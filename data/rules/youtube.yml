@@ -18,7 +18,7 @@ rules:
     min_entropy: 2.0
     confidence: medium
     examples:
-      - '"youtube":{"api_key":"***REMOVED***"'
+      - '"youtube":{"api_key":"ALnwTyCRFtowWu-NUwlRAfLFB2kHTgjHpXSbYhy"'
     validation:
       type: Http
       content:
