@@ -1,0 +1,30 @@
+rules:
+  - name: ScrapeOwl API Key
+    id: kingfisher.scrapeowl.1
+    pattern: |
+      (?xi)
+      \b
+      scrapeowl
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{30}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - scrapeowl SECRET jd8e4rnfo92jd93jf9hg74kfso28dj
+      - scrapeowl ACCESS l4k5fjid89ck2i3ou8bzm8fpw3akfj
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.scrapeowl.com/v1/scrape?api_key={{ TOKEN }}"
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch

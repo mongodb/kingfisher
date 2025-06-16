@@ -1,0 +1,32 @@
+rules:
+  - name: Happyscribe API Key
+    id: kingfisher.happyscribe.1
+    pattern: |
+      (?xi)
+      \b
+      happyscribe
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{24}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - "happyscribe SECRET 123ABC456DEF789GHI012JKL"
+      - "happyscribeKEY 012ABC345DEF678GHI901JKL234"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://www.happyscribe.com/api/v1/transcriptions"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

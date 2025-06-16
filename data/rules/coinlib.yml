@@ -1,0 +1,32 @@
+rules:
+  - name: Coinlib API Key
+    id: kingfisher.coinlib.1
+    pattern: |
+      (?xi)
+      \b
+      coinlib
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{16}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - coinlib_key=abc123def456789a
+      - COINLIB_ACCESS_TOKEN=b1c2d3e4f5g6h7i8
+      - coinlib_secret=12345678abcdefgh
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: 'https://coinlib.io/api/v1/global?key={{ TOKEN }}&pref=EUR'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

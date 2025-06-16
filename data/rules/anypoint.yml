@@ -1,0 +1,82 @@
+rules:
+  - name: Anypoint API Key
+    id: kingfisher.anypoint.1
+    pattern: |
+      (?x)                    
+      (?i)               
+      anypoint
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b                       
+      (                        
+        [0-9a-z]{8}
+        -
+        [0-9a-z]{4}
+        -
+        [0-9a-z]{4}
+        -
+        [0-9a-z]{4}
+        -
+        [0-9a-z]{12}
+      )                        
+      \b                   
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - anypoint_key = "33333333-cccc-dddd-eeee-444444444444"
+    categories:
+      - api
+      - secret
+    references:
+      - https://docs.mulesoft.com/access-management/connected-apps-overview
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://anypoint.mulesoft.com/apiplatform/repository/v2/organizations/{{ ORGID }}/apis/by-name?apiName=
+    depends_on_rule:
+      - rule_id: "kingfisher.anypoint.2"
+        variable: ORGID
+
+  - name: Anypoint Organization ID
+    id: kingfisher.anypoint.2
+    pattern: |
+      (?x)                    
+      (?i)                    
+      \b
+      anypoint
+      (?:.|[\n\r]){0,32}?
+      (?:org)
+      (?:.|[\n\r]){0,32}?
+      \b                       
+      (                        
+        [0-9a-z]{8}
+        -
+        [0-9a-z]{4}
+        -
+        [0-9a-z]{4}
+        -
+        [0-9a-z]{4}
+        -
+        [0-9a-z]{12}
+      )                        
+      \b                   
+    min_entropy: 3.5
+    visible: false
+    confidence: medium
+    examples:
+      - anypoint org_id = "11111111-aaaa-bbbb-cccc-222222222222"
+    categories:
+      - api
+      - identifier
+    references:
+      - https://docs.mulesoft.com/access-management/organization

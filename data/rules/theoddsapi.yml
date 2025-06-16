@@ -1,0 +1,29 @@
+rules:
+  - name: TheOddsApi Key
+    id: kingfisher.theoddsapi.1
+    pattern: |
+      (?xi)
+      \b
+      (?:theoddsapi|the-odds-api)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9a-f]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - theoddsapi=abcdef1234567890abcdef1234567890
+      - 'the-odds-api:abcdef1234567890abcdef1234567890'
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.the-odds-api.com/v4/sports/?apiKey={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

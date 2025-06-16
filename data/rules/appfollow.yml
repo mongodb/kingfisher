@@ -1,0 +1,36 @@
+rules:
+  - name: Appfollow API Token
+    id: kingfisher.appfollow.1
+    pattern: |
+      (?xi)
+      \b
+      appfollow
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9\.[0-9A-Za-z]{74}\.[0-9A-Z-a-z\-_]{43}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - appfollow_token =eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.lzQtK1DgZNmCOHOHB88clyjHTzUuzz3UiHtNSnW2xR4retZNjfuMyiOpfaDoAOn3Y522tGWSf7.WNlwLpWqGSukhkolqQjdGeW7K9jz4VQgcY5lvtfy0IS
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-AppFollow-API-Token: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: 200
+            - type: WordMatch
+              words: 
+                - "Invalid API token"
+              negative: true
+            - type: JsonValid
+          url: https://api.appfollow.io/api/v2/account/users

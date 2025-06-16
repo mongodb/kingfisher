@@ -1,0 +1,32 @@
+rules:
+  - name: GeoIpifi API Key
+    id: kingfisher.geoipifi.1
+    pattern: |
+      (?xi)
+      \b
+      ipifi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - ipifi_key=abcd1234ABCD5678efgh9012EFGH3456
+      - IPIFI_ACCESS_TOKEN=WXYZ9876wxyz5432MNOP1234mnop7890
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/json"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: "https://geo.ipify.org/api/v2/country?apiKey={{ TOKEN }}&ipAddress=8.8.8.8"

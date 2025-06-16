@@ -1,0 +1,32 @@
+rules:
+  - name: GetGeoAPI Key
+    id: kingfisher.getgeoapi.1
+    pattern: |
+      (?xi)
+      \b
+      getgeoapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - getgeoapiSECRET=1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: 'https://api.getgeoapi.com/v2/currency/list?api_key={{ TOKEN }}'

@@ -1,0 +1,31 @@
+rules:
+  - name: Lob API Key
+    id: kingfisher.lob.1
+    pattern: |
+      (?xi)
+      \b
+      lob
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_]{40}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - lobSecretKey=QWERTYUIOPASDFGHJKLZXCVBNM1234567890ABCD
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.lob.com/v1/addresses
+          headers:
+            Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

@@ -1,0 +1,29 @@
+rules:
+  - name: Pixabay API Key
+    id: kingfisher.pixabay.1
+    pattern: |
+      (?xi)
+      \b
+      pixabay
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9-]{34}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "pixabay_key=abcd1234efgh5678ijkl9012mnop3456qrst7890"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://pixabay.com/api/?key={{ TOKEN }}&q=yellow+flowers&image_type=photo"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

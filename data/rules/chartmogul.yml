@@ -1,0 +1,30 @@
+rules:
+  - name: ChartMogul API Key
+    id: kingfisher.chartmogul.1
+    pattern: |
+      (?xi)
+      \b
+      chartmogul
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "chartmogul a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
+          method: GET
+          url: "https://api.chartmogul.com/v1/ping"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

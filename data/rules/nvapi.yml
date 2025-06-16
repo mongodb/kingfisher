@@ -1,0 +1,30 @@
+rules:
+  - name: NVAPI Key
+    id: kingfisher.nvapi.1
+    pattern: |
+      (?xi)
+      \b
+      nvapi-
+      \b
+      (
+        [a-zA-Z0-9_-]{64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - nvapi-123456ABCDEF78901234567890abcdefABCDEF1234567890abcdefABCDEF1234
+    validation:
+      type: Http
+      content:
+        request:
+          body: credentials={{ TOKEN }}
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+          method: POST
+          url: https://api.ngc.nvidia.com/v3/keys/get-caller-info
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

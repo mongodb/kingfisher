@@ -1,0 +1,33 @@
+rules:
+  - name: Simplesat API Key
+    id: kingfisher.simplesat.1
+    pattern: |
+      (?xi)
+      \b
+      simplesat
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - simplesat_token=1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t
+      - simplesat_key=abcdef1234567890abcdef1234567890abcdef12
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-Simplesat-Token: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.simplesat.io/api/answers/

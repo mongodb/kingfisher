@@ -1,0 +1,34 @@
+rules:
+  - name: Statuspage API Key
+    id: kingfisher.statuspage.1
+    pattern: |
+      (?xi)
+      \b
+      statuspage
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z-]{36}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "statuspage_key = 123e4567-e89b-12d3-a456-426614174000"
+      - "statuspage_token = 1fb2c3d4-e5f6-7abc-8912-abcdef123456"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+            Authorization: "{{ TOKEN }}"
+          method: GET
+          url: "https://api.statuspage.io/v1/pages"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

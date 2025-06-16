@@ -1,0 +1,32 @@
+rules:
+  - name: Scrutinizer CI Access Token
+    id: kingfisher.scrutinizerci.1
+    pattern: |
+      (?xi)
+      \b
+      scrutinizer
+      (?:.|[\n\r]){0,8}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,8}?
+      \b
+      (
+        [0-9a-z]{64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "scrutinizer_key = abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+          method: GET
+          url: "https://scrutinizer-ci.com/api/user/repositories?access_token={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

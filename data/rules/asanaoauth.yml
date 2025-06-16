@@ -1,0 +1,31 @@
+rules:
+  - name: Asana OAuth Token
+    id: kingfisher.asanaoauth.1
+    pattern: |
+      (?xi)
+      \b
+      asana
+      (?:.|[\n\r]){0,8}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-z\/:0-9]{51}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - asana_token:0/9a/z8y7x6w5v4u3t2s1r0q9p8o7n6m5l4k3j2h1g0f9e8d7c
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.asana.com/api/1.0/users/me

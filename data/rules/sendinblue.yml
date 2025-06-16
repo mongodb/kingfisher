@@ -1,0 +1,27 @@
+rules:
+  - name: SendinBlue API Key
+    id: kingfisher.sendinblue.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        xkeysib-[a-f0-9]{64}\-(?i)[a-z0-9]{16}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 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
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            api-key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.sendinblue.com/v3/account

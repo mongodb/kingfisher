@@ -1,0 +1,35 @@
+rules:
+  - name: Clarifai API Key
+    id: kingfisher.clarifai.1
+    pattern: |
+      (?xi)
+      \b
+      clarifai
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - clarifai SECRET dkHL49dId5skLfBjsf342RJkdskdpD54
+      - clarifai access key dkHL49dId5skLfBjsf342RJkdskdpD54
+    references:
+      - https://clarifai.com/developer/guide/authentication
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Key {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.clarifai.com/v2/inputs

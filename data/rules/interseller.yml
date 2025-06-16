@@ -1,0 +1,34 @@
+rules:
+  - name: Interseller API Key
+    id: kingfisher.interseller.1
+    pattern: |
+      (?xi)
+      \b
+      interseller
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - interseller_SECRET_key=123e4567-e89b-12d3-a456-426614174000
+      - interseller_PRIVATE_KEY=234d5678-a89b-23d4-b567-527715274111
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-API-Key: '{{ TOKEN }}'
+            Accept: 'application/json'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://interseller.io/api/campaigns/list

@@ -1,0 +1,32 @@
+rules:
+  - name: CloudConvert API Key
+    id: kingfisher.cloudconvert.1
+    pattern: |
+      (?xi)
+      \b
+      cloudconvert
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        (?:[a-zA-Z0-9\-\._~\+\/=]{30,34}\. ?[a-zA-Z0-9\-\._~\+\/=]{200,500}\. ?[a-zA-Z0-9\-\._~\+\/=]{600,700})
+      )
+    min_entropy: 4.5
+    confidence: medium
+    examples:
+      - cloudconvert_token = GvTlmkGKeF11T+qwpNawwn_HOMGrPBDm.hE1WyM8gZwC8R4tMg4C9IDfr7fe7WeDvw62FygQ240XIw5amCEF5yS9gR8i9YPPyNfIO0yS6YiiZ0Ks5zWRfB2Na16Sr7mR8t1WbKCMRngLtdJHVOMQwyR0Qunp3JtwmYOx_ykpWX1Pc7PYb5l42Oe=BAUm74ULCGGOUeKp156+5tTzZNLmPJvyn5AT34UwoJoRbTrqsFLW6mMAGoFETkVc8BAeo7RXkRInYD7jc.CfJYDVH83KDnS5IOL7qnzkykbse8TsO9a43I7wguQpnLOd04ClGtd6RGNOPXvOA0BtvFLQn6t5AGxhEOvFaCLZXqi2z7jYAxL4OG8yjsNtf60hhZaXuzcFt9ovQWhcSFFBJBSKKVXaQ2iVkyv32UlEfHn07qmvSdp5DkMsiwMQE9rDyTbiOL6vTd1OKsiY4JYOP44IGAMqsHTqIe5eZPbhgna8eIqvhz5Nks5pZE=QeicuYupQjDyE8kofQxVeVJ_2eVaTxlSKalqHEfEZj9kcQsjPMHTqJSAaAQ81Wx0CI5JQxXfofEopk55dFe6Yu6U2VYKgAjV8WgDNCidU0OsSVWzJtOxubQvzbGO8wpVJWABktW9d+cNbzuuSWxtWiI3DjwrzEkCuBFfYOjtPtZuWZeuHl6sLpgwdnoJSd0JchPImYP3B2SpB0z22JmNNTKYofhDrW57KVkQQp2TsjxtoTReSAqZp7WNTHuo26LJHayxp6jjDSZWW62BxRVBByJtjlo7XkpWaKuMU8vcbvGKaHjD8xX7fpYRRMQJDBoSYXfQFY3H4rnWKktlIwebngW0VBQieDZWXtVng431hLRhSWjBI2MWxf9t1E9HEAvtE5osR9PIIdpKGVz
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: "application/vnd.cloudconvert+json; version=3"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.cloudconvert.com/v2/users/me

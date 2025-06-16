@@ -1,0 +1,33 @@
+rules:
+  - name: Owlbot API Key
+    id: kingfisher.owlbot.1
+    pattern: |
+      (?xi)
+      \b
+      owlbot
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "owlbot SECRET b7d21c0e88e9a3c5938fb045b2b6a5e693eaf9d1"
+      - "owlbot TOKEN 8a5de3a89b7e4f29bf728b45adcdea6ea3410c78"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Token {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://owlbot.info/api/v4/dictionary/security

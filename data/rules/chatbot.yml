@@ -1,0 +1,32 @@
+rules:
+  - name: Chatbot API Key
+    id: kingfisher.chatbot.1
+    pattern: |
+      (?xi)
+      \b
+      chatbot
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - chatbot_token = Z1VuI6jJ_fwA4MxLF4sFz7drsDOEW05p
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.chatbot.com/stories

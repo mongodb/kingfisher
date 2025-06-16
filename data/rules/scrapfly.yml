@@ -1,0 +1,31 @@
+rules:
+  - name: Scrapfly API Key
+    id: kingfisher.scrapfly.1
+    pattern: |
+      (?xi)
+      \b
+      scrapfly
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        (?:scp-(?:live|test)-[a-z0-9]{32}|[a-z0-9]{32})
+      )
+      \b
+    min_entropy: 3.2
+    confidence: medium
+    examples:
+      - scrapfly SECRET_KEY scp-live-03b9e7d0d0024e4b8fccc1ffe923e899
+      - scrapfly KEY scp-test-1234567890abcdef1234567890abcdef
+      - scrapfly TOKEN 03b9e7d0d0024e4b8fccc1ffe923e899
+    validation:
+      type: Http
+      content:
+        request:
+          url: 'https://api.scrapfly.io/scrape?key={{ TOKEN }}&url=https://httpbin.org/status/200'
+          method: GET
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch

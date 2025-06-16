@@ -1,0 +1,35 @@
+rules:
+  - name: HubSpot API Key
+    id: kingfisher.hubspot.1
+    pattern: |
+      (?xi)
+      \b
+      pat-(?:eu|na)1
+      -
+      [A-Za-z0-9]{8}
+      -
+      [A-Za-z0-9]{4}
+      -
+      [A-Za-z0-9]{4}
+      -
+      [A-Za-z0-9]{4}
+      -
+      [A-Za-z0-9]{12}
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - pat-na1-12345678-1234-1234-1234-123456789012
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.hubapi.com/account-info/v3/api-usage/daily/private-apps

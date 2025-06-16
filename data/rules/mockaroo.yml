@@ -1,0 +1,30 @@
+rules:
+  - name: Mockaroo API Key
+    id: kingfisher.mockaroo.1
+    pattern: |
+      (?xi)
+      \b
+      mockaroo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{8}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - mockaroo-secret-key=abcd1234
+      - "mockaroo.token xyz PRIVATE_TOKEN=42fc56d9"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.mockaroo.com/api/types?key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

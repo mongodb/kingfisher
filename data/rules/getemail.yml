@@ -1,0 +1,36 @@
+rules:
+  - name: GetEmail API Key
+    id: kingfisher.getemail.1
+    pattern: |
+      (?xi)
+      \b
+      getemail
+      (?:.|[\n\r]){0,4}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9-]{20}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - getemail_key=AbC12345Def67890Ghi0
+      - getemail-SECRET-12345ABCDE123456FGHI
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.getemail.io/v1/find-mail?firstname=Larry&lastname=Page&domain=google.com&api_key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                  - 200
+            - type: JsonValid
+            - type: WordMatch
+              words: 
+                - '"errorType":"Error"'
+              negative: true

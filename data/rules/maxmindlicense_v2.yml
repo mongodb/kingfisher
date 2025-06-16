@@ -1,0 +1,28 @@
+rules:
+  - name: MaxMind License Key
+    id: kingfisher.maxmind.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        [a-zA-Z0-9]{6}_[a-zA-Z0-9]{29}_mmk
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - XYZ123_12345678901234567890123456789_mmk
+      - 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
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://secret-scanning.maxmind.com/secrets/validate-license-key
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

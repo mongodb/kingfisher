@@ -1,0 +1,38 @@
+rules:
+  - name: LaunchDarkly API Key
+    id: kingfisher.launchdarkly.1
+    pattern: |
+      (?xi)
+      launchdarkly
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      -
+      [a-z0-9]{8}
+      -
+      [a-z0-9]{4}
+      -
+      4[a-z0-9]{3}
+      -
+      [a-z0-9]{4}
+      -
+      [a-z0-9]{12}
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "launchdarkly-secret-123e4567-e89b-4a3c-a456-abcdef123456"
+      - "launchdarkly-private-abcdef12-3456-4d78-abcd-123456abcdef"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "{{ TOKEN }}"
+          method: GET
+          url: "https://app.launchdarkly.com/api/v2/caller-identity"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

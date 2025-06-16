@@ -1,0 +1,31 @@
+rules:
+  - name: Nightfall API Key
+    id: kingfisher.nightfall.1
+    pattern: |
+      (?xi)
+      \b
+      NF
+      -
+      (
+        [a-zA-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - NF-abcdef1234567890abcdef1234567890
+      - NF-ABCDEF1234567890ABCDEF1234567890
+      - NF-12345678901234567890123456789012
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: POST
+          url: "https://api.nightfall.ai/v3/upload"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

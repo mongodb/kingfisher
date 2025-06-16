@@ -1,0 +1,34 @@
+rules:
+  - name: Tyntec API Key
+    id: kingfisher.tyntec.1
+    pattern: |
+      (?xi)
+      \b
+      tyntec
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - tyntec SECRET b19a730fd0e140e286f47feb2f3bb7c9
+      - tyntec TOKEN a1b2c3d4e5f678901234567890abcdef
+      - tyntec ACCESS 1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            apiKey: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.tyntec.com/2fa/v1/application

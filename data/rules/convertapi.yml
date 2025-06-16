@@ -1,0 +1,30 @@
+rules:
+  - name: ConvertAPI Key
+    id: kingfisher.convertapi.1
+    pattern: |
+      (?xi)
+      \b
+      convertapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{16}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - convertapi SECRET 1234567890abcdef
+      - convertapi KEY abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          url: https://v2.convertapi.com/user?Secret={{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

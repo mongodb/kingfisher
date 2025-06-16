@@ -1,0 +1,26 @@
+rules:
+  - name: Contentful Personal Access Token
+    id: kingfisher.contentful.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        CFPAT-[a-zA-Z0-9_\-]{43}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - CFPAT-abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890_
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.contentful.com/organizations

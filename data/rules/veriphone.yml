@@ -1,0 +1,30 @@
+rules:
+  - name: Veriphone API Key
+    id: kingfisher.veriphone.1
+    pattern: |
+      (?xi)
+      \b
+      veriphone
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Z]{32}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - "veriphone_key = 6345ABCD0987EFGH3456IJKL7891MNOP"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.veriphone.io/v2/verify?phone=%252B49-15123577723&key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

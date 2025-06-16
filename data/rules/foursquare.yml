@@ -1,0 +1,31 @@
+rules:
+  - name: Foursquare API Key
+    id: kingfisher.foursquare.1
+    pattern: |
+      (?xi)
+      \b
+      foursquare
+      (?:.|[\n\r]){0,8}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9A-Z]{48}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "foursquare_key = 0F12A345BB67C8D901EFG23H45IJKL67MNO89PQ12RST34UV"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+          method: GET
+          url: "https://api.foursquare.com/v2/venues/trending?client_id={{ TOKEN }}&client_secret={{ SECRET }}&v=20211019&near=LA"
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch

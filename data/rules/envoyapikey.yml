@@ -1,0 +1,36 @@
+rules:
+  - name: Envoy API Key
+    id: kingfisher.envoy.1
+    pattern: |
+      (?xi)
+      \b
+      envoy
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{220}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - envoy_token=abcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzabcdefghijklmnopqrstuvwxyzbu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWDEFGHIJKLMNOPQRSTUVWXYZ0123456789bu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefgh
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.envoy+json; version=3"
+            X-Api-Key: "{{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.envoy.com/v1/locations

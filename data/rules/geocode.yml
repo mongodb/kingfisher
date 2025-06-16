@@ -1,0 +1,34 @@
+rules:
+  - name: Geocode API Key
+    id: kingfisher.geocode.1
+    pattern: |
+      (?xi)
+      \b
+      geocode
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{28}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - geocode_key=abc123def456ghi789jkl0123456
+      - geocode_token=xyz987uvw654mno321pqr8901234
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: 'https://geocode.xyz/51.4647,0.0079?json=1&auth={{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"remaining_credits" :'

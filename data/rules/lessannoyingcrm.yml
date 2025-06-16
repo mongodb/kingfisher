@@ -1,0 +1,31 @@
+rules:
+  - name: LessAnnoyingCRM API Key
+    id: kingfisher.lessannoyingcrm.1
+    pattern: |
+      (?xi)
+      \b
+      less
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9-]{57}
+      )
+    min_entropy: 3.2
+    confidence: medium
+    examples:
+      - less-secret-key-ab123cdef456ghijkl789mnopqr012stu345vwx678yzABC901def234ghijk
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.lessannoyingcrm+json; version=3"
+          method: GET
+          url: "https://api.lessannoyingcrm.com?UserCode={{ TOKEN | split: '-' | first }}&APIToken={{ TOKEN }}&Function=GetUserInfo"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

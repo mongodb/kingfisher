@@ -1,0 +1,46 @@
+rules:
+  - name: Enigma API Key
+    id: kingfisher.enigma.1
+    pattern: |
+      (?xi)
+      \b
+      enigma
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - enigma=abcDEfgHIJKLmnoPQRstuVwxyz01234mnopQrsTu
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "name": "Enigma Technologies, Inc.",
+              "person": {
+                "first_name": "",
+                "last_name": ""
+              },
+              "address": {
+                "street_address1": "245 5th Ave",
+                "street_address2": "",
+                "city": "New York",
+                "state": "NY",
+                "postal_code": "10016"
+              }
+            }
+          headers:
+            Content-Type: application/json
+            x-api-key: '{{ TOKEN }}'
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.enigma.com/businesses/match

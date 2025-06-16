@@ -1,0 +1,30 @@
+rules:
+  - name: TeamworkCRM API Key
+    id: kingfisher.teamworkcrm.1
+    pattern: |
+      (?xi)
+      \b
+      (?:teamwork|teamworkcrm)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        tkn\.v1_[0-9A-Za-z]{71}=
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - teamwork tkn.v1_LOO5pFaDcBZuFgBzOMKO6qNq98gdbMsoCBHSLZk9ap6aVwgAebNZ8esaIhmdLxi1lQDXg14=
+      - teamworkcrm tkn.v1_RLeNOwtPH89jaINvjUKF1FW7ZrbYBvT8sKRFMqM7d5bq4DjG3MUhZWr3QU4UCTDApYNB6xU=
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://example.teamwork.com/crm/api/v2/users.json

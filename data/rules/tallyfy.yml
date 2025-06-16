@@ -1,0 +1,32 @@
+rules:
+  - name: Tallyfy API Key
+    id: kingfisher.tallyfy.1
+    pattern: |
+      (?xi)
+      \b
+      tallyfy
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{36}\.[0-9A-Za-z]{264}\.[0-9A-Za-z\-_]{683}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - tallyfy_token = lQ0i3CZNyM2rsoWVaB3uVSljNIaZecAHZx6D.Rwmzd4NJB5EeKoWheuZ2u5H0qxUu2EkXCrPdjresywngpLDD4eGSOWVJpywEk7wz7orDVYaYWKVrS2qK8xdOAKlcYYYYPwRJoyy6zDgWkvqDBZMeoQLZQvVezgIGZSg1HbwUTQwUAsqO891J0wlrmZRNbemJe10VoSkkHSW5hjkyZILhRuyG15acncmVOPqGFtT197AVF22Z8wBM4ObSw81lHqjPxZeitvP2AIUbrDDJzxBR31zVO8xurdBJ4rHslxQellBE.ywq42v74fjS80Tv37mSYOkowa2tZ4LlAEWVswmCeAAWkIvETedwSwcvKn9PuNModKRSBATbdZfDp4Mwlx58ozDLb9r84MyTZ6kTzKJlKymmkg84NQ9iUDhd66AoqXKsJsmUjWTni0KnW4GsuvsPzvquROz4RCFnZ64QHF8UQab8zy2v11trTtmr0LHQofAqWuPZOe91yVDY4yksEuFuUYHqwO7YFhp5qhwF1nkyGZRLwsIkhEScj8yaFYUNYjcNQZUFmhoXt6e0CqVCf0D16zPkTFr2Qm0G65i7GXsje9UNQbtJJjirt2dvpeA8TnoioI1Z7I8UqC0gZ9PCWg90Vum5J37jnXvNcLs3gkU0YZmVJ5fa1zdFFPNu0ONUJlIbXHHsLbE8uxfrufBPH5dqpaXbcpTbXqLWZCTQw6ozQWDkjPL1yw6gjIZca-iw3fDJb891l5amzrl624aGd5JrjbHpxOTa6oKyOv55kQfxzIQiuFMBYGb1CV88oHP8DT0T7t4mqfhSMgZWYKj5w8gEGoyMZYSV_56odyYwWt0O3Ec1P8OcYXsSgwOG1QFh9QGpvOGzi6GX1cNeensmY3emSibP1I3E1TQavc7esZfIasHMXQTBh1QTumK2rEnRRuqUls2TJY6xT8bxEBzchsheBHXWGqRt97yooqd6sqDeK09c
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.tallyfy.com/me

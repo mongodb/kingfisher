@@ -1,0 +1,32 @@
+rules:
+  - name: Blazemeter API Key
+    id: kingfisher.blazemeter.1
+    pattern: |
+      (?xi)
+      \b
+      (?:blazemeter|runscope)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "blazemeter 123e4567-e89b-12d3-a456-426614174000"
+      - "runscope 123e4567-e89b-12d3-a456-426614174abc"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://api.runscope.com/account"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

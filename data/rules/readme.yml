@@ -1,0 +1,29 @@
+rules:
+  - name: ReadMe API Key
+    id: kingfisher.readme.1
+    pattern: |
+      (?x)(?i)
+      \b
+      (
+        rdme_(?P<RDMVAL>[a-z0-9]{70})
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - rdme_abcdefghijklmnopqrstuvwxyzabcdef1234567890abcdef1234567890abcdef123456
+      - rdme_xn8s9he60fb31e9d290403d2707cce88fa820042d425fc6eb2baed4191dd88a5405987
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "{{ TOKEN | b64enc }}"
+            Content-Type: "application/json; charset=utf-8"
+            Accept: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://dash.readme.com/api/v1

@@ -1,0 +1,30 @@
+rules:
+  - name: AviationStack API Key
+    id: kingfisher.aviationstack.1
+    pattern: |
+      (?xi)
+      \b
+      aviationstack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - aviationstack_token = shwc7ighlfw9fcoul7ahojmf2sx2dabv
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.aviationstack.com/v1/flights?access_key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

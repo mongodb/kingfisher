@@ -1,0 +1,32 @@
+rules:
+  - name: Zenscrape API Key
+    id: kingfisher.zenscrape.1
+    pattern: |
+      (?xi)
+      \b
+      zenscrape
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - zenscrape_token = 123e4567-e89b-12d3-a456-426614174abc
+      - zenscrape_key = 123e4567-e89b-12d3-a456-426614174000
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            apikey: "{{ TOKEN }}"
+          method: GET
+          url: https://app.zenscrape.com/api/v1/status
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

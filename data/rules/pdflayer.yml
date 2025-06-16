@@ -1,0 +1,36 @@
+rules:
+  - name: PdfLayer API Key
+    id: kingfisher.pdflayer.1
+    pattern: |
+      (?xi)
+      \b
+      pdflayer
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - pdflayer_key=1234567890abcdef1234567890abcdef
+      - PDFLAYER_ACCESS_TOKEN=abcdef1234567890abcdef1234567890
+      - pdflayer_secret=0123456789abcdef0123456789abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.pdflayer.com/api/convert?access_key={{ TOKEN }}&document_url=https://pdflayer.com/downloads/invoice.html
+    references:
+      - https://pdflayer.com/documentation

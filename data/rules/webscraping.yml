@@ -1,0 +1,31 @@
+rules:
+  - name: Webscraping API Key
+    id: kingfisher.webscraping.1
+    pattern: |
+      (?xi)
+      \b
+      webscraping
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - webscrapingSECRET 1234567890abcdef1234567890abcdef
+      - webscrapingPRIVATE 0987654321fedcba0987654321fedcba
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.webscrapingapi.com/v1?api_key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

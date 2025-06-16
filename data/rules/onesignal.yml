@@ -1,0 +1,33 @@
+rules:
+  - name: OneSignal API Key
+    id: kingfisher.onesignal.1
+    pattern: |
+      (?xi)
+      \b
+      onesignal
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - onesignal_key=12345678-90ab-cdef-1234-567890abcdef
+      - ONESIGNAL_SECRET_KEY=98765432-10fe-dcba-9876-543210fedcba
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.onesignal+json; version=3"
+            Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://onesignal.com/api/v1/apps

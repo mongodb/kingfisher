@@ -1,0 +1,36 @@
+rules:
+  - name: Monday API Key
+    id: kingfisher.monday.1
+    pattern: |
+      (?xi)
+      \b
+      monday
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        eyJ[A-Za-z0-9-_]{15,100}\.eyJ[A-Za-z0-9-_]{100,300}\.[A-Za-z0-9-_]{25,100}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - monday SECRET_TOKEN=eyJhbGcJPzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJLMSIsImV4cCI6MTY0NzY4ODU1ODEsImlhdCI6MTYxNzY4NDk1ODEsImlzcyI6InNoYXJlZC5iaXQiLCJzdWIiOiJ1c2VyX2lkIn0.ssumlA-ZBbEBvtUjc9uTGAv9FGFgLfAm3_3P3hSUFw
+      - monday ACCESS_KEY=eyJhbGcJTNBGiOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhYXVMiOiI2MSIsImV4cCI6MTY1NzY4ODc5ODEsImlhdCI6MTYxNzY8OTk5ODEsImlzcyI6InNoYXJlZC5iaXQiLCJzdWIiOiJ1c2VyX2lkSIn0.skpmlA-ZBbEBvtUyc9qTGe-5v_TgLufAm3_3P3hSDz
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {"query":"{boards(limit:1){id name}}"}
+          headers:
+            Content-Type: application/json
+            Authorization: '{{ TOKEN }}'
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.monday.com/v2

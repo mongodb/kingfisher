@@ -1,0 +1,31 @@
+rules:
+  - name: Etherscan API Key
+    id: kingfisher.etherscan.1
+    pattern: |
+      (?xi)
+      \b
+      etherscan
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Z]{34}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - etherscan SECRETKEY=0123456789ABCDEFGHIJKLMNOBQP7Z2WXY
+    references: []
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: 'https://api.etherscan.io/api?module=account&action=balance&address=0x1f9090aaE28b8a3dCeaDf281B0F12828e676c326&tag=latest&apikey={{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"OK"'

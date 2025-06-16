@@ -1,0 +1,34 @@
+rules:
+  - name: Alchemy API Key
+    id: kingfisher.alchemy.1
+    pattern: |
+      (?x)                  
+      (?i)                
+      alchemy
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?      
+      \b                       
+      (                       
+        [a-zA-Z0-9]{23}_[a-zA-Z0-9]{8}      
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - alchemy_key = "v9sswdzc2it8axf4jxwqt7h_12345678"
+    categories:
+      - api
+      - secret
+    references:
+      - https://docs.alchemy.com/reference/api-overview
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://eth-mainnet.g.alchemy.com/v2/{{ TOKEN }}/getNFTs/?owner=vitalik.eth

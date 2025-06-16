@@ -1,0 +1,30 @@
+rules:
+  - name: Rentman API Key
+    id: kingfisher.rentman.1
+    pattern: |
+      (?xi)
+      \b
+      rentman
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        ey[a-zA-Z0-9]{34}\.ey[a-zA-Z0-9._-]{250,300}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - rentman eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyLCJleHAiOjE1MTYyMzkwMjIsImF1ZCI6WyJhcGkucmVudG1hbi5uZXQiXSwiaXNzIjoicmVudG1hbi5uZXQiLCJqdGkiOiJhYmNkZWYxMjM0NTY3ODkwIiwic2NvcGUiOlsicmVhZDp1c2VycyIsIndyaXRlOnVzZXJzIl0sInBlcm1pc3Npb25zIjpbInJlYWQ6dXNlcnMiLCJ3cml0ZTp1c2VycyJdfQ
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.rentman.net/files"
+          headers:
+            Content-Type: "application/json"
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

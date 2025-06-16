@@ -1,0 +1,34 @@
+rules:
+  - name: RequestFinance API Key
+    id: kingfisher.requestfinance.1
+    pattern: |
+      (?xi)
+      \b
+      requestfinance
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Z]{7}-[0-9A-Z]{7}-[0-9A-Z]{7}-[0-9A-Z]{7}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - RequestFinance-Key ABCDEFG-HIJKLMN-OPQRSTU-VWXYZAB
+      - requestfinance Token 1234567-ABC1234-XYZ5678-0123456
+      - "requestfinanceAccessKey: ABCDE12-34FGH56-IJK78LM-NOPQ90R"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.request.finance/invoices

@@ -1,0 +1,36 @@
+rules:
+  - name: Tefter API Key
+    id: kingfisher.tefter.1
+    pattern: |
+      (?xi)
+      \b
+      tefter
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{20}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - tefter SECRET KEY abcdefghijklmnopqrst
+      - tefter PRIVATE KEY zyxwvutsrqponmlkjihg
+    references:
+      - https://www.tefter.io/docs/api
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+            X-User-Token: "{{ TOKEN }}"
+          method: POST
+          url: https://www.tefter.io/api/v1/bookmarks?url=google.com
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

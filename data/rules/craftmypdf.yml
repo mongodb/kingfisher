@@ -1,0 +1,31 @@
+rules:
+  - name: CraftMyPDF API Key
+    id: kingfisher.craftmypdf.1
+    pattern: |
+      (?xi)
+      \b
+      craftmypdf
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{35}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - craftmypdf_key = b9dgkd4atdrm1tl7mdsrciiijh087fp3c58
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.craftmypdf.com/v1/get-account-info
+          headers:
+            Content-Type: application/json
+            X-API-KEY: '{{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

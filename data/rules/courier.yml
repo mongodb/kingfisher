@@ -1,0 +1,34 @@
+rules:
+  - name: Courier API Key
+    id: kingfisher.courier.1
+    pattern: |
+      (?xi)
+      \b
+      courier
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        pk_[a-zA-Z0-9]{1,}_[a-zA-Z0-9]{28}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - courier_key=pk_prod_N7HX5K2YWMP9Q3BVJR4TLCE8A6D1
+      - courier_secret=pk_test_M9KF3R8DPWN2X4HVBQY5ZGCS7L1A
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.courier.com/preferences

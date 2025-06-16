@@ -1,0 +1,31 @@
+rules:
+  - name: WorldWeather API Key
+    id: kingfisher.worldweather.1
+    pattern: |
+      (?xi)
+      \b
+      worldweather
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{31}
+      )
+    min_entropy: 3.1
+    confidence: medium
+    examples:
+      - worldweatherSECRETkey=abcdef123456789abcdef123456789ab
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.worldweatheronline.com/premium/v1/search.ashx?query=LA&key={{ TOKEN }}
+          headers:
+            Content-Type: application/json
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

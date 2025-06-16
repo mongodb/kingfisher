@@ -1,0 +1,33 @@
+rules:
+  - name: Hybiscus API Key
+    id: kingfisher.hybiscus.1
+    pattern: |
+      (?xi)
+      \b
+      hybiscus
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{43}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - hybiscus secret=hybiscusSECRET1234567890abcdef1234567890abcdefABCDEFGH
+      - hybiscus-key hybiscus key 67890PRIVATE1234567890abcdef1234567890abcdefAB
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.hybiscus+json; version=3"
+            X-API-KEY: '{{ TOKEN }}'
+          method: GET
+          url: https://api.hybiscus.dev/api/v1/get-remaining-quota
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

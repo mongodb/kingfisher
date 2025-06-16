@@ -1,0 +1,33 @@
+rules:
+  - name: TatumIO API Key
+    id: kingfisher.tatumio.1
+    pattern: |
+      (?xi)
+      \b
+      tatum
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z-]{36}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - tatum_secret_key=12345678-1234-1234-1234-123456789abc
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.tatumio+json; version=3"
+            x-api-key: "{{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: "https://api-eu1.tatum.io/v3/ledger/account?pageSize=10&offset=0&accountCode=AC_1011_B"

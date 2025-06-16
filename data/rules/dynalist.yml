@@ -1,0 +1,39 @@
+rules:
+  - name: Dynalist API Key
+    id: kingfisher.dynalist.1
+    pattern: |
+      (?xi)
+      \b
+      dynalist
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9-_]{128}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - dynalist_token = bu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWDEFGHIJKLMNOPQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvQRSTUVWXYZ0123456789abcdefghijklmn
+      - dynalist_key = 01234567890123456789ABCQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01234567890123
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "token": "{{ TOKEN }}"
+            }
+          headers:
+            Content-Type: "application/json"
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"_code":"Ok"'
+          url: https://dynalist.io/api/v1/file/list

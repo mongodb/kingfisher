@@ -1,0 +1,33 @@
+rules:
+  - name: Moonclerk API Key
+    id: kingfisher.moonclerk.1
+    pattern: |
+      (?xi)
+      \b
+      moonclerk
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - moonclerk SECRET 1234567890abcdef1234567890abcdef
+      - moonclerk ACCESSKEY 1234567890abcdef1234567890abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Token token={{ TOKEN }}
+            Accept: application/vnd.moonclerk+json;version=1
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.moonclerk.com/forms

@@ -1,0 +1,31 @@
+rules:
+  - name: ScraperAPI Key
+    id: kingfisher.scraperapi.1
+    pattern: |
+      (?xi)
+      \b
+      scraperapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - scraperapiKEY=1234567890abcdef1234567890abcdef
+      - SCRAPERAPI_ACCESS_TOKEN=abcdef1234567890abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.scraperapi.com?api_key={{ TOKEN }}&url=google.com"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

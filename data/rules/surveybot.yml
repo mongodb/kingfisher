@@ -1,0 +1,32 @@
+rules:
+  - name: SurveyBot API Key
+    id: kingfisher.surveybot.1
+    pattern: |
+      (?xi)
+      \b
+      surveybot
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Za-z0-9-]{80}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - surveybot=abcdef1234567890ABCDEF1234567890abcdef1234567890ABCDEF1234567890abcdef1234567890
+      - surveybot_key=A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U1V2W3X4Y5Z6a7b8c9d0e1f2g3h4i5j6k7l8m9n0
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            X-Api-Key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.surveybot.io/api/v1/surveys?page=1&per_page=20&offset=0

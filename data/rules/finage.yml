@@ -1,0 +1,32 @@
+rules:
+  - name: Finage API Key
+    id: kingfisher.finage.1
+    pattern: |
+      (?xi)
+      \b
+      finage
+      (?:.){0,8}?
+      (?:API_KEY)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9A-Z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - finage API_KEY = 0123456789ABCDEF0123456789ABCDEF
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          url: https://api.finage.co.uk/symbol-list/crypto?apikey={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

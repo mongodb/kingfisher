@@ -1,0 +1,31 @@
+rules:
+  - name: Optimizely API Key
+    id: kingfisher.optimizely.1
+    pattern: |
+      (?xi)
+      \b
+      optimizely
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z\-:]{54}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - "optimizely_token = 12345678-1234-1234-1234-1234567890abcdef12345678-123:abcd"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://api.optimizely.com/v2/projects"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

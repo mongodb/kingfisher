@@ -1,0 +1,31 @@
+rules:
+  - name: Qualaroo API Key
+    id: kingfisher.qualaroo.1
+    pattern: |
+      (?xi)
+      \b
+      qualaroo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      ([a-z0-9A-Z=]{64})
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'qualaroo TOKEN: ABCDEF1234567890abcdef1234567890ABCDEF1234567890abcdef1234567890'
+      - 'qualaroo privateKEY: ABCDEF1234567890abcdef1234567890ABCDEF1234567890abcdef1234567890'
+      - 'Qualaroo Secret=ABCDEF1234567890abcdef1234567890ABCDEF1234567890abcdef1234567890'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ "Basic " | append: TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.qualaroo.com/api/v1/nudges

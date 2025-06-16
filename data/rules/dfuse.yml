@@ -1,0 +1,32 @@
+rules:
+  - name: Dfuse API Key
+    id: kingfisher.dfuse.1
+    pattern: |
+      (?xi)
+      \b
+      web_
+      (
+        [0-9a-z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - web_123e4567e89b12d3a456426614174abc
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "api_key": "{{ TOKEN }}"
+            }
+          headers:
+            Content-Type: application/json
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://auth.dfuse.io/v1/auth/issue

@@ -1,0 +1,34 @@
+rules:
+  - name: ZonkaFeedback API Token
+    id: kingfisher.zonkafeedback.1
+    pattern: |
+      (?xi)
+      \b
+      zonka
+      (?:.|[\n\r]){0,8}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [A-Za-z0-9]{36}
+      )
+      \b
+    confidence: medium
+    examples:
+      - "zonkaSECRET: A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8"
+      - "zonkaTOKEN A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8"
+      - "zonka ACCESS_KEY A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8"
+      - "zonka-key-ACCESS A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Z-API-TOKEN: "{{ TOKEN }}"
+          method: GET
+          url: "https://app-us1.zonkafeedback.com/responses?page=1&limit=25&startDate=2020-05-02&endDate=2020-05-09"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

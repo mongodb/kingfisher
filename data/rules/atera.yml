@@ -1,0 +1,32 @@
+rules:
+  - name: Atera API Key
+    id: kingfisher.atera.1
+    pattern: |
+      (?xi)
+      \b
+      atera
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - atera_key = aistqqnd7yd1r6ls74icrhu93l236jt5
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            X-API-KEY: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.atera.com/api/v3/alerts

@@ -1,0 +1,34 @@
+rules:
+  - name: Bugsnag API Key
+    id: kingfisher.bugsnag.1
+    pattern: |
+      (?xi)
+      \b
+      bugsnag
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "bugsnag secret 123e4567-e89b-12d3-a456-426614174000"
+      - "bugsnag private-key 123e4567-e89b-12d3-a456-426614174abc"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+            Authorization: "token {{ TOKEN }}"
+          method: GET
+          url: "https://api.bugsnag.com/user/organizations?admin"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,34 @@
+rules:
+  - name: Formcraft API Key
+    id: kingfisher.formcraft.1
+    pattern: |
+      (?xi)
+      \b
+      formcraft
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{16}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - formcraft_key=1234567890abcdef
+      - formcraft_token=abcdef1234567890
+      - FORMCRAFT_ACCESS_KEY=a1b2c3d4e5f6g7h8
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://formcrafts.com/api/v1/

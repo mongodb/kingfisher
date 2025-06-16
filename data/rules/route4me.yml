@@ -1,0 +1,30 @@
+rules:
+  - name: Route4Me API Key
+    id: kingfisher.route4me.1
+    pattern: |
+      (?xi)
+      \b
+      route4me
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - route4me API KEY=SECRET ACCESS TOKEN=ABCD1234EFGH5678IJKL9012MNOP3456
+      - route4mePRIVATEKEY=ZXYW9876VTSR5432QNMO1298LKJC8765
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.route4me.com/api.v4/address_book.php?api_key={{ TOKEN }}
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch

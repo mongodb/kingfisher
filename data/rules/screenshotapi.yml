@@ -1,0 +1,35 @@
+rules:
+  - name: ScreenshotAPI Key
+    id: kingfisher.screenshotapi.1
+    pattern: |
+      (?xi)
+      \b
+      screenshotapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Z]{7}-[0-9A-Z]{7}-[0-9A-Z]{7}-[0-9A-Z]{7}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - screenshotapi KEY-ABC1234-GHI5678-JKL9012-MNO3456
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://shot.screenshotapi.net/screenshot?token={{ TOKEN }}&url=https://google.com&width=1920&height=1080"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words: 
+                - "api_key_invalid"
+              negative: true
+            - type: JsonValid

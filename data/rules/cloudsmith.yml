@@ -1,0 +1,37 @@
+rules:
+  - name: Cloudsmith API Key
+    id: kingfisher.cloudsmith.1
+    pattern: |
+      (?xi)
+      \b
+      cloudsmith
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - cloudsmith 1234567890abcdef1234567890abcdef12345678
+      - cloudsmith abcdef0123456789abcdef0123456789abcdef01
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.cloudsmith.io/v1/user/self/
+          headers:
+            Accept: application/json
+            X-Api-Key: '{{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words: 
+                - '"authenticated":false'
+              negative: true
+            - type: JsonValid

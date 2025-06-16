@@ -1,0 +1,33 @@
+rules:
+  - name: Zenkit API Key
+    id: kingfisher.zenkit.1
+    pattern: |
+      (?xi)
+      \b
+      zenkit
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{8}-[0-9A-Za-z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - zenkit SECRET 12345678-abcd1234efgh5678ijkl9012mnop3456
+      - zenkit TOKEN abcd1234-xyz9876uvw2345rst8901qpo6789ijkL
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://base.zenkit.com/api/v1/users/me
+          headers:
+            Zenkit-API-Key: '{{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

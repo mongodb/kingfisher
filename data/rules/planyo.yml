@@ -1,0 +1,37 @@
+rules:
+  - name: Planyo API Key
+    id: kingfisher.planyo.1
+    pattern: |
+      (?xi)
+      \b
+      planyo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{62}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - planyo_token=bu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefghijklmnopqrstuvwxyz12
+      - planyo_key=12345678901234567890123456789012345678901234567890123456789012
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.planyo+json; version=3"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"data"'
+                - '"Your Planyo site has expired"'
+          url: 'https://www.planyo.com/rest/?method=get_site_info&api_key={{ TOKEN }}'

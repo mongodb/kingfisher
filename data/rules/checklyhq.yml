@@ -1,0 +1,33 @@
+rules:
+  - name: ChecklyHQ API Key
+    id: kingfisher.checklyhq.1
+    pattern: |
+      (?xi)
+      \b
+      checklyhq
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - checklyhqTOKEN=ad13dfc23adf55fa404a91e76d96f472
+      - checklyhq_SECRET=ff339a24f65123b9d0a42316f8e9c7d6
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.checklyhq.com/v1/checks

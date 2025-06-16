@@ -1,0 +1,32 @@
+rules:
+  - name: SimFin API Key
+    id: kingfisher.simfin.1
+    pattern: |
+      (?xi)
+      \b
+      simfin
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - simfinKEY=abcdefghijklmnopqrstuvwxyz123456
+      - simfinTOKEN:ABCDEFGHIJKLMNOPQRSTUVWXYZ123456
+      - simfinSECRET:12345678901234567890123456789012
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://simfin.com/api/v2/companies/list?api-key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

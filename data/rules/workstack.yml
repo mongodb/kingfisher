@@ -1,0 +1,31 @@
+rules:
+  - name: Workstack API Key
+    id: kingfisher.workstack.1
+    pattern: |
+      (?xi)
+      \b
+      workstack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9Aa-zA-Z]{60}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - workstack SECRET_TOKEN=1234567890bu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWDEF1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+          method: GET
+          url: https://app.workstack.io/api/team?api_token={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

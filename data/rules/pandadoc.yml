@@ -1,0 +1,37 @@
+rules:
+  - name: PandaDoc API Key
+    id: kingfisher.pandadoc.1
+    pattern: |
+      (?xi)
+      \b
+      pandadoc
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{40}
+      )
+      \b
+    min_entropy: 3.1
+    confidence: medium
+    examples:
+      - pandadoc PRIVATE gHjrT345rflePOKazE2Bj47hF56U9dsVwMdSiY73
+      - pandadoc SECRET qwerTYUI3456bnmzXCvbnmzaQWERtyuiOPasdfgh
+      - pandadoc ACCESS qF56MjdfY32jaPQwrt7SW3ZnVbgD2HrPLe2cf94p
+      - pandadoc TOKEN jh67YtMnbV56lpoIUYtr23wsXDFghJmKY56tSunL
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "API-Key {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.pandadoc.com/public/v1/documents
+    references:
+      - https://developers.pandadoc.com/reference/using-api-keys

@@ -1,0 +1,55 @@
+rules:
+  - name: Confluent Client ID
+    id: kingfisher.confluent.1
+    pattern: |
+      (?x)(?i)
+      \b(?:confluent|ccloud|cpdev|kafka)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{16}
+      )
+      \b
+    min_entropy: 3
+    confidence: medium
+    visible: false
+    examples:
+      - confluent client_id=ABCD1234EFGH5678
+      - kafka_client=WXYZ9876MNOP5432
+    references:
+      - https://docs.confluent.io/cloud/current/access-management/authenticate/api-keys.html
+  - name: Confluent API Secret
+    id: kingfisher.confluent.2
+    pattern: |
+      (?x)(?i)
+      (?:confluent|ccloud|cpdev|kafka)
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9\+/]{64}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - confluent secret=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ab
+      - kafka_token=ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCD
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ CLIENTID | append: ":" | append: TOKEN | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.confluent.cloud/iam/v2/api-keys/{{ CLIENTID }}
+    references:
+      - https://docs.confluent.io/cloud/current/access-management/authenticate/api-keys.html
+    depends_on_rule:
+      - rule_id: "kingfisher.confluent.1"
+        variable: CLIENTID

@@ -1,0 +1,33 @@
+rules:
+  - name: DronaHQ API Key
+    id: kingfisher.dronahq.1
+    pattern: |
+      (?xi)
+      \b
+      dronahq
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{50}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - dronahq SECRET abcdefghijklmnopqrstuvwxy1234567890abcdefghijklmno
+      - dronahq TOKEN abcdefghijklmnopqrstuvwxy1234567890abcdefghijklmno
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: 'https://plugin.api.dronahq.com/users/?tokenkey={{ TOKEN }}'
+          headers:
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

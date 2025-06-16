@@ -1,0 +1,34 @@
+rules:
+  - name: New Relic Personal API Key
+    id: kingfisher.newrelic.1
+    pattern: |
+      (?xi)
+      \b
+      newrelic
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9_.]{4}
+        -
+        [A-Z0-9_.]{42}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - newrelic_key = abcd-1234567890abcdef1234567890abcdef1234dd5678
+      - newrelic_token = 1234-abcdefghijklmnopqrstuvwxyzABCD2342EFGHIJKL
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.newrelic.com/v2/users.json
+          headers:
+            X-Api-Key: '{{ TOKEN }}'
+        response_matcher:
+          - report_response: true
+          - type: StatusMatch
+            status:
+              - 200

@@ -1,0 +1,31 @@
+rules:
+  - name: ZipCodeAPI Key
+    id: kingfisher.zipcodeapi.1
+    pattern: |
+      (?xi)
+      \b
+      zipcodeapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{64}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - zipcodeapiSECRET abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789ab
+      - zipcodeapiPRIVATE qrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz01
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://www.zipcodeapi.com/rest/{{ TOKEN }}/distance.json/71601/72959/mile"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

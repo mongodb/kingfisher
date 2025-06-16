@@ -1,0 +1,32 @@
+rules:
+  - name: Calendly API Key
+    id: kingfisher.calendly.1
+    pattern: |
+      (?xi)
+      \b
+      calendly
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        eyJ[A-Za-z0-9-_]{100,300}\.eyJ[A-Za-z0-9-_]{100,300}\.[A-Za-z0-9-_]+
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - calendly_token=eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJjYWxlbmRseS5jb20iLCJpYXQiOjE2MjM0NTY3ODksImV4cCI6MTYyMzQ2MDM4OSwiYXVkIjoiY2FsZW5kbHkuY29tIiwic3ViIjoiYWJjZGVmMTIzNDU2Nzg5MCJ9.eyJpc3MiOiJjYWxlbmRseS5jb20iLCJpYXQiOjE2MjM0NTY3ODksImV4cCI6MTYyMzQ2MDM4OSwiYXVkIjoiY2FsZW5kbHkuY29tIiwic3ViIjoiYWJjZGVmMTIzNDU2Nzg5MCJ9.abcdefghijklmnopqrstuvwxyz
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.calendly.com/users/me

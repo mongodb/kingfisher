@@ -1,0 +1,30 @@
+rules:
+  - name: Adafruit IO Key
+    id: kingfisher.adafruitio.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        aio_
+        [a-zA-Z0-9]{28}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - '#define IO_KEY       "aio_NrZCb67VvzSaM7fr3nMXrfZ1uMPH"'
+      - 'export IO_KEY="aio_NrZCb67VvzSaM7fr3nMXrfZ1uMPH"'
+      - 'ADAFRUIT_IO_KEY = "aio_NrZCb67VvzSaM7fr3nMXrfZ1uMPH"'
+    validation:
+      type: Http
+      content:
+        request:
+          url: https://io.adafruit.com/api/v2/ladybugtest/feeds/
+          headers:
+            x-aio-key: "{{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

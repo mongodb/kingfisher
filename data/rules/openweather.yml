@@ -1,0 +1,37 @@
+rules:
+  - name: OpenWeather Map API Key
+    id: kingfisher.openweather.1
+    pattern: |
+      (?xi)
+      (?:pyowm|openweather|\bowm\b)
+      (?:.|[\n\r]){0,64}?
+      \b
+      (
+        (?:
+          [a-z0-9]{32}
+        )
+        \b
+        |APPID=
+        (?:
+          [a-z0-9]{32}
+        )
+      )
+      \b
+    min_entropy: 3.5
+    examples:
+      - pyowm = '3k144a5af729351d0fc58bdrj9a21mkr'
+      - owm = '3k144a5af729351d0fc58bdrj9a21mkr'
+      - openweatherapikey=cd2b1d12d01ae2deffecfebafcc3c31d
+      - apikey=openweather:cd2b1d12d01ae2deffecfebafcc3c31d
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          response_matcher:
+            - report_response: true
+            - match_all_status: true
+              status:
+                - 200
+              type: StatusMatch
+          url: https://api.openweathermap.org/data/2.5/weather?id=5128581&lang=fr&appid={{ TOKEN }}

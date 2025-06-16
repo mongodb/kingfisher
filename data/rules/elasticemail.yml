@@ -1,0 +1,34 @@
+rules:
+  - name: ElasticEmail API Key
+    id: kingfisher.elasticemail.1
+    pattern: |
+      (?xi)
+      \b
+      elastic
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Za-z0-9_-]{96}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - elastic_key = amEi67sdfhQIh3sdfksjDH9fdnamE_egW9gR8A471N8ljkHENkdsfjall4OaW9gR8ak29sh471N8ljkHENkdsfjall4OaW9g
+    validation:
+      type: Http
+      content:
+        request:
+          url: https://api.elasticemail.com/v2/account/profileoverview?apikey={{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words: 
+                - '"success":false'
+              negative: true

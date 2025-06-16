@@ -1,0 +1,30 @@
+rules:
+  - name: IpStack API Key
+    id: kingfisher.ipstack.1
+    pattern: |
+      (?xi)
+      \b
+      ipstack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-fA-F0-9]{32}
+      )
+      \b
+    min_entropy: 3.0
+    examples:
+      - "ipstack_token=123e4567e89b12d3a456426614174000"
+      - "ipstack_key=abcdefabcdefabcdefabcdefabcdef12"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.ipstack.com/8.8.8.8?access_key={{ TOKEN }}"
+          response_matcher:
+            - type: WordMatch
+              words:
+                - "continent_code"
+                - '"info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."'

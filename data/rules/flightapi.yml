@@ -1,0 +1,32 @@
+rules:
+  - name: FlightApi Key
+    id: kingfisher.flightapi.1
+    pattern: |
+      (?xi)
+      \b
+      flightapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{24}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - flightapi SECRET abcdef123456abcdef123456
+      - flightapi KEY abcdef123456abcdef666666
+      - flightapi ACCESS abcdefabcd1234abcdefabcd
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.flightapi.io/iata/{{ TOKEN }}/london/airport
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

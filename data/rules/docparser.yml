@@ -1,0 +1,35 @@
+rules:
+  - name: Docparser API Key
+    id: kingfisher.docparser.1
+    pattern: |
+      (?xi)
+      \b
+      docparser
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-f0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "docparser_key=1234567890abcdef1234567890abcdef12345678"
+      - "docparser_token 0123456789abcdef0123456789abcdef01234567"
+    references:
+      - https://docparser.com/docs/api/
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: "https://api.docparser.com/v1/parsers?api_key={{ TOKEN }}"

@@ -1,0 +1,33 @@
+[env]
+
+# OIDC authentication
+[[env.variables]]
+name = "vvp.auth.oidc.registration.clientSecret"
+valueFrom.secretKeyRef.name = "mysecrets"
+valueFrom.secretKeyRef.key = "oidc"
+
+# JDBC persistence
+[[env.variables]]
+name = "spring.datasource.password"
+valueFrom.secretKeyRef.name = "mysecrets"
+valueFrom.secretKeyRef.key = "jdbc"
+
+# Bootstrap Token
+[[env.variables]]
+name = "vvp.auth.bootstrapToken.token"
+valueFrom.secretKeyRef.name = "mysecrets"
+valueFrom.secretKeyRef.key = "blink182"
+
+[metadata]
+private_key = "all along the watchtower"
+my_private_key = "ja4wALsaho20af21dS"
+
+[type]
+kind = "Opaque"
+
+[data]
+password = "dG9wLVNlY3JldA=="
+jdbc = "dG9wLVNlY3JldA=="
+my_unique_authorization_key = "dG9wLVNlY3JldA=="
+aws_key_id = "AKIA6ODU5DHT7VPXGCE4"
+aws_secret = "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"

@@ -1,0 +1,34 @@
+rules:
+  - name: Lemlist API Key
+    id: kingfisher.lemlist.1
+    pattern: |
+      (?xi)
+      \b
+      lemlist
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-f0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'lemlistSECRET abcdef0123456789abcdef0123456789'
+      - 'lemlistTOKEN abcdef0123456789abcdef0123456789'
+      - 'lemlistPRIVATE abcdef0123456789abcdef0123456789'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ (":" | append: TOKEN) | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.lemlist.com/api/team

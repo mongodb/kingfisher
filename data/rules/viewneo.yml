@@ -1,0 +1,36 @@
+rules:
+  - name: Viewneo API Key
+    id: kingfisher.viewneo.1
+    pattern: |
+      (?xi)
+      \b
+      viewneo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9A-Z]{120,300}
+        \.[a-z0-9A-Z]{150,300}
+        \.[a-z0-9A-Z-_]{600,800}
+      )
+    min_entropy: 4.5
+    confidence: medium
+    examples:
+      - viewneo_token = Dj95N5oDZlzVbGOJdd9p2aT3LFkSyX9z6xhoJBXKyYWBccIePzqnYbWNChHkluE66ORYa3gAaqX62oIOrLPqzxPA1KpcEh8EQEaJKXbBh841rutvzdjxmvFaERbAF.G16ShDRqycqY5hyTrrvHlzNlSshtTrDVPn1gGTK8BRCxtyNUgF4Yqmo5SSWBmob6lkftqKeQJ7xecgdwf4NIGoQ6sOzh53e8aSWPoRKt1zMBRc3wRpzSErjK9249TxU7Ja4bUwZq5IdOwZfg8tXRV837qNf.qCDumbB6q54yn2kDgaiGRCVvNwXmWWcIwHRZ8hz57KqGqmcqFFz7c53g1DNbmvdY1N42S8PrmmYO6q5UsQ7bktGKNbQageuH6kcHu0VmzrholmNv3mvkVcuPFqUCSD8QNSR5BPt10t50SfBKI1P13B3Fq5wJ54aoSuSxAtBolav1XTHJ3fjlxcmVWzGEeakayBDNS3bQvDQuWSTxwL38B9cWNjdoPokWstPaFA78u6a2Q455uTj8okYzTVjSQE6fntVTLF9cDAq7SbR0jVKIMDd6SAKvP4uofKVg3BRkAapbUTYZT9qz53JQudh2Bx1fXNW51lnbU8ciR903g8B3ZKkFNSI5PM6bqi5VQ4ZbpLvCcUFlLofqsZ3hrTbK61bOk0czzvvES1ql9YyT8lDIRgkwtk4QU3uRgTLoSQKrQKcv6snPbWgDVYllw72x7cFSBcKUXvyhzYfcMeIwvi7XaqlJpsUiosV1yUD7UoZz2zlKyZdlCXiWWsnl01yg8zgKaYmag49Wl5XdymhfdsImZlKgMqwcfi1vp8vP3oZfPRJWOCkRUiowJcVjmiSzqCxp6qda53UkTnmkjonEZaOM0PknQNCjvehSc5y7xzm7lZdH92jnGNI9o3tteQrL5MXaGvzcXi3KwEEroWv
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://cloud.viewneo.com/api/v1.0/playlist
+    references:
+      - https://www.viewneo.com/api-documentation

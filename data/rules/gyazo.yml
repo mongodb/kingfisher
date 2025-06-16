@@ -1,0 +1,30 @@
+rules:
+  - name: Gyazo API Key
+    id: kingfisher.gyazo.1
+    pattern: |
+      (?xi)
+      \b
+      gyazo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z-]{43}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - gyazo SECRET access_token-abcdefghij1234567890klmnopqrstuvABCDEFG1234
+      - gyazoTOKEN xyz-0123456789abcdefhijkLMNOPQRstuVWXYzABCDE1234567
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.gyazo.com/api/images?access_token={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

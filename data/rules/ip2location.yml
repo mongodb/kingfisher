@@ -1,0 +1,30 @@
+rules:
+  - name: Ip2location API Key
+    id: kingfisher.ip2location.1
+    pattern: |
+      (?xi)
+      \b
+      ip2location
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - ip2location SECRETKEY 1234567890ABCDEF1234567890ABCDEF
+      - 'ip2locationKEY=B1CD2EF3GHIJ4567KLMN8OPQR9ST0UVW'
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.ip2location.io/?key={{ TOKEN }}
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch

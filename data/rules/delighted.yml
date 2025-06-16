@@ -1,0 +1,41 @@
+rules:
+  - name: Delighted API Key
+    id: kingfisher.delighted.1
+    pattern: |
+      (?xi)
+      \b
+      delighted
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9A-Z]{32}
+      )
+      \b
+    min_entropy: 3.2
+    confidence: medium
+    examples:
+      - delighted_key=abCdefgHIJKLMNOpqrstUVWXyz012345
+      - delighted_token=ABCDEFGHIJKLMNOPQRSTUVWXYZ012345
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Basic {{ TOKEN | b64enc }}"
+            Content-Type: application/json
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.delighted.com/v1/people.json
+          body: |
+            {
+              "email": "test@example.com",
+              "properties": {
+                "platform": "web"
+              }
+            }

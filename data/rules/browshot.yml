@@ -1,0 +1,32 @@
+rules:
+  - name: Browshot API Key
+    id: kingfisher.browshot.1
+    pattern: |
+      (?xi)
+      \b
+      browshot
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{28}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "browshot key abcdefghijklmnopqrstuvwxyzab"
+      - "browshot SECRET 1234567890123456789012345678"
+      - "browshot PRIVATE TOKEN ABCDEFGHIJKLMNOPQRSTUVWXYZAB"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.browshot.com/api/v1/instance/list?key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

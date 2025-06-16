@@ -1,0 +1,32 @@
+rules:
+  - name: Yelp API Key
+    id: kingfisher.yelp.1
+    pattern: |
+      (?xi)
+      \b
+      yelp
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_\\=.\\-]{128}
+      )
+      \b
+    min_entropy: 3.8
+    confidence: medium
+    examples:
+      - yelp_token = abcdefghij1234567890abcdefghijklmnopqrstuvwx1234567890yzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwx1234567890yz
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: https://api.yelp.com/v3/businesses/search?term=delis&latitude=40.7620799&longitude=-73.984179
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

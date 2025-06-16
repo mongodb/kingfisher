@@ -1,0 +1,37 @@
+rules:
+  - name: Weights & Biases API Key
+    id: kingfisher.wandb.1
+    pattern: |
+      (?xi)
+      \b
+      wandb
+      \b
+      (?:.|[\n\r]){0,16}?
+      (
+        [0-9a-f]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - wandb 123e4567abcd4567abcd4567abcd4567abcd4567
+      - wandb abcdef1234567890abcdef1234567890abcdef01
+    validation:
+      type: Http
+      content:
+        request:
+          body: '{"query":"query Viewer { viewer { id username email admin } }"}'
+          headers:
+            Content-Type: application/json
+            Authorization: 'Basic {{ "api:" | append: TOKEN | b64enc }}'
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - '"username":'
+          url: https://api.wandb.ai/graphql

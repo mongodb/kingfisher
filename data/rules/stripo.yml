@@ -1,0 +1,32 @@
+rules:
+  - name: Stripo JWT Token
+    id: kingfisher.stripo.1
+    pattern: |
+      (?xi)
+      \b
+      stripo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        eyJhbGciOiJIUzI1NiJ9\.[0-9A-Za-z]{130}\.[0-9A-Za-z_-]{43}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "stripo_tokeny = eyJhbGciOiJIUzI1NiJ9.AO9gWJy6UnMceCzA4Lig0VV4wwUjIf6N5NIbwh2eLvEu2djHkrVf7AdpOfFxIp488PfscAidf36DyGlKbFvSzEbRM9ZFce4i6QFSNFSoWSebGI1HjhJ04QF8jsmMxmSpnd.pXQPQg6j4Zpp4limL4CI5HdIUuRel2CW5tZFXmVzcBM"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Stripo-Api-Auth: "{{ TOKEN }}"
+          method: GET
+          url: "https://stripo.email/emailgeneration/v1/emails?parameters=sortingAsc=true"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

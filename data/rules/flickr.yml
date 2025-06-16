@@ -1,0 +1,36 @@
+rules:
+  - name: Flickr API Key
+    id: kingfisher.flickr.1
+    pattern: |
+      (?xi)
+      \b
+      flickr
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{32}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - flickr SECRET 1234567890abcdef1234567890abcdef
+      - flickr KEY io3l0urk6hubmo2gbbzrf192key0ke9x
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - 'owner='
+          url: https://www.flickr.com/services/rest/?method=flickr.tags.getHotList&api_key={{ TOKEN }}

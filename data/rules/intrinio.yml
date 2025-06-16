@@ -1,0 +1,31 @@
+rules:
+  - name: Intrinio API Key
+    id: kingfisher.intrinio.1
+    pattern: |
+      (?xi)
+      \b
+      intrinio
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{44}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - INTRINIO_API_KEY=OJk4ZWE2MjYyYzFhNDM2ZjlhYzE2ZTRjYjk3NmQ5YWFi
+      - intrinio_secret=P9n5ZWE2MjYyYzFhNDM2ZjlhYzE2ZTRjYjk3NmQ5YWFi
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api-v2.intrinio.com/securities?api_key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

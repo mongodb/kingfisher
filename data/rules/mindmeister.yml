@@ -1,0 +1,35 @@
+rules:
+  - name: Mindmeister API Key
+    id: kingfisher.mindmeister.1
+    pattern: |
+      (?xi)
+      \b
+      mindmeister
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{43}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - mindmeister_token = mgdvkj45d4k3Czv2psdfd0x7g07Yof93rqtnj8fz2bm
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"stat":"ok"'
+          url: https://www.mindmeister.com/services/rest/oauth2?method=mm.maps.getList

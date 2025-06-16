@@ -1,0 +1,96 @@
+rules:
+  - name: DigitalOcean API Key
+    id: kingfisher.digitalocean.1
+    pattern: |
+      (?x)
+      \b
+      (
+        (?:dop|doo)_v1_
+        [a-f0-9]{64}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - dop_v1_1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+      - 'token         = "dop_v1_ef0e04edc13918192246e0c90f0735c7f4db7a5a036a857e48d6cc98f1c9576b"'
+    categories:
+      - api
+      - secret
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.digitalocean.com/v2/account
+
+  - name: DigitalOcean Refresh Token
+    id: kingfisher.digitalocean.2
+    pattern: |
+      (?x)
+      \b
+      (
+        dor_v1_
+        [a-f0-9]{64}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - dor_v1_1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+      - '  "refresh_token": "dor_v1_d6ce5b93104521c47be0b580e9296454ef4a319b02b5513469f0ec71d99af2e2",'
+    categories:
+      - api
+      - secret
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          response_matcher:
+            - type: JsonValid
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://cloud.digitalocean.com/v1/oauth/token?grant_type=refresh_token&refresh_token={{ TOKEN }}
+
+  - name: DigitalOcean Token
+    id: kingfisher.digitalocean.3
+    pattern: |
+      (?x)
+      \b
+      (
+        (?:dop|doo)_v1_
+        [a-f0-9]{64}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - dop_v1_1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+      - 'token         = "dop_v1_ef0e04edc13918192246e0c90f0735c7f4db7a5a036a857e48d6cc98f1c9576b"'
+      - 'curl -X GET -H "Content-Type: application/json" -H "Authorization: Bearer doo_v1_c46dde8bd620fcc382e70d5d43be6eebb141fa2452e8f8fa882433377898ebf2" "https://api.digitalocean.com/v2/cdn/endpoints"'
+    categories:
+      - api
+      - secret
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.digitalocean.com/v2/account

@@ -1,0 +1,33 @@
+rules:
+  - name: Twitch Access Token
+    id: kingfisher.twitch.1
+    pattern: |
+      (?xi)
+      \b
+      twitch
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{30}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - twitch_access_token=abcdefghij1234567890abcdefghij
+      - TWITCH_SECRET=1234567890abcdefghij1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: OAuth {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://id.twitch.tv/oauth2/validate

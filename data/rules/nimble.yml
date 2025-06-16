@@ -1,0 +1,36 @@
+rules:
+  - name: Nimble API Key
+    id: kingfisher.nimble.1
+    pattern: |
+      (?xi)
+      \b
+      nimble
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{30}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "nimble SECRET N2kxq5vKN6S7M9Jp0vHK8z2Qwy6V8d"
+      - "nimble PRIVATE q9k2vHJZ4BTG6A8l2mNK3v9JH7tN1j"
+      - "nimble ACCESS 3mL6pHJQ7NMK3v8Z1J6n2L9F6qK2dH"
+      - "nimble TOKEN V9jK3mL6pHJQ7N5K2v8Z1J6n2L9F6q"
+      - "nimble KEY Y5tJ4mL2K9pHN7vM3J2rN8qK6z3X5s"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.nimble.com/api/v1/myself

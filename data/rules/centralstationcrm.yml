@@ -1,0 +1,35 @@
+rules:
+  - name: CentralStationCRM API Key
+    id: kingfisher.centralstationcrm.1
+    pattern: |
+      (?xi)
+      \b
+      centralstationcrm
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{30}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - centralstationcrmKEY=12ab34cd56ef78gh90ij12kl34mn56
+      - centralstationcrmTOKEN=abcdefabcdefabcdefabcdefabcdef
+      - centralstationcrmSECRET=123456123456123456123456123456
+      - centralstationcrmACCESS=abcdefabcdefabcdefabcdefabcdef
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-apikey: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.centralstationcrm.net/api/users.json

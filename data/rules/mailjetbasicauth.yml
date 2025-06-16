@@ -1,0 +1,31 @@
+rules:
+  - name: MailJet Basic Auth
+    id: kingfisher.mailjet.1
+    pattern: |
+      (?xi)
+      \b
+      mailjet
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Za-z0-9]{87}=
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - mailjet_token = neno01fy530zukbtvq8xunwec74b7m7lsmzha8su93zdvy4mp4dc5gctfa2rcwetllcjzncirjv58se7i8l9gdf=
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.mailjet.com/v3/REST/message

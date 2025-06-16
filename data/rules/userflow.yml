@@ -1,0 +1,33 @@
+rules:
+  - name: Userflow API Key
+    id: kingfisher.userflow.1
+    pattern: |
+      (?xi)
+      \b
+      userflow
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z_]{29}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - userflow_token=abc12_def34ghijk5mn6pqrst7890
+      - USERFLOW_SECRET=xyz98_wvu76tsrqp5nm4lkjih3210
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.userflow+json; version=3"
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.userflow.com/users

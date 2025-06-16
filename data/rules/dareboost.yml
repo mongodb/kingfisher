@@ -1,0 +1,34 @@
+rules:
+  - name: Dareboost API Key
+    id: kingfisher.dareboost.1
+    pattern: |
+      (?xi)
+      \b
+      dareboost
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9a-zA-Z]{60}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - "dareboost=bu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefghijklmnopqrstuvwxyz"
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "token": "{{ TOKEN }}",
+              "location": "Paris"
+            }
+          headers:
+            Content-Type: application/json
+          method: POST
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"status":200'
+          url: https://api.dareboost.com/0.8/config

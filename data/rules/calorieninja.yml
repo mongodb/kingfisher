@@ -1,0 +1,31 @@
+rules:
+  - name: CalorieNinja API Key
+    id: kingfisher.calorieninja.1
+    pattern: |
+      (?xi)
+      \b
+      calorieninja
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9A-Za-z]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "calorieninja_token = WpnELPNqADyZJMSn4OqHGd29LD7S3VixSCw9nOWV"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.calorieninjas.com/v1/nutrition?query"
+          headers:
+            Content-Type: "application/json"
+            X-Api-Key: "{{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

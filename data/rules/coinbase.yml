@@ -1,0 +1,37 @@
+rules:
+  - name: Coinbase API Key
+    id: kingfisher.coinbase.1
+    pattern: |
+      (?x)
+        (?i)
+        \b
+        coinbase
+        (?:.|[\n\r]){0,16}?
+        (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+        (?:.|[\n\r]){0,16}?
+        \b
+        (
+          [a-zA-Z-0-9]{32}
+        )
+        \b                    
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - COINBASE_API_KEY=32iAkQCcHHYxXGx20VogBZoj27PC1ouI
+      - coinbase_secret=kETSVUrnPuVzCcVj32iAkQCcHHYxXGx2
+    references:
+      - https://docs.cloud.coinbase.com/exchange/docs/authorization-and-authentication
+      - https://docs.cloud.coinbase.com/commerce/docs/api-auth
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.coinbase.com/v2/user

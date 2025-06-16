@@ -1,0 +1,34 @@
+rules:
+  - name: DailyCO API Key
+    id: kingfisher.dailyco.1
+    pattern: |
+      (?xi)
+      \b
+      daily
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{64}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - daily SECRET 123f456b789c234b567e890f123a456c789d012e345b678f901c234b567e890f
+      - daily ACCESS 123f456b789c234b567e890f123a456c789d012e345b678f901c234b567e890f
+      - dailyKEY 123f456b789c234b567e890f123a456c789d012e345b678f901c234b567e890f
+      - dailyTOKEN 123f456b789c234b567e890f123a456c789d012e345b678f901c234b567e890f
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: https://api.daily.co/v1/rooms
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

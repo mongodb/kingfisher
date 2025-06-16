@@ -1,0 +1,33 @@
+rules:
+  - name: Tiingo API Key
+    id: kingfisher.tiingo.1
+    pattern: |
+      (?xi)
+      \b
+      tiingo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{40}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "tiingo_secret=abcdef1234567890abcdef1234567890abcdef12"
+      - "tiingo_token=12345abcde67890fabcde67890fabcde67890fab"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            Authorization: "Token {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.tiingo.com/tiingo/fundamentals/definitions

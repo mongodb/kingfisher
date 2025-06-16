@@ -1,0 +1,35 @@
+rules:
+  - name: Audd API Key
+    id: kingfisher.audd.1
+    pattern: |
+      (?xi)
+      \b
+      audd
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9-]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - audd_key=1234567890abcdef1234567890abcdef
+      - audd_token=abcd1234efgh5678ijkl9012mnop3456
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.audd.io/setCallbackUrl/?api_token={{ TOKEN }}&url=https://yourwebsite.com/callbacks_handler/"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"status":"success"'

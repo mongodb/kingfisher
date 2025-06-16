@@ -1,0 +1,32 @@
+rules:
+  - name: Glassnode API Key
+    id: kingfisher.glassnode.1
+    pattern: |
+      (?xi)
+      \b
+      glassnode
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{27}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - glassnode SECRET 1A2B3C4D5E6F7G8H9I0J1K2L3M4N
+      - glassnode KEY abcdefghijklmnopqrstuvwxyzA
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.glassnode.com/v1/metrics/indicators/sopr?a=btc&api_key={{ TOKEN }}

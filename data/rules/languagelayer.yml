@@ -1,0 +1,38 @@
+rules:
+  - name: LanguageLayer API Key
+    id: kingfisher.languagelayer.1
+    pattern: |
+      (?xi)
+      \b
+      languagelayer
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - languagelayer SECRET ab12cd34ef56gh78ij90kl12mn34op56
+      - languagelayer PRIVATE xy12za34vb56ui78op90qs12tr34ew56
+      - languagelayer ACCESS lm12no34pq56rs78tu90vw12xy34za56
+      - languagelayer KEY uv12wx34za56bc78de90fg12hi34jk56
+      - languagelayer TOKEN qr12tu34vw56xy78za90bc12de34fg56
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.languagelayer.com/languages?access_key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"results"'
+                - '"info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."'

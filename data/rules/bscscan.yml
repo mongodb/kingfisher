@@ -1,0 +1,35 @@
+rules:
+  - name: BscScan API Key
+    id: kingfisher.bscscan.1
+    pattern: |
+      (?xi)
+      \b
+      bscscan
+      (?:.|[\n\r]){0,8}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9A-Z]{34}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "bscscan-key = ABCDEFGHIJ1234567890KLMNOPQRSTUVWX"
+      - "bscscan_token:12345ABCDEFGHIJKLMNOPQRSTUVWXYZ789"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.bscscan.com/api?module=account&action=balance&address=0x70F657164e5b75689b64B7fd1fA275F334f28e18&apikey={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"status":"1"'
+                - '"message":"OK"'

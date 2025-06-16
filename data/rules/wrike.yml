@@ -1,0 +1,32 @@
+rules:
+  - name: Wrike API Key
+    id: kingfisher.wrike.1
+    pattern: |
+      (?xi)
+      \b
+      wrike
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        ey[a-zA-Z0-9\-._]{333}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - wrike_token = eyTbo6cTM72eum7PJGEuM3CKQvOh56gzYw3cMgAgjWzPamlH5qjmwvN5aC3Z792yNhsScAT3cMIo72yG5U9tMEgQwvnYsDdegBfiBleWzVTVumW4D.EPiL2niKsCy1rUIwC1Q7_qLWCFOHJjlRnMwqMfXwp3VTfZDjMhdWfeYp0mirYV0.rBi27tEKLkL3SmvlAWTypzmzJmwU0pin94B2nUAfVJkqX4ZdBYzswPkiOpagaM9CUPO01rNBX1t4QNeuMH-lSdqTMhXH89zCmJ0nudL7NLVMLHzOwtze2RhgM3LJzTS0XVPd_DpkPwEZqZeAmdfStQhW8iYHq
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: https://app-us2.wrike.com/api/v4/contacts?me=true
+          response_matcher:
+            - report_response: true
+              type: StatusMatch
+              status:
+                - 200

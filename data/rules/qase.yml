@@ -1,0 +1,33 @@
+rules:
+  - name: Qase API Key
+    id: kingfisher.qase.1
+    pattern: |
+      (?xi)
+      \b
+      qase
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "qase_key = abcd1234567890abcd1234567890abcd12345678"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+            Token: "{{ TOKEN }}"
+          method: GET
+          url: "https://api.qase.io/v1/user"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

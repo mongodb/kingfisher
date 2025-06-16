@@ -1,0 +1,33 @@
+rules:
+  - name: CountryLayer API Key
+    id: kingfisher.countrylayer.1
+    pattern: |
+      (?xi)
+      \b
+      countrylayer
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - countrylayer_access_key=1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p
+      - COUNTRYLAYER_API_KEY=abcdef0123456789abcdef0123456789
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.countrylayer.com/v2/all?access_key={{ TOKEN }}

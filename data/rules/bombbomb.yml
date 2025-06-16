@@ -1,0 +1,33 @@
+rules:
+  - name: BombBomb API Key
+    id: kingfisher.bombbomb.1
+    pattern: |
+      (?xi)
+      \b
+      bombbomb
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Za-z0-9=+/]{88}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - bombbomb_TOKEN=1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnop==
+      - bombbomb_SECRET=ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyz1234567890abcdefghijklmnop==
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://api.bombbomb.com/v2/user/"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

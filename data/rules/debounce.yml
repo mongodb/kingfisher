@@ -1,0 +1,31 @@
+rules:
+  - name: Debounce API Key
+    id: kingfisher.debounce.1
+    pattern: |
+      (?xi)
+      \b
+      debounce
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{13}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - debounce_token = ab12cd34ef56g
+      - debounce_key = 123456789ABCD
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.debounce.io/v1/?api={{ TOKEN }}&email=some@gmail.com"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

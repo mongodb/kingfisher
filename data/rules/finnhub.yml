@@ -1,0 +1,33 @@
+rules:
+  - name: Finnhub API Key
+    id: kingfisher.finnhub.1
+    pattern: |
+      (?xi)
+      \b
+      finnhub
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{20}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - finnhub SECRET abcdef1234567890abcd
+      - finnhubTOKEN=uvwxyz9876543210zyxw
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: "https://finnhub.io/api/v1/calendar/economic?token={{ TOKEN }}"

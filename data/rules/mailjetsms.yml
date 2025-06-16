@@ -1,0 +1,32 @@
+rules:
+  - name: MailJetSMS API Key
+    id: kingfisher.mailjetsms.1
+    pattern: |
+      (?xi)
+      \b
+      mailjet
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Za-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - mailjet ABCDEFGHIJKLMNOPQRSTUVWXYZ012345
+      - mailjet-token 9A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.mailjetsms+json; version=3"
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.mailjet.com/v4/sms

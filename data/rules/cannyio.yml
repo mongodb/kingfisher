@@ -1,0 +1,37 @@
+rules:
+  - name: CannyIo API Key
+    id: kingfisher.cannyio.1
+    pattern: |
+      (?xi)
+      \b
+      canny
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{8}-
+        [a-z0-9]{4}-
+        [a-z0-9]{4}-
+        [a-z0-9]{4}-
+        [a-z0-9]{12}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - canny_secret_access_key=123e4567-e89b-12d3-a456-426614174000
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            apiKey={{ TOKEN }}
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://canny.io/api/v1/boards/list

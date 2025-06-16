@@ -1,0 +1,33 @@
+rules:
+  - name: AppOptics API Key
+    id: kingfisher.appoptics.1
+    pattern: |
+      (?xi)
+      \b
+      appoptics
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z_-]{71}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - appoptics_token = ozg7Mn3BiGOm81jwqs51Z5UkU2BWXKwPi5YSOwWuGk34pEcq3z36UFWA7WneIzOKHfAGoUP
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.appoptics.com/v1/metrics

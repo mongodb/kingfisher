@@ -1,0 +1,28 @@
+rules:
+  - name: Zoho CRM API Access Token
+    id: kingfisher.zohocrm.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        1000\.[a-f0-9]{32}\.[a-f0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 1000.a23f12b4c5d6e7f8901234567890abc1.23d4e5f67890abcdef1234567890abcd
+      - 1000.123fa4b5c678d90eabcdef1234567890.ab12c3d4e5f6a7890bcd12ef345678ab
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Zoho-oauthtoken {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://www.zohoapis.com/crm/v7/Leads?fields=Email&per_page=1

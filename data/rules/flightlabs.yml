@@ -1,0 +1,35 @@
+rules:
+  - name: FlightLabs API Key
+    id: kingfisher.flightlabs.1
+    pattern: |
+      (?xi)
+      \b
+      flightlabs
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        ey[a-zA-Z0-9]{34}
+        \.
+        ey[a-zA-Z0-9._-]{300,350}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - flightlabs_key=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9
+    references:
+      - https://app.goflightlabs.com/doc/api
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: 'https://app.goflightlabs.com/airports?access_key={{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"id"'

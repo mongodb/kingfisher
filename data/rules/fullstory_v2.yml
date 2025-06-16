@@ -1,0 +1,26 @@
+rules:
+  - name: Fullstory Key
+    id: kingfisher.fullstory.1
+    pattern: |
+      (?xi)
+      \b
+      (na1\.[A-Za-z0-9\+\/]{100})
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - na1.ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+0
+      - na1.NOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789+ABCDEFGHIJKL
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Basic {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.fullstory.com/v2/users

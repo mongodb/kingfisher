@@ -1,0 +1,32 @@
+rules:
+  - name: Mailboxlayer API Key
+    id: kingfisher.mailboxlayer.1
+    pattern: |
+      (?xi)
+      \b
+      mailboxlayer
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "mailboxlayer SECRET 16cf1e4c389b42d29e4c1f7f44d4f3ec"
+      - "mailboxlayer ACCESS 9afd45ea93b219fd0f2b8e6d99c7d3c0"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://apilayer.net/api/check?access_key={{ TOKEN }}&email=support@email.com"
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"email"'
+                - '"info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."'

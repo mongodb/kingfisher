@@ -1,0 +1,52 @@
+rules:
+  - name: PayPal OAuth Client ID
+    id: kingfisher.paypal.1
+    pattern: |
+      (?xi)
+      paypal
+      (?:.|[\n\r]){0,8}?
+      (?:CLIENT|ID|USER)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        a[a-z0-9_-]{59}
+      )
+    min_entropy: 3.5
+    visible: false
+    examples:
+      - paypal_client_id=AZJ6y8Dpr1TYbqAIdhkPzyhjXoY6m8GplL7C3zZ3lPrkTIdhkPzyhjXo_Dx3
+  - name: PayPal OAuth Secret
+    id: kingfisher.paypal.2
+    pattern: |
+      (?xi)
+      paypal
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9_\.\-]{44,80}
+      )
+    min_entropy: 3.5
+    examples:
+      - paypal_secret=EDe5J6y8Dpr1TYbqAIdhkPzyhjXoY6m8GplL7C3zZ3lPrkT1XlV6hYPSeJL5b1T1
+    validation:
+      type: Http
+      content:
+        request:
+          body: "grant_type=client_credentials"
+          headers:
+            Accept: application/json
+            Accept-Language: en_US
+            Authorization: "Basic {{ CLIENTID | append: ':' | append: TOKEN | b64enc }}"
+            Content-Type: application/x-www-form-urlencoded
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api-m.sandbox.paypal.com/v1/oauth2/token
+    depends_on_rule:
+      - rule_id: kingfisher.paypal.1
+        variable: CLIENTID

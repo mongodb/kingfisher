@@ -1,0 +1,32 @@
+rules:
+  - name: Streak API Key
+    id: kingfisher.streak.1
+    pattern: |
+      (?xi)
+      \b
+      streak
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Fa-f]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "streak_key=1234567890abcdef1234567890abcdef"
+      - "streak_token: abcdef1234567890abcdef1234567890"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://www.streak.com/api/v1/pipelines

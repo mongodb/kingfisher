@@ -1,0 +1,32 @@
+rules:
+  - name: TomTom API Key
+    id: kingfisher.tomtom.1
+    pattern: |
+      (?xi)
+      \b
+      tomtom
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - tomtom_key=abcdef1234567890abcdef1234567890
+      - tomtom_secret=ABCDEF1234567890ABCDEF1234567890
+      - tomtom_access_token=12345678901234567890123456789012
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.tomtom.com/map/1/tile/basic/main/0/0/0.png?view=Unified&key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

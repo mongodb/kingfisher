@@ -1,0 +1,30 @@
+rules:
+  - name: Storyblok Secret
+    id: kingfisher.storyblok.1
+    pattern: |
+      (?xi)
+      \b
+      storyblok
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{22}t{2}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - storyblok_token=abcdefghijklmnopqrstuvtt
+      - STORYBLOK_SECRET=12345678901234567890ABtt
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.storyblok.com/v1/cdn/spaces/me/?token={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

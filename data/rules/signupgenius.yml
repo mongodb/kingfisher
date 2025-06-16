@@ -1,0 +1,37 @@
+rules:
+  - name: SignupGenius API Key
+    id: kingfisher.signupgenius.1
+    pattern: |
+      (?xi)
+      \b
+      signupgenius
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{32}
+      )
+      \b
+    min_entropy: 3.2
+    confidence: medium
+    examples:
+      - signupgeniusSECRET=53e2ca67b12b98e25e01946ab4669911
+      - "signupgeniusPRIVATE.53e2ca67b12b98e25e01946ab4669911"
+      - 'signupgeniusKEY "53e2ca67b12b98e25e01946ab4669911"'
+      - | 
+        token: signupgeniusACCESS
+          key: 53e2ca67b12b98e25e01946ab4669911
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.signupgenius.com/v2/k/user/profile/?user_key={{ TOKEN }}

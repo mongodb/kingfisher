@@ -1,0 +1,42 @@
+rules:
+  - name: CarbonInterface API Key
+    id: kingfisher.carboninterface.1
+    pattern: |
+      (?xi)
+      \b
+      carboninterface
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{21}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - carboninterface SECRET A2B6C9D1E3F4G6H7I8J0K
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "type": "flight",
+              "passengers": 2,
+              "legs": [
+                {"departure_airport":"sfo", "destination_airport":"yyz"},
+                {"departure_airport":"yyz", "destination_airport":"sfo"}
+              ]
+            }
+          headers:
+            Content-Type: application/json
+            Authorization: "Bearer {{ TOKEN }}"
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://www.carboninterface.com/api/v1/estimates

@@ -1,0 +1,33 @@
+rules:
+  - name: Close CRM API Key
+    id: kingfisher.closecrm.1
+    pattern: |
+      (?xi)
+      \b
+      closecrm
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        api_[a-z0-9A-Z.]{45}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - closecrm_api_key = api_defghijklmnopqrstuvwxyzABCDEFGHIJKL0123456789
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
+            Content-Type: "application/json"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.close.com/api/v1/me/

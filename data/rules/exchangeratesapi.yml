@@ -1,0 +1,33 @@
+rules:
+  - name: ExchangeRatesAPI Key
+    id: kingfisher.exchangeratesapi.1
+    pattern: |
+      (?xi)
+      \b
+      exchangerates
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - exchangerates_api_key=abcd1234efgh5678ijkl9012mnop3456
+      - EXCHANGERATES_ACCESS_TOKEN=zyxw9876vuts5432rqpo1234nmlk7890
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.exchangeratesapi.io/v1/latest?access_key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+                - 201
+                - 202
+              type: StatusMatch

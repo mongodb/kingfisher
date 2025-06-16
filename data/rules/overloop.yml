@@ -1,0 +1,33 @@
+rules:
+  - name: Overloop API Key
+    id: kingfisher.overloop.1
+    pattern: |
+      (?xi)
+      \b
+      overloop
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z\_\-0-9]{50}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - overloop_key=AbCd1234EfGh5678IjKl9012MnOp3456QrSt7890UvWxYz12_-Abc
+      - overloop_secret=XyZ9876WvUt5432SrQp1098NmLk7654JiHg3210FeDc_-BaZyX
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.overloop.com/public/v1/users

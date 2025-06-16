@@ -1,0 +1,30 @@
+rules:
+  - name: ImageKit API Key
+    id: kingfisher.imagekit.1
+    pattern: |
+      (?xi)
+      \b
+      imagekit
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_=]{36}
+      )
+    min_entropy: 3.2
+    confidence: medium
+    examples:
+      - imagekit token 123456789ABCD123456789ABCD1234567890=
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.imagekit.io/v1/files

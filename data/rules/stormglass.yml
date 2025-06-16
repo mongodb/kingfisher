@@ -1,0 +1,33 @@
+rules:
+  - name: Stormglass API Key
+    id: kingfisher.stormglass.1
+    pattern: |
+      (?xi)
+      \b
+      stormglass
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z-]{73}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - stormglass_key=e4d89b23-a7c6-4c91-b523-42d9f8c90876543210987654321098765432109876543210987654321
+      - stormglass_token=f5e92c34-b8d7-5da2-c634-53eaf9d01987654321098765432109876543210987654321098765432
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.stormglass.io/v2/weather/point?lat=40.7127&lng=074.0059&params=windSpeed

@@ -1,0 +1,34 @@
+rules:
+  - name: Protocols.io API Key
+    id: kingfisher.protocolsio.1
+    pattern: |
+      (?xi)
+      \b
+      protocols
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{64}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: high
+    examples:
+      - protocolsSECRETkey abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+      - protocolsACCESSkey 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+      - protocolsPRIVATEkey 1a2b3c4d5e6f7g8h9i0jklmnopqrstuv1a2b3c4d5e6f7g8h9i0jklmnopqrstuv
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://www.protocols.io/api/v3/session/profile

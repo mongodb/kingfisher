@@ -1,0 +1,30 @@
+rules:
+  - name: Cliengo API Key
+    id: kingfisher.cliengo.1
+    pattern: |
+      (?xi)
+      \b
+      cliengo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - cliengo-SECRET-123e4567-e89b-12d3-a456-426614174000
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.cliengo.com/1.0/account?api_key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

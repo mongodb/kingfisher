@@ -1,0 +1,31 @@
+rules:
+  - name: Findl API Key
+    id: kingfisher.findl.1
+    pattern: |
+      (?xi)
+      \b
+      findl
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}
+      )
+      \b 
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - findl=123e4567-e89b-12d3-a456-426614174000
+      - findl=123e4567-e89b-12d3-a456-426614174abc
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-API-Key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.findl.com/v1.0/query?limit=6

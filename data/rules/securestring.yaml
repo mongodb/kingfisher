@@ -1,0 +1,7 @@
+rules:
+  - name: Plaintext password being converted to SecureString
+    id: kingfisher.plaintext.1
+    pattern: (?xi)\bconvertto-securestring ".*" -asplaintext -force|convertto-securestring -asplaintext -force ".*"
+    min_entropy: 3.5
+    examples:
+      - ConvertTo-SecureString "6AAcfcdFBBeCF8fdD9FfBCE8052E057adD83a066" -AsPlainText -Force

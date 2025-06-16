@@ -1,0 +1,31 @@
+rules:
+  - name: Todoist API Key
+    id: kingfisher.todoist.1
+    pattern: |
+      (?xi)
+      \b
+      todoist
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{40}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - todoist SECRET 5179f75c4209d75c79f4d5f420d9a75c75f1d79f
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.todoist.com/rest/v2/projects

@@ -1,0 +1,33 @@
+rules:
+  - name: Spoonacular API Key
+    id: kingfisher.spoonacular.1
+    pattern: |
+      (?xi)
+      \b
+      spoonacular
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "spoonacular_SECRET abcdef0123456789abcdef0123456789"
+      - "spoonacularACCESS key abcdef0123456789abcdef0123456789"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+          method: GET
+          url: "https://api.spoonacular.com/recipes/random?apiKey={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

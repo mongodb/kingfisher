@@ -1,0 +1,35 @@
+rules:
+  - name: GTMetrix API Key
+    id: kingfisher.gtmetrix.1
+    pattern: |
+      (?xi)
+      \b
+      gtmetrix
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - gtmetrixTOKEN=c42e123c07f00268f6ba8f5f6c9abd04
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://gtmetrix.com/api/2.0/status
+          headers:
+            Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: 200
+            - type: WordMatch
+              words: 
+                - "Invalid API key"
+              negative: true
+            - type: JsonValid

@@ -1,0 +1,31 @@
+rules:
+  - name: Zeplin API Key
+    id: kingfisher.zeplin.1
+    pattern: |
+      (?xi)
+      \b
+      zeplin
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9-.]{350,400}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - zeplin SECRET TOKEN=abcdEF1234567890ghijklMNOPQRSTUvwxyzABCDEFGHIJKLMNopqrstuvwxYZQRSTUVWXYZ0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLmnopqrSTUVWXYZ-abcdefghijKLMNOPQRSTUvwxyzaBCDEFGHIJKLMNOPqrsTUVWXYZabcdefghijklmnOPQRSTUVWX-yzABCDEFGHIJKLmnopqrSTUVWXYZbu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWDEFG-HIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyZABcdefghijklmnopqrstuvwXYZA
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.zeplin.dev/v1/users/me

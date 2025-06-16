@@ -1,0 +1,32 @@
+rules:
+  - name: Taxjar API Key
+    id: kingfisher.taxjar.1
+    pattern: |
+      (?xi)
+      \b
+      taxjar
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "taxjar key: a1b2c3e4f9g0h3i2j5k6m7n8o9p0q1r2"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          url: https://api.taxjar.com/v2/categories
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

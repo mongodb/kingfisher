@@ -1,0 +1,33 @@
+rules:
+  - name: Vyte API Key
+    id: kingfisher.vyte.1
+    pattern: |
+      (?xi)
+      \b
+      vyte
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{50}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - vyte_token = 74bt83a0fnreonaknkbauvumjekm1v608pk61pddfntkma2n89
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.vyte+json; version=3"
+            Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.vyte.in/v2/events

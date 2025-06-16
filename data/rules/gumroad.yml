@@ -1,0 +1,32 @@
+rules:
+  - name: Gumroad API Key
+    id: kingfisher.gumroad.1
+    pattern: |
+      (?xi)
+      \b
+      gumroad
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9A-Z-]{43}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - gumroadSECRET-abcdefghijklmnopqrstuvwxyzABABCDEFGHI1234567890
+      - gumroadPRIVATE-123ABCDEFGHIJKLMNOPQRSTUVWXYZabcDEFGH4567890ij
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.gumroad.com/v2/products

@@ -1,0 +1,33 @@
+rules:
+  - name: Restpack Screenshot API Key
+    id: kingfisher.restpack.1
+    pattern: |
+      (?xi)
+      \b
+      restpack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{48}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - restpack foo SECRET bar 1234567890abcdef1234567890abcdef1234567890abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            X-Access-Token: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://restpack.io/api/screenshot/usage

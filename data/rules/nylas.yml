@@ -1,0 +1,33 @@
+rules:
+  - name: Nylas API Key
+    id: kingfisher.nylas.1
+    pattern: |
+      (?xi)
+      \b
+      nylas
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{30}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - nylas_token = 2temab2qpfioneggb01j2dhfllqgiu
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.nylas+json; version=3"
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.nylas.com/account

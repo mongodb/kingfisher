@@ -1,0 +1,31 @@
+rules:
+  - name: Pepipost API Key
+    id: kingfisher.pepipost.1
+    pattern: |
+      (?xi)
+      \b
+      (?:pepipost|netcore)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-zA-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - pepipost=abcd1234efgh5678ijkl9012mnop3456
+      - netcore_api=wxyz7890abcd1234efgh5678ijkl9012
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.pepipost.com/v5.1/domain/getDomains?domain=pepisandbox.com
+          headers:
+            api_key: '{{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,35 @@
+rules:
+  - name: GoodDay API Key
+    id: kingfisher.goodday.1
+    pattern: |
+      (?xi)
+      \b
+      goodday
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - goodday SECRET abcdef1234567890abcdef1234567890
+      - goodday ACCESS abcdef1234567890abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            gd-api-token: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.goodday.work/2.0/users
+    references:
+      - https://www.goodday.work/docs/api

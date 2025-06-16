@@ -1,0 +1,32 @@
+rules:
+  - name: Onfleet API Key
+    id: kingfisher.onfleet.1
+    pattern: |
+      (?xi)
+      \b
+      onfleet
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - onfleetSECRET=abcdef1234567890abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://onfleet.com/api/v2/organization

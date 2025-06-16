@@ -1,0 +1,34 @@
+rules:
+  - name: Privacy API Key
+    id: kingfisher.privacy.1
+    pattern: |
+      (?xi)
+      \b
+      privacy
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - privacy_key=123e4567-e89b-12d3-a456-426614174000
+      - privacy_token=abcd1234-ef56-78gh-ijkl-mnopqrstuvwx
+      - privacy_secret=98765432-dcba-4321-efgh-ijklmnopqrst
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "api-key {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.privacy.com/v1/card?page=1&page_size=50

@@ -1,0 +1,30 @@
+rules:
+  - name: TechnicalAnalysisApi Key
+    id: kingfisher.technicalanalysisapi.1
+    pattern: |
+      (?xi)
+      \b
+      technicalanalysisapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9]{48}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "technicalanalysisapi_key = ABCD0123EFGH4567IJKL8901MNOP2345QRST6789UVWX0123"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://technical-analysis-api.com/api/v1/analysis/BTC?apiKey={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

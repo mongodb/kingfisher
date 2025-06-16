@@ -1,0 +1,36 @@
+rules:
+  - name: VatLayer API Key
+    id: kingfisher.vatlayer.1
+    pattern: |
+      (?xi)
+      \b
+      vatlayer
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "vatlayerTOKEN abcdefghijklmnopqrstuvwxyzabcdef"
+      - "vatlayer SECRET abcdefghijklmnopqrstuvwxyzabcdef"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://www.apilayer.net/api/validate?access_key={{ TOKEN }}&vat_number=LU26375245&format=1
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - match_all_words: false
+              type: WordMatch
+              words:
+                - '"vat_number"'
+                - '"info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."'

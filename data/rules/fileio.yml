@@ -1,0 +1,36 @@
+rules:
+  - name: FileIO Secret Key
+    id: kingfisher.fileio.1
+    pattern: |
+      (?xi)
+      \b
+      fileio
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9.-]{39}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - fileioSECRETKEY-ABCD1234EFGH5678IJKL9012MNOP3456QRST7890
+      - fileio.PRIVATE.TOKEN-ABCD1234EFGH5678IJKL9012MNOP3456QRST7890
+      - fileio_ACCESS-ABCD1234EFGH5678IJKL9012MNOP3456QRST7890
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://file.io/
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: HeaderMatch
+              header: content-type
+              expected: ["application/json"]
+            - type: JsonValid

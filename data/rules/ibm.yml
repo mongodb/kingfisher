@@ -1,0 +1,38 @@
+rules:
+  - name: IBM Cloud User Key
+    id: kingfisher.ibm.1
+    pattern: |
+      (?x)                   
+      (?i)                   
+      \b                     
+      ibm
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (                      
+        [a-z0-9_-]{42,44}
+      )                   
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - ibmcloud_apikey = abcdef0123_56789abcdef0123456789abcdef01234
+      - ibm_platform_key= f-_RrJDVnuVh07HNTcmnQx_b6CbcQsxmEarVm9P_RWtF
+    categories:
+      - api
+      - identifier
+    validation:
+      type: Http
+      content:
+        request:
+          body: apikey={{ TOKEN }}&grant_type=urn%3Aibm%3Aparams%3Aoauth%3Agrant-type%3Aapikey
+          headers:
+            Authorization: Basic Yng6Yng=
+            Content-Type: application/x-www-form-urlencoded
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://iam.cloud.ibm.com/identity/token

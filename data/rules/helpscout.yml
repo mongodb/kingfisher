@@ -1,0 +1,34 @@
+rules:
+  - name: Helpscout API Key
+    id: kingfisher.helpscout.1
+    pattern: |
+      (?xi)
+      \b
+      helpscout
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "helpscout SECRET = eecd6bcf6f4ebc8d174ee68bbdcf739dcb3a9e1b"
+      - "PRIVATE helpscout key12345678 token eecd6bcf6f4ebc8d174ee68bbdcf739dcb3a9e1b"
+      - "helpscout TOKEN: eecd6bcf6f4ebc8d174ee68bbdcf739dcb3a9e1b"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ TOKEN | append: ":X" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://docsapi.helpscout.net/v1/collections

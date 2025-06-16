@@ -1,0 +1,35 @@
+rules:
+  - name: TwelveData API Key
+    id: kingfisher.twelvedata.1
+    pattern: |
+      (?xi)
+      \b
+      twelvedata
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - twelvedata_secret=ab1234567890cdef1234567890abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.twelvedata.com/earliest_timestamp?symbol=AAPL&interval=1day&apikey={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words: 
+                - '"code":401'
+              negative: true
+            - type: JsonValid

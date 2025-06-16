@@ -1,0 +1,33 @@
+rules:
+  - name: PeopleDataLabs API Key
+    id: kingfisher.peopledatalabs.1
+    pattern: |
+      (?xi)
+      \b
+      peopledatalabs
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{64}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - peopledatalabsSECRET=1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+      - peopledatalabsACCESS-TOKEN=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-Api-Key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: 'https://api.peopledatalabs.com/v5/person/enrich?min_likelihood=6&profile=https://linkedin.com/in/rbranson'

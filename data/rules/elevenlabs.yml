@@ -1,0 +1,27 @@
+rules:
+  - name: ElevenLabs API Key
+    id: kingfisher.elevenlabs.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        (?:sk)_[a-f0-9]{48}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - sk_1234567890abcdef1234567890abcdef1234567890abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            xi-api-key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.elevenlabs.io/v1/user

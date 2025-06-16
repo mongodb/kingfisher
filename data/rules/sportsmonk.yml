@@ -1,0 +1,31 @@
+rules:
+  - name: Sportsmonk API Key
+    id: kingfisher.sportsmonk.1
+    pattern: |
+      (?xi)
+      \b
+      sportsmonk
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{60}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - sportsmonkSECRET=abcdEfghIjklmnopQRstuvWxYz1234567890ABCDEFGHIJKLmnoPQrsTuVwxYzaB
+      - sportsmonkPRIVATE:abcdefghiJKlmNOPqrstuvWXYZaBcDEfgHijKlmnopQRStuVWx123456YzaBc
+      - sportsmonkKEY=abcdefGHIjKLmnopqrSTuvwxyZaBCDefGhijKLmNOprsTUvwxYz123456ZaBCde
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: "https://soccer.sportmonks.com/api/v2.0/leagues?api_token={{ TOKEN }}"

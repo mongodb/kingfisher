@@ -1,0 +1,33 @@
+rules:
+  - name: BlitApp API Key
+    id: kingfisher.blitapp.1
+    pattern: |
+      (?xi)
+      \b
+      blitapp
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_-]{39}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - blitapp SECRET key=abC123_-FgH456ijKL789mnopQRS012tu345vwXYz
+      - blitapp.ACCESS_TOKEN=abC123_-FgH456ijKL789mnopQRS012tu345vwXYz
+      - "blitapp   PRIVATE    KEY  :  abC123_-FgH456ijKL789mnopQRS012tu345vwXYz"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            API-Key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://blitapp.com/api/apps/all

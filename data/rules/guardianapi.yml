@@ -1,0 +1,30 @@
+rules:
+  - name: Guardian API Key
+    id: kingfisher.guardian.1
+    pattern: |
+      (?xi)
+      \b
+      guardian
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - guardian SECRET=abcdef12-1234-abcd-5678-abcdef123456
+      - guardianPRIVATEKEY=abcdef12-1234-abcd-5678-abcdef123456
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://content.guardianapis.com/search?api-key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

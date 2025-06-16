@@ -1,0 +1,36 @@
+rules:
+  - name: Coinlayer API Key
+    id: kingfisher.coinlayer.1
+    pattern: |
+      (?xi)
+      \b
+      coinlayer
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - coinlayerSECRET=1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p
+      - coinlayerKEY=9a8b7c6d5e4f3g2h1i0j9k8l7m6n5o4p
+      - coinlayerTOKEN=abcd1234efgh5678ijkl9012mnop3456
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.coinlayer.com/api/live?access_key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"success": true'
+                - '"info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."'

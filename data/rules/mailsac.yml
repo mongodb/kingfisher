@@ -1,0 +1,33 @@
+rules:
+  - name: Mailsac API Key
+    id: kingfisher.mailsac.1
+    pattern: |
+      (?xi)
+      \b
+      mailsac
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (k_[0-9A-Za-z]{36,})
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - mailsac SECRET k_abcd1234efgh5678ijkl90mnopqrstu1234567890
+      - mailsac PRIVATE k_A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0U9V8W7
+      - mailsac TOKEN k_za123xr456yc789bg0mfq8su9krty0pq1342b5dn76ji
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            Mailsac-Key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://mailsac.com/api/addresses

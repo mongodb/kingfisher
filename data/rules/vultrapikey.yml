@@ -1,0 +1,32 @@
+rules:
+  - name: Vultr API Key
+    id: kingfisher.vultr.1
+    pattern: |
+      (?xi)
+      \b
+      vultr
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9]{36}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - vultr_SECRET_ACCESS_KEY ABCDEFGHIJKLMNOPQRSTUVWX345678901234
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.vultr.com/v2/account

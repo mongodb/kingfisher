@@ -1,0 +1,31 @@
+rules:
+  - name: LinkPreview API Key
+    id: kingfisher.linkpreview.1
+    pattern: |
+      (?xi)
+      \b
+      linkpreview
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "linkpreview SECRET abcdef1234567890abcdef1234567890"
+      - "linkpreview ACCESS 1234567890abcdef1234567890ABCDEF"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.linkpreview.net/?key={{ TOKEN }}&q=https://google.com"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,51 @@
+rules:
+  - name: Azure DevOps Personal Access Token
+    id: kingfisher.azure.devops.1
+    pattern: |
+      (?xi)
+      \b
+      azure
+      (?:.|[\n\r]){0,32}?
+      (
+        [0-9A-Za-z]{84}
+      )
+      \b
+    min_entropy: 3
+    confidence: medium
+    examples:
+      - azure devops pat = FBdFol081crwkIHWJH2yiqDDyrFjVSi7HWl22hN2hTYfsB8NlGDpJQQJ77BAACAAAAAAAAAAAAASAZDOBucT
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ ":" | append: TOKEN | b64enc }}'
+          method: GET
+          url: 'https://dev.azure.com/{{ ORG }}/_apis/projects'
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200
+            - type: WordMatch
+              words:
+                - 'lastUpdateTime'
+    depends_on_rule:
+      - rule_id: kingfisher.azure.devops.2
+        variable: ORG
+
+  - name: Azure DevOps Org Name
+    id: kingfisher.azure.devops.2
+    pattern: |
+      (?xi)
+      \b
+      dev.azure.com\/
+      (
+        [a-zA-Z0-9-]{5,30}
+      )
+      \b
+    min_entropy: 0
+    confidence: medium
+    visible: false
+    examples:
+      - https://dev.azure.com/micksmix515/_usersSettings/tokens

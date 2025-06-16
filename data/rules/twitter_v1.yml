@@ -1,0 +1,32 @@
+rules:
+  - name: Twitter v1 API Key
+    id: kingfisher.twitter.v1.1
+    pattern: |
+      (?xi)
+      \b
+      twitter
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z]{22}%[a-zA-Z-0-9]{23}%[a-zA-Z-0-9]{6}%[a-zA-Z-0-9]{3}%[a-zA-Z-0-9]{9}%[a-zA-Z-0-9]{52}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - twitter_token = ABOYKJCSVHKFGFYKVOJNRF%tjHNMzEpCIsmVvSFq1gzPI4%E4UY0w%L3X%dq95eFuxF%fGtbNy7RwoxiMRkPMg3ffFjEsgtBUGIqauGhlmlLU2QzhXov0QRY
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.twitter.com/2/tweets/20

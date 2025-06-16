@@ -1,0 +1,31 @@
+rules:
+  - name: Nozbe Teams API Key
+    id: kingfisher.nozbe.1
+    pattern: |
+      (?xi)
+      \b
+      (?:nozbe|nozbeteams)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9A-Za-z]{16}_[0-9A-Za-z\-_=]{64}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "nozbe ABCD1234EFGH5678_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_ "
+      - "nozbeteams k9m2n4p6q8r3t5v7_XYZABCDEFGHIJKLMNOPQRSTUVWxyzabcdefghijklmnopqrstuvw0123456789== "
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api4.nozbe.com/v1/api/users

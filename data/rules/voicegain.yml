@@ -1,0 +1,31 @@
+rules:
+  - name: Voicegain API Key
+    id: kingfisher.voicegain.1
+    pattern: |
+      (?xi)
+      \b
+      voicegain
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (ey[0-9a-zA-Z_-]{34}\.ey[0-9a-zA-Z_-]{108}\.[0-9a-zA-Z_-]{43})
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - voicegain_token = eyjN9tEByT-3r2kwGs4_oziLD6aUvJcwPPzy.eyE7D69cRJc0-KuMv1bELOz6_MCuM70rTGe1eJuib0f9epZw9MtOuDrIY1npMdoM8nIrRlUiBUD4BA03lPpOUQQtmRtHTaSbA03HP6DQg6yvxW.60yoZY2LZ0R4y3P_gJfSDYtSKp8H-m80oSkYnQ0hrkF
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.voicegain.ai/v1/sa/config

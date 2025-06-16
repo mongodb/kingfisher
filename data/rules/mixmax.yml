@@ -1,0 +1,33 @@
+rules:
+  - name: Mixmax API Key
+    id: kingfisher.mixmax.1
+    pattern: |
+      (?xi)
+      \b
+      mixmax
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_-]{36}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "mixmax_key = 123456789012345678901234567890123456"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-API-Token: "{{ TOKEN }}"
+          method: GET
+          url: "https://api.mixmax.com/v1/users/me"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+    references:
+      - "https://developer.mixmax.com/"

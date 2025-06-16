@@ -1,0 +1,29 @@
+rules:
+  - name: SelectPDF API Key
+    id: kingfisher.selectpdf.1
+    pattern: |
+      (?xi)
+      \b
+      selectpdf
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9-]{36}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - selectpdf-access-key-abcdef01-2345-6789-abcdef123456
+    validation:
+      type: Http
+      content:
+        request:
+          url: "https://selectpdf.com/api2/convert/?key={{ TOKEN }}&url=google.com"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,33 @@
+rules:
+  - name: VoodooSMS API Key
+    id: kingfisher.voodoosms.1
+    pattern: |
+      (?xi)
+      \b
+      voodoosms
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{46}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - voodoosms_key = qPUKVel1ka4YalLPP0E533QvWeXSE3m0zd7UExTlRM8L9Z
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.voodoosms.com/credits

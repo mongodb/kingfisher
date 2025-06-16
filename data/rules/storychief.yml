@@ -1,0 +1,18 @@
+rules:
+  - name: Storychief API Key
+    id: kingfisher.storychief.1
+    pattern: |
+      (?xi)
+      \b
+      storychief
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_\-.]{940,1000}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - storychief_key=eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJpc3MiOiJodHRwczovL2FwaS5zdG9yeWNoaWVmLmlvIiwiYXVkIjoiaHR0cHM6Ly9hcGkuc3RvcnljaGllZi5pbyIsImlhdCI6MTIzNDU2Nzg5MCwiZXhwIjoxMjM0NTY3ODkwLCJzdWIiOiIxMjM0NTY3ODkwIiwianRpIjoiMTIzNDU2Nzg5MCIsInVzZXJfaWQiOiIxMjM0NTY3ODkwIiwiZW1haWwiOiJleGFtcGxlQGV4YW1wbGUuY29tIiwibmFtZSI6IkpvaG4gRG9lIiwicm9sZSI6ImFkbWluIiwicGVybWlzc2lvbnMiOlsicmVhZCIsIndyaXRlIiwiZGVsZXRlIl0sInRlYW1faWQiOiIxMjM0NTY3ODkwIiwidGVhbV9uYW1lIjoiRXhhbXBsZSBUZWFtIiwidGVhbV9yb2xlIjoiYWRtaW4iLCJ0ZWFtX3Blcm1pc3Npb25zIjpbInJlYWQiLCJ3cml0ZSIsImRlbGV0ZSJdLCJjbGllbnRfaWQiOiIxMjM0NTY3ODkwIiwiY2xpZW50X25hbWUiOiJFeGFtcGxlIENsaWVudCIsImNsaWVudF9yb2xlIjoiYWRtaW4iLCJjbGllbnRfcGVybWlzc2lvbnMiOlsicmVhZCIsIndyaXRlIiwiZGVsZXRlIl0sInByb2plY3RfaWQiOiIxMjM0NTY3ODkwIiwicHJvamVjdF9uYW1lIjoiRXhhbXBsZSBQcm9qZWN0IiwicHJvamVjdF9yb2xlIjoiYWRtaW4iLCJwcm9qZWN0X3Blcm1pc3Npb25zIjpbInJlYWQiLCJ3cml0ZSIsImRlbGV0ZSJdLCJvcmdhbml6YXRpb25faWQiOiIxMjM0NTY3ODkwIiwib3JnYW5pemF0aW9uX25hbWUiOiJFeGFtcGxlIE9yZ2FuaXphdG

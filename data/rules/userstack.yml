@@ -1,0 +1,32 @@
+rules:
+  - name: UserStack API Key
+    id: kingfisher.userstack.1
+    pattern: |
+      (?xi)
+      \b
+      userstack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - userstack_access_key=abcdef1234567890abcdef1234567890
+      - userstack_token=12345678901234567890123456789012
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.userstack.com/detect?access_key={{ TOKEN }}&ua=Mozilla/5.0"
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - "is_mobile_device"
+                - '"info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."'

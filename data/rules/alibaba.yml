@@ -1,0 +1,35 @@
+rules:
+  - name: Alibaba Access Key ID
+    id: kingfisher.alibabacloud.1
+    pattern: |
+      (?x)
+      (?i)
+      \b
+      (
+        LTAI[a-z0-9]{17,21}
+      )
+      \b
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - LTAI8x2NiGqfyJGx7eLDhp12
+      - LTAI5GqyJGhp12ad31L5hpix
+  - name: Alibaba Access Key Secret
+    id: kingfisher.alibabacloud.2
+    pattern: |
+      (?x)
+      (?i)
+      \b
+      alibaba
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-z0-9]{30}
+      )
+      \b
+    min_entropy: 4.2
+    confidence: medium
+    examples:
+      - alibaba_secret = 7jkWdTjKLnSlGddwPR5gBn65PHcZG6
+      - alibaba-token = aJHKLnSlGddwPR5g7jkWdTBn65PHc5
+    

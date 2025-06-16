@@ -1,0 +1,65 @@
+rules:
+  - name: Shotstack API Key
+    id: kingfisher.shotstack.1
+    pattern: |
+      (?xi)
+      \b
+      shotstack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{40}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - shotstack_key=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMN
+      - shotstack_token=A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "timeline": {
+                "soundtrack": {
+                  "src": "https://s3-ap-southeast-2.amazonaws.com/shotstack-assets/music/moment.mp3",
+                  "effect": "fadeOut"
+                },
+                "background": "#000000",
+                "tracks": [
+                  {
+                    "clips": [
+                      {
+                        "asset": {
+                          "type": "title",
+                          "text": "Hello World",
+                          "style": "minimal"
+                        },
+                        "start": 0,
+                        "length": 5,
+                        "transition": {
+                          "in": "fade",
+                          "out": "fade"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "output": {"format": "mp4", "resolution": "sd"}
+            }
+          headers:
+            Content-Type: application/json
+            Accept: application/json
+            x-api-key: '{{ TOKEN }}'
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.shotstack.io/stage/render

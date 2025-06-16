@@ -1,0 +1,35 @@
+rules:
+  - name: FetchRSS API Key
+    id: kingfisher.fetchrss.1
+    pattern: |
+      (?xi)
+      \b
+      fetchrss
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9.]{40}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: high
+    examples:
+      - fetchrssSECRET_KEY=bGkFaXJb34GkLWkMF19N2wGg8J2b3kJrF29S0gHK
+      - fetchrssACCESS_KEY=jK4dZV1qW3rP2xS7cF5gK8oB9qM6eH3vY0tJ2lQ9
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://fetchrss.com/api/v1/feed/list?auth={{ TOKEN }}"
+          response_matcher:
+            - type: WordMatch
+              words:
+                - '"success":true'
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: JsonValid

@@ -1,0 +1,32 @@
+rules:
+  - name: HelloSign API Key
+    id: kingfisher.hellosign.1
+    pattern: |
+      (?xi)
+      \b
+      hellosign
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z-0-9/+]{64}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - hellosign-PRIVATE-key-LaKSDJF98ALSkfj9823JDfj3JKd8JhfaEv5s9JAdlfk92JHFAs8KLJfl8KJDFH3J==
+      - hellosignACCESS-TOKEN-ksdfjKHJ92349kdjfhSDlf8349JSADFksdajf8J4DFLkfjHFad61kdfhKJH3LdF==
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN | append: ":" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.hellosign.com/v3/account

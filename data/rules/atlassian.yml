@@ -1,0 +1,41 @@
+rules:
+  - name: Atlassian API token
+    id: kingfisher.atlassian.1
+    pattern: |
+      (?x)                       
+      (?i)                       
+      \b                         
+      atlassian
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b                         
+      (
+        [a-z0-9]{24}
+      )
+      \b                         
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - Atlassian_key = "DjayBenyJrtpvydFCzAphcqc"
+      - "ATLASSIAN_API_TOKEN:'abcdef1234567890abcdef12'"
+    categories:
+      - api
+      - token
+      - atlassian
+    references:
+      - https://support.atlassian.com/atlassian-account/docs/manage-api-tokens-for-your-atlassian-account/
+    validation:
+      type: Http
+      content:
+        request:
+          url: https://api.atlassian.com/admin/v1/orgs
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: "application/json"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,34 @@
+rules:
+  - name: Qubole API Key
+    id: kingfisher.qubole.1
+    pattern: |
+      (?xi)
+      \b
+      qubole
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{64}
+      )
+    min_entropy: 3.5
+    confidence: high
+    examples:
+      - "qubole-secret 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+      - "qUboLE accessKEy 9876543210abcdef9876543210abcdef9876543210abcdef9876543210abcdef"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+            Accept: "application/json"
+            X-AUTH-TOKEN: "{{ TOKEN }}"
+          method: GET
+          url: "https://us.qubole.com/api/v1.2/account"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

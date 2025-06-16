@@ -1,0 +1,31 @@
+rules:
+  - name: Livestorm API Key
+    id: kingfisher.livestorm.1
+    pattern: |
+      (?xi)
+      \b
+      livestorm
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        eyJhbGciOiJIUzI1NiJ9\.eyJhdWQiOiJhcGkubGl2ZXN0b3JtLmNvIiwianRpIjoi[0-9A-Z-a-z]{134}\.[0-9A-Za-z\-\_]{43}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - livestorm_key = eyJhbGciOiJIUzI1NiJ9.eyJhdWQiOiJhcGkubGl2ZXN0b3JtLmNvIiwianRpIjoil0pz62xfowrlpz3d9lwwyzv125aki8owjtnjd6of4piljvf8le79e6nxntfq09hsmsjqkto39wqofr3vkbcmz6usf769cay494u1ssxm8b2s5v5x971kfnqj132kirm3jxxal2.bgfwv9h4cb0t4fmfsxgc18fvc19cn8a5oeco84oq2kd
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.livestorm.co/v1/ping

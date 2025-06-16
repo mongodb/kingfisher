@@ -1,0 +1,44 @@
+rules:
+  - name: Infura API Key
+    id: kingfisher.infura.1
+    pattern: |
+      (?xi)
+      \b
+      infura
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - infuraSECRETsomesecret-abcdef1234567890abcdef1234567890
+      - infuraKEYwithspecial-abcdef1234567890abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "jsonrpc":"2.0",
+              "method":"eth_blockNumber",
+              "params":[],
+              "id":1
+            }
+          headers:
+            Content-Type: application/json
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"result"'
+          url: https://mainnet.infura.io/v3/{{ TOKEN }}
+    references:
+      - https://infura.io/docs

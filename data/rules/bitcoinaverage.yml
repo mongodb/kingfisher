@@ -1,0 +1,35 @@
+rules:
+  - name: BitcoinAverage API Key
+    id: kingfisher.bitcoinaverage.1
+    pattern: |
+      (?xi)
+      \b
+      bitcoinaverage
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      ([a-zA-Z0-9]{43})
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - bitcoinaverage_SECRET=NxKP7QmL9vRt5YgW8cBnAhZj2eDf3uS4wJ6XyVMkFpT
+      - bitcoinaverage_KEY=B2nM4vWcRxKp9ZjH7tLyAqY5fDg8sU3wE6PmNkTuSaV
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            x-ba-key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words: 
+                - '"success":false'
+              negative: true
+          url: https://apiv2.bitcoinaverage.com/websocket/v3/get_ticket

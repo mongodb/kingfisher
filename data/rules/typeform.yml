@@ -1,0 +1,30 @@
+rules:
+  - name: Typeform API Key
+    id: kingfisher.typeform.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        tfp_[a-zA-Z0-9_]{40,59}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "tfp_abcdefghijklmnopqrstuvwxyz1234567890abcdefghi"
+      - "tfp_abcdef9876543210jklmnopqrstuvwxyz6543210hi"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://api.typeform.com/me"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200
+    references:
+      - https://developer.typeform.com/get-started/

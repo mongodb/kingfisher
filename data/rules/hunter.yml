@@ -1,0 +1,33 @@
+rules:
+  - name: Hunter API Key
+    id: kingfisher.hunter.1
+    pattern: |
+      (?xi)
+      \b
+      hunter
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9_-]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - hunter_secret_key=abcdefghijklmnopqrstuvwx1234567890abcd12
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.hunter.io/v2/leads_lists?api_key={{ TOKEN }}
+          headers:
+            Content-Type: application/json
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch
+    references:
+      - https://hunter.io/api/documentation

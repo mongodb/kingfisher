@@ -1,0 +1,31 @@
+rules:
+  - name: Restpack API Key
+    id: kingfisher.restpack.1
+    pattern: |
+      (?xi)
+      \b
+      restpack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{48}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - restpack_TOKEN=abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUV
+      - RESTPACK_SECRET=123456789012345678901234567890123456789012345678
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://restpack.io/api/screenshot/usage?access_token={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

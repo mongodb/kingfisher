@@ -1,0 +1,60 @@
+rules:
+  - name: NPM Access Token (fine-grained)
+    id: kingfisher.npm.1
+    pattern: |
+      (?x)
+      \b
+      (
+        npm_[A-Za-z0-9]{36}
+      )
+      \b
+    references:
+      - https://docs.npmjs.com/about-access-tokens
+      - https://github.com/github/roadmap/issues/557
+      - https://github.blog/changelog/2022-12-06-limit-scope-of-npm-tokens-with-the-new-granular-access-tokens/
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - 'npm_TCllNwh2WLQlMWVhybM1iQrsTj6rMQ0BOh6d'
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://registry.npmjs.org/-/whoami
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"username":'
+
+  - name: NPM Access Token (old format)
+    id: kingfisher.npm.2
+    pattern: |
+      (?xi)
+      \b
+      (?:_authToken|NPM_TOKEN)
+      (?:.|[\n\r]){0,16}?
+      (
+        [0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - '"_authToken": "b98ec224-cdb2-4340-b7bd-9617fc719d1d"'
+      - '-export NPM_TOKEN="007e64c7-635d-4d54-8295-f364cd8e0e0f"'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - type: WordMatch
+              words:
+                - '"status":"valid"'
+          url: https://registry.npmjs.org/-/whoami

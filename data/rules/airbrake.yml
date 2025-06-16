@@ -1,0 +1,37 @@
+rules:
+  - name: Airbrake User Key
+    id: kingfisher.airbrake.1
+    pattern: |
+      (?x)(?i)
+      \b
+      airbrake
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      (
+        [a-zA-Z0-9-]{40}
+      )
+      \b                 
+    min_entropy: 4.5
+    confidence: medium
+    examples:
+      - airbrake secretKey= a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0
+      - "airbrakeToken: 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0'"
+    categories:
+      - api
+      - secret
+    references:
+      - https://airbrake.io/docs/api/
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.airbrake.io/api/v4/projects?key={{ TOKEN }}

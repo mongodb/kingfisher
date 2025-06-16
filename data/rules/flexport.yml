@@ -1,0 +1,29 @@
+rules:
+  - name: Flexport API Key
+    id: kingfisher.flexport.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        shltm_[0-9a-zA-Z-_]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - shltm_ABCDEFGHIJKLMNOabcdefghijklmno1234567890
+    references:
+      - https://howtorotate.com/docs/tutorials/flexport/
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://logistics-api.flexport.com/logistics/api/2024-04/webhooks

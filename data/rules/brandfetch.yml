@@ -1,0 +1,38 @@
+rules:
+  - name: Brandfetch API Key
+    id: kingfisher.brandfetch.1
+    pattern: |
+      (?xi)
+      \b
+      brandfetch
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - brandfetch_key=Tz7XVS4H9NJWmrK2pLgYfQ8BcAeDnE5MkF6RUw3C
+      - BRANDFETCH_TOKEN=Tz7XVS4H9NJWmrK2pLgYfQ8BcAeDnE5MkF6RUw3C
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "domain": "www.example.com"
+            }
+          headers:
+            Content-Type: application/json
+            x-api-key: '{{ TOKEN }}'
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.brandfetch.io/v1/color

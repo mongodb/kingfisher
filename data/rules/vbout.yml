@@ -1,0 +1,32 @@
+rules:
+  - name: Vbout API Key
+    id: kingfisher.vbout.1
+    pattern: |
+      (?xi)
+      \b
+      vbout
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9]{25}
+      )
+      \b
+    min_entropy: 0.0
+    confidence: medium
+    examples:
+      - vbout SECRET 1234567890123456789012345
+      - vbout ACCESS 1234567890123456789012345
+      - vbout KEY 1234567890123456789012345
+    validation:
+      type: Http
+      content:
+        request:
+          url: 'https://api.vbout.com/1/app/me.json?key={{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

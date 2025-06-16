@@ -1,0 +1,33 @@
+rules:
+  - name: Weatherbit API Key
+    id: kingfisher.weatherbit.1
+    pattern: |
+      (?xi)
+      \b
+      weatherbit
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "weatherbitSECRET ff9cfa3aafd54870b8407ac660f17590"
+      - "weatherbitACCESS a4b8ffbb028d4d35a8c8d87f5b06771f"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+          method: GET
+          url: "https://api.weatherbit.io/v2.0/history/airquality?lat=38.0&lon=-78.0&key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,36 @@
+rules:
+  - name: Convertkit API Key
+    id: kingfisher.convertkit.1
+    pattern: |
+      (?xi)
+      \b
+      convertkit
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9A-Z_]{22}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - convertkitSECRETtoken=abcdefghij123456789012
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "{{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200
+                - 201
+                - 202
+                - 203
+                - 204
+          url: https://api.convertkit.com/v3/forms?api_key={{ TOKEN }}

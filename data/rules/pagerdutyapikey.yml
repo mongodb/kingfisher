@@ -1,0 +1,32 @@
+rules:
+  - name: PagerDuty API Key
+    id: kingfisher.pagerduty.1
+    pattern: |
+      (?xi)
+      \b
+      (?:pagerduty|pager_duty|pd_|pd-)
+      (?:.|[\n\r]){0,16}?
+      (
+        u\+[a-zA-Z0-9_+-]{18}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - pagerduty_key = u+Lyhd2_N2MCy+ZoH-S5
+      - pd_key = u+3xVszZ-b4m+T6d23KA
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Token token={{ TOKEN }}'
+            Accept: 'application/vnd.pagerduty+json;version=2'
+            Content-Type: 'application/json'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.pagerduty.com/users

@@ -1,0 +1,32 @@
+rules:
+  - name: ApiMetrics API Key
+    id: kingfisher.apimetrics.1
+    pattern: |
+      (?xi)
+      \b
+      apimetrics
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "apimetrics_secretkey=1234567890abcdef1234567890abcdef"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://client.apimetrics.io/api/2/calls/"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

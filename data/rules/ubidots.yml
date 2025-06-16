@@ -1,0 +1,29 @@
+rules:
+  - name: Ubidots Token
+    id: kingfisher.ubidots.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        BBFF-[0-9a-zA-Z]{30}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - BBFF-1A2B3C4D5E6F7G8H9I0J1K2L3M4N5O
+      - BBFF-pQwErTyUiOpAsDfGhJkLmNbVxYzZ12
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            X-Auth-Token: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://industrial.api.ubidots.com/api/v1.6/variables/

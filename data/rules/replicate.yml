@@ -1,0 +1,26 @@
+rules:
+  - name: Replicate API Key
+    id: kingfisher.replicate.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        r8_[0-9A-Za-z-_]{37}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - r8_12abCDEfghiJKlmNOpqrSTUvwxyzABCDEFGHIJKLMNOPQ
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Token {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.replicate.com/v1/predictions

@@ -1,0 +1,30 @@
+rules:
+  - name: Terraform Cloud Personal Token
+    id: kingfisher.terraform.1
+    pattern: |
+      (?x)
+      \b
+      terraform
+      \b
+      (?:.|[\n\r]){0,16}?
+      (
+        [A-Za-z0-9]{14}\.atlasv1\.[A-Za-z0-9]{67}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - terraform = abcdef12345678.atlasv1.aBcDeF1234567890aBcDeF1234567890aBcDeF1234567890aBcDeF1234567890ABC
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.terraform.io/api/v2/account/details

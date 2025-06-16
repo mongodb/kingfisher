@@ -1,0 +1,35 @@
+rules:
+  - name: Semaphore API Key
+    id: kingfisher.semaphore.1
+    pattern: |
+      (?xi)
+      \b
+      semaphore
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "semaphore_key = abcdef1234567890abcdef1234567890"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.semaphore.co/api/v4/account?apikey={{ TOKEN }}"
+          headers:
+            Accept: "application/vnd.semaphore+json; version=3"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200
+            - type: WordMatch
+              words:
+                - '"account_id"'

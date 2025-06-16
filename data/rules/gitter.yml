@@ -1,0 +1,32 @@
+rules:
+  - name: Gitter API Key
+    id: kingfisher.gitter.1
+    pattern: |
+      (?xi)
+      \b
+      gitter
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9-]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - gitter-secret-abcdefghijklmnopqrstuvwxyz12345678901234
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.gitter.im/v1/user/me

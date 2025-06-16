@@ -1,0 +1,33 @@
+rules:
+  - name: IconFinder API Key
+    id: kingfisher.iconfinder.1
+    pattern: |
+      (?xi)
+      \b
+      iconfinder
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'iconfinder SECRET C1D2E3F4G5H6I7J8K9L0M1N2O3P4Q5R6S7T8U9V0W1X2Y3Z4A5B6C7D8E9F0G1H2'
+      - 'iconfinder PRIVATE T7R8S9T0U1V2W3X4Y5Z6A7B8C9D0E1F2G3H4I5J6K7L8M9N0O1P2Q3R4S5T6U7V8'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.iconfinder.com/v4/iconsets

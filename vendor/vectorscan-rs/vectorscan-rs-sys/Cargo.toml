@@ -1,0 +1,48 @@
+[package]
+name = "vectorscan-rs-sys"
+description = "Native bindings to the Vectorscan high-performance regex library"
+readme = "README.md"
+
+build = "build.rs"
+links = "hs"
+
+version = "0.0.5"
+authors = ["Brad Larsen <brad@bradlarsen.com>"]
+edition = "2021"
+rust-version = "1.73"
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/bradlarsen/vectorscan-rs"
+keywords = ["ffi", "bindings", "text", "regex"]
+categories = ["api-bindings", "parsing", "text-processing"]
+
+
+[features]
+# This feature causes `bindgen` to run to produce the raw Rust bindings to Vectorscan.
+gen = ["bindgen"]
+
+# This feature causes Vectorscan to build using available SIMD
+# microarchitecture support from the build system CPU, such as AVX2, AVX512,
+# SVE, and SVE2. The resulting binary will not be portable to CPUs that lack
+# SIMD support that the build system has.
+simd_specialization = []
+
+# This feature causes Vectorscan to build with code tuned for the
+# microarchitecture of the build system's CPU. The resulting binary will not be
+# portable to CPUs that lack SIMD support that the build system has.
+cpu_native = []
+
+# This feature causes the Vectorscan unit test suite to be built and run at
+# crate build time.
+unit_hyperscan = []
+
+# This feature causes Vectorscan to build with address sanitizer enabled.
+asan = []
+
+[build-dependencies]
+bindgen = { version = "0.70", optional = true }
+cmake = "0.1"
+flate2 = "1.0"
+tar = "0.4"
+
+[lib]
+doctest = false

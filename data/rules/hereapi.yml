@@ -1,0 +1,30 @@
+rules:
+  - name: HereAPI Key
+    id: kingfisher.hereapi.1
+    pattern: |
+      (?xi)
+      \b
+      hereapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9\S]{43}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "hereapi_key=XxK6G3m_pQ8nR2vT4wY9jL5bN7cA1dF3hJ0iM4eP9sW2u"
+      - "HEREAPI_SECRET=ZzY8xW6vU4tS2qP0nM5kJ9hF7dC1bA3gL8iK4eR9wQ2m"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://weather.ls.hereapi.com/weather/1.0/report.json?product=alerts&name=Argentina&apiKey={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

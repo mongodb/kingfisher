@@ -1,0 +1,32 @@
+rules:
+  - name: Parseur API Key
+    id: kingfisher.parseur.1
+    pattern: |
+      (?xi)
+      \b
+      parseur
+      \b
+      [^il]
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-f0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - parseur x abcdef1234567890abcdef1234567890abcdef12
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Token {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.parseur.com/

@@ -1,0 +1,37 @@
+rules:
+  - name: CurrencyLayer API Key
+    id: kingfisher.currencylayer.1
+    pattern: |
+      (?xi)
+      \b
+      currencylayer
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - currencylayer_access_key=1234567890abcdef1234567890abcdef
+      - currencylayer_secret=abcdef1234567890abcdef1234567890
+    references:
+      - https://currencylayer.com/documentation
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.currencylayer.com/live?access_key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"success": true'
+                - '"info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."'

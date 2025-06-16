@@ -1,0 +1,41 @@
+rules:
+  - name: ConversionTools API Key
+    id: kingfisher.conversiontools.1
+    pattern: |
+      (?xi)
+      \b
+      conversiontools
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        ey[a-zA-Z0-9_.]{157,165}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: high
+    examples:
+      - "conversiontools_token=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5cdefghijklm"
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "type": "convert.website_to_jpg",
+              "options": {
+                "url": "http://google.com",
+                "images": "yes"
+              }
+            }
+          headers:
+            Content-Type: application/json
+            Authorization: "Bearer {{ TOKEN }}"
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.conversiontools.io/v1/tasks

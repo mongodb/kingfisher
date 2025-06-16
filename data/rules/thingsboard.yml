@@ -1,0 +1,40 @@
+rules:
+  - name: ThingsBoard Access Token
+    id: kingfisher.thingsboard.1
+    pattern: |
+      (?xi)
+      thingsboard\.cloud/api/v1/
+      ([a-z0-9]{20})
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - http://thingsboard.cloud/api/v1/354u1g321kcqc1oad3w7/telemetry
+      - https://thingsboard.cloud/api/v1/354u1g321kcqc1oad3w7/telemetry
+      - coap://coap.thingsboard.cloud/api/v1/354u1g321kcqc1oad3w7/telemetry
+
+  - name: ThingsBoard Provision Device Key
+    id: kingfisher.thingsboard.2
+    pattern: |
+      (?x)
+      "provisionDeviceKey"\s*:\s*"
+      ([a-z0-9]{20})
+      "
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - '"{"deviceName": "DEVICE_NAME", "provisionDeviceKey": "s2s1gfcuatgbi61n8h5s", "provisionDeviceSecret": "xbzsovaw9ix4qfhi14an"}"'
+    references:
+      - https://thingsboard.io/docs/paas/reference/http-api/
+      - https://thingsboard.io/docs/paas/user-guide/device-provisioning/
+
+  - name: ThingsBoard Provision Device Secret
+    id: kingfisher.thingsboard.3
+    pattern: |
+      (?x)
+      "provisionDeviceSecret"\s*:\s*"
+      ([a-z0-9]{20})
+      "
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - '"{"deviceName": "DEVICE_NAME", "provisionDeviceKey": "s2s1gfcuatgbi61n8h5s", "provisionDeviceSecret": "xbzsovaw9ix4qfhi14an"}"'

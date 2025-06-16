@@ -1,0 +1,64 @@
+rules:
+  - name: Salesforce Access / Refresh Token
+    id: kingfisher.salesforce.1
+    pattern: |
+      (?x)                   
+      (?i)                   
+      \b
+      (                     
+        00
+        [a-z0-9]{13}
+        !
+        [a-z0-9_.]{96}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - 00DE0X0A0M0PeLE!CJoAQOx1GCLf1UIt4UU9y0VOPLUZAYN6I8DsdGEDyHh5cO02egObcAhIDHYiGCfi94c53oFbr4HB.xZfuYRGhvNuxobAAXRe
+      - |
+        === Org Description
+        KEY               VALUE
+        ────────────────  ────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+        Access Token      00DE0X0A0M0PeLE!AQcAQH0dMHEXAMPLEzmpkb58urFRkgeBGsxL_QJWwYMfAbUeeG7c1EXAMPLEDUkWe6H34r1AAwOR8B8fLEz6nEXAMPLEAAAA
+        Client Id         PlatformCLI
+        Connected Status  Connected
+        Id                00D5fORGIDEXAMPLE
+        Instance Url      https://MyDomainName.my.salesforce.com
+        Username          juliet.capulet@empathetic-wolf-g5qddtr.com
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - type: StatusMatch
+              status:
+                - 200
+            - type: WordMatch
+              words:
+                - records
+              match_all_words: true
+          url: https://{{ INSTANCE }}.my.salesforce.com/services/data/v58.0/query?q=SELECT+name+from+Account
+    depends_on_rule:
+      - rule_id: "kingfisher.salesforce.2"
+        variable: INSTANCE
+  - name: Salesforce Instance URL
+    id: kingfisher.salesforce.2
+    pattern: |
+      (?x)                   
+      (?i)                   
+      \b                     
+      https://
+      (
+        [0-9a-z-]{1,100}
+      )
+      \.
+      my\.salesforce\.com
+      \b                     
+    min_entropy: 2.5
+    confidence: medium
+    visible: false
+    examples:
+      - https://example123.my.salesforce.com

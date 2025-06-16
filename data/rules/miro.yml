@@ -1,0 +1,34 @@
+rules:
+  - name: Miro API Key
+    id: kingfisher.miro.1
+    pattern: |
+      (?xi)
+      \b
+      miro
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{27}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - miroSECRET xyz1234567890abcdefGHIJKLMN
+      - miroACCESS o123456789abcdefghijklmnopqrstuvwxyz
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/json"
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200
+                - 204
+          url: https://api.miro.com/v1/users/me

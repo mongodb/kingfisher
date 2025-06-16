@@ -1,0 +1,32 @@
+rules:
+  - name: Pagarme API Key
+    id: kingfisher.pagarme.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        ak_live_[a-zA-Z0-9]{30}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "ak_live_abcdefghijklmnopqrstuvwx123456"
+      - "ak_live_XYZabc123XYZabc123XYZabc123XYZ"
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "api_key": "{{ TOKEN }}"
+            }
+          headers:
+            Content-Type: "application/json"
+          method: GET
+          url: "https://api.pagar.me/1/balance"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

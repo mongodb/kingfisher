@@ -1,0 +1,36 @@
+rules:
+  - name: ProspectCRM API Key
+    id: kingfisher.prospectcrm.1
+    pattern: |
+      (?xi)
+      \b
+      prospect
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9-]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - prospect-access-4d9f1e2b6ac3fd80e162b12f8a9c45f1
+      - prospect-token-ba98cfe3ed3fc70d2a08b467a43d513b
+      - prospect-secret-5f4dcc3b5aa765d61d8327deb882cf99
+    references:
+      - https://api-batch-v1.prospect365.com/docs
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api-batch-v1.prospect365.com/Contacts

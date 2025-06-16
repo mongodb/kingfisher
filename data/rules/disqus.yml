@@ -1,0 +1,31 @@
+rules:
+  - name: Disqus API Key
+    id: kingfisher.disqus.1
+    pattern: |
+      (?xi)
+      \b
+      disqus
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{64}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - disqus_secret_key = jK5HbxY2QrPn7vMNL8tADcF3mWg4kXqR9sBdZyE1hVuT6fGwJpC0nI9vUxY2aM3K
+      - DISQUS_PRIVATE_TOKEN = Nh7vRf3mKp9wXc5tJq2YbL8sAg4dB6TzWeUx1nGQjCkPyDHVME0aI1FSx2Z5vY3n
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://disqus.com/api/3.0/trends/listThreads.json?api_key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

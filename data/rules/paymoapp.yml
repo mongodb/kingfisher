@@ -1,0 +1,33 @@
+rules:
+  - name: Paymoapp API Key
+    id: kingfisher.paymoapp.1
+    pattern: |
+      (?xi)
+      \b
+      paymoapp
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{44}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - paymoapp_key = JK0o0nYgI03emLGpBYKs6xkC3Vc6umRHro0ytTXIcQu9
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: Basic {{ TOKEN | b64enc }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.paymoapp.com/api/me

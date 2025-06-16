@@ -1,0 +1,34 @@
+rules:
+  - name: Eventbrite API Key
+    id: kingfisher.eventbrite.1
+    pattern: |
+      (?xi)
+      \b
+      eventbrite
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Z]{20}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - eventbrite secretkey X7W8HTTHLVYXPPVRZJZS
+      - eventbrite privatekey YTR4GR5T89WQP8HJKLDF
+      - "eventbrite private access key\nZXC2JK3HV4TY5UIO6PLK"
+      - eventbrite token ABCDEF1234567890QRST
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          url: https://www.eventbriteapi.com/v3/users/me/
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

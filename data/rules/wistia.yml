@@ -1,0 +1,30 @@
+rules:
+  - name: Wistia API Key
+    id: kingfisher.wistia.1
+    pattern: |
+      (?xi)
+      \b
+      wistia
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{64}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - "wistia_key = 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.wistia.com/v1/stats/account.json?access_token={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

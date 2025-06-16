@@ -1,0 +1,33 @@
+rules:
+  - name: Ticket Tailor API Key
+    id: kingfisher.tickettailor.1
+    pattern: |
+      (?xi)
+      \b
+      tickettailor
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        sk_[0-9]{4}_[0-9]{6}_[a-f0-9]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - tickettailor secret sk_1234_123456_1a2b3c4d5e6f1a2b3c4d5e6f1a2b3c4d
+      - tickettailor key sk_5678_234567_abcdefabcdefabcdefabcdefabcdefabcdef
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: 'Basic {{ TOKEN | b64enc }}'
+          method: GET
+          url: https://api.tickettailor.com/v1/orders
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

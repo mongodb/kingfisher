@@ -1,0 +1,30 @@
+rules:
+  - name: VPNAPI Key
+    id: kingfisher.vpnapi.1
+    pattern: |
+      (?xi)
+      \b
+      vpnapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9A-Z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - vpnapi secret_key=abcdefghijklmnopqrstuvwxyz123456
+    validation:
+      type: Http
+      content:
+        request:
+          url: https://vpnapi.io/api/8.8.8.8?key={{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

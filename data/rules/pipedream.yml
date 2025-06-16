@@ -1,0 +1,33 @@
+rules:
+  - name: Pipedream API Key
+    id: kingfisher.pipedream.1
+    pattern: |
+      (?xi)
+      \b
+      pipedream
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "pipedream_key = abcde12345abcd67890abcde12345678"
+    references: []
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://api.pipedream.com/v1/users/me"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

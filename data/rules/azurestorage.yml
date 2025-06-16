@@ -1,0 +1,63 @@
+rules:
+  - name: Azure Storage Account Name
+    id: kingfisher.azurestorage.name.1
+    pattern: |
+      (?x)
+      (?:
+        (?i:
+          (?:Account|Storage)
+          (?:[._-]Account)?
+          [._-]?Name
+        )
+        (?:.|[\n\r]){0,20}?
+        ([a-z0-9]{3,24})
+      |
+        ([a-z0-9]{3,24})
+        (?i:\.blob\.core\.windows\.net)
+      )\b
+    min_entropy: 2.5
+    visible: false
+    confidence: medium
+    examples:
+      - storage_name=mystorageaccount123
+      - mystorageaccount.blob.core.windows.net
+
+  - name: Azure Storage Account Key
+    id: kingfisher.azurestorage.key.1
+    pattern: |
+      (?x)
+      (?i:(?:Access|Account|Storage)[_.-]?Key)
+      (?:.|[\n\r]){0,25}?
+      (
+        [a-zA-Z0-9+\\/-]{86,88}={0,2}
+      )
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - AccountKey=Xy9aB8cD7eF6gH5iJ4kL3mN2oP1qR0sT9uV8wX7yZ6aB5cD4eF3gH2iJ1kL0mN9oP8qR7sT6uV5wX4yZ3aB2cD1eF0gH9iJ8kL7mN6oP5q==\
+    validation:
+      type: AzureStorage
+    depends_on_rule:
+      - rule_id: kingfisher.azurestorage.name.1
+        variable: AZURENAME
+    #  validation:
+    #    type: Http
+    #    content:
+    #      request:
+    #        method: GET
+    #        url: https://{{ AZURENAME }}.blob.core.windows.net/?comp=list
+    #        headers:
+    #          x-ms-date: '{{ "now" | date: "%a, %d %b %Y %H:%M:%S GMT" }}'
+    #          x-ms-version: 2019-12-12
+    #          Authorization: |
+    #           SharedKey {{ AZURENAME }}:{{
+    #               TOKEN | hmac_sha256: "hello world"
+    #           }}
+    #        response_matcher:
+    #          - report_response: true
+    #          - status:
+    #              - 200
+    #            type: StatusMatch
+    #  depends_on_rule:
+    #    - rule_id: kingfisher.azurestorage.name.1
+    #      variable: AZURENAME

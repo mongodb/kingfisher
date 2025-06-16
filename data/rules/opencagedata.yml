@@ -1,0 +1,32 @@
+rules:
+  - name: OpenCageData API Key
+    id: kingfisher.opencagedata.1
+    pattern: |
+      (?xi)
+      \b
+      opencagedata
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - opencagedata_key abcdef1234567890abcdef1234567890
+      - opencagedata_secret 12345678901234567890123456789012
+      - opencagedata_token abcd1234efgh5678ijkl9012mnop3456
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.opencagedata.com/geocode/v1/json?q=12.8797,121.7740&key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

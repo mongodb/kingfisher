@@ -1,0 +1,31 @@
+rules:
+  - name: Marketstack API Key
+    id: kingfisher.marketstack.1
+    pattern: |
+      (?xi)
+      \b
+      marketstack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - marketstack SECRET=abcdef0123456789abcdef0123456789
+      - marketstack key-0123456789abcdef0123456789abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.marketstack.com/v1/eod?access_key={{ TOKEN }}&symbols=AAPL
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

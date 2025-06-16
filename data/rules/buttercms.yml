@@ -1,0 +1,33 @@
+rules:
+  - name: ButterCMS API Key
+    id: kingfisher.buttercms.1
+    pattern: |
+      (?xi)
+      \b
+      buttercms
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "buttercmsSECRET=ab8f9c72ca483c3b6c3d4e6e8f9284ab56cd78f0"
+      - "buttercmsPRIVATEkey-ab8f9c72ca483c3b6c3d4e6e8f9284ab56cd78f0"
+    references:
+      - https://buttercms.com/docs/api
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.buttercms.com/v2/posts/?auth_token={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

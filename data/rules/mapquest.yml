@@ -1,0 +1,31 @@
+rules:
+  - name: MapQuest API Key
+    id: kingfisher.mapquest.1
+    pattern: |
+      (?xi)
+      \b
+      mapquest
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - mapquest_key=X7ZT5pnGkgFLz9H1vR4WmY3qNcB8jD6M
+      - MAPQUEST_API_TOKEN=K9bN4mP8vJ2hL5gQ3fR7tY6wX1cS0dAE
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://www.mapquestapi.com/datamanager/v2/get-column-types?key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

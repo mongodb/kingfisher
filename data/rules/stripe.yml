@@ -1,0 +1,54 @@
+rules:
+  - name: Stripe Key
+    id: kingfisher.stripe.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        (?:sk|pk)_live_[0-9a-z]{10,100}
+      )
+    min_entropy: 3.3
+    examples:
+      - sk_live_HQS0j4H75XpthOW
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - '"object":'
+                - '"url":'
+                - '"data":'
+          url: https://api.stripe.com/v1/charges
+
+  - name: Stripe Secret Key
+    id: kingfisher.stripe.2
+    pattern: |
+      (?x)
+      \b
+      (
+        [rs]k_live_[a-z0-9]{22,247}
+      )
+      \b
+    min_entropy: 3.3
+    examples:
+      - sk_live_f01c79xuuug7yodgzj5ws0h1x2kyvho3ft3640n241uqewmael0e66iw91hrob9rl9pt6o
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.stripe.com/v1/charges

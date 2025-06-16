@@ -1,0 +1,32 @@
+rules:
+  - name: Cicero API Key
+    id: kingfisher.cicero.1
+    pattern: |
+      (?xi)
+      \b
+      cicero
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - ciceroSECRET=1234567890abcdef1234567890abcdef12345678
+      - ciceroPRIVATEKEY=abcdef1234567890abcdef1234567890abcdef12
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          url: "https://cicero.azavea.com/v3.1/account/credits_remaining?key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: 200

@@ -1,0 +1,33 @@
+rules:
+  - name: Holistic API Key
+    id: kingfisher.holistic.1
+    pattern: |
+      (?xi)
+      \b
+      holistic
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{64}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - holisticACCESS=abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdef
+      - 'holisticKEY=1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef'
+      - "holisticTOKEN-abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdef"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            x-api-key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.holistic.dev/api/v1/project

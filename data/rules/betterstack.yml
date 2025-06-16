@@ -1,0 +1,33 @@
+rules:
+  - name: Betterstack API Key
+    id: kingfisher.betterstack.1
+    pattern: |
+      (?xi)
+      \b
+      betterstack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{24}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - "betterstack SECRET=abcdefghijklmnopqrstuvwx"
+      - "betterstack PRIVATE_KEY abcdefghijklmnopqrstuvwx"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://uptime.betterstack.com/api/v2/monitors"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

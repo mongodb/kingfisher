@@ -1,0 +1,32 @@
+rules:
+  - name: Voiceflow API Key
+    id: kingfisher.voiceflow.1
+    pattern: |
+      (?xm)
+      \b
+      (VF\.(?:(?:DM|WS)\.)?[a-fA-F0-9]{24}\.[a-zA-Z0-9]{16})
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - VF.DM.1234567890abcdef12345678.qwertyuiopasdfgh
+      - VF.WS.abcdef1234567890abcdef12.asdfghjklzxcvbnm
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "question": "is my voice my passport?"
+            }
+          headers:
+            Accept: application/json
+            Authorization: '{{ TOKEN }}'
+            Content-Type: application/json
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://general-runtime.voiceflow.com/knowledge-base/query

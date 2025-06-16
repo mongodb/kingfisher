@@ -1,0 +1,33 @@
+rules:
+  - name: Teletype API Key
+    id: kingfisher.teletype.1
+    pattern: |
+      (?xi)
+      \b
+      teletype
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z-]{64}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - teletype_key=abcd1234-5678-90ef-ghij-klmn1234567890abcdef1234567890abcdef1234567890
+      - teletype_token=ABCD1234-5678-90EF-GHIJ-KLMN1234567890ABCDEF1234567890ABCDEF1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            X-Auth-Token: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.teletype.app/public/api/v1/messages

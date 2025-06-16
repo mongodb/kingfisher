@@ -1,0 +1,30 @@
+rules:
+  - name: ScraperBox API Key
+    id: kingfisher.scraperbox.1
+    pattern: |
+      (?xi)
+      \b
+      scraperbox
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.2
+    confidence: medium
+    examples:
+      - scraperbox secret token=ABCDEFGHIJKLMNOZQRSTUVWXYZ987654
+    validation:
+      type: Http
+      content:
+        request:
+          url: "https://api.scraperbox.com/scrape?token={{ TOKEN }}&url=https://google.com"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

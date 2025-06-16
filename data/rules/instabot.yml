@@ -1,0 +1,33 @@
+rules:
+  - name: Instabot API Key
+    id: kingfisher.instabot.1
+    pattern: |
+      (?xi)
+      \b
+      instabot
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z=+/]{43}[0-9a-zA-Z+/=]{1}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - instabot SECRET_KEY=Ym9va21hcmsgZXhhbXBsZSBpbnN0YWJvdCBrZXkgMDE=
+      - instabot_private_access uSER=U29tZVNlY3JldFN0cmluZzEyMyBpbnN0YWJvdA==
+      - instabot TOKEN:VGhpcyBpcyBhbiBpbnN0YWJvdCBhcGkgdG9rZW4gZXhhbXBsZQ==
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-Instabot-Api-Key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.instabot.io/v1

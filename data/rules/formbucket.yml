@@ -1,0 +1,36 @@
+rules:
+  - name: FormBucket API Key
+    id: kingfisher.formbucket.1
+    pattern: |
+      (?xi)
+      \b
+      formbucket
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{1,}\.[0-9A-Za-z]{1,}\.[0-9A-Z-a-z\-_]{1,}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - formbucket SECRET abc123.def456.ghi789-jkl
+      - formbucket KEY a1b2c3.d4e5f6.g7h8i9-j0k1
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"created_on"'
+          url: https://www.formbucket.com/v1/profile

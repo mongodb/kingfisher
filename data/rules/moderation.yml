@@ -1,0 +1,37 @@
+rules:
+  - name: Moderation API Key
+    id: kingfisher.moderation.1
+    pattern: |
+      (?xi)
+      \b
+      moderation
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{36}\.[a-zA-Z0-9]{115}\.[a-zA-Z0-9_]{43}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - moderation_token = 0qrzh8x2s1kqjsunk9ok8oisbfh21lmvcele.03mjdz07v9zua5m3sromijsjujr67z218f5qkfcl07qtf9y1cze1zis9ja9mxf01kf43fonserce13gjl0bfvpi3edctem99c74y2fh1v2zdqf4d3oz.o8arzeqz5g195v0cb7mufeub4ta0pibpklcxd44p57p
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "value": "This is an english text"
+            }
+          headers:
+            Content-Type: application/json
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://moderationapi.com/api/v1/analyze/language

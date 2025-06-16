@@ -1,0 +1,30 @@
+rules:
+  - name: Unsplash API Key
+    id: kingfisher.unsplash.1
+    pattern: |
+      (?xi)
+      \b
+      unsplash
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z_]{43}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - unsplash_token = Jz7csTGvDKKtdUsyCQqlThkXspbLw4nyQXy1ubc185w
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.unsplash.com/photos/?client_id={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

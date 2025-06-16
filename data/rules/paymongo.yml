@@ -1,0 +1,36 @@
+rules:
+  - name: PayMongo API Key
+    id: kingfisher.paymongo.1
+    pattern: |
+      (?xi)
+      \b
+      paymongo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - paymongo_key = 5HWaoDB9jbokXJ9LNknss4m6TPmaCHfr
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://api.paymongo.com/v1/payment_methods
+          headers:
+            Content-Type: application/json
+            Authorization: '{{ TOKEN | prepend: "Basic " }}'
+          body: '{"data":{"attributes":{"type":"paymaya"}}}'
+          response_matcher:
+            - type: WordMatch
+              words: 
+                - "api_key_invalid"
+              negative: true
+            - report_response: true
+            - type: StatusMatch
+              status: 200

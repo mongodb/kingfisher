@@ -1,0 +1,34 @@
+rules:
+  - name: Moralis API Key
+    id: kingfisher.moralis.1
+    pattern: |
+      (?xi)
+      \b
+      moralis
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - moralis_api_key=Hs7Jh9KmN5qRtVw2XzA3BcDe4FgHjLmP8nQ9rStUvWxYzA1BcDe4FgHjKmN5pQrS
+      - MORALIS_SECRET=1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p7q8r9s0t1u2v3w4x5y6z7a8b9c0d1e2f
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            X-API-Key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://deep-index.moralis.io/api/v2/0xd8da6bf26964af9d7eed9e03e53415d37aa96045/nft?chain=eth&format=decimal

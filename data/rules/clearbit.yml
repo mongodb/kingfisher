@@ -1,0 +1,32 @@
+rules:
+  - name: Clearbit API Key
+    id: kingfisher.clearbit.1
+    pattern: |
+      (?xi)
+      \b
+      clearbit
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z_]{35}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - clearbit_token = dp50091fm93fl4nod3a4c5lijihbrrtbvg1
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://person.clearbit.com/v1/people/email/alex@alexmaccaw.com
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

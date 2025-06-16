@@ -1,0 +1,32 @@
+rules:
+  - name: RAWG API Key
+    id: kingfisher.rawg.1
+    pattern: |
+      (?xi)
+      \b
+      rawg
+      \b
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{32}
+      )
+    min_entropy: 3.2
+    confidence: medium
+    examples:
+      - rawg SECRET 1234567890abcdef1234567890abcdef
+      - rawg KEY abcdef1234567890abcdef1234567890ab
+      - rawg TOKEN 0123456789abcdef0123456789abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.rawg.io/api/platforms?key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

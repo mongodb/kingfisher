@@ -1,0 +1,32 @@
+rules:
+  - name: SurveySparrow API Key
+    id: kingfisher.surveysparrow.1
+    pattern: |
+      (?xi)
+      \b
+      surveysparrow
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9-_]{88}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "surveysparrow-Key-SECRET = surveysparrowSECRET1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcd"
+      - "surveysparrowToken1234_surveysparrowTOKEN=surveysparrowSECRET1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcd"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://api.surveysparrow.com/v1/contacts"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

@@ -1,0 +1,33 @@
+rules:
+  - name: D7Network API Key
+    id: kingfisher.d7network.1
+    pattern: |
+      (?xi)
+      \b
+      d7network
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9\W\S]{23}=
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - d7networkSECRET abc1234567890ABC+=01Nz==
+      - d7networkKEY jkl0987654321XYZ+/45Mf==
+      - d7networkACCESS qwe0987654321XYZ+=Sdf==
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://rest-api.d7networks.com/secure/balance

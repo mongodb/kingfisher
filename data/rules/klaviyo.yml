@@ -1,0 +1,32 @@
+rules:
+  - name: Klaviyo API Key
+    id: kingfisher.klaviyo.1
+    pattern: |
+      (?xi)
+      klaviyo
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        pk_[a-zA-Z0-9]{34}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - klaviyo_key = pk_abcd1234fghij5678klmn9012opqr3456s
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Revision: "2023-02-22"
+            Authorization: "Klaviyo-API-Key {{ TOKEN }}"
+          method: GET
+          url: https://a.klaviyo.com/api/profiles
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

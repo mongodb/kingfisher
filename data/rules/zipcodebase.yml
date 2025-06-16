@@ -1,0 +1,34 @@
+rules:
+  - name: Zipcodebase API Key
+    id: kingfisher.zipcodebase.1
+    pattern: |
+      (?xi)
+      \b
+      zipcodebase
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - zipcodebase-secret-123e4567-e89b-12d3-a456-426614174001
+      - zipcodebase-access-987e6543-e89b-12d3-b456-426614174002
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/vnd.zipcodebase+json; version=3
+            apikey: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.zipcodebase.com/api/v1/search?codes=10005,10006

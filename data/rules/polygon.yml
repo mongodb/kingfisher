@@ -1,0 +1,30 @@
+rules:
+  - name: Polygon API Key
+    id: kingfisher.polygon.1
+    pattern: |
+      (?xi)
+      \b
+      polygon
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "polygon SECRET wxyzABCD1234567890efghIJKLmnopQR"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.polygon.io/v2/reference/locales?apiKey={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

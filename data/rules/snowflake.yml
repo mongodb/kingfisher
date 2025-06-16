@@ -1,0 +1,79 @@
+rules:
+  - name: Snowflake Account Identifier
+    id: kingfisher.snowflake.1
+    pattern: |
+      (?xi)
+      snowflake
+      (?:.|[\n\r]){0,16}?
+      account
+      (?:.|[\n\r]){0,64}?
+      \b
+      (
+        [a-z]{7}-[0-9a-z]{7}
+        |
+        [a-z0-9]{4,32}
+      )\b
+    min_entropy: 3.5
+    visible: false
+    examples:
+      - snowflake_account = ABCDEFG-1234567
+  - name: Snowflake Username
+    id: kingfisher.snowflake.2
+    pattern: |
+      (?xi)
+      snowflake
+      (?:.|[\n\r]){0,16}?
+      user
+      (?:.|[\n\r]){0,64}?
+      \b
+      (
+        [a-z0-9._%+-]{2,32}
+      )\b
+    min_entropy: 3
+    visible: false
+    examples:
+      - snowflake_user = "JTAAvluMi1"
+  - name: Snowflake Password
+    id: kingfisher.snowflake.3
+    pattern: |
+      (?xi)
+      snowflake
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN|PASSWORD)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-z0-9!@\#$%^&*]{8,64}
+      )
+    min_entropy: 3.5
+    examples:
+      - snowflake password = P@ssw0rd123
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "data": {
+                "ACCOUNT_NAME": "{{ SNOWFLAKEACCOUNT }}",
+                "LOGIN_NAME": "{{ SNOWFLAKEUSERNAME }}",
+                "PASSWORD": "{{ TOKEN }}"
+              }
+            }
+          headers:
+            Content-Type: application/json
+          method: POST
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"success" : true'
+                - '"success":true'
+                - '"message" : null'
+                - '"message":null'
+          url: "https://{{ SNOWFLAKEACCOUNT }}.snowflakecomputing.com:443/session/v1/login-request"
+    depends_on_rule:
+      - rule_id: kingfisher.snowflake.1
+        variable: SNOWFLAKEACCOUNT
+      - rule_id: kingfisher.snowflake.2
+        variable: SNOWFLAKEUSERNAME

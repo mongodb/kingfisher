@@ -1,0 +1,30 @@
+rules:
+  - name: ScrapingBee API Key
+    id: kingfisher.scrapingbee.1
+    pattern: |
+      (?xi)
+      \b
+      scrapingbee
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9]{80}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - scrapingbee_key = 7MJ2AF6A4054T0LBOP3FEOM6L1IHR8F6IA2P6U1L53NE4GETAT51EOM6L1ITAT51EOM4T0LBOP3FEOM6
+    validation:
+      type: Http
+      content:
+        request:
+          url: https://app.scrapingbee.com/api/v1/?api_key={{ TOKEN }}&url=https://httpbin.org/anything?json&render_js=false
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

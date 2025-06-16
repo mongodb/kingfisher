@@ -1,0 +1,31 @@
+rules:
+  - name: Meistertask API Key
+    id: kingfisher.meistertask.1
+    pattern: |
+      (?xi)
+      \b
+      meistertask
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{43}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - meistertask_token = yfi45upwc03e6uq6Zayqwt7vvaad4a6mjtyjaadtp35
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://www.meistertask.com/api/projects

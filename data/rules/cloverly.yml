@@ -1,0 +1,32 @@
+rules:
+  - name: Cloverly API Key
+    id: kingfisher.cloverly.1
+    pattern: |
+      (?xi)
+      \b
+      cloverly
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9:_]{28}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - cloverly_secret:abc12345xyz98765_qrs456789tuv
+      - cloverly_api_key:123xyz456abc_789qrs012tuv345
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.cloverly.com/2019-03-beta/account

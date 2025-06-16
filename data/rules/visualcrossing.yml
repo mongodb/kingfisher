@@ -1,0 +1,39 @@
+rules:
+  - name: Visual Crossing API Key
+    id: kingfisher.visualcrossing.1
+    pattern: |
+      (?xi)
+      \b
+      visualcrossing
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Z]{25}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - | 
+        visualcrossing
+        PRIVATE 
+        ABCDEFGHIJKLMNOPQRSTUVWXY
+      - |
+        visualcrossing
+        KEY
+        ABCDEFGHIJKLMNOPQRSTUVWXY
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+          method: GET
+          url: "https://weather.visualcrossing.com/VisualCrossingWebServices/rest/services/timeline/LA?key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

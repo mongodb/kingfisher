@@ -1,0 +1,32 @@
+rules:
+  - name: Avaza Personal Access Token
+    id: kingfisher.avaza.1
+    pattern: |
+      (?xi)
+      \b
+      avaza
+      (?:.|[\n\r]){0,8}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9]+-[0-9a-f]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - avaza_token = 123-abcdef1234567890abcdef1234567890abcdef12
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.avaza.com/api/Account

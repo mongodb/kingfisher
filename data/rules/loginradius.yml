@@ -1,0 +1,29 @@
+rules:
+  - name: Loginradius API Key
+    id: kingfisher.loginradius.1
+    pattern: |
+      (?xi)
+      \b
+      loginradius
+      (?:.|[\n\r]){0,8}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "loginradius_key = 123e4567-e89b-12d3-a456-426614174000"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.loginradius.com/identity/v2/serverinfo?apikey={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

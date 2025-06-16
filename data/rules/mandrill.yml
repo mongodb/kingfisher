@@ -1,0 +1,36 @@
+rules:
+  - name: Mandrill API Key
+    id: kingfisher.mandrill.1
+    pattern: |
+      (?x)                   
+      (?i)                   
+      \b                     
+      mandrill
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b                     
+      (                      
+        [a-zA-Z0-9_-]{20,24}
+      ) 
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - mandrill_token = taqnVL1P5AJrM4oU4opSqQ
+    categories:
+      - api
+      - identifier
+    validation:
+      type: Http
+      content:
+        request:
+          body: '{"key": "{{ TOKEN }}"}'
+          headers:
+            Content-Type: application/json
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://mandrillapp.com/api/1.0/users/info

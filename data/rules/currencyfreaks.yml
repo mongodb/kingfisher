@@ -1,0 +1,31 @@
+rules:
+  - name: Currencyfreaks API Key
+    id: kingfisher.currencyfreaks.1
+    pattern: |
+      (?xi)
+      \b
+      currencyfreaks
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - currencyfreaksKEY-abc123def456ghi789jkl012mno345pq
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.currencyfreaks.com/latest"
+          headers:
+            Authorization: "apikey={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

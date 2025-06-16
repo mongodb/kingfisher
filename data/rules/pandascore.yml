@@ -1,0 +1,34 @@
+rules:
+  - name: PandaScore API Key
+    id: kingfisher.pandascore.1
+    pattern: |
+      (?xi)
+      \b
+      pandascore
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z\-_]{51}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - pandascore_token=test_TK7p9N4Lm2Jx5Vq8WyU3aB1cD6fHjKnRvZ0sE9gYiX4bC-h
+      - PANDASCORE_SECRET=live_Qw3Er5Ty7Ui9Op1As2Df4Gh6Jk8Lm0Nx-BvCzXcVbNmK_p
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.pandascore.co/videogames

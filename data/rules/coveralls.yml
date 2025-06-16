@@ -1,0 +1,34 @@
+rules:
+  - name: Coveralls API Key
+    id: kingfisher.coveralls.1
+    pattern: |
+      (?xi)
+      \b
+      coveralls
+      (?:.|[\n\r]){0,1}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9-]{37}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - coveralls_SECRETTOKEN abcdefghijklmnopqrstuvwxyzab12345cdef
+      - coveralls-SECRET-KEY mnopqrstuvwxyzabcdefghi12345678901234
+      - coveralls_PRIVATEKEY-1234567890abcdefghijklmnopqrstuvwxyza
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "token {{ TOKEN }}"
+          method: GET
+          url: https://coveralls.io/api/repos/github/secretscanner02/scanner
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

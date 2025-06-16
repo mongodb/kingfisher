@@ -1,0 +1,30 @@
+rules:
+  - name: Skrapio API Key
+    id: kingfisher.skrappio.1
+    pattern: |
+      (?xi)
+      \b
+      skrapp
+      (?:.|[\n\r]){0,32}?
+      (
+        [a-z0-9A-Z]{42}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "skrapp 2e11kyDIiLGCGkHX7pAdSvKuqrEcZtYf82HrSVZxCZ"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            X-Access-Key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.skrapp.io/api/v2/account

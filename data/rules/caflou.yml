@@ -1,0 +1,32 @@
+rules:
+  - name: Caflou API Key
+    id: kingfisher.caflou.1
+    pattern: |
+      (?xi)
+      \b
+      caflou
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9\S]{155}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - caflou_SECRET=ABCDEFGHIJKLMNOPQRSTUVWXYZbu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWDEFGHIJKLMNOPQRSTUVWXYZbu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWDEFGHIJKLMNOPQRSTUVWXYZabcd
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.caflou.com/api/v1/accounts

@@ -1,0 +1,31 @@
+rules:
+  - name: IEX Cloud API Key
+    id: kingfisher.iexapis.1
+    pattern: |
+      (?xi)
+      \b
+      iexapis
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        sk_[a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - iexapis_token=sk_12345678901234567890123456789012
+      - IEXAPIS_SECRET_KEY=sk_abcdef1234567890abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://cloud.iexapis.com/stable/stock/aapl/quote?token={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

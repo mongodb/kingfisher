@@ -1,0 +1,30 @@
+rules:
+  - name: TeamworkSpaces API Key
+    id: kingfisher.teamworkspaces.1
+    pattern: |
+      (?xi)
+      \b
+      (?:teamwork|teamworkspaces)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        tkn\.v1_[0-9A-Za-z]{71}=
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - teamwork tkn.v1_ot076nh59jBwn3pJwJoqps40WmqRN6S2yi0cc5a66OdoaHuomyuyqbwIO2STD4Nm03uMhtD=
+      - teamworkspaces tkn.v1_2VgvysaMMcvbNQrmnVW5asseDY0tMDrNvy2eQPbMTpQVHNM3eDARqe93co9QWN4IgiVCikE=
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://example.teamwork.com/spaces/api/v1/users.json

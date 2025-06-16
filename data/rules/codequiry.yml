@@ -1,0 +1,34 @@
+rules:
+  - name: Codequiry API Key
+    id: kingfisher.codequiry.1
+    pattern: |
+      (?xi)
+      \b
+      codequiry
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - codequirySECRET=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+      - codequiry_KEY=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+      - codequiry-PRIVATE-abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            apikey: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://codequiry.com/api/v1/checks

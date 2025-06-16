@@ -1,0 +1,33 @@
+rules:
+  - name: Ayrshare API Key
+    id: kingfisher.ayrshare.1
+    pattern: |
+      (?xi)
+      \b
+      ayrshare
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9]{8}-[A-Z0-9]{8}-[A-Z0-9]{8}-[A-Z0-9]{8}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "ayrshare SECRET ABCD1234-EFGH5678-IJKL9101-MNOP1121"
+      - "ayrshare TOKEN XYZ98765-WXYZ1234-KLMN5678-QRST9101"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: https://app.ayrshare.com/api/user
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

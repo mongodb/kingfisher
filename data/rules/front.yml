@@ -1,0 +1,33 @@
+rules:
+  - name: Front API Key
+    id: kingfisher.front.1
+    pattern: |
+      (?xi)
+      \b
+      front
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{36}\.[0-9a-zA-Z\.\-\_]{188,244}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - front.key.123456789012345678901234567890123456.abcdefghijklmnopqrstuvwxyzbu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefghijklmnopqrstuvwxyzbu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefghijklmnopqrstuvwxyzbu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefghijk
+      - front.token.123456789012345678901234567890123456.XYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcdXYZabcd.YZabc123etcToMake244CharactersLong........................................................................
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api2.frontapp.com/accounts

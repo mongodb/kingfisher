@@ -1,0 +1,35 @@
+rules:
+  - name: Twitter v2 API Key
+    id: kingfisher.twitter.v2.1
+    pattern: |
+      (?xi)
+      \b
+      twitter
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-zA-Z0-9]{20,59}%([a-zA-Z0-9]{3,}%){0,2}[a-zA-Z0-9]{52}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - twitter_token=ABCDEFGHIJ1234567890%abc%def%ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnop
+      - twitter_secret=KLMNOPQRST0987654321%xyz%ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnop
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.twitter.com/2/account/verify_credentials
+    references:
+      - https://developer.twitter.com/en/docs/authentication/oauth-2-0

@@ -1,0 +1,32 @@
+rules:
+  - name: Leadfeeder API Key
+    id: kingfisher.leadfeeder.1
+    pattern: |
+      (?xi)
+      \b
+      leadfeeder
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9-]{43}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - leadfeederSECRET leadfeeder-123e4567-e89b-12d3-a456-4266141740000abcdEFG
+      - leadfeederKEY=abcDEr45ghlmnopqrs678tu9vwxy01zX234ABCDe56FGHIJKLM789opqr5
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Token token={{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.leadfeeder.com/accounts

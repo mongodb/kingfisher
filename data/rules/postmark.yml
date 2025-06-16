@@ -1,0 +1,33 @@
+rules:
+  - name: Postmark Server Token
+    id: kingfisher.postmark.1
+    pattern: |
+      (?xi)
+      \b
+      postmark
+      (?:.|[\n\r]){0,8}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,8}?
+      \b
+      (
+        [0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - postmark_token = 123e4567-e89b-12d3-a456-426614174000
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/json"
+            Content-Type: "application/json"
+            X-Postmark-Server-Token: "{{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.postmarkapp.com/deliverystats

@@ -1,0 +1,35 @@
+rules:
+  - name: Noticeable API Key
+    id: kingfisher.noticeable.1
+    pattern: |
+      (?xi)
+      \b
+      noticeable
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{20}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - noticeable abcdefghij1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "query": "YOUR_GRAPHQL_PAYLOAD"
+            }
+          headers:
+            Content-Type: application/json
+            Authorization: "Apikey {{ TOKEN }}"
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.noticeable.io/graphql

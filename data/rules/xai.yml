@@ -1,0 +1,30 @@
+rules:
+  - name: xAI API Key
+    id: kingfisher.xai.1
+    pattern: |
+      (?x)
+      (?i)
+      \b
+      (
+        xai-
+        [0-9A-Za-z_]{80}
+      )
+      \b
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - xai-AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_ABCDEFGHIJKLMNOpqrstuvwxyz0123456AbCdEfGhIj
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.x.ai/v1/api-key
+          headers:
+            Content-Type: application/json
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

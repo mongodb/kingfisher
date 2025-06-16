@@ -1,0 +1,32 @@
+rules:
+  - name: Newscatcher API Key
+    id: kingfisher.newscatcher.1
+    pattern: |
+      (?xi)
+      \b
+      newscatcher
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z_]{43}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - newscatcher_key = 0TmwjGlDiFJcHN_wODUUrEGBjC4Zh9xSnTQ2jiN83oU
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            x-api-key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.newscatcherapi.com/v2/search?q=Tesla

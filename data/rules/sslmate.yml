@@ -1,0 +1,33 @@
+rules:
+  - name: SslMate API Key
+    id: kingfisher.sslmate.1
+    pattern: |
+      (?xi)
+      \b
+      sslmate
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{36}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - sslmate_key=abcdefghij1234567890abcdefghij123456
+      - SSLMATE_SECRET_KEY=ABCDEFGHIJ1234567890ABCDEFGHIJ123456
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://sslmate.com/api/v2/certs/example.com?expand=current.crt

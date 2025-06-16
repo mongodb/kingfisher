@@ -1,0 +1,36 @@
+rules:
+  - name: Budibase API Key
+    id: kingfisher.budibase.1
+    pattern: |
+      (?xi)
+      \b
+      budibase
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-f0-9]{32}-[a-f0-9]{78,80}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: high
+    examples:
+      - budibase_api_key=12345678901234567890123456789012-abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef01234567
+      - budibase_secret_token=deadbeefdeadbeefdeadbeefdeadbeef-123456789012345678901234567890123456789012345678901234567890123456789012345678
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {"name":"qwerty"}
+          headers:
+            Content-Type: application/json
+            x-budibase-api-key: '{{ TOKEN }}'
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://budibase.app/api/public/v1/applications/search

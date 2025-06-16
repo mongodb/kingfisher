@@ -1,0 +1,36 @@
+rules:
+  - name: Fixer.io API Key
+    id: kingfisher.fixerio.1
+    pattern: |
+      (?xi)
+      \b
+      fixer
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Za-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - fixer SECRET abcdef123456abcdef123456abcdef12
+      - fixer KEY 1234abcd5678efgh1234ijkl5678mnop
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://data.fixer.io/api/latest?access_key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              match_all_words: false
+              words:
+                - '"success": true'
+                - '"info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."'

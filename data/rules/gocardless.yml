@@ -1,0 +1,37 @@
+rules:
+  - name: GoCardless API Token
+    id: kingfisher.gocardless.1
+    pattern: |
+      (?xi)                     
+      \b
+      gocardless
+      (?:.|[\n\r]){0,32}?
+      \b
+      (                        
+        live_
+        [a-zA-Z0-9-_=]{40,42}
+      )                  
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'gocardless_token = "live_8uq9fsUA28SqKT=CTsQxgKrqB6_7QV5tA39I8y5H'
+      - GOCARDLESS_LIVE_KEY = "live_cpo0k9jbnb2djeaq=tga45ua_bnhev5ivv294a6cs"
+    categories:
+      - api
+      - payment
+      - identifier
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Content-Type: application/json
+            GoCardless-Version: "2015-07-06"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.gocardless.com/customers/

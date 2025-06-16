@@ -1,0 +1,32 @@
+rules:
+  - name: GrooveHQ API Key
+    id: kingfisher.groovehq.1
+    pattern: |
+      (?xi)
+      \b
+      groove
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{64}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - https://api.groovehq.com/v1/me?access_token=41529cf5de0f4daa10098ff4881521c0cfea8b127d8e11bc5cc2cadb974e9a72
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          url: https://api.groovehq.com/v1/me
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

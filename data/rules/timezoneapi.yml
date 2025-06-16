@@ -1,0 +1,32 @@
+rules:
+  - name: TimezoneAPI Key
+    id: kingfisher.timezoneapi.1
+    pattern: |
+      (?xi)
+      \b
+      timezoneapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z]{20}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - timezoneapi SECRET token abcDEFGHIJKLmnoPqrst
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://timezoneapi.io/api/ip/?token={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"date"'

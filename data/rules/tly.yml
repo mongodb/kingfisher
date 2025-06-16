@@ -1,0 +1,31 @@
+rules:
+  - name: TLy API Key
+    id: kingfisher.tly.1
+    pattern: |
+      (?xi)
+      \b
+      tly
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{60}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - tly_secret=Aa0Bb1Cc2Dd3Ee4Ff5Gg6Hh7Ii8Jj9Kk0Ll1Mm2Nn3Oo4Pp5Qq6Rr7Ss8Tt9
+      - tly_token=9T8s7R6q5P4o3N2m1L0k9J8i7H6g5F4e3D2c1B0a9Z8y7X6w5V4u3T2s1R0p
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://t.ly/api/v1/link/stats?api_token={{ TOKEN }}&short_url=https://t.ly/abcd
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,28 @@
+rules:
+  - name: Fleetbase API Key
+    id: kingfisher.fleetbase.1
+    pattern: |
+      (?xi)
+      \b
+      flb_live_
+      (
+        [0-9a-zA-Z]{20}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "flb_live_1234567890abcdefGHIJ"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://api.fleetbase.io/v1/contacts/"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

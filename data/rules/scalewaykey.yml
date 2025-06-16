@@ -1,0 +1,33 @@
+rules:
+  - name: Scaleway API Key
+    id: kingfisher.scaleway.1
+    pattern: |
+      (?xi)
+      \b
+      scaleway
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[0-9a-z]{4}-[0-9a-z]{12}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - scaleway SECRET a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6
+      - scaleway ACCESS a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6
+      - scaleway KEY a1b2c3d4-e5f6-g7h8-i9j0-k1l2m3n4o5p6
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-Auth-Token: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.scaleway.com/instance/v1/zones/fr-par-1/servers

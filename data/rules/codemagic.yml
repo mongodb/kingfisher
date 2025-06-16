@@ -1,0 +1,33 @@
+rules:
+  - name: Codemagic API Key
+    id: kingfisher.codemagic.1
+    pattern: |
+      (?xi)
+      \b
+      codemagic
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Za-z0-9_]{43}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'codemagic SECRET_ACCESS_KEY codemagic123_vAr0u3Fx9lAf3BmeN8gUd3Pm6Vx2F2ay3_ij2C8l'
+      - 'codemagic_PRIVATE-TOKEN codemagic_xM0x2W7bFg6uGz5L6v3bNmTlyHo4eF2Gh3SjL9P0C39'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            x-auth-token: '{{ TOKEN }}'
+          method: GET
+          url: https://api.codemagic.io/apps
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,32 @@
+rules:
+  - name: Column API Key
+    id: kingfisher.column.1
+    pattern: |
+      (?xi)
+      \b
+      column
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        (?:test|live)_[a-zA-Z0-9]{27}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - column_key = test_abcdefghijklmnopqrstuvwxyz123456
+      - column_token = live_abcdefghijklmnopqrstuvwxyz123456
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ TOKEN | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.column.com/entities

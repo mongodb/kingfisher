@@ -1,0 +1,52 @@
+rules:
+  - name: Trello API Key
+    id: kingfisher.trello.1
+    pattern: |
+      (?x)                   
+      (?i)                   
+      \b                     
+      trello
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b                     
+      (
+        [a-z0-9\-]{32}
+      )     
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - TRELLO_API_KEY="5b5541420c56d22cd0cb21nn401cn4b2"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          response_matcher:
+            - report_response: true
+            - match_all_status: true
+              status:
+                - 200
+              type: StatusMatch
+          url: https://api.trello.com/1/members/me?key={{ TOKEN }}&token={{ TRELLOAPITOKEN }}
+    depends_on_rule:
+      - rule_id: "kingfisher.trello.2"
+        variable: TRELLOAPITOKEN
+
+  - name: Trello API Token
+    id: kingfisher.trello.2
+    pattern: |
+      (?x)                   
+      (?i)                   
+      trello    
+      (?:.|[\n\r]){0,64}?
+      \b
+      (      
+        [a-z0-9\-]{60,70}
+      )
+      \b                     
+    min_entropy: 3.5
+    visible: false
+    confidence: medium
+    examples:
+      - TRELLO_API_SECRET="b42n292nb622ebn1b21bb2nnb1bc2e02231b9n924169c220b2b8313122cb14en"

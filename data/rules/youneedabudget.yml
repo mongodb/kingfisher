@@ -1,0 +1,33 @@
+rules:
+  - name: YouNeedABudget API Key
+    id: kingfisher.youneedabudget.1
+    pattern: |
+      (?xi)
+      \b
+      youneedabudget
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{64}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - "youneedabudgetSECRET 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+      - "xxx youneedabudgetACCESS 0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef xxx"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.youneedabudget.com/v1/user

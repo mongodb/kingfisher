@@ -1,0 +1,29 @@
+rules:
+  - name: Supabase API Key
+    id: kingfisher.supabase.1
+    pattern: |
+      (?xi)
+      \b
+      sbp_
+      (
+        [a-z0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - sbp_abcd1234efgh5678ijkl9012mnop3456qrst7890
+      - sbp_1234567890abcdefghij1234567890klmnopqrst
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://api.supabase.com/v1/projects"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

@@ -1,0 +1,34 @@
+rules:
+  - name: Logz.io API Key
+    id: kingfisher.logzio.1
+    pattern: |
+      (?xi)
+      \b
+      logz
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      (
+        [0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - logzToken=123e4567-e89b-12d3-a456-426614174000
+      - logzKey=abcd1234-ef01-gh23-ij45-kl6789012345
+      - logzPrivateAccess=dcba4321-10fe-32hg-54ji-lk0987654321
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-API-TOKEN: '{{ TOKEN }}'
+            Content-Type: application/json; charset=utf-8
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.logz.io/v2/whoami

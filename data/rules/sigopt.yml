@@ -1,0 +1,33 @@
+rules:
+  - name: Sigopt API Key
+    id: kingfisher.sigopt.1
+    pattern: |
+      (?xi)
+      \b
+      sigopt
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9]{48}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - sigopt_token = QA6TTJ7CS4QT32R3ASQA8F7T5N8T676H2D0CUEHCQRI5MGU7
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.sigopt.com/v1/experiments

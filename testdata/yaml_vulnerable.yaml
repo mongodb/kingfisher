@@ -1,0 +1,31 @@
+env:
+# OIDC authentication:
+- name: vvp.auth.oidc.registration.clientSecret
+  valueFrom:
+    secretKeyRef:
+      name: mysecrets
+      key: oidc
+# JDBC persistence:
+- name: spring.datasource.password
+  valueFrom:
+    secretKeyRef:
+      name: mysecrets
+      key: jdbc
+# Bootstrap Token:
+- name: vvp.auth.bootstrapToken.token
+  valueFrom:
+    secretKeyRef:
+      name: mysecrets
+      key: blink182
+apiVersion: v1
+kind: Secret
+metadata:
+  private_key: all along the watchtower
+  my_private_key: "ja4wALsaho20af21dS"
+type: Opaque
+data:
+  password: dG9wLVNlY3JldA==
+  jdbc: dG9wLVNlY3JldA==
+  my_unique_authorization_key: dG9wLVNlY3JldA==
+  aws_key_id: AKIA6ODU5DHT7VPXGCE4
+  aws_secret: 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

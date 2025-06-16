@@ -1,0 +1,30 @@
+rules:
+  - name: Telegram Bot API Token
+    id: kingfisher.telegram.1
+    pattern: |
+      (?xi)
+      \b
+      (?:telegram|tgram://)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9]{8,10}:[a-zA-Z0-9_-]{35}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "telegram: 1234567890:h3YLlUHP8-STgTic38bCZXDJ_6s05ERgsaM"
+      - "tgram://12345678:ulTK_HG7-Sb3_zcz5CV2VjFyoNH0cZoGM1r"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.telegram.org/bot{{ TOKEN }}/getMe"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: JsonValid

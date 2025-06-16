@@ -1,0 +1,31 @@
+rules:
+  - name: Lexigram API Key
+    id: kingfisher.lexigram.1
+    pattern: |
+      (?xi)
+      \b
+      lexigram
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9\S]{301}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - lexigram_key=abcdefghijklmnopqrstuvwxyzbu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefghijklmnopqrstuvwxyzbu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefghijklmnopqrstuvwxyzbu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefghijklmnopqrstuvwxyzbu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789a
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.lexigram.io/v1/lexigraph/search?q=diabetes

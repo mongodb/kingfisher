@@ -1,0 +1,33 @@
+rules:
+  - name: Oanda API Key
+    id: kingfisher.oanda.1
+    pattern: |
+      (?xi)
+      \b
+      oanda
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{24}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - oanda SECRET key ABCDEFGHIJKLMNOPQRSTUVWX
+      - oanda ACCESS TOKEN ZYXWVUTSRQPONMLKJIHGFEDC
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://web-services.oanda.com/rates/api/v2/currencies.json

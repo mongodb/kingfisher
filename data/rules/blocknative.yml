@@ -1,0 +1,32 @@
+rules:
+  - name: Blocknative API Key
+    id: kingfisher.blocknative.1
+    pattern: |
+      (?xi)
+      \b
+      blocknative
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - blocknative_key=9f5c17d2-957e-4dda-ae24-811274ed88e5
+      - BLOCKNATIVE_TOKEN=12345678-90ab-cdef-1234-567890abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.blocknative.com/gasprices/blockprices

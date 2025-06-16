@@ -1,0 +1,33 @@
+rules:
+  - name: Coda API Key
+    id: kingfisher.coda.1
+    pattern: |
+      (?xi)
+      \b
+      coda
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{8}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{4}-[0-9a-z]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "codakey-123e4567-e89b-12d3-a456-426614174000"
+      - "codatoken-987e6543-a210-47d6-a456-654321098765"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://coda.io/apis/v1/whoami"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

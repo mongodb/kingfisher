@@ -1,0 +1,15 @@
+edition = "2021"
+max_width = 100
+hard_tabs = false
+tab_spaces = 4
+use_small_heuristics = "Max"
+newline_style = "Unix"
+
+imports_granularity = "Crate"
+group_imports = "StdExternalCrate"
+reorder_imports = true
+
+normalize_doc_attributes = true
+format_code_in_doc_comments = true
+wrap_comments = true
+comment_width = 100

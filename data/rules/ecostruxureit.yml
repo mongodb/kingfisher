@@ -1,0 +1,33 @@
+rules:
+  - name: EcoStruxure IT API Key
+    id: kingfisher.ecostruxureit.1
+    pattern: |
+      (?xi)
+      \b
+      ecostruxureit
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        AK1[0-9a-zA-Z/]{50,55}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - ecostruxureit SECRET AK1abc1234567890abcdefGHIjkLmnopqrSTUVWx12345yzQWERTY
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.ecostruxureit.com/rest/v1/organizations

@@ -1,0 +1,33 @@
+rules:
+  - name: PushBullet API Key
+    id: kingfisher.pushbullet.1
+    pattern: |
+      (?xi)
+      \b
+      pushbullet
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Za-z0-9_\.]{34}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - pushbullet SECRET aa4a2cH7QOxs40mhF7wFufa4uH3Pn3tLQ0
+      - pushbullet Access aiOj3Jj4hds9w8dj3OaJrn2D9KleYn3C2P
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Access-Token: '{{ TOKEN }}'
+          method: GET
+          url: https://api.pushbullet.com/v2/users/me
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

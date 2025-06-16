@@ -1,0 +1,35 @@
+rules:
+  - name: Deepgram API Key
+    id: kingfisher.deepgram.1
+    pattern: |
+      (?xi)
+      \b
+      deepgram
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "deepgram secret 1234567890abcdef1234567890abcdef12345678"
+      - "deepgram-token d3adbeef1234567890deadbeef1234567890dead"
+      - "deepgramKEY io3l0urk6hubmo2gbbzrf192key0ke9xabcdabcd"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+            Authorization: "Token {{ TOKEN }}"
+          method: GET
+          url: "https://api.deepgram.com/v1/projects"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

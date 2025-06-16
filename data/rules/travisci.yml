@@ -1,0 +1,35 @@
+rules:
+  - name: Travis CI Token
+    id: kingfisher.travisci.1
+    pattern: |
+      (?x)
+      (?i)
+      \b
+      travis
+      (?:.|[\\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-zA-Z0-9A-Z_]{22}
+      )
+      \b
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - "travis_token splendid21RANDOMCONTENT_token"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "token {{ TOKEN }}"
+            User-Agent: "API Explorer"
+            Travis-API-Version: "3"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.travis-ci.com/user

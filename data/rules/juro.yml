@@ -1,0 +1,34 @@
+rules:
+  - name: Juro API Key
+    id: kingfisher.juro.1
+    pattern: |
+      (?xi)
+      \b
+      juro
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{40}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - juro_key=abcdefghij1234567890abcdefghij1234567890
+      - juro_access_token=ABCDEFGHIJ1234567890ABCDEFGHIJ1234567890
+      - juro_secret=1a2b3c4d5e6f7g8h9i0j1a2b3c4d5e6f7g8h9i0j
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            x-api-key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.juro.com/v3/templates

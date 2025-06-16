@@ -1,0 +1,33 @@
+rules:
+  - name: SecurityTrails API Key
+    id: kingfisher.securitytrails.1
+    pattern: |
+      (?xi)
+      \b
+      securitytrails
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - securitytrails PRIVATE_KEY 1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p
+      - securitytrails ACCESS_TOKEN 1234567890abcdef1234567890abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            APIKEY: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.securitytrails.com/v1/ping

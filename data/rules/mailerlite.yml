@@ -1,0 +1,33 @@
+rules:
+  - name: MailerLite API Key
+    id: kingfisher.mailerlite.1
+    pattern: |
+      (?xi)
+      \b
+      mailerlite
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - mailerlite key 1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p
+      - mailerliteSECRET=abcd1234abcd5678abcd9012abcd3456
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-MailerLite-ApiKey: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.mailerlite.com/api/v2/campaigns

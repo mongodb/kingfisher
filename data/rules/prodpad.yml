@@ -1,0 +1,33 @@
+rules:
+  - name: Prodpad API Key
+    id: kingfisher.prodpad.1
+    pattern: |
+      (?xi)
+      \b
+      prodpad
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-f0-9]{64}
+      )
+      \b
+    min_entropy: 3.8
+    confidence: medium
+    examples:
+      - prodpadSECRET a1b2c3d4e5f678901234567890abcdef1234567890abcdef1234567890abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.prodpad.com/v1/tags

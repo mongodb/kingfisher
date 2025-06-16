@@ -1,0 +1,34 @@
+rules:
+  - name: UptimeRobot API Key
+    id: kingfisher.uptimerobot.1
+    pattern: |
+      (?xi)
+      \b
+      uptimerobot
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{9}-[a-zA-Z0-9]{24}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - uptimerobot_SECRET=u7654321a-b1c2d3e4f5g6h7i8j9k0l1m2
+      - uptimerobot_KEY=m9n8p7q6r-s5t4u3v2w1x0y9z8a7b6c5d4
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://api.uptimerobot.com/v2/getMonitors?api_key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"ok"'

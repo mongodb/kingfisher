@@ -1,0 +1,33 @@
+rules:
+  - name: Worksnaps API Key
+    id: kingfisher.worksnaps.1
+    pattern: |
+      (?xi)
+      \b
+      worksnaps
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - worksnaps_token=3GXxGjp9Vler1tj9kEosLxxO61lNJ7dLrnjUphWl
+      - WORKSNAPS_SECRET_KEY=0819lDRddnPzcod6uVOj1veeS0m8Kv0bW7lvgxUI
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ TOKEN | append: ":ignored" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.worksnaps.com/api/projects.xml

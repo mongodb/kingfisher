@@ -1,0 +1,74 @@
+rules:
+  - name: AWS Access Key ID
+    id: kingfisher.aws.1
+    pattern: |
+      (?x)                
+      (?i)                
+      \b                  
+      (
+        (?:AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)
+        [0-9A-Z]{16}
+      )
+      \b                  
+    min_entropy: 3.2
+    visible: false
+    confidence: medium
+    examples:
+      - ASIAOZW6VBVAZFJHJLQA
+
+  - name: AWS Secret Access Key
+    id: kingfisher.aws.2
+    pattern: |
+      (?xi)
+      (?:
+        \b
+        (?:AWS|AMAZON|AMZN|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)
+        (?:.|[\n\r]){0,32}?
+        \b
+        (
+          [A-Za-z0-9/+=]{40}
+        )
+        \b
+      |
+        \b(?:AWS|AMAZON|AMZN|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)
+        (?:.|[\n\r]){0,96}?
+        (?:SECRET|PRIVATE|ACCESS)
+        (?:.|[\n\r]){0,16}?
+        (?:KEY|TOKEN)
+        (?:.|[\n\r]){0,32}?
+        \b
+        (
+          [A-Za-z0-9/+=]{40}
+        )
+        \b
+      )
+    min_entropy: 4.5
+    confidence: medium
+    examples:
+      - foo.backup.archive.aws.secretkey=sBmHlDFrNcsz35N+LRjwlUxF8/wypT4tiJCQ0wP4
+      - '"awsSecretKey":"3lyTWqHMt5UySny2drdPYheRTEzrNux8Cn5JWFHL"'
+      - '"\"awsSecretKey\":\"3lyTWqHMt5UySny2drdPYheRTEzrNux8Cn5JWFHL\"," +'
+      - |
+        "Whiteboard" : {
+          "type" : "aws-s3",
+          "config" : {
+            "accessKeyId" : "AKIAIVOURJN3SXRRLZFQ",
+            "region" : "us-east-1",
+            "secretAccessKey" : "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"
+          },
+    validation:
+      type: AWS
+    depends_on_rule:
+      - rule_id: kingfisher.aws.1
+        variable: AKID
+
+  - name: AWS Session Token
+    id: kingfisher.aws.4
+    pattern: '(?i)(?:aws.?session|aws.?session.?token|aws.?token)["''`]?\s{0,30}(?::|=>|=)\s{0,30}["''`]?([a-z0-9/+=]{16,200})[^a-z0-9/+=]'
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - |
+        export AWS_ACCESS_KEY_ID="I08BCX2ACV45ED1DOC9J"
+        export AWS_SECRET_ACCESS_KEY="0qk+o7XctJMmG6ydO8537c9+TofLJU1K0PiVBXSg"
+        export AWS_SESSION_TOKEN="eyJhbGciOiJIUzUxMi53InR5cCI6IkpXVCJ9.eyJhY2Nlc3NLZXkiOiJJMDhCQ1gySkpWNDVFRDFET0M5SiIsImFjciI6Ij53LCJhdWQiOiJhY2NvdW50IiwiYXV0aF90aW1lIjowLCJhenAiOiJtaW5pbyIsImVtYWlsIjoiYWlkYW4uY29wZUBnbWFpbC5jb20iLCJlbWFpbF92ZXJpZmllZCI6ZmFsc2UsImV4cCI6MTU4MDUwMDIzOCwiZmFtaWx5X25hbWUiOiJDb3BlIiwiZ2l2ZW5fbmFtZSI6IkFpZGFuIENvcGUiLCJpYXQiOjE1ODA0OTk5MzgsImlzcyI6Imh0dHBzOi8vYXV0aHN0Zy5wb3BkYXRhLmJjLmNhL2F1dGgvcmVhbG1zL3NhbXBsZSIsImp0aSI6IjU5ZTM5ODAxLWQxMmUtNDVhYS04NmQzLWVhMmNmZDU0NmE2MiIsIm1pbmlvX3BvbGljeSI6ImRhdGFzZXRfMV9ybyIsIm5hbWUiOiJBaWRhbiBDb3BlIENvcGUiLCJuYmYiOjAsInByZWZlcnJlZF91c2VybmFtZSI6ImFjb3BlLTk5LXQwNSIsInJlYWxtX2FjY2VzcyI6eyJyb2xlcyI6WyJvZmZsaW5lX2FjY2VzcyIsInVtYV9hdXRob3JpemF0aW9uIl19LCJyZXNvdXJjZV9hY2Nlc3MiOnsiYWNjb3VudCI6eyJyb2xlcyI6WyJtYW5hZ2UtYWNjb3VudCIsIm1hbmFnZS1hY2NvdW50LWxpbmtzIiwidmlldy1wcm9maWxlIl19fSwic2NvcGUiOiJwcm9maWxlIGVtYWlsIiwic2Vzc2lvbl9zdGF0ZSI6IjcxYjczZWJjLThlMzMtNGMyMi04NmE2LWI0MzhhNDM4ZmI2MiIsInN1YiI6IjVkOTBlOTgzLTA1NDItNDYyYS1hZWIwLWYxZWVmNjcwYzdlNSIsInR5cCI6IkJlYXJlciJ9.J-a9PORJToz7MUrnPQlOywcqtVMNkXy53Gedp_V4PW-Gbf1_BAMjwuw_X7fKRd6hkNfEn43CKKju7muzi_d1Ig"

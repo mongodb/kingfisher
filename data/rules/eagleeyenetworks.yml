@@ -1,0 +1,60 @@
+rules:
+  - name: Eagle Eye Networks API Key
+    id: kingfisher.eagleeyenetworks.1
+    pattern: |
+      (?xi)
+      \b
+      eagleeyenetworks
+      (?:.|[\n\r]){0,16}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{15}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - eagleeyenetworks ACCESS abcDE1234567890
+      - eagleeyenetworks SECRET GHIJK1234567890
+      - eagleeyenetworks TOKEN ZYXWV9876543210
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "username": "{{ EMAIL }}",
+              "password": "{{ TOKEN }}"
+            }
+          headers:
+            Content-Type: application/json
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://login.eagleeyenetworks.com/g/aaa/authenticate
+    depends_on_rule:
+      - rule_id: "kingfisher.eagleeyenetworks.2"
+        variable: EMAIL
+  - name: Eagle Eye Networks Email
+    id: kingfisher.eagleeyenetworks.2
+    pattern: |
+      (?xi)
+      \b
+      eagleeyenetworks
+      (?:.|[\n\r]){0,8}?
+      \b
+      (
+        [a-zA-Z0-9]{3,20}@[a-zA-Z0-9]{2,12}\.[a-zA-Z0-9]{2,5}
+      )
+      \b
+    min_entropy: 3.5
+    visible: false
+    confidence: medium
+    examples:
+      - eagleeyenetworks user@domain.com
+      - eagleeyenetworks email123@sample.net

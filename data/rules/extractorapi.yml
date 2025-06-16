@@ -1,0 +1,31 @@
+rules:
+  - name: ExtractorAPI Key
+    id: kingfisher.extractorapi.1
+    pattern: |
+      (?xi)
+      \b
+      extractorapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - extractorapi_key abcdefghij0123456789klmnopqrst9876543210
+      - extractorapi_secret ABCDEFGHIJ0123456789KLMNOPQRST9876543210
+    validation:
+      type: Http
+      content:
+        request:
+          url: "https://extractorapi.com/api/v1/extractor?apikey={{ TOKEN }}&url=example.com"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,30 @@
+rules:
+  - name: Yandex API Key
+    id: kingfisher.yandex.1
+    pattern: |
+      (?xi)
+      \b
+      yandex
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9.]{83}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - "yandex_api_key=ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123"
+      - "yandex_secret=1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ123"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: 'https://dictionary.yandex.net/api/v1/dicservice.json/getLangs?key={{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

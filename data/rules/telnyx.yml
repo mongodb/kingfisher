@@ -1,0 +1,31 @@
+rules:
+  - name: Telnyx API Key
+    id: kingfisher.telnyx.1
+    pattern: |
+      (?xi)
+      \b
+      telnyx
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        KEY[0-9A-Za-z_-]{55}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - telnyx = KEYUAaoJbHzFtewME4Mj7-D3fHaONWFO2msN7QsFK_lZgTpNY5D4HbAInl
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.telnyx+json; version=3"
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: https://api.telnyx.com/v2/messaging_profiles
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

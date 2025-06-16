@@ -1,0 +1,33 @@
+rules:
+  - name: Apollo API Key
+    id: kingfisher.apollo.1
+    pattern: |
+      (?xi)
+      \b
+      apollo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{22}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: high
+    examples:
+      - apolloSecretTOKEN abc123def456ghi789jkl0
+      - apolloAPIKEY 1Z2y3X4w5V6u7T8s9R0q1P
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.apollo.io/v1/account_stages
+          headers:
+            x-api-key: '{{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

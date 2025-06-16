@@ -1,0 +1,29 @@
+rules:
+  - name: Tines Webhook URL
+    id: kingfisher.tineswebhook.1
+    pattern: |
+      (?xi)
+      \b
+      https://[\w\-]+\.tines\.com/webhook
+      \b
+      /
+      [a-z0-9]{32}
+      /
+      (
+        [a-z0-9]{32}
+      )
+    min_entropy: 3.3
+    confidence: high
+    examples:
+      - https://example.tines.com/webhook/1234567890abcdef1234567890abcdef/abcdef1234567890abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: '{{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

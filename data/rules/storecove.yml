@@ -1,0 +1,32 @@
+rules:
+  - name: Storecove API Key
+    id: kingfisher.storecove.1
+    pattern: |
+      (?xi)
+      \b
+      storecove
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_-]{43}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - storecove_secret_token=storecove_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNO
+      - storecove-access-key=storecove_1234567890abcdefghijklmnopqrstuWXYZABCDEF123
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.storecove.com/api/v2/discovery/identifiers

@@ -1,0 +1,31 @@
+rules:
+  - name: Nasdaq Data Link API Key
+    id: kingfisher.nasdaqdatalink.1
+    pattern: |
+      (?xi)
+      \b
+      nasdaq
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_-]{20}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - nasdaq_key = yhTFulkELh3-jC6oudRX
+      - nasdaq_token = UuB0m_oxBeQrciedzI8Z
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://data.nasdaq.com/api/v3/datasets/FRED/GDP.csv?api_key={{ TOKEN }}&collapse=annual&rows=6&order=asc&column_index=1"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

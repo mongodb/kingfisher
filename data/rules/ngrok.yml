@@ -1,0 +1,42 @@
+rules:
+  - name: Ngrok API Key
+    id: kingfisher.ngrok.1
+    pattern: |
+      (?x)
+      (?i)
+      ngrok
+      (?:.|[\\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        (?:
+          [a-z0-9]{25,30}_\d[a-z0-9]{20}
+        )
+        |
+        (?:
+          (?:cr_|ak_)[a-z0-9]{25,30}
+        )
+      )
+      \b
+    min_entropy: 4
+    examples:
+      - 'ngrok authtoken: 2Ot3hdNCKF3JRJDCioqNV2J0PPc_6th2CSUm9KsjfXdtRDvzT'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            ngrok-version: 2
+          method: GET
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"error_code":"ERR_NGROK_200"'
+                - '"error_code":"ERR_NGROK_206"'
+                - '"error_code":"ERR_NGROK_207"'
+                - '"error_code":"ERR_NGROK_208"'
+                - '"uri":'
+          url: https://api.ngrok.com/api_keys

@@ -1,0 +1,35 @@
+rules:
+  - name: Reply.io API Key
+    id: kingfisher.replyio.1
+    pattern: |
+      (?xi)
+      \b
+      replyio
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{24}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - replyio_key=abc123def456ghi789jkl000
+      - REPLYIO_API_TOKEN=XYZ987MNO654PQR321STU111
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-Api-Key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.reply.io/v1/people
+    references:
+      - https://apidocs.reply.io/#introduction

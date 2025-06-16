@@ -1,0 +1,36 @@
+rules:
+  - name: EdenAI API Key
+    id: kingfisher.edenai.1
+    pattern: |
+      (?xi)
+      \b
+      edenai
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{36}
+        \.
+        [a-zA-Z0-9]{92}
+        \.
+        [a-zA-Z0-9_]{43}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - edenai_token = rh83qVzJzCOvCOhriyaTA2VPQeiloqUCgpY8.LdWOFn1swiWcakqgLrUSDhRhZgLuzl5pBJXHwzqyjvK4oF8BeVOwA9xEurElOp3xOrFxkSHul1eqC8oN8MERV2h83cot.uelzuGM9l4Ooj5WJIpitGMK9PrH7DwULLO90ev405fr
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.edenai.run/v1/automl/text/project

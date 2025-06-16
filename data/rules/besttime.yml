@@ -1,0 +1,33 @@
+rules:
+  - name: Besttime API Key
+    id: kingfisher.besttime.1
+    pattern: |
+      (?xi)
+      \b
+      besttime
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z_]{36}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - besttime_samplekey = abcdefghijklmnopqrstuvwxyz1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: 'https://besttime.app/api/v1/keys/{{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"status": "OK"'

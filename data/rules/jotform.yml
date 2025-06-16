@@ -1,0 +1,30 @@
+rules:
+  - name: JotForm API Key
+    id: kingfisher.jotform.1
+    pattern: |
+      (?xi)
+      \b
+      jotform
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - jotform apikey=abcde12345abcde67890abcde12345fg
+    validation:
+      type: Http
+      content:
+        request:
+          url: "https://api.jotform.com/user"
+          method: GET
+          headers:
+            Authorization: '{{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

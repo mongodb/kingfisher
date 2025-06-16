@@ -1,0 +1,35 @@
+rules:
+  - name: Whoxy API Key
+    id: kingfisher.whoxy.1
+    pattern: |
+      (?xi)
+      \b
+      whoxy
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{33}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - whoxy_secret=abcdefghijklmnopqrstuvwxyza123456
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          url: "https://api.whoxy.com/?key={{ TOKEN }}&account=balance"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200
+            - type: WordMatch
+              words:
+                - '"status": 1'

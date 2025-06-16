@@ -1,0 +1,34 @@
+rules:
+  - name: Urlscan API Key
+    id: kingfisher.urlscan.1
+    pattern: |
+      (?xi)
+      \b
+      urlscan
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9-]{36}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - urlscanSECRET-access-key-123e4567-e89b-12d3-a456-426614174abc
+      - urlscanPRIVATEkey-abcdef01-2345-6789-abcd-ef0123456789
+      - urlscan-access-token-key-7654ba98-1234-cdef-5678-9012b3c4d5f6
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            API-Key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://urlscan.io/user/quotas

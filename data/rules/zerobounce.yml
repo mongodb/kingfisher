@@ -1,0 +1,38 @@
+rules:
+  - name: Zerobounce API Key
+    id: kingfisher.zerobounce.1
+    pattern: |
+      (?xi)
+      \b
+      zerobounce
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - zerobounceSECRET=io3l0urk6hubmo2gbbzrf192key0ke9x
+      - zerobounceTOKEN=io3l0urk6hubmo2gbbzrf192key0ke9x
+      - zerobounceACCESS=io3l0urk6hubmo2gbbzrf192key0ke9x
+      - zerobounceKEY=io3l0urk6hubmo2gbbzrf192key0ke9x
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - '"found"'
+          url: "https://api.zerobounce.net/v1/activity?email=testemail@email.com&api_key={{ TOKEN }}"
+    references:
+      - https://www.zerobounce.net/api

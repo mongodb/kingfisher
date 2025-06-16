@@ -1,0 +1,33 @@
+rules:
+  - name: Loyverse API Key
+    id: kingfisher.loyverse.1
+    pattern: |
+      (?xi)
+      \b
+      loyverse
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{32}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - 'loyverseSecretKey=abcd1234abcd5678abcd9012abcd3456'
+      - 'loyverse_access_token: "abcd1234efgh5678ijkl9012mnop3456"'
+      - 'loyversePRIVATEkey-abcd1234efgh5678ijkl9012mnop3456'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.loyverse.com/v1.0/merchant/

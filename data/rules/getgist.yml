@@ -1,0 +1,32 @@
+rules:
+  - name: Getgist API Key
+    id: kingfisher.getgist.1
+    pattern: |
+      (?xi)
+      \b
+      getgist
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9A-Z+=]{68}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - getgist_token=1a2b3c4d5e6f7g8h9i0jklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890==
+      - GETGIST_SECRET_KEY=Ab9x8yZ7w6v5u4t3s2r1qpOnMlKjIhGfEdCbA9x8yZ7w6v5u4t3s2r1qpOnMlKjIh==
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.getgist.com/contacts/

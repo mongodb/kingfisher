@@ -1,0 +1,33 @@
+rules:
+  - name: Line Notify API Key
+    id: kingfisher.notify.line.1
+    pattern: |
+      (?xi)
+      \b
+      linenotify
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{43}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - linenotifySECRET 3l1v3a2b1ytr23t4r56yegnifyv7ul9ajds8r0c1f0i4t3r8yg4fP
+      - linenotify KEY 3L1V3A2B1YTR23T4R56YEGNIFV7UL9AJDS8R0C1F0I4T3R8YG4FP
+      - linenotify TOKEN 0A7n8RcKjf8vF9U8X6aY6oD9t0p1S2U3m4t5K7L0N2h0f6J5g9P3O
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://notify-api.line.me/api/notify?message=Notification%20Successful

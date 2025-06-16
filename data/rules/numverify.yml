@@ -1,0 +1,35 @@
+rules:
+  - name: Numverify API Key
+    id: kingfisher.numverify.1
+    pattern: |
+      (?xi)
+      \b
+      numverify
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - numverify SECRET abcdef1234567890abcdef1234567890
+      - numverify KEY 0987654321fedcba0987654321fedcba
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://apilayer.net/api/validate?access_key={{ TOKEN }}&number=14158586273
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - 'country_code'
+                - '"info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."'
+            - status:
+                - 200
+              type: StatusMatch

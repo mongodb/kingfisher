@@ -1,0 +1,38 @@
+rules:
+  - name: PackageCloud API Key
+    id: kingfisher.packagecloud.1
+    pattern: |
+      (?xi)
+      \b
+      packagecloud
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{48}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - packagecloud accessKEY 1234567890abcdef1234567890abcdef1234567890abcdef
+      - "packagecloud:token=1234567890abcdef1234567890abcdef1234567890abcdef"
+      - |
+        "config": {
+          "packagecloud_secret": "1234567890abcdef1234567890abcdef1234567890abcdef"
+        }
+      - packagecloudPRIVATEkey 1234567890abcdef1234567890abcdef1234567890abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN | append: ":" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://packagecloud.io/api/v1/repos

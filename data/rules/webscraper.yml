@@ -1,0 +1,31 @@
+rules:
+  - name: WebScraper API Key
+    id: kingfisher.webscraper.1
+    pattern: |
+      (?xi)
+      \b
+      webscraper
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{60}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - webscraper SECRET ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890ABCDEFGHIJKLMNOPQRSTUVWX
+      - webscraperPRIVATE abcdefghijklmnopqrstuvwxyzabcdefghij1234567890klmnopqrstuvwx
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.webscraper.io/api/v1/sitemaps?api_token={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

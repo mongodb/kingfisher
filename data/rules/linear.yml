@@ -1,0 +1,35 @@
+rules:
+  - name: Linear API Key
+    id: kingfisher.linear.1
+    pattern: |
+      (?x)                   
+      (?i)                   
+      \b                     
+      (                      
+        lin_api_
+        [a-z0-9]{40}
+      )                      
+      \b                     
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'apikey: ''lin_api_2thngjik222gkiihzivh242LU7zvkdvdgB14B41S'''
+    categories:
+      - api
+      - key
+    validation:
+      type: Http
+      content:
+        request:
+          body: '{ "query": "{ viewer { id name } }" }'
+          headers:
+            Authorization: '{{ TOKEN }}'
+            Content-Type: application/json
+          method: POST
+          response_matcher:
+            - report_response: true
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - '"data":'
+          url: https://api.linear.app/graphql

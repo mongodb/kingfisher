@@ -1,0 +1,39 @@
+rules:
+  - name: Shortcut API Key
+    id: kingfisher.shortcut.1
+    pattern: |
+      (?xi)
+      \b
+      shortcut
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - shortcut-private-key 123e4567-e89b-12d3-a456-426614174000
+      - shortcutaccess 987e6543-d21c-4b1d-a456-789654321abc
+      - "shortcut-SECRET-tok 1a2b3c4d-e89b-12d3-a456-42f678901234"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.app.shortcut.com/api/v3/member
+          headers:
+            Content-Type: application/json
+            Shortcut-Token: '{{ TOKEN }}'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - '"name":'

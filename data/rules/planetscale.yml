@@ -1,0 +1,51 @@
+rules:
+  - name: PlanetScale API Token
+    id: kingfisher.planetscale.1
+    pattern: |
+      (?x)
+      (?i)
+      \b
+      (
+        pscale_tkn_[a-z0-9-_]{43}
+      )
+      \b
+    min_entropy: 4
+    examples:
+      - pscale_tkn_abcdefghijklmnopqrstuvwxyZ1234567890_ABCDEF
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: '{{ USERNAME | append: ":" | append: TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.planetscale.com/v1/organizations
+    depends_on_rule:
+      - rule_id: kingfisher.planetscale.2
+        variable: USERNAME
+
+  - name: PlanetScale Username
+    id: kingfisher.planetscale.2
+    pattern: |
+      (?x)
+      (?i)
+      (?:pscale|planetscale)
+      (?:.|[\n\r]){0,16}?
+      (?:USER|ID|NAME)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-z0-9]{12}
+      )
+      \b
+    min_entropy: 3.5
+    visible: false
+    examples:
+      - pscale_user = abcdefghijkl
+      - 'planetscale_id: hgtmrnzlv1t7'

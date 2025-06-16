@@ -1,0 +1,28 @@
+rules:
+  - name: OpenAI API Key
+    id: kingfisher.openai.1
+    pattern: |
+      (?x)
+      \b
+      (
+        sk-[a-zA-Z0-9]{48}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - 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
+      - curl https://api.openai.com/v1/images/generations  -H 'Content-Type application/json'  -H "Authorization Bearer sk-mxIt5s1tyfCJyIKHwrqOT4BlbkFJT3VVmv6VdSwB7XXIq1TO"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.openai.com/v1/me

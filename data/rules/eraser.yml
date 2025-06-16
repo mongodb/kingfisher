@@ -1,0 +1,38 @@
+rules:
+  - name: Eraser API Key
+    id: kingfisher.eraser.1
+    pattern: |
+      (?xi)
+      \b
+      eraser
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{20}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - eraser_token = jklmnopqrstu1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "elements":[{"type":"diagram"}]
+            }
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            content-type: application/json
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.eraser.io/api/render/elements
+    references:
+      - https://howtorotate.com/docs/tutorials/eraser/

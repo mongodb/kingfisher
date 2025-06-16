@@ -1,0 +1,32 @@
+rules:
+  - name: Cloudplan API Key
+    id: kingfisher.cloudplan.1
+    pattern: |
+      (?xi)
+      \b
+      cloudplan
+      (?:.|[\n\r]){0,8}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [A-Z0-9-]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - cloudplanSECRET-ABCD1234EFGH5678IJKL9012MNOP3456
+      - cloudplanPRIVATE-X1Y2Z3A4B5C6D7E8F9G0H1I2J3K4L5M6
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            session_id: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.cloudplan.biz/api/user/me

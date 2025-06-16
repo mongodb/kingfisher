@@ -1,0 +1,34 @@
+rules:
+  - name: Snipcart API Key
+    id: kingfisher.snipcart.1
+    description: Snipcart is an easy-to-implement shopping cart platform for developers. Snipcart API keys can be used to access and manage e-commerce functionalities.
+    pattern: |
+      (?xi)
+      \b
+      snipcart
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z_]{75}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - snipcart_token = pl1Cj5dZcGfOQxPvcrN02g6029YmPj_ZkboUyq7rW43NCLa6DtpDuN0z4bbteQMrpjkGewfx1dW
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.snipcart.com/api/orders

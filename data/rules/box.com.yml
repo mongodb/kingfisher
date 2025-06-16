@@ -1,0 +1,41 @@
+rules:
+  - name: Box.com API key
+    id: kingfisher.box.com.1
+    pattern: |
+      (?x)                   
+      (?i)                   
+      \b                     
+      box
+      (?:\b|_)
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b                     
+      (
+        [a-z0-9]{32}
+      )
+      \b                     
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - box-key = 4Fa83E1Dc6b92CAeE780C9b47dd9bE34
+      - BOX_SECRET = "1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p"
+      - box-token = 'AbCdEfGhIjKlMnOpQrStUvWxYz123456'
+    references:
+      - https://developer.box.com/guides/authentication/access-tokens/
+      - https://developer.box.com/guides/authentication/oauth2/
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - 'total_count":'
+                - 'limit":'
+          url: https://api.box.com/2.0/collections

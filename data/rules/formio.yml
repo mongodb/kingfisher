@@ -1,0 +1,33 @@
+rules:
+  - name: FormIO JWT Token
+    id: kingfisher.formio.1
+    pattern: |
+      (?xi)
+      \b
+      formio
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.[0-9A-Za-z]{220,310}\.[0-9A-Z-a-z\-_]{43}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - formio_key = eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.k5rh4lo9u3dx8j4cxdn5e5otsqfbiwe3b2tt5ws0een0on5fu1setq989179ubw0ryb1lij0nx0w1bmcjvltaei8msf47pgl45ble5sycduy7xs4614abjoamxy7lcyfz944tbzqqk7uhtyzfyfvhllbt4zsaht8bjvmkjw24o83ac2uwtecoe4sjsu9mrrq7oymxri8ndv3tn9qq5gfufi1ehb2ru6po.lwb9g2cbhsy9h903vlkfoovukc9iutm13w7xf8rgae9
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            x-jwt-token: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://formio.form.io/current

@@ -1,0 +1,33 @@
+rules:
+  - name: TicketMaster API Key
+    id: kingfisher.ticketmaster.1
+    pattern: |
+      (?xi)
+      \b
+      ticketmaster
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - ticketmaster_key=7BKWGCh4nXY9vFjQPtMDL3Z5RxS8qJaV
+      - TICKETMASTER_API_KEY=DgH2MkP9wLcN4vQxZjR8sTbF6nKmVyB3
+    references:
+      - https://developer.ticketmaster.com/products-and-docs/apis/getting-started/
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://app.ticketmaster.com/discovery/v2/events.json?apikey={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

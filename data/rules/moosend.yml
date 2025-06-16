@@ -1,0 +1,30 @@
+rules:
+  - name: Moosend API Key
+    id: kingfisher.moosend.1
+    pattern: |
+      (?xi)
+      \b
+      moosend
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Fa-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - moosendSECRET=123e4567-e89b-12d3-a456-426614174000
+      - moosendACCESS:123e4567-e89b-12d3-a456-426614174000
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.moosend.com/v3/lists.json?apikey={{ TOKEN }}&format=json
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - "CreatedOn"

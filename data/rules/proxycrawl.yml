@@ -1,0 +1,32 @@
+rules:
+  - name: ProxyCrawl API Key
+    id: kingfisher.proxycrawl.1
+    pattern: |
+      (?xi)
+      \b
+      proxycrawl
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_]{22}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "proxycrawl_key = abcdefghijklmnoprstu_1"
+      - "PROXYCRAWL_TOKEN = XYZ123abcdefghijklmNOP"
+      - "proxycrawl_secret = 12345678901234567890ab"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.proxycrawl.com/leads?token={{ TOKEN }}&domain=google.com"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

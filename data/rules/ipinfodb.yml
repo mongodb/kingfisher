@@ -1,0 +1,35 @@
+rules:
+  - name: IPinfoDB API Key
+    id: kingfisher.ipinfodb.1
+    pattern: |
+      (?xi)
+      \b
+      ipinfodb
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - ipinfodbSECRET abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+      - ipinfodb PRIVATE abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+      - ipinfodb ACCESS-TOKEN abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: 'https://api.ipinfodb.com/v3/ip-country/?key={{ TOKEN }}&ip=8.8.8.8&format=json'
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"statusCode": "OK"'

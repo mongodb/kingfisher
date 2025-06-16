@@ -1,0 +1,37 @@
+rules:
+  - name: AppSynergy API Key
+    id: kingfisher.appsynergy.1
+    pattern: |
+      (?xi)
+      \b
+      appsynergy
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - appsynergy_token o5rp8apgq8ds59srpvd4nj0gwvczlr4s73dmxijqtefct4doqz38it6epb1d5pi6
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "html":"<html><body><h1>Hello World</h1></body></html>",
+              "filename":"HelloWorld.pdf"
+            }
+          headers:
+            Content-Type: application/json
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://www.appsynergy.com/api?action=HTML2PDF&apiKey={{ TOKEN }}

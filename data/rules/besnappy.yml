@@ -1,0 +1,33 @@
+rules:
+  - name: Besnappy API Key
+    id: kingfisher.besnappy.1
+    pattern: |
+      (?xi)
+      \b
+      besnappy
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-f0-9]{64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - besnappy TOKEN abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+      - besnappy SECRET abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ TOKEN | append: ":x" | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.besnappy.com/api/v1/accounts

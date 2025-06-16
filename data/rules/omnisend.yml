@@ -1,0 +1,32 @@
+rules:
+  - name: Omnisend API Key
+    id: kingfisher.omnisend.1
+    pattern: |
+      (?xi)
+      \b
+      omnisend
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9A-Z-]{75}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - omnisend_token = tGTBROJg6UEtgFA9H-rqLaciRBFGtEIjERQqlXE-TjGT7HI2qRJAlBOfGbEwV7vtoSelfJsam5k
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-API-KEY: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.omnisend.com/v3/contacts?limit=100&offset=0

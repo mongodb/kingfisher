@@ -1,0 +1,32 @@
+rules:
+  - name: OpsGenie API Key
+    id: kingfisher.opsgenie.1
+    pattern: |
+      (?x)
+      (?i)
+      \b
+      opsgenie
+      (?:.|[\\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      )
+    min_entropy: 3.5
+    examples:
+      - opsgenie_api_key = '12345678-9abc-def0-1234-56789abcdef0'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: GenieKey {{ TOKEN }}
+          method: GET
+          url: https://api.opsgenie.com/v2/alerts
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words: 
+                - "Could not authenticate"
+              negative: true

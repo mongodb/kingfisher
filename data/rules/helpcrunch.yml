@@ -1,0 +1,31 @@
+rules:
+  - name: HelpCrunch API Key
+    id: kingfisher.helpcrunch.1
+    pattern: |
+      (?xi)
+      \b
+      helpcrunch
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9+/=]{328}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - helpcrunch_access_token=Uj5HWTBGRVJFUlVGRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUkZSRlJGUg==
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.helpcrunch.com/v1/departments

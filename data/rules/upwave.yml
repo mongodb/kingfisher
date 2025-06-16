@@ -1,0 +1,34 @@
+rules:
+  - name: Upwave API Key
+    id: kingfisher.upwave.1
+    pattern: |
+      (?xi)
+      \b
+      upwave
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - upwave_token=1234567890abcdef1234567890abcdef
+      - upwave_key=abcdef1234567890abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            Authorization: "Token {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.upwave.io/workspaces/

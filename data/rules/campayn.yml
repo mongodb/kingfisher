@@ -1,0 +1,33 @@
+rules:
+  - name: Campayn API Key
+    id: kingfisher.campayn.1
+    pattern: |
+      (?xi)
+      \b
+      campayn
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - campayn key 1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+      - campayn token abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'TRUEREST apikey={{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://campayn.com/api/v1/lists

@@ -1,0 +1,87 @@
+rules:
+  - name: CircleCI API Personal Access Token
+    id: kingfisher.circleci.1
+    pattern: |
+      (?x)                   
+      (?i)                   
+      \b                     
+      (                      
+        CCIPAT_
+        [a-z0-9]{4}
+        [a-z]{5}
+        [a-z0-9]{3}
+        [0-9]{3}
+        [a-z]{2}
+        [A-Z]{2}
+        [0-9]{1}
+        [a-z]{1}
+        [a-z0-9]{1}
+        [0-9]{1}
+        [a-z]{1}
+        _
+        [a-z0-9]{40}
+      )                      
+      \b                     
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - CircleCI_PAT = "CCIPAT_lZyPAuThWn2G908ssDT0g33e_t7qh0r5hrvsqzmuraqzduq6qco5onxgrtcn7y2z4"
+      - |
+        export CIRCLECI_TOKEN=CCIPAT_lZyPAuThWn2G908ssDT0g33e_t7qh0r5hrvsqzmuraqzduq6qco5onxgrtcn7y2z4
+    references:
+      - https://circleci.com/docs/managing-api-tokens/
+      - https://circleci.com/docs/openid-connect-tokens/
+    categories:
+      - api
+      - secret
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Circle-Token: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://circleci.com/api/v2/me
+  - name: CircleCI API Project Token
+    id: kingfisher.circleci.2
+    pattern: |
+      (?xi)
+      \b                     
+      circleci
+      (?:.|[\n\r]){0,64}?
+      (                      
+        [a-f0-9]{40}
+      )
+      \b            
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - circleci_project_secret = 'Ca61263Bf9A4DcEECd00EdAAacb4eaEe74e8682f'
+      - "CIRCLECI_API_TOKEN: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
+    references:
+      - https://en.wikipedia.org/wiki/SHA-1
+      - https://git-scm.com/book/en/v2/Git-Tools-Revision-Selection
+    categories:
+      - crypto
+      - hash
+      - secret
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Circle-Token: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://circleci.com/api/v2/me

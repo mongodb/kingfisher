@@ -1,0 +1,59 @@
+rules:
+  - name: Spotify API Secret
+    id: kingfisher.spotify.1
+    pattern: |
+      (?x)
+      (?i)
+      \b
+      spotify
+      (?:.|[\\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    examples:
+      - spotify_key = abcdefghijklmnopqrstuvwxyz123456
+      - spotify_secret = abcdefghijklmnopqrstuvwxyz123456
+    validation:
+      type: Http
+      content:
+        request:
+          body: grant_type=client_credentials&client_id={{ CLIENTID }}&client_secret={{ TOKEN }}
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+          method: POST
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch
+            - report_response: true
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - '"token_type":"Bearer"'
+          url: https://accounts.spotify.com/api/token
+    depends_on_rule:
+      - rule_id: "kingfisher.spotify.2"
+        variable: CLIENTID
+  - name: Spotify API ID
+    id: kingfisher.spotify.2
+    pattern: |
+      (?x)
+      (?i)
+      spotify
+      .{0,16}
+      id
+      (?:.|[\n\r]){0,64}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    visible: false
+    examples:
+      - spotifyClientid = abcdefghijklmnopqrstuvwxyz123456

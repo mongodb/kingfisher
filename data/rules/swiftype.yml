@@ -1,0 +1,32 @@
+rules:
+  - name: Swiftype API Key
+    id: kingfisher.swiftype.1
+    pattern: |
+      (?xi)
+      \b
+      swiftype
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{6}_[a-zA-Z0-9]{6}-[a-zA-Z0-9]{6}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - swiftypeSECRET 665Hkj_12ABcd-eF34xW
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://search-api.swiftype.com/api/v1/engines/bookstore/document_types/books/search.json

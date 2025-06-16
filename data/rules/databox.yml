@@ -1,0 +1,46 @@
+rules:
+  - name: Databox API Key
+    id: kingfisher.databox.1
+    pattern: |
+      (?xi)
+      \b
+      databox
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9=+]{21}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - databox SECRET=ABCdefGHIjklMNOpqrSTUv
+      - databoxPRIVATEKEY abcDEFGhijKLmnoPQRstuv
+      - databox ACCESS=ABCDEFGHIJKLmno123456
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "data": [
+                {
+                  "$sales": 1633,
+                  "$visitors": 10019
+                }
+              ]
+            }
+          headers:
+            Content-Type: application/json
+            Accept: application/vnd.databox.v2+json
+            Authorization: '{{ "TOKEN:" | b64enc }}'
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://push.databox.com
+    references:
+      - https://developers.databox.com/docs

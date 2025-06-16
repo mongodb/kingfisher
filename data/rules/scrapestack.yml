@@ -1,0 +1,35 @@
+rules:
+  - name: ScrapeStack API Key
+    id: kingfisher.scrapestack.1
+    pattern: |
+      (?xi)
+      \b
+      scrapestack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - scrapestack SECRET abcdef123456ghijklmnop7890qrstuv
+      - scrapestack KEY zyxwvutsrqponmlkjihgfedcba123456
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.scrapestack.com/scrape?access_key={{ TOKEN }}&url=https://apple.com"
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - 'html'
+                - '"info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."'
+            - type: StatusMatch
+              status:
+                - 200

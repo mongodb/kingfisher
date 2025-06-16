@@ -1,0 +1,33 @@
+rules:
+  - name: SuperNotes API Key
+    id: kingfisher.supernotes.1
+    pattern: |
+      (?xi)
+      \b
+      supernotes
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z\-_]{43}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - supernotes-SECRET=supernotes_sk-9876543210BCDEFG9876543210BCDEFG9876543210B
+      - supernotesACCESSKEY-supernotes_sk-abcdefghijABCDEFGHIJabcdefghijABCDEFGHIJ
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Api-Key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.supernotes.app/v1/user

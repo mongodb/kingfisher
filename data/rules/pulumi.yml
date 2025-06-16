@@ -1,0 +1,28 @@
+rules:
+  - name: Pulumi API Key
+    id: kingfisher.pulumi.1
+    pattern: |
+      (?x)
+      \b
+      (
+        pul-[a-z0-9]{40}
+      )
+      \b
+    min_entropy: 3.3
+    examples:
+      - pul-18e13e3eebebeb94eac318d421ca8ecc5ca78d5f
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/vnd.pulumi+8
+            Authorization: token {{ TOKEN }}
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.pulumi.com/api/user/stacks

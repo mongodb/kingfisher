@@ -1,0 +1,34 @@
+rules:
+  - name: DetectLanguage API Key
+    id: kingfisher.detectlanguage.1
+    pattern: |
+      (?xi)
+      \b
+      detectlanguage
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - detectlanguage KEY 1abc2345def6789ghij01234klmno567
+      - detectlanguage ACCESS 1234567890abcdef1234567890abcdef
+      - detectlanguage SECRET a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://ws.detectlanguage.com/0.2/user/status

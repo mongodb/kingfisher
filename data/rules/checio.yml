@@ -1,0 +1,32 @@
+rules:
+  - name: ChecIO API Key
+    id: kingfisher.checio.1
+    pattern: |
+      (?xi)
+      \b
+      checio
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        pk_[a-z0-9]{45}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "checio SECRET    pk_abcdefghijklmnopqrstuvwxyz1234567890abcde12345"
+      - "checio PRIVATEtoken pk_1234567890abcdef1234567890abcdefgabcdefgabcdef"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.chec.io/v1/products?limit=25

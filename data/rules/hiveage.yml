@@ -1,0 +1,33 @@
+rules:
+  - name: Hiveage API Key
+    id: kingfisher.hiveage.1
+    pattern: |
+      (?xi)
+      \b
+      hiveage
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z\_\-]{20}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - hiveage-secret-KEY-ABC123XYZ789abcd5678
+      - hiveageACCESS-0000XxXxXxXxXxXxXxXx0000
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: '{{ "Basic " | append: TOKEN | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://mltb8350.hiveage.com/api/network

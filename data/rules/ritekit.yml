@@ -1,0 +1,32 @@
+rules:
+  - name: RiteKit API Key
+    id: kingfisher.ritekit.1
+    pattern: |
+      (?xi)
+      \b
+      ritekit
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{44}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - ritekit_secret=b45342d1e04f33d84e4d67f7e03c4267354f741b7658
+      - ritekit_token=b45342d1e04f33d84e4d67f7e03c4267354f741b7658
+    validation:
+      type: Http
+      content:
+        request:
+          url: "https://api.ritekit.com/v1/stats/multiple-hashtags?tags=hello&client_id={{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+    description: RiteKit is a social media toolkit that provides various APIs for managing social media content and analytics. RiteKit API keys can be used to access and manage social media data.

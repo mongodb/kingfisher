@@ -1,0 +1,32 @@
+rules:
+  - name: AssemblyAI API Key
+    id: kingfisher.assemblyai.1
+    pattern: |
+      (?xi)
+      \b
+      assemblyai
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - assemblyai.access_token=abcd1234efgh5678ijkl9012mnop3456
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN }}'
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.assemblyai.com/v2/transcript

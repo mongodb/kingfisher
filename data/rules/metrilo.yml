@@ -1,0 +1,46 @@
+rules:
+  - name: Metrilo API Key
+    id: kingfisher.metrilo.1
+    pattern: |
+      (?xi)
+      \b
+      metrilo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{16}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - metriloSecretKey=abcd1234efgh5678
+      - metriloKEY=abcd5678efgh1234
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "time": 1518004715732,
+              "token": "{{ TOKEN }}",
+              "platform": "Wordpress 4.2.7 / Woocommerce 3.5",
+              "pluginVersion": "1.1.0",
+              "params": {
+                "id": "12",
+                "name": "Clothing",
+                "url": "https://dummysite.com"
+              }
+            }
+          headers:
+            Content-Type: application/json
+            Content-Length: "0"
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://trk.mtrl.me/category

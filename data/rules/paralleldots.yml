@@ -1,0 +1,44 @@
+rules:
+  - name: ParallelDots API Key
+    id: kingfisher.paralleldots.1
+    pattern: |
+      (?xi)
+      \b
+      paralleldots
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{43}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - paralleldots_key=8htQolfTRcvBcjQkMOYAbpa8wRwn8Hrf4RbXnvTEZ3x
+      - paralleldots_token=vkmz9ktJiinWyPqkyZlxGRBoat1QbmdmdQyvGxPuXDW
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://apis.paralleldots.com/v4/intent
+          headers:
+            Content-Type: multipart/form-data
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"intent"'
+          multipart:
+            parts:
+              - name: api_key
+                type: text
+                content: '{{ TOKEN }}'
+              - name: text
+                type: text
+                content: sample text

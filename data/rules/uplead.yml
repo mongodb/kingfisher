@@ -1,0 +1,33 @@
+rules:
+  - name: Uplead API Key
+    id: kingfisher.uplead.1
+    pattern: |
+      (?xi)
+      \b
+      uplead
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9-]{32}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - uplead_key=f6ameo8gaperc4j4g4tg9lbsqwbnak3c
+      - uplead_token=eduf0pezfibcmvlvdtbpf5s8bjbkxqpw
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.uplead.com/v2/credits

@@ -1,0 +1,30 @@
+rules:
+  - name: Blogger API Key
+    id: kingfisher.blogger.1
+    pattern: |
+      (?xi)
+      \b
+      blogger
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z-]{39}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - bloggerSECRETkey-abc123efg456hij789klm012nop345qrstu678vwxy
+      - bloggerKEY-ab12cd34ef56gh78ij90kl12mn34op56qr78st90uvwxyz
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://www.googleapis.com/blogger/v3/blogs/2399953?key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

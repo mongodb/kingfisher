@@ -1,0 +1,32 @@
+rules:
+  - name: Frame.io API token
+    id: kingfisher.frame.io.1
+    pattern: |
+      (?x)                     
+      (?i)                     
+      (                        
+        fio-u-
+        [a-z0-9-_=]{64}
+      )                        
+      \b                       
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - fio-u-TaWoPIBovaGCbBkUtGPKWS0D3cu254VA33IFCCrtwl8J2Dtq2pMJ9MvNHmNoL2XX
+      - ffio-u-TaWoPIBovaGCbBkUtGPKWS0D3cu254VA33IFCCrtwl8J2Dtq2pMJ9MvNHmNoL2XX
+    categories:
+      - api
+      - identifier
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.frame.io/v2/me

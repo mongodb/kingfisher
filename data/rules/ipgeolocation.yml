@@ -1,0 +1,33 @@
+rules:
+  - name: IPGeolocation API Key
+    id: kingfisher.ipgeolocation.1
+    pattern: |
+      (?xi)
+      \b
+      ipgeolocation
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "ipgeolocationSecretToken abcdef0123456789ghijklmnopqrstuv"
+      - "ipgeolocation_key=ghijklmnopqrstuvabcdef0123456789"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.ipgeolocation.io/ipgeo?apiKey={{ TOKEN }}

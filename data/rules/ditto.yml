@@ -1,0 +1,32 @@
+rules:
+  - name: Ditto API Key
+    id: kingfisher.ditto.1
+    pattern: |
+      (?xi)
+      \b
+      ditto
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}\.[a-z0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - ditto_key = 123e4567-e89b-12d3-a456-426614174000.abcdef0123456789abcdef0123456789abcdef01
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "token {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200
+          url: https://api.dittowords.com/variants

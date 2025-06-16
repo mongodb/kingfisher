@@ -1,0 +1,34 @@
+rules:
+  - name: CoinApi API Key
+    id: kingfisher.coinapi.1
+    pattern: |
+      (?xi)
+      \b
+      coinapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9\-]{36}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "coinapi SECRET fa327aA1-23ZC-eA32-aZ32-2A67fb34EACD"
+      - "coinapi ACCESS 4a6CA234-aFd3-1bC2-Cd23-fedC239EAD0E"
+      - "coinapi TOKEN AC319DA9-948B-A47E-Cf56-DE2333ADC9B0"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-CoinAPI-Key: "{{ TOKEN }}"
+          method: GET
+          url: "https://rest.coinapi.io/v1/exchanges"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

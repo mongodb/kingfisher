@@ -1,0 +1,33 @@
+rules:
+  - name: Serphouse API Key
+    id: kingfisher.serphouse.1
+    pattern: |
+      (?xi)
+      \b
+      serphouse
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{60}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - serphouse SECRET abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890
+      - serphouse KEY qwertyuiopasdfghjklzxcvbnmQWERTYUIOPASDFGHJKLZXCVBNM1234567890
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.serphouse+json; version=3"
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.serphouse.com/account/info

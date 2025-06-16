@@ -1,0 +1,51 @@
+rules:
+  - name: PubNub Publish Key
+    id: kingfisher.pubnub.1
+    pattern: |
+      (?x)(?i)
+      \b
+      (
+        pub-c-[0-9a-z]{8}-[0-9a-z]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}
+      )
+      \b
+    min_entropy: 3.5
+    examples:
+      - pub-c-12345678-1234-1234-1234-123456789012
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://ps.pndsn.com/signal/{{ TOKEN }}/{{ SUBSCRIPTIONTOKEN }}/0/ch1/0/%22typing_on%22?uuid=username987654321
+    depends_on_rule:
+      - rule_id: "kingfisher.pubnub.2"
+        variable: SUBSCRIPTIONTOKEN
+  - name: PubNub Subscription Key
+    id: kingfisher.pubnub.2
+    pattern: |
+      (?xi)
+      \b
+      (
+        sub-c-[0-9a-z]{8}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - sub-c-12345678-abcd-1234-efgh-567890abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://ps.pndsn.com/v2/objects/{{ TOKEN }}/uuids"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

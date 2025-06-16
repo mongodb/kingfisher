@@ -1,0 +1,33 @@
+rules:
+  - name: PostageApp API Key
+    id: kingfisher.postageapp.1
+    pattern: |
+      (?xi)
+      \b
+      postageapp
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{32}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: high
+    examples:
+      - postageapp_key=abcd1234efgh5678ijkl9012mnop3456
+      - postageapp_secret=zyxw9876vuts5432rqpo1234nmlk7890
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://api.postageapp.com/v.1.0/get_account_info.json?api_key={{ TOKEN }}
+          headers:
+            Content-Type: application/json
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

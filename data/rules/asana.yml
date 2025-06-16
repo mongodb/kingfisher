@@ -1,0 +1,97 @@
+rules:
+  - name: Asana Client ID
+    id: kingfisher.asana.1
+    pattern: |
+      (?x)                       
+      (?i)                       
+      \b                         
+      asana
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b                         
+      (
+        [0-9]{16}
+      )
+      \b                         
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - asana_key = "8195513847023883"
+      - "ASANA_API_TOKEN: 1234567890123456"
+    categories:
+      - api
+      - token
+      - asana
+    references:
+      - https://developers.asana.com/docs/authentication
+
+  - name: Asana Client Secret
+    id: kingfisher.asana.2
+    pattern: |
+      (?x)                       
+      (?i)                       
+      \b                         
+      asana
+      (?:.|[\n\r]){0,64}?
+      \b                         
+      (
+        [a-z0-9]{30,40}
+      )
+      \b                         
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "asana :'20c2F0d03201af478ca1aBE9515A1A4FEfb'"
+      - ASANA_PAT = 1234567890abcdef1234567890abcdef12
+    categories:
+      - api
+      - token
+      - asana
+
+  - name: Asana OAuth / Personal Access Token
+    id: kingfisher.asana.3
+    pattern: |
+      (?x)                       
+      (?i)                       
+      \b                         
+      asana
+      (?:.|[\n\r]){0,64}?
+      \b                         
+      (                          
+        [01]{1,} 
+        \/
+        [0-9a-f]{16,32}
+        (?:                      
+          :
+          [a-z0-9]{32,64}
+        )?
+      )                          
+      \b                         
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - asana_pat = 1/1248440223456784:d3d7e52e5c4a5d4c9bc424d2d882324d
+      - asana token = 0/d6f1e29e5b4b4d8c9bb419b2d882154d
+    categories:
+      - api
+      - key
+      - asana
+    references:
+      - https://developers.asana.com/docs/authentication#api-key-authentication
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - 'data:'
+                - email
+                - name
+          url: https://app.asana.com/api/1.0/users/me

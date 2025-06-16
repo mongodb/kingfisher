@@ -1,0 +1,31 @@
+rules:
+  - name: Graphhopper API Key
+    id: kingfisher.graphhopper.1
+    pattern: |
+      (?xi)
+      \b
+      graphhopper
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9\-]{36}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - graphhopperSECRETyo-98765432-4321-4321-4321-abcdefghijklmn
+      - graphhopper_access_key_X-abcdef12-3456-7890-abcd-ef1234567890
+      - graphhopperPRIVATE12-34abcd56-78ef-90gh-ijkl-mn1234567890op
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://graphhopper.com/api/1/geocode?q=India&type=json&key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

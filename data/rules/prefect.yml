@@ -1,0 +1,29 @@
+rules:
+  - name: Prefect API Key
+    id: kingfisher.prefect.1
+    pattern: |
+      (?xi)
+      prefect
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        pnu_[a-zA-Z0-9]{36}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - prefect = pnu_yEUPGHD2I1bYeZJYd5bl4In6aEokTJDHt8Ja
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: https://api.prefect.cloud/auth/login
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,33 @@
+rules:
+  - name: GetResponse API Key
+    id: kingfisher.getresponse.1
+    pattern: |
+      (?xi)
+      \b
+      getresponse
+      (?:.|[\n\r]){0,8}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "getresponse_token = abcdef1234567890abcdef1234567890"
+      - "getresponseKEY=12345678901234567890123456789012"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-Auth-Token: "api-key {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: "https://api.getresponse.com/v3/accounts"

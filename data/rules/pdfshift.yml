@@ -1,0 +1,33 @@
+rules:
+  - name: PdfShift API Key
+    id: kingfisher.pdfshift.1
+    pattern: |
+      (?xi)
+      \b
+      pdfshift
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - pdfshift SECRET 123e4567e89b12d3a456426614174000
+      - pdfshift ACCESS 9f71c52d839b5cd527645e42b5134f8b
+      - pdfshift-KEY d3b07384d113edec49eaa6238ad5ff00
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          url: https://api.pdfshift.io/v3/credits/usage
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch

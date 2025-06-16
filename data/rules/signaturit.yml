@@ -1,0 +1,31 @@
+rules:
+  - name: Signaturit API Key
+    id: kingfisher.signaturit.1
+    pattern: |
+      (?xi)
+      \b
+      signaturit
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{86}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - signaturit secret TOKEN 12345678901234567890123456789012345678901234567890123456789012345678901234567890123456
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.sandbox.signaturit.com/v3/signatures.json

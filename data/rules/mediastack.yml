@@ -1,0 +1,31 @@
+rules:
+  - name: MediaStack API Key
+    id: kingfisher.mediastack.1
+    pattern: |
+      (?xi)
+      \b
+      mediastack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - mediastack-SECRET-abc123def456ghi789jkl012mno34567
+      - mediastackPRIVATE-1234567890abcdef1234567890abcdef
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.mediastack.com/v1/news?access_key={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

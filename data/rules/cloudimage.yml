@@ -1,0 +1,31 @@
+rules:
+  - name: CloudImage API Key
+    id: kingfisher.cloudimage.1
+    pattern: |
+      (?xi)
+      \b
+      cloudimage
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-z0-9_]{30}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "cloudimage_token = 6a3lhvh6va5lkmp7id0u9c96e38c5t"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+            X-Client-Key: "{{ TOKEN }}"
+          method: POST
+          url: "https://api.cloudimage.com/invalidate"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

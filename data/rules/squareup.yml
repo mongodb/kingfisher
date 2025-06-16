@@ -1,0 +1,27 @@
+rules:
+  - name: Squareup API Key
+    id: kingfisher.squareup.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        sq0idp-[0-9A-Za-z]{22}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - sq0idp-uZGn3lJQK4Y4EfxqDOoV8J
+      - sq0idp-hvrcdJIftSJcrQ8C7Pcgbd
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: 'https://connect.squareup.com/oauth2/authorize?client_id={{ TOKEN }}&scope=CUSTOMERS_WRITE+CUSTOMERS_READ&session=False&state=82201dd8d83d23cc8a48caf52b'

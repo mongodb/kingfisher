@@ -1,0 +1,31 @@
+rules:
+  - name: Paystack API Key
+    id: kingfisher.paystack.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        sk_
+        [a-z]{1,}
+        _
+        [A-Za-z0-9]{40}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - sk_test_abcdef1234567890abcdef1234567890abcdef12
+      - sk_live_gwjaoi1234567890abcdef1234567890abcdef12
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.paystack.co/customer

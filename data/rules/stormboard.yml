@@ -1,0 +1,35 @@
+rules:
+  - name: Stormboard API Key
+    id: kingfisher.stormboard.1
+    pattern: |
+      (?xi)
+      \b
+      stormboard
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-f0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - stormboard SECRET 20bc9d12e4f73123456789abcdef1234567890ab
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-API-Key: '{{ TOKEN }}'
+          method: GET
+          url: https://api.stormboard.com/users/profile
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: 200
+            - type: WordMatch
+              words: 
+                - "Invalid API Key"
+              negative: true

@@ -1,0 +1,30 @@
+rules:
+  - name: ReallySimpleSystems API Key
+    id: kingfisher.reallysimplesystems.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        ey[a-zA-Z0-9-._]{153}
+        .
+        ey[a-zA-Z0-9-._]{916,1000}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - eyH8GnxWfFSCkaW3TsqAIHYsAs9w8LvSApjonGMOWZvafPPPCc8Jo2tigQDCYp951qpKUBajMacqa7f272X8Yv3Wqkh3gnEbbGcDS2ovtSPK8Z6.XjLBTjc9DFB2wofBCsAWYH_gbx4GQi5NAeciyjCQLAd.eyKKJ7QztBbP00m0FdmnjdDaEQnqntD8LETyGUgsHVoLQFrWVqVI2bCjlI4c0H1KUrFJlKH9aFqRFI1dAQ7erNI7xaMUEKtbk3bMcL0xceY1gaVnm84gXEn9Xo9MCBXWlO0z0hpiI8hg8pm02eor7u55QYJCAgFsM61skYwbQRvURDKBXKD4gMHSu5K2hORzRlen04Cj5mMQOV9xFoQYcU6fCLMLUkD6k0DcKslOy6UcIZ1xtPAAvgJL7ClUFS8sQq42F3DxPTD0QxxnXz4wRXm8LSjcUcKiAR6U205b10GtVncTxkDvRCPh6SiiHuJh0gUgT6xbkchaA5dj1gpD0B0pnER2GTOW6dgVRY8mL7wLJqT03Mr67lE2GdKLuaiuwBpRWDwawraIhmYiHhN8U7wU7QKzD1WOjE4poMCGotfwSLYXQngBZ4oS8YSCwsBtyrnizorkPBfZ2JoEM7YE3srPWgUpl2vMzQX703z98TVTaHYXBCG1ydii6cm7Y6dX18RyiDDXdSML60PzFIVxlTCk4LVSAGtmAI.ehKpXymg5pjDS43L73Fn1aO63sHqIzLA80p1lEioEjyEQ5cy0mXxcbntFwEYw0TmD5CDiFQk9oEPbudgCSTwUHO-wVxopNGwlI9pTHti5NJIQ98Er6A1WTJPKou3Gfovg72Mw6eoUjeAXe0fJQaFaYSYUMxxOKlJWHy4cuTQmWq7KIR16Oy1ZoKJvaTJ5GBNQyOylKA5blOwiI9TVF8mAq8SakGjdEnAPLHBvN6jWHZ_ZSaYR84Qdxxu8E2ieUwCLYyqumEPgworVFWyRIzvihfKpqy05XX3dQgWssrV6Wow1N8XtrIvGVzkiJjTKt7alC1auMyuzMr61sj1F5pmBqD1Aq6ZXtjnQMjI11O9GguThJlxQxE
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: JsonValid
+          url: https://apiv4.reallysimplesystems.com/accounts

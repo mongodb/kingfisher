@@ -1,0 +1,35 @@
+rules:
+  - name: Feedier API Key
+    id: kingfisher.feedier.1
+    pattern: |
+      (?xi)
+      \b
+      feedier
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9A-Z]{32}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - feedier PRIVATEKEY abcdeFGHIJKLmnopqrstuVWXYZ123456
+      - feedier-ACCESS-KEY ABCDEfghijklmnopqrstuVWxyz123456
+      - feedier-SECRET a1b2C3d4E5f6G7h8I9j0KlmnOpqrStUV
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.feedier.com/v1/carriers

@@ -1,0 +1,34 @@
+rules:
+  - name: UPCDatabase API Key
+    id: kingfisher.upcdatabase.1
+    pattern: |
+      (?xi)
+      \b
+      upcdatabase
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - upcdatabase SECRET ABCDEFGHIJKLMNOPQRSTUVWXYZ012345
+      - upcdatabase ACCESS KEY XY9K2M4N7P8QRSTVWBCDEFGHJL5A3U6T
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.upcdatabase.org/product/0111222333446?apikey={{ TOKEN }}
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - "added_time"

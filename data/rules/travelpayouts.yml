@@ -1,0 +1,30 @@
+rules:
+  - name: TravelPayouts API Key
+    id: kingfisher.travelpayouts.1
+    pattern: |
+      (?xi)
+      \b
+      travelpayouts
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - "travelpayouts_key = abcdef0123456789abcdef0123456789"
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.travelpayouts.com/v2/prices/latest?currency=usd&limit=5&token={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

@@ -1,0 +1,33 @@
+rules:
+  - name: Shutterstock OAuth Token
+    id: kingfisher.shutterstock.1
+    pattern: |
+      (?xi)
+      \b
+      shutterstock
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        v2/[0-9A-Za-z]{388}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - shutterstock_token = v2/xCQ7pDACKfKdvCiVIfzplbo1lFyqg6bqnDien7SSOOyvMNq3LAaMyW0vgI5fCQzNwlJIQxMVTUzQGfHD98tdCxCorFs5yP3IqE4YI12mA28WObE6UA9O56IHYelNSy5V4C23leCf2DW7jCutzCw7BIPbQyksIocxPFPzvIdOthiVwjwKJxhLdy5vQmEDjOP1gxm0Keub2TMZyKPlvQ8x6oFt8nAbN8Ae0M5S0lchGq0YTxNXDB9y1CqNUpTfr3sawWl0AcgElCDPR8GsvJ33bDH8JObVLmz7akfJyuzD08lTbV7aJc1YSN8w2Ac7hCThTtboczJndQhAirHcM3KpvCD3dPU117tSm6LrgWIcqvsSSdng4iLJoHz4UOQHBBAJGUt3
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/json"
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.shutterstock.com/v2/user

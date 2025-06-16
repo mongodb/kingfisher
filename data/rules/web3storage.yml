@@ -1,0 +1,33 @@
+rules:
+  - name: Web3.storage API Key
+    id: kingfisher.web3storage.1
+    pattern: |
+      (?xi)
+      \b
+      web3
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9\.eyJ[A-Za-z0-9-_]{100,300}\.[A-Za-z0-9-_]{25,100}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - web3 access key eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJabcdefghijABCDEFGHIJKabcdefghijABCDEFGHIJabcdefghijABCDEFGHIJKLMNOabcdefghijABCDEFGHIJKabcdefghiabcdefghijABCDEFGHI.BX5nl1YOeHZ_kxc3X0Mjprlf9A
+      - web3 secret key eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJabcdefghijABCDEFGHIJKabcdefghijABCDEFGHIJabcdefghijABCDEFGHIJKLMNOabcdefghijABCDEFGHIJKabcdefghiabcdefghijABCDEFGHI.BX5nl1YOeHZ_kxc3X0Mjprlf9A
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.web3.storage/user/uploads

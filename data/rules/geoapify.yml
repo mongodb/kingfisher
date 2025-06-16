@@ -1,0 +1,30 @@
+rules:
+  - name: Geoapify API Key
+    id: kingfisher.geoapify.1
+    pattern: |
+      (?xi)
+      \b
+      geoapify
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - geoapifyXYZSECRET=abc123def456ghi789jkl012mno345pq
+    validation:
+      type: Http
+      content:
+        request:
+          url: https://api.geoapify.com/v1/geocode/search?text=California&apiKey={{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

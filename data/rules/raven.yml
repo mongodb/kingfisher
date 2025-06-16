@@ -1,0 +1,33 @@
+rules:
+  - name: Raven API Key
+    id: kingfisher.raven.1
+    pattern: |
+      (?xi)
+      \b
+      raven
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9-]{16}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - ravenXYZSECRETXYZK ABCD1234-EFGH5678
+      - ravenXYZACCESSY ABCD1234-EFGH5678
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.raventools.com/api?key={{ TOKEN }}&method=profile_info&format=json"
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - "{"
+                - "}"

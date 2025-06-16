@@ -1,0 +1,32 @@
+rules:
+  - name: CurrentsAPI Key
+    id: kingfisher.currentsapi.1
+    pattern: |
+      (?xi)
+      \b
+      currentsapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9-_\+=]{48}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - currentsapi_token = IaA-pItAhnAFOZj6UkfE3M_7aTfL=BByQ87+eNAW5bc9pB3Z
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.currentsapi.services/v1/latest-news

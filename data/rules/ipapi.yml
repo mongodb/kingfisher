@@ -1,0 +1,36 @@
+rules:
+  - name: Ipapi API Key
+    id: kingfisher.ipapi.1
+    pattern: |
+      (?xi)
+      \b
+      ipapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - ipapi_key=abcdef0123456789abcdef0123456789
+      - ipapi_access_token=12345678901234567890123456789012
+      - ipapi_secret=aaaabbbbccccddddeeeeffffgggghhhh
+    validation:
+      type: Http
+      content:
+        request:
+          url: "https://api.ipapi.com/49.146.239.251?access_key={{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - "continent_code"
+                - '"info":"Access Restricted - Your current Subscription Plan does not support HTTPS Encryption."'
+            - type: StatusMatch
+              status:
+                - 200

@@ -1,0 +1,32 @@
+rules:
+  - name: LemonSqueezy API Token
+    id: kingfisher.lemonsqueezy.1
+    pattern: |
+      (?xi)
+      \b
+      lemonsqueezy
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9\.[0-9A-Za-z]{314}\.[0-9A-Za-z-_]{512}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - lemonsqueezy_key = eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.9f4pen222u4l4tnpt4w94nxjppg9cqpoa30qfmadoty5gzwohf7cljkw5p7jln8ughq4f11tw2h8lnpta21h99n95ic6xan92armh2bbl0uncmk9zqyrq3cnxxowbxryssaxxn8n3cabtvj3rg73nns9mjvys2hulxppk5h7lbnl9iorpb6uz2ijzx4ifodjfd5vodmj8uxfkmohcy4wld2f02hd2z3da01qxd7eqbx3vzd6nunxvnh6maf0lxk8u2pa56qln8fl0ge95vrxja6c0y39yxongvygsnn0kd5n39nzg6w584qa2e.wlptix437lb1wt2flglobb6um1dqxhbl2992kroj43n0xgqy6a5fgq5kblrqtdlof8mvxn1rznvie9nq8scbv622pekpzjm2g5jicz0b0lr9dv1aykvk5bokpa4qx5sumb1ff95ngpw3t6a5otlciaejq06nxp2x9t02t9804eyjkdgf6r7f1sotdcl9wdv3gnodbkhxbxfrmuu3dex6hlhv6ns57m91t3aoo0s9l5ceymix6rwxmp2o6u6sps62awe7hjl0z38wq1xcr9ag8hjicuiy6u7974x6m3wf2b6m6xeqytcwnvxnyr6vr1a51hj9pvw5j08impsszz8yueyvr9agorwseglv8lnegsri5cr9hok366apas0z8gbcxyuir1fc5d9ktzgoratnmymrovelsj60dke9pw6ksvybzm0oc1hgrt6oscjjddbscji84hlghy1imdw2pt8b16u3wtabxgt7mdpz81819kn0hnjigefl0h09ks95af52
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.lemonsqueezy.com/v1/products/

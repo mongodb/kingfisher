@@ -1,0 +1,36 @@
+rules:
+  - name: ScreenshotLayer API Key
+    id: kingfisher.screenshotlayer.1
+    pattern: |
+      (?xi)
+      \b
+      screenshotlayer
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9_]{32}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - screenshotlayer SECRET abcdefghijklmnopqrstuvwxyz123456
+      - screenshotlayer KEY ZYXWVUTSRQPONMLKJIHGFEDCBA098765
+      - screenshotlayer ACCESS hgfedcba0987654321gfedcbaijklmn12
+      - screenshotlayer TOKEN mnopqrstuvwxyz1234abcdefgHIJKL5678
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.screenshotlayer.com/api/capture?access_key={{ TOKEN }}&url=https://google.com
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - PNG

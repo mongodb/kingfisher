@@ -1,0 +1,32 @@
+rules:
+  - name: Sparkpost API Key
+    id: kingfisher.sparkpost.1
+    pattern: |
+      (?xi)
+      \b
+      sparkpost
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "sparkpost_key = abcdefghijklmnopqrstuvwxyz1234567890abcd"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "{{ TOKEN }}"
+          method: GET
+          url: "https://api.sparkpost.com/api/v1/account"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

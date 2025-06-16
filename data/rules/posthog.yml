@@ -1,0 +1,29 @@
+rules:
+  - name: PostHog API Key
+    id: kingfisher.posthog.1
+    pattern: |
+      (?xi)
+      \b
+      posthog
+      (?:.|[\n\r]){0,32}?
+      (
+        phx_[a-zA-Z0-9_]{43}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - posthog = phx_WQV1jrBNdIiYiH_XoWIb5KqZv18v_4JQbNBVuGihaYw
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.posthog.com/api/event/?personal_api_key={{ TOKEN }}

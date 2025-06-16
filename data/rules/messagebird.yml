@@ -1,0 +1,35 @@
+rules:
+  - name: MessageBird API Key
+    id: kingfisher.messagebird.1
+    pattern: |
+      (?x)                   
+      (?i)                   
+      \b                     
+      messagebird
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b                     
+      (                      
+        [a-zA-Z0-9_-]{25}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - messagebird_key = z9mDSt4spXMqykDGYzReONZl7
+    categories:
+      - api
+      - identifier
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: AccessKey {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://rest.messagebird.com/messages

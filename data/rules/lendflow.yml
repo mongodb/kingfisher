@@ -1,0 +1,54 @@
+rules:
+  - name: Lendflow API Key
+    id: kingfisher.lendflow.1
+    pattern: |
+      (?xi)
+      \b
+      lendflow
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-zA-Z0-9]{36}
+        \.
+        [a-zA-Z0-9]{235}
+        \.
+        [a-zA-Z0-9]{32}
+        \-
+        [a-zA-Z0-9]{47}
+        \-
+        [a-zA-Z0-9_]{162}
+        \-
+        [a-zA-Z0-9]{42}
+        \-
+        [a-zA-Z0-9_]{40}
+        \-
+        [a-zA-Z0-9_]{66}
+        \-
+        [a-zA-Z0-9_]{59}
+        \-
+        [a-zA-Z0-9]{7}
+        \-
+        [a-zA-Z0-9_]{220}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - lendflow_token = yzrzyoknyoo3wcng23iy9sk2gpsubniws0ak.gj8i3tkd2ruowvktljs86fjdy9jaf0zx13dax027iob6n1ldck3fmlds3a5jlk1wvk80gyxhpnt4ngutils222yhf3zdztwdtjrblr0utiw3oy49r7vqaa4rvy3or7f0qaa04nwxzixsfoewujh0m4b6n417we7ehx2xu7g0ylckc38ezwlydz1pdwimzu7vgflbqnwrzhih3qgdh7tcffbyh2pd09zrq0cvpm65ig7.5freneaq5omtx20ttll3l6nmk4fg869m-7yh3d36q8zebzqcmc0s3wyn2esh59wfwpcq3329wlqony0t-sj96rqc7r3tx8a05ao636bqoirsd7vhux35h3repvtzovsmau9ttf6v2c9iyav0erw39g7wi90x7sbczlsnheiqc76apiy8qq0btgfwgi2veg4k7nnpqgf7f9orakekszs3bfmx62lk1yjluvjzte4i8wrrvsfu4ea-psm50hpn1plod5gne3rl6q9bjsow98bn44f2c6ms03-am8qd73bqf4yre6u8cbu33ng2s7m7uakur1n83mw-6595chrjqf5eui5mzgg6agumzuwtebwn1waztdubxr5ni5vndxmc0qqcemceb4o7e7-2nx18hbmwp9x8qz1vmnoewvcmr3wc8553ej1rhswjku3g1nlp04mogh3sna-fcvpehd-9yhktvuu54siq1rb2ow2c24i1v9xyl0k61ye5166a6jrhg4sfhd54k2u7k7klhzvbc8cwfswh3vvrry2iogrh9x5uxfnasskqwl8hfhssj16sska9poc6sa1rg0h9tofi78b6dcwcgnesm2ukdcjn1uq9j1jk24hret7es9bz91av8p3zc5xbby2zb9fwfjuaatasq3q00ukermg7uw08t1vhck0
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://app.lendflow.io/api/v1/deals
+          headers:
+            Content-Type: application/json
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

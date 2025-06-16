@@ -1,0 +1,34 @@
+rules:
+  - name: Splunk Observability Token
+    id: kingfisher.splunk.1
+    pattern: |
+      (?xi)
+      \b
+      splunk
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{22}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - splunk-SECRET 8gNfR3bC7mJ6p9eK4t8wQ2
+      - splunk_PRIVATE b7L4f9hQ8r3kN5l8m1G2cE
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            X-Sf-Token: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.us1.signalfx.com/v2/dashboard

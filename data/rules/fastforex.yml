@@ -1,0 +1,29 @@
+rules:
+  - name: FastForex API Key
+    id: kingfisher.fastforex.1
+    pattern: |
+      (?xi)
+      \b
+      fastforex
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9-]{28}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - fastforex 1234abcd5678efgh9012ijkl3456
+      - fastforex-abcd1234efgh5678ijkl9012mnop
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.fastforex.io/fetch-all?api_key={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

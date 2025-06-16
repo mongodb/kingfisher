@@ -1,0 +1,37 @@
+rules:
+  - name: Financial Modeling Prep API Key
+    id: kingfisher.financialmodelingprep.1
+    pattern: |
+      (?xi)
+      \b
+      financialmodelingprep
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'financialmodelingprep_KEY=ABCD1234EFGH5678IJKL9012MNOP3456'
+      - 'financialmodelingprep_TOKEN=12345678ABCDEFGHIJKLMNOPQRSTUVWX'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - '['
+          url: 'https://financialmodelingprep.com/api/v3/financial-statement-symbol-lists?apikey={{ TOKEN }}'

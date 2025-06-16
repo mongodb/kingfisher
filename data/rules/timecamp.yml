@@ -1,0 +1,35 @@
+rules:
+  - name: TimeCamp API Key
+    id: kingfisher.timecamp.1
+    pattern: |
+      (?xi)
+      \b
+      timecamp
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{26}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - timecamp_secret_key=abcdef1234567890abcdef1234
+      - "timecamp_access_token: abcd12345678efgh90ijklmnop"
+      - 'TIMECAMP_API_KEY="12345abcdef67890abcdef1234"'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: "application/vnd.timecamp+json; version=3"
+            Authorization: "{{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: "https://app.timecamp.com/third_party/api/user?format=json"

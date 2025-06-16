@@ -1,0 +1,32 @@
+rules:
+  - name: Impala API Key
+    id: kingfisher.impala.1
+    pattern: |
+      (?xi)
+      \b
+      impala
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z_]{46}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - impala_key=abc123DEF456ghi789JKL012mno345PQR678stu901VWX234
+      - impala_token=XYZ987abc654DEF321ghi098JKL765mno432PQR109stu876
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            x-api-key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.impala.travel/v1/bookings

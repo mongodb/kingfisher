@@ -1,0 +1,32 @@
+rules:
+  - name: CapsuleCRM API Key
+    id: kingfisher.capsulecrm.1
+    pattern: |
+      (?xi)
+      \b
+      capsulecrm
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9-._+=]{64}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - capsulecrm-SECRET-abcdefghijklmnopqrstuvwxyzABCDEF0123456789ghijklMNOPQRST-1234567890abcdef
+      - capsulecrm-PRIVATE-bu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefghijklmnopqrstuvwxyzABCDEFGHIJ
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.capsulecrm.com/api/v2/users

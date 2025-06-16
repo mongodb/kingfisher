@@ -1,0 +1,37 @@
+rules:
+  - name: Mailchimp API Key
+    id: kingfisher.mailchimp.1
+    pattern: |
+      (?xi)
+      mailchimp
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{32}
+        -
+        us[0-9]{1,2}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'mailchimp_token = abcdef1234567890abcdef1234567890-us1'
+      - 'mailchimp_key = abcdef1234567890abcdef1234567890-us5'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ "anystring:" | append: TOKEN | b64enc }}'
+            Accept: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: 'https://{{TOKEN | split: "-" | last}}.api.mailchimp.com/3.0/'
+    references:
+      - https://howtorotate.com/docs/tutorials/mailchimp/
+      - https://mailchimp.com/developer/guides/marketing-api-conventions/

@@ -1,0 +1,35 @@
+rules:
+  - name: MonkeyLearn API Key
+    id: kingfisher.monkeylearn.1
+    pattern: |
+      (?xi)
+      \b
+      monkeylearn
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - monkeylearn ACCESS 1234567890abcdef098f6bcd4621d373cade4d56
+      - monkeylearn TOKEN abcd1234abcd5678abcd9012abcd3456abcd7890
+      - monkeylearn KEY 0123456789abcdef0123456789abcdef01234567
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: "Token {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.monkeylearn.com/v3/classifiers

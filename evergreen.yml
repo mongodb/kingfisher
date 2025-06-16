@@ -1,0 +1,447 @@
+project: kingfisher
+exec_timeout_secs: 10800
+
+aliases:
+  - name: patch
+    variants: [all]
+    tasks:   [all]
+
+github_pr_aliases:
+  - variant: ".*"
+    task:    ".*"
+
+expansions:
+  &cdn
+  aws_cdn_bucket: cdn-origin-kingfisher
+  aws_cdn_role:   arn:aws:iam::119629040606:role/s3-access.cdn-origin-kingfisher
+  cdn_prefix:     kingfisher
+
+########################
+#  SHARED FUNCTIONS    #
+########################
+functions:
+
+  # -- fetch repo --------------------------------------------------
+  fetch-source:
+    - command: git.get_project
+      params:
+        directory: kingfisher
+        shallow_clone: true
+
+  setup-base-linux:
+    - command: shell.exec
+      params:
+        working_dir: kingfisher
+        shell: bash
+        script: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          # Only a tiny set of tools the Makefile assumes exist;
+          # the Makefile will install everything else it needs.
+          sudo apt-get install -y --no-install-recommends \
+            build-essential curl ca-certificates xz-utils pkg-config
+
+  extract-version:
+    # Parse the value
+    - command: shell.exec
+      params:
+        working_dir: kingfisher
+        shell: bash
+        script: |
+          set -euo pipefail
+          # Grab the first `version = "…"` line, strip everything except the value
+          V=$(grep -m1 '^version *= *"' Cargo.toml | cut -d'"' -f2)
+          # Write it as a one-line YAML file understood by Evergreen
+          echo "version: \"$V\"" > version.yml
+
+    # Load it into the task’s expansions
+    - command: expansions.update          # ← writes the new variable
+      params:
+        file: kingfisher/version.yml      # one-key YAML file we just created
+        ignore_missing_file: false
+
+  # -- install rustup + Rust 1.85 on macOS ------------------------
+  setup-rust-macos:
+    - command: shell.exec
+      params:
+        working_dir: kingfisher
+        shell: bash
+        script: |
+          set -euo pipefail
+
+          REQUIRED=1.85.0
+
+          # install rustup if missing
+          if ! command -v rustup >/dev/null 2>&1; then
+            echo "⬇️  installing rustup…"
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+              | sh -s -- -y --profile minimal --default-toolchain none
+            export PATH="$HOME/.cargo/bin:$PATH"
+            hash -r
+          fi
+
+          # ensure the requested tool-chain is present & default
+          if ! rustup toolchain list | grep -q "$REQUIRED"; then
+            rustup toolchain install "$REQUIRED"
+          fi
+          rustup default "$REQUIRED"
+
+          # expose rustc version
+          rustc --version
+
+
+  # -- run the Makefile target passed via $BUILD ------------------
+  make-build:
+    - command: shell.exec
+      params:
+        working_dir: kingfisher
+        shell: bash
+        add_expansions_to_env: true 
+        script: |
+          set -euo pipefail
+          [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "▶ make $BUILD"
+          make "$BUILD"
+
+  package-unix:
+    - command: shell.exec
+      params:
+        working_dir: kingfisher
+        shell: bash
+        script: |
+          set -euo pipefail
+          mkdir -p dist
+          cp target/release/kingfisher-* dist/ || true
+
+          # build Evergreen artifact manifest
+          cd dist
+          {
+            echo '['
+            first=1
+            for f in kingfisher-*; do
+              [ -f "$f" ] || continue
+              [ $first -eq 0 ] && echo ','        
+              first=0
+              printf '  { "name": "%s", "link": "%s" }' "$f" "$f"
+            done
+            echo
+            echo ']'
+          } > artifacts.json
+          ls -lh                  
+
+    - command: attach.artifacts
+      params:
+        working_dir: kingfisher/dist
+        files: ["artifacts.json"]
+
+  macos-sign-notify:
+    - command: shell.exec
+      params:
+        working_dir: kingfisher
+        shell: bash
+        add_expansions_to_env: true
+        script: |
+          set -euo pipefail
+          shopt -s nullglob
+
+          # One-liner: “give me the first macOS tarball if it exists”
+          archive=$(printf '%s\n' dist/kingfisher-darwin-*.tgz | head -n 1 || true)
+
+          if [[ -z "$archive" || ! -f "$archive" ]]; then
+            echo "‼️  No macOS archive to notarize – skipping"
+            exit 0
+          fi
+
+          echo "✍️  Notarizing $archive …"
+          python evergreen/macos_notary.py "$archive"
+          
+
+    - command: attach.artifacts
+      params:
+        working_dir: kingfisher/dist   # where artifacts.json sits
+        files: ["artifacts.json"]
+
+  package-windows:
+    - command: shell.exec
+      params:
+        working_dir: kingfisher
+        shell: powershell.exe
+        script: |
+          $ErrorActionPreference = 'Stop'
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target\release\kingfisher-windows-x64.zip dist\ -Force
+          Write-Host "✓ Copied ZIP into dist\"
+
+          # rebuild artifacts.json with the single ZIP we just copied
+          Get-ChildItem dist\*.zip -File |
+            ForEach-Object { [pscustomobject]@{name=$_.Name; link=$_.Name} } |
+            ConvertTo-Json -Depth 2 |
+            Set-Content dist\artifacts.json -Encoding ascii
+          Write-Host "✓ Re-generated artifacts.json"
+
+    - command: attach.artifacts
+      params:
+        working_dir: kingfisher/dist
+        files: ["artifacts.json"]
+
+
+  # -- run `make tests` on Bash platforms ------------------------
+  run-tests-unix:
+    - command: shell.exec
+      params:
+        working_dir: kingfisher
+        shell: bash
+        add_expansions_to_env: true
+        script: |
+          set -euo pipefail
+          [ -f "$HOME/.cargo/env" ] && source "$HOME/.cargo/env"
+          export PATH="$HOME/.cargo/bin:$PATH"
+          echo "▶ make tests"
+          make tests
+
+  # -- run release tests on Windows ------------------------------
+  run-tests-windows:
+    - command: shell.exec
+      params:
+        working_dir: kingfisher
+        shell: powershell.exe
+        script: |
+          $ErrorActionPreference = 'Stop'
+
+          # Always pull the latest PATH from the registry
+          if (Get-Command Update-SessionEnvironment -ErrorAction SilentlyContinue) {
+            Update-SessionEnvironment
+          } else {
+            Import-Module "$env:ChocolateyInstall\helpers\chocolateyProfile.psm1"
+            Update-SessionEnvironment
+          }
+
+          # tell Git to use Windows’ native certificate store
+          git config --global http.sslBackend schannel
+
+          # Ensure tools are present
+          if (-not (Get-Command cmake.exe -ErrorAction SilentlyContinue)) {
+            choco install cmake -y --installargs 'ADD_CMAKE_TO_PATH=System'
+            Update-SessionEnvironment
+          }
+
+          if (-not (Get-Command git.exe -ErrorAction SilentlyContinue)) {
+            choco install git -y --params "/GitOnlyOnPath"
+            Update-SessionEnvironment
+          }
+
+          if (-not (Get-Command cargo-nextest -ErrorAction SilentlyContinue)) {
+            cargo install --locked cargo-nextest
+          }
+
+          # Run the release test-suite
+          Write-Host "▶ cargo nextest run --release"
+          cargo nextest run --release --workspace --all-targets
+
+  # Install GitHub CLI -------------------------------------------------
+  install-gh-cli:
+    # Linux (RPM/DEB not shown – easiest is the official static tarball)
+    - command: shell.exec
+      params:
+        shell: bash
+        script: |
+          set -euo pipefail
+          if [[ "$OS_FAMILY" == "windows" ]]; then exit 0; fi
+          if command -v gh >/dev/null 2>&1; then exit 0; fi
+          curl -sSL https://github.com/cli/cli/releases/latest/download/gh_$(uname -m | sed 's/aarch64/arm64/;s/x86_64/amd64/')_linux.tar.gz \
+            | tar -xz --strip-components=1 -C /usr/local/bin gh_*/bin/gh
+          gh --version
+
+    # macOS via brew
+    - command: shell.exec
+      params:
+        run_on_distro: macos-14  # only runs on macOS tasks
+        shell: bash
+        script: |
+          set -euo pipefail
+          if command -v gh >/dev/null 2>&1; then exit 0; fi
+          brew install gh
+          gh --version
+
+    # Windows via choco
+    - command: shell.exec
+      params:
+        run_on_distro: windows-2022-large
+        shell: powershell.exe
+        script: |
+          if (Get-Command gh.exe -ErrorAction SilentlyContinue) { exit 0 }
+          choco install gh -y
+          gh --version
+
+
+  # Upload (or create) GitHub draft release ---------------------------
+  upload-github-release:
+    - command: shell.exec
+      params:
+        working_dir: kingfisher
+        add_expansions_to_env: true   # so $version is available
+        shell: bash
+        script: |
+          set -euo pipefail
+          export GH_TOKEN="${GITHUB_TOKEN:?GITHUB_TOKEN not set}"
+
+          TAG="v${version}"
+          TITLE="Kingfisher ${version}"
+          ASSET_DIR="dist"
+
+          # Does the draft already exist?
+          if gh release view "$TAG" --json isDraft >/dev/null 2>&1; then
+            echo "📝 Draft release $TAG exists."
+          else
+            echo "➕ Creating draft release $TAG"
+            gh release create "$TAG" --draft --title "$TITLE" --notes "Automated draft for $TAG"
+          fi
+
+          # Get list of already-uploaded asset names
+          EXISTING=$(gh release view "$TAG" --json assets -q '.assets[].name' | sort)
+
+          for FILE in $ASSET_DIR/*.{tgz,tar.gz,zip} ; do
+            [[ -f "$FILE" ]] || continue
+            NAME=$(basename "$FILE")
+            if grep -qxF "$NAME" <<< "$EXISTING"; then
+              echo "✔ $NAME already attached – skipping"
+            else
+              echo "⬆ Uploading $NAME"
+              gh release upload "$TAG" "$FILE" --clobber
+            fi
+          done
+
+  publish-cdn:
+    # ZIP archives
+    - command: s3.put
+      params:
+        working_dir: kingfisher
+        role_arn:   ${aws_cdn_role}
+        bucket:     ${aws_cdn_bucket}
+        region:     us-east-1
+        local_files_include_filter_prefix: kingfisher
+        local_files_include_filter:
+          - dist/*.zip
+          - release/*.zip
+        remote_file: ${cdn_prefix}/${version}/
+        content_type: application/zip          # ← non-blank value
+        permissions: public-read
+        visibility: public
+        skip_existing: true
+
+    # .tgz archives
+    - command: s3.put
+      params:
+        working_dir: kingfisher
+        role_arn:   ${aws_cdn_role}
+        bucket:     ${aws_cdn_bucket}
+        region:     us-east-1
+        local_files_include_filter_prefix: kingfisher
+        local_files_include_filter:
+          - dist/*.tgz
+          - dist/*.tar.gz
+          - release/*.tgz
+          - release/*.tar.gz
+        remote_file: ${cdn_prefix}/${version}/
+        content_type: application/x-gzip
+        permissions: public-read
+        visibility: public
+        skip_existing: true
+
+
+
+########################
+#        TASKS         #
+########################
+tasks:
+
+  - name: build-linux-docker
+    commands:
+      - func: fetch-source
+      - func: extract-version
+      - func: make-build
+      - func: package-unix
+      # - func: install-gh-cli
+      # - func: upload-github-release
+
+  # ---------- macOS (x64 / arm64) -------------------------------
+  - name: build-macos
+    commands:
+      - func: fetch-source
+      - func: setup-rust-macos
+      - func: extract-version
+      - func: make-build
+      - func: run-tests-unix
+      - func: package-unix
+      - func: macos-sign-notify # notarize the macOS app
+      # - func: install-gh-cli
+      # - func: upload-github-release
+
+  # ---------- Windows -------------------------------------------
+  - name: build-windows
+    commands:
+      - func: fetch-source
+      - command: shell.exec
+        params:
+          working_dir: kingfisher
+          shell: cmd.exe 
+          add_expansions_to_env: true 
+          script: |
+            .\buildwin.bat -force
+      - func: extract-version
+      - func: run-tests-windows
+      - func: package-windows
+      # - func: install-gh-cli
+      # - func: upload-github-release
+
+########################
+#    BUILD VARIANTS    #
+########################
+buildvariants:
+
+  # ---- Linux ----------------------------------------------------
+  - name: linux-x64-docker
+    display_name: "🐧 Linux x64"
+    run_on: rhel80-docker-medium
+    expansions:
+      <<: *cdn
+      BUILD: linux-x64
+    tasks: [build-linux-docker]
+
+  - name: linux-arm64-docker
+    display_name: "🐧 Linux arm64"
+    run_on: ubuntu2404-arm64-latest-small
+    expansions:
+      <<: *cdn  
+      BUILD: linux-arm64
+    tasks: [build-linux-docker]
+
+  # ---- macOS ----------------------------------------------------
+  - name: darwin-x64
+    display_name: "🍎 macOS x64"
+    run_on: macos-14
+    expansions:
+      <<: *cdn  
+      BUILD: darwin-x64
+    tasks: [build-macos]
+
+  - name: darwin-arm64
+    display_name: "🍎 macOS arm64"
+    run_on: macos-14-arm64-gui
+    expansions:
+      <<: *cdn  
+      BUILD: darwin-arm64
+    tasks: [build-macos]
+
+  # ---- Windows --------------------------------------------------
+  - name: windows-x64
+    display_name: "🪟 Windows x64"
+    run_on: windows-2022-large
+    expansions:
+      <<: *cdn
+      BUILD: "windows-x64"
+      garasign_jsign_image: 901841024863.dkr.ecr.us-east-1.amazonaws.com/release-infrastructure/garasign-jsign:latest
+      garasign_jsign_username: ${GARASIGN_USER1_USERNAME|}
+      garasign_jsign_password: ${GARASIGN_USER1_PASSWORD|}
+    tasks: [build-windows]

@@ -1,0 +1,33 @@
+rules:
+  - name: RocketReach API Key
+    id: kingfisher.rocketreach.1
+    pattern: |
+      (?xi)
+      \b
+      rocketreach
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9-]{39}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - rocketreach_key = 12345678-abcd-efgh-ijkl-mnop-qrst-uvwx-yz90
+      - rocketreach_secret = a1b2c3d4-e5f6-g7h8-i9j0-klmn-opqr-stuv-wxyz
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Api-Key: "{{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: "https://api.rocketreach.co/v2/api/account"

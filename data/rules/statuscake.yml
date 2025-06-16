@@ -1,0 +1,33 @@
+rules:
+  - name: Statuscake API Key
+    id: kingfisher.statuscake.1
+    pattern: |
+      (?xi)
+      \b
+      statuscake
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{20}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "statuscake_token=ABCDEF12345678901234"
+      - "statuscake_private=abcdEFghij1234567890"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://api.statuscake.com/v1/ssl"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

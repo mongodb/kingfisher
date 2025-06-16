@@ -1,0 +1,30 @@
+rules:
+  - name: FTP URI Password
+    id: kingfisher.ftp.1
+    pattern: |
+      (?xi)
+      \b
+      ftp://[\S]{3,50}:
+      (
+        [\S]{3,50}
+      )
+      @[-.%\w/:]+
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "ftp://username:password@ftp.example.com:21"
+      - "ftp://user:secret@ftp.trusted.com"
+      - "ftp://anon:anon123@ftp.trusted.com"
+    validation:
+      type: Http
+      content:
+        request:
+          user: "{{ USER }}"
+          password: "{{ TOKEN }}"
+          method: FTP_LOGIN
+          url: "ftp://{{ HOST }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

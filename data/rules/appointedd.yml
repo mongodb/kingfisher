@@ -1,0 +1,32 @@
+rules:
+  - name: Appointedd API Key
+    id: kingfisher.appointedd.1
+    pattern: |
+      (?xi)
+      \b
+      appointedd
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9=+]{88}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - appointedd_SECRET=examplevalidkeyABCDEFGHIJKLMNOPQRSTUVWXYYZABCDEFGHIJKLMNOPQRSTUVWXYYZABCDEFGHIJKLMNOPQRS=
+      - appointedd_TOKEN=ABCD1234EFGH5678IJKL9012MNOP3456QRST7890UVWX2345YZAB6789CDEF0123UVWX4567YZAB6789CDEF0123UVWX=
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            X-API-KEY: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"total"'
+          url: https://api.appointedd.com/v1/availability/slots

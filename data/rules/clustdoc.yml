@@ -1,0 +1,33 @@
+rules:
+  - name: ClustDoc API Key
+    id: kingfisher.clustdoc.1
+    pattern: |
+      (?xi)
+      \b
+      clustdoc
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{60}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - clustdoc_key=bu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWDEFGHIJKLMNOPQRSTUVWXYZ12
+      - clustdoc_token=bu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWdefghijklmnopqrstuvwxyz12
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://clustdoc.com/api/users

@@ -1,0 +1,36 @@
+rules:
+  - name: Mesibo API Key
+    id: kingfisher.mesibo.1
+    pattern: |
+      (?xi)
+      \b
+      mesibo
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - mesibo_token=abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789
+      - mesibo_key=a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.mesibo.com/api.php?op=useradd&token={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words: 
+                - '"error":"AUTHFAIL"'
+              negative: true
+            - type: JsonValid

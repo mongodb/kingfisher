@@ -1,0 +1,32 @@
+rules:
+  - name: ZeroTier API Key
+    id: kingfisher.zerotier.1
+    pattern: |
+      (?xi)
+      \b
+      zerotier
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - zerotier_token = qPqfOr5cib1mV8zj5fvthiDUhYPjTan4
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "token {{ TOKEN }}"
+          method: GET
+          url: https://api.zerotier.com/api/v1/network
+          response_matcher:
+            - report_response: true
+              type: StatusMatch
+              status:
+                - 200

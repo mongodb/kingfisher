@@ -1,0 +1,27 @@
+rules:
+  - name: ClickUp Personal Token
+    id: kingfisher.clickup.1
+    pattern: |
+      (?x)
+      \b
+      (
+        pk_[0-9]{7,8}_[0-9A-Z]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - pk_1234567_ABCDEFGHJKLMN1234567890OPQRS1234
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.clickup.com/api/v2/user

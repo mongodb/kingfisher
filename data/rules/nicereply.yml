@@ -1,0 +1,29 @@
+rules:
+  - name: Nicereply API Key
+    id: kingfisher.nicereply.1
+    pattern: |
+      (?xi)
+      \b
+      nicereply
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-f]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "nicereply 1234567890abcdef1234567890abcdef12345678"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ (":" | append: TOKEN) | b64enc }}'
+          method: GET
+          url: "https://api.nicereply.com/v1/users/stats"
+          response_matcher:
+            - status:
+                - 200
+              type: StatusMatch

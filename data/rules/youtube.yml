@@ -1,0 +1,27 @@
+rules:
+  - name: YouTube API Key
+    id: kingfisher.youtube.1
+    pattern: |
+      (?x)                   
+      (?i)                   
+      youtube
+      (?:.|[\n\r]){0,64}?
+      \b                     
+      (?<KEYFIRSTHALF>
+        [a-z0-9_-]{14}
+      )
+      -
+      (?<CHANNELID>
+        [a-z0-9_]{24}
+      )
+      \b                     
+    min_entropy: 2.0
+    confidence: medium
+    examples:
+      - '"youtube":{"api_key":"***REMOVED***"'
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://www.googleapis.com/youtube/v3/channelSections?key={{ KEYFIRSTHALF }}-{{ CHANNELID }}&channelId={{ CHANNELID }}

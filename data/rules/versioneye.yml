@@ -1,0 +1,34 @@
+rules:
+  - name: VersionEye API Key
+    id: kingfisher.versioneye.1
+    pattern: |
+      (?xi)
+      \b
+      versioneye
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9-]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - versioneye_key=versioneyeSECRETkey-1234567890123456789012345678901234567890
+      - versioneyePRIVATEversioneye_KEYversioneye-0987654321098765432109876543210987654321
+      - versioneyeACCESS-abcdef1234567890abcdef1234567890abcdef12
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            apiKey: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://www.versioneye.com/api/v1/scans

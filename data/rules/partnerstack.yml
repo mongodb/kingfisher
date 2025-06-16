@@ -1,0 +1,33 @@
+rules:
+  - name: PartnerStack API Key
+    id: kingfisher.partnerstack.1
+    pattern: |
+      (?xi)
+      \b
+      partnerstack
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9A-Za-z]{64}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "partnerstack_key=abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
+      - "PARTNERSTACK_ACCESS_TOKEN=XYZ9876543210ABC9876543210ABC9876543210ABC9876543210ABC9876543210"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.partnerstack.com/api/v2/partnerships

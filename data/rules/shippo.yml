@@ -1,0 +1,21 @@
+rules:
+  - name: Shippo API token
+    id: kingfisher.shippo.1
+    pattern: (?xi)shippo_(live|test)_[a-f0-9]{40}
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - shippo_test_b14c9D8f7B6D3604928Ada4506bE9c3C9B4cEF0b
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: ShippoToken {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.goshippo.com/v1/account

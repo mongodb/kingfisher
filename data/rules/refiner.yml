@@ -1,0 +1,41 @@
+rules:
+  - name: Refiner API Key
+    id: kingfisher.refiner.1
+    pattern: |
+      (?xi)
+      \b
+      refiner
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-fA-F]{8}
+        -
+        [0-9a-fA-F]{4}
+        -
+        [0-9a-fA-F]{4}
+        -
+        [0-9a-fA-F]{4}
+        -
+        [0-9a-fA-F]{12}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "refiner-123e4567-e89b-12d3-a456-426614174000"
+      - "refiner-abc12345-6789-0abc-1def-23456789abcd"
+    validation:
+      type: Http
+      content:
+        request:
+          body: "id=Your-User-Id&event=Your%20event%20name"
+          headers:
+            Content-Type: "application/x-www-form-urlencoded"
+            Authorization: "Bearer {{ TOKEN }}"
+          method: POST
+          url: "https://api.refiner.io/v1/identify-user"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

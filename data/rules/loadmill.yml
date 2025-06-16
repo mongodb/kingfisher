@@ -1,0 +1,36 @@
+rules:
+  - name: Loadmill API Key
+    id: kingfisher.loadmill.1
+    pattern: |
+      (?xi)
+      \b
+      loadmill
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - loadmill SECRET a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0
+      - loadmill PRIVATE TOKEN k9l8m7n6o5p4q3r2s1t0a1b2c3d4e5f6g7h8i9j0
+    references:
+      - https://loadmill.com/documentation
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: "application/vnd.loadmill+json; version=3"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://app.loadmill.com/api/v1/labels?filter=CI_enable

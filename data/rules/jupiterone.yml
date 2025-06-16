@@ -1,0 +1,35 @@
+rules:
+  - name: JupiterOne API Key
+    id: kingfisher.jupiterone.1
+    pattern: |
+      (?xi)
+      \b
+      jupiterone
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{76}
+      )
+    min_entropy: 3.8
+    confidence: medium
+    examples:
+      - jupiterone SECRET abcdefghi1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijlmnopqrstu12345678901234
+      - jupiterone PRIVATE 1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnoABCDEFGHIJKLMOPQRSTUVWXYZ12
+      - jupiterone ACCESS_KEY 890abcdefghijklmnoABCDEFGHIJKLMOPQRSTUVWXYZ1234567890abcdefghijklmnopqrstuvwxyz
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            JupiterOne-Account: "12345678-1234-1234-1234-123412341234"
+            Content-Type: "application/json"
+          method: POST
+          url: https://graphql.us.jupiterone.io/
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

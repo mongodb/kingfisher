@@ -1,0 +1,34 @@
+rules:
+  - name: CryptoCompare API Key
+    id: kingfisher.cryptocompare.1
+    pattern: |
+      (?xi)
+      \b
+      cryptocompare
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9]{64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - cryptocompare SECRET=abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234
+      - cryptocompare ACCESS abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234
+    validation:
+      type: Http
+      content:
+        request:
+          url: https://min-api.cryptocompare.com/data/blockchain/list?api_key={{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200
+            - type: WordMatch
+              words:
+                - '"Response":"Success"'

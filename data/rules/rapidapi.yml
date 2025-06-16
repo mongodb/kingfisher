@@ -1,0 +1,33 @@
+rules:
+  - name: RapidAPI Key
+    id: kingfisher.rapidapi.1
+    pattern: |
+      (?xi)
+      \b
+      rapidapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Za-z0-9_-]{50}
+      )
+      \b
+    min_entropy: 4.5
+    confidence: high
+    examples:
+      - rapidapi_key=abcdefghij1234567890ABCDEFGHIJ1234567890abcdefghij
+      - '"rapidapiKey":"ABCDEFGHIJ1234567890abcdefghij1234567890ABCDEFGHIJ"'
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            x-rapidapi-key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://covid-19-tracking.p.rapidapi.com/v1

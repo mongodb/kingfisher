@@ -1,0 +1,34 @@
+rules:
+  - name: APITemplate API Key
+    id: kingfisher.apitemplate.1
+    pattern: |
+      (?xi)
+      \b
+      apitemplate
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-zA-Z]{39}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "apitemplate SECRET: bu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOW"
+      - "apitemplateKEY bu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOW"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+            X-API-KEY: "{{ TOKEN }}"
+          method: GET
+          url: "https://api.apitemplate.io/v1/list-templates"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,34 @@
+rules:
+  - name: Tradier API Key
+    id: kingfisher.tradier.1
+    pattern: |
+      (?xi)
+      \b
+      tradier
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{28}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - "tradier_token=ABCDEF123456GHIJKL7890MNOPQR"
+    references:
+      - https://docs.tradier.com/brokerage
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          url: "https://api.tradier.com/v1/watchlists"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status:
+                - 200

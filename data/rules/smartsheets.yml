@@ -1,0 +1,31 @@
+rules:
+  - name: Smartsheets API Key
+    id: kingfisher.smartsheets.1
+    pattern: |
+      (?xi)
+      \b
+      smartsheets
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-zA-Z0-9]{37}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - smartsheets=1234567890abcdefghijklmnopqrstuvwxyzA
+      - smartsheets_token=ABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890a
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.smartsheet.com/2.0/sheets

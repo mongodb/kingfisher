@@ -1,0 +1,32 @@
+rules:
+  - name: Documo API Key
+    id: kingfisher.documo.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        ey[a-zA-Z0-9]{34}
+        \.
+        ey[a-zA-Z0-9]{154}
+        \.
+        [a-zA-Z0-9_-]{43}
+      )
+      \b
+    min_entropy: 4.5
+    confidence: medium
+    examples:
+      - eyA1ZXWmv5R8rysmZi54NagJwFwd7y5Dcmda.eyA1ZXWmv5R8rysmZi54NagJwFwd7y5DcmeyA1ZXWdkmv5R8rysmZi54NbgJwFwd7y5DcmeyA1ZXWmv5R8rysmZi54NdgJwFwd7y5DcmeyA1ZXWmv5R8rysmZi54NugJwFwd7y5DcmeyA1ZXWmv5R8rysmZi.ceyA1ZXWmv5R8rysmZi54NrgJwFwd7y5Dcmy5Dcmy5D
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: "application/json"
+            Authorization: "Basic {{ TOKEN }}"
+          method: GET
+          url: "https://api.documo.com/v1/me"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

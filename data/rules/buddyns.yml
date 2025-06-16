@@ -1,0 +1,34 @@
+rules:
+  - name: BuddyNS API Key
+    id: kingfisher.buddyns.1
+    pattern: |
+      (?xi)
+      \b
+      buddyns
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [0-9a-z]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - buddynsSECRET=123e4567e89b12d3a456426614174000abcde000
+      - buddynsPRIVATE=abcdefabcdefabcdefabcdefabcdefabcdefabcd
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            Authorization: Token {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://www.buddyns.com/api/v2/zone/

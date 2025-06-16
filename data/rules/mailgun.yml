@@ -1,0 +1,67 @@
+rules:
+  - name: MailGun Token
+    id: kingfisher.mailgun.1
+    pattern: |
+      (?x)                   
+      (?i)                   
+      \b                     
+      mailgun
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b                     
+      (                      
+        [a-z0-9-]{72}
+      )              
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - mailgun_api_key=abcdef123456abcdef123456abcdef123456abcdef123456abcdef123456abcdef123456
+    categories:
+      - api
+      - key
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Basic {{ TOKEN | b64enc }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.mailgun.net/v3/domains
+  - name: MailGun Primary Key
+    id: kingfisher.mailgun.2
+    pattern: |
+      (?x)                  
+      (?i)
+      (?:mailgun|mg)
+      (?:.|[\n\r]){0,64}?
+      \b
+      (                      
+        key-[a-z0-9]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - key-mailgun_token= key-ad13dfc23adf55fa404a91e76d96f472
+    categories:
+      - api
+      - identifier
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: 'Basic {{ "api:" | append: TOKEN | b64enc }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.mailgun.net/v3/domains

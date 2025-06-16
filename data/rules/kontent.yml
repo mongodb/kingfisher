@@ -1,0 +1,33 @@
+rules:
+  - name: Kontent API Key
+    id: kingfisher.kontent.1
+    pattern: |
+      (?xi)
+      \b                       
+      kontent
+      (?:.|[\n\r]){0,8}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-z0-9\-]{36}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - kontent_key = 123e4567-e89b-12d3-a456-426614174000
+    references:
+      - "https://kontent.ai"
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+          method: GET
+          url: https://deliver.kontent.ai/{{ TOKEN }}/items
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

@@ -1,0 +1,3 @@
+[profile.default]
+# Hard limit: kill any single test that runs longer than 5 minutes
+test-timeout = "5m"

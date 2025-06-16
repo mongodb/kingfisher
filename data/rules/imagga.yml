@@ -1,0 +1,33 @@
+rules:
+  - name: Imagga API Key
+    id: kingfisher.imagga.1
+    pattern: |
+      (?xi)
+      \b
+      imagga
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-z0-9A-Z=]{72}
+      )
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - imaggaSECRET ImaggaABCDEFGHIJKLMNOPQRSTUVWX0123456789abcdefghijklmnopqrstuvwx0123456789=+
+      - imaggaTOKEN zyxwvutsrqponmlkjihgfedcba9876543210ZYXWVUTSRQPONMLKJIHGFEDCBA9876543210+=
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Content-Type: application/json
+            Authorization: Basic {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.imagga.com/v2/usage

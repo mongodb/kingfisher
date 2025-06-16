@@ -1,0 +1,26 @@
+rules:
+  - name: Zapier Webhook URL
+    id: kingfisher.zapierwebhook.1
+    pattern: |
+      (?xi)
+      \b
+      https:\/\/hooks\.zapier\.com\/hooks\/catch\/
+      \b
+      (
+        [A-Za-z0-9\/]{16}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - https://hooks.zapier.com/hooks/catch/abcd1234efgh5678
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: "https://hooks.zapier.com/hooks/catch/{{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch

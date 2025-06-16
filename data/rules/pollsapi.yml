@@ -1,0 +1,32 @@
+rules:
+  - name: PollsAPI Key
+    id: kingfisher.pollsapi.1
+    pattern: |
+      (?xi)
+      \b
+      pollsapi
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Z0-9]{28}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - pollsapi SECRET ABCDEFGHIJKLMNOPQRSTUVWXYX12
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            api-key: '{{ TOKEN }}'
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.pollsapi.com/v1/get/polls?offset=0&limit=10

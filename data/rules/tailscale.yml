@@ -1,0 +1,30 @@
+rules:
+  - name: Tailscale API Key
+    id: kingfisher.tailscale.1
+    pattern: |
+      (?x)
+      (?i)
+      \b
+      (
+        tskey-[a-z]+-[0-9A-Za-z_]+-[0-9A-Za-z_]+
+      )
+      \b
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - tskey-secret-12345678-abcd
+      - tskey-api-abcdefg-123456789
+    validation:
+      type: Http
+      content:
+        request:
+          body: key={{ TOKEN }}
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.tailscale.com/api/v2/secret-scanning/verify

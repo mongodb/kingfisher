@@ -1,0 +1,35 @@
+rules:
+  - name: Intercom API Token
+    id: kingfisher.intercom.1
+    pattern: |
+      (?xi)
+      \b
+      intercom
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Za-z0-9+/]{59}=
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'intercom_access_token: dG9rOvI0NmJlMTA5XzQwM2NfNDVlM184MjQzXzkwMDnmOTE1NGIyONoxOjA= \n"'
+    categories:
+      - api
+      - identifier
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Accept: application/json
+            Authorization: Bearer {{ TOKEN }}
+          method: GET
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+          url: https://api.intercom.io/contacts?per_page=5
