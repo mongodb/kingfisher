@@ -28,7 +28,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp target/release/kingfisher-linux-x64.tar.gz dist/
+          cp target/release/kingfisher-linux-x64.tgz dist/
 
       - uses: actions/upload-artifact@v4
         with:
@@ -56,7 +56,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp target/release/kingfisher-linux-arm64.tar.gz dist/
+          cp target/release/kingfisher-linux-arm64.tgz dist/
 
       - uses: actions/upload-artifact@v4
         with:
@@ -85,7 +85,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp target/release/kingfisher-darwin-x64.tar.gz  dist/
+          cp target/release/kingfisher-darwin-x64.tgz  dist/
 
       - uses: actions/upload-artifact@v4
         with:
@@ -114,7 +114,7 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist
-          cp target/release/kingfisher-darwin-arm64.tar.gz dist/
+          cp target/release/kingfisher-darwin-arm64.tgz dist/
 
       - uses: actions/upload-artifact@v4
         with:
