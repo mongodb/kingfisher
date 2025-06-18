@@ -1,0 +1,178 @@
+name: build-and-release
+
+on:
+  push:
+    branches:
+      - main          # runs when a merge lands on actions-test
+
+jobs:
+  # ──────────────── Linux (via Makefile) ────────────────
+  linux-x64:
+    name: Linux x64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.85.0
+          profile: minimal
+          override: true
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: Build (Makefile ubuntu-x64)
+        run: make ubuntu-x64
+
+      - name: Move artifact to dist
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/kingfisher-linux-x64.tar.gz dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kingfisher-linux-x64
+          path: dist/kingfisher-*linux-x64*.*
+
+  linux-arm64:
+    name: Linux arm64
+    runs-on: ubuntu-24.04-arm
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.85.0
+          profile: minimal
+          override: true
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: Build (Makefile ubuntu-arm64)
+        run: make ubuntu-arm64
+
+      - name: Move artifact to dist
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/kingfisher-linux-arm64.tar.gz dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kingfisher-linux-arm64
+          path: dist/kingfisher-*linux-arm64*.*
+
+
+  macos-x64:
+    name: macOS x64
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.85.0
+          profile: minimal
+          override: true
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: Build Darwin x64
+        run: make darwin-x64
+
+      - name: Move artifacts to dist
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/kingfisher-darwin-x64.tar.gz  dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kingfisher-darwin-
+          path: dist/kingfisher-*darwin-x64*.*
+
+
+  macos-arm64:
+    name: macOS arm64
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.85.0
+          profile: minimal
+          override: true
+
+      - uses: swatinem/rust-cache@v2
+
+      - name: Build Darwin arm64
+        run: make darwin-arm64
+
+      - name: Move artifacts to dist
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/kingfisher-darwin-arm64.tar.gz dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kingfisher-darwin-
+          path: dist/kingfisher-*darwin-arm64*.*
+
+
+  # ──────────────── Windows ────────────────
+  windows:
+    name: Windows x64
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions-rs/toolchain@v1
+        with:
+          toolchain: 1.85.0           # keep in sync with `required_rust`
+          profile: minimal
+          override: true
+
+      - uses: Swatinem/rust-cache@v2 
+      - name: Build
+        run: .\buildwin.bat -force
+        shell: cmd
+
+      - name: Move artifact to dist
+        shell: bash
+        run: |
+          mkdir -p dist
+          cp target/release/kingfisher-windows-x64.zip dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: kingfisher-windows-x64
+          path: dist/kingfisher-*windows-x64*.*
+
+    # ──────────────── Draft public release ────────────────
+  release:
+    name: Public GitHub Release
+    needs: [linux-x64, linux-arm64, windows, macos-x64, macos-arm64] # wait for all builds to finish
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write     # allow release upload
+    steps:
+      - uses: actions/checkout@v4
+      - name: Read version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(grep -m1 '^version\s*=' Cargo.toml | cut -d '"' -f2)
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@v4
+        with:
+          path: target/release/kingfisher-*
+          merge-multiple: true
+      - name: Create release & upload assets
+        uses: ncipollo/release-action@v1
+        with:
+          tag: v${{ steps.version.outputs.version }}
+          name: "Kingfisher v${{ steps.version.outputs.version }}"
+          bodyFile: CHANGELOG.md       # use existing changelog
+          generateReleaseNotes: false  # turn off auto-notes
+          artifacts: target/release/**
