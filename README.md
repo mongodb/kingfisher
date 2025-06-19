@@ -34,7 +34,11 @@ By integrating Kingfisher into your development lifecycle, you can:
 
 ### Installation
 
-Build for your platform via `make`:
+On macOS, you can simply `brew install kingfisher`
+
+Pre-built binaries are also available on the [Releases](https://github.com/mongodb/kingfisher/releases) section of this page.
+
+Or you may compile for your platform via `make`:
 
 ```bash
 # Linux (x64 and arm64)
@@ -174,12 +178,6 @@ export KF_GITLAB_TOKEN="glpat-…"
 | 205  | Validated findings discovered       |
 
 ---
-## Exit Codes
-
-- `0`: No findings
-- `200`: Findings discovered
-- `205`: Validated findings discovered
-
 
 ## Custom Rules
 
@@ -243,14 +241,6 @@ See ([docs/FINGERPRINT.md](docs/FINGERPRINT.md))
 kingfisher scan --help
 ```
 
-## Benchmark Results
-
-See ([docs/COMPARISON.md](docs/COMPARISON.md))
-# License
-
-[Apache2 License](LICENSE)
-
-
 
 ## The Risk of Leaked Secrets
 
@@ -278,4 +268,11 @@ Embedding credentials in code repositories is a pervasive, ever‑present risk t
 
 Left unchecked, leaked secrets can lead to unauthorized access, pivoting within your environment, regulatory fines, and brand‑damaging incident response costs.
 
----
+## Benchmark Results
+
+See ([docs/COMPARISON.md](docs/COMPARISON.md))
+# License
+
+[Apache2 License](LICENSE)
+
+
