@@ -21,8 +21,8 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
 
-      - name: Build (Makefile ubuntu-x64)
-        run: make ubuntu-x64
+      - name: Build (Makefile linux-x64)
+        run: make linux-x64
 
       - name: Move artifact to dist
         shell: bash
@@ -49,8 +49,8 @@ jobs:
 
       - uses: swatinem/rust-cache@v2
 
-      - name: Build (Makefile ubuntu-arm64)
-        run: make ubuntu-arm64
+      - name: Build (Makefile linux-arm64)
+        run: make linux-arm64
 
       - name: Move artifact to dist
         shell: bash
