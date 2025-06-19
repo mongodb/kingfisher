@@ -3,7 +3,7 @@ name: build-and-release
 on:
   push:
     branches:
-      - main          # runs when a merge lands on actions-test
+      - main
 
 jobs:
   # ──────────────── Linux (via Makefile) ────────────────
@@ -138,6 +138,15 @@ jobs:
       - name: Build
         run: .\buildwin.bat -force
         shell: cmd
+
+      - name: Run tests
+        shell: pwsh
+        run: |
+          if (-not (Get-Command cargo-nextest -ErrorAction SilentlyContinue)) {
+            cargo install --locked cargo-nextest
+          }
+          Write-Host "▶ cargo nextest run --release --workspace --all-targets"
+          cargo nextest run --release --workspace --all-targets
 
       - name: Move artifact to dist
         shell: bash
