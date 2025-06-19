@@ -89,8 +89,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kingfisher-darwin-
-          path: dist/kingfisher-*darwin-x64*.*
+          name: kingfisher-darwin-x64.tgz
+          path: dist/kingfisher-darwin-x64.tgz
 
 
   macos-arm64:
@@ -118,8 +118,8 @@ jobs:
 
       - uses: actions/upload-artifact@v4
         with:
-          name: kingfisher-darwin-
-          path: dist/kingfisher-*darwin-arm64*.*
+          name: kingfisher-darwin-arm64.tgz
+          path: dist/kingfisher-darwin-arm64.tgz
 
 
   # ──────────────── Windows ────────────────
