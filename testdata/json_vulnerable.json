@@ -1,0 +1,25 @@
+{
+    "glossary": {
+        "title": "example glossary",
+        "somedata1": ["foo", "bar"],
+		"GlossDiv": {
+            "title": "S",
+			"GlossList": {
+                "GlossEntry": {
+                    "ID": "SGML",
+					"SortAs": "SGML",
+					"password": "blink182",
+					"Acronym": "qwerty123",
+					"Abbrev": "ISO 8879:1986",
+                    "aws_key_id": "AKIA6ODU5DHT7VPXGCE4",
+                    "aws_secret": "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",
+					"GlossDef": {
+                        "para": "A meta-markup language, used to create markup languages such as DocBook.",
+						"GlossSeeAlso": ["GML", "XML"]
+                    },
+					"GlossSee": "markup"
+                }
+            }
+        }
+    }
+}

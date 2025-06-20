@@ -16,8 +16,7 @@ It lets the scanner **deduplicate** repeated hits of the *same logical issue* wh
 
 ### How the *reported* fingerprint is calculated
 
-1. **Rule SHA-1** – a hex digest of the rule’s pattern  
-   (`Rule::finding_sha1_fingerprint`, computed once when the rule is loaded).
+1. **Finding Bytes** – the matched finding pattern
 
 2. **Origin label** – one of  
    *`"git"`*, *`"file"`*, *`"ext"`*, identifying whether the hit came from a Git
@@ -29,13 +28,13 @@ It lets the scanner **deduplicate** repeated hits of the *same logical issue* wh
 Those four fields are concatenated:
 
 ```bash
-<rule_sha1_hex> + <origin_label> + <offset_start> + <offset_end>
+< finding_bytes> + <origin_label> + <offset_start> + <offset_end>
 ```
 
 The resulting buffer is hashed with **XXH3-64**, producing a single unsigned-64 value:
 
 ```bash
-rule-SHA1 + origin + start-offset + end-offset -> XXH3-64 -> finding_fingerprint
+finding-bytes + origin + start-offset + end-offset -> XXH3-64 -> finding_fingerprint
 ```
 
 
@@ -45,19 +44,24 @@ This fingerprint is what you see reported in the finding output.
 
 ### Why the rule’s SHA-1 is used (and not the secret)
 
-| Reason | Benefit |
-|--------|---------|
-| **No secret leakage** | Only the pattern’s hash is stored, never the credential text. |
-| **Stable across rotations** | If a key on the same line changes from `AKIA…AAA` to `AKIA…BBB`, the fingerprint stays the same, so dashboards don’t fill with near-duplicates. |
-| **Location uniqueness** | Offsets remain part of the hash, so two different lines (or two hits on one line) still get separate fingerprints. |
-| **Light-weight origin** | Using a coarse origin label avoids churn across commits while still separating Git-history scans from local-file scans. |
+The fingerprint is a [XXH3-64](https://github.com/Cyan4973/xxHash) hash of the following components concatenated together:
 
-*Engine-internal* code paths may use a secret-based fingerprint for caching and
-validation, but **all external reports use this rule-based fingerprint** to
-guarantee privacy.
+* The content of the matched secret.
+* A coarse-grained origin label (`git`, `file`, or `ext`).
+* The start and end byte-offsets of the match.
+
+This content-aware approach provides several benefits:
+
+| Reason                      | Benefit                                                                                                                                              |
+| --------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Accurate Secret Tracking** | If a key is rotated (e.g., from `AKIA…AAA` to `AKIA…BBB`), the new key correctly receives a new fingerprint. This allows for precise tracking of a secret's lifecycle. |
+| **Location Uniqueness** | Because byte offsets are part of the hash, two identical secrets found on different lines will have separate fingerprints.                             |
+| **Privacy-Safe by Design** | The fingerprint is a one-way hash, not the raw secret itself. This prevents sensitive credential data from being exposed in reports and logs.          |
+| **Light-weight Origin** | Using a coarse origin label (`git`, `file`, etc.) avoids fingerprint churn across commits while still separating findings from different types of scans. |
+
+This method ensures that every unique secret is tracked precisely, providing a clear and accurate picture of sensitive data exposure.
 
 ---
-
 ### Controlling deduplication
 
 By default the CLI **deduplicates** findings that share the same fingerprint, so you see only one entry even if the secret appears in multiple commits.
