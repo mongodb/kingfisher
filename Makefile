@@ -403,6 +403,15 @@ tests:
 	@echo "🔍 checking for cargo-nextest …"
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 	    echo "✅ cargo-nextest already present"; \
+	else \
+	    echo "📦 installing cargo-nextest …"; \
+	    cargo install --locked cargo-nextest || { \
+	        echo "⚠️  install failed – falling back to cargo test"; \
+	        cargo test --workspace --all-targets; exit $$?; }; \
+	fi
+	
+	@if command -v cargo-nextest >/dev/null 2>&1; then \
+	    echo "✅ cargo-nextest already present"; \
 	    echo "▶ running tests with nextest …"; \
 	    cargo nextest run; \
 	else \
