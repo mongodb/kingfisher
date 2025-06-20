@@ -405,9 +405,14 @@ tests:
 	    echo "✅ cargo-nextest already present"; \
 	else \
 	    echo "📦 installing cargo-nextest …"; \
-	    cargo install --locked cargo-nextest || { \
-	        echo "⚠️  install failed – falling back to cargo test"; \
-	        cargo test --workspace --all-targets; exit $$?; }; \
+	    cargo install --locked cargo-nextest || true; \
+	fi
+	@echo "▶ running tests …"; \
+	if command -v cargo-nextest >/dev/null 2>&1; then \
+	    cargo nextest run --workspace --all-targets; \
+	else \
+	    echo "⚠️  cargo-nextest unavailable – falling back to cargo test"; \
+	    cargo test --workspace --all-targets; \
 	fi
 
 clean:
