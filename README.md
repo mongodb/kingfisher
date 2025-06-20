@@ -12,47 +12,55 @@ Kingfisher is a blazingly fast secret‑scanning and validation tool built in Ru
 
 - **Performance**: Multi‑threaded, Hyperscan‑powered scanning for massive codebases
 - **Language‑Aware Accuracy**: AST parsing in 20+ languages via Tree‑Sitter reduces contextless regex matches. see [docs/PARSING.md](/docs/PARSING.md)
-- **Built‑In Validation**: 700+ rules with HTTP and service‑specific checks (AWS, Azure, GCP, etc.) to confirm if a detected string is a live credential—see [docs/RULES.md](/docs/RULES.md)
-- **Git Integration**: Scan local repos, remote GitHub orgs/users, or arbitrary GitHub repos.
-
-
-## Business Value
-
-By integrating Kingfisher into your development lifecycle, you can:
-
-- **Prevent Costly Breaches**  
-  Early detection of embedded credentials avoids expensive incident response, legal fees, and reputation damage
-- **Automate Compliance**  
-  Enforce secret‑scanning policies across GitOps, CI/CD, and pull requests to help satisfy SOC 2, PCI‑DSS, GDPR, and other standards  
-- **Reduce Noise, Focus on Real Threats**  
-  Validation logic filters out false positives and highlights only active, valid secrets (`--only-valid`)
-- **Accelerate Dev Workflows**  
-  Run in parallel across dozens of languages, integrate with GitHub Actions or any pipeline, and shift security left to minimize delays
+- **Built-In Validation**: 700+ built-in detection rules, many with live-credential validators that call the relevant service APIs (AWS, Azure, GCP, Stripe, etc.) to confirm a secret is active. You can extend or override the library by adding YAML-defined rules on the command line—see [docs/RULES.md](/docs/RULES.md) for details
+- **Git History Scanning**: Scan local repos, remote GitHub/GitLab orgs/users, or arbitrary GitHub/GitLab repos
 
 
 ## Getting Started
 
 ### Installation
 
-On macOS, you can simply `brew install kingfisher`
+On macOS, you can simply
+```bash
+brew install kingfisher
+```
 
 Pre-built binaries are also available on the [Releases](https://github.com/mongodb/kingfisher/releases) section of this page.
 
 Or you may compile for your platform via `make`:
 
 ```bash
-# Linux (x64 and arm64)
+# NOTE: Requires Docker
 make linux
+```
 
-# macOS (Apple Silicon and x64)
+```bash
+# macOS
 make darwin
+```
 
+```bash
 # Windows x64 --- requires building from a Windows host with Visual Studio installed
 ./buildwin.bat -force
-
-# Build all targets
-make all
 ```
+
+```bash
+# Build all targets
+make linux-all # builds both x64 and arm64
+make darwin-all # builds both x64 and arm64
+make all # builds for every OS and architecture supported
+```
+
+
+# Write Custom Rules!
+
+Kingfisher ships with 700+ rules with HTTP and service‑specific validation checks (AWS, Azure, GCP, etc.) to confirm if a detected string is a live credential.
+
+However, you may want to add your own custom rules, or modify a detection to better suit your needs / environment.
+
+First, review [docs/RULES.md](/docs/RULES.md) to learn how to create custom Kingfisher rules, or find a prompt to provide to an LLM (eg ChatGPT, Gemini, Claude, etc) to help generate one.
+
+Once you've done that, you can provide your custom rules (defined in a YAML file) and provide it to Kingfisher at runtime --- no recompiling required!
 
 # Usage
 
@@ -123,11 +131,13 @@ kingfisher scan --github-organization my-org
 ### Scan remote GitHub repository
 ```bash
 kingfisher scan --git-url https://github.com/org/repo.git
-```
 
+# Optionally provide a GitHub Token
+KF_GITHUB_TOKEN="ghp_…" kingfisher scan --git-url https://github.com/org/private_repo.git
+
+```
 ---
 ## Scanning GitLab
-
 
 ### Scan GitLab group (requires `KF_GITLAB_TOKEN`)
 ```bash
@@ -179,15 +189,6 @@ export KF_GITLAB_TOKEN="glpat-…"
 
 ---
 
-## Custom Rules
-
-Kingfisher ships with 700+ rules with HTTP and service‑specific validation checks (AWS, Azure, GCP, etc.) to confirm if a detected string is a live credential.
-
-However, you may want to add your own custom rules, or modify a detection to better suit your needs / environment.
-
-First, review [docs/RULES.md](/docs/RULES.md) to learn how to create custom Kingfisher rules, or find a prompt to provide to an LLM (eg ChatGPT, Gemini, Claude, etc) to help generate one.
-
-Once you've done that, you can provide your custom rules (defined in a YAML file) and provide it to Kingfisher at runtime --- no recompiling required!
 
 ### List Builtin Rules
 ```bash
@@ -240,6 +241,20 @@ See ([docs/FINGERPRINT.md](docs/FINGERPRINT.md))
 ```bash
 kingfisher scan --help
 ```
+
+
+## Business Value
+
+By integrating Kingfisher into your development lifecycle, you can:
+
+- **Prevent Costly Breaches**  
+  Early detection of embedded credentials avoids expensive incident response, legal fees, and reputation damage
+- **Automate Compliance**  
+  Enforce secret‑scanning policies across GitOps, CI/CD, and pull requests to help satisfy SOC 2, PCI‑DSS, GDPR, and other standards  
+- **Reduce Noise, Focus on Real Threats**  
+  Validation logic filters out false positives and highlights only active, valid secrets (`--only-valid`)
+- **Accelerate Dev Workflows**  
+  Run in parallel across dozens of languages, integrate with GitHub Actions or any pipeline, and shift security left to minimize delays
 
 
 ## The Risk of Leaked Secrets

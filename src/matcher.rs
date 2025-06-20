@@ -725,13 +725,18 @@ impl Match {
         origin_type: &'a str,
     ) -> Self {
         let offset_span = owned_blob_match.matching_input_offset_span;
-        let _matching_finding = owned_blob_match
+        // Extract the matched secret content. Use capture group 1 if it exists, otherwise fall back to group 0.
+        let matching_finding_bytes = owned_blob_match
             .captures
             .captures
             .get(1)
             .or_else(|| owned_blob_match.captures.captures.get(0))
-            .map(|capture| capture.value.as_bytes().to_vec())
-            .unwrap_or_else(Vec::new);
+            .map(|capture| capture.value.as_bytes())
+            .unwrap_or_default();
+
+        // The fingerprint will be based on the content of the secret.
+        let finding_value_for_fp = std::str::from_utf8(matching_finding_bytes).unwrap_or("");
+
         let source_span = loc_mapping.get_source_span(&offset_span);
         let rule_finding_fingerprint = owned_blob_match.rule.finding_sha1_fingerprint().to_owned();
 
@@ -740,7 +745,7 @@ impl Match {
         let offset_end: u64 = owned_blob_match.matching_input_offset_span.end.try_into().unwrap();
 
         let finding_fingerprint = compute_finding_fingerprint(
-            &rule_finding_fingerprint,
+            finding_value_for_fp,
             origin_type, // file_or_commit,
             offset_start,
             offset_end,
