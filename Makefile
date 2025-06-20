@@ -409,16 +409,6 @@ tests:
 	        echo "⚠️  install failed – falling back to cargo test"; \
 	        cargo test --workspace --all-targets; exit $$?; }; \
 	fi
-	
-	@if command -v cargo-nextest >/dev/null 2>&1; then \
-	    echo "✅ cargo-nextest already present"; \
-	    echo "▶ running tests with nextest …"; \
-	    cargo nextest run; \
-	else \
-	    echo "📦 falling back to cargo test …"; \
-	    cargo test --workspace --all-targets; \
-	fi
-
 
 clean:
 	@echo "Cleaning build artifacts..."
