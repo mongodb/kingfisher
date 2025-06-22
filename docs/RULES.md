@@ -52,7 +52,7 @@ rules:
           headers:
             X-Secret: "{{ TOKEN }}"
             X-Id:     "{{ AKID }}"
-          response_is_html: true # be default, validation responses containing HTML or considered invalid. Set to `true` if you expect HTML returned from a validation response
+          response_is_html: true # by default, validation responses containing HTML or considered invalid. Set to `true` if you expect HTML returned from a validation response
           response_matcher:
             - report_response: true   # always include raw payload
             - type: StatusMatch

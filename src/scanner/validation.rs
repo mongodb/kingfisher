@@ -89,7 +89,7 @@ pub async fn run_secret_validation(
 
         let validation_results = DashMap::<String, CachedResponse>::new();
 
-        let pb = ProgressBar::new(groups.len() as u64).with_message("Validating simple secrets…");
+        let pb = ProgressBar::new(groups.len() as u64).with_message("Validating secrets…");
         pb.set_style(
             ProgressStyle::with_template(
                 "{spinner:.green} {msg} [{bar:40.green/blue}] {pos}/{len} ({percent}%) \

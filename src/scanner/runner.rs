@@ -236,7 +236,7 @@ pub fn load_and_record_rules(
     datastore: &Arc<Mutex<findings_store::FindingsStore>>,
 ) -> Result<RulesDatabase> {
     let init_progress = ProgressBar::new_spinner();
-    init_progress.set_message("Compiling rules...");
+    // init_progress.set_message("Compiling rules...");
     let rules_db = {
         let loaded = RuleLoader::from_rule_specifiers(&args.rules)
             .load(args)

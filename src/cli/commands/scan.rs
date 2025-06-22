@@ -1,5 +1,6 @@
 use clap::{Args, ValueEnum};
 use strum::Display;
+use tracing::debug;
 
 use crate::{
     cli::{
@@ -13,16 +14,42 @@ use crate::{
     rules::rule::Confidence,
 };
 
-/// Determine the default number of parallel scan jobs by checking CPU core count and RAM.
+
+/// Determine the default number of parallel scan jobs.
+///
+/// * Target = `num_cpus * 2`.
+/// * Cap by RAM at ≈ 1 GiB per job (so 16 GiB ⇒ max 16 jobs).
+/// * Always ≥ 1.
+/// * When `-v/--verbose` is passed, the computed value is logged at DEBUG.
 fn default_scan_jobs() -> usize {
-    match (std::thread::available_parallelism(), *RAM_GB) {
-        (Ok(v), Some(ram_gb)) => {
-            let cpu_count = usize::from(v);
-            let max_cores = (ram_gb / 4.0).ceil().max(1.0) as usize;
-            cpu_count.clamp(1, max_cores)
+    // How many logical CPUs do we see? (Falls back to 1 on error.)
+    let cpu_count = std::thread::available_parallelism()
+        .map(usize::from)
+        .unwrap_or(1);
+
+    // Desired parallelism is CPU * 2.
+    let desired = cpu_count * 2;
+
+    match *RAM_GB {
+        // If we know how much RAM we have, cap by a 1 GiB-per-job heuristic.
+        Some(ram_gb) => {
+            let max_by_ram = ram_gb.ceil() as usize;     // 1 GiB per job
+            let jobs       = desired.min(max_by_ram).max(1);
+
+            debug!(
+                "Using {jobs} parallel scan jobs \
+                 (cpus = {cpu_count}, desired = {desired}, \
+                 ram = {ram_gb:.1} GiB, cap_by_ram = {max_by_ram})"
+            );
+            jobs
         }
-        (Ok(v), None) => usize::from(v),
-        (Err(_), _) => 1,
+        // If RAM is unknown, just use the desired value.
+        None => {
+            debug!(
+                "Using {desired} parallel scan jobs (cpus = {cpu_count}, ram unknown)"
+            );
+            desired
+        }
     }
 }
 

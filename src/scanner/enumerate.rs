@@ -128,7 +128,7 @@ pub fn enumerate_filesystem_inputs(
     let make_blob_processor = || -> BlobProcessor {
         let t1 = Instant::now();
         *num_blob_processors.lock().unwrap() += 1;
-        let guesser = Guesser::new().expect("should be able to create filetype guessser");
+        let guesser = Guesser::new().expect("should be able to create filetype guesser");
         {
             let mut init_time = blob_processor_init_time.lock().unwrap();
             *init_time += t1.elapsed();

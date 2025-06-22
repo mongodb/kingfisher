@@ -8,6 +8,8 @@
 Kingfisher is a blazingly fast secret‑scanning and validation tool built in Rust. It combines Intel’s hardware‑accelerated Hyperscan regex engine with language‑aware parsing via Tree‑Sitter, and **ships with 700+ built‑in rules** to detect, validate, and triage secrets before they ever reach production
 </p>
 
+**MongoDB Blog**: [Introducing Kingfisher: Real-Time Secret Detection and Validation](https://www.mongodb.com/blog/post/product-release-announcements/introducing-kingfisher-real-time-secret-detection-validation)
+
 ## Key Features
 
 - **Performance**: Multi‑threaded, Hyperscan‑powered scanning for massive codebases

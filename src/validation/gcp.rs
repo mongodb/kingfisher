@@ -9,9 +9,19 @@ use ring::{rand, signature};
 use serde_json::Value as JsonValue;
 use tokio::sync::Semaphore;
 use tracing::debug;
+use once_cell::sync::OnceCell;
+
+static GLOBAL_VALIDATOR: OnceCell<GcpValidator> = OnceCell::new();
 
 pub struct GcpValidator {
     semaphore: Arc<Semaphore>,
+    client: Client,
+}
+
+impl GcpValidator {
+    pub fn global() -> Result<&'static Self> {
+        GLOBAL_VALIDATOR.get_or_try_init(Self::new)
+    }
 }
 
 /// Generate a standardized cache key for GCP validation attempts.
@@ -26,7 +36,8 @@ impl GcpValidator {
     pub fn new() -> Result<Self> {
         const MAX_CONCURRENT_VALIDATIONS: usize = 500;
         let semaphore = Arc::new(Semaphore::new(MAX_CONCURRENT_VALIDATIONS));
-        Ok(Self { semaphore })
+        let client = Client::builder().build()?;
+        Ok(Self { semaphore, client })
     }
 
     pub async fn validate_gcp_credentials(&self, gcp_json: &[u8]) -> Result<(bool, Vec<String>)> {
@@ -58,8 +69,9 @@ impl GcpValidator {
         let jwt = self.create_jwt(client_email, private_key, token_uri)?;
 
         // Request an access token
-        let client = Client::new();
-        let response = client
+        // let client = Client::new();
+        let response = self
+            .client
             .post(token_uri)
             .form(&[
                 ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
