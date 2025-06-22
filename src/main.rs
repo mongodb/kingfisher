@@ -56,7 +56,7 @@ use serde_json::json;
 use tempfile::TempDir;
 use term_size;
 use tokio::runtime::Builder;
-use tracing::{debug, error, warn};
+use tracing::{info, error, warn};
 use tracing_core::metadata::LevelFilter;
 use tracing_subscriber::{
     self, fmt, prelude::__tracing_subscriber_SubscriberExt, registry, util::SubscriberInitExt,
@@ -77,7 +77,7 @@ fn main() -> anyhow::Result<()> {
         Command::GitLab(_) => num_cpus::get(), // Default for GitLab commands
         Command::Rules(_) => num_cpus::get(),  // Default for Rules commands
     };
-    debug!("Running with {} worker threads.", num_jobs);
+    
     // Set up the Tokio runtime with the specified number of threads
     let runtime = Builder::new_multi_thread()
         .worker_threads(num_jobs)
@@ -86,6 +86,7 @@ fn main() -> anyhow::Result<()> {
         .context("Failed to create Tokio runtime")?;
     runtime.block_on(async_main(args))
 }
+
 fn setup_logging(global_args: &GlobalArgs) {
     // Determine log level based on global verbosity
     let (level, all_targets) = if global_args.quiet {
@@ -166,6 +167,7 @@ async fn async_main(args: CommandLineArgs) -> Result<()> {
             // —————————————————————————————————————————
             // If no paths or a single "-", slurp stdin into a temp file
             // —————————————————————————————————————————
+            info!("Launching with {} concurrent scan jobs. Use --num-jobs to override.", &scan_args.num_jobs);
             let paths = &scan_args.input_specifier_args.path_inputs;
             let is_dash = paths.iter().any(|p| p.as_os_str() == "-");
             if (paths.is_empty() || is_dash) && !atty::is(atty::Stream::Stdin) {

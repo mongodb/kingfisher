@@ -12,8 +12,11 @@ use crate::cli::commands::{
 
 #[deny(missing_docs)]
 #[derive(Parser, Debug)]
-#[command(version = env!("CARGO_PKG_VERSION"))]
-/// Find secrets and sensitive information in textual data
+#[command(
+    version = env!("CARGO_PKG_VERSION"),
+    after_help = "Made with \u{2764} by MongoDB",
+)]
+/// Kingfisher by MongoDB — Detect and validate secrets across files and full Git history
 pub struct CommandLineArgs {
     /// The command to execute
     #[command(subcommand)]

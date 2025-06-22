@@ -32,7 +32,7 @@ mod postgres;
 mod utils;
 
 const VALIDATION_CACHE_SECONDS: u64 = 1200; // 20 minutes
-const MAX_VALIDATION_BODY_LEN: usize = 512;
+const MAX_VALIDATION_BODY_LEN: usize = 2048;
 
 // Use SkipMap-based cache instead of a mutex-wrapped FxHashMap.
 type Cache = Arc<SkipMap<String, CachedResponse>>;
@@ -788,22 +788,23 @@ async fn timed_validate_single_match<'a>(
                 }
             }
 
-            match gcp::GcpValidator::new() {
-                Ok(validator) => {
-                    match validator.validate_gcp_credentials(&gcp_json.as_bytes()).await {
-                        Ok((ok, meta)) => {
-                            m.validation_success = ok;
-                            m.validation_response_body = meta.join("\n");
-                            m.validation_response_status =
-                                if ok { StatusCode::OK } else { StatusCode::UNAUTHORIZED };
-                        }
-                        Err(e) => {
-                            m.validation_success = false;
-                            m.validation_response_body = format!("GCP validation error: {}", e);
-                            m.validation_response_status = StatusCode::BAD_GATEWAY;
-                        }
+            match gcp::GcpValidator::global() {
+                Ok(validator) => match validator.validate_gcp_credentials(&gcp_json.as_bytes()).await {
+                    Ok((ok, meta)) => {
+                        m.validation_success = ok;
+                        m.validation_response_body = meta.join("\n");
+                        m.validation_response_status = if ok {
+                            StatusCode::OK
+                        } else {
+                            StatusCode::UNAUTHORIZED
+                        };
                     }
-                }
+                    Err(e) => {
+                        m.validation_success = false;
+                        m.validation_response_body = format!("GCP validation error: {}", e);
+                        m.validation_response_status = StatusCode::BAD_GATEWAY;
+                    }
+                },
                 Err(e) => {
                     m.validation_success = false;
                     m.validation_response_body = format!("Failed to create GCP validator: {}", e);

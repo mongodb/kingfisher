@@ -107,34 +107,6 @@ impl LoadedRules {
         self.id_to_rule.values()
     }
 
-    // pub fn resolve_enabled_rules(&self) -> Result<Vec<&Rule>> {
-    //     let resolved_rules = match &self.enabled_rule_ids {
-    //         None => {
-    //             debug!("Using all available rules");
-    //             self.iter_rules().collect()
-    //         }
-    //         Some(enabled_ids) => {
-    //             let mut resolved = Vec::new();
-    //             for id in enabled_ids {
-    //                 if let Some(rule) = self.id_to_rule.get(id) {
-    //                     resolved.push(rule);
-    //                 } else {
-    //                     error!("Unknown rule `{}` encountered", id);
-    //                     bail!(RuleLoaderError::UnknownRule(id.clone()));
-    //                 }
-    //             }
-    //             resolved
-    //         }
-    //     };
-    //     let mut resolved_rules = resolved_rules;
-    //     sort_and_deduplicate_rules(&mut resolved_rules);
-    //     info!("Loaded {}", Counted::regular(resolved_rules.len(), "rule"),);
-    //     for rule in resolved_rules.iter() {
-    //         trace!("Using rule `{}`: {}", rule.id(), rule.name());
-    //     }
-    //     Ok(resolved_rules)
-    // }
-
     pub fn resolve_enabled_rules(&self) -> Result<Vec<&Rule>> {
         let resolved_rules = match &self.enabled_rule_ids {
             // No selectors ⇒ every rule is enabled
