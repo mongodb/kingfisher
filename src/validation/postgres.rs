@@ -51,6 +51,7 @@ pub async fn validate_postgres(postgres_url: &str) -> Result<(bool, Vec<String>)
 
 fn has_any_local_host(cfg: &Config) -> bool {
     cfg.get_hosts().iter().any(|h| match h {
+        #[cfg(unix)]
         Host::Unix(_) => true, // local unix socket
         Host::Tcp(s) => is_local_tcp_host(s),
     })
