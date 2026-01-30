@@ -2,9 +2,9 @@ rules:
   - name: Alibaba Access Key ID
     id: kingfisher.alibabacloud.1
     pattern: |
-      (?xi)
+      (?x)
       (
-        LTAI[a-z0-9]{17,21}
+        LTAI([a-zA-Z0-9]{12}|[a-zA-Z0-9]{20})
       )
       \b
     pattern_requirements:
