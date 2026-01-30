@@ -15,6 +15,7 @@ rules:
     confidence: medium
     visible: false
     examples:
+      - LTAI5tLaYtUxxx
       - LTAI8x2NiGqfyJGx7eLDhp12
       - LTAI5GqyJGhp12ad31L5hpix
   - name: Alibaba Access Key Secret
