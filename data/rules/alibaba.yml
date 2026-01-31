@@ -4,7 +4,7 @@ rules:
     pattern: |
       (?x)
       (
-        LTAI([a-zA-Z0-9]{20}|[a-zA-Z0-9]{12})
+        LTAI([a-zA-Z0-9]{12,20})
       )
       \b
     pattern_requirements:
