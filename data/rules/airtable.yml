@@ -2,13 +2,13 @@ rules:
   - name: Airtable Personal Access Token
     id: kingfisher.airtable.1
     pattern: |
-      (?xi)                    
+      (?x)                    
       \b                       
       (                        
         pat
-        [a-z0-9]{14}
+        [A-Za-z0-9]{14}
         \.                     
-        [a-z0-9]{64}
+        [a-f0-9]{64}
       )
       \b
     pattern_requirements:
