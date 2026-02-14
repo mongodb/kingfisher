@@ -19,6 +19,25 @@ env:
   VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
   RUST_TOOLCHAIN: "1.92"
 
+# Reusable step definitions (YAML anchors) to avoid repetition.
+# Use `- *install-rust-shell` or `- *install-rust-windows` in job `steps` lists.
+x-install-rust-shell: &install-rust-shell
+  name: Install Rust toolchain
+  shell: bash
+  run: |
+    curl https://sh.rustup.rs -sSf | sh -s -- -y --default-toolchain "${RUST_TOOLCHAIN}"
+    echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+x-install-rust-windows: &install-rust-windows
+  name: Install Rust toolchain (Windows)
+  shell: pwsh
+  run: |
+    $arch = "x86_64"
+    $url = "https://static.rust-lang.org/rustup/dist/$arch-pc-windows-msvc/rustup-init.exe"
+    Invoke-WebRequest -Uri $url -OutFile rustup-init.exe
+    Start-Process -FilePath .\rustup-init.exe -ArgumentList "-y", "--default-toolchain", "${env:RUST_TOOLCHAIN}" -Wait
+    Add-Content -Path $env:GITHUB_PATH -Value "$env:USERPROFILE\.cargo\bin"
+
 jobs:
   # ──────────────── Linux (via Makefile) ────────────────
   linux-x64:
@@ -37,11 +56,7 @@ jobs:
           sudo docker image prune --all --force
           df -h
 
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          profile: minimal
-          override: true
+      - *install-rust-shell
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -108,11 +123,7 @@ jobs:
           sudo docker image prune --all --force
           df -h
       
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          profile: minimal
-          override: true
+      - *install-rust-shell
       
       - uses: swatinem/rust-cache@v2
         with:
@@ -169,11 +180,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          profile: minimal
-          override: true
+      - *install-rust-shell
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -200,11 +207,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          profile: minimal
-          override: true
+      - *install-rust-shell
 
       - uses: swatinem/rust-cache@v2
         with:
@@ -241,11 +244,7 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: ${{ env.RUST_TOOLCHAIN }}
-          profile: minimal
-          override: true
+      - *install-rust-windows
 
       # Cache vcpkg artifacts & downloads (so we only fetch PCRE once)
       - name: Cache vcpkg artifacts
