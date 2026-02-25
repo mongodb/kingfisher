@@ -12,7 +12,7 @@
 .prettierrc
 custom.py
 logs/*
-*.patch
+!src/scanner/repos.rs!src/jira.rs*.patch
 *.orig
 *.rej
 *.html

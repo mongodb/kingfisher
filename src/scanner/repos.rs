@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use crossbeam_channel;
 use indicatif::{HumanCount, ProgressBar, ProgressStyle};
 use rayon::ThreadPoolBuilder;
+use serde_json;
 use tokio::time::Duration;
 use tracing::{debug, error, info};
 use url::Url;
@@ -647,6 +648,8 @@ pub async fn fetch_jira_issues(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
     datastore: &Arc<Mutex<findings_store::FindingsStore>>,
+    scan_comments: bool,
+    scan_changelog: bool,
 ) -> Result<Vec<PathBuf>> {
     let Some(jira_url) = args.input_specifier_args.jira_url.clone() else {
         return Ok(Vec::new());
@@ -655,20 +658,44 @@ pub async fn fetch_jira_issues(
         return Ok(Vec::new());
     };
     let max_results = args.input_specifier_args.max_results;
+    let ignore_certs = global_args.ignore_certs;
+    
     let output_dir = {
         let ds = datastore.lock().unwrap();
         ds.clone_root()
     };
     let output_dir = output_dir.join("jira_issues");
-    let _paths = jira::download_issues_to_dir(
-        jira_url,
-        jql,
-        max_results,
-        global_args.ignore_certs,
-        &output_dir,
-    )
-    .await?;
-    Ok(vec![output_dir])
+    std::fs::create_dir_all(&output_dir)?;
+    
+    let mut all_paths = Vec::new();
+    
+    // Fetch issues manually to process each one
+    let issues = jira::fetch_issues(jira_url.clone(), jql, max_results, ignore_certs).await?;
+    
+    for issue in issues {
+        let issue_key = issue.key.clone();
+        let issue_file = output_dir.join(format!("{}.json", issue_key));
+        std::fs::write(&issue_file, serde_json::to_vec(&issue)?)?;
+        all_paths.push(issue_file.clone());
+        
+        // Fetch and save comments if requested
+        if scan_comments {
+            let comments = jira::fetch_comments(jira_url.clone(), &issue_key, ignore_certs).await?;
+            let comments_file = output_dir.join(format!("{}-comments.json", issue_key));
+            std::fs::write(&comments_file, serde_json::to_vec(&comments)?)?;
+            all_paths.push(comments_file);
+        }
+        
+        // Fetch and save changelog if requested
+        if scan_changelog {
+            let changelog = jira::fetch_changelog(jira_url.clone(), &issue_key, ignore_certs).await?;
+            let changelog_file = output_dir.join(format!("{}-changelog.json", issue_key));
+            std::fs::write(&changelog_file, serde_json::to_vec(&changelog)?)?;
+            all_paths.push(changelog_file);
+        }
+    }
+    
+    Ok(all_paths)
 }
 
 pub async fn fetch_confluence_pages(

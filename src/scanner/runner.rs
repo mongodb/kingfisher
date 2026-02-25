@@ -357,7 +357,14 @@ async fn fetch_all_artifacts(
     }
 
     // Fetch Jira issues if requested
-    let jira_dirs = fetch_jira_issues(args, global_args, datastore).await?;
+    let jira_dirs = fetch_jira_issues(
+        args,
+        global_args,
+        datastore,
+        args.input_specifier_args.scan_comments,
+        args.input_specifier_args.scan_changelog,
+    )
+    .await?;
     input_roots.extend(jira_dirs);
 
     // Fetch Confluence pages if requested

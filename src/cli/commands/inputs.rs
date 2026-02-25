@@ -262,6 +262,14 @@ pub struct InputSpecifierArgs {
     #[arg(long, requires = "jira_url", hide = true)]
     pub jql: Option<String>,
 
+    /// Include Jira comments in the scan
+    #[arg(long = "with-jira-comments", default_value_t = false, hide = true)]
+    pub scan_comments: bool,
+
+    /// Include Jira changelogs in the scan
+    #[arg(long = "with-jira-changelogs", default_value_t = false, hide = true)]
+    pub scan_changelog: bool,
+
     /// Confluence base URL (e.g. https://confluence.example.com)
     #[arg(long, value_hint = ValueHint::Url, requires = "cql", hide = true)]
     pub confluence_url: Option<Url>,
