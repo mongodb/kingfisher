@@ -666,36 +666,30 @@ pub async fn fetch_jira_issues(
     };
     let output_dir = output_dir.join("jira_issues");
     std::fs::create_dir_all(&output_dir)?;
-    
-    let mut all_paths = Vec::new();
-    
-    // Fetch issues manually to process each one
+
     let issues = jira::fetch_issues(jira_url.clone(), jql, max_results, ignore_certs).await?;
-    
+
     for issue in issues {
-        let issue_key = issue.key.clone();
-        let issue_file = output_dir.join(format!("{}.json", issue_key));
-        std::fs::write(&issue_file, serde_json::to_vec(&issue)?)?;
-        all_paths.push(issue_file.clone());
-        
-        // Fetch and save comments if requested
+        std::fs::write(output_dir.join(format!("{}.json", issue.key)), serde_json::to_vec(&issue)?)?;
+
         if scan_comments {
-            let comments = jira::fetch_comments(jira_url.clone(), &issue_key, ignore_certs).await?;
-            let comments_file = output_dir.join(format!("{}-comments.json", issue_key));
-            std::fs::write(&comments_file, serde_json::to_vec(&comments)?)?;
-            all_paths.push(comments_file);
+            let comments = jira::fetch_comments(jira_url.clone(), &issue.key, ignore_certs).await?;
+            std::fs::write(
+                output_dir.join(format!("{}-comments.json", issue.key)),
+                serde_json::to_vec(&comments)?,
+            )?;
         }
-        
-        // Fetch and save changelog if requested
+
         if scan_changelog {
-            let changelog = jira::fetch_changelog(jira_url.clone(), &issue_key, ignore_certs).await?;
-            let changelog_file = output_dir.join(format!("{}-changelog.json", issue_key));
-            std::fs::write(&changelog_file, serde_json::to_vec(&changelog)?)?;
-            all_paths.push(changelog_file);
+            let changelog = jira::fetch_changelog(jira_url.clone(), &issue.key, ignore_certs).await?;
+            std::fs::write(
+                output_dir.join(format!("{}-changelog.json", issue.key)),
+                serde_json::to_vec(&changelog)?,
+            )?;
         }
     }
-    
-    Ok(all_paths)
+
+    Ok(vec![output_dir])
 }
 
 pub async fn fetch_confluence_pages(

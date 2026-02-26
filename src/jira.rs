@@ -7,26 +7,26 @@ use url::Url;
 // Re-export the Issue type from gouqi so callers don't depend on the crate directly.
 pub use gouqi::Issue as JiraIssue;
 
+fn build_jira_client(jira_url: &Url, ignore_certs: bool) -> Result<Jira> {
+    let base = jira_url.as_str().trim_end_matches('/');
+    let client = Client::builder()
+        .danger_accept_invalid_certs(ignore_certs)
+        .build()
+        .context("Failed to build HTTP client")?;
+    let credentials = match std::env::var("KF_JIRA_TOKEN") {
+        Ok(token) => Credentials::Bearer(token),
+        Err(_) => Credentials::Anonymous,
+    };
+    Ok(Jira::from_client(base.to_string(), credentials, client)?)
+}
+
 pub async fn fetch_issues(
     jira_url: Url,
     jql: &str,
     max_results: usize,
     ignore_certs: bool,
 ) -> Result<Vec<JiraIssue>> {
-    // build a &str without any trailing `/`
-    let base = jira_url.as_str().trim_end_matches('/');
-
-    let client = Client::builder()
-        .danger_accept_invalid_certs(ignore_certs)
-        .build()
-        .context("Failed to build HTTP client")?;
-
-    let credentials = match std::env::var("KF_JIRA_TOKEN") {
-        Ok(token) => Credentials::Bearer(token),
-        Err(_) => Credentials::Anonymous,
-    };
-
-    let jira = Jira::from_client(base.to_string(), credentials, client)?;
+    let jira = build_jira_client(&jira_url, ignore_certs)?;
 
     let search_options = SearchOptions::builder().max_results(max_results as u64).build();
 
@@ -61,21 +61,7 @@ pub async fn fetch_comments(
     issue_key: &str,
     ignore_certs: bool,
 ) -> Result<Vec<gouqi::Comment>> {
-    let base = jira_url.as_str().trim_end_matches('/');
-
-    let client = Client::builder()
-        .danger_accept_invalid_certs(ignore_certs)
-        .build()
-        .context("Failed to build HTTP client")?;
-
-    let credentials = match std::env::var("KF_JIRA_TOKEN") {
-        Ok(token) => Credentials::Bearer(token),
-        Err(_) => Credentials::Anonymous,
-    };
-
-    let jira = Jira::from_client(base.to_string(), credentials, client)?;
-
-    // Get the issue to access its comments
+    let jira = build_jira_client(&jira_url, ignore_certs)?;
     let issue = jira.issues().get(issue_key).await?;
     let comments = issue.comments().map(|c| c.comments).unwrap_or_default();
     Ok(comments)
@@ -87,20 +73,7 @@ pub async fn fetch_changelog(
     issue_key: &str,
     ignore_certs: bool,
 ) -> Result<gouqi::Changelog> {
-    let base = jira_url.as_str().trim_end_matches('/');
-
-    let client = Client::builder()
-        .danger_accept_invalid_certs(ignore_certs)
-        .build()
-        .context("Failed to build HTTP client")?;
-
-    let credentials = match std::env::var("KF_JIRA_TOKEN") {
-        Ok(token) => Credentials::Bearer(token),
-        Err(_) => Credentials::Anonymous,
-    };
-
-    let jira = Jira::from_client(base.to_string(), credentials, client)?;
-
+    let jira = build_jira_client(&jira_url, ignore_certs)?;
     let changelog = jira.issues().changelog(issue_key).await?;
     Ok(changelog)
 }
