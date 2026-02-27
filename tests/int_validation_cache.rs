@@ -165,6 +165,8 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
 
             jira_url: None,
             jql: None,
+            scan_comments: false,
+            scan_changelog: false,
             confluence_url: None,
             cql: None,
             max_results: 100,

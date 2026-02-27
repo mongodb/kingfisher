@@ -427,10 +427,8 @@ impl ScanCommandArgs {
                     scan_args.input_specifier_args.jira_url = Some(args.url);
                     scan_args.input_specifier_args.jql = Some(args.jql);
                     scan_args.input_specifier_args.max_results = args.max_results;
-                    
                     scan_args.input_specifier_args.scan_comments = args.scan_comments;
                     scan_args.input_specifier_args.scan_changelog = args.scan_changelog;
-                    
                     None
                 }
                 ScanInputCommand::Confluence(args) => {

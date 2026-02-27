@@ -105,6 +105,8 @@ fn run_skiplist(skip_regex: Vec<String>, skip_skipword: Vec<String>) -> Result<u
             azure_repo_type: AzureRepoType::Source,
             jira_url: None,
             jql: None,
+            scan_comments: false,
+            scan_changelog: false,
             confluence_url: None,
             cql: None,
             slack_query: None,

@@ -88,6 +88,8 @@ async fn test_redact_hashes_finding_values() -> Result<()> {
             azure_repo_type: AzureRepoType::Source,
             jira_url: None,
             jql: None,
+            scan_comments: false,
+            scan_changelog: false,
             confluence_url: None,
             cql: None,
             max_results: 100,

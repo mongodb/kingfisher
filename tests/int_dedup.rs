@@ -122,6 +122,8 @@ rules:
 
             jira_url: None,
             jql: None,
+            scan_comments: false,
+            scan_changelog: false,
             confluence_url: None,
             cql: None,
             max_results: 100,

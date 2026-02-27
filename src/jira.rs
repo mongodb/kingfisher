@@ -21,12 +21,12 @@ fn build_jira_client(jira_url: &Url, ignore_certs: bool) -> Result<Jira> {
 }
 
 pub async fn fetch_issues(
-    jira_url: Url,
+    jira_url: &Url,
     jql: &str,
     max_results: usize,
     ignore_certs: bool,
 ) -> Result<Vec<JiraIssue>> {
-    let jira = build_jira_client(&jira_url, ignore_certs)?;
+    let jira = build_jira_client(jira_url, ignore_certs)?;
 
     let search_options = SearchOptions::builder().max_results(max_results as u64).build();
 
@@ -35,7 +35,7 @@ pub async fn fetch_issues(
 }
 
 pub async fn download_issues_to_dir(
-    jira_url: Url,
+    jira_url: &Url,
     jql: &str,
     max_results: usize,
     ignore_certs: bool,
@@ -57,11 +57,11 @@ pub async fn download_issues_to_dir(
 
 /// Fetch comments for a specific Jira issue
 pub async fn fetch_comments(
-    jira_url: Url,
+    jira_url: &Url,
     issue_key: &str,
     ignore_certs: bool,
 ) -> Result<Vec<gouqi::Comment>> {
-    let jira = build_jira_client(&jira_url, ignore_certs)?;
+    let jira = build_jira_client(jira_url, ignore_certs)?;
     let issue = jira.issues().get(issue_key).await?;
     let comments = issue.comments().map(|c| c.comments).unwrap_or_default();
     Ok(comments)
@@ -69,11 +69,11 @@ pub async fn fetch_comments(
 
 /// Fetch changelog for a specific Jira issue
 pub async fn fetch_changelog(
-    jira_url: Url,
+    jira_url: &Url,
     issue_key: &str,
     ignore_certs: bool,
 ) -> Result<gouqi::Changelog> {
-    let jira = build_jira_client(&jira_url, ignore_certs)?;
+    let jira = build_jira_client(jira_url, ignore_certs)?;
     let changelog = jira.issues().changelog(issue_key).await?;
     Ok(changelog)
 }

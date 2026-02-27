@@ -108,6 +108,8 @@ fn test_gitlab_remote_scan() -> Result<()> {
 
             jira_url: None,
             jql: None,
+            scan_comments: false,
+            scan_changelog: false,
             confluence_url: None,
             cql: None,
             max_results: 100,
@@ -277,6 +279,8 @@ fn test_gitlab_remote_scan_no_history() -> Result<()> {
 
             jira_url: None,
             jql: None,
+            scan_comments: false,
+            scan_changelog: false,
             confluence_url: None,
             cql: None,
             max_results: 100,

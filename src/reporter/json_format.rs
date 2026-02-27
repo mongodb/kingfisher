@@ -140,6 +140,8 @@ mod tests {
                 // Jira options
                 jira_url: None,
                 jql: None,
+                scan_comments: false,
+                scan_changelog: false,
                 // Confluence options
                 confluence_url: None,
                 cql: None,

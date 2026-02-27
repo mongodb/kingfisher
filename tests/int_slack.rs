@@ -245,6 +245,8 @@ async fn test_scan_slack_messages() -> Result<()> {
             azure_repo_type: AzureRepoType::Source,
             jira_url: None,
             jql: None,
+            scan_comments: false,
+            scan_changelog: false,
             confluence_url: None,
             cql: None,
             slack_query: Some("test".into()),

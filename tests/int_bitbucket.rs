@@ -105,6 +105,8 @@ fn test_bitbucket_remote_scan() -> Result<()> {
 
             jira_url: None,
             jql: None,
+            scan_comments: false,
+            scan_changelog: false,
             confluence_url: None,
             cql: None,
             max_results: 100,
