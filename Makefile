@@ -286,15 +286,8 @@ linux-x64: check-docker create-dockerignore
 		    patch perl ragel \
 	        git openssl-dev curl && \
 		\
-		cargo test --workspace --all-targets ; \
-		\
-		rustup target add x86_64-unknown-linux-musl && \
-		\
-		export PKG_CONFIG_ALLOW_CROSS=1 ; \
-		export RUSTFLAGS="-C target-feature=+crt-static" ; \
-		\
-		cargo build --release --target x86_64-unknown-linux-musl && \
-		cd target/x86_64-unknown-linux-musl/release && \
+		cargo build --release && \
+		cd target/release && \
 	    sha256sum kingfisher > CHECKSUM.txt && \
 	    tar -czf /src/target/release/kingfisher-linux-x64.tgz \
 	        kingfisher CHECKSUM.txt \

@@ -55,15 +55,44 @@ pub async fn download_issues_to_dir(
     Ok(paths)
 }
 
-/// Fetch comments for a specific Jira issue
+/// Fetch comments for a specific Jira issue via the dedicated comments API endpoint.
+///
+/// This is a fallback for Jira servers that omit the `self` link in the embedded
+/// `fields.comment` wrapper, which causes `gouqi::Comments` deserialization to fail.
+/// Prefer calling `issue.comments()` first; use this only when it returns `None`.
+///
+/// Uses GET /rest/api/2/issue/{key}/comment directly and returns raw comment bodies
+/// as a Vec of serde_json::Value.
 pub async fn fetch_comments(
     jira_url: &Url,
     issue_key: &str,
     ignore_certs: bool,
-) -> Result<Vec<gouqi::Comment>> {
-    let jira = build_jira_client(jira_url, ignore_certs)?;
-    let issue = jira.issues().get(issue_key).await?;
-    let comments = issue.comments().map(|c| c.comments).unwrap_or_default();
+) -> Result<Vec<serde_json::Value>> {
+    let token = std::env::var("KF_JIRA_TOKEN").unwrap_or_default();
+    let url = format!(
+        "{}/rest/api/2/issue/{}/comment?maxResults=1000",
+        jira_url.as_str().trim_end_matches('/'),
+        issue_key
+    );
+    let client = Client::builder()
+        .danger_accept_invalid_certs(ignore_certs)
+        .build()
+        .context("Failed to build HTTP client")?;
+    let resp = client
+        .get(&url)
+        .header("Authorization", format!("Bearer {}", token))
+        .send()
+        .await
+        .context("Failed to fetch Jira comments")?
+        .text()
+        .await
+        .context("Failed to read Jira comments response")?;
+    let json: serde_json::Value = serde_json::from_str(&resp).context("Failed to parse Jira comments JSON")?;
+    let comments = json
+        .get("comments")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
     Ok(comments)
 }
 
