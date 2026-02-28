@@ -675,16 +675,24 @@ pub async fn fetch_jira_issues(
             // Primary: use comments embedded in the issue response (no extra request).
             // Fallback: some Jira servers omit "self" in the comments wrapper which
             // breaks gouqi::Comments deserialization → issue.comments() returns None.
-            let comments_bytes = match issue.comments() {
-                Some(c) if !c.comments.is_empty() => serde_json::to_vec(&c.comments)?,
+            // Both paths are normalised to serde_json::Value for a consistent schema.
+            let comments: Vec<serde_json::Value> = match issue.comments() {
+                Some(c) if !c.comments.is_empty() => c
+                    .comments
+                    .into_iter()
+                    .filter_map(|c| serde_json::to_value(c).ok())
+                    .collect(),
                 _ => {
-                    let raw = jira::fetch_comments(&jira_url, &issue.key, ignore_certs).await?;
-                    serde_json::to_vec(&raw)?
+                    tracing::debug!(
+                        issue_key = %issue.key,
+                        "issue.comments() returned None or empty, falling back to direct API"
+                    );
+                    jira::fetch_comments(&jira_url, &issue.key, ignore_certs).await?
                 }
             };
             std::fs::write(
                 output_dir.join(format!("{}-comments.json", issue.key)),
-                comments_bytes,
+                serde_json::to_vec(&comments)?,
             )?;
         }
 
