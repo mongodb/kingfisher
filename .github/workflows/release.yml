@@ -87,15 +87,15 @@ jobs:
           cp target/release/kingfisher-linux-x64.deb dist/
           cp target/release/kingfisher-linux-x64.rpm dist/
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kingfisher-linux-x64.tgz
           path: dist/kingfisher-linux-x64.tgz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kingfisher-linux-x64.deb
           path: dist/kingfisher-linux-x64.deb
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kingfisher-linux-x64.rpm
           path: dist/kingfisher-linux-x64.rpm
@@ -162,15 +162,15 @@ jobs:
           cp target/release/kingfisher-linux-arm64.deb dist/
           cp target/release/kingfisher-linux-arm64.rpm dist/
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kingfisher-linux-arm64.tgz
           path: dist/kingfisher-linux-arm64.tgz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kingfisher-linux-arm64.deb
           path: dist/kingfisher-linux-arm64.deb
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kingfisher-linux-arm64.rpm
           path: dist/kingfisher-linux-arm64.rpm
@@ -209,7 +209,7 @@ jobs:
           mkdir -p dist
           cp target/release/kingfisher-darwin-x64.tgz  dist/
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kingfisher-darwin-x64.tgz
           path: dist/kingfisher-darwin-x64.tgz
@@ -247,7 +247,7 @@ jobs:
           mkdir -p dist
           cp target/release/kingfisher-darwin-arm64.tgz dist/
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kingfisher-darwin-arm64.tgz
           path: dist/kingfisher-darwin-arm64.tgz
@@ -343,7 +343,7 @@ jobs:
           mkdir -p dist
           cp target/release/kingfisher-windows-${{ matrix.arch }}.zip dist/
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: kingfisher-windows-${{ matrix.arch }}
           path: dist/kingfisher-windows-${{ matrix.arch }}.zip
