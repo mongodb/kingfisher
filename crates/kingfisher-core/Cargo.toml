@@ -42,7 +42,7 @@ memchr = "2.7"
 gix = { version = "0.73", default-features = false, features = ["serde"] }
 
 # Console formatting
-console = "0.15"
+console = "0.16"
 
 # Language detection for content types
 tokei = "14.0.0"
