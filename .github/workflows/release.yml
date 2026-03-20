@@ -390,7 +390,7 @@ jobs:
 
       # ── create the release using just that snippet ─────────────────────
       - name: Create release & upload assets
-        uses: ncipollo/release-action@440c8c1cb0ed28b9f43e4d1d670870f059653174 # v1.16.0
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           tag: ${{ steps.version.outputs.tag }}
           name: "Kingfisher ${{ steps.version.outputs.tag }}"
