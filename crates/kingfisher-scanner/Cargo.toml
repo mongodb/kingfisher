@@ -165,7 +165,7 @@ pem = { version = "3.0.6", optional = true }
 percent-encoding = { workspace = true, optional = true }
 ring = { version = "0.17", optional = true }
 
-jsonwebtoken = { version = "10.2.0", features = ["aws-lc-rs"], optional = true }
+jsonwebtoken = { version = "10.3.0", features = ["aws-lc-rs"], optional = true }
 p256 = { version = "0.13.2", optional = true }
 ed25519-dalek = { version = "2.2", features = ["pkcs8"], optional = true }
 hex = { workspace = true, optional = true }

@@ -226,7 +226,7 @@ percent-encoding = "2.3.2"
 self_update = { version = "0.43.1", default-features = false, features = ["reqwest", "rustls", "archive-tar", "archive-zip", "compression-flate2"] }
 semver = "1.0.27"
 globset = "0.4.18"
-jsonwebtoken = { version = "10.2.0", features = ["aws-lc-rs"] }
+jsonwebtoken = { version = "10.3.0", features = ["aws-lc-rs"] }
 ipnet = "2.11.0"
 gouqi = { version = "0.20.0", features = ["async"] }
 oci-client = { version = "0.16", default-features = false, features = ["rustls-tls"] }
