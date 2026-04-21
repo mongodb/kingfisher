@@ -169,7 +169,7 @@ tracing.workspace = true
 reqwest = { version = "0.12", default-features = false, features = [
     "json", "gzip", "brotli", "deflate", "stream", "rustls-tls", "rustls-tls-native-roots", "multipart"
 ], optional = true }
-tokio = { version = "1.51", features = ["net", "time", "sync", "io-util"], optional = true }
+tokio = { version = "1.52", features = ["net", "time", "sync", "io-util"], optional = true }
 liquid = { version = "0.26", optional = true }
 liquid-core = { version = "0.26", optional = true }
 quick-xml = { version = "0.39", features = ["serde", "serialize"], optional = true }
@@ -218,4 +218,4 @@ ldap3 = { version = "0.11.5", default-features = false, features = ["tls-rustls"
 [dev-dependencies]
 pretty_assertions = "1.4"
 tempfile = "3.23"
-tokio = { version = "1.51", features = ["macros", "rt"] }
+tokio = { version = "1.52", features = ["macros", "rt"] }
