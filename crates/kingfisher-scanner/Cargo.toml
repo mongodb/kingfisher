@@ -195,7 +195,7 @@ rustls = { version = "0.23.35", optional = true }
 rustls-native-certs = { version = "0.8.2", optional = true }
 tokio-rustls = { version = "0.26.4", optional = true }
 # AWS validation
-aws-config = { version = "1.8.14", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
+aws-config = { version = "1.8.16", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
 aws-credential-types = { version = "1.2.12", optional = true }
 aws-sdk-iam = { version = "1.104.0", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
 aws-sdk-sts = { version = "1.98.0", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
