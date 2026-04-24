@@ -210,7 +210,7 @@ rand = { version = "0.10", optional = true }
 [target.'cfg(all(windows, target_arch = "aarch64"))'.dependencies]
 # ldap3's rustls backend still pulls ring 0.16, which fails to build on Windows ARM64.
 # Use the platform TLS backend there to keep the raw LDAP validator available.
-ldap3 = { version = "0.11.5", default-features = false, features = ["tls-native"], optional = true }
+ldap3 = { version = "0.12.1", default-features = false, features = ["tls-native"], optional = true }
 
 [target.'cfg(not(all(windows, target_arch = "aarch64")))'.dependencies]
 ldap3 = { version = "0.11.5", default-features = false, features = ["tls-rustls"], optional = true }
