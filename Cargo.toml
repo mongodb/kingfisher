@@ -195,7 +195,7 @@ mimalloc = { version = "0.1.48", features = ["override"] }
 thread_local = "1.1.9"
 bloomfilter = "3.0.1"
 uuid = "1.19.0"
-rand = "0.10.0"
+rand = "0.10.1"
 percent-encoding = "2.3.2"
 self_update = { version = "0.44.0", default-features = false, features = ["reqwest", "rustls", "archive-tar", "archive-zip", "compression-flate2"] }
 semver = "1.0.27"
