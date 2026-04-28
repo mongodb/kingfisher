@@ -38,7 +38,7 @@ bstr.workspace = true
 memchr = "2.7"
 
 # Git types (minimal, for ObjectId and Time)
-gix = { version = "0.81", default-features = false, features = ["serde", "sha1"] }
+gix = { version = "0.83", default-features = false, features = ["serde", "sha1"] }
 
 # Console formatting
 console = "0.16"
