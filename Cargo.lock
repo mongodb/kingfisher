@@ -1658,7 +1658,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "117725a109d387c937a1533ce01b450cbde6b88abceea8473c4d7a85853cda3c"
 dependencies = [
  "lazy_static",
- "windows-sys 0.48.0",
+ "windows-sys 0.52.0",
 ]
 
 [[package]]
@@ -5039,7 +5039,7 @@ dependencies = [
  "predicates",
  "pretty_assertions",
  "proptest",
- "quick-xml 0.39.4",
+ "quick-xml 0.40.0",
  "rand 0.10.1",
  "rand_chacha 0.10.0",
  "rayon",
@@ -5186,7 +5186,7 @@ dependencies = [
  "pem",
  "percent-encoding",
  "pretty_assertions",
- "quick-xml 0.39.4",
+ "quick-xml 0.40.0",
  "rand 0.10.1",
  "regex",
  "reqwest 0.12.28",
@@ -6759,9 +6759,9 @@ dependencies = [
 
 [[package]]
 name = "quick-xml"
-version = "0.39.4"
+version = "0.40.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdcc8dd4e2f670d309a5f0e83fe36dfdc05af317008fea29144da1a2ac858e5e"
+checksum = "0b7315c86b26aaef0321fba33c9dcc160da659c6a9d278f0f6a5656d6561c03b"
 dependencies = [
  "memchr",
  "serde",
@@ -9502,7 +9502,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.48.0",
+ "windows-sys 0.61.2",
 ]
 
 [[package]]
