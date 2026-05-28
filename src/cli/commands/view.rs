@@ -28,9 +28,9 @@ pub const DEFAULT_ADDRESS: &str = "127.0.0.1";
 /// View a Kingfisher access-map report locally.
 #[derive(clap::Args, Debug)]
 pub struct ViewArgs {
-    /// Paths to JSON/JSONL reports or directories containing them.
+    /// Paths to JSON/JSONL/SARIF reports or directories containing them.
     /// Multiple files are merged and deduplicated by fingerprint.
-    /// Directories are scanned (non-recursively) for .json/.jsonl files.
+    /// Directories are scanned (non-recursively) for .json/.jsonl/.sarif files.
     #[arg(value_name = "REPORT", value_hint = clap::ValueHint::AnyPath)]
     pub reports: Vec<PathBuf>,
 
@@ -73,7 +73,7 @@ pub fn ensure_port_available(port: u16, address: &str, flag_name: &str) -> Resul
 }
 
 /// Resolve report paths: expand directories (non-recursively) into their
-/// `.json` / `.jsonl` children, expand tildes, and filter to valid extensions.
+/// `.json` / `.jsonl` / `.sarif` children, expand tildes, and filter to valid extensions.
 /// Non-matching files inside directories are silently skipped.
 async fn resolve_report_paths(raw: &[PathBuf]) -> Result<Vec<PathBuf>> {
     let mut paths = Vec::new();
@@ -111,7 +111,7 @@ fn is_report_extension(path: &Path) -> bool {
         .and_then(|ext| ext.to_str())
         .map(|ext| {
             let lower = ext.to_ascii_lowercase();
-            lower == "json" || lower == "jsonl"
+            lower == "json" || lower == "jsonl" || lower == "sarif"
         })
         .unwrap_or(false)
 }
@@ -202,7 +202,7 @@ pub async fn run(args: ViewArgs) -> Result<()> {
     } else if !args.reports.is_empty() {
         let paths = resolve_report_paths(&args.reports).await?;
         if paths.is_empty() {
-            warn!("No JSON/JSONL report files found in the provided paths");
+            warn!("No JSON/JSONL/SARIF report files found in the provided paths");
             None
         } else {
             let combined = load_and_combine_reports(&paths).await?;
@@ -366,7 +366,9 @@ fn expand_tilde(path: &Path) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::ensure_port_available;
+    use std::path::Path;
+
+    use super::{ensure_port_available, is_report_extension};
 
     #[test]
     fn ensure_port_available_uses_passed_flag_name_in_error() {
@@ -375,5 +377,14 @@ mod tests {
 
         let err = ensure_port_available(port, "127.0.0.1", "--view-report-port").unwrap_err();
         assert!(err.to_string().contains("--view-report-port <PORT>"));
+    }
+
+    #[test]
+    fn is_report_extension_accepts_sarif_json_and_jsonl() {
+        assert!(is_report_extension(Path::new("report.sarif")));
+        assert!(is_report_extension(Path::new("report.json")));
+        assert!(is_report_extension(Path::new("report.jsonl")));
+        assert!(is_report_extension(Path::new("REPORT.SARIF")));
+        assert!(!is_report_extension(Path::new("report.txt")));
     }
 }

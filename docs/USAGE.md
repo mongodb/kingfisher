@@ -144,10 +144,13 @@ The same viewer that powers `kingfisher view` and `--view-report` also accepts *
    # Open a TruffleHog report
    kingfisher view trufflehog-report.jsonl
 
-   # Merge multiple reports (deduplicated by fingerprint / secret identity)
-   kingfisher view kingfisher.json gitleaks.json trufflehog.jsonl
+   # Open a SARIF report
+   kingfisher view sarif-report.sarif
 
-   # Or drop a directory of reports in and the viewer will ingest the JSON/JSONL files
+   # Merge multiple reports (deduplicated by fingerprint / secret identity)
+   kingfisher view kingfisher.json gitleaks.json trufflehog.jsonl sarif-report.sarif
+
+   # Or drop a directory of reports in and the viewer will ingest the JSON/JSONL/SARIF files
    kingfisher view ./reports/
    ```
 
@@ -155,7 +158,7 @@ The same viewer that powers `kingfisher view` and `--view-report` also accepts *
 
 2. **Hosted viewer** — [https://mongodb.github.io/kingfisher/viewer/](https://mongodb.github.io/kingfisher/viewer/)
 
-   A static, upload-based copy of the same UI published on GitHub Pages. Drag a Kingfisher, Gitleaks, or TruffleHog report into the page and triage it in your browser. Everything runs client-side — no reports leave your machine. Useful when you want to share a link rather than a binary, or triage a report on a machine that doesn't have Kingfisher installed.
+   A static, upload-based copy of the same UI published on GitHub Pages. Drag a Kingfisher, Gitleaks, TruffleHog, or SARIF report into the page and triage it in your browser. Everything runs client-side — no reports leave your machine. Useful when you want to share a link rather than a binary, or triage a report on a machine that doesn't have Kingfisher installed.
 
 #### Why use a visual viewer / triager for Gitleaks, TruffleHog, and Kingfisher output?
 

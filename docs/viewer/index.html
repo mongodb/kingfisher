@@ -2057,7 +2057,7 @@
       <div class="panel__header">
         <div class="panel__title">
           <h3>Load Report</h3>
-          <p>Analyze Kingfisher JSON / JSONL output, plus Gitleaks and TruffleHog JSON reports</p>
+          <p>Analyze Kingfisher JSON / JSONL / SARIF output, plus Gitleaks and TruffleHog JSON reports</p>
         </div>
       </div>
       <div class="upload-shell">
@@ -2067,9 +2067,9 @@
           <div class="upload-sub">Drop files anywhere in this card, or click to choose them from disk.</div>
           <div class="upload-action-row">
             <span class="upload-primary">Choose Reports</span>
-            <span class="upload-action-hint">JSON and JSONL only</span>
+            <span class="upload-action-hint">JSON, JSONL, and SARIF</span>
           </div>
-          <input type="file" id="file-input" hidden accept=".json,.jsonl" multiple>
+          <input type="file" id="file-input" hidden accept=".json,.jsonl,.sarif" multiple>
           <div class="upload-options" style="margin-top:14px; display:flex; justify-content:center; font-size:12px; color:var(--text-muted);">
             <label id="dedup-toggle-label" style="display:inline-flex; align-items:center; gap:6px; cursor:pointer;">
               <input type="checkbox" id="dedup-toggle" checked>
@@ -2080,7 +2080,7 @@
         <div class="upload-help-grid">
           <div class="upload-help-card">
             <div class="upload-help-label">Formats</div>
-            <div class="upload-help-text"><strong>Kingfisher</strong> JSON/JSONL, <strong>Gitleaks</strong> OSS JSON, and <strong>TruffleHog</strong> OSS JSON/JSONL.</div>
+            <div class="upload-help-text"><strong>Kingfisher</strong> JSON/JSONL/SARIF, <strong>Gitleaks</strong> OSS JSON, and <strong>TruffleHog</strong> OSS JSON/JSONL.</div>
           </div>
           <div class="upload-help-card">
             <div class="upload-help-label">Merge More</div>
@@ -3137,6 +3137,23 @@
         const item = stack.shift();
         if (!item || typeof item !== "object") continue;
 
+        // Detect SARIF containers (validated as Kingfisher-only during normalization):
+        // - $schema containing "sarif", or
+        // - runs[0].tool.driver structure.
+        if (typeof item.$schema === "string" && item.$schema.toLowerCase().includes("sarif")) {
+          return "sarif";
+        }
+        if (
+          Array.isArray(item.runs) &&
+          item.runs.length > 0 &&
+          item.runs[0] &&
+          typeof item.runs[0] === "object" &&
+          item.runs[0].tool &&
+          item.runs[0].tool.driver
+        ) {
+          return "sarif";
+        }
+
         if (Array.isArray(item.results)) {
           stack.unshift(...item.results);
           continue;
@@ -3168,6 +3185,21 @@
       }
 
       return "kingfisher";
+    }
+
+    function isKingfisherSarif(payload) {
+      const docs = Array.isArray(payload) ? payload : [payload];
+      let hasRuns = false;
+      for (const doc of docs) {
+        if (!doc || typeof doc !== "object" || !Array.isArray(doc.runs)) continue;
+        for (const run of doc.runs) {
+          if (!run || typeof run !== "object") continue;
+          hasRuns = true;
+          const toolName = String(firstNonEmpty(run.tool && run.tool.driver && run.tool.driver.name, "") || "").toLowerCase();
+          if (toolName !== "kingfisher") return false;
+        }
+      }
+      return hasRuns;
     }
 
     function unwrapImportedEntries(payload, format) {
@@ -3444,6 +3476,172 @@
       };
     }
 
+    function sarifLevelToConfidence(level) {
+      const normalized = String(level || "").toLowerCase();
+      if (normalized === "note" || normalized === "none") return "low";
+      if (normalized === "warning") return "medium";
+      if (normalized === "error") return "high";
+      return "medium";
+    }
+
+    function normalizeSarifPayload(payload) {
+      const docs = Array.isArray(payload) ? payload : [payload];
+      if (!isKingfisherSarif(docs)) {
+        throw new Error("Only Kingfisher SARIF is supported. Expected runs[].tool.driver.name = \"kingfisher\".");
+      }
+      const findings = [];
+      const accessMap = [];
+      const tools = new Set();
+      let hasNativeKingfisherRun = false;
+      let hasNonNativeRun = false;
+
+      docs.forEach((doc) => {
+        if (!doc || typeof doc !== "object") return;
+        const runs = Array.isArray(doc.runs) ? doc.runs : [];
+        runs.forEach((run) => {
+          if (!run || typeof run !== "object") return;
+
+          const toolName = String(firstNonEmpty(run.tool && run.tool.driver && run.tool.driver.name, "SARIF") || "SARIF");
+          tools.add(toolName);
+          const runIsKingfisher = toolName.toLowerCase() === "kingfisher";
+          if (runIsKingfisher) hasNativeKingfisherRun = true;
+          else hasNonNativeRun = true;
+
+          const ruleMap = {};
+          const rules = toArray(run.tool && run.tool.driver && run.tool.driver.rules);
+          rules.forEach((rule) => {
+            if (!rule || typeof rule !== "object") return;
+            const rid = String(firstNonEmpty(rule.id, rule.name) || "");
+            if (!rid) return;
+            ruleMap[rid] = String(firstNonEmpty(
+              rule.name,
+              rule.shortDescription && rule.shortDescription.text,
+              rule.fullDescription && rule.fullDescription.text,
+              rid
+            ) || rid);
+          });
+
+          if (run.properties && Array.isArray(run.properties.access_map)) {
+            accessMap.push(...run.properties.access_map);
+          }
+
+          const results = toArray(run.results);
+          results.forEach((result) => {
+            if (!result || typeof result !== "object") return;
+
+            const location = Array.isArray(result.locations) && result.locations.length
+              ? result.locations[0]
+              : null;
+            const physicalLocation = location && location.physicalLocation && typeof location.physicalLocation === "object"
+              ? location.physicalLocation
+              : {};
+            const region = physicalLocation.region && typeof physicalLocation.region === "object"
+              ? physicalLocation.region
+              : {};
+            const properties = Object.assign(
+              {},
+              result.properties && typeof result.properties === "object" ? result.properties : {},
+              location && location.properties && typeof location.properties === "object" ? location.properties : {}
+            );
+
+            const ruleId = String(firstNonEmpty(result.ruleId, result.rule && result.rule.id, "imported.sarif.unknown") || "imported.sarif.unknown");
+            const ruleName = String(firstNonEmpty(
+              ruleMap[ruleId],
+              result.message && result.message.text,
+              ruleId
+            ) || ruleId);
+            const path = String(firstNonEmpty(
+              physicalLocation.artifactLocation && physicalLocation.artifactLocation.uri,
+              physicalLocation.artifactLocation && physicalLocation.artifactLocation.uriBaseId,
+              ""
+            ) || "");
+            const line = toNumberOrNull(firstNonEmpty(region.startLine, region.line));
+            const columnStart = toNumberOrNull(firstNonEmpty(region.startColumn, region.columnStart));
+            const columnEnd = toNumberOrNull(firstNonEmpty(region.endColumn, region.columnEnd));
+            const snippet = String(firstNonEmpty(
+              region.snippet && region.snippet.text,
+              result.message && result.message.text,
+              ""
+            ) || "");
+            const fingerprint = String(firstNonEmpty(
+              result.partialFingerprints && result.partialFingerprints.fingerprint,
+              result.fingerprints && result.fingerprints.primaryLocationLineHash,
+              buildSyntheticFingerprint("sarif", [ruleId, path, line, columnStart, snippet])
+            ) || "");
+
+            findings.push({
+              rule: {
+                id: runIsKingfisher ? ruleId : "imported.sarif." + slugifyIdentifier(ruleId),
+                name: ruleName,
+              },
+              finding: {
+                snippet,
+                fingerprint,
+                confidence: sarifLevelToConfidence(result.level),
+                entropy: String(firstNonEmpty(properties.entropy, properties.Entropy) || ""),
+                validation: {
+                  status: String(firstNonEmpty(properties.validation_status, properties.validationStatus, "Not Attempted") || "Not Attempted"),
+                  response: String(firstNonEmpty(properties.validation_response, properties.validationResponse, "") || ""),
+                },
+                language: "Imported",
+                line,
+                column_start: columnStart,
+                column_end: columnEnd,
+                path,
+                git_metadata: properties.git_metadata && typeof properties.git_metadata === "object"
+                  ? properties.git_metadata
+                  : null,
+                validate_command: String(firstNonEmpty(properties.validate_command, properties.validateCommand, "") || ""),
+                revoke_command: String(firstNonEmpty(properties.revoke_command, properties.revokeCommand, "") || ""),
+                viewer_import: runIsKingfisher
+                  ? undefined
+                  : {
+                    source_tool: "SARIF",
+                    source_rule_id: ruleId,
+                    source_rule_name: ruleName,
+                  },
+              },
+            });
+          });
+        });
+      });
+
+      const toolList = Array.from(tools);
+      const summaryToolName = toolList.length ? toolList.join(" + ") : "SARIF";
+      const notes = hasNonNativeRun
+        ? ["Imported from SARIF. Access map and command enrichments are available only when included by the SARIF producer."]
+        : [];
+      const imported = hasNonNativeRun;
+      const fullCapabilities = hasNativeKingfisherRun && !hasNonNativeRun;
+      const hasValidateCommands = findings.some((entry) => Boolean(entry.finding && entry.finding.validate_command));
+      const hasRevokeCommands = findings.some((entry) => Boolean(entry.finding && entry.finding.revoke_command));
+      const hasAccessMap = accessMap.length > 0;
+
+      return {
+        f: findings,
+        am: accessMap,
+        rd: {
+          findings,
+          access_map: accessMap,
+          metadata: {
+            generated_at: new Date().toISOString(),
+            scan_timestamp: new Date().toISOString(),
+            target: "",
+            kingfisher_version: "",
+            summary: buildImportedSummary(summaryToolName, findings),
+            viewer_import: buildViewerImportMetadata(summaryToolName, {
+              imported,
+              tools: toolList.length ? toolList : ["SARIF"],
+              accessMapSupported: fullCapabilities || hasAccessMap,
+              validateCommandSupported: fullCapabilities || hasValidateCommands,
+              revokeCommandSupported: fullCapabilities || hasRevokeCommands,
+              notes,
+            }),
+          },
+        },
+      };
+    }
+
     function normalizeKingfisherPayload(payload) {
       const collected = collectReportData(payload);
       const rd = collected.mainReport || collected.statsReport
@@ -3472,6 +3670,9 @@
         if (topFormat === "trufflehog") {
           return normalizeImportedPayload(payload, "TruffleHog");
         }
+        if (topFormat === "sarif") {
+          return normalizeSarifPayload(payload);
+        }
         const entryFormats = [];
         let hasImported = false;
         for (const entry of payload) {
@@ -3481,7 +3682,7 @@
           }
           const fmt = detectReportFormat(entry);
           entryFormats.push(fmt);
-          if (fmt === "gitleaks" || fmt === "trufflehog") {
+          if (fmt === "gitleaks" || fmt === "trufflehog" || fmt === "sarif") {
             hasImported = true;
           }
         }
@@ -3498,6 +3699,8 @@
             partial = normalizeImportedPayload(entry, "TruffleHog");
           } else if (fmt === "gitleaks") {
             partial = normalizeImportedPayload(entry, "Gitleaks");
+          } else if (fmt === "sarif") {
+            partial = normalizeSarifPayload(entry);
           } else {
             partial = normalizeKingfisherPayload(entry);
           }
@@ -3514,6 +3717,9 @@
       }
       if (format === "gitleaks") {
         return normalizeImportedPayload(payload, "Gitleaks");
+      }
+      if (format === "sarif") {
+        return normalizeSarifPayload(payload);
       }
       return normalizeKingfisherPayload(payload);
     }
@@ -3545,11 +3751,11 @@
     function processFiles(files, { append = false } = {}) {
       const validFiles = files.filter((f) => {
         const name = f.name.toLowerCase();
-        return name.endsWith(".json") || name.endsWith(".jsonl");
+        return name.endsWith(".json") || name.endsWith(".jsonl") || name.endsWith(".sarif");
       });
 
       if (validFiles.length === 0) {
-        errorMsg.textContent = "No JSON or JSONL files found in the selection.";
+        errorMsg.textContent = "No JSON, JSONL, or SARIF files found in the selection.";
         errorMsg.classList.remove("hidden");
         return;
       }
@@ -7086,6 +7292,7 @@
       if (project) return `https://console.cloud.google.com/home/dashboard?project=${encodeURIComponent(project)}`;
       return null;
     }
+
   </script>
 </body>
 </html>
