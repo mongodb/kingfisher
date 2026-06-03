@@ -35,7 +35,7 @@ dashmap = "6.1"
 
 # Byte string handling
 bstr.workspace = true
-memchr = "2.7"
+memchr = "2.8"
 
 # Git types (minimal, for ObjectId and Time)
 gix = { version = "0.83", default-features = false, features = ["serde", "sha1"] }
