@@ -365,6 +365,10 @@ pub struct InputSpecifierArgs {
     #[arg(long = "docker-image", hide = true)]
     pub docker_image: Vec<String>,
 
+    /// Docker image archives provided by the docker subcommand
+    #[arg(skip)]
+    pub docker_archive: Vec<PathBuf>,
+
     /// Select how to clone Git repositories
     #[arg(long, default_value_t=GitCloneMode::Bare, alias="git-clone-mode")]
     pub git_clone: GitCloneMode,
@@ -474,6 +478,7 @@ impl InputSpecifierArgs {
             || self.s3_bucket.is_some()
             || self.gcs_bucket.is_some()
             || !self.docker_image.is_empty()
+            || !self.docker_archive.is_empty()
     }
 
     /// Return true when any flag has been set that schedules artifact
@@ -492,6 +497,7 @@ impl InputSpecifierArgs {
             || !self.postman_environments.is_empty()
             || self.postman_all
             || !self.docker_image.is_empty()
+            || !self.docker_archive.is_empty()
     }
 
     /// Emit deprecation warnings for legacy top-level provider flags.

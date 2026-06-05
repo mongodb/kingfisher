@@ -205,6 +205,7 @@ async fn test_scan_postman_all() -> Result<()> {
             gcs_prefix: None,
             gcs_service_account: None,
             docker_image: Vec::new(),
+            docker_archive: Vec::new(),
             git_clone: GitCloneMode::Bare,
             git_history: GitHistoryMode::Full,
             commit_metadata: true,

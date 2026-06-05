@@ -1,7 +1,7 @@
 site_name: Kingfisher
 site_url: https://mongodb.github.io/kingfisher
 site_description: >-
-  Open source secret scanner with live validation. 950 detection rules,
+  Open source secret scanner with live validation. 954 detection rules,
   blast radius mapping, credential revocation, and a browser-based
   report viewer that also imports Gitleaks and TruffleHog output.
   Built in Rust by MongoDB.

@@ -133,6 +133,7 @@ impl TestContext {
                 gcs_service_account: None,
                 // Docker image scanning
                 docker_image: Vec::new(),
+                docker_archive: Vec::new(),
                 // git clone / history options
                 git_clone: GitCloneMode::Bare,
                 git_history: GitHistoryMode::Full,
@@ -291,6 +292,7 @@ impl TestContext {
                 aws_local_profile: None,
                 // Docker image scanning
                 docker_image: Vec::new(),
+                docker_archive: Vec::new(),
                 // git clone / history options
                 git_clone: GitCloneMode::Bare,
                 git_history: GitHistoryMode::Full,

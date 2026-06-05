@@ -100,6 +100,10 @@ kingfisher scan gcs cloud-samples-data --prefix "storage/"
 
 Kingfisher will first try to use any locally available image, then fall back to pulling via OCI.  
 
+To skip local image lookup, registry access, and `docker save`, scan a Docker or OCI image archive
+directly with `--archive`. Archive inputs include files produced by `docker save`. Supported archive
+formats are `.tar`, `.tar.gz`, `.tar.gzip`, `.tgz`, `.tar.bz2`, `.tar.bzip2`, and `.tar.xz`.
+
 Authentication happens *in this order*:
 
 1. **`KF_DOCKER_TOKEN`** env var  
@@ -125,6 +129,12 @@ kingfisher scan docker some-private-registry.dkr.ecr.us-east-1.amazonaws.com/bas
 # 3) Or rely on your Docker CLI login/keychain:
 #    (e.g. aws ecr get-login-password … | docker login …)
 kingfisher scan docker private.registry.example.com/my-image:tag
+
+# 4) Scan a Docker image archive created by docker save:
+docker save ghcr.io/owasp/wrongsecrets/wrongsecrets-master:latest-master -o image.tar
+kingfisher scan docker --archive image.tar
+gzip -k image.tar
+kingfisher scan docker --archive image.tar.gz
 ```
 
 > **Deprecated**

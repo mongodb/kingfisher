@@ -123,7 +123,7 @@ invocation is scanning, not project policy:
 - positional paths, `--git-url`
 - `--github-user` / `--github-org`, `--gitlab-user` / `--gitlab-group` and
   the equivalent Gitea / Bitbucket / Azure / Hugging Face flags
-- `--s3-bucket`, `--gcs-bucket`, `--docker-image`
+- `--s3-bucket`, `--gcs-bucket`, `--docker-image`, Docker `--archive`
 - `--jira-url`, `--confluence-url`, `--slack-query`, `--teams-query`,
   `--postman-*`
 

@@ -7,7 +7,7 @@
     <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License" style="height: 24px;" />
   </a>
   <a href="https://github.com/mongodb/kingfisher">
-    <img src="https://img.shields.io/badge/Detection%20Rules-950-2ea043.svg" alt="Detection Rules" style="height: 24px;" />
+    <img src="https://img.shields.io/badge/Detection%20Rules-954-2ea043.svg" alt="Detection Rules" style="height: 24px;" />
   </a>
   <br>
   <a href="https://github.com/mongodb/kingfisher/pkgs/container/kingfisher">
@@ -20,7 +20,7 @@
 
 Kingfisher is an open source secret scanner and **live secret validation** tool built in Rust.
 
-It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale, and ships with [950 built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/) to detect, **validate**, and triage leaked API keys, tokens, and credentials before they ever reach production.
+It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale, and ships with [950+ built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/) to detect, **validate**, and triage leaked API keys, tokens, and credentials before they ever reach production.
 
 Kingfisher also ships a **browser-based report viewer** that visualizes and triages findings from Kingfisher **and** from Gitleaks and TruffleHog JSON reports — so you can import scans from other tools and triage them in the same UI. A [hosted copy of the viewer](https://mongodb.github.io/kingfisher/viewer/) is published on the Kingfisher docs site [or run locally](#3-scan-and-view-results-in-browser)
 
@@ -54,9 +54,9 @@ Kingfisher is a high-performance, open source secret detection tool for source c
 
 </div>
 
-### Performance, Accuracy, and 950 Rules
+### Performance, Accuracy, and 954 Rules
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
-- **Extensible rules**: 950 built-in rules plus YAML-defined custom rules ([docs/RULES.md](/docs/RULES.md))
+- **Extensible rules**: 954 built-in rules plus YAML-defined custom rules ([docs/RULES.md](/docs/RULES.md))
 - **Validate & Revoke**: live validation of discovered secrets, plus direct revocation for supported platforms (GitHub, GitLab, Slack, AWS, GCP, and more) ([docs/USAGE.md](/docs/USAGE.md))
 - **Revocation support matrix**: current built-in revocation coverage across providers and rule IDs ([docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
 - **Blast Radius Mapping**: instantly map leaked keys to their effective cloud identities and exposed resources with `--access-map` (alias `--blast-radius`). Supports 43 providers (see table below).
@@ -227,10 +227,11 @@ kingfisher scan s3 bucket-name --prefix path/
 kingfisher scan gcs bucket-name --prefix path/
 ```
 
-### 14: Scan a Docker image
+### 14: Scan a Docker image or saved image archive
 
 ```bash
 kingfisher scan docker ghcr.io/org/image:latest
+kingfisher scan docker --archive image.tar
 ```
 
 ### 15: Scan Jira issues
@@ -399,7 +400,7 @@ kingfisher scan /path/to/scan --access-map --view-report
 
 # Detection Rules
 
-Kingfisher ships with [950 built-in rules](crates/kingfisher-rules/data/rules/) covering cloud keys, AI tokens, CI/CD secrets, database credentials, and SaaS API keys. Below is an overview — see the full list in [crates/kingfisher-rules/data/rules/](crates/kingfisher-rules/data/rules/):
+Kingfisher ships with [954 built-in rules](crates/kingfisher-rules/data/rules/) covering cloud keys, AI tokens, CI/CD secrets, database credentials, and SaaS API keys. Below is an overview — see the full list in [crates/kingfisher-rules/data/rules/](crates/kingfisher-rules/data/rules/):
 
 | Category | What we catch |
 |----------|---------------|
@@ -416,7 +417,7 @@ Kingfisher ships with [950 built-in rules](crates/kingfisher-rules/data/rules/) 
 
 ## Write Custom Rules
 
-Kingfisher ships with 950 built-in rules.
+Kingfisher ships with 954 built-in rules.
 
 However, you may want to add your own custom rules, or modify a detection to better suit your needs / environment.
 
@@ -659,6 +660,9 @@ kingfisher scan gcs bucket-name
 
 # Scan Docker image
 kingfisher scan docker ghcr.io/owasp/wrongsecrets/wrongsecrets-master:latest-master
+
+# Scan Docker image archive produced by docker save
+kingfisher scan docker --archive image.tar
 
 # Scan GitHub organization
 kingfisher scan github --organization my-org

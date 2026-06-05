@@ -185,6 +185,7 @@ mod tests {
                 gcs_service_account: None,
 
                 docker_image: Vec::new(),
+                docker_archive: Vec::new(),
                 // clone / history options
                 git_clone: GitCloneMode::Bare,
                 git_history: GitHistoryMode::Full,

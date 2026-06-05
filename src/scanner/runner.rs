@@ -39,7 +39,7 @@ use crate::{
             fetch_gcs_objects, fetch_git_host_artifacts, fetch_jira_issues,
             fetch_postman_resources, fetch_s3_objects, fetch_slack_messages, fetch_teams_messages,
         },
-        run_secret_validation, save_docker_images,
+        run_secret_validation, save_docker_archives, save_docker_images,
         summary::{compute_scan_totals, print_scan_summary},
     },
     util::{set_redaction_enabled, tokio_blocking_threads_limit},
@@ -495,21 +495,31 @@ async fn fetch_all_artifacts(
         }
     }
 
-    if !args.input_specifier_args.docker_image.is_empty() {
+    if !args.input_specifier_args.docker_image.is_empty()
+        || !args.input_specifier_args.docker_archive.is_empty()
+    {
         let clone_root = {
             let ds = datastore.lock().unwrap();
             ds.clone_root()
         };
-        let docker_dirs = save_docker_images(
-            &args.input_specifier_args.docker_image,
+        let mut docker_dirs = Vec::new();
+        docker_dirs.extend(
+            save_docker_images(
+                &args.input_specifier_args.docker_image,
+                &clone_root,
+                progress_enabled,
+            )
+            .await?,
+        );
+        docker_dirs.extend(save_docker_archives(
+            &args.input_specifier_args.docker_archive,
             &clone_root,
             progress_enabled,
-        )
-        .await?;
-        for (dir, img) in docker_dirs {
+        )?);
+        for (dir, source) in docker_dirs {
             {
                 let mut ds = datastore.lock().unwrap();
-                ds.register_docker_image(dir.clone(), img);
+                ds.register_docker_image(dir.clone(), source);
             }
             if !push(dir, &out_tx) {
                 return Ok(());

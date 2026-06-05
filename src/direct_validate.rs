@@ -1039,6 +1039,7 @@ pub(crate) fn create_minimal_scan_args() -> crate::cli::commands::scan::ScanArgs
             postman_include_mocks_monitors: false,
             postman_api_url: Url::parse("https://api.getpostman.com/").unwrap(),
             docker_image: Vec::new(),
+            docker_archive: Vec::new(),
             git_clone: GitCloneMode::Bare,
             git_history: GitHistoryMode::Full,
             commit_metadata: true,

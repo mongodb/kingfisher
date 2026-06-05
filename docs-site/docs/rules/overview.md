@@ -736,8 +736,6 @@ rules:
         - sample
     examples:
       - token: "REALVALUE1234"
-    negative_examples:
-      - token = "SAMPLETOKEN9999"  # dropped by ignore_if_contains
 ```
 
 ### Example: Custom Special Characters

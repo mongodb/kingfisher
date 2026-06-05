@@ -1,7 +1,8 @@
+use std::collections::HashSet;
 use std::env;
 use std::fs::File;
 use std::io::{Read, Write};
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::Duration;
 
@@ -16,7 +17,13 @@ use sha2::{Digest, Sha256};
 use tracing::debug;
 use walkdir::WalkDir;
 
-use crate::decompress::decompress_file;
+use crate::decompress::decompress_file_with_single_stream_cap;
+
+/// Docker/OCI image layers are often large tar streams. Keep this high enough
+/// to avoid silently dropping scan coverage for normal base OS layers while
+/// still bounding hostile compressed input.
+// nosemgrep: this is the defensive cap — do not flag for missing-limit rules.
+const MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
 fn helper_get_creds(helper: &str, registry: &str) -> Option<(String, String)> {
     fn run(bin: &str, registry: &str) -> Option<(String, String)> {
@@ -65,6 +72,304 @@ fn image_dir_name(reference: &str) -> String {
     name.push('_');
     name.push_str(short);
     name
+}
+
+fn archive_dir_name(path: &Path) -> String {
+    image_dir_name(&path.display().to_string())
+}
+
+fn progress_bar(use_progress: bool) -> ProgressBar {
+    if use_progress {
+        let style =
+            ProgressStyle::with_template("{spinner} {msg} {pos}/{len}").expect("progress template");
+        let pb = ProgressBar::new(0).with_style(style);
+        pb.enable_steady_tick(Duration::from_millis(100));
+        pb
+    } else {
+        ProgressBar::hidden()
+    }
+}
+
+fn tar_wrapped_intermediate_path(archive_path: &Path, out_dir: &Path) -> Option<PathBuf> {
+    let filename = archive_path.file_name()?.to_str()?.to_ascii_lowercase();
+    let is_tar_wrapped = filename.ends_with(".tgz")
+        || filename.ends_with(".tar.gz")
+        || filename.ends_with(".tar.gzip")
+        || filename.ends_with(".tar.bz2")
+        || filename.ends_with(".tar.bzip2")
+        || filename.ends_with(".tar.xz");
+
+    if !is_tar_wrapped {
+        return None;
+    }
+
+    let stem = archive_path.file_stem()?;
+    Some(out_dir.join(stem).with_extension("decomp.tar"))
+}
+
+fn is_safe_relative_path(path: &Path) -> bool {
+    !path.is_absolute()
+        && path
+            .components()
+            .all(|component| matches!(component, Component::Normal(_) | Component::CurDir))
+}
+
+fn push_manifest_layer(
+    out_dir: &Path,
+    layer_path: &str,
+    layer_paths: &mut Vec<PathBuf>,
+    seen: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    let relative_path = Path::new(layer_path);
+    if !is_safe_relative_path(relative_path) {
+        return Err(anyhow!("unsafe Docker archive layer path {layer_path}"));
+    }
+
+    let path = out_dir.join(relative_path);
+    if !path.is_file() {
+        return Err(anyhow!("Docker archive layer {} was not found", path.display()));
+    }
+
+    if seen.insert(path.clone()) {
+        layer_paths.push(path);
+    }
+    Ok(())
+}
+
+fn collect_docker_manifest_layers(
+    out_dir: &Path,
+    layer_paths: &mut Vec<PathBuf>,
+    seen: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    let manifest_path = out_dir.join("manifest.json");
+    if !manifest_path.is_file() {
+        return Ok(());
+    }
+
+    let manifest: Value = serde_json::from_reader(File::open(&manifest_path)?)
+        .with_context(|| format!("parsing {}", manifest_path.display()))?;
+    if let Some(images) = manifest.as_array() {
+        for image in images {
+            if let Some(layers) = image.get("Layers").and_then(|v| v.as_array()) {
+                for layer in layers {
+                    if let Some(layer_path) = layer.as_str() {
+                        push_manifest_layer(out_dir, layer_path, layer_paths, seen)?;
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn blob_path_from_digest(out_dir: &Path, digest: &str) -> Option<PathBuf> {
+    let (algorithm, value) = digest.split_once(':')?;
+    let relative_path = Path::new("blobs").join(algorithm).join(value);
+    if is_safe_relative_path(&relative_path) { Some(out_dir.join(relative_path)) } else { None }
+}
+
+fn collect_oci_layers_from_value(
+    out_dir: &Path,
+    value: &Value,
+    layer_paths: &mut Vec<PathBuf>,
+    seen_layers: &mut HashSet<PathBuf>,
+    seen_manifests: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    if let Some(layers) = value.get("layers").and_then(|v| v.as_array()) {
+        for layer in layers {
+            if let Some(digest) = layer.get("digest").and_then(|v| v.as_str()) {
+                let path = blob_path_from_digest(out_dir, digest)
+                    .ok_or_else(|| anyhow!("invalid OCI layer digest {digest}"))?;
+                if !path.is_file() {
+                    return Err(anyhow!("OCI layer blob {} was not found", path.display()));
+                }
+                if seen_layers.insert(path.clone()) {
+                    layer_paths.push(path);
+                }
+            }
+        }
+    }
+
+    if let Some(manifests) = value.get("manifests").and_then(|v| v.as_array()) {
+        for manifest in manifests {
+            let is_attestation = manifest
+                .get("annotations")
+                .and_then(|v| v.get("vnd.docker.reference.type"))
+                .and_then(|v| v.as_str())
+                == Some("attestation-manifest");
+            let is_unknown_platform =
+                manifest.get("platform").and_then(|v| v.get("os")).and_then(|v| v.as_str())
+                    == Some("unknown");
+            if is_attestation || is_unknown_platform {
+                continue;
+            }
+
+            if let Some(digest) = manifest.get("digest").and_then(|v| v.as_str()) {
+                let path = blob_path_from_digest(out_dir, digest)
+                    .ok_or_else(|| anyhow!("invalid OCI manifest digest {digest}"))?;
+                if !path.is_file() || !seen_manifests.insert(path.clone()) {
+                    continue;
+                }
+                let manifest_value: Value = serde_json::from_reader(File::open(&path)?)
+                    .with_context(|| format!("parsing OCI manifest {}", path.display()))?;
+                collect_oci_layers_from_value(
+                    out_dir,
+                    &manifest_value,
+                    layer_paths,
+                    seen_layers,
+                    seen_manifests,
+                )?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn collect_oci_layout_layers(
+    out_dir: &Path,
+    layer_paths: &mut Vec<PathBuf>,
+    seen_layers: &mut HashSet<PathBuf>,
+) -> Result<()> {
+    let index_path = out_dir.join("index.json");
+    if !index_path.is_file() {
+        return Ok(());
+    }
+
+    let index: Value = serde_json::from_reader(File::open(&index_path)?)
+        .with_context(|| format!("parsing {}", index_path.display()))?;
+    let mut seen_manifests = HashSet::new();
+    collect_oci_layers_from_value(out_dir, &index, layer_paths, seen_layers, &mut seen_manifests)
+}
+
+fn collect_saved_archive_layers(out_dir: &Path) -> Result<Vec<PathBuf>> {
+    let mut layer_paths = Vec::new();
+    let mut seen = HashSet::new();
+
+    for entry in WalkDir::new(out_dir) {
+        let entry = entry?;
+        if entry.file_name() == "layer.tar" {
+            let path = entry.path().to_path_buf();
+            if seen.insert(path.clone()) {
+                layer_paths.push(path);
+            }
+        }
+    }
+
+    if layer_paths.is_empty() {
+        collect_docker_manifest_layers(out_dir, &mut layer_paths, &mut seen)?;
+    }
+    if layer_paths.is_empty() {
+        collect_oci_layout_layers(out_dir, &mut layer_paths, &mut seen)?;
+    }
+
+    Ok(layer_paths)
+}
+
+fn sha256_file(path: &Path) -> Result<String> {
+    let mut file = File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buf = [0_u8; 16 * 1024];
+    loop {
+        let read = file.read(&mut buf)?;
+        if read == 0 {
+            break;
+        }
+        hasher.update(&buf[..read]);
+    }
+    Ok(hex::encode(hasher.finalize()))
+}
+
+fn extension_for_extensionless_layer(path: &Path) -> Result<&'static str> {
+    let mut file = File::open(path)?;
+    let mut buf = [0_u8; 512];
+    let len = file.read(&mut buf)?;
+
+    if len >= 2 && buf[0] == 0x1f && buf[1] == 0x8b {
+        return Ok("tar.gz");
+    }
+    if len >= 262 && &buf[257..262] == b"ustar" {
+        return Ok("tar");
+    }
+
+    Err(anyhow!("unsupported Docker archive layer compression for {}", path.display()))
+}
+
+fn link_or_copy_layer(source: &Path, dest: &Path) -> Result<()> {
+    match std::fs::hard_link(source, dest) {
+        Ok(()) => Ok(()),
+        Err(_) => {
+            std::fs::copy(source, dest)?;
+            Ok(())
+        }
+    }
+}
+
+fn remove_tar_wrapped_intermediate(path: &Path, out_dir: &Path) -> Result<()> {
+    if let Some(intermediate) = tar_wrapped_intermediate_path(path, out_dir)
+        && intermediate.exists()
+    {
+        std::fs::remove_file(intermediate)?;
+    }
+    Ok(())
+}
+
+fn extract_layer_archive(path: &Path, out_dir: &Path) -> Result<()> {
+    let aliased_path;
+    let layer_path = if path.extension().is_some() {
+        path
+    } else {
+        let ext = extension_for_extensionless_layer(path)?;
+        let digest = sha256_file(path)?;
+        aliased_path = out_dir.join(format!("layer_{digest}.{ext}"));
+        link_or_copy_layer(path, &aliased_path)?;
+        &aliased_path
+    };
+
+    let result = decompress_file_with_single_stream_cap(
+        layer_path,
+        Some(out_dir),
+        MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES,
+    );
+    let cleanup_result = if layer_path != path && layer_path.exists() {
+        std::fs::remove_file(layer_path)
+    } else {
+        Ok(())
+    };
+    result?;
+    cleanup_result?;
+    remove_tar_wrapped_intermediate(layer_path, out_dir)?;
+
+    if path.starts_with(out_dir) && path.exists() {
+        std::fs::remove_file(path)?;
+    }
+
+    Ok(())
+}
+
+fn extract_saved_archive_layers(
+    archive_path: &Path,
+    out_dir: &Path,
+    pb: &ProgressBar,
+) -> Result<usize> {
+    pb.set_message("extracting layers");
+    decompress_file_with_single_stream_cap(
+        archive_path,
+        Some(out_dir),
+        MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES,
+    )?;
+    remove_tar_wrapped_intermediate(archive_path, out_dir)?;
+
+    let layer_paths = collect_saved_archive_layers(out_dir)?;
+
+    pb.set_length(layer_paths.len() as u64);
+    for p in &layer_paths {
+        extract_layer_archive(p, out_dir)?;
+        pb.inc(1);
+    }
+
+    Ok(layer_paths.len())
 }
 
 fn creds_from_docker_config(registry: &str) -> Option<(String, String)> {
@@ -140,15 +445,7 @@ impl Docker {
             return Err(anyhow!("image not local"));
         }
 
-        let pb = if use_progress {
-            let style = ProgressStyle::with_template("{spinner} {msg} {pos}/{len}")
-                .expect("progress template");
-            let pb = ProgressBar::new(0).with_style(style);
-            pb.enable_steady_tick(Duration::from_millis(100));
-            pb
-        } else {
-            ProgressBar::hidden()
-        };
+        let pb = progress_bar(use_progress);
         pb.set_message(format!("saving local {image}"));
 
         std::fs::create_dir_all(out_dir)?;
@@ -162,40 +459,32 @@ impl Docker {
             return Err(anyhow!("failed to save local image"));
         }
 
-        pb.set_message("extracting layers");
-        decompress_file(&tar_path, Some(out_dir))?;
-
-        let mut layer_paths = Vec::new();
-        for entry in WalkDir::new(out_dir) {
-            let entry = entry?;
-            if entry.file_name() == "layer.tar" {
-                layer_paths.push(entry.path().to_path_buf());
-            }
-        }
-
-        pb.set_length(layer_paths.len() as u64);
-        for p in layer_paths {
-            let mut file = File::open(&p)?;
-            let mut hasher = Sha256::new();
-            let mut buf = [0_u8; 16 * 1024];
-            loop {
-                let read = file.read(&mut buf)?;
-                if read == 0 {
-                    break;
-                }
-                hasher.update(&buf[..read]);
-            }
-            let digest = hex::encode(hasher.finalize());
-
-            let new_path = out_dir.join(format!("layer_{digest}.tar"));
-            std::fs::rename(&p, &new_path)?;
-            // extract layer contents so inner filenames appear in scan results
-            decompress_file(&new_path, Some(out_dir))?;
-            std::fs::remove_file(&new_path)?;
-            pb.inc(1);
-        }
+        extract_saved_archive_layers(&tar_path, out_dir, &pb)?;
 
         pb.finish_with_message(format!("saved {image}"));
+        Ok(())
+    }
+
+    pub fn save_archive_to_dir(
+        &self,
+        archive_path: &Path,
+        out_dir: &Path,
+        use_progress: bool,
+    ) -> Result<()> {
+        let pb = progress_bar(use_progress);
+        pb.set_message(format!("extracting {}", archive_path.display()));
+
+        std::fs::create_dir_all(out_dir)?;
+        let layer_count = extract_saved_archive_layers(archive_path, out_dir, &pb)?;
+        if layer_count == 0 {
+            pb.finish_with_message("no docker layers found");
+            return Err(anyhow!(
+                "archive {} did not contain Docker image layers",
+                archive_path.display()
+            ));
+        }
+
+        pb.finish_with_message(format!("extracted {}", archive_path.display()));
         Ok(())
     }
 
@@ -211,16 +500,8 @@ impl Docker {
         let reference: Reference =
             image.parse().with_context(|| format!("invalid image reference {image}"))?;
         debug!("Pulling {image}");
-        let pb = if use_progress {
-            let style = ProgressStyle::with_template("{spinner} {msg} {pos}/{len}")
-                .expect("progress template");
-            let pb = ProgressBar::new(0).with_style(style);
-            pb.enable_steady_tick(Duration::from_millis(100));
-            pb.set_message(format!("pulling {image}"));
-            pb
-        } else {
-            ProgressBar::hidden()
-        };
+        let pb = progress_bar(use_progress);
+        pb.set_message(format!("pulling {image}"));
         let client = Client::new(ClientConfig {
             platform_resolver: Some(Box::new(linux_amd64_resolver)),
             ..Default::default()
@@ -251,7 +532,11 @@ impl Docker {
             let tmp_path = out_dir.join(file_name);
             let mut tmp = std::fs::File::create(&tmp_path)?;
             tmp.write_all(&layer.data)?;
-            decompress_file(&tmp_path, Some(out_dir))?;
+            decompress_file_with_single_stream_cap(
+                &tmp_path,
+                Some(out_dir),
+                MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES,
+            )?;
             std::fs::remove_file(&tmp_path)?;
             pb.inc(1);
         }
@@ -281,12 +566,193 @@ pub async fn save_docker_images(
     Ok(dirs)
 }
 
+pub fn save_docker_archives(
+    archives: &[PathBuf],
+    clone_root: &Path,
+    use_progress: bool,
+) -> Result<Vec<(PathBuf, String)>> {
+    let docker = Docker::new();
+    let mut dirs = Vec::new();
+
+    for archive in archives {
+        let dir_name = archive_dir_name(archive);
+        let out_dir = clone_root.join(format!("docker_archive_{dir_name}"));
+        docker
+            .save_archive_to_dir(archive, &out_dir, use_progress)
+            .with_context(|| format!("extracting docker archive {}", archive.display()))?;
+        dirs.push((out_dir, archive.display().to_string()));
+    }
+
+    Ok(dirs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use flate2::{Compression, write::GzEncoder};
+    use tempfile::tempdir;
 
     #[test]
     fn docker_struct_new() {
         let _ = Docker::new();
+    }
+
+    fn append_bytes(tar: &mut tar::Builder<impl Write>, path: &str, data: &[u8]) -> Result<()> {
+        let mut hdr = tar::Header::new_gnu();
+        hdr.set_size(data.len() as u64);
+        hdr.set_mode(0o644);
+        hdr.set_cksum();
+        tar.append_data(&mut hdr, path, data)?;
+        Ok(())
+    }
+
+    fn build_layer_tar() -> Result<Vec<u8>> {
+        let mut layer = Vec::new();
+        {
+            let mut tar = tar::Builder::new(&mut layer);
+            append_bytes(
+                &mut tar,
+                "app/secret.txt",
+                b"token=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\n",
+            )?;
+            tar.finish()?;
+        }
+        Ok(layer)
+    }
+
+    fn build_docker_archive(path: &Path, gzip: bool) -> Result<()> {
+        let layer = build_layer_tar()?;
+        let file = File::create(path)?;
+
+        if gzip {
+            let gz = GzEncoder::new(file, Compression::default());
+            let mut tar = tar::Builder::new(gz);
+            append_bytes(&mut tar, "manifest.json", br#"[{"Layers":["abc/layer.tar"]}]"#)?;
+            append_bytes(&mut tar, "abc/layer.tar", &layer)?;
+            tar.into_inner()?.finish()?;
+        } else {
+            let mut tar = tar::Builder::new(file);
+            append_bytes(&mut tar, "manifest.json", br#"[{"Layers":["abc/layer.tar"]}]"#)?;
+            append_bytes(&mut tar, "abc/layer.tar", &layer)?;
+            tar.finish()?;
+        }
+
+        Ok(())
+    }
+
+    fn build_oci_layout_archive(path: &Path) -> Result<()> {
+        let layer = build_layer_tar()?;
+        let file = File::create(path)?;
+        let gz = GzEncoder::new(Vec::new(), Compression::default());
+        let mut layer_tar = tar::Builder::new(gz);
+        append_bytes(
+            &mut layer_tar,
+            "app/secret.txt",
+            b"token=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\n",
+        )?;
+        let compressed_layer = layer_tar.into_inner()?.finish()?;
+
+        let mut tar = tar::Builder::new(file);
+        append_bytes(&mut tar, "oci-layout", br#"{"imageLayoutVersion":"1.0.0"}"#)?;
+        append_bytes(
+            &mut tar,
+            "manifest.json",
+            br#"[{"Config":"blobs/sha256/config","Layers":["blobs/sha256/layer"]}]"#,
+        )?;
+        append_bytes(&mut tar, "blobs/sha256/config", br#"{}"#)?;
+        append_bytes(&mut tar, "blobs/sha256/layer", &compressed_layer)?;
+        append_bytes(&mut tar, "blobs/sha256/unused", &layer)?;
+        tar.finish()?;
+        Ok(())
+    }
+
+    fn build_pure_oci_archive(path: &Path) -> Result<()> {
+        let file = File::create(path)?;
+        let gz = GzEncoder::new(Vec::new(), Compression::default());
+        let mut layer_tar = tar::Builder::new(gz);
+        append_bytes(
+            &mut layer_tar,
+            "app/secret.txt",
+            b"token=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\n",
+        )?;
+        let compressed_layer = layer_tar.into_inner()?.finish()?;
+
+        let mut tar = tar::Builder::new(file);
+        append_bytes(&mut tar, "oci-layout", br#"{"imageLayoutVersion":"1.0.0"}"#)?;
+        append_bytes(
+            &mut tar,
+            "index.json",
+            br#"{"schemaVersion":2,"manifests":[{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:manifest","platform":{"os":"linux","architecture":"amd64"}},{"mediaType":"application/vnd.oci.image.manifest.v1+json","digest":"sha256:attestation","platform":{"os":"unknown","architecture":"unknown"},"annotations":{"vnd.docker.reference.type":"attestation-manifest"}}]}"#,
+        )?;
+        append_bytes(
+            &mut tar,
+            "blobs/sha256/manifest",
+            br#"{"schemaVersion":2,"layers":[{"mediaType":"application/vnd.oci.image.layer.v1.tar+gzip","digest":"sha256:layer"}]}"#,
+        )?;
+        append_bytes(
+            &mut tar,
+            "blobs/sha256/attestation",
+            br#"{"schemaVersion":2,"layers":[{"mediaType":"application/vnd.in-toto+json","digest":"sha256:attestation-layer"}]}"#,
+        )?;
+        append_bytes(&mut tar, "blobs/sha256/layer", &compressed_layer)?;
+        append_bytes(&mut tar, "blobs/sha256/attestation-layer", br#"{"predicate":{}}"#)?;
+        tar.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn save_archive_to_dir_extracts_docker_archive() -> Result<()> {
+        let dir = tempdir()?;
+        let archive = dir.path().join("image.tar");
+        let out = dir.path().join("out");
+        build_docker_archive(&archive, false)?;
+
+        Docker::new().save_archive_to_dir(&archive, &out, false)?;
+
+        assert!(out.join("app/secret.txt").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn save_archive_to_dir_extracts_gzipped_docker_archive() -> Result<()> {
+        let dir = tempdir()?;
+        let archive = dir.path().join("image.tar.gz");
+        let out = dir.path().join("out");
+        build_docker_archive(&archive, true)?;
+
+        Docker::new().save_archive_to_dir(&archive, &out, false)?;
+
+        assert!(out.join("app/secret.txt").exists());
+        assert!(!out.join("image.decomp.tar").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn save_archive_to_dir_extracts_oci_layout_archive() -> Result<()> {
+        let dir = tempdir()?;
+        let archive = dir.path().join("image.tar");
+        let out = dir.path().join("out");
+        build_oci_layout_archive(&archive)?;
+
+        Docker::new().save_archive_to_dir(&archive, &out, false)?;
+
+        assert!(out.join("app/secret.txt").exists());
+        assert!(!out.join("blobs/sha256/layer").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn save_archive_to_dir_extracts_pure_oci_archive() -> Result<()> {
+        let dir = tempdir()?;
+        let archive = dir.path().join("image.tar");
+        let out = dir.path().join("out");
+        build_pure_oci_archive(&archive)?;
+
+        Docker::new().save_archive_to_dir(&archive, &out, false)?;
+
+        assert!(out.join("app/secret.txt").exists());
+        assert!(out.join("blobs/sha256/attestation-layer").exists());
+        assert!(!out.join("blobs/sha256/layer").exists());
+        Ok(())
     }
 }

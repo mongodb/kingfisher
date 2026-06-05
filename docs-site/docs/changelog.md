@@ -6,6 +6,11 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 # Changelog
 
 All notable changes to this project will be documented in this file.
+
+## [v1.102.0]
+- Added 3 detection and validation rules for Cognition Devin API credentials: `kingfisher.devin.1` (legacy personal keys, `apk_user_` prefix), `kingfisher.devin.2` (legacy service keys, `apk_` prefix), and `kingfisher.devin.3` (v3 service-user tokens, `cog_` prefix / RFC 4648 base32). Live validation uses `GET /v1/sessions` for `apk_*` keys and `GET /v3/self` for `cog_` tokens.
+- Added `kingfisher scan docker --archive <image.tar>` for scanning saved Docker/OCI image archives directly, including OCI-layout `docker save` output and compressed tar archives.
+
 ## [v1.101.0]
 - Fixed asymmetric JWT validation panics by using a single `jsonwebtoken` crypto backend and adding RS256 regression coverage. Thanks @AgentEnder. [#386](https://github.com/mongodb/kingfisher/pull/386)
 - Validator panics now fail that validation result instead of crashing the scan, with panic payloads kept out of cached and user-visible validation responses. Thanks @AgentEnder. [#387](https://github.com/mongodb/kingfisher/pull/387)

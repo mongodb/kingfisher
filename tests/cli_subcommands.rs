@@ -834,6 +834,32 @@ mod huggingface {
 }
 
 // =============================================================================
+// Docker Scan Subcommand Tests
+// =============================================================================
+
+mod docker {
+    use super::*;
+
+    #[test]
+    fn scan_docker_help_includes_archive() {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args(["scan", "docker", "--help"])
+            .assert()
+            .success()
+            .stdout(contains("Scan Docker or OCI images").and(contains("--archive")));
+    }
+
+    #[test]
+    fn scan_docker_requires_image_or_archive() {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args(["scan", "docker", "--no-update-check"])
+            .assert()
+            .failure()
+            .stderr(contains("image or --archive"));
+    }
+}
+
+// =============================================================================
 // Cross-Platform Tests
 // =============================================================================
 

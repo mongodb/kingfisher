@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.102.0]
+- Security: hardened ASAR and in-memory archive extraction to skip traversal or absolute entry paths before writing to the temp extraction directory.
+- Security: git clone provider tokens (`KF_GITHUB_TOKEN`, `KF_GITLAB_TOKEN`, `KF_GITEA_TOKEN`, `KF_AZURE_TOKEN`, `KF_HUGGINGFACE_TOKEN`) are now installed as host-scoped, HTTPS-only credential helpers (`credential.https://<host>.helper`) instead of unscoped global ones, so a malicious clone target can no longer capture them via an auth challenge. Trusted hosts derive from each provider's SaaS default plus any configured `--<provider>-api-url`/`--azure-base-url`/`--endpoint`, preserving GitHub Enterprise and other self-hosted flows.
+- Security: `--output` report files are opened with `O_NOFOLLOW` (with a symlink pre-check on non-Unix) so a symlink planted at the report path inside a scanned repository can no longer redirect the write to truncate or overwrite an arbitrary file.
+- Security: single-stream gzip/bzip2/xz/zlib decompression is now bounded by a 512 MB decompressed-byte cap, preventing a small compression bomb from exhausting disk during a scan.
+- Added 3 detection and validation rules for Cognition Devin API credentials: `kingfisher.devin.1` (legacy personal keys, `apk_user_` prefix), `kingfisher.devin.2` (legacy service keys, `apk_` prefix), and `kingfisher.devin.3` (v3 service-user tokens, `cog_` prefix / RFC 4648 base32). Live validation uses `GET /v1/sessions` for `apk_*` keys and `GET /v3/self` for `cog_` tokens.
+- Added `kingfisher scan docker --archive <image.tar>` for scanning saved Docker/OCI image archives directly, including OCI-layout `docker save` output and compressed tar archives.
+
 ## [v1.101.0]
 - Fixed asymmetric JWT validation panics by using a single `jsonwebtoken` crypto backend and adding RS256 regression coverage. Thanks @AgentEnder. [#386](https://github.com/mongodb/kingfisher/pull/386)
 - Validator panics now fail that validation result instead of crashing the scan, with panic payloads kept out of cached and user-visible validation responses. Thanks @AgentEnder. [#387](https://github.com/mongodb/kingfisher/pull/387)

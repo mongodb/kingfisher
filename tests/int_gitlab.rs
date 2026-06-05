@@ -133,6 +133,7 @@ fn test_gitlab_remote_scan() -> Result<()> {
             gcs_service_account: None,
             // Docker image scanning
             docker_image: Vec::new(),
+            docker_archive: Vec::new(),
             git_clone: GitCloneMode::Bare,
             git_history: GitHistoryMode::Full,
             commit_metadata: true,
@@ -324,6 +325,7 @@ fn test_gitlab_remote_scan_no_history() -> Result<()> {
             role_arn: None,
             aws_local_profile: None,
             docker_image: Vec::new(),
+            docker_archive: Vec::new(),
             git_clone: GitCloneMode::Bare,
             git_history: GitHistoryMode::None,
             commit_metadata: true,

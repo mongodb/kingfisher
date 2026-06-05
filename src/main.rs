@@ -1136,8 +1136,17 @@ fn describe_scan_target(args: &InputSpecifierArgs) -> Option<String> {
     if let Some(b) = &args.gcs_bucket {
         return Some(format!("gs://{}{}", b, args.gcs_prefix.as_deref().unwrap_or("")));
     }
-    if !args.docker_image.is_empty() {
-        return Some(format!("docker: {}", join_brief(&args.docker_image, "images")));
+    if !args.docker_image.is_empty() || !args.docker_archive.is_empty() {
+        let mut docker_targets = Vec::new();
+        if !args.docker_image.is_empty() {
+            docker_targets.push(join_brief(&args.docker_image, "images"));
+        }
+        if !args.docker_archive.is_empty() {
+            let archives =
+                args.docker_archive.iter().map(|p| p.display().to_string()).collect::<Vec<_>>();
+            docker_targets.push(join_brief(&archives, "archives"));
+        }
+        return Some(format!("docker: {}", docker_targets.join(", ")));
     }
     if let Some(u) = &args.jira_url {
         return Some(format!("jira: {}", u));
@@ -1675,6 +1684,7 @@ fn create_default_scan_args() -> cli::commands::scan::ScanArgs {
             postman_api_url: Url::parse("https://api.getpostman.com/").unwrap(),
             // Docker image scanning
             docker_image: Vec::new(),
+            docker_archive: Vec::new(),
 
             // git clone / history options
             git_clone: GitCloneMode::Bare,

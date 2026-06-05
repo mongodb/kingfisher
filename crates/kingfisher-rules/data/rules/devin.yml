@@ -1,0 +1,152 @@
+rules:
+  - name: Cognition Devin Personal API Key
+    id: kingfisher.devin.1
+    # Personal/user API keys are emitted as:
+    #   apk_user_<base64( "user-<32hex>_org-<32hex>:<32hex>" )>
+    # The encoded body is ~144 base64 chars and may end with `=` padding.
+    pattern: |
+      (?x)
+      \b
+      (
+        apk_user_[A-Za-z0-9+/]{120,180}={0,2}
+      )
+    pattern_requirements:
+      min_digits: 2
+      min_lowercase: 1
+      min_uppercase: 1
+      ignore_if_contains:
+        - "YOUR_"
+        - "REPLACE_"
+        - "EXAMPLE"
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - apk_user_dXNlci0yMDc5ZjllYTUyZDA0OWE0OTVlOWUwNDc2OTJiNWZhYl9vcmctZmE4NzllMzdjYWRmNGI2YmJmMmE3YWYzMTgxZGVjMTM6MjUwZjRhNzc2ZDEyNGVlMTk0NDk5OGNhNmRmNjBiY2I=
+      - "DEVIN_API_KEY=apk_user_dXNlci0yMDc5ZjllYTUyZDA0OWE0OTVlOWUwNDc2OTJiNWZhYl9vcmctZmE4NzllMzdjYWRmNGI2YmJmMmE3YWYzMTgxZGVjMTM6YTYzNWU0MTA3M2VkNDU3OGFmZDFhMjAxZDhkMjNkODg="
+      - "Authorization: Bearer apk_user_dXNlci0yMDc5ZjllYTUyZDA0OWE0OTVlOWUwNDc2OTJiNWZhYl9vcmctZmE4NzllMzdjYWRmNGI2YmJmMmE3YWYzMTgxZGVjMTM6NDMxYWFhYjBmN2VmNGRmMTlmZjkwNTBiNDhlYmE3NjM="
+    references:
+      - https://docs.devin.ai/api-reference/overview
+      - https://docs.devin.ai/api-reference/v1/sessions
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.devin.ai/v1/sessions?limit=1
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+            - type: WordMatch
+              words:
+                - '"sessions"'
+              match_all_words: true
+    # Revocation: no documented self-service revocation endpoint exists for
+    # legacy apk_user_* keys; users must rotate them via the Devin web UI.
+
+  - name: Cognition Devin Service API Key
+    id: kingfisher.devin.2
+    # Legacy service API keys are emitted as:
+    #   apk_<base64( "org-<32hex>:<32hex>" )>
+    # The encoded body is ~92 base64 chars. The base64 charset contains no
+    # underscore, so apk_user_* tokens (which contain an underscore after
+    # "user") cannot be matched by this rule.
+    pattern: |
+      (?x)
+      \b
+      (
+        apk_[A-Za-z0-9+/]{80,100}={0,2}
+      )
+    pattern_requirements:
+      min_digits: 2
+      min_lowercase: 1
+      min_uppercase: 1
+      ignore_if_contains:
+        - "apk_user_"
+        - "YOUR_"
+        - "REPLACE_"
+        - "EXAMPLE"
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - apk_b3JnLWZhODc5ZTM3Y2FkZjRiNmJiZjJhN2FmMzE4MWRlYzEzOjM0MTU3ZWU4NTZiMjRkMjI5MDYwNzAxOGJmMGEyYzU0
+      - "DEVIN_API_KEY=apk_b3JnLWZhODc5ZTM3Y2FkZjRiNmJiZjJhN2FmMzE4MWRlYzEzOmFjMWE2YWEwZjhjYzQ0OGNiY2Q5ZDJlOTI5MGEyN2Jh"
+      - "Authorization: Bearer apk_b3JnLWZhODc5ZTM3Y2FkZjRiNmJiZjJhN2FmMzE4MWRlYzEzOjU2NTNiMWJhNTMyMDRmMmFhNjg5Y2E5OGE2OTM4Yzc2"
+    references:
+      - https://docs.devin.ai/api-reference/overview
+      - https://docs.devin.ai/api-reference/v1/sessions
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.devin.ai/v1/sessions?limit=1
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+            - type: WordMatch
+              words:
+                - '"sessions"'
+              match_all_words: true
+    # Revocation: no documented self-service revocation endpoint exists for
+    # legacy apk_* service keys; users must rotate them via the Devin web UI.
+
+  - name: Cognition Devin Service User Token
+    id: kingfisher.devin.3
+    # v3 service-user credentials issued via the Devin UI. Format:
+    #   cog_<52 chars from RFC 4648 base32 lowercase alphabet [a-z2-7]>
+    pattern: |
+      (?x)
+      \b
+      (
+        cog_[a-z2-7]{52}
+      )
+      \b
+    pattern_requirements:
+      min_lowercase: 10
+      ignore_if_contains:
+        - "YOUR_"
+        - "REPLACE_"
+        - "EXAMPLE"
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - cog_l5osrifmypvazi4j3yko52gj6jfj7qprsmy4lrcf27jas4szffha
+      - "DEVIN_API_KEY=cog_uv23fh6fc5kpaxdqif7hyvmzslnbmwriqita7cqkbb4rpaixnleq"
+      - "Authorization: Bearer cog_nxcgv6nuzdvwpgla5wcqsf6dhqrvjmi63j6f6say2au72ihjlxua"
+    references:
+      - https://docs.devin.ai/api-reference/overview
+      - https://docs.devin.ai/api-reference/v3/self
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.devin.ai/v3/self
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+            - type: WordMatch
+              words:
+                - '"principal_type"'
+                - '"service_user_id"'
+              match_all_words: false
+    # Revocation: DELETE /v3beta1/enterprise/service-users/{service_user_id}/api-keys/{api_key_id}
+    # is not implemented here because (1) it requires a separate admin service user with the
+    # `ManageAccountServiceUsers` permission (no self-revoke) and (2) the corresponding
+    # list-api-keys endpoint returns only metadata (no key value/hash), so a leaked token
+    # cannot be matched to its api_key_id from the token alone. Rotate via the Devin web UI.

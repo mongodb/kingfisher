@@ -97,6 +97,57 @@ kingfisher scan . --config ./kingfisher.yaml --confidence low
 # scan.confidence: high in YAML → CLI flag wins, runs at low confidence
 ```
 
+## Provider endpoint overrides
+
+For self-hosted or private instances of GitHub, GitLab, Gitea, Jira, Confluence,
+or Artifactory you can redirect validation and revocation requests away from the
+public cloud endpoints.
+
+**Per-run (CLI):**
+
+```bash
+# Single provider
+kingfisher scan ./repo \
+  --endpoint github=https://ghe.corp.example.com \
+  --allow-internal-ips
+
+# Multiple providers at once via a YAML file
+kingfisher scan ./repo \
+  --endpoint-config ./kingfisher-endpoints.yml \
+  --allow-internal-ips
+```
+
+**Persisted in `kingfisher.yaml`** (under `global:`):
+
+```yaml
+global:
+  endpoints:
+    - github=https://ghe.corp.example.com
+    - gitlab=https://gitlab.corp.example.com
+  endpoint_config: ./kingfisher-endpoints.yml  # merged with `endpoints` list
+  allow_internal_ips: true                      # required for private/localhost URLs
+```
+
+`--endpoint-config` / `endpoint_config` points to a YAML file that maps provider
+keys to base URLs:
+
+```yaml
+endpoints:
+  github: https://ghe.corp.example.com
+  gitlab: https://gitlab.corp.example.com
+  jira: https://jira.corp.example.com
+  confluence: https://confluence.corp.example.com
+  artifactory: http://localhost:8071
+```
+
+Supported provider keys: `github`, `gitlab`, `gitea`, `jira`, `jira-cloud`,
+`confluence`, `artifactory`. For endpoints on private IPs or `localhost`,
+always combine with `--allow-internal-ips` (or `global.allow_internal_ips: true`
+in `kingfisher.yaml`) — Kingfisher blocks SSRF by default.
+
+See the [GitHub Enterprise section](basic-scanning.md#scan-a-github-enterprise-self-hosted-github-instance)
+in the scanning guide for end-to-end examples.
+
 ## Webhook URL policy
 
 `alerts.webhooks[].url` (and `--alert-webhook URL`) **must use `https://`**.
@@ -128,7 +179,7 @@ invocation is scanning, not project policy:
 - positional paths, `--git-url`
 - `--github-user` / `--github-org`, `--gitlab-user` / `--gitlab-group` and
   the equivalent Gitea / Bitbucket / Azure / Hugging Face flags
-- `--s3-bucket`, `--gcs-bucket`, `--docker-image`
+- `--s3-bucket`, `--gcs-bucket`, `--docker-image`, Docker `--archive`
 - `--jira-url`, `--confluence-url`, `--slack-query`, `--teams-query`,
   `--postman-*`
 

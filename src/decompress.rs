@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{BufReader, Read},
+    io::{BufReader, Read, Write},
     path::{Component, Path, PathBuf},
 };
 
@@ -403,7 +403,12 @@ fn handle_asar_archive_in_memory(buffer: &[u8], archive_path: &Path) -> Result<C
         Ok(reader) => {
             let mut contents = Vec::new();
             for (path_in_asar, file) in reader.files() {
-                let inner_path = path_in_asar.to_string_lossy().to_string();
+                let inner_path = path_in_asar.to_string_lossy().replace('\\', "/");
+                if !is_safe_extract_path(Path::new(&inner_path)) {
+                    tracing::warn!("unsafe asar path: {inner_path}");
+                    continue;
+                }
+
                 let logical_path = format!("{}!{}", archive_path.display(), inner_path);
                 let data = file.data();
                 let take = data.len().min(MAX_ASAR_ENTRY_BYTES);
@@ -422,6 +427,28 @@ fn handle_asar_archive_in_memory(buffer: &[u8], archive_path: &Path) -> Result<C
     }
 }
 
+fn materialize_in_memory_archive_entries(
+    files: &[(String, Vec<u8>)],
+    base_dir: &Path,
+) -> Result<()> {
+    for (name, data) in files {
+        let rel = name.split_once('!').map(|(_, sub)| sub).unwrap_or(name.as_str());
+        let normalized_rel = rel.replace('\\', "/");
+        let rel_path = Path::new(&normalized_rel);
+        if !is_safe_extract_path(rel_path) {
+            tracing::warn!("unsafe archive path: {normalized_rel}");
+            continue;
+        }
+
+        let p = base_dir.join(rel_path);
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(p, data)?;
+    }
+    Ok(())
+}
+
 /// Validate and open a file for reading, checking for path traversal attacks.
 fn safe_open_for_read(path: &Path) -> Result<fs::File> {
     if has_parent_or_embedded_prefix(path) {
@@ -438,24 +465,97 @@ fn safe_create_for_write(path: &Path) -> Result<fs::File> {
     Ok(fs::File::create(path)?)
 }
 
-fn stream_to_file<R: Read>(mut decoder: R, out_path: &Path) -> Result<CompressedContent> {
-    let mut out_file = safe_create_for_write(out_path)?;
-    std::io::copy(&mut decoder, &mut out_file)?;
+/// Hard cap on the number of bytes a single-stream decompressor
+/// (gzip/bzip2/xz/zlib) will write to disk for one input. Mirrors the per-entry
+/// decompressed cap enforced by the ZIP extractors so a small "compression
+/// bomb" cannot expand without limit and exhaust the scanner's temporary
+/// filesystem. Output past the cap is dropped and a truncation warning logged.
+// nosemgrep: this is the defensive cap — do not flag for missing-limit rules.
+pub const MAX_SINGLE_STREAM_DECOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+
+/// `Write` adaptor that drops everything past `remaining` bytes.
+///
+/// Bounds single-stream decompressors so a high-ratio compression bomb can't
+/// fill the disk. Writes past the cap are reported as fully consumed so the
+/// underlying decoder runs to completion instead of erroring or looping; the
+/// truncation is surfaced via [`CappedWriter::truncated`], matching the
+/// truncate-and-warn behavior of the ZIP entry extractor.
+struct CappedWriter<W: Write> {
+    inner: W,
+    remaining: u64,
+    truncated: bool,
+}
+
+impl<W: Write> CappedWriter<W> {
+    fn new(inner: W, cap: u64) -> Self {
+        Self { inner, remaining: cap, truncated: false }
+    }
+
+    fn truncated(&self) -> bool {
+        self.truncated
+    }
+}
+
+impl<W: Write> Write for CappedWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let allowed = (buf.len() as u64).min(self.remaining) as usize;
+        if allowed > 0 {
+            self.inner.write_all(&buf[..allowed])?;
+            self.remaining -= allowed as u64;
+        }
+        if allowed < buf.len() {
+            self.truncated = true;
+        }
+        // Report the whole buffer as consumed even when the tail was dropped so
+        // `io::copy`/`xz_decompress` don't treat the cap as a write error.
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn stream_to_file_capped<R: Read>(
+    mut decoder: R,
+    out_path: &Path,
+    cap: u64,
+) -> Result<CompressedContent> {
+    let out_file = safe_create_for_write(out_path)?;
+    let mut capped = CappedWriter::new(out_file, cap);
+    std::io::copy(&mut decoder, &mut capped)?;
+    if capped.truncated() {
+        tracing::warn!(
+            "decompressed stream written to {} exceeded {cap} byte cap; truncating",
+            out_path.display()
+        );
+    }
     Ok(CompressedContent::RawFile(out_path.to_owned()))
 }
 
-fn stream_xz_to_file(path: &Path, out_path: &Path) -> Result<CompressedContent> {
+fn stream_xz_to_file_capped(path: &Path, out_path: &Path, cap: u64) -> Result<CompressedContent> {
     let input = safe_open_for_read(path)?;
     let mut reader = BufReader::new(input);
-    let mut out_file = safe_create_for_write(out_path)?;
-    xz_decompress(&mut reader, &mut out_file)?;
+    let out_file = safe_create_for_write(out_path)?;
+    let mut capped = CappedWriter::new(out_file, cap);
+    xz_decompress(&mut reader, &mut capped)?;
+    if capped.truncated() {
+        tracing::warn!(
+            "decompressed xz stream written to {} exceeded {cap} byte cap; truncating",
+            out_path.display()
+        );
+    }
     Ok(CompressedContent::RawFile(out_path.to_owned()))
 }
 
 /* ───────────────────────────────────────────────────────────────
 one *step* of decompression
 ───────────────────────────────────────────────────────────── */
-fn decompress_once(path: &Path, base_dir: Option<&Path>) -> Result<CompressedContent> {
+fn decompress_once_with_single_stream_cap(
+    path: &Path,
+    base_dir: Option<&Path>,
+    single_stream_cap: u64,
+) -> Result<CompressedContent> {
     let extension = path.extension().and_then(|ext| ext.to_str()).map(|s| s.to_ascii_lowercase());
 
     let mut file = safe_open_for_read(path)?;
@@ -496,21 +596,21 @@ fn decompress_once(path: &Path, base_dir: Option<&Path>) -> Result<CompressedCon
             "gz" | "gzip" | "tgz" => {
                 let out_path = make_output_path(path, base_dir, "decomp.tar");
                 let decoder = GzDecoder::new(BufReader::new(safe_open_for_read(path)?));
-                return stream_to_file(decoder, &out_path);
+                return stream_to_file_capped(decoder, &out_path, single_stream_cap);
             }
             "bz2" | "bzip2" => {
                 let out_path = make_output_path(path, base_dir, "decomp.tar");
                 let decoder = DecoderReader::new(BufReader::new(safe_open_for_read(path)?));
-                return stream_to_file(decoder, &out_path);
+                return stream_to_file_capped(decoder, &out_path, single_stream_cap);
             }
             "xz" => {
                 let out_path = make_output_path(path, base_dir, "decomp.tar");
-                return stream_xz_to_file(path, &out_path);
+                return stream_xz_to_file_capped(path, &out_path, single_stream_cap);
             }
             "zlib" => {
                 let out_path = make_output_path(path, base_dir, "decomp.tar");
                 let decoder = ZlibDecoder::new(BufReader::new(safe_open_for_read(path)?));
-                return stream_to_file(decoder, &out_path);
+                return stream_to_file_capped(decoder, &out_path, single_stream_cap);
             }
             _ => {}
         }
@@ -526,12 +626,21 @@ fn decompress_once(path: &Path, base_dir: Option<&Path>) -> Result<CompressedCon
 public entry point – keeps peeling layers
 ───────────────────────────────────────────────────────────── */
 pub fn decompress_file(path: &Path, base_dir: Option<&Path>) -> Result<CompressedContent> {
+    decompress_file_with_single_stream_cap(path, base_dir, MAX_SINGLE_STREAM_DECOMPRESSED_BYTES)
+}
+
+pub fn decompress_file_with_single_stream_cap(
+    path: &Path,
+    base_dir: Option<&Path>,
+    single_stream_cap: u64,
+) -> Result<CompressedContent> {
     let mut current_path: &Path = path;
     let mut owned_buf: Option<PathBuf>;
 
     loop {
         let should_extract_tar = is_tar_wrapped_compression(current_path);
-        let content = decompress_once(current_path, base_dir)?;
+        let content =
+            decompress_once_with_single_stream_cap(current_path, base_dir, single_stream_cap)?;
 
         // If the step produced a single on-disk file that is itself a .tar,
         // recurse on that file.
@@ -582,14 +691,7 @@ pub fn decompress_file_to_temp(path: &Path) -> Result<(CompressedContent, TempDi
                 }
             }
         }
-        for (name, data) in files {
-            let rel = name.split_once('!').map(|(_, sub)| sub).unwrap_or(name);
-            let p = temp_dir.path().join(rel.replace('\\', "/"));
-            if let Some(parent) = p.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(p, data)?;
-        }
+        materialize_in_memory_archive_entries(files, temp_dir.path())?;
     } else if let CompressedContent::ArchiveFiles(ref mut entries) = content {
         if let Some(prefix) = &prefix_for_replace {
             let prefix_str = prefix.display().to_string();
@@ -607,14 +709,24 @@ pub fn decompress_file_to_temp(path: &Path) -> Result<(CompressedContent, TempDi
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write};
+    use std::{fs::File, io::Write, path::Path};
 
     use flate2::{Compression, write::GzEncoder};
     use tar::Builder;
     use tempfile::tempdir;
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
-    use super::{CompressedContent, decompress_file_to_temp, decompress_once};
+    use super::{
+        CompressedContent, decompress_file_to_temp, materialize_in_memory_archive_entries,
+    };
+
+    fn decompress_once(path: &Path, base_dir: Option<&Path>) -> anyhow::Result<CompressedContent> {
+        super::decompress_once_with_single_stream_cap(
+            path,
+            base_dir,
+            super::MAX_SINGLE_STREAM_DECOMPRESSED_BYTES,
+        )
+    }
 
     /// 1) Fully unpack:
     ///    - 1st decompress `.gz` -- get a `.tar` file
@@ -790,6 +902,68 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn materialize_in_memory_archive_entries_skips_unsafe_paths() -> anyhow::Result<()> {
+        let sandbox = tempdir()?;
+        let extract_root = sandbox.path().join("extract");
+        std::fs::create_dir(&extract_root)?;
+
+        let outside_parent = sandbox.path().join("outside-parent.txt");
+        let outside_absolute = sandbox.path().join("outside-absolute.txt");
+        let entries = vec![
+            ("archive.asar!nested/safe.txt".to_string(), b"safe".to_vec()),
+            ("archive.asar!../outside-parent.txt".to_string(), b"bad".to_vec()),
+            (format!("archive.asar!{}", outside_absolute.display()), b"bad".to_vec()),
+        ];
+
+        materialize_in_memory_archive_entries(&entries, &extract_root)?;
+
+        assert_eq!(std::fs::read(extract_root.join("nested/safe.txt"))?, b"safe");
+        assert!(!outside_parent.exists());
+        assert!(!outside_absolute.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn decompress_asar_skips_parent_dir_entries() -> anyhow::Result<()> {
+        use asar::AsarWriter;
+
+        let mut writer = AsarWriter::new();
+        writer.write_file("safe.txt", b"safe", false)?;
+        writer.write_file("aa/bb/escape.txt", b"bad", false)?;
+
+        let mut archive = Vec::new();
+        writer.finalize(&mut archive)?;
+
+        let json_size = u32::from_le_bytes(archive[12..16].try_into().unwrap()) as usize;
+        let header = &mut archive[16..16 + json_size];
+        let header_str = std::str::from_utf8(header)?;
+        assert!(header_str.contains("\"aa\""));
+        assert!(header_str.contains("\"bb\""));
+
+        let patched = header_str.replace("\"aa\"", "\"..\"").replace("\"bb\"", "\"..\"");
+        assert_eq!(patched.len(), header_str.len());
+        header.copy_from_slice(patched.as_bytes());
+
+        let dir = tempdir()?;
+        let asar_path = dir.path().join("malicious.asar");
+        std::fs::write(&asar_path, archive)?;
+
+        let (content, _tmp) = decompress_file_to_temp(&asar_path)?;
+        let CompressedContent::Archive(entries) = content else {
+            panic!("expected Archive for asar");
+        };
+
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries
+                .iter()
+                .any(|(name, data)| name.ends_with("!safe.txt") && data.as_slice() == b"safe")
+        );
+        assert!(!entries.iter().any(|(name, _)| name.contains("..")));
+        Ok(())
+    }
+
     /// 3) Nested archive: outer.tar.gz  ──▶  outer.tar  (contains inner.tar.gz) └──▶  inner.tar.gz
     ///    ──▶  inner.tar  (contains secret.txt)
     #[test]
@@ -800,7 +974,7 @@ mod tests {
         use tar::Builder;
         use tempfile::tempdir;
 
-        use super::{CompressedContent, decompress_once};
+        use super::CompressedContent;
 
         let tmp = tempdir()?;
 
@@ -1040,6 +1214,51 @@ mod tests {
             other => panic!("expected Raw for egg, got {:?}", other),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn capped_writer_drops_bytes_past_cap() {
+        use std::io::Write;
+
+        use super::CappedWriter;
+
+        let mut sink = Vec::new();
+        let mut capped = CappedWriter::new(&mut sink, 40);
+        // Report full consumption even though the tail is dropped.
+        assert_eq!(capped.write(&[0u8; 100]).unwrap(), 100);
+        assert!(capped.truncated());
+        capped.flush().unwrap();
+        assert_eq!(sink.len(), 40);
+
+        let mut sink = Vec::new();
+        let mut capped = CappedWriter::new(&mut sink, 40);
+        assert_eq!(capped.write(&[0u8; 10]).unwrap(), 10);
+        assert!(!capped.truncated());
+        assert_eq!(sink.len(), 10);
+    }
+
+    #[test]
+    fn stream_to_file_capped_truncates_oversized_stream() -> anyhow::Result<()> {
+        use std::io::Cursor;
+
+        use super::{CompressedContent, stream_to_file_capped};
+
+        let dir = tempdir()?;
+        let out_path = dir.path().join("out.bin");
+
+        // A "decompressed" stream far larger than the cap: only `cap` bytes
+        // should ever reach disk, mirroring a small compression bomb.
+        let payload = vec![b'A'; 8192];
+        let content = stream_to_file_capped(Cursor::new(payload), &out_path, 128)?;
+
+        match content {
+            CompressedContent::RawFile(p) => {
+                let written = std::fs::metadata(&p)?.len();
+                assert_eq!(written, 128, "output must be capped at the byte budget");
+            }
+            other => panic!("expected RawFile, got {other:?}"),
+        }
         Ok(())
     }
 }

@@ -613,10 +613,13 @@ impl ScanCommandArgs {
                     None
                 }
                 ScanInputCommand::Docker(args) => {
-                    if args.images.is_empty() {
-                        bail!("Provide at least one image when using the docker subcommand");
+                    if args.images.is_empty() && args.archives.is_empty() {
+                        bail!(
+                            "Provide at least one image or --archive path when using the docker subcommand"
+                        );
                     }
                     scan_args.input_specifier_args.docker_image = args.images;
+                    scan_args.input_specifier_args.docker_archive = args.archives;
                     None
                 }
             };
@@ -1040,6 +1043,10 @@ pub struct GcsScanArgs {
 #[derive(Args, Debug, Clone)]
 pub struct DockerScanArgs {
     /// Docker or OCI images to scan
-    #[arg(value_name = "IMAGE", num_args = 1..)]
+    #[arg(value_name = "IMAGE")]
     pub images: Vec<String>,
+
+    /// Docker image archive files to scan, such as files produced by docker save
+    #[arg(long = "archive", value_name = "PATH", value_hint = ValueHint::FilePath)]
+    pub archives: Vec<PathBuf>,
 }

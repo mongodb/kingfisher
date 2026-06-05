@@ -1,13 +1,13 @@
 ---
 title: "Built-in Rules List"
-description: "Complete list of all 950 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
+description: "Complete list of all 954 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
 ---
 
 # Built-in Rules
 
-Kingfisher ships with **950 detection rules** across **583 providers**
-(826 detectors + 124 dependent rules).
-Of these, **485** include live validation and **50** support direct revocation.
+Kingfisher ships with **954 detection rules** across **584 providers**
+(830 detectors + 124 dependent rules).
+Of these, **489** include live validation and **50** support direct revocation.
 
 !!! tip "Search"
     Use the search box below to filter rules by provider name, rule ID, or confidence level.
@@ -2018,6 +2018,30 @@ Of these, **485** include live validation and **50** support direct revocation.
 <td>Medium</td>
 <td>Yes</td>
 <td>Yes</td>
+</tr>
+<tr>
+<td>Devin</td>
+<td>Cognition Devin Personal API Key</td>
+<td><code>kingfisher.devin.1</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Devin</td>
+<td>Cognition Devin Service API Key</td>
+<td><code>kingfisher.devin.2</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Devin</td>
+<td>Cognition Devin Service User Token</td>
+<td><code>kingfisher.devin.3</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
 </tr>
 <tr>
 <td>Diffbot</td>
@@ -7263,7 +7287,15 @@ Of these, **485** include live validation and **50** support direct revocation.
 <td>Voyageai</td>
 <td>Voyage AI API Key</td>
 <td><code>kingfisher.voyageai.api_key</code></td>
-<td>High</td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Voyageai</td>
+<td>Voyage AI API Key</td>
+<td><code>kingfisher.voyageai.api_key.2</code></td>
+<td>Medium</td>
 <td>Yes</td>
 <td></td>
 </tr>

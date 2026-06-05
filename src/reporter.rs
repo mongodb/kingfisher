@@ -1402,6 +1402,9 @@ fn derive_scan_target(args: &cli::commands::scan::ScanArgs) -> Option<String> {
     for image in &input_args.docker_image {
         targets.push(format!("docker://{image}"));
     }
+    for archive in &input_args.docker_archive {
+        targets.push(format!("docker-archive://{}", archive.display()));
+    }
     if input_args.jira_url.is_some() {
         targets.push("jira".to_string());
     }
@@ -1818,6 +1821,7 @@ mod tests {
                 gcs_prefix: None,
                 gcs_service_account: None,
                 docker_image: Vec::new(),
+                docker_archive: Vec::new(),
                 git_clone: GitCloneMode::Bare,
                 git_history: GitHistoryMode::Full,
                 commit_metadata: true,

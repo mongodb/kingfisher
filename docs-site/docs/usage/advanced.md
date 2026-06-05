@@ -300,7 +300,7 @@ kingfisher scan ./my-project \
 
 ## Custom Rules
 
-Kingfisher currently ships with 950 built-in rules, but you may want to add your own custom rules or modify existing detection to better suit your needs.
+Kingfisher currently ships with 954 built-in rules, but you may want to add your own custom rules or modify existing detection to better suit your needs.
 
 First, review [RULES.md](../rules/overview.md) to learn how to create custom Kingfisher rules.
 

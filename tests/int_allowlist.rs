@@ -143,6 +143,7 @@ fn run_skiplist(skip_regex: Vec<String>, skip_skipword: Vec<String>) -> Result<u
             gcs_prefix: None,
             gcs_service_account: None,
             docker_image: Vec::new(),
+            docker_archive: Vec::new(),
             git_clone: GitCloneMode::Bare,
             git_history: GitHistoryMode::Full,
             commit_metadata: true,
