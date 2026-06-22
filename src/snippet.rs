@@ -5,8 +5,9 @@ use std::{
 
 use base64::{Engine as _, engine::general_purpose};
 use bstr::{BString, ByteSlice};
-use schemars::{JsonSchema, r#gen::SchemaGenerator, schema::Schema};
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
 pub struct Base64BString(#[serde(with = "Base64BString")] pub BString);
 impl fmt::Display for Base64BString {
@@ -15,12 +16,12 @@ impl fmt::Display for Base64BString {
     }
 }
 impl JsonSchema for Base64BString {
-    fn schema_name() -> String {
-        "Base64String".to_string()
+    fn schema_name() -> Cow<'static, str> {
+        "Base64String".into()
     }
 
-    fn json_schema(r#gen: &mut SchemaGenerator) -> Schema {
-        String::json_schema(r#gen)
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        String::json_schema(generator)
     }
 }
 impl Base64BString {

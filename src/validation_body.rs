@@ -1,4 +1,4 @@
-use schemars::{JsonSchema, r#gen::SchemaGenerator, schema::Schema};
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Deserializer, Serializer};
 use std::borrow::Cow;
 
@@ -37,6 +37,6 @@ where
     Ok(from_string(body))
 }
 
-pub fn schema(r#gen: &mut SchemaGenerator) -> Schema {
-    String::json_schema(r#gen)
+pub fn schema(generator: &mut SchemaGenerator) -> Schema {
+    String::json_schema(generator)
 }

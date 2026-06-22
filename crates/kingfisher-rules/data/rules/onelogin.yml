@@ -1,0 +1,133 @@
+rules:
+  - name: OneLogin Client ID
+    id: kingfisher.onelogin.1
+    pattern: |
+      (?xi)
+      \b
+      one[\s_.-]*login
+      (?:.|[\n\r]){0,64}?
+      (?:
+        api[\s_.-]*client[\s_.-]*id
+      |
+        client[\s_.-]*id
+      |
+        api[\s_.-]*id
+      |
+        idr
+      )
+      (?:.|[\n\r]){0,20}?
+      [=:"'\s_-]*
+      (?:idr[_-])?
+      (
+        [a-z0-9]{64}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 4
+      min_lowercase: 8
+    min_entropy: 3.4
+    confidence: medium
+    visible: false
+    examples:
+      - ONELOGIN_CLIENT_ID=rz5dx87tuykcvonk5577picx71wkllmq14tzexx8a8oaeee6yar815drbn3s4umx
+      - 'onelogin api client id: "idr_rz5dx87tuykcvonk5577picx71wkllmq14tzexx8a8oaeee6yar815drbn3s4umx"'
+      - "one-login\nclient_id=rz5dx87tuykcvonk5577picx71wkllmq14tzexx8a8oaeee6yar815drbn3s4umx"
+    references:
+      - https://developers.onelogin.com/api-docs/1/getting-started/working-with-api-credentials
+
+  - name: OneLogin Client Secret
+    id: kingfisher.onelogin.2
+    pattern: |
+      (?xi)
+      \b
+      one[\s_.-]*login
+      (?:.|[\n\r]){0,64}?
+      (?:
+        api[\s_.-]*client[\s_.-]*secret
+      |
+        client[\s_.-]*secret
+      |
+        api[\s_.-]*secret
+      |
+        [\s_.\-:"'=]secret\b
+      )
+      (?:.|[\n\r]){0,20}?
+      [=:"'\s_-]*
+      (?:secret[_-])?
+      (
+        [a-z0-9]{64}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 4
+      min_lowercase: 8
+      ignore_if_contains:
+        - example
+        - placeholder
+    min_entropy: 3.4
+    confidence: medium
+    examples:
+      - ONELOGIN_CLIENT_SECRET=51exgkt8tf875584xr5awedi6y48txm0vzdwjzxxgp3119o5rpyubn07gm6a5u2l
+      - 'onelogin secret: "secret_51exgkt8tf875584xr5awedi6y48txm0vzdwjzxxgp3119o5rpyubn07gm6a5u2l"'
+      - "one-login\nclient_secret=51exgkt8tf875584xr5awedi6y48txm0vzdwjzxxgp3119o5rpyubn07gm6a5u2l"
+    depends_on_rule:
+      - rule_id: kingfisher.onelogin.1
+        variable: CLIENT_ID
+      - rule_id: kingfisher.onelogin.3
+        variable: DOMAIN
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          # OneLogin's `/auth/oauth2/v2/token` accepts the standard OAuth 2.0
+          # client-credentials flow with HTTP Basic auth (base64 of
+          # `client_id:client_secret`). The earlier comma-separated
+          # `Authorization: client_id:..., client_secret:...` form was never
+          # the documented standard — it appears in OneLogin error messages
+          # only as an example of what *not* to do — so the validator was
+          # always returning a 4xx and never confirming credentials.
+          url: https://{{ DOMAIN }}/auth/oauth2/v2/token
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+            Authorization: "Basic {{ CLIENT_ID | append: ':' | append: TOKEN | b64enc }}"
+          body: grant_type=client_credentials
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+            - type: WordMatch
+              match_all_words: true
+              words:
+                - '"access_token"'
+                - '"token_type"'
+    # Revocation not added: OneLogin documents token revocation, but not API
+    # credential-pair deletion or disablement through a safe public API.
+    references:
+      - https://developers.onelogin.com/api-docs/1/getting-started/working-with-api-credentials
+      - https://developers.onelogin.com/api-authorization/oneLogin-api-define-custom-access-tokens
+
+  - name: OneLogin Tenant Domain
+    id: kingfisher.onelogin.3
+    pattern: |
+      (?xi)
+      \b
+      (
+        [a-z0-9]
+        (?:[a-z0-9-]{0,61}[a-z0-9])?
+        \.onelogin\.com
+      )
+      \b
+    min_entropy: 2.0
+    confidence: medium
+    visible: false
+    examples:
+      - acme-corp.onelogin.com
+      - https://tenant-example.onelogin.com/api/2/users
+      - ONELOGIN_SUBDOMAIN=sampletenant.onelogin.com
+    categories:
+      - domain
+      - onelogin
+    references:
+      - https://developers.onelogin.com/api-docs/1/getting-started/dev-overview

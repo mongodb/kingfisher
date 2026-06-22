@@ -21,6 +21,7 @@ use tracing::debug;
 use crate::{
     cli::{commands::validate::ValidateArgs, global::GlobalArgs},
     liquid_filters::register_all,
+    provider_endpoints::{ProviderEndpointOverrides, hydrate_endpoint_globals_for_rule},
     rule_loader::RuleLoader,
     rules::{HttpValidation, Validation, rule::Rule},
     template_vars::extract_template_vars,
@@ -210,18 +211,25 @@ fn extract_validation_vars(validation: &Validation) -> BTreeSet<String> {
 /// - `variables`: Named variables in NAME=VALUE format (explicit overrides)
 /// - `template_vars`: Set of variable names used in the validation template
 fn build_globals(
+    rule_id: &str,
     secret: &str,
     args: &[String],
     variables: &[String],
     template_vars: &BTreeSet<String>,
+    endpoint_overrides: &ProviderEndpointOverrides,
 ) -> Result<Object> {
     let mut globals = Object::new();
 
     // Set TOKEN to the provided secret
     globals.insert("TOKEN".into(), Value::scalar(secret.to_string()));
 
+    endpoint_overrides.apply_defaults(&mut globals);
+
     // Get non-TOKEN variables in alphabetical order for auto-assignment
-    let auto_assign_vars: Vec<&String> = template_vars.iter().filter(|v| *v != "TOKEN").collect();
+    let auto_assign_vars: Vec<&String> = template_vars
+        .iter()
+        .filter(|v| *v != "TOKEN" && !globals.contains_key(v.as_str()))
+        .collect();
 
     // Auto-assign --arg values to template variables
     for (i, arg_value) in args.iter().enumerate() {
@@ -247,6 +255,8 @@ fn build_globals(
 
         globals.insert(name.into(), Value::scalar(value));
     }
+
+    hydrate_endpoint_globals_for_rule(rule_id, &mut globals);
 
     Ok(globals)
 }
@@ -390,9 +400,9 @@ async fn execute_grpc_validation(
         headers.get("grpc-message").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     if grpc_status == "0" {
         body = "grpc-status=0".to_string();
-    } else if body.trim().is_empty() && (!grpc_status.is_empty() || !grpc_message.is_empty()) {
-        body = format!("grpc-status={grpc_status} grpc-message={grpc_message}");
-    } else if body.as_bytes().contains(&0) {
+    } else if (body.trim().is_empty() && (!grpc_status.is_empty() || !grpc_message.is_empty()))
+        || body.as_bytes().contains(&0)
+    {
         body = format!("grpc-status={grpc_status} grpc-message={grpc_message}");
     }
 
@@ -469,6 +479,7 @@ pub async fn run_direct_validation(
 
     // Build Liquid parser
     let parser = register_all(liquid::ParserBuilder::with_stdlib()).build()?;
+    let endpoint_overrides = ProviderEndpointOverrides::from_global_args(global_args)?;
 
     let timeout = Duration::from_secs(args.timeout);
     let rate_limiter =
@@ -525,7 +536,14 @@ pub async fn run_direct_validation(
             }
         }
 
-        let globals = build_globals(&secret, &args.args, &args.variables, &template_vars)?;
+        let globals = build_globals(
+            &rule_id,
+            &secret,
+            &args.args,
+            &args.variables,
+            &template_vars,
+            &endpoint_overrides,
+        )?;
 
         // Log auto-assignment info for debugging
         if !non_token_vars.is_empty() && !args.args.is_empty() {
@@ -571,16 +589,27 @@ pub async fn run_direct_validation(
             );
         }
 
-        if let Some(limiter) = rate_limiter.as_deref() {
-            if should_rate_limit_validation(validation) {
-                limiter.wait_for_rule(&rule_id).await;
-            }
+        if let Some(limiter) = rate_limiter.as_deref()
+            && should_rate_limit_validation(validation)
+        {
+            limiter.wait_for_rule(&rule_id).await;
         }
 
-        // Execute validation based on type
+        // Execute validation based on type. Errors from the HTTP / gRPC
+        // pathways (DNS failure, SSRF preflight, request build, request
+        // execution, timeout) used to short-circuit the whole `validate`
+        // command via `?`, which left stdout empty and made downstream
+        // tools (and integration tests) unable to distinguish "no rule"
+        // from "validation attempted, infrastructure failed". Match the
+        // pattern used by AWS / GCP / raw branches below: surface the
+        // failure as a non-valid result with a generic `message`. The
+        // underlying error is intentionally NOT included in stdout or in
+        // debug logs because the rendered URL / headers / body can
+        // contain `{{ TOKEN }}` substituted to the secret (and any
+        // `--var` / `--arg` values).
         let mut result = match validation {
             Validation::Http(http_validation) => {
-                execute_http_validation(
+                match execute_http_validation(
                     http_validation,
                     &globals,
                     &client,
@@ -589,17 +618,48 @@ pub async fn run_direct_validation(
                     args.retries,
                     global_args.allow_internal_ips,
                 )
-                .await?
+                .await
+                {
+                    Ok(r) => r,
+                    Err(_e) => {
+                        // Intentionally drop the underlying error: it can
+                        // embed the rendered URL with `{{ TOKEN }}`
+                        // substituted (i.e. the secret) or `--var` /
+                        // `--arg` values. Logging it (even at debug) would
+                        // leak credentials into stderr when -v is on.
+                        debug!("HTTP validation failed");
+                        DirectValidationResult {
+                            rule_id: rule_id.clone(),
+                            rule_name: rule_name.clone(),
+                            is_valid: false,
+                            status_code: None,
+                            message: "HTTP validation failed".to_string(),
+                        }
+                    }
+                }
             }
             Validation::Grpc(grpc_validation_cfg) => {
-                execute_grpc_validation(
+                match execute_grpc_validation(
                     grpc_validation_cfg,
                     &globals,
                     &parser,
                     timeout,
                     global_args.allow_internal_ips,
                 )
-                .await?
+                .await
+                {
+                    Ok(r) => r,
+                    Err(_e) => {
+                        debug!("gRPC validation failed");
+                        DirectValidationResult {
+                            rule_id: rule_id.clone(),
+                            rule_name: rule_name.clone(),
+                            is_valid: false,
+                            status_code: None,
+                            message: "gRPC validation failed".to_string(),
+                        }
+                    }
+                }
             }
 
             Validation::AWS => {
@@ -896,7 +956,7 @@ pub(crate) fn create_minimal_scan_args() -> crate::cli::commands::scan::ScanArgs
         gitlab::GitLabRepoType,
         inputs::{ContentFilteringArgs, InputSpecifierArgs},
         output::{OutputArgs, ReportOutputFormat},
-        rules::RuleSpecifierArgs,
+        rules::{RuleCacheArgs, RuleSpecifierArgs},
         scan::{ConfidenceLevel, ScanArgs},
     };
     use url::Url;
@@ -908,6 +968,7 @@ pub(crate) fn create_minimal_scan_args() -> crate::cli::commands::scan::ScanArgs
             rule: vec!["all".into()],
             load_builtins: true,
         },
+        rule_cache: RuleCacheArgs::default(),
         input_specifier_args: InputSpecifierArgs {
             path_inputs: Vec::new(),
             git_url: Vec::new(),
@@ -972,7 +1033,14 @@ pub(crate) fn create_minimal_scan_args() -> crate::cli::commands::scan::ScanArgs
             slack_api_url: Url::parse("https://slack.com/api/").unwrap(),
             teams_query: None,
             teams_api_url: Url::parse("https://graph.microsoft.com/").unwrap(),
+            postman_workspaces: Vec::new(),
+            postman_collections: Vec::new(),
+            postman_environments: Vec::new(),
+            postman_all: false,
+            postman_include_mocks_monitors: false,
+            postman_api_url: Url::parse("https://api.getpostman.com/").unwrap(),
             docker_image: Vec::new(),
+            docker_archive: Vec::new(),
             git_clone: GitCloneMode::Bare,
             git_history: GitHistoryMode::Full,
             commit_metadata: true,
@@ -1015,6 +1083,14 @@ pub(crate) fn create_minimal_scan_args() -> crate::cli::commands::scan::ScanArgs
         no_ignore_if_contains: false,
         view_report_port: 7890,
         view_report_address: "127.0.0.1".to_string(),
+        alert_webhook: Vec::new(),
+        alert_format: None,
+        alert_on: crate::alerts::AlertOn::Findings,
+        alert_min_confidence: ConfidenceLevel::Medium,
+        alert_include_secret: false,
+        alert_report_url: None,
+        alert_detail: crate::alerts::AlertDetail::Auto,
+        config_webhook_overrides: Vec::new(),
         validation_timeout: 10,
         validation_retries: 1,
         validation_rps: None,

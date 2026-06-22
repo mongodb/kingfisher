@@ -21,7 +21,10 @@ env:
   VCPKG_DOWNLOADS: C:\vcpkg\downloads
   VCPKG_FEATURE_FLAGS: binarycaching
   VCPKG_BINARY_SOURCES: clear;x-gha,readwrite
-  RUST_TOOLCHAIN: "1.94.1"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  RUST_TOOLCHAIN: "1.96.0"
 
 jobs:
   # ──────────────── Linux (via Makefile) ────────────────
@@ -29,7 +32,7 @@ jobs:
     name: Linux x64
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # Free up disk space on Ubuntu runners
       - name: Free Disk Space
@@ -41,7 +44,7 @@ jobs:
           sudo docker image prune --all --force
           df -h
 
-      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
@@ -63,11 +66,17 @@ jobs:
         run: make tests
         env:
           CARGO_BUILD_JOBS: 1
+
+      - name: Reclaim test artifacts
+        run: |
+          rm -rf target/debug
+          df -h
+
       - name: Build (Makefile linux-x64)
         run: make ubuntu-x64
 
       - name: Fix permissions
-        run: sudo chown -R $(id -u):$(id -g) target
+        run: sudo chown -R "$(id -u):$(id -g)" target
 
       - name: Build Debian package
         run: |
@@ -87,15 +96,15 @@ jobs:
           cp target/release/kingfisher-linux-x64.deb dist/
           cp target/release/kingfisher-linux-x64.rpm dist/
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kingfisher-linux-x64.tgz
           path: dist/kingfisher-linux-x64.tgz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kingfisher-linux-x64.deb
           path: dist/kingfisher-linux-x64.deb
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kingfisher-linux-x64.rpm
           path: dist/kingfisher-linux-x64.rpm
@@ -104,7 +113,7 @@ jobs:
     name: Linux arm64
     runs-on: ubuntu-24.04-arm
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
       # Free up disk space on Ubuntu runners
       - name: Free Disk Space
@@ -116,7 +125,7 @@ jobs:
           sudo docker image prune --all --force
           df -h
 
-      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
@@ -138,11 +147,17 @@ jobs:
         run: make tests
         env:
           CARGO_BUILD_JOBS: 1
+
+      - name: Reclaim test artifacts
+        run: |
+          rm -rf target/debug
+          df -h
+
       - name: Build (Makefile linux-arm64)
         run: make ubuntu-arm64
 
       - name: Fix permissions
-        run: sudo chown -R $(id -u):$(id -g) target
+        run: sudo chown -R "$(id -u):$(id -g)" target
 
       - name: Build Debian package
         run: |
@@ -162,15 +177,15 @@ jobs:
           cp target/release/kingfisher-linux-arm64.deb dist/
           cp target/release/kingfisher-linux-arm64.rpm dist/
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kingfisher-linux-arm64.tgz
           path: dist/kingfisher-linux-arm64.tgz
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kingfisher-linux-arm64.deb
           path: dist/kingfisher-linux-arm64.deb
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kingfisher-linux-arm64.rpm
           path: dist/kingfisher-linux-arm64.rpm
@@ -179,9 +194,9 @@ jobs:
     name: macOS x64
     runs-on: macos-15-intel
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
@@ -209,7 +224,7 @@ jobs:
           mkdir -p dist
           cp target/release/kingfisher-darwin-x64.tgz  dist/
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kingfisher-darwin-x64.tgz
           path: dist/kingfisher-darwin-x64.tgz
@@ -218,9 +233,9 @@ jobs:
     name: macOS arm64
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
 
-      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
@@ -247,7 +262,7 @@ jobs:
           mkdir -p dist
           cp target/release/kingfisher-darwin-arm64.tgz dist/
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kingfisher-darwin-arm64.tgz
           path: dist/kingfisher-darwin-arm64.tgz
@@ -268,13 +283,13 @@ jobs:
             msystem: CLANGARM64
 
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
-      - uses: dtolnay/rust-toolchain@efa25f7f19611383d5b0ccf2d1c8914531636bf9 # master
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - uses: dtolnay/rust-toolchain@3c5f7ea28cd621ae0bf5283f0e981fb97b8a7af9 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
 
       - name: Set up MSYS2
-        uses: msys2/setup-msys2@cafece8e6baf9247cf9b1bf95097b0b983cc558d # v2.31.0
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
         with:
           msystem: ${{ matrix.msystem }}
           update: true
@@ -305,7 +320,7 @@ jobs:
           mkdir -p dist
           cp target/release/kingfisher-windows-${{ matrix.arch }}.zip dist/
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: kingfisher-windows-${{ matrix.arch }}
           path: dist/kingfisher-windows-${{ matrix.arch }}.zip
@@ -321,7 +336,7 @@ jobs:
       id-token: write
       attestations: write
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
       - name: Determine tag
         id: version
         shell: bash
@@ -339,7 +354,7 @@ jobs:
             TAG="v${VERSION}"
           fi
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           path: target/release/kingfisher-*
           merge-multiple: true
@@ -347,12 +362,46 @@ jobs:
         run: |
           awk '
             BEGIN            { grabbing = 0 }
-            /^## \[/         { 
+            /^## \[/         {
                                if (grabbing) exit;  # already grabbed latest entry
                                grabbing = 1
                              }
             grabbing         { print }
           ' CHANGELOG.md > .latest_changelog.md
+
+      # ── Sign every release artifact with a SLSA v1 build-provenance attestation.
+      #    actions/attest-build-provenance produces a multi-subject Sigstore Bundle
+      #    in JSONL format and writes it to bundle-path. We ship that file alongside
+      #    the binaries as `multiple.intoto.jsonl` so users can verify offline with
+      #    `gh attestation verify`, `cosign`, or `slsa-verifier` — no GitHub API call
+      #    required at verify time. This also satisfies the OSSF Scorecard
+      #    `Signed-Releases` check, which scans for *.intoto.jsonl in release assets.
+      - name: Attest build provenance
+        id: attest
+        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
+        with:
+          # Match the actual artifact files under target/release/ (download-artifact
+          # places them in a subdirectory, so we use ** to recurse).
+          subject-path: |
+            target/release/**/kingfisher-*.tgz
+            target/release/**/kingfisher-*.zip
+            target/release/**/kingfisher-*.deb
+            target/release/**/kingfisher-*.rpm
+
+      - name: Stage attestation bundle as a release asset
+        shell: bash
+        run: |
+          set -euo pipefail
+          BUNDLE_PATH='${{ steps.attest.outputs.bundle-path }}'
+          if [[ -z "${BUNDLE_PATH}" || ! -f "${BUNDLE_PATH}" ]]; then
+            echo "::error::attest-build-provenance did not produce a bundle at '${BUNDLE_PATH}'"
+            exit 1
+          fi
+          # Use the slsa-verifier-recognized filename for multi-subject bundles.
+          mkdir -p target/release
+          cp "${BUNDLE_PATH}" target/release/multiple.intoto.jsonl
+          echo "Bundle line count (one DSSE-wrapped attestation per subject):"
+          wc -l target/release/multiple.intoto.jsonl
 
       # ── create the release using just that snippet ─────────────────────
       - name: Create release & upload assets
@@ -364,11 +413,6 @@ jobs:
           allowUpdates: true
           generateReleaseNotes: false
           artifacts: target/release/**
-
-      - name: Attest build provenance
-        uses: actions/attest-build-provenance@a2bbfa25375fe432b6a289bc6b6cd05ecd0c4c32 # v4.1.0
-        with:
-          subject-path: 'target/release/*'
 
   # ──────────────── Publish Docker image ────────────────
   publish-docker:

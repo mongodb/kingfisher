@@ -52,10 +52,10 @@ pub async fn search_pages(
     let token = std::env::var("KF_CONFLUENCE_TOKEN")
         .context("KF_CONFLUENCE_TOKEN environment variable must be set")?;
     let user = std::env::var("KF_CONFLUENCE_USER").ok();
-    if let Some(ref u) = user {
-        if !u.contains('@') {
-            bail!("KF_CONFLUENCE_USER must be an email address");
-        }
+    if let Some(ref u) = user
+        && !u.contains('@')
+    {
+        bail!("KF_CONFLUENCE_USER must be an email address");
     }
 
     let client = Client::builder()

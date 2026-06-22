@@ -196,10 +196,10 @@ pub(crate) fn filter_match<'b>(
         let full_capture = captures.get(0).unwrap();
         let full_capture_offset_span =
             OffsetSpan::from_range((start + full_capture.start())..(start + full_capture.end()));
-        if let Some(full_matches) = full_matches.as_deref_mut() {
-            if !record_match(full_matches, rule_id, full_capture_offset_span) {
-                continue;
-            }
+        if let Some(full_matches) = full_matches.as_deref_mut()
+            && !record_match(full_matches, rule_id, full_capture_offset_span)
+        {
+            continue;
         }
         let matching_input_for_entropy = find_secret_capture(re, &captures);
 

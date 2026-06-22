@@ -123,14 +123,14 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let severity = derive_severity(&projects);
 
     let mut roles = Vec::new();
-    if let Some(ref scopes) = scopes {
-        if !scopes.is_empty() {
-            roles.push(RoleBinding {
-                name: "token_scopes".into(),
-                source: "gitlab".into(),
-                permissions: scopes.clone(),
-            });
-        }
+    if let Some(ref scopes) = scopes
+        && !scopes.is_empty()
+    {
+        roles.push(RoleBinding {
+            name: "token_scopes".into(),
+            source: "gitlab".into(),
+            permissions: scopes.clone(),
+        });
     }
 
     if projects.is_empty() {

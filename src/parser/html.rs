@@ -88,7 +88,7 @@ fn collect_visible_text(tag: &HTMLTag<'_>, parser: &Parser<'_>, out: &mut String
                 {
                     continue;
                 }
-                collect_visible_text(&child, parser, out);
+                collect_visible_text(child, parser, out);
             }
         }
     }

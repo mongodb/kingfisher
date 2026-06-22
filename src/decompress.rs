@@ -1,6 +1,6 @@
 use std::{
     fs,
-    io::{BufReader, Read},
+    io::{BufReader, Read, Write},
     path::{Component, Path, PathBuf},
 };
 
@@ -18,23 +18,23 @@ use zip::ZipArchive;
 
 /// Formats that are basically a ZIP container.
 pub const ZIP_BASED_FORMATS: &[&str] = &[
-    "zip", "zipx", "jar", "war", "ear", "aar", "jmod", "jhm", "jnlp", "nupkg", "vsix", "xap",
-    "docx", "xlsx", "pptx", "odt", "ods", "odp", "odg", "odf", "epub", "gadget", "kmz", "widget",
-    "xpi", "sketch", "pages", "key", "numbers", "hwpx",
+    "zip", "zipx", "jar", "war", "ear", "aar", "apk", "aab", "ipa", "jmod", "jhm", "jnlp", "nupkg",
+    "vsix", "xap", "docx", "xlsx", "pptx", "odt", "ods", "odp", "odg", "odf", "epub", "gadget",
+    "kmz", "widget", "xpi", "sketch", "pages", "key", "numbers", "hwpx",
 ];
 
-/// Break `<name>.<outer>.<inner>` into `(Some(outer), Some(inner))`.
-/// For `foo.tar.gz` this returns `("tar", "gz")`.
-fn split_extensions(path: &Path) -> (Option<String>, Option<String>) {
-    let ext_inner = path.extension().and_then(|e| e.to_str()).map(|s| s.to_ascii_lowercase());
+fn is_tar_wrapped_compression(path: &Path) -> bool {
+    let filename = match path.file_name().and_then(|s| s.to_str()) {
+        Some(name) => name.to_ascii_lowercase(),
+        None => return false,
+    };
 
-    let ext_outer = path
-        .file_stem()
-        .and_then(|s| Path::new(s).extension())
-        .and_then(|e| e.to_str())
-        .map(|s| s.to_ascii_lowercase());
-
-    (ext_outer, ext_inner)
+    filename.ends_with(".tgz")
+        || filename.ends_with(".tar.gz")
+        || filename.ends_with(".tar.gzip")
+        || filename.ends_with(".tar.bz2")
+        || filename.ends_with(".tar.bzip2")
+        || filename.ends_with(".tar.xz")
 }
 
 #[derive(Debug)]
@@ -50,22 +50,33 @@ pub enum CompressedContent {
 }
 
 pub fn is_safe_extract_path(path: &Path) -> bool {
-    for (idx, comp) in path.components().enumerate() {
+    if path.is_absolute() {
+        return false;
+    }
+
+    for comp in path.components() {
         match comp {
             // Never allow parent-directory escapes
             Component::ParentDir => return false,
 
-            // Leading "C:\" (Windows) or "/" (Unix) is fine;
-            // a prefix later in the path would be suspicious.
-            Component::Prefix(_) | Component::RootDir if idx == 0 => continue,
-
-            // A prefix *inside* the path (e.g. "foo/C:\evil") is unsafe
-            Component::Prefix(_) => return false,
+            // Archive entry names must always be relative to the extraction root.
+            Component::Prefix(_) | Component::RootDir => return false,
 
             _ => {}
         }
     }
     true
+}
+
+fn has_parent_or_embedded_prefix(path: &Path) -> bool {
+    for (idx, comp) in path.components().enumerate() {
+        match comp {
+            Component::ParentDir => return true,
+            Component::Prefix(_) if idx > 0 => return true,
+            _ => {}
+        }
+    }
+    false
 }
 
 fn is_zip_format(ext: &str) -> bool {
@@ -82,29 +93,77 @@ fn handle_tar_archive_streaming(
 ) -> Result<CompressedContent> {
     let mut archive = Archive::new(file);
     let mut entries_on_disk = Vec::new();
+    let mut truncated = false;
 
-    for entry in archive.entries()? {
-        let mut entry = entry?;
+    let entries = match archive.entries() {
+        Ok(entries) => entries,
+        Err(e) => {
+            tracing::debug!("failed to open tar archive {}: {}", archive_path.display(), e);
+            return Ok(CompressedContent::RawFile(archive_path.to_owned()));
+        }
+    };
+
+    for entry in entries {
+        let mut entry = match entry {
+            Ok(entry) => entry,
+            Err(e) => {
+                tracing::debug!("tar archive {} ended early: {}", archive_path.display(), e);
+                truncated = true;
+                break;
+            }
+        };
         if entry.header().entry_type().is_file() {
-            let path_in_tar = entry.path()?.to_string_lossy().to_string();
+            let path_in_tar = match entry.path() {
+                Ok(path) => path.to_string_lossy().to_string(),
+                Err(e) => {
+                    tracing::debug!(
+                        "failed to read tar entry path in {}: {}",
+                        archive_path.display(),
+                        e
+                    );
+                    truncated = true;
+                    break;
+                }
+            };
+            if !is_safe_extract_path(Path::new(&path_in_tar)) {
+                tracing::debug!("unsafe tar path: {path_in_tar}");
+                continue;
+            }
             let logical_path = format!("{}!{}", archive_path.display(), path_in_tar);
 
             let out_path = base_dir.join(&path_in_tar);
-            if let Some(parent) = out_path.parent() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    tracing::debug!("failed to create directory {}: {}", parent.display(), e);
-                    continue;
-                }
-            }
-            if !is_safe_extract_path(&out_path) {
-                tracing::warn!("unsafe tar path: {}", out_path.display());
+            if let Some(parent) = out_path.parent()
+                && let Err(e) = fs::create_dir_all(parent)
+            {
+                tracing::debug!("failed to create directory {}: {}", parent.display(), e);
                 continue;
             }
             match fs::File::create(&out_path) {
                 Ok(mut out_file) => {
-                    if let Err(e) = std::io::copy(&mut entry, &mut out_file) {
-                        tracing::debug!("failed to extract {}: {}", out_path.display(), e);
-                        continue;
+                    let expected_size = entry.size();
+                    let copied = match std::io::copy(&mut entry, &mut out_file) {
+                        Ok(n) => n,
+                        Err(e) => {
+                            tracing::debug!("failed to extract {}: {}", out_path.display(), e);
+                            // Drop the handle before removing so the partial
+                            // file is deletable on Windows, then discard it so
+                            // it doesn't accumulate in the temp extraction dir.
+                            drop(out_file);
+                            let _ = fs::remove_file(&out_path);
+                            truncated = true;
+                            break;
+                        }
+                    };
+                    if copied != expected_size {
+                        tracing::debug!(
+                            "tar entry {} in {} was truncated after {copied} of {expected_size} bytes",
+                            path_in_tar,
+                            archive_path.display()
+                        );
+                        drop(out_file);
+                        let _ = fs::remove_file(&out_path);
+                        truncated = true;
+                        break;
                     }
                     entries_on_disk.push((logical_path, out_path));
                 }
@@ -115,7 +174,129 @@ fn handle_tar_archive_streaming(
             }
         }
     }
+
+    if truncated && entries_on_disk.is_empty() {
+        tracing::debug!(
+            "tar archive {} was truncated before any entry completed; falling back to raw scan",
+            archive_path.display()
+        );
+        return Ok(CompressedContent::RawFile(archive_path.to_owned()));
+    }
+
     Ok(CompressedContent::ArchiveFiles(entries_on_disk))
+}
+
+/// Extract every file entry in a ZIP-based archive directly from a byte
+/// slice, without touching the filesystem. Intended for the git-blob
+/// scan path where blobs already sit in memory and writing them out to a
+/// temp file just to read them back imposes substantial overhead in
+/// monorepos with many committed `.jar`/`.zip`/`.apk` artifacts.
+///
+/// `archive_label` is used to construct logical entry paths of the form
+/// `<archive_label>!<entry_name>`, matching the convention used by the
+/// streaming-to-disk path.
+///
+/// The same per-entry decompressed-size cap as the streaming-to-disk
+/// extractor is enforced so that ZIP bombs cannot allocate unbounded
+/// memory.
+/// Maximum compressed archive size that the in-memory ZIP extractor will
+/// accept. Larger archives fall back to the disk-streaming path so that we
+/// never hold both the archive bytes AND every decompressed entry in RAM
+/// simultaneously. The threshold is intentionally generous — most committed
+/// `.jar`/`.zip`/`.apk` artifacts in real repos are well under 64 MB.
+pub const MAX_INMEM_ZIP_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
+
+/// Aggregate cap on total decompressed bytes the in-memory ZIP extractor
+/// will accumulate per archive. Bounds the worst-case footprint of one
+/// rayon worker processing one archive: with `num_jobs` workers running
+/// in parallel, peak resident memory is bounded by `num_jobs * this`.
+/// Independent of the per-entry cap, so a single bomb-style entry can't
+/// drain it all but neither can N medium-sized entries.
+pub const MAX_INMEM_ZIP_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+
+pub fn extract_zip_archive_in_memory(
+    data: &[u8],
+    archive_label: &str,
+) -> Result<Vec<(String, Vec<u8>)>> {
+    if data.len() > MAX_INMEM_ZIP_ARCHIVE_BYTES {
+        anyhow::bail!(
+            "zip archive {archive_label} is {} bytes, exceeding {} byte in-memory cap",
+            data.len(),
+            MAX_INMEM_ZIP_ARCHIVE_BYTES
+        );
+    }
+
+    // Per-entry cap on decompressed bytes: bounds memory cost of zip bombs.
+    // Mirrors the disk-streaming variant's cap.
+    // nosemgrep: this is the defensive cap — do not flag for missing-limit rules.
+    const MAX_ZIP_ENTRY_DECOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+
+    let cursor = std::io::Cursor::new(data);
+    let mut zip = ZipArchive::new(cursor)?;
+    let mut entries = Vec::with_capacity(zip.len());
+    let mut total_decompressed: u64 = 0;
+
+    for i in 0..zip.len() {
+        if total_decompressed >= MAX_INMEM_ZIP_DECOMPRESSED_BYTES {
+            tracing::debug!(
+                "in-memory zip {archive_label} exceeded {MAX_INMEM_ZIP_DECOMPRESSED_BYTES} byte aggregate cap at entry {i}/{}; truncating",
+                zip.len()
+            );
+            break;
+        }
+
+        let mut zipped_file = match zip.by_index(i) {
+            Ok(f) => f,
+            Err(e) => {
+                tracing::debug!("zip entry {i} read failed: {e}");
+                continue;
+            }
+        };
+        if !zipped_file.is_file() {
+            continue;
+        }
+        let name_in_zip = zipped_file.name().to_string();
+        // Defense in depth: refuse traversal-style names. The in-memory
+        // path never writes to disk, but downstream code may construct
+        // file URLs from these strings.
+        if !is_safe_extract_path(Path::new(&name_in_zip)) {
+            tracing::debug!("unsafe zip entry name in {archive_label}: {name_in_zip}");
+            continue;
+        }
+
+        // The remaining-budget cap on this read serves two purposes:
+        // (1) honor the aggregate budget exactly even if one entry would
+        //     individually push us over it, and (2) keep the existing
+        //     per-entry zip-bomb cap of 512 MB as a hard upper bound.
+        let remaining = MAX_INMEM_ZIP_DECOMPRESSED_BYTES.saturating_sub(total_decompressed);
+        let entry_cap = remaining.min(MAX_ZIP_ENTRY_DECOMPRESSED_BYTES);
+
+        let mut buf = Vec::new();
+        let mut limited = (&mut zipped_file).take(entry_cap);
+        if let Err(e) = limited.read_to_end(&mut buf) {
+            tracing::debug!(
+                "failed to decompress zip entry {name_in_zip} from {archive_label}: {e}"
+            );
+            continue;
+        }
+        if buf.len() as u64 == entry_cap && entry_cap == MAX_ZIP_ENTRY_DECOMPRESSED_BYTES {
+            tracing::debug!(
+                "zip entry {name_in_zip} in {archive_label} exceeded {MAX_ZIP_ENTRY_DECOMPRESSED_BYTES} byte cap; truncating"
+            );
+        }
+        total_decompressed += buf.len() as u64;
+        entries.push((format!("{archive_label}!{name_in_zip}"), buf));
+    }
+    Ok(entries)
+}
+
+/// Return true if `data` begins with a standard ZIP signature — used to
+/// short-circuit extraction attempts on blobs whose extension matches a
+/// ZIP-based format but whose contents are not actually a real ZIP.
+pub fn looks_like_zip(data: &[u8]) -> bool {
+    data.starts_with(b"PK\x03\x04")
+        || data.starts_with(b"PK\x05\x06")
+        || data.starts_with(b"PK\x07\x08")
 }
 
 fn handle_zip_archive_streaming(
@@ -130,27 +311,41 @@ fn handle_zip_archive_streaming(
 
     let mut zip = ZipArchive::new(file)?;
     let mut entries_on_disk = Vec::new();
+    let mut total_decompressed: u64 = 0;
 
     for i in 0..zip.len() {
+        if total_decompressed >= MAX_INMEM_ZIP_DECOMPRESSED_BYTES {
+            tracing::debug!(
+                "zip archive {} exceeded {} byte aggregate cap at entry {i}/{}; truncating",
+                archive_path.display(),
+                MAX_INMEM_ZIP_DECOMPRESSED_BYTES,
+                zip.len()
+            );
+            break;
+        }
+
         let mut zipped_file = zip.by_index(i)?;
         if zipped_file.is_file() {
             let name_in_zip = zipped_file.name().to_string();
+            if !is_safe_extract_path(Path::new(&name_in_zip)) {
+                tracing::debug!("unsafe zip path: {name_in_zip}");
+                continue;
+            }
             let logical_path = format!("{}!{}", archive_path.display(), name_in_zip);
 
             let out_path = base_dir.join(&name_in_zip);
-            if let Some(parent) = out_path.parent() {
-                if let Err(e) = fs::create_dir_all(parent) {
-                    tracing::debug!("failed to create directory {}: {}", parent.display(), e);
-                    continue;
-                }
-            }
-            if !is_safe_extract_path(&out_path) {
-                tracing::warn!("unsafe zip path: {}", out_path.display());
+            if let Some(parent) = out_path.parent()
+                && let Err(e) = fs::create_dir_all(parent)
+            {
+                tracing::debug!("failed to create directory {}: {}", parent.display(), e);
                 continue;
             }
             match fs::File::create(&out_path) {
                 Ok(mut out_file) => {
-                    let mut limited = (&mut zipped_file).take(MAX_ZIP_ENTRY_DECOMPRESSED_BYTES);
+                    let remaining =
+                        MAX_INMEM_ZIP_DECOMPRESSED_BYTES.saturating_sub(total_decompressed);
+                    let entry_cap = remaining.min(MAX_ZIP_ENTRY_DECOMPRESSED_BYTES);
+                    let mut limited = (&mut zipped_file).take(entry_cap);
                     let copied = match std::io::copy(&mut limited, &mut out_file) {
                         Ok(n) => n,
                         Err(e) => {
@@ -158,14 +353,23 @@ fn handle_zip_archive_streaming(
                             continue;
                         }
                     };
-                    if copied == MAX_ZIP_ENTRY_DECOMPRESSED_BYTES {
-                        tracing::warn!(
+                    total_decompressed += copied;
+                    if copied == entry_cap && entry_cap == MAX_ZIP_ENTRY_DECOMPRESSED_BYTES {
+                        tracing::debug!(
                             "zip entry {} exceeded {} byte cap; truncating",
                             out_path.display(),
                             MAX_ZIP_ENTRY_DECOMPRESSED_BYTES
                         );
                     }
                     entries_on_disk.push((logical_path, out_path));
+                    if total_decompressed >= MAX_INMEM_ZIP_DECOMPRESSED_BYTES {
+                        tracing::debug!(
+                            "zip archive {} reached {} byte aggregate cap; truncating remaining entries",
+                            archive_path.display(),
+                            MAX_INMEM_ZIP_DECOMPRESSED_BYTES
+                        );
+                        break;
+                    }
                 }
                 Err(e) => {
                     tracing::debug!("failed to create file {}: {}", out_path.display(), e);
@@ -256,12 +460,17 @@ fn handle_asar_archive_in_memory(buffer: &[u8], archive_path: &Path) -> Result<C
         Ok(reader) => {
             let mut contents = Vec::new();
             for (path_in_asar, file) in reader.files() {
-                let inner_path = path_in_asar.to_string_lossy().to_string();
+                let inner_path = path_in_asar.to_string_lossy().replace('\\', "/");
+                if !is_safe_extract_path(Path::new(&inner_path)) {
+                    tracing::debug!("unsafe asar path: {inner_path}");
+                    continue;
+                }
+
                 let logical_path = format!("{}!{}", archive_path.display(), inner_path);
                 let data = file.data();
                 let take = data.len().min(MAX_ASAR_ENTRY_BYTES);
                 if take < data.len() {
-                    tracing::warn!(
+                    tracing::debug!(
                         "asar entry {} exceeded {} byte cap; truncating",
                         inner_path,
                         MAX_ASAR_ENTRY_BYTES
@@ -271,13 +480,35 @@ fn handle_asar_archive_in_memory(buffer: &[u8], archive_path: &Path) -> Result<C
             }
             Ok(CompressedContent::Archive(contents))
         }
-        Err(_) => Ok(CompressedContent::Archive(Vec::new())),
+        Err(e) => Err(e.into()),
     }
+}
+
+fn materialize_in_memory_archive_entries(
+    files: &[(String, Vec<u8>)],
+    base_dir: &Path,
+) -> Result<()> {
+    for (name, data) in files {
+        let rel = name.split_once('!').map(|(_, sub)| sub).unwrap_or(name.as_str());
+        let normalized_rel = rel.replace('\\', "/");
+        let rel_path = Path::new(&normalized_rel);
+        if !is_safe_extract_path(rel_path) {
+            tracing::debug!("unsafe archive path: {normalized_rel}");
+            continue;
+        }
+
+        let p = base_dir.join(rel_path);
+        if let Some(parent) = p.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        fs::write(p, data)?;
+    }
+    Ok(())
 }
 
 /// Validate and open a file for reading, checking for path traversal attacks.
 fn safe_open_for_read(path: &Path) -> Result<fs::File> {
-    if !is_safe_extract_path(path) {
+    if has_parent_or_embedded_prefix(path) {
         anyhow::bail!("unsafe input path during decompression: {}", path.display());
     }
     Ok(fs::File::open(path)?)
@@ -285,30 +516,103 @@ fn safe_open_for_read(path: &Path) -> Result<fs::File> {
 
 /// Validate and create a file for writing, checking for path traversal attacks.
 fn safe_create_for_write(path: &Path) -> Result<fs::File> {
-    if !is_safe_extract_path(path) {
+    if has_parent_or_embedded_prefix(path) {
         anyhow::bail!("unsafe output path during decompression: {}", path.display());
     }
     Ok(fs::File::create(path)?)
 }
 
-fn stream_to_file<R: Read>(mut decoder: R, out_path: &Path) -> Result<CompressedContent> {
-    let mut out_file = safe_create_for_write(out_path)?;
-    std::io::copy(&mut decoder, &mut out_file)?;
+/// Hard cap on the number of bytes a single-stream decompressor
+/// (gzip/bzip2/xz/zlib) will write to disk for one input. Mirrors the per-entry
+/// decompressed cap enforced by the ZIP extractors so a small "compression
+/// bomb" cannot expand without limit and exhaust the scanner's temporary
+/// filesystem. Output past the cap is dropped and a truncation warning logged.
+// nosemgrep: this is the defensive cap — do not flag for missing-limit rules.
+pub const MAX_SINGLE_STREAM_DECOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+/// `Write` adaptor that drops everything past `remaining` bytes.
+///
+/// Bounds single-stream decompressors so a high-ratio compression bomb can't
+/// fill the disk. Writes past the cap are reported as fully consumed so the
+/// underlying decoder runs to completion instead of erroring or looping; the
+/// truncation is surfaced via [`CappedWriter::truncated`], matching the
+/// truncate-and-warn behavior of the ZIP entry extractor.
+struct CappedWriter<W: Write> {
+    inner: W,
+    remaining: u64,
+    truncated: bool,
+}
+
+impl<W: Write> CappedWriter<W> {
+    fn new(inner: W, cap: u64) -> Self {
+        Self { inner, remaining: cap, truncated: false }
+    }
+
+    fn truncated(&self) -> bool {
+        self.truncated
+    }
+}
+
+impl<W: Write> Write for CappedWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let allowed = (buf.len() as u64).min(self.remaining) as usize;
+        if allowed > 0 {
+            self.inner.write_all(&buf[..allowed])?;
+            self.remaining -= allowed as u64;
+        }
+        if allowed < buf.len() {
+            self.truncated = true;
+        }
+        // Report the whole buffer as consumed even when the tail was dropped so
+        // `io::copy`/`xz_decompress` don't treat the cap as a write error.
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+
+fn stream_to_file_capped<R: Read>(
+    mut decoder: R,
+    out_path: &Path,
+    cap: u64,
+) -> Result<CompressedContent> {
+    let out_file = safe_create_for_write(out_path)?;
+    let mut capped = CappedWriter::new(out_file, cap);
+    std::io::copy(&mut decoder, &mut capped)?;
+    if capped.truncated() {
+        tracing::debug!(
+            "decompressed stream written to {} exceeded {cap} byte cap; truncating",
+            out_path.display()
+        );
+    }
     Ok(CompressedContent::RawFile(out_path.to_owned()))
 }
 
-fn stream_xz_to_file(path: &Path, out_path: &Path) -> Result<CompressedContent> {
+fn stream_xz_to_file_capped(path: &Path, out_path: &Path, cap: u64) -> Result<CompressedContent> {
     let input = safe_open_for_read(path)?;
     let mut reader = BufReader::new(input);
-    let mut out_file = safe_create_for_write(out_path)?;
-    xz_decompress(&mut reader, &mut out_file)?;
+    let out_file = safe_create_for_write(out_path)?;
+    let mut capped = CappedWriter::new(out_file, cap);
+    xz_decompress(&mut reader, &mut capped)?;
+    if capped.truncated() {
+        tracing::debug!(
+            "decompressed xz stream written to {} exceeded {cap} byte cap; truncating",
+            out_path.display()
+        );
+    }
     Ok(CompressedContent::RawFile(out_path.to_owned()))
 }
 
 /* ───────────────────────────────────────────────────────────────
 one *step* of decompression
 ───────────────────────────────────────────────────────────── */
-fn decompress_once(path: &Path, base_dir: Option<&Path>) -> Result<CompressedContent> {
+fn decompress_once_with_single_stream_cap(
+    path: &Path,
+    base_dir: Option<&Path>,
+    single_stream_cap: u64,
+) -> Result<CompressedContent> {
     let extension = path.extension().and_then(|ext| ext.to_str()).map(|s| s.to_ascii_lowercase());
 
     let mut file = safe_open_for_read(path)?;
@@ -346,24 +650,24 @@ fn decompress_once(path: &Path, base_dir: Option<&Path>) -> Result<CompressedCon
                     return handle_zip_archive_streaming(&mut file, path, temp.path());
                 }
             }
-            "gz" | "gzip" => {
+            "gz" | "gzip" | "tgz" => {
                 let out_path = make_output_path(path, base_dir, "decomp.tar");
                 let decoder = GzDecoder::new(BufReader::new(safe_open_for_read(path)?));
-                return stream_to_file(decoder, &out_path);
+                return stream_to_file_capped(decoder, &out_path, single_stream_cap);
             }
             "bz2" | "bzip2" => {
                 let out_path = make_output_path(path, base_dir, "decomp.tar");
                 let decoder = DecoderReader::new(BufReader::new(safe_open_for_read(path)?));
-                return stream_to_file(decoder, &out_path);
+                return stream_to_file_capped(decoder, &out_path, single_stream_cap);
             }
             "xz" => {
                 let out_path = make_output_path(path, base_dir, "decomp.tar");
-                return stream_xz_to_file(path, &out_path);
+                return stream_xz_to_file_capped(path, &out_path, single_stream_cap);
             }
             "zlib" => {
                 let out_path = make_output_path(path, base_dir, "decomp.tar");
                 let decoder = ZlibDecoder::new(BufReader::new(safe_open_for_read(path)?));
-                return stream_to_file(decoder, &out_path);
+                return stream_to_file_capped(decoder, &out_path, single_stream_cap);
             }
             _ => {}
         }
@@ -379,20 +683,30 @@ fn decompress_once(path: &Path, base_dir: Option<&Path>) -> Result<CompressedCon
 public entry point – keeps peeling layers
 ───────────────────────────────────────────────────────────── */
 pub fn decompress_file(path: &Path, base_dir: Option<&Path>) -> Result<CompressedContent> {
+    decompress_file_with_single_stream_cap(path, base_dir, MAX_SINGLE_STREAM_DECOMPRESSED_BYTES)
+}
+
+pub fn decompress_file_with_single_stream_cap(
+    path: &Path,
+    base_dir: Option<&Path>,
+    single_stream_cap: u64,
+) -> Result<CompressedContent> {
     let mut current_path: &Path = path;
     let mut owned_buf: Option<PathBuf>;
 
     loop {
-        let content = decompress_once(current_path, base_dir)?;
+        let should_extract_tar = is_tar_wrapped_compression(current_path);
+        let content =
+            decompress_once_with_single_stream_cap(current_path, base_dir, single_stream_cap)?;
 
         // If the step produced a single on-disk file that is itself a .tar,
         // recurse on that file.
-        if let CompressedContent::RawFile(ref p) = content {
-            if split_extensions(p).0.as_deref() == Some("tar") {
-                owned_buf = Some(p.clone()); // own the path
-                current_path = owned_buf.as_ref().unwrap();
-                continue;
-            }
+        if let CompressedContent::RawFile(ref p) = content
+            && should_extract_tar
+        {
+            owned_buf = Some(p.clone()); // own the path
+            current_path = owned_buf.as_ref().unwrap();
+            continue;
         }
         return Ok(content);
     }
@@ -427,30 +741,23 @@ pub fn decompress_file_to_temp(path: &Path) -> Result<(CompressedContent, TempDi
         if let Some(prefix) = &prefix_for_replace {
             let prefix_str = prefix.display().to_string();
             for (name, _) in files.iter_mut() {
-                if let Some(rest) = name.strip_prefix(&prefix_str) {
-                    if let Some((_, suffix)) = rest.split_once('!') {
-                        *name = format!("{}!{}", path.display(), suffix);
-                    }
+                if let Some(rest) = name.strip_prefix(&prefix_str)
+                    && let Some((_, suffix)) = rest.split_once('!')
+                {
+                    *name = format!("{}!{}", path.display(), suffix);
                 }
             }
         }
-        for (name, data) in files {
-            let rel = name.split_once('!').map(|(_, sub)| sub).unwrap_or(name);
-            let p = temp_dir.path().join(rel.replace('\\', "/"));
-            if let Some(parent) = p.parent() {
-                fs::create_dir_all(parent)?;
-            }
-            fs::write(p, data)?;
-        }
-    } else if let CompressedContent::ArchiveFiles(ref mut entries) = content {
-        if let Some(prefix) = &prefix_for_replace {
-            let prefix_str = prefix.display().to_string();
-            for (name, _) in entries.iter_mut() {
-                if let Some(rest) = name.strip_prefix(&prefix_str) {
-                    if let Some((_, suffix)) = rest.split_once('!') {
-                        *name = format!("{}!{}", path.display(), suffix);
-                    }
-                }
+        materialize_in_memory_archive_entries(files, temp_dir.path())?;
+    } else if let CompressedContent::ArchiveFiles(ref mut entries) = content
+        && let Some(prefix) = &prefix_for_replace
+    {
+        let prefix_str = prefix.display().to_string();
+        for (name, _) in entries.iter_mut() {
+            if let Some(rest) = name.strip_prefix(&prefix_str)
+                && let Some((_, suffix)) = rest.split_once('!')
+            {
+                *name = format!("{}!{}", path.display(), suffix);
             }
         }
     }
@@ -459,14 +766,24 @@ pub fn decompress_file_to_temp(path: &Path) -> Result<(CompressedContent, TempDi
 
 #[cfg(test)]
 mod tests {
-    use std::{fs::File, io::Write};
+    use std::{fs::File, io::Write, path::Path};
 
     use flate2::{Compression, write::GzEncoder};
     use tar::Builder;
     use tempfile::tempdir;
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
-    use super::{CompressedContent, decompress_once};
+    use super::{
+        CompressedContent, decompress_file_to_temp, materialize_in_memory_archive_entries,
+    };
+
+    fn decompress_once(path: &Path, base_dir: Option<&Path>) -> anyhow::Result<CompressedContent> {
+        super::decompress_once_with_single_stream_cap(
+            path,
+            base_dir,
+            super::MAX_SINGLE_STREAM_DECOMPRESSED_BYTES,
+        )
+    }
 
     /// 1) Fully unpack:
     ///    - 1st decompress `.gz` -- get a `.tar` file
@@ -518,6 +835,130 @@ mod tests {
             assert!(found, "did not find secret.txt in ArchiveFiles");
         } else {
             panic!("expected ArchiveFiles on second pass, got {:?}", content);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn smoke_decompress_tgz_archive() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let tgz = dir.path().join("payload.tgz");
+        let github_pat = "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"; // this is not a real secret
+
+        {
+            let f = File::create(&tgz)?;
+            let gz = GzEncoder::new(f, Compression::default());
+            let mut tar = Builder::new(gz);
+
+            let data = format!("token={github_pat}\n");
+            let mut hdr = tar::Header::new_gnu();
+            hdr.set_size(data.len() as u64);
+            hdr.set_mode(0o644);
+            hdr.set_cksum();
+            tar.append_data(&mut hdr, "secret.txt", data.as_bytes())?;
+
+            tar.into_inner()?.finish()?;
+        }
+
+        let (content, _tmp) = decompress_file_to_temp(&tgz)?;
+        if let CompressedContent::ArchiveFiles(files) = content {
+            let mut found = false;
+            for (logical, path) in files {
+                if logical.ends_with("payload.tgz!secret.txt") {
+                    let txt = std::fs::read_to_string(&path)?;
+                    assert!(txt.contains(github_pat));
+                    found = true;
+                }
+            }
+            assert!(found, "did not find secret.txt in tgz ArchiveFiles");
+        } else {
+            panic!("expected ArchiveFiles for tgz archive, got {:?}", content);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn smoke_decompress_truncated_tgz_archive_keeps_partial_entries() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let tgz = dir.path().join("payload.tgz");
+        let github_pat = "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"; // this is not a real secret
+
+        {
+            let f = File::create(&tgz)?;
+            let gz = GzEncoder::new(f, Compression::default());
+            let mut tar = Builder::new(gz);
+
+            let first = format!("token={github_pat}\n");
+            let mut hdr = tar::Header::new_gnu();
+            hdr.set_size(first.len() as u64);
+            hdr.set_mode(0o644);
+            hdr.set_cksum();
+            tar.append_data(&mut hdr, "first.txt", first.as_bytes())?;
+
+            let second = vec![b'B'; 4096];
+            let mut hdr = tar::Header::new_gnu();
+            hdr.set_size(second.len() as u64);
+            hdr.set_mode(0o644);
+            hdr.set_cksum();
+            tar.append_data(&mut hdr, "second.txt", second.as_slice())?;
+
+            tar.into_inner()?.finish()?;
+        }
+
+        let tmp = tempdir()?;
+        let content = super::decompress_file_with_single_stream_cap(&tgz, Some(tmp.path()), 1536)?;
+        if let CompressedContent::ArchiveFiles(files) = content {
+            let mut found = false;
+            for (logical, path) in files {
+                if logical.ends_with("!first.txt") {
+                    let txt = std::fs::read_to_string(&path)?;
+                    assert!(txt.contains(github_pat));
+                    found = true;
+                }
+            }
+            assert!(found, "did not recover first.txt from truncated archive");
+        } else {
+            panic!("expected ArchiveFiles for truncated tgz, got {:?}", content);
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn smoke_decompress_truncated_tgz_archive_falls_back_to_raw_when_no_entry_completes()
+    -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let tgz = dir.path().join("payload.tgz");
+
+        {
+            let f = File::create(&tgz)?;
+            let gz = GzEncoder::new(f, Compression::default());
+            let mut tar = Builder::new(gz);
+
+            let first = vec![b'A'; 2048];
+            let mut hdr = tar::Header::new_gnu();
+            hdr.set_size(first.len() as u64);
+            hdr.set_mode(0o644);
+            hdr.set_cksum();
+            tar.append_data(&mut hdr, "secret.txt", first.as_slice())?;
+
+            tar.into_inner()?.finish()?;
+        }
+
+        let tmp = tempdir()?;
+        let content = super::decompress_file_with_single_stream_cap(&tgz, Some(tmp.path()), 600)?;
+        match content {
+            CompressedContent::RawFile(path) => {
+                let data = std::fs::read(&path)?;
+                let as_str = String::from_utf8_lossy(&data);
+                assert!(
+                    as_str.contains("secret.txt") || data.windows(5).any(|w| w == b"ustar"),
+                    "raw fallback should preserve tar bytes"
+                );
+            }
+            other => panic!("expected RawFile for heavily truncated tgz, got {:?}", other),
         }
 
         Ok(())
@@ -603,6 +1044,68 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn materialize_in_memory_archive_entries_skips_unsafe_paths() -> anyhow::Result<()> {
+        let sandbox = tempdir()?;
+        let extract_root = sandbox.path().join("extract");
+        std::fs::create_dir(&extract_root)?;
+
+        let outside_parent = sandbox.path().join("outside-parent.txt");
+        let outside_absolute = sandbox.path().join("outside-absolute.txt");
+        let entries = vec![
+            ("archive.asar!nested/safe.txt".to_string(), b"safe".to_vec()),
+            ("archive.asar!../outside-parent.txt".to_string(), b"bad".to_vec()),
+            (format!("archive.asar!{}", outside_absolute.display()), b"bad".to_vec()),
+        ];
+
+        materialize_in_memory_archive_entries(&entries, &extract_root)?;
+
+        assert_eq!(std::fs::read(extract_root.join("nested/safe.txt"))?, b"safe");
+        assert!(!outside_parent.exists());
+        assert!(!outside_absolute.exists());
+        Ok(())
+    }
+
+    #[test]
+    fn decompress_asar_skips_parent_dir_entries() -> anyhow::Result<()> {
+        use asar::AsarWriter;
+
+        let mut writer = AsarWriter::new();
+        writer.write_file("safe.txt", b"safe", false)?;
+        writer.write_file("aa/bb/escape.txt", b"bad", false)?;
+
+        let mut archive = Vec::new();
+        writer.finalize(&mut archive)?;
+
+        let json_size = u32::from_le_bytes(archive[12..16].try_into().unwrap()) as usize;
+        let header = &mut archive[16..16 + json_size];
+        let header_str = std::str::from_utf8(header)?;
+        assert!(header_str.contains("\"aa\""));
+        assert!(header_str.contains("\"bb\""));
+
+        let patched = header_str.replace("\"aa\"", "\"..\"").replace("\"bb\"", "\"..\"");
+        assert_eq!(patched.len(), header_str.len());
+        header.copy_from_slice(patched.as_bytes());
+
+        let dir = tempdir()?;
+        let asar_path = dir.path().join("malicious.asar");
+        std::fs::write(&asar_path, archive)?;
+
+        let (content, _tmp) = decompress_file_to_temp(&asar_path)?;
+        let CompressedContent::Archive(entries) = content else {
+            panic!("expected Archive for asar");
+        };
+
+        assert_eq!(entries.len(), 1);
+        assert!(
+            entries
+                .iter()
+                .any(|(name, data)| name.ends_with("!safe.txt") && data.as_slice() == b"safe")
+        );
+        assert!(!entries.iter().any(|(name, _)| name.contains("..")));
+        Ok(())
+    }
+
     /// 3) Nested archive: outer.tar.gz  ──▶  outer.tar  (contains inner.tar.gz) └──▶  inner.tar.gz
     ///    ──▶  inner.tar  (contains secret.txt)
     #[test]
@@ -613,7 +1116,7 @@ mod tests {
         use tar::Builder;
         use tempfile::tempdir;
 
-        use super::{CompressedContent, decompress_once};
+        use super::CompressedContent;
 
         let tmp = tempdir()?;
 
@@ -691,6 +1194,50 @@ mod tests {
                 assert!(found, "secret.txt not extracted from nested archive");
             }
             other => panic!("expected ArchiveFiles after untar inner, got {:?}", other),
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn smoke_decompress_apk_archive() -> anyhow::Result<()> {
+        // APKs are ZIP containers. We expect Kingfisher to recognize the .apk
+        // extension and extract its entries so embedded secrets get scanned.
+        let dir = tempdir()?;
+        let apk_path = dir.path().join("aws_leak.apk");
+        let aws_key = "AKIAIOSFODNN7EXAMPLE"; // canonical AWS sample, not real
+
+        {
+            let file = File::create(&apk_path)?;
+            let mut zip = ZipWriter::new(file);
+            let options = SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .unix_permissions(0o644);
+
+            zip.start_file("res/values/strings.xml", options)?;
+            zip.write_all(
+                format!(
+                    "<?xml version=\"1.0\"?><resources><string name=\"aws\">{aws_key}</string></resources>"
+                )
+                .as_bytes(),
+            )?;
+            zip.finish()?;
+        }
+
+        let tmp = tempdir()?;
+        let content = decompress_once(&apk_path, Some(tmp.path()))?;
+        if let CompressedContent::ArchiveFiles(files) = content {
+            let mut found = false;
+            for (logical, path) in files {
+                if logical.ends_with("!res/values/strings.xml") {
+                    let txt = std::fs::read_to_string(&path)?;
+                    assert!(txt.contains(aws_key));
+                    found = true;
+                }
+            }
+            assert!(found, "did not find res/values/strings.xml in apk ArchiveFiles");
+        } else {
+            panic!("expected ArchiveFiles for apk archive, got {:?}", content);
         }
 
         Ok(())
@@ -809,6 +1356,51 @@ mod tests {
             other => panic!("expected Raw for egg, got {:?}", other),
         }
 
+        Ok(())
+    }
+
+    #[test]
+    fn capped_writer_drops_bytes_past_cap() {
+        use std::io::Write;
+
+        use super::CappedWriter;
+
+        let mut sink = Vec::new();
+        let mut capped = CappedWriter::new(&mut sink, 40);
+        // Report full consumption even though the tail is dropped.
+        assert_eq!(capped.write(&[0u8; 100]).unwrap(), 100);
+        assert!(capped.truncated());
+        capped.flush().unwrap();
+        assert_eq!(sink.len(), 40);
+
+        let mut sink = Vec::new();
+        let mut capped = CappedWriter::new(&mut sink, 40);
+        assert_eq!(capped.write(&[0u8; 10]).unwrap(), 10);
+        assert!(!capped.truncated());
+        assert_eq!(sink.len(), 10);
+    }
+
+    #[test]
+    fn stream_to_file_capped_truncates_oversized_stream() -> anyhow::Result<()> {
+        use std::io::Cursor;
+
+        use super::{CompressedContent, stream_to_file_capped};
+
+        let dir = tempdir()?;
+        let out_path = dir.path().join("out.bin");
+
+        // A "decompressed" stream far larger than the cap: only `cap` bytes
+        // should ever reach disk, mirroring a small compression bomb.
+        let payload = vec![b'A'; 8192];
+        let content = stream_to_file_capped(Cursor::new(payload), &out_path, 128)?;
+
+        match content {
+            CompressedContent::RawFile(p) => {
+                let written = std::fs::metadata(&p)?.len();
+                assert_eq!(written, 128, "output must be capped at the byte budget");
+            }
+            other => panic!("expected RawFile, got {other:?}"),
+        }
         Ok(())
     }
 }

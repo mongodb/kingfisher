@@ -19,7 +19,7 @@ use kingfisher::{
             gitlab::GitLabRepoType,
             inputs::{ContentFilteringArgs, InputSpecifierArgs},
             output::{OutputArgs, ReportOutputFormat},
-            rules::RuleSpecifierArgs,
+            rules::{RuleCacheArgs, RuleSpecifierArgs},
             scan::{ConfidenceLevel, ScanArgs},
         },
         global::{Mode, TlsMode},
@@ -110,6 +110,7 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
             rule: vec!["all".into()],
             load_builtins: false,
         },
+        rule_cache: RuleCacheArgs::default(),
         input_specifier_args: InputSpecifierArgs {
             path_inputs: vec![secret_file.clone()],
             git_url: Vec::new(),
@@ -174,6 +175,12 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
             slack_api_url: Url::parse("https://slack.com/api/").unwrap(),
             teams_query: None,
             teams_api_url: Url::parse("https://graph.microsoft.com/").unwrap(),
+            postman_workspaces: Vec::new(),
+            postman_collections: Vec::new(),
+            postman_environments: Vec::new(),
+            postman_all: false,
+            postman_include_mocks_monitors: false,
+            postman_api_url: Url::parse("https://api.getpostman.com/").unwrap(),
             // s3
             s3_bucket: None,
             s3_prefix: None,
@@ -184,6 +191,7 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
             gcs_service_account: None,
             // Docker image scanning
             docker_image: Vec::new(),
+            docker_archive: Vec::new(),
             // git clone / history options
             git_clone: GitCloneMode::Bare,
             git_history: GitHistoryMode::Full,
@@ -233,6 +241,14 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
         validation_timeout: 10,
         full_validation_response: false,
         max_validation_response_length: 2048,
+        alert_webhook: Vec::new(),
+        alert_format: None,
+        alert_on: kingfisher::alerts::AlertOn::Findings,
+        alert_min_confidence: ConfidenceLevel::Medium,
+        alert_include_secret: false,
+        alert_report_url: None,
+        alert_detail: kingfisher::alerts::AlertDetail::Auto,
+        config_webhook_overrides: Vec::new(),
     };
 
     /* --------------------------------------------------------- *
@@ -264,11 +280,21 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
         user_agent_suffix: None,
         tls_mode: TlsMode::Strict,
         allow_internal_ips: true,
+        endpoint: Vec::new(),
+        endpoint_config: None,
+        config: None,
     };
     let update_status = UpdateStatus::default();
 
-    run_async_scan(&global_args, &scan_args, Arc::clone(&datastore), &rules_db, &update_status)
-        .await?;
+    run_async_scan(
+        &global_args,
+        &scan_args,
+        Arc::clone(&datastore),
+        &rules_db,
+        &update_status,
+        false,
+    )
+    .await?;
 
     /* --------------------------------------------------------- *
      * 6. Assertions                                             *

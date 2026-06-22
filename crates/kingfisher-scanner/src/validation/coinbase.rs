@@ -23,7 +23,7 @@ pub fn generate_coinbase_cache_key(cred_name: &str, private_key: &str) -> String
     h.update(cred_name.as_bytes());
     h.update(b"\0");
     h.update(private_key.as_bytes());
-    format!("COINBASE:{:x}", h.finalize())
+    format!("COINBASE:{}", hex::encode(h.finalize()))
 }
 
 pub async fn validate_cdp_api_key(
@@ -107,7 +107,7 @@ fn build_jwt(
             let sig: p256::ecdsa::Signature = signing_key.sign(signing_input.as_bytes());
             let sig_b64 = URL_SAFE_NO_PAD.encode(sig.to_bytes());
 
-            return Ok(format!("{signing_input}.{sig_b64}"));
+            Ok(format!("{signing_input}.{sig_b64}"))
         }
         _ => {
             let key_bytes = base64::engine::general_purpose::STANDARD
@@ -147,7 +147,7 @@ fn build_jwt(
             let signing_input = format!("{header_b64}.{claims_b64}");
             let sig: ed25519_dalek::Signature = signing_key.sign(signing_input.as_bytes());
             let sig_b64 = URL_SAFE_NO_PAD.encode(sig.to_bytes());
-            return Ok(format!("{signing_input}.{sig_b64}"));
+            Ok(format!("{signing_input}.{sig_b64}"))
         }
     }
 }

@@ -147,8 +147,6 @@ pub async fn map_access_from_credentials(
         Severity::Medium
     } else if has_payment_scopes {
         Severity::Critical
-    } else if !permissions.admin.is_empty() || !permissions.risky.is_empty() {
-        Severity::High
     } else {
         Severity::High // live read-only is still High
     };

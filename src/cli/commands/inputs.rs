@@ -22,6 +22,7 @@ const DEFAULT_BITBUCKET_API_URL: &str = "https://api.bitbucket.org/2.0/";
 const DEFAULT_AZURE_BASE_URL: &str = "https://dev.azure.com/";
 const DEFAULT_SLACK_API_URL: &str = "https://slack.com/api/";
 const DEFAULT_TEAMS_API_URL: &str = "https://graph.microsoft.com/";
+const DEFAULT_POSTMAN_API_URL: &str = "https://api.getpostman.com/";
 
 // -----------------------------------------------------------------------------
 // Inputs
@@ -295,7 +296,40 @@ pub struct InputSpecifierArgs {
     #[arg(long, default_value = "https://graph.microsoft.com/", value_hint = ValueHint::Url, hide = true)]
     pub teams_api_url: Url,
 
-    /// Maximum number of Slack, Teams, Jira, or Confluence results to fetch
+    /// Scan a Postman workspace by ID or web URL (repeatable)
+    #[arg(long = "postman-workspace", value_name = "ID_OR_URL", hide = true)]
+    pub postman_workspaces: Vec<String>,
+
+    /// Scan a single Postman collection by UID or web URL (repeatable)
+    #[arg(long = "postman-collection", value_name = "UID_OR_URL", hide = true)]
+    pub postman_collections: Vec<String>,
+
+    /// Scan a single Postman environment by UID (repeatable)
+    #[arg(long = "postman-environment", value_name = "UID", hide = true)]
+    pub postman_environments: Vec<String>,
+
+    /// Scan every workspace, collection, and environment visible to the API key
+    #[arg(
+        long = "postman-all",
+        hide = true,
+        conflicts_with_all = ["postman_workspaces", "postman_collections", "postman_environments"],
+    )]
+    pub postman_all: bool,
+
+    /// Include Postman mocks and monitors when scanning a workspace (off by default)
+    #[arg(long = "postman-include-mocks-monitors", hide = true)]
+    pub postman_include_mocks_monitors: bool,
+
+    /// Use the specified base URL for the Postman API (e.g. self-hosted)
+    #[arg(
+        long = "postman-api-url",
+        default_value = DEFAULT_POSTMAN_API_URL,
+        value_hint = ValueHint::Url,
+        hide = true,
+    )]
+    pub postman_api_url: Url,
+
+    /// Maximum number of Slack, Teams, Jira, Confluence, or Postman results to fetch
     #[arg(long, default_value_t = 100, hide = true)]
     pub max_results: usize,
 
@@ -330,6 +364,10 @@ pub struct InputSpecifierArgs {
     /// Docker/OCI images to scan (no local Docker required)
     #[arg(long = "docker-image", hide = true)]
     pub docker_image: Vec<String>,
+
+    /// Docker image archives provided by the docker subcommand
+    #[arg(skip)]
+    pub docker_archive: Vec<PathBuf>,
 
     /// Select how to clone Git repositories
     #[arg(long, default_value_t=GitCloneMode::Bare, alias="git-clone-mode")]
@@ -433,9 +471,33 @@ impl InputSpecifierArgs {
             || self.confluence_url.is_some()
             || self.slack_query.is_some()
             || self.teams_query.is_some()
+            || !self.postman_workspaces.is_empty()
+            || !self.postman_collections.is_empty()
+            || !self.postman_environments.is_empty()
+            || self.postman_all
             || self.s3_bucket.is_some()
             || self.gcs_bucket.is_some()
             || !self.docker_image.is_empty()
+            || !self.docker_archive.is_empty()
+    }
+
+    /// Return true when any flag has been set that schedules artifact
+    /// fetching (issues/PRs/wikis, Jira, Confluence, Slack, Teams, Postman,
+    /// or Docker images). Used by the scan runner to decide whether the
+    /// "no inputs" guard should bail out, since artifact dirs arrive via
+    /// the streaming scan channel rather than via `input_roots`.
+    pub fn has_artifact_sources(&self) -> bool {
+        self.repo_artifacts
+            || self.jira_url.is_some()
+            || self.confluence_url.is_some()
+            || self.slack_query.is_some()
+            || self.teams_query.is_some()
+            || !self.postman_workspaces.is_empty()
+            || !self.postman_collections.is_empty()
+            || !self.postman_environments.is_empty()
+            || self.postman_all
+            || !self.docker_image.is_empty()
+            || !self.docker_archive.is_empty()
     }
 
     /// Emit deprecation warnings for legacy top-level provider flags.

@@ -73,14 +73,13 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let permissions = classify_permissions(&scopes);
     let severity = derive_severity(&permissions);
 
-    let mut resources = Vec::new();
-    resources.push(ResourceExposure {
+    let resources = vec![ResourceExposure {
         resource_type: "workspace".into(),
         name: team,
         permissions: scopes.clone(),
         risk: "medium".into(),
         reason: "Token has access to this workspace".into(),
-    });
+    }];
 
     let recommendations = build_recommendations(severity);
 

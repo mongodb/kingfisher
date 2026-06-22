@@ -118,7 +118,7 @@ fn dedup_preserves_dependency_provider_matches_per_blob() -> Result<()> {
 fn dedup_still_merges_non_dependency_rules_across_blobs() -> Result<()> {
     let rule = make_rule("RULE.SIMPLE", vec![]);
     let mut store = FindingsStore::new(PathBuf::from("/tmp"));
-    store.record_rules(&[rule.clone()]);
+    store.record_rules(std::slice::from_ref(&rule));
 
     let origin = Arc::new(OriginSet::single(Origin::from_file(PathBuf::from("b.txt"))));
     let blob_a = Arc::new(BlobMetadata {

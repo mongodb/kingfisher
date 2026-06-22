@@ -34,7 +34,7 @@ rules:
       content:
         request:
           method: GET
-          url: https://gitea.com/api/v1/user
+          url: '{{ GITEA_API_BASE_URL }}/user'
           headers:
             Authorization: token {{ TOKEN }}
             Accept: application/json

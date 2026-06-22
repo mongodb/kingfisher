@@ -374,11 +374,11 @@ async fn fetch_paginated(
             }
         }
         items.append(&mut page);
-        if let Some(link_value) = link_header {
-            if let Some(next_url) = parse_next_link(&link_value) {
-                current_url = next_url;
-                continue;
-            }
+        if let Some(link_value) = link_header
+            && let Some(next_url) = parse_next_link(&link_value)
+        {
+            current_url = next_url;
+            continue;
         }
         break;
     }
@@ -494,15 +494,8 @@ pub async fn enumerate_repo_urls(
         if let Some(pb) = progress.as_ref() {
             pb.set_message(format!("Enumerating Hugging Face {label}"));
         }
-        match fetch_resources_for_owner(
-            &client,
-            &base_url,
-            user,
-            &label,
-            auth,
-            progress.as_ref().map(|pb| &**pb),
-        )
-        .await
+        match fetch_resources_for_owner(&client, &base_url, user, &label, auth, progress.as_deref())
+            .await
         {
             Ok(mut resources) => collected.append(&mut resources),
             Err(err) => warn!("Failed to enumerate Hugging Face user {user}: {err}"),
@@ -514,15 +507,8 @@ pub async fn enumerate_repo_urls(
         if let Some(pb) = progress.as_ref() {
             pb.set_message(format!("Enumerating Hugging Face {label}"));
         }
-        match fetch_resources_for_owner(
-            &client,
-            &base_url,
-            org,
-            &label,
-            auth,
-            progress.as_ref().map(|pb| &**pb),
-        )
-        .await
+        match fetch_resources_for_owner(&client, &base_url, org, &label, auth, progress.as_deref())
+            .await
         {
             Ok(mut resources) => collected.append(&mut resources),
             Err(err) => warn!("Failed to enumerate Hugging Face organization {org}: {err}"),
@@ -613,7 +599,7 @@ mod tests {
     #[test]
     fn exclude_set_matches_typed_and_untyped() {
         let excludes =
-            ExcludeSet::from_list(&vec!["model:user/model".into(), "datasets/user/data".into()]);
+            ExcludeSet::from_list(&["model:user/model".into(), "datasets/user/data".into()]);
         assert!(excludes.should_exclude(ResourceKind::Model, "user/model"));
         assert!(excludes.should_exclude(ResourceKind::Dataset, "user/data"));
         assert!(!excludes.should_exclude(ResourceKind::Space, "user/space"));

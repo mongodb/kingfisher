@@ -17,7 +17,7 @@ use kingfisher::{
             gitlab::GitLabRepoType,
             inputs::{ContentFilteringArgs, InputSpecifierArgs},
             output::{OutputArgs, ReportOutputFormat},
-            rules::RuleSpecifierArgs,
+            rules::{RuleCacheArgs, RuleSpecifierArgs},
             scan::{ConfidenceLevel, ScanArgs},
         },
         global::{Mode, TlsMode},
@@ -54,6 +54,7 @@ impl TestContext {
                 rule: vec!["all".into()],
                 load_builtins: true,
             },
+            rule_cache: RuleCacheArgs::default(),
             input_specifier_args: InputSpecifierArgs {
                 path_inputs: Vec::new(),
                 git_url: Vec::new(),
@@ -117,6 +118,12 @@ impl TestContext {
                 slack_api_url: Url::parse("https://slack.com/api/").unwrap(),
                 teams_query: None,
                 teams_api_url: Url::parse("https://graph.microsoft.com/").unwrap(),
+                postman_workspaces: Vec::new(),
+                postman_collections: Vec::new(),
+                postman_environments: Vec::new(),
+                postman_all: false,
+                postman_include_mocks_monitors: false,
+                postman_api_url: Url::parse("https://api.getpostman.com/").unwrap(),
                 // s3
                 s3_bucket: None,
                 s3_prefix: None,
@@ -127,6 +134,7 @@ impl TestContext {
                 gcs_service_account: None,
                 // Docker image scanning
                 docker_image: Vec::new(),
+                docker_archive: Vec::new(),
                 // git clone / history options
                 git_clone: GitCloneMode::Bare,
                 git_history: GitHistoryMode::Full,
@@ -176,6 +184,14 @@ impl TestContext {
             validation_timeout: 10,
             full_validation_response: false,
             max_validation_response_length: 2048,
+            alert_webhook: Vec::new(),
+            alert_format: None,
+            alert_on: kingfisher::alerts::AlertOn::Findings,
+            alert_min_confidence: ConfidenceLevel::Medium,
+            alert_include_secret: false,
+            alert_report_url: None,
+            alert_detail: kingfisher::alerts::AlertDetail::Auto,
+            config_webhook_overrides: Vec::new(),
         };
 
         let loaded = RuleLoader::from_rule_specifiers(&scan_args.rules)
@@ -201,6 +217,7 @@ impl TestContext {
                 rule: vec!["all".into()],
                 load_builtins: true,
             },
+            rule_cache: RuleCacheArgs::default(),
             input_specifier_args: InputSpecifierArgs {
                 path_inputs: vec![file_path.to_path_buf()],
                 git_url: Vec::new(),
@@ -264,6 +281,12 @@ impl TestContext {
                 slack_api_url: Url::parse("https://slack.com/api/").unwrap(),
                 teams_query: None,
                 teams_api_url: Url::parse("https://graph.microsoft.com/").unwrap(),
+                postman_workspaces: Vec::new(),
+                postman_collections: Vec::new(),
+                postman_environments: Vec::new(),
+                postman_all: false,
+                postman_include_mocks_monitors: false,
+                postman_api_url: Url::parse("https://api.getpostman.com/").unwrap(),
                 // s3
                 s3_bucket: None,
                 s3_prefix: None,
@@ -271,6 +294,7 @@ impl TestContext {
                 aws_local_profile: None,
                 // Docker image scanning
                 docker_image: Vec::new(),
+                docker_archive: Vec::new(),
                 // git clone / history options
                 git_clone: GitCloneMode::Bare,
                 git_history: GitHistoryMode::Full,
@@ -324,6 +348,14 @@ impl TestContext {
             validation_timeout: 10,
             full_validation_response: false,
             max_validation_response_length: 2048,
+            alert_webhook: Vec::new(),
+            alert_format: None,
+            alert_on: kingfisher::alerts::AlertOn::Findings,
+            alert_min_confidence: ConfidenceLevel::Medium,
+            alert_include_secret: false,
+            alert_report_url: None,
+            alert_detail: kingfisher::alerts::AlertDetail::Auto,
+            config_webhook_overrides: Vec::new(),
         };
 
         let global_args = GlobalArgs {
@@ -337,6 +369,9 @@ impl TestContext {
             user_agent_suffix: None,
             tls_mode: TlsMode::Strict,
             allow_internal_ips: false,
+            endpoint: Vec::new(),
+            endpoint_config: None,
+            config: None,
         };
 
         let datastore = Arc::new(Mutex::new(FindingsStore::new(clone_dir)));
@@ -348,6 +383,7 @@ impl TestContext {
             Arc::clone(&datastore),
             &self.rules_db,
             &update_status,
+            false,
         )
         .await?;
 

@@ -145,7 +145,7 @@ pub async fn map_access_from_token_and_url(token: &str, base_url: &str) -> Resul
 
     // Determine if user has admin-level access based on policy management
     // If policies are readable AND repos are listed, likely has elevated access
-    let can_manage_policies = has_policy_access && policies.len() > 0;
+    let can_manage_policies = has_policy_access && !policies.is_empty();
     let can_scan_repos = !repos.is_empty();
 
     if can_manage_policies {

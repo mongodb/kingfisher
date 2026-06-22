@@ -118,7 +118,7 @@ fn parse_excluded_project(raw: &str) -> Option<String> {
 }
 
 fn build_exclude_matcher(exclude_repos: &[String]) -> git_host::ExcludeMatcher {
-    git_host::build_exclude_matcher(exclude_repos, |raw| parse_excluded_project(raw), "GitLab")
+    git_host::build_exclude_matcher(exclude_repos, parse_excluded_project, "GitLab")
 }
 
 fn should_exclude_repo(clone_url: &str, excludes: &git_host::ExcludeMatcher) -> bool {
@@ -376,7 +376,7 @@ pub async fn enumerate_contributor_repo_urls(
             contributor
                 .email
                 .as_ref()
-                .and_then(|email| user.email.as_ref().map(|u| (email, u)))
+                .zip(user.email.as_ref())
                 .map(|(email, user_email)| email.eq_ignore_ascii_case(user_email))
                 .unwrap_or_else(|| user.name.eq_ignore_ascii_case(&contributor.name))
         });
@@ -400,23 +400,23 @@ pub async fn enumerate_contributor_repo_urls(
     let mut repo_urls = Vec::new();
     let mut total_repo_count = 0usize;
     for user in users {
-        if let Some(total_limit) = total_limit {
-            if total_repo_count >= total_limit {
-                break;
-            }
+        if let Some(total_limit) = total_limit
+            && total_repo_count >= total_limit
+        {
+            break;
         }
         let mut user_repo_count = 0usize;
         page = 1;
         loop {
-            if let Some(per_user_limit) = per_user_limit {
-                if user_repo_count >= per_user_limit {
-                    break;
-                }
+            if let Some(per_user_limit) = per_user_limit
+                && user_repo_count >= per_user_limit
+            {
+                break;
             }
-            if let Some(total_limit) = total_limit {
-                if total_repo_count >= total_limit {
-                    break;
-                }
+            if let Some(total_limit) = total_limit
+                && total_repo_count >= total_limit
+            {
+                break;
             }
             let mut url = api_base
                 .join(&format!("api/v4/users/{}/projects", user.id))
@@ -440,15 +440,15 @@ pub async fn enumerate_contributor_repo_urls(
                 break;
             }
             for proj in projects {
-                if let Some(per_user_limit) = per_user_limit {
-                    if user_repo_count >= per_user_limit {
-                        break;
-                    }
+                if let Some(per_user_limit) = per_user_limit
+                    && user_repo_count >= per_user_limit
+                {
+                    break;
                 }
-                if let Some(total_limit) = total_limit {
-                    if total_repo_count >= total_limit {
-                        break;
-                    }
+                if let Some(total_limit) = total_limit
+                    && total_repo_count >= total_limit
+                {
+                    break;
                 }
                 if should_exclude_repo(&proj.http_url_to_repo, &exclude_set) {
                     continue;
@@ -513,6 +513,7 @@ fn build_contributor_progress_bar(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn list_repositories(
     api_url: Url,
     ignore_certs: bool,
@@ -597,10 +598,10 @@ pub async fn fetch_repo_items(
             "https://{host}/api/v4/projects/{encoded}/issues?scope=all&state=all&per_page=100&page={page}"
         );
         let mut req = client.get(&url);
-        if let Ok(token) = env::var("KF_GITLAB_TOKEN") {
-            if !token.is_empty() {
-                req = req.header("PRIVATE-TOKEN", token);
-            }
+        if let Ok(token) = env::var("KF_GITLAB_TOKEN")
+            && !token.is_empty()
+        {
+            req = req.header("PRIVATE-TOKEN", token);
         }
         let resp = req.send().await?;
         if !resp.status().is_success() {
@@ -635,10 +636,10 @@ pub async fn fetch_repo_items(
         let url =
             format!("https://{host}/api/v4/projects/{encoded}/snippets?per_page=100&page={page}");
         let mut req = client.get(&url);
-        if let Ok(token) = env::var("KF_GITLAB_TOKEN") {
-            if !token.is_empty() {
-                req = req.header("PRIVATE-TOKEN", token);
-            }
+        if let Ok(token) = env::var("KF_GITLAB_TOKEN")
+            && !token.is_empty()
+        {
+            req = req.header("PRIVATE-TOKEN", token);
         }
         let resp = req.send().await?;
         if !resp.status().is_success() {
@@ -652,10 +653,10 @@ pub async fn fetch_repo_items(
             if let Some(id) = snip.get("id").and_then(|v| v.as_u64()) {
                 let raw_url = format!("https://{host}/api/v4/projects/{encoded}/snippets/{id}/raw");
                 let mut req_s = client.get(&raw_url);
-                if let Ok(token) = env::var("KF_GITLAB_TOKEN") {
-                    if !token.is_empty() {
-                        req_s = req_s.header("PRIVATE-TOKEN", token);
-                    }
+                if let Ok(token) = env::var("KF_GITLAB_TOKEN")
+                    && !token.is_empty()
+                {
+                    req_s = req_s.header("PRIVATE-TOKEN", token);
                 }
                 let raw = req_s.send().await?.text().await?;
                 let file_path = snippets_dir.join(format!("snippet_{id}"));
@@ -703,14 +704,14 @@ mod tests {
 
     #[test]
     fn should_exclude_repo_matches_normalized_paths() {
-        let excludes = build_exclude_matcher(&vec!["Group/Sub/Project".to_string()]);
+        let excludes = build_exclude_matcher(&["Group/Sub/Project".to_string()]);
         assert!(should_exclude_repo("https://gitlab.com/group/sub/project.git", &excludes));
         assert!(!should_exclude_repo("https://gitlab.com/group/other/project.git", &excludes));
     }
 
     #[test]
     fn should_exclude_repo_matches_ssh_urls() {
-        let excludes = build_exclude_matcher(&vec!["group/sub/project".to_string()]);
+        let excludes = build_exclude_matcher(&["group/sub/project".to_string()]);
         assert!(should_exclude_repo(
             "ssh://git@gitlab.example.com/group/sub/project.git",
             &excludes
@@ -719,7 +720,7 @@ mod tests {
 
     #[test]
     fn should_exclude_repo_matches_globs() {
-        let excludes = build_exclude_matcher(&vec!["group/**/archive-*".to_string()]);
+        let excludes = build_exclude_matcher(&["group/**/archive-*".to_string()]);
         assert!(should_exclude_repo("https://gitlab.com/group/sub/archive-2023.git", &excludes));
         assert!(!should_exclude_repo("https://gitlab.com/group/sub/project.git", &excludes));
     }

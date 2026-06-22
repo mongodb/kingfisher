@@ -21,7 +21,11 @@ fn smoke_scan_tar_gz_archive() -> anyhow::Result<()> {
         let mut t = Builder::new(gz);
 
         let data = format!("token={github_pat}\n");
-        t.append_data(&mut tar::Header::new_gnu(), "secret.txt", data.as_bytes())?;
+        let mut header = tar::Header::new_gnu();
+        header.set_size(data.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        t.append_data(&mut header, "secret.txt", data.as_bytes())?;
         t.into_inner()?.finish()?;
     }
 

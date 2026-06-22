@@ -187,12 +187,12 @@ pub fn generate_aws_cache_key(aws_access_key_id: &str, aws_secret_access_key: &s
     hasher.update(aws_access_key_id.as_bytes());
     hasher.update(b"\0");
     hasher.update(aws_secret_access_key.as_bytes());
-    format!("AWS:{:x}", hasher.finalize())
+    format!("AWS:{}", hex::encode(hasher.finalize()))
 }
 
 /// Validate AWS credentials format before attempting validation.
 pub fn validate_aws_credentials_input(access_key_id: &str, secret_key: &str) -> Result<(), String> {
-    // Validate access key ID format (20 chars, known AWS prefixes including STS)
+    // Validate access key ID format (20 chars, usable AWS access-key prefixes including STS)
     if access_key_id.len() != 20 {
         return Err("Invalid AWS access key ID format".to_string());
     }
@@ -200,9 +200,9 @@ pub fn validate_aws_credentials_input(access_key_id: &str, secret_key: &str) -> 
         return Err("AWS access key ID contains invalid characters".to_string());
     }
     let prefix = &access_key_id[..4];
-    let valid_prefix =
-        matches!(prefix, "AKIA" | "AGPA" | "AIDA" | "AROA" | "AIPA" | "ANPA" | "ANVA" | "ASIA")
-            || prefix.starts_with("A3T");
+    // IAM principal IDs (for example AIDA/AROA) are deliberately rejected here:
+    // they are not usable access-key IDs for STS credential validation.
+    let valid_prefix = matches!(prefix, "AKIA" | "ASIA") || prefix.starts_with("A3T");
     if !valid_prefix {
         return Err("Invalid AWS access key ID format".to_string());
     }

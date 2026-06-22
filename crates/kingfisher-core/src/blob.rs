@@ -9,9 +9,10 @@
 //! Large files are automatically memory-mapped for efficiency.
 
 use std::{
+    borrow::Cow,
     convert::TryInto,
     fs::File,
-    io::{Read, Write},
+    io::Read,
     path::Path,
     sync::{
         Arc, OnceLock,
@@ -23,8 +24,9 @@ use bstr::{BString, ByteSlice};
 use gix::ObjectId;
 use parking_lot::Mutex;
 use rustc_hash::FxHashMap;
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use sha1::{Digest, Sha1};
 use smallvec::SmallVec;
 
@@ -222,12 +224,14 @@ impl Drop for Blob<'_> {
 #[serde(into = "String")]
 pub struct BlobId([u8; 20]);
 
-impl BlobId {
-    /// Creates a zero-filled (default) `BlobId`.
-    pub fn default() -> Self {
+impl Default for BlobId {
+    /// Creates a zero-filled `BlobId`.
+    fn default() -> Self {
         BlobId([0; 20])
     }
+}
 
+impl BlobId {
     /// Computes a `BlobId` from raw bytes.
     ///
     /// For large inputs, only the first and last 64KB are hashed for performance.
@@ -235,7 +239,7 @@ impl BlobId {
     pub fn new(input: &[u8]) -> Self {
         const CHUNK: usize = 64 * 1024; // 64KB from start and end
         let mut hasher = Sha1::new();
-        write!(&mut hasher, "blob {}\0", input.len()).unwrap();
+        update_git_blob_header(&mut hasher, input.len());
         if input.len() <= CHUNK * 2 {
             hasher.update(input);
         } else {
@@ -249,7 +253,7 @@ impl BlobId {
     /// Computes a `BlobId` from the complete bytes (no truncation).
     pub fn compute_from_bytes(bytes: &[u8]) -> Self {
         let mut hasher = Sha1::new();
-        write!(&mut hasher, "blob {}\0", bytes.len()).unwrap();
+        update_git_blob_header(&mut hasher, bytes.len());
         hasher.update(bytes);
         let digest: [u8; 20] = hasher.finalize().into();
         BlobId(digest)
@@ -275,6 +279,27 @@ impl BlobId {
     pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
+}
+
+fn update_git_blob_header(hasher: &mut Sha1, len: usize) {
+    let mut digits = [0u8; 20];
+    let mut n = len;
+    let mut i = digits.len();
+
+    if n == 0 {
+        i -= 1;
+        digits[i] = b'0';
+    } else {
+        while n > 0 {
+            i -= 1;
+            digits[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+        }
+    }
+
+    hasher.update(b"blob ");
+    hasher.update(&digits[i..]);
+    hasher.update(b"\0");
 }
 
 impl<'de> Deserialize<'de> for BlobId {
@@ -312,17 +337,15 @@ impl std::fmt::Display for BlobId {
 }
 
 impl JsonSchema for BlobId {
-    fn schema_name() -> String {
+    fn schema_name() -> Cow<'static, str> {
         "BlobId".into()
     }
 
-    fn json_schema(r#gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-        let s = String::json_schema(r#gen);
-        let mut o = s.into_object();
-        o.string().pattern = Some("[0-9a-f]{40}".into());
-        let md = o.metadata();
-        md.description = Some("A hex-encoded blob ID as computed by Git".into());
-        schemars::schema::Schema::Object(o)
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let mut schema = String::json_schema(generator);
+        schema.insert("pattern".to_owned(), json!("[0-9a-f]{40}"));
+        schema.insert("description".to_owned(), json!("A hex-encoded blob ID as computed by Git"));
+        schema
     }
 }
 

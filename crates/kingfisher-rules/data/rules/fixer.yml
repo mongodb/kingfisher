@@ -35,7 +35,7 @@ rules:
             - report_response: true
             - type: StatusMatch
               status: [200]
-            - type: StatusMatch
-              status: [401]
-              negative: true
+            - type: WordMatch
+              words:
+                - '"success":true'
             - type: JsonValid

@@ -1,30 +1,48 @@
-use std::sync::LazyLock;
+use std::{borrow::Cow, sync::LazyLock};
 
 use anyhow::Result;
 use regex::Regex;
 
 use super::Language;
 
+macro_rules! quoted_literal_pattern {
+    () => {
+        r#"
+            b?r\#*"(?s:.*?)"\#*
+            |
+            (?i:[rubf]{0,3})?"""(?s:.*?)"""
+            |
+            (?i:[rubf]{0,3})?'''(?s:.*?)'''
+            |
+            (?:\$@|@\$|@)"(?s:(?:[^"]|"")*)"
+            |
+            (?:\$|(?i:[rubf]{1,3}))?"(?:[^"\\]|\\.)*"
+            |
+            (?i:[rubf]{1,3})?'(?:[^'\\]|\\.)*'
+            |
+            '(?:[^'\\]|\\.)*'
+            |
+            `(?s:[^`]*)`
+        "#
+    };
+}
+
 static ASSIGNMENT_LITERAL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+    Regex::new(concat!(
         r#"(?x)
         (?P<key>[A-Za-z_@$][\w$@.:>-]*)
         \s*
         (?P<op>:=|=>|=|\+=)
         \s*
         (?P<value>
-            @"(?s:(?:[^"]|"")*)"
+        "#,
+        quoted_literal_pattern!(),
+        r#"
             |
-            "(?:[^"\\]|\\.)*"
-            |
-            '(?:[^'\\]|\\.)*'
-            |
-            `[^`]*`
-            |
-            [+-]?\d+(?:\.\d+)?
+            [+-]?\d+(?:[_.xX[:xdigit:]]*)?
         )
     "#,
-    )
+    ))
     .unwrap()
 });
 
@@ -42,29 +60,25 @@ static ASSIGNMENT_ANY_RE: LazyLock<Regex> = LazyLock::new(|| {
 });
 
 static TYPED_ASSIGNMENT_LITERAL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+    Regex::new(concat!(
         r#"(?x)
         (?P<key>[A-Za-z_@$][\w$@.-]*)
         \s*:\s*[^=]+?
         =\s*
         (?P<value>
-            @"(?s:(?:[^"]|"")*)"
+        "#,
+        quoted_literal_pattern!(),
+        r#"
             |
-            "(?:[^"\\]|\\.)*"
-            |
-            '(?:[^'\\]|\\.)*'
-            |
-            `[^`]*`
-            |
-            [+-]?\d+(?:\.\d+)?
+            [+-]?\d+(?:[_.xX[:xdigit:]]*)?
         )
     "#,
-    )
+    ))
     .unwrap()
 });
 
 static PAIR_LITERAL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+    Regex::new(concat!(
         r#"(?x)
         (?:
             ^
@@ -76,33 +90,29 @@ static PAIR_LITERAL_RE: LazyLock<Regex> = LazyLock::new(|| {
         (?P<key>"(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|[A-Za-z_@$][\w$@.-]*)
         \s*:\s*
         (?P<value>
-            "(?:[^"\\]|\\.)*"
+        "#,
+        quoted_literal_pattern!(),
+        r#"
             |
-            '(?:[^'\\]|\\.)*'
-            |
-            `[^`]*`
-            |
-            [+-]?\d+(?:\.\d+)?
+            [+-]?\d+(?:[_.xX[:xdigit:]]*)?
         )
     "#,
-    )
+    ))
     .unwrap()
 });
 
 static TYPE_LITERAL_RE: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
+    Regex::new(concat!(
         r#"(?x)
         (?P<key>[A-Za-z_@$][\w$@.-]*)
         \s*:\s*
         (?P<value>
-            "(?:[^"\\]|\\.)*"
-            |
-            '(?:[^'\\]|\\.)*'
-            |
-            `[^`]*`
+        "#,
+        quoted_literal_pattern!(),
+        r#"
         )
     "#,
-    )
+    ))
     .unwrap()
 });
 
@@ -179,7 +189,8 @@ where
     F: FnMut(&str) -> bool,
 {
     let cleaned = strip_comments(text, CommentStyle::python());
-    for line in cleaned.lines() {
+    for line in context_lines(&cleaned) {
+        let line = line.as_ref();
         if emit_assignment_literals(line, false, sink).is_break() {
             return Ok(());
         }
@@ -198,7 +209,8 @@ where
     F: FnMut(&str) -> bool,
 {
     let cleaned = strip_comments(text, CommentStyle::hash_only());
-    for line in cleaned.lines() {
+    for line in context_lines(&cleaned) {
+        let line = line.as_ref();
         if emit_assignment_literals(line, false, sink).is_break() {
             return Ok(());
         }
@@ -217,7 +229,8 @@ where
     F: FnMut(&str) -> bool,
 {
     let cleaned = strip_comments(text, CommentStyle::php());
-    for line in cleaned.lines() {
+    for line in context_lines(&cleaned) {
+        let line = line.as_ref();
         if emit_assignment_literals(line, false, sink).is_break() {
             return Ok(());
         }
@@ -261,10 +274,10 @@ where
         if trimmed.is_empty() || trimmed.starts_with('[') {
             continue;
         }
-        if let Some((key, value)) = split_assignment(trimmed, '=') {
-            if emit_value(key, value, true, false, sink).is_break() {
-                return Ok(());
-            }
+        if let Some((key, value)) = split_assignment(trimmed, '=')
+            && emit_value(key, value, true, false, sink).is_break()
+        {
+            return Ok(());
         }
     }
     Ok(())
@@ -275,7 +288,11 @@ where
     F: FnMut(&str) -> bool,
 {
     let cleaned = strip_comments(text, CommentStyle::c_style().with_backticks());
-    for line in cleaned.lines() {
+    for line in context_lines(&cleaned) {
+        let line = line.as_ref();
+        if include_type_literals && emit_typed_assignment_literals(line, sink).is_break() {
+            return Ok(());
+        }
         if emit_assignment_literals(line, false, sink).is_break() {
             return Ok(());
         }
@@ -300,7 +317,8 @@ where
     F: FnMut(&str) -> bool,
 {
     let cleaned = strip_comments(text, CommentStyle::c_style());
-    for line in cleaned.lines() {
+    for line in context_lines(&cleaned) {
+        let line = line.as_ref();
         if emit_typed_assignment_literals(line, sink).is_break() {
             return Ok(());
         }
@@ -320,10 +338,12 @@ where
 {
     let style = match language {
         Language::CSharp => CommentStyle::c_style().with_verbatim_strings(),
+        Language::Go => CommentStyle::c_style().with_backticks(),
         _ => CommentStyle::c_style(),
     };
     let cleaned = strip_comments(text, style);
-    for line in cleaned.lines() {
+    for line in context_lines(&cleaned) {
+        let line = line.as_ref();
         if emit_assignment_literals(line, false, sink).is_break() {
             return Ok(());
         }
@@ -350,6 +370,173 @@ impl Flow {
     fn is_break(self) -> bool {
         matches!(self, Self::Break)
     }
+}
+
+fn context_lines(text: &str) -> impl Iterator<Item = Cow<'_, str>> {
+    // Yield candidates lazily so a caller that early-exits (`is_break`) once
+    // its sink is satisfied stops the scan immediately instead of paying for a
+    // full pass over the file. Each source line is yielded in order, and a
+    // stitched multi-line statement is yielded right after the line that
+    // completes it (so in-source-order extraction survives early exit).
+    let mut lines = text.lines();
+    let mut current = String::new();
+    let mut active = false;
+    // A stitched statement produced while handling a source line is buffered
+    // here and emitted on the next call, after that line.
+    let mut pending: Option<Cow<'_, str>> = None;
+    let mut flushed = false;
+
+    std::iter::from_fn(move || {
+        if let Some(stitched) = pending.take() {
+            return Some(stitched);
+        }
+
+        if let Some(line) = lines.by_ref().next() {
+            let trimmed = line.trim();
+            if !trimmed.is_empty() {
+                if active {
+                    current.push(' ');
+                    current.push_str(trimmed);
+                    let structure = scan_structure(&current);
+                    if multiline_context_complete(&current, structure) {
+                        pending = Some(Cow::Owned(std::mem::take(&mut current)));
+                        active = false;
+                    }
+                } else if starts_multiline_context(trimmed) {
+                    current.push_str(trimmed);
+                    let structure = scan_structure(&current);
+                    if multiline_context_complete(&current, structure) {
+                        current.clear();
+                    } else {
+                        active = true;
+                    }
+                }
+            }
+            return Some(Cow::Borrowed(line));
+        }
+
+        // Source exhausted: emit the trailing incomplete statement once, if it
+        // still holds literal values worth surfacing.
+        if !flushed {
+            flushed = true;
+            if active && !current.is_empty() && !extract_literal_values(&current, false).is_empty()
+            {
+                return Some(Cow::Owned(std::mem::take(&mut current)));
+            }
+        }
+        None
+    })
+}
+
+#[derive(Clone, Copy, Default)]
+struct Structure {
+    depth: i32,
+    unclosed_literal: bool,
+}
+
+fn starts_multiline_context(line: &str) -> bool {
+    if starts_with_block_keyword(line) {
+        return false;
+    }
+
+    if !contains_assignment_operator(line) && !looks_like_multiline_call_start(line) {
+        return false;
+    }
+
+    let structure = scan_structure(line);
+    structure.unclosed_literal || structure.depth > 0 || statement_needs_more(line)
+}
+
+fn multiline_context_complete(statement: &str, structure: Structure) -> bool {
+    !structure.unclosed_literal
+        && structure.depth <= 0
+        && !statement_needs_more(statement)
+        && !extract_literal_values(statement, false).is_empty()
+}
+
+fn starts_with_block_keyword(line: &str) -> bool {
+    const KEYWORDS: &[&str] = &[
+        "catch", "class", "def", "else", "fn", "for", "function", "if", "impl", "match", "switch",
+        "try", "while",
+    ];
+
+    KEYWORDS.iter().any(|keyword| {
+        line.strip_prefix(keyword)
+            .and_then(|rest| rest.chars().next())
+            .is_some_and(|ch| ch.is_ascii_whitespace() || matches!(ch, '(' | '{' | '<'))
+    })
+}
+
+fn contains_assignment_operator(line: &str) -> bool {
+    let bytes = line.as_bytes();
+    let mut idx = 0;
+    while idx < bytes.len() {
+        if let Some(span) = parse_any_literal_span(line, idx) {
+            idx = span.end;
+            continue;
+        }
+
+        if bytes[idx] == b'=' {
+            let prev = idx.checked_sub(1).map(|pos| bytes[pos]);
+            let next = bytes.get(idx + 1).copied();
+            if next == Some(b'=') || matches!(prev, Some(b'!' | b'<' | b'>')) {
+                idx += 1;
+                continue;
+            }
+            return true;
+        }
+        idx += 1;
+    }
+    false
+}
+
+fn looks_like_multiline_call_start(line: &str) -> bool {
+    let Some(paren_idx) = line.find('(') else {
+        return false;
+    };
+    let call = line[..paren_idx].trim().trim_start_matches("new ").trim();
+    if call.is_empty() || call.contains(char::is_whitespace) {
+        return false;
+    }
+    call.chars().all(|ch| {
+        ch.is_ascii_alphanumeric() || matches!(ch, '_' | '$' | '@' | '.' | ':' | '>' | '-')
+    })
+}
+
+fn statement_needs_more(statement: &str) -> bool {
+    let trimmed = statement.trim_end();
+    trimmed.ends_with('\\')
+        || trimmed.ends_with(',')
+        || trimmed.ends_with('(')
+        || trimmed.ends_with('[')
+        || trimmed.ends_with('{')
+        || trimmed.ends_with('=')
+        || trimmed.ends_with(":=")
+        || trimmed.ends_with("=>")
+        || trimmed.ends_with("+=")
+}
+
+fn scan_structure(input: &str) -> Structure {
+    let bytes = input.as_bytes();
+    let mut structure = Structure::default();
+    let mut idx = 0;
+
+    while idx < bytes.len() {
+        if let Some(span) = parse_any_literal_span(input, idx) {
+            structure.unclosed_literal |= !span.closed;
+            idx = span.end;
+            continue;
+        }
+
+        match bytes[idx] {
+            b'(' | b'[' | b'{' => structure.depth += 1,
+            b')' | b']' | b'}' => structure.depth -= 1,
+            _ => {}
+        }
+        idx += 1;
+    }
+
+    structure
 }
 
 fn emit_assignment_literals<F>(line: &str, keep_full_key: bool, sink: &mut F) -> Flow
@@ -566,19 +753,77 @@ fn normalize_value(value: &str, allow_bare: bool) -> String {
 }
 
 fn trim_wrapped_literal(value: &str) -> Option<String> {
-    if value.starts_with("@\"") && value.ends_with('"') && value.len() >= 3 {
-        return Some(value[2..value.len() - 1].replace("\"\"", "\""));
+    strip_rust_raw_literal(value)
+        .or_else(|| strip_csharp_verbatim_literal(value))
+        .or_else(|| strip_quoted_literal(value))
+        .or_else(|| value.strip_prefix('`')?.strip_suffix('`').map(str::to_string))
+}
+
+fn strip_rust_raw_literal(value: &str) -> Option<String> {
+    let span = parse_rust_raw_literal_span(value, 0)?;
+    if !span.closed || span.end != value.len() {
+        return None;
     }
-    if value.starts_with('"') && value.ends_with('"') && value.len() >= 2 {
-        return Some(value[1..value.len() - 1].to_string());
+
+    let bytes = value.as_bytes();
+    let mut idx = 0;
+    if matches!(bytes.get(idx), Some(b'b' | b'B')) {
+        idx += 1;
     }
-    if value.starts_with('\'') && value.ends_with('\'') && value.len() >= 2 {
-        return Some(value[1..value.len() - 1].to_string());
+    idx += 1; // r/R
+    let hash_start = idx;
+    while matches!(bytes.get(idx), Some(b'#')) {
+        idx += 1;
     }
-    if value.starts_with('`') && value.ends_with('`') && value.len() >= 2 {
-        return Some(value[1..value.len() - 1].to_string());
+    let hash_count = idx - hash_start;
+    idx += 1; // opening quote
+
+    Some(value[idx..value.len() - 1 - hash_count].to_string())
+}
+
+fn strip_csharp_verbatim_literal(value: &str) -> Option<String> {
+    let span = parse_csharp_verbatim_literal_span(value, 0)?;
+    if !span.closed || span.end != value.len() {
+        return None;
     }
-    None
+
+    let quote_idx = if value.starts_with("@\"") {
+        1
+    } else if value.starts_with("$@\"") || value.starts_with("@$\"") {
+        2
+    } else {
+        return None;
+    };
+
+    Some(value[quote_idx + 1..value.len() - 1].replace("\"\"", "\""))
+}
+
+fn strip_quoted_literal(value: &str) -> Option<String> {
+    let span = parse_quoted_literal_span(value, 0)?;
+    if !span.closed || span.end != value.len() {
+        return None;
+    }
+
+    let bytes = value.as_bytes();
+    let mut quote_idx = 0;
+    if matches!(bytes.get(quote_idx), Some(b'$')) {
+        quote_idx += 1;
+    } else {
+        while quote_idx < bytes.len() && is_string_prefix_byte(bytes[quote_idx]) {
+            quote_idx += 1;
+        }
+    }
+
+    let quote = *bytes.get(quote_idx)?;
+    if !matches!(quote, b'\'' | b'"') {
+        return None;
+    }
+    let triple = quote_idx + 2 < bytes.len()
+        && bytes[quote_idx + 1] == quote
+        && bytes[quote_idx + 2] == quote;
+    let content_start = quote_idx + if triple { 3 } else { 1 };
+    let content_end = value.len() - if triple { 3 } else { 1 };
+    Some(value[content_start..content_end].to_string())
 }
 
 fn normalize_call_name(call: &str) -> String {
@@ -591,17 +836,197 @@ fn normalize_call_name(call: &str) -> String {
 }
 
 fn looks_like_embedded_key(value: &str) -> bool {
-    !value.is_empty()
-        && value.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.' | '='))
+    let lower = value.trim().trim_end_matches('=').to_ascii_lowercase();
+    !lower.is_empty()
+        && lower.chars().all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '_' | '-' | '.'))
+        && ["api", "auth", "credential", "key", "pass", "password", "secret", "token"]
+            .iter()
+            .any(|needle| lower.contains(needle))
 }
 
 fn looks_like_number(value: &str) -> bool {
-    value.chars().all(|ch| ch.is_ascii_digit() || ch == '.' || ch == '-' || ch == '+')
+    let value = value.trim().replace('_', "");
+    let value = value.strip_prefix(['-', '+']).unwrap_or(&value);
+    if value.is_empty() {
+        return false;
+    }
+    if let Some(hex) = value.strip_prefix("0x").or_else(|| value.strip_prefix("0X")) {
+        return !hex.is_empty() && hex.chars().all(|ch| ch.is_ascii_hexdigit());
+    }
+
+    let mut seen_digit = false;
+    let mut seen_dot = false;
+    for ch in value.chars() {
+        if ch.is_ascii_digit() {
+            seen_digit = true;
+        } else if ch == '.' && !seen_dot {
+            seen_dot = true;
+        } else {
+            return false;
+        }
+    }
+    seen_digit
 }
 
 fn looks_like_cpp_ctor_initializer_line(line: &str) -> bool {
     let trimmed = line.trim_start();
     trimmed.contains(") :") || trimmed.starts_with(':') || trimmed.starts_with(',')
+}
+
+#[derive(Clone, Copy)]
+struct LiteralSpan {
+    end: usize,
+    closed: bool,
+}
+
+fn parse_any_literal_span(input: &str, start: usize) -> Option<LiteralSpan> {
+    parse_rust_raw_literal_span(input, start)
+        .or_else(|| parse_csharp_verbatim_literal_span(input, start))
+        .or_else(|| parse_quoted_literal_span(input, start))
+        .or_else(|| parse_backtick_literal_span(input, start))
+}
+
+fn parse_rust_raw_literal_span(input: &str, start: usize) -> Option<LiteralSpan> {
+    let bytes = input.as_bytes();
+    let mut idx = start;
+
+    if matches!(bytes.get(idx), Some(b'b' | b'B'))
+        && matches!(bytes.get(idx + 1), Some(b'r' | b'R'))
+    {
+        idx += 1;
+    }
+
+    if !matches!(bytes.get(idx), Some(b'r' | b'R')) {
+        return None;
+    }
+    idx += 1;
+
+    let hash_start = idx;
+    while matches!(bytes.get(idx), Some(b'#')) {
+        idx += 1;
+    }
+    let hash_count = idx - hash_start;
+
+    if !matches!(bytes.get(idx), Some(b'"')) {
+        return None;
+    }
+    idx += 1;
+
+    while idx < bytes.len() {
+        if bytes[idx] == b'"'
+            && idx + 1 + hash_count <= bytes.len()
+            && bytes[idx + 1..idx + 1 + hash_count].iter().all(|ch| *ch == b'#')
+        {
+            return Some(LiteralSpan { end: idx + 1 + hash_count, closed: true });
+        }
+        idx += 1;
+    }
+
+    Some(LiteralSpan { end: bytes.len(), closed: false })
+}
+
+fn parse_csharp_verbatim_literal_span(input: &str, start: usize) -> Option<LiteralSpan> {
+    let bytes = input.as_bytes();
+    let quote_idx =
+        if matches!(bytes.get(start), Some(b'@')) && matches!(bytes.get(start + 1), Some(b'"')) {
+            start + 1
+        } else if (matches!(bytes.get(start), Some(b'$'))
+            && matches!(bytes.get(start + 1), Some(b'@'))
+            && matches!(bytes.get(start + 2), Some(b'"')))
+            || (matches!(bytes.get(start), Some(b'@'))
+                && matches!(bytes.get(start + 1), Some(b'$'))
+                && matches!(bytes.get(start + 2), Some(b'"')))
+        {
+            start + 2
+        } else {
+            return None;
+        };
+
+    let mut idx = quote_idx + 1;
+    while idx < bytes.len() {
+        if bytes[idx] == b'"' {
+            if matches!(bytes.get(idx + 1), Some(b'"')) {
+                idx += 2;
+                continue;
+            }
+            return Some(LiteralSpan { end: idx + 1, closed: true });
+        }
+        idx += 1;
+    }
+
+    Some(LiteralSpan { end: bytes.len(), closed: false })
+}
+
+fn parse_quoted_literal_span(input: &str, start: usize) -> Option<LiteralSpan> {
+    let bytes = input.as_bytes();
+    let mut quote_idx = start;
+
+    if matches!(bytes.get(quote_idx), Some(b'$')) {
+        quote_idx += 1;
+    } else if !matches!(bytes.get(quote_idx), Some(b'\'' | b'"')) {
+        let prefix_start = quote_idx;
+        while quote_idx < bytes.len()
+            && quote_idx - prefix_start < 3
+            && is_string_prefix_byte(bytes[quote_idx])
+        {
+            quote_idx += 1;
+        }
+        if quote_idx == prefix_start {
+            return None;
+        }
+    }
+
+    let &quote = bytes.get(quote_idx)?;
+    if !matches!(quote, b'\'' | b'"') {
+        return None;
+    }
+
+    let triple = quote_idx + 2 < bytes.len()
+        && bytes[quote_idx + 1] == quote
+        && bytes[quote_idx + 2] == quote;
+    let mut idx = quote_idx + if triple { 3 } else { 1 };
+
+    while idx < bytes.len() {
+        if !triple && bytes[idx] == b'\\' {
+            idx = (idx + 2).min(bytes.len());
+            continue;
+        }
+        if triple {
+            if idx + 2 < bytes.len()
+                && bytes[idx] == quote
+                && bytes[idx + 1] == quote
+                && bytes[idx + 2] == quote
+            {
+                return Some(LiteralSpan { end: idx + 3, closed: true });
+            }
+        } else if bytes[idx] == quote {
+            return Some(LiteralSpan { end: idx + 1, closed: true });
+        }
+        idx += 1;
+    }
+
+    Some(LiteralSpan { end: bytes.len(), closed: false })
+}
+
+fn parse_backtick_literal_span(input: &str, start: usize) -> Option<LiteralSpan> {
+    let bytes = input.as_bytes();
+    if !matches!(bytes.get(start), Some(b'`')) {
+        return None;
+    }
+
+    let mut idx = start + 1;
+    while idx < bytes.len() {
+        if bytes[idx] == b'`' {
+            return Some(LiteralSpan { end: idx + 1, closed: true });
+        }
+        idx += 1;
+    }
+
+    Some(LiteralSpan { end: bytes.len(), closed: false })
+}
+
+fn is_string_prefix_byte(ch: u8) -> bool {
+    matches!(ch, b'b' | b'B' | b'f' | b'F' | b'r' | b'R' | b'u' | b'U')
 }
 
 fn extract_literal_values(input: &str, allow_bare: bool) -> Vec<String> {
@@ -610,42 +1035,15 @@ fn extract_literal_values(input: &str, allow_bare: bool) -> Vec<String> {
     let mut idx = 0;
 
     while idx < bytes.len() {
+        if let Some(span) = parse_any_literal_span(input, idx) {
+            values.push(input[idx..span.end].to_string());
+            idx = span.end;
+            continue;
+        }
+
         match bytes[idx] {
             b' ' | b'\t' | b'\r' | b'\n' | b',' => {
                 idx += 1;
-            }
-            b'@' if idx + 1 < bytes.len() && bytes[idx + 1] == b'"' => {
-                let start = idx;
-                idx += 2;
-                while idx < bytes.len() {
-                    if bytes[idx] == b'"' {
-                        if idx + 1 < bytes.len() && bytes[idx + 1] == b'"' {
-                            idx += 2;
-                            continue;
-                        }
-                        idx += 1;
-                        break;
-                    }
-                    idx += 1;
-                }
-                values.push(input[start..idx].to_string());
-            }
-            b'"' | b'\'' | b'`' => {
-                let quote = bytes[idx];
-                let start = idx;
-                idx += 1;
-                while idx < bytes.len() {
-                    if bytes[idx] == b'\\' && quote != b'`' {
-                        idx += 2;
-                        continue;
-                    }
-                    if bytes[idx] == quote {
-                        idx += 1;
-                        break;
-                    }
-                    idx += 1;
-                }
-                values.push(input[start..idx].to_string());
             }
             b'[' | b'(' | b'{' => {
                 let (close, start) = match bytes[idx] {
@@ -657,22 +1055,12 @@ fn extract_literal_values(input: &str, allow_bare: bool) -> Vec<String> {
                 let mut depth = 1usize;
                 let inner_start = start;
                 while idx < bytes.len() && depth > 0 {
+                    if let Some(span) = parse_any_literal_span(input, idx) {
+                        idx = span.end;
+                        continue;
+                    }
+
                     match bytes[idx] {
-                        b'"' | b'\'' | b'`' => {
-                            let quote = bytes[idx];
-                            idx += 1;
-                            while idx < bytes.len() {
-                                if bytes[idx] == b'\\' && quote != b'`' {
-                                    idx += 2;
-                                    continue;
-                                }
-                                if bytes[idx] == quote {
-                                    idx += 1;
-                                    break;
-                                }
-                                idx += 1;
-                            }
-                        }
                         ch if ch == bytes[start - 1] => {
                             depth += 1;
                             idx += 1;
@@ -986,6 +1374,20 @@ fn strip_comments(source: &str, style: CommentStyle) -> String {
             continue;
         }
 
+        if style.verbatim_strings
+            && idx + 2 < bytes.len()
+            && bytes[idx] == b'@'
+            && bytes[idx + 1] == b'$'
+            && bytes[idx + 2] == b'"'
+        {
+            out.push('@');
+            out.push('$');
+            out.push('"');
+            idx += 3;
+            string_state = Some(StringState::Verbatim);
+            continue;
+        }
+
         if style.triple_quotes && idx + 2 < bytes.len() {
             if bytes[idx] == b'\'' && bytes[idx + 1] == b'\'' && bytes[idx + 2] == b'\'' {
                 out.push('\'');
@@ -1062,6 +1464,28 @@ mod tests {
     }
 
     #[test]
+    fn extract_literals_trailing_backslash_does_not_panic() {
+        // Regression: a string literal ending in a lone backslash used to
+        // push idx past bytes.len() and panic at `input[start..idx]`.
+        // The unterminated literal should be returned as-is (without the
+        // closing quote that doesn't exist) and contain the trailing
+        // backslash.
+        let single = extract_literal_values("'foo \\", false);
+        assert_eq!(single, vec!["'foo \\"]);
+
+        let double = extract_literal_values("\"foo \\", false);
+        assert_eq!(double, vec!["\"foo \\"]);
+
+        // The bracketed form should also recurse into the unterminated
+        // string without panicking; the result may be empty if no inner
+        // values were closed, but the call must return.
+        let bracketed = extract_literal_values("['foo \\']", false);
+        // Only assert non-panic; exact shape depends on bracket matching
+        // around an unterminated string.
+        let _ = bracketed;
+    }
+
+    #[test]
     fn extract_literals_numbers() {
         let vals = extract_literal_values("42, -3.14, +1", false);
         assert_eq!(vals, vec!["42", "-3.14", "+1"]);
@@ -1124,6 +1548,18 @@ mod tests {
         let vals = extract_literal_values(r#"@"line1""line2""#, false);
         assert_eq!(vals.len(), 1);
         assert_eq!(vals[0], r#"@"line1""line2""#);
+    }
+
+    #[test]
+    fn extract_literals_prefixed_and_raw_strings() {
+        let vals = extract_literal_values(
+            r##"r#"raw // ok"#, f"py", $@"a""b", $"cs", `go // raw`"##,
+            false,
+        );
+        assert_eq!(
+            vals,
+            vec![r##"r#"raw // ok"#"##, r#"f"py""#, r#"$@"a""b""#, r#"$"cs""#, "`go // raw`"]
+        );
     }
 
     #[test]
@@ -1202,6 +1638,14 @@ mod tests {
     }
 
     #[test]
+    fn strip_csharp_interpolated_verbatim_string() {
+        let style = CommentStyle::c_style().with_verbatim_strings();
+        let result = strip_comments(r#"x = @$"path // still string" // comment"#, style);
+        assert!(result.contains(r#"@$"path // still string""#));
+        assert!(!result.ends_with("comment"));
+    }
+
+    #[test]
     fn strip_backtick_template_preserves_content() {
         let style = CommentStyle::c_style().with_backticks();
         let result = strip_comments("x = `template // not a comment`", style);
@@ -1256,8 +1700,21 @@ mod tests {
     }
 
     #[test]
+    fn normalize_value_strips_prefixed_literals() {
+        assert_eq!(normalize_value(r##"r#"raw value"#"##, false), "raw value");
+        assert_eq!(normalize_value(r#"f"py {value}""#, false), "py {value}");
+        assert_eq!(normalize_value(r#"$@"a""b""#, false), "a\"b");
+    }
+
+    #[test]
     fn normalize_value_rejects_bare_when_not_allowed() {
         assert_eq!(normalize_value("bareword", false), "");
+    }
+
+    #[test]
+    fn normalize_value_rejects_lone_numeric_signs() {
+        assert_eq!(normalize_value("+", false), "");
+        assert_eq!(normalize_value("-", false), "");
     }
 
     #[test]
@@ -1269,5 +1726,66 @@ mod tests {
     fn normalize_value_accepts_numbers() {
         assert_eq!(normalize_value("42", false), "42");
         assert_eq!(normalize_value("-3.14", false), "-3.14");
+    }
+
+    // ── language extraction regressions ─────────────────────────────────
+
+    fn collect(source: &str, language: Language) -> Vec<String> {
+        let mut texts = Vec::new();
+        stream_context_candidates(source.as_bytes(), &language, &mut |text| {
+            texts.push(text.to_string());
+            true
+        })
+        .unwrap();
+        texts
+    }
+
+    #[test]
+    fn javascript_multiline_assignment_emits_variable_context() {
+        let texts = collect(
+            "const auth0_client_secret =\n  \"abcd1234abcd1234abcd1234abcd1234\";",
+            Language::JavaScript,
+        );
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "auth0_client_secret = abcd1234abcd1234abcd1234abcd1234"),
+            "expected multiline assignment candidate, got {texts:?}"
+        );
+    }
+
+    #[test]
+    fn typescript_typed_assignment_uses_variable_name() {
+        let texts = collect(r#"const apiToken: string = "secret123";"#, Language::TypeScript);
+        assert!(texts.iter().any(|text| text == "apiToken = secret123"));
+    }
+
+    #[test]
+    fn go_backtick_literal_preserves_comment_markers() {
+        let texts = collect("apiKey := `secret // not comment`", Language::Go);
+        assert!(texts.iter().any(|text| text == "apiKey = secret // not comment"));
+    }
+
+    #[test]
+    fn embedded_call_key_must_look_secret_related() {
+        let mut texts = Vec::new();
+        assert!(matches!(
+            emit_calls(r#"User::new("John", "Doe")"#, false, &mut |text| {
+                texts.push(text.to_string());
+                true
+            }),
+            Flow::Continue
+        ));
+        assert!(!texts.iter().any(|text| text == "John = Doe"), "got {texts:?}");
+
+        texts.clear();
+        assert!(matches!(
+            emit_calls(r#"send("password=", "secret123")"#, false, &mut |text| {
+                texts.push(text.to_string());
+                true
+            }),
+            Flow::Continue
+        ));
+        assert!(texts.iter().any(|text| text == "password= = secret123"), "got {texts:?}");
     }
 }

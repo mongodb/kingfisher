@@ -370,7 +370,11 @@ mod tests {
 
     #[test]
     fn ensure_port_available_uses_passed_flag_name_in_error() {
-        let listener = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let listener = match std::net::TcpListener::bind(("127.0.0.1", 0)) {
+            Ok(listener) => listener,
+            Err(err) if err.kind() == std::io::ErrorKind::PermissionDenied => return,
+            Err(err) => panic!("failed to bind local test port: {err}"),
+        };
         let port = listener.local_addr().unwrap().port();
 
         let err = ensure_port_available(port, "127.0.0.1", "--view-report-port").unwrap_err();

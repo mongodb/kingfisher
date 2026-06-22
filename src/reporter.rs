@@ -15,7 +15,9 @@ use url::Url;
 use kingfisher_scanner::validation::http_validation::is_auto_provided_request_var;
 
 use crate::{
-    access_map::{AccessSummary, AccessTokenDetails, ProviderMetadata, ResourceExposure},
+    access_map::{
+        AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata, ResourceExposure,
+    },
     blob::BlobMetadata,
     bstring_escape::Escaped,
     cli,
@@ -225,13 +227,12 @@ fn build_var_args(
     let mut var_args = Vec::new();
 
     // Add AKID if available (for AWS)
-    if let Some(akid) = akid_from_captures.or(akid_from_validation_body) {
-        if !akid.is_empty()
-            && required_vars.contains("AKID")
-            && !dependent_captures.contains_key("AKID")
-        {
-            var_args.push(format!("--var AKID={}", escape_for_shell(akid)));
-        }
+    if let Some(akid) = akid_from_captures.or(akid_from_validation_body)
+        && !akid.is_empty()
+        && required_vars.contains("AKID")
+        && !dependent_captures.contains_key("AKID")
+    {
+        var_args.push(format!("--var AKID={}", escape_for_shell(akid)));
     }
 
     // Add dependent captures only when required by the templates.
@@ -507,17 +508,30 @@ pub fn run(
     args: &cli::commands::scan::ScanArgs,
     audit_context: Option<ScanAuditContext>,
 ) -> Result<()> {
+    let writer = args.output_args.get_writer()?;
+    run_with_writer(global_args, ds, args, audit_context, writer)
+}
+
+/// Same as [`run`], but writes into a caller-provided `Write` instead of
+/// constructing one from `args.output_args`. Useful when the caller wants
+/// to render into an in-memory buffer first (e.g. so a stdout lock can be
+/// held only around the final atomic emit, not around the report's CPU
+/// work).
+pub fn run_with_writer<W: std::io::Write>(
+    global_args: &GlobalArgs,
+    ds: Arc<Mutex<findings_store::FindingsStore>>,
+    args: &cli::commands::scan::ScanArgs,
+    audit_context: Option<ScanAuditContext>,
+    writer: W,
+) -> Result<()> {
     global_args.use_color(std::io::stdout());
     let stdout_is_tty = std::io::stdout().is_terminal();
     let use_color = stdout_is_tty && !args.output_args.has_output();
     let styles = Styles::new(use_color);
 
     let ds_clone = Arc::clone(&ds);
-    // Initialize the reporter
     let reporter =
         DetailsReporter { datastore: ds_clone, styles, only_valid: args.only_valid, audit_context };
-    let writer = args.output_args.get_writer()?;
-    // Generate and write the report in the specified format
     reporter.report(args.output_args.format, writer, args)
 }
 pub struct DetailsReporter {
@@ -562,7 +576,7 @@ impl DetailsReporter {
 
             let atime = cmd
                 .committer_timestamp
-                .format(gix::date::time::format::SHORT.clone())
+                .format(gix::date::time::format::SHORT)
                 .unwrap_or_else(|_| cmd.committer_timestamp.seconds.to_string());
 
             let git_metadata = serde_json::json!({
@@ -641,7 +655,7 @@ impl DetailsReporter {
             .groups
             .captures
             .get(1)
-            .or_else(|| m.groups.captures.get(0))
+            .or_else(|| m.groups.captures.first())
             .map(|capture| capture.raw_value())
             .unwrap_or("");
         let offset_start = m.location.offset_span.start as u64;
@@ -704,6 +718,11 @@ impl DetailsReporter {
     fn teams_message_url(&self, path: &std::path::Path) -> Option<String> {
         let ds = self.datastore.lock().ok()?;
         ds.teams_links().get(path).cloned()
+    }
+
+    fn postman_resource_url(&self, path: &std::path::Path) -> Option<String> {
+        let ds = self.datastore.lock().ok()?;
+        ds.postman_links().get(path).cloned()
     }
 
     fn repo_artifact_url(&self, path: &std::path::Path) -> Option<String> {
@@ -881,7 +900,7 @@ impl DetailsReporter {
                 .captures
                 .iter()
                 .find(|c| c.name.map(|n| n.eq_ignore_ascii_case("TOKEN")).unwrap_or(false))
-                .or_else(|| rm.m.groups.captures.get(0));
+                .or_else(|| rm.m.groups.captures.first());
 
         // Get raw snippet value (for revoke/validate command) and display snippet (for output)
         let (raw_snippet, snippet) = if let Some(capture) = snippet_capture {
@@ -1064,6 +1083,7 @@ impl DetailsReporter {
                 .or_else(|| self.confluence_page_url(&e.path).and_then(Self::non_empty_string))
                 .or_else(|| self.slack_message_url(&e.path).and_then(Self::non_empty_string))
                 .or_else(|| self.teams_message_url(&e.path).and_then(Self::non_empty_string))
+                .or_else(|| self.postman_resource_url(&e.path).and_then(Self::non_empty_string))
                 .or_else(|| self.s3_display_path(&e.path).and_then(Self::non_empty_string))
                 .or_else(|| self.docker_display_path(&e.path).and_then(Self::non_empty_string))
                 .or_else(|| Self::non_empty_string(e.path.display().to_string())),
@@ -1235,6 +1255,10 @@ impl DetailsReporter {
 
             groups.sort_by(|a, b| a.resources.cmp(&b.resources));
 
+            let permissions_by_severity =
+                if result.permissions.is_empty() { None } else { Some(result.permissions.clone()) };
+            let context = AccessIdentityContext::from_summary(&result.identity);
+
             entries.push(AccessMapEntry {
                 provider: result.cloud.clone(),
                 account: account.clone(),
@@ -1242,6 +1266,8 @@ impl DetailsReporter {
                 token_details: result.token_details.clone(),
                 provider_metadata: result.provider_metadata.clone(),
                 fingerprint: result.fingerprint.clone(),
+                permissions_by_severity,
+                context,
             });
         }
 
@@ -1348,10 +1374,10 @@ impl Reportable for DetailsReporter {
 }
 
 fn generated_at_for_scan_timezone(scan_timestamp: Option<&str>) -> String {
-    if let Some(scan_timestamp) = scan_timestamp {
-        if let Ok(scan_dt) = chrono::DateTime::parse_from_rfc3339(scan_timestamp) {
-            return Utc::now().with_timezone(scan_dt.offset()).to_rfc3339();
-        }
+    if let Some(scan_timestamp) = scan_timestamp
+        && let Ok(scan_dt) = chrono::DateTime::parse_from_rfc3339(scan_timestamp)
+    {
+        return Utc::now().with_timezone(scan_dt.offset()).to_rfc3339();
     }
     Local::now().to_rfc3339()
 }
@@ -1374,6 +1400,9 @@ fn derive_scan_target(args: &cli::commands::scan::ScanArgs) -> Option<String> {
     }
     for image in &input_args.docker_image {
         targets.push(format!("docker://{image}"));
+    }
+    for archive in &input_args.docker_archive {
+        targets.push(format!("docker-archive://{}", archive.display()));
     }
     if input_args.jira_url.is_some() {
         targets.push("jira".to_string());
@@ -1449,6 +1478,14 @@ pub struct AccessMapEntry {
     pub provider_metadata: Option<ProviderMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// Permissions classified by severity (admin / privilege_escalation / risky / read_only).
+    /// Same shape as PermissionSummary; aggregated across all groups for this identity.
+    /// Absent when the underlying provider didn't classify (e.g., imported reports).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub permissions_by_severity: Option<PermissionSummary>,
+    /// Discriminator context to tell duplicate-named identities apart in the UI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub context: Option<AccessIdentityContext>,
 }
 
 #[derive(Serialize, JsonSchema, Clone, Debug)]
@@ -1456,6 +1493,48 @@ pub struct AccessMapResourceGroup {
     pub resources: Vec<String>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub permissions: Vec<String>,
+}
+
+/// Optional identity context (project, tenant, account, host) used by the
+/// viewer to disambiguate duplicate-named identities.
+#[derive(Serialize, JsonSchema, Clone, Debug, Default)]
+pub struct AccessIdentityContext {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub project: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tenant: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub access_type: Option<String>,
+}
+
+impl AccessIdentityContext {
+    fn from_summary(identity: &AccessSummary) -> Option<Self> {
+        let project = identity.project.clone().filter(|s| !s.trim().is_empty());
+        let tenant = identity.tenant.clone().filter(|s| !s.trim().is_empty());
+        let account_id = identity.account_id.clone().filter(|s| !s.trim().is_empty());
+        let id = identity.id.clone();
+        let identity_id = if id.trim().is_empty() { None } else { Some(id) };
+        let access_type = if identity.access_type.trim().is_empty() {
+            None
+        } else {
+            Some(identity.access_type.clone())
+        };
+
+        if project.is_none()
+            && tenant.is_none()
+            && account_id.is_none()
+            && identity_id.is_none()
+            && access_type.is_none()
+        {
+            return None;
+        }
+
+        Some(Self { project, tenant, account_id, identity_id, access_type })
+    }
 }
 
 #[derive(Serialize, JsonSchema, Clone, Debug)]
@@ -1542,6 +1621,7 @@ pub struct FindingRecordData {
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use crate::{
@@ -1555,7 +1635,7 @@ mod tests {
             gitea::GiteaRepoType,
             github::{GitCloneMode, GitHistoryMode, GitHubRepoType},
             gitlab::GitLabRepoType,
-            rules::RuleSpecifierArgs,
+            rules::{RuleCacheArgs, RuleSpecifierArgs},
         },
         git_commit_metadata::CommitMetadata,
         location::{Location, OffsetSpan, SourcePoint, SourceSpan},
@@ -1670,6 +1750,7 @@ mod tests {
         ScanArgs {
             num_jobs: 1,
             rules: RuleSpecifierArgs::default(),
+            rule_cache: RuleCacheArgs::default(),
             input_specifier_args: InputSpecifierArgs {
                 path_inputs: Vec::new(),
                 git_url: Vec::new(),
@@ -1726,6 +1807,12 @@ mod tests {
                 slack_api_url: Url::parse("https://slack.com/api/").unwrap(),
                 teams_query: None,
                 teams_api_url: Url::parse("https://graph.microsoft.com/").unwrap(),
+                postman_workspaces: Vec::new(),
+                postman_collections: Vec::new(),
+                postman_environments: Vec::new(),
+                postman_all: false,
+                postman_include_mocks_monitors: false,
+                postman_api_url: Url::parse("https://api.getpostman.com/").unwrap(),
                 max_results: 100,
                 s3_bucket: None,
                 s3_prefix: None,
@@ -1735,6 +1822,7 @@ mod tests {
                 gcs_prefix: None,
                 gcs_service_account: None,
                 docker_image: Vec::new(),
+                docker_archive: Vec::new(),
                 git_clone: GitCloneMode::Bare,
                 git_history: GitHistoryMode::Full,
                 commit_metadata: true,
@@ -1783,6 +1871,14 @@ mod tests {
             validation_rps_rule: Vec::new(),
             full_validation_response: false,
             max_validation_response_length: 2048,
+            alert_webhook: Vec::new(),
+            alert_format: None,
+            alert_on: crate::alerts::AlertOn::Findings,
+            alert_min_confidence: cli::commands::scan::ConfidenceLevel::Medium,
+            alert_include_secret: false,
+            alert_report_url: None,
+            alert_detail: crate::alerts::AlertDetail::Auto,
+            config_webhook_overrides: Vec::new(),
         }
     }
 

@@ -5,16 +5,15 @@ rules:
       (?x)             
       \b
       (
-        (?:A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)
+        (?:A3T[A-Z0-9]|AKIA|ASIA)
         [A-Z0-9]{16}
       )
       \b
     pattern_requirements:
-      min_digits: 1
       ignore_if_contains:
         - "EXAMPLE"
         - "TEST"
-    min_entropy: 3.2
+    min_entropy: 3.0
     visible: false
     confidence: medium
     examples:
@@ -25,14 +24,14 @@ rules:
     pattern: |
       (?xi)
       (?:
-        \b
-        (?:AWS|AMAZON|AMZN|A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)
+        (?:\b|_)
+        (?:AWS|AMAZON|AMZN|A3T[A-Z0-9]|AKIA|ASIA)
         (?:.|[\n\r]){0,64}?
         [^A-Za-z0-9_+!@\#$%^&*()\]./]
         ([A-Za-z0-9/+]{40})
         [^A-Za-z0-9_+!@\#$%^&*()\]./]
       |
-        \b(?:AWS|AMAZON|AMZN|A3T[A-Z0-9]|AKIA|AGPA|AIDA|AROA|AIPA|ANPA|ANVA|ASIA)
+        (?:\b|_)(?:AWS|AMAZON|AMZN|A3T[A-Z0-9]|AKIA|ASIA)
         (?:.|[\n\r]){0,96}?
         (?:SECRET|PRIVATE|ACCESS)
         (?:.|[\n\r]){0,16}?

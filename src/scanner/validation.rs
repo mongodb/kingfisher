@@ -1,4 +1,6 @@
 use std::{
+    future::Future,
+    panic::AssertUnwindSafe,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -14,8 +16,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use liquid::Parser;
 use reqwest::StatusCode;
 use rustc_hash::{FxHashMap, FxHashSet};
-use tokio::{sync::Notify, time::timeout};
-use tracing::trace;
+use tokio::sync::Notify;
+use tracing::{debug, trace, warn};
 
 use crate::{
     access_map::AccessMapRequest,
@@ -23,6 +25,7 @@ use crate::{
     findings_store::{FindingsStore, FindingsStoreMessage},
     location::OffsetSpan,
     matcher::OwnedBlobMatch,
+    provider_endpoints::ProviderEndpointOverrides,
     rules::rule::Validation,
     validation::{
         CachedResponse, collect_variables_and_dependencies, utils, validate_single_match,
@@ -406,6 +409,14 @@ impl AccessMapCollector {
             .or_insert_with(|| AccessMapRequest::Asana { token: token.to_string(), fingerprint });
     }
 
+    pub fn record_pinecone(&self, token: &str, fingerprint: String) {
+        let key = xxhash_rust::xxh3::xxh3_64(format!("pinecone|{token}").as_bytes());
+        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Pinecone {
+            token: token.to_string(),
+            fingerprint,
+        });
+    }
+
     pub fn into_requests(self) -> Vec<AccessMapRequest> {
         self.inner.iter().map(|entry| entry.value().clone()).collect()
     }
@@ -421,6 +432,7 @@ pub async fn run_secret_validation(
     range: Option<std::ops::Range<usize>>,
     access_map: Option<AccessMapCollector>,
     rate_limiter: Option<Arc<ValidationRateLimiter>>,
+    provider_endpoints: Arc<ProviderEndpointOverrides>,
     validation_timeout: Duration,
     validation_retries: u32,
     max_body_len: usize,
@@ -485,7 +497,7 @@ pub async fn run_secret_validation(
             // incorrectly pick up inner unnamed groups when patterns have nested captures
             // like (?<REGEX>...(ABC|DEF)...), causing all matches to share the same
             // validation result.
-            let secret = arc_msg.2.groups.captures.get(0).map_or("", |c| c.raw_value());
+            let secret = arc_msg.2.groups.captures.first().map_or("", |c| c.raw_value());
             let group_key = format!("{}|{}", arc_msg.2.rule.id(), secret);
             trace!(
                 rule_id = %arc_msg.2.rule.id(),
@@ -536,6 +548,7 @@ pub async fn run_secret_validation(
             let pb = pb.clone();
             let access_map = access_map.clone();
             let rate_limiter = rate_limiter.clone();
+            let provider_endpoints = provider_endpoints.clone();
             let empty_dep_vars = &empty_dep_vars;
             let empty_missing = &empty_missing;
             let empty_cache = empty_cache.clone();
@@ -544,7 +557,7 @@ pub async fn run_secret_validation(
             async move {
                 // VALIDATION DEDUP: Use get(0) for the primary secret value.
                 // See comment above for why this differs from fingerprint/reporting code.
-                let secret = rep_arc.2.groups.captures.get(0).map_or("", |c| c.raw_value());
+                let secret = rep_arc.2.groups.captures.first().map_or("", |c| c.raw_value());
                 let key = format!("{}|{}", rep_arc.2.rule.id(), secret);
 
                 match val_res.entry(key.clone()) {
@@ -577,6 +590,7 @@ pub async fn run_secret_validation(
                     &cache_glob,
                     access_map.as_ref(),
                     rate_limiter.as_deref(),
+                    &provider_endpoints,
                     validation_timeout,
                     validation_retries,
                     max_body_len,
@@ -612,7 +626,7 @@ pub async fn run_secret_validation(
                 if !match_arc.2.rule.syntax().depends_on_rule.is_empty() {
                     continue;
                 }
-                let secret = match_arc.2.groups.captures.get(0).map_or("", |c| c.raw_value());
+                let secret = match_arc.2.groups.captures.first().map_or("", |c| c.raw_value());
                 let key = format!("{}|{}", match_arc.2.rule.id(), secret);
                 if let Some(cr) = validation_results.get(&key) {
                     let (_, _, existing) = Arc::make_mut(match_arc);
@@ -690,9 +704,7 @@ pub async fn run_secret_validation(
                     let cache_glob = cache.clone();
                     let access_map = access_map.clone();
                     let rate_limiter = rate_limiter.clone();
-                    let validation_timeout = validation_timeout;
-                    let validation_retries = validation_retries;
-
+                    let provider_endpoints = provider_endpoints.clone();
                     async move {
                         let owned = matches_for_blob
                             .iter()
@@ -712,10 +724,10 @@ pub async fn run_secret_validation(
                         let mut by_key: FxHashMap<String, Vec<OwnedBlobMatch>> =
                             FxHashMap::default();
                         for om in owned {
-                            by_key.entry(build_cache_key(&om, &dep_vars)).or_default().push(om);
+                            by_key.entry(build_cache_key(&om)).or_default().push(om);
                         }
                         let reps: Vec<_> =
-                            by_key.into_iter().map(|(_k, mut v)| (v.remove(0), v)).collect();
+                            by_key.into_values().map(|mut v| (v.remove(0), v)).collect();
 
                         let validated: Vec<_> =
                             stream::iter(reps.into_iter().map(|(mut rep, mut dups)| {
@@ -730,6 +742,7 @@ pub async fn run_secret_validation(
                                 let cache_glob = cache_glob.clone();
                                 let access_map = access_map.clone();
                                 let rate_limiter = rate_limiter.clone();
+                                let provider_endpoints = provider_endpoints.clone();
                                 async move {
                                     validate_single(
                                         &mut rep,
@@ -744,6 +757,7 @@ pub async fn run_secret_validation(
                                         &cache_glob,
                                         access_map.as_ref(),
                                         rate_limiter.as_deref(),
+                                        &provider_endpoints,
                                         validation_timeout,
                                         validation_retries,
                                         max_body_len,
@@ -805,7 +819,7 @@ pub async fn run_secret_validation(
             };
             for match_arc in slice.iter_mut() {
                 if let Some((success, body, status, dep_caps)) =
-                    dep_updates.get(&match_arc.2.finding_fingerprint).map(|v| v.clone())
+                    dep_updates.get(&match_arc.2.finding_fingerprint).cloned()
                 {
                     let (_, _, existing) = Arc::make_mut(match_arc);
                     existing.validation_success = success;
@@ -826,6 +840,7 @@ pub async fn run_secret_validation(
 // ---------------------------------------------------
 // The core validation logic, used in an async pipeline
 // ---------------------------------------------------
+#[allow(clippy::too_many_arguments)]
 async fn validate_single(
     om: &mut OwnedBlobMatch,
     parser: &Parser,
@@ -839,21 +854,12 @@ async fn validate_single(
     cache2: &Arc<SkipMap<String, CachedResponse>>,
     access_map: Option<&AccessMapCollector>,
     rate_limiter: Option<&ValidationRateLimiter>,
+    provider_endpoints: &Arc<ProviderEndpointOverrides>,
     validation_timeout: Duration,
     validation_retries: u32,
     max_body_len: usize,
 ) {
-    // Build key
-    let dep_vars_str = dep_vars
-        .get(om.rule.id())
-        .map(|hm| {
-            let mut sorted: Vec<_> = hm.iter().collect();
-            sorted.sort_by(|(k, _), (k2, _)| k.cmp(k2));
-            sorted.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("|")
-        })
-        .unwrap_or_default();
-    let capture0 = om.captures.captures.get(0).map_or(String::new(), |c| c.raw_value().to_string());
-    let cache_key = format!("{}|{}|{}", om.rule.name(), capture0, dep_vars_str);
+    let cache_key = build_cache_key(om);
     // Check cache first
     if let Some(cached) = cache.get(&cache_key) {
         om.validation_success = cached.is_valid;
@@ -893,49 +899,26 @@ async fn validate_single(
     }
     // If we reach here, we're the first task to validate this key
     // Perform validation
-    let outcome = timeout(
-        validation_timeout,
-        validate_single_match(
-            om,
-            parser,
-            clients,
-            dep_vars,
-            missing_deps,
-            cache2,
-            validation_timeout,
-            validation_retries,
-            rate_limiter,
-            max_body_len,
+    let outcome = ValidationOutcome::from_panic_result(
+        catch_validation_panic(
+            validate_single_match(
+                om,
+                parser,
+                clients,
+                dep_vars,
+                missing_deps,
+                cache2,
+                validation_timeout,
+                validation_retries,
+                rate_limiter,
+                provider_endpoints.as_ref(),
+                max_body_len,
+            )
+            .boxed(),
         )
-        .boxed(),
-    )
-    .await;
-    // Store result in cache
-    match outcome {
-        Ok(_) => {
-            if om.validation_success && is_counted_validation_status(om.validation_response_status)
-            {
-                success_count.fetch_add(1, Ordering::Relaxed);
-            } else if is_counted_validation_status(om.validation_response_status) {
-                fail_count.fetch_add(1, Ordering::Relaxed);
-            }
-            cache.insert(
-                cache_key.clone(),
-                CachedResponse {
-                    is_valid: om.validation_success,
-                    status: om.validation_response_status,
-                    body: om.validation_response_body.clone(),
-                    timestamp: Instant::now(),
-                },
-            );
-        }
-        Err(_) => {
-            om.validation_success = false;
-            om.validation_response_body = validation_body::from_string("Validation timed out");
-            om.validation_response_status = http::StatusCode::REQUEST_TIMEOUT;
-            fail_count.fetch_add(1, Ordering::Relaxed);
-        }
-    }
+        .await,
+    );
+    apply_validation_outcome(om, &cache_key, outcome, success_count, fail_count, cache);
     maybe_record_access_map(om, access_map);
     // Remove from `in_progress`
     // in_progress.remove(&cache_key);
@@ -945,28 +928,166 @@ async fn validate_single(
     }
 }
 
+/// Result of attempting to validate a single match.
+///
+/// Flattens panic handling into a self-describing enum so call sites and
+/// signatures stay readable. Validation timeouts are handled inside
+/// `validate_single_match`, where the module-local de-dupe state can be cleaned.
+enum ValidationOutcome {
+    /// Validation ran to completion; the match's own fields describe whether it
+    /// succeeded or failed.
+    Completed,
+    /// Validation panicked. The payload is captured for logging only and must
+    /// never be surfaced to the user or cache (it may embed secret material).
+    Panicked(String),
+}
+
+impl ValidationOutcome {
+    fn from_panic_result(result: std::result::Result<(), String>) -> Self {
+        match result {
+            Ok(()) => ValidationOutcome::Completed,
+            Err(panic_message) => ValidationOutcome::Panicked(panic_message),
+        }
+    }
+}
+
+fn apply_validation_outcome(
+    om: &mut OwnedBlobMatch,
+    cache_key: &str,
+    outcome: ValidationOutcome,
+    success_count: &AtomicUsize,
+    fail_count: &AtomicUsize,
+    cache: &DashMap<String, CachedResponse>,
+) {
+    match outcome {
+        ValidationOutcome::Completed => {
+            if om.validation_success && is_counted_validation_status(om.validation_response_status)
+            {
+                success_count.fetch_add(1, Ordering::Relaxed);
+            } else if is_counted_validation_status(om.validation_response_status) {
+                fail_count.fetch_add(1, Ordering::Relaxed);
+            }
+            cache.insert(
+                cache_key.to_owned(),
+                CachedResponse {
+                    is_valid: om.validation_success,
+                    status: om.validation_response_status,
+                    body: om.validation_response_body.clone(),
+                    timestamp: Instant::now(),
+                },
+            );
+        }
+        ValidationOutcome::Panicked(panic_message) => {
+            // The panic payload can embed secret material (e.g. a token captured
+            // in a debug string), so it must never reach the cached or
+            // user-visible body. Keep WARN free of the payload too; truncated
+            // panic detail is only emitted at DEBUG for troubleshooting.
+            warn!(
+                rule_id = %om.rule.id(),
+                "validator panicked; marking match as failed",
+            );
+            debug!(
+                rule_id = %om.rule.id(),
+                panic = %truncate_for_log(&panic_message),
+                "validator panic detail",
+            );
+            om.validation_success = false;
+            om.validation_response_body = validation_body::from_string(format!(
+                "Validation panicked for rule {}",
+                om.rule.id()
+            ));
+            om.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
+            fail_count.fetch_add(1, Ordering::Relaxed);
+            cache.insert(
+                cache_key.to_owned(),
+                CachedResponse {
+                    is_valid: om.validation_success,
+                    status: om.validation_response_status,
+                    body: om.validation_response_body.clone(),
+                    timestamp: Instant::now(),
+                },
+            );
+        }
+    }
+}
+
 fn is_counted_validation_status(status: StatusCode) -> bool {
     !matches!(status, StatusCode::CONTINUE | StatusCode::PRECONDITION_REQUIRED)
 }
 
-// Helper to compute the cache key for an OwnedBlobMatch
-fn build_cache_key(
-    om: &OwnedBlobMatch,
-    dep_vars: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
-) -> String {
-    // Build key
-    let dep_vars_str = dep_vars
-        .get(om.rule.id())
-        .map(|hm| {
-            let mut sorted: Vec<_> = hm.iter().collect();
-            sorted.sort_by(|(k, _), (k2, _)| k.cmp(k2));
-            sorted.into_iter().map(|(k, v)| format!("{}={}", k, v)).collect::<Vec<_>>().join("|")
-        })
-        .unwrap_or_default();
-    // For demonstration, we’ll do a simplistic approach
-    // You can adapt from your existing logic
-    let capture0 = om.captures.captures.get(0).map_or(String::new(), |c| c.raw_value().to_string());
-    format!("{}|{}|{}", om.rule.name(), capture0, dep_vars_str)
+/// Defensive, last-resort boundary around a validator future.
+///
+/// Validators perform network I/O and parse untrusted responses, so a stray
+/// `panic!`/`unwrap` would otherwise tear down the entire scan. We catch the
+/// unwind here and surface it as `Err(message)` so the caller can fail just the
+/// one match.
+///
+/// `AssertUnwindSafe` is required because the future borrows `&mut om`. It is
+/// sound for this use because the unwind is never observed as a partial result:
+/// on the panic path [`apply_validation_outcome`] unconditionally overwrites the
+/// match's validation fields (`validation_success`, `validation_response_status`,
+/// `validation_response_body`) with a deterministic failure state. The shared
+/// counters and response cache are only mutated *after* this boundary returns,
+/// so a panic cannot leave them inconsistent.
+async fn catch_validation_panic<F>(future: F) -> std::result::Result<(), String>
+where
+    F: Future<Output = ()>,
+{
+    match AssertUnwindSafe(future).catch_unwind().await {
+        Ok(()) => Ok(()),
+        Err(payload) => Err(describe_panic_payload(payload)),
+    }
+}
+
+fn describe_panic_payload(payload: Box<dyn std::any::Any + Send>) -> String {
+    if let Some(message) = payload.downcast_ref::<&str>() {
+        (*message).to_string()
+    } else if let Some(message) = payload.downcast_ref::<String>() {
+        message.clone()
+    } else {
+        "non-string panic payload".to_string()
+    }
+}
+
+/// Bound a panic message before it reaches the logs. Panic payloads are
+/// unbounded in length and may be influenced by scanned content, so cap them at
+/// a fixed length on a UTF-8 boundary.
+fn truncate_for_log(message: &str) -> String {
+    const MAX_LEN: usize = 256;
+    if message.len() <= MAX_LEN {
+        return message.to_string();
+    }
+    let mut end = MAX_LEN;
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    format!("{}… (truncated)", &message[..end])
+}
+
+// Helper to compute the cache key for an OwnedBlobMatch.
+fn build_cache_key(om: &OwnedBlobMatch) -> String {
+    let capture0 =
+        om.captures.captures.first().map_or(String::new(), |c| c.raw_value().to_string());
+
+    let has_context_dependency = om
+        .rule
+        .syntax()
+        .depends_on_rule
+        .iter()
+        .flatten()
+        .any(|dep| !dep.variable.eq_ignore_ascii_case("TOKEN"));
+    if has_context_dependency {
+        return format!(
+            "{}|{}|{}|{}|{}",
+            om.rule.name(),
+            capture0,
+            om.blob_id,
+            om.matching_input_offset_span.start,
+            om.matching_input_offset_span.end
+        );
+    }
+
+    format!("{}|{}", om.rule.name(), capture0)
 }
 
 fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapCollector>) {
@@ -989,8 +1110,9 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                 .map(|(_, value, ..)| value.clone())
                 .unwrap_or_default();
 
-            let mut akid = utils::find_closest_variable(&captures, &secret, "TOKEN", "AKID")
-                .unwrap_or_default();
+            let mut akid =
+                utils::find_closest_variable(&captures, secret.as_str(), "TOKEN", "AKID")
+                    .unwrap_or_default();
 
             if akid.is_empty() {
                 akid = extract_akid_from_body(&om.validation_response_body).unwrap_or_default();
@@ -1001,10 +1123,10 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
             }
         }
         Some(Validation::GCP) => {
-            if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                if !value.is_empty() {
-                    collector.record_gcp(value, fp.clone());
-                }
+            if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_gcp(value, fp.clone());
             }
         }
         Some(Validation::AzureStorage) => {
@@ -1014,7 +1136,7 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                 .map(|(_, value, ..)| value.clone())
                 .unwrap_or_default();
             let storage_account =
-                utils::find_closest_variable(&captures, &storage_key, "TOKEN", "AZURENAME")
+                utils::find_closest_variable(&captures, storage_key.as_str(), "TOKEN", "AZURENAME")
                     .unwrap_or_default();
 
             let mut storage_account = storage_account;
@@ -1035,33 +1157,32 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
             }
         }
         Some(Validation::Postgres) => {
-            if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                if !value.is_empty() {
-                    collector.record_postgres(value, fp.clone());
-                }
+            if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_postgres(value, fp.clone());
             }
         }
         Some(Validation::MongoDB) => {
-            if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                if !value.is_empty() {
-                    collector.record_mongodb(value, fp.clone());
-                }
+            if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_mongodb(value, fp.clone());
             }
         }
         Some(Validation::MySQL) => {
-            if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                if !value.is_empty() {
-                    collector.record_mysql(value, fp.clone());
-                }
+            if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_mysql(value, fp.clone());
             }
         }
         _ => {
-            if om.rule.id().starts_with("kingfisher.github.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_github(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.github.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_github(value, fp.clone());
             }
             if om.rule.id().starts_with("kingfisher.azure.devops.") {
                 let token = captures
@@ -1069,9 +1190,13 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                     .find(|(name, ..)| name == "TOKEN")
                     .map(|(_, value, ..)| value.clone())
                     .unwrap_or_default();
-                let mut organization =
-                    utils::find_closest_variable(&captures, &token, "TOKEN", "AZURE_DEVOPS_ORG")
-                        .unwrap_or_default();
+                let mut organization = utils::find_closest_variable(
+                    &captures,
+                    token.as_str(),
+                    "TOKEN",
+                    "AZURE_DEVOPS_ORG",
+                )
+                .unwrap_or_default();
                 if organization.is_empty() {
                     organization = extract_azure_devops_org_from_body(&om.validation_response_body)
                         .unwrap_or_default();
@@ -1088,7 +1213,7 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                     .map(|(_, value, ..)| value.clone())
                     .unwrap_or_default();
                 let access_key =
-                    utils::find_closest_variable(&captures, &secret_key, "TOKEN", "AKID")
+                    utils::find_closest_variable(&captures, secret_key.as_str(), "TOKEN", "AKID")
                         .or_else(|| om.dependent_captures.get("AKID").cloned())
                         .unwrap_or_default();
 
@@ -1102,14 +1227,22 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                     .find(|(name, ..)| name == "TOKEN")
                     .map(|(_, value, ..)| value.clone())
                     .unwrap_or_default();
-                let access_key =
-                    utils::find_closest_variable(&captures, &secret_key, "TOKEN", "STS_AKID")
-                        .or_else(|| om.dependent_captures.get("STS_AKID").cloned())
-                        .unwrap_or_default();
-                let session_token =
-                    utils::find_closest_variable(&captures, &secret_key, "TOKEN", "SECURITY_TOKEN")
-                        .or_else(|| om.dependent_captures.get("SECURITY_TOKEN").cloned())
-                        .unwrap_or_default();
+                let access_key = utils::find_closest_variable(
+                    &captures,
+                    secret_key.as_str(),
+                    "TOKEN",
+                    "STS_AKID",
+                )
+                .or_else(|| om.dependent_captures.get("STS_AKID").cloned())
+                .unwrap_or_default();
+                let session_token = utils::find_closest_variable(
+                    &captures,
+                    secret_key.as_str(),
+                    "TOKEN",
+                    "SECURITY_TOKEN",
+                )
+                .or_else(|| om.dependent_captures.get("SECURITY_TOKEN").cloned())
+                .unwrap_or_default();
 
                 if !access_key.is_empty() && !secret_key.is_empty() && !session_token.is_empty() {
                     collector.record_alibaba(
@@ -1120,68 +1253,59 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                     );
                 }
             }
-            if is_gitlab_rule {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_gitlab(value, fp.clone());
-                    }
-                }
+            if is_gitlab_rule
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_gitlab(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.slack.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_slack(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.slack.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_slack(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.huggingface.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_huggingface(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.huggingface.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_huggingface(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.gitea.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_gitea(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.gitea.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_gitea(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.bitbucket.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_bitbucket(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.bitbucket.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_bitbucket(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.buildkite.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_buildkite(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.buildkite.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_buildkite(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.harness.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_harness(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.harness.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_harness(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.openai.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_openai(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.openai.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_openai(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.anthropic.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_anthropic(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.anthropic.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_anthropic(value, fp.clone());
             }
             if om.rule.id().starts_with("kingfisher.salesforce.") {
                 let token = captures
@@ -1200,29 +1324,25 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                     collector.record_salesforce(&token, &instance, fp.clone());
                 }
             }
-            if om.rule.id().starts_with("kingfisher.wandb.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_weightsandbiases(value, fp.clone());
-                    }
-                }
-            }
-            if om.rule.id().starts_with("kingfisher.msteams.")
-                || om.rule.id().starts_with("kingfisher.microsoftteamswebhook.")
+            if om.rule.id().starts_with("kingfisher.wandb.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
             {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_microsoft_teams(value, fp.clone());
-                    }
-                }
+                collector.record_weightsandbiases(value, fp.clone());
+            }
+            if (om.rule.id().starts_with("kingfisher.msteams.")
+                || om.rule.id().starts_with("kingfisher.microsoftteamswebhook."))
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_microsoft_teams(value, fp.clone());
             }
             // --- New providers ---
-            if om.rule.id().starts_with("kingfisher.airtable.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_airtable(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.airtable.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_airtable(value, fp.clone());
             }
             if om.rule.id().starts_with("kingfisher.algolia.") {
                 let api_key = captures
@@ -1240,17 +1360,16 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                     collector.record_algolia(&app_id, &api_key, fp.clone());
                 }
             }
-            if om.rule.id().starts_with("kingfisher.artifactory.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        let base_url = captures
-                            .iter()
-                            .find(|(name, ..)| name == "HOST" || name == "URL")
-                            .map(|(_, value, ..)| value.clone())
-                            .or_else(|| om.dependent_captures.get("HOST").cloned());
-                        collector.record_artifactory(value, base_url.as_deref(), fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.artifactory.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                let base_url = captures
+                    .iter()
+                    .find(|(name, ..)| name == "HOST" || name == "URL")
+                    .map(|(_, value, ..)| value.clone())
+                    .or_else(|| om.dependent_captures.get("HOST").cloned());
+                collector.record_artifactory(value, base_url.as_deref(), fp.clone());
             }
             if om.rule.id().starts_with("kingfisher.auth0.") {
                 let client_secret = captures
@@ -1274,40 +1393,35 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                     collector.record_auth0(&client_id, &client_secret, &domain, fp.clone());
                 }
             }
-            if om.rule.id().starts_with("kingfisher.circleci.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_circleci(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.circleci.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_circleci(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.digitalocean.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_digitalocean(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.digitalocean.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_digitalocean(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.fastly.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_fastly(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.fastly.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_fastly(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.hubspot.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_hubspot(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.hubspot.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_hubspot(value, fp.clone());
             }
-            if om.rule.id().starts_with("kingfisher.ibm.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_ibm_cloud(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.ibm.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_ibm_cloud(value, fp.clone());
             }
             if om.rule.id().starts_with("kingfisher.jira.") {
                 let token = captures
@@ -1362,21 +1476,18 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                     collector.record_plaid(&client_id, &secret, fp.clone());
                 }
             }
-            if om.rule.id().starts_with("kingfisher.sendgrid.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_sendgrid(value, fp.clone());
-                    }
-                }
-            }
-            if om.rule.id().starts_with("kingfisher.sendinblue.")
-                || om.rule.id().starts_with("kingfisher.brevo.")
+            if om.rule.id().starts_with("kingfisher.sendgrid.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
             {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_sendinblue(value, fp.clone());
-                    }
-                }
+                collector.record_sendgrid(value, fp.clone());
+            }
+            if (om.rule.id().starts_with("kingfisher.sendinblue.")
+                || om.rule.id().starts_with("kingfisher.brevo."))
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_sendinblue(value, fp.clone());
             }
             if om.rule.id().starts_with("kingfisher.shopify.") {
                 let token = captures
@@ -1394,40 +1505,35 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                     collector.record_shopify(&token, &subdomain, fp.clone());
                 }
             }
-            if om.rule.id().starts_with("kingfisher.square.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_square(value, fp.clone());
-                    }
-                }
-            }
-            if om.rule.id().starts_with("kingfisher.stripe.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_stripe(value, fp.clone());
-                    }
-                }
-            }
-            if om.rule.id().starts_with("kingfisher.terraform.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_terraform(value, fp.clone());
-                    }
-                }
-            }
-            if om.rule.id().starts_with("kingfisher.jfrog.")
-                || om.rule.id().starts_with("kingfisher.xray.")
+            if om.rule.id().starts_with("kingfisher.square.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
             {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        let base_url = captures
-                            .iter()
-                            .find(|(name, ..)| name == "HOST" || name == "URL")
-                            .map(|(_, value, ..)| value.clone())
-                            .or_else(|| om.dependent_captures.get("HOST").cloned());
-                        collector.record_xray(value, base_url.as_deref(), fp.clone());
-                    }
-                }
+                collector.record_square(value, fp.clone());
+            }
+            if om.rule.id().starts_with("kingfisher.stripe.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_stripe(value, fp.clone());
+            }
+            if om.rule.id().starts_with("kingfisher.terraform.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_terraform(value, fp.clone());
+            }
+            if (om.rule.id().starts_with("kingfisher.jfrog.")
+                || om.rule.id().starts_with("kingfisher.xray."))
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                let base_url = captures
+                    .iter()
+                    .find(|(name, ..)| name == "HOST" || name == "URL")
+                    .map(|(_, value, ..)| value.clone())
+                    .or_else(|| om.dependent_captures.get("HOST").cloned());
+                collector.record_xray(value, base_url.as_deref(), fp.clone());
             }
             if om.rule.id().starts_with("kingfisher.zendesk.") {
                 let token = captures
@@ -1445,12 +1551,11 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                     collector.record_zendesk(&token, &subdomain, fp.clone());
                 }
             }
-            if om.rule.id().starts_with("kingfisher.monday.") {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_monday(value, fp.clone());
-                    }
-                }
+            if om.rule.id().starts_with("kingfisher.monday.")
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_monday(value, fp.clone());
             }
             // Only Asana rules whose TOKEN capture is a standalone access/PAT:
             // .3 (legacy 0/...), .4 (V1 1/...), .5 (V2 2/...). Rule .1 is a client ID
@@ -1458,12 +1563,16 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
             if matches!(
                 om.rule.id(),
                 "kingfisher.asana.3" | "kingfisher.asana.4" | "kingfisher.asana.5"
-            ) {
-                if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN") {
-                    if !value.is_empty() {
-                        collector.record_asana(value, fp.clone());
-                    }
-                }
+            ) && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_asana(value, fp.clone());
+            }
+            if om.rule.id() == "kingfisher.pinecone.1"
+                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
+                && !value.is_empty()
+            {
+                collector.record_pinecone(value, fp.clone());
             }
         }
     }
@@ -1521,6 +1630,53 @@ fn extract_azure_devops_org_from_body(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        blob::BlobId,
+        matcher::{OwnedBlobMatch, SerializableCapture, SerializableCaptures},
+        rules::rule::{Confidence, Rule, RuleSyntax},
+        util::intern,
+    };
+    use smallvec::smallvec;
+    use std::sync::Arc;
+
+    fn make_owned_blob_match() -> OwnedBlobMatch {
+        OwnedBlobMatch {
+            rule: Arc::new(Rule::new(RuleSyntax {
+                name: "panic-test".to_string(),
+                id: "test.panic".to_string(),
+                pattern: "panic".to_string(),
+                min_entropy: 0.0,
+                confidence: Confidence::Low,
+                visible: true,
+                examples: vec![],
+                negative_examples: vec![],
+                references: vec![],
+                validation: None,
+                revocation: None,
+                depends_on_rule: vec![],
+                pattern_requirements: None,
+                tls_mode: None,
+            })),
+            blob_id: BlobId::new(b"panic-test-blob"),
+            finding_fingerprint: 1,
+            matching_input_offset_span: OffsetSpan { start: 0, end: 5 },
+            captures: SerializableCaptures {
+                captures: smallvec![SerializableCapture {
+                    name: None,
+                    match_number: 0,
+                    start: 0,
+                    end: 5,
+                    value: intern("panic"),
+                }],
+            },
+            validation_response_body: None,
+            validation_response_status: StatusCode::CONTINUE,
+            validation_success: false,
+            calculated_entropy: 0.0,
+            is_base64: false,
+            dependent_captures: std::collections::BTreeMap::new(),
+        }
+    }
 
     #[test]
     fn counted_validation_status_excludes_skipped_statuses() {
@@ -1571,5 +1727,50 @@ mod tests {
             }
             other => panic!("unexpected request: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn catch_validation_panic_returns_panic_message() {
+        let result = catch_validation_panic(async {
+            panic!("validator blew up");
+        })
+        .await;
+
+        assert_eq!(result.unwrap_err(), "validator blew up");
+    }
+
+    #[tokio::test]
+    async fn panic_outcome_is_reported_as_failure_and_cached() {
+        let mut om = make_owned_blob_match();
+        let cache_key = build_cache_key(&om);
+        let cache = DashMap::new();
+        let success_count = AtomicUsize::new(0);
+        let fail_count = AtomicUsize::new(0);
+
+        let outcome = ValidationOutcome::from_panic_result(
+            catch_validation_panic(async {
+                panic!("validator blew up");
+            })
+            .await,
+        );
+
+        apply_validation_outcome(&mut om, &cache_key, outcome, &success_count, &fail_count, &cache);
+
+        assert!(!om.validation_success);
+        assert_eq!(om.validation_response_status, StatusCode::INTERNAL_SERVER_ERROR);
+        let body = validation_body::clone_as_string(&om.validation_response_body);
+        assert!(body.contains("Validation panicked for rule test.panic"));
+        // The raw panic payload must never leak into the user-visible body.
+        assert!(!body.contains("validator blew up"));
+        assert_eq!(success_count.load(Ordering::Relaxed), 0);
+        assert_eq!(fail_count.load(Ordering::Relaxed), 1);
+
+        let cached = cache.get(&cache_key).expect("panic result should be cached");
+        assert!(!cached.is_valid);
+        assert_eq!(cached.status, StatusCode::INTERNAL_SERVER_ERROR);
+        let cached_body = validation_body::clone_as_string(&cached.body);
+        assert!(cached_body.contains("Validation panicked for rule test.panic"));
+        // The cached body must not retain the raw panic payload either.
+        assert!(!cached_body.contains("validator blew up"));
     }
 }

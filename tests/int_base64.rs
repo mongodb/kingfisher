@@ -27,7 +27,7 @@ fn detects_base64_encoded_secret() -> anyhow::Result<()> {
         .code(200)
         .stdout(
             predicate::str::contains("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")
-                .and(predicate::str::contains("\"encoding\": \"base64\"")),
+                .and(predicate::str::contains("\"encoding\":\"base64\"")),
         );
 
     dir.close()?;
@@ -111,7 +111,7 @@ fn detects_base64_in_code_with_context_verifier() -> anyhow::Result<()> {
         .code(200)
         .stdout(
             predicate::str::contains("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")
-                .and(predicate::str::contains("\"encoding\": \"base64\"")),
+                .and(predicate::str::contains("\"encoding\":\"base64\"")),
         );
 
     dir.close()?;

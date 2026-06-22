@@ -66,31 +66,29 @@ impl Rules {
                         if !rule_syntax.confidence.is_at_least(&confidence) {
                             continue;
                         }
-                        if let Some(Validation::Http(http_val)) = &rule_syntax.validation {
-                            if http_val
+                        if let Some(Validation::Http(http_val)) = &rule_syntax.validation
+                            && http_val
                                 .request
                                 .response_matcher
                                 .as_ref()
-                                .map_or(true, |m| m.is_empty())
-                            {
-                                bail!(RulesError::MissingResponseMatcher {
-                                    path: path.display().to_string(),
-                                    rule_id: rule_syntax.id.clone(),
-                                });
-                            }
+                                .is_none_or(|m| m.is_empty())
+                        {
+                            bail!(RulesError::MissingResponseMatcher {
+                                path: path.display().to_string(),
+                                rule_id: rule_syntax.id.clone(),
+                            });
                         }
-                        if let Some(Revocation::Http(http_revocation)) = &rule_syntax.revocation {
-                            if http_revocation
+                        if let Some(Revocation::Http(http_revocation)) = &rule_syntax.revocation
+                            && http_revocation
                                 .request
                                 .response_matcher
                                 .as_ref()
-                                .map_or(true, |m| m.is_empty())
-                            {
-                                bail!(RulesError::MissingRevocationMatcher {
-                                    path: path.display().to_string(),
-                                    rule_id: rule_syntax.id.clone(),
-                                });
-                            }
+                                .is_none_or(|m| m.is_empty())
+                        {
+                            bail!(RulesError::MissingRevocationMatcher {
+                                path: path.display().to_string(),
+                                rule_id: rule_syntax.id.clone(),
+                            });
                         }
                         rules.rules.insert(rule_syntax.id.clone(), rule_syntax);
                     }
@@ -155,27 +153,25 @@ impl Rules {
                     if !rule_syntax.confidence.is_at_least(&confidence) {
                         continue;
                     }
-                    if let Some(Validation::Http(http_val)) = &rule_syntax.validation {
-                        if http_val.request.response_matcher.as_ref().map_or(true, |m| m.is_empty())
-                        {
-                            bail!(RulesError::MissingResponseMatcher {
-                                path: path.display().to_string(),
-                                rule_id: rule_syntax.id.clone(),
-                            });
-                        }
+                    if let Some(Validation::Http(http_val)) = &rule_syntax.validation
+                        && http_val.request.response_matcher.as_ref().is_none_or(|m| m.is_empty())
+                    {
+                        bail!(RulesError::MissingResponseMatcher {
+                            path: path.display().to_string(),
+                            rule_id: rule_syntax.id.clone(),
+                        });
                     }
-                    if let Some(Revocation::Http(http_revocation)) = &rule_syntax.revocation {
-                        if http_revocation
+                    if let Some(Revocation::Http(http_revocation)) = &rule_syntax.revocation
+                        && http_revocation
                             .request
                             .response_matcher
                             .as_ref()
-                            .map_or(true, |m| m.is_empty())
-                        {
-                            bail!(RulesError::MissingRevocationMatcher {
-                                path: path.display().to_string(),
-                                rule_id: rule_syntax.id.clone(),
-                            });
-                        }
+                            .is_none_or(|m| m.is_empty())
+                    {
+                        bail!(RulesError::MissingRevocationMatcher {
+                            path: path.display().to_string(),
+                            rule_id: rule_syntax.id.clone(),
+                        });
                     }
                     rules.rules.insert(rule_syntax.id.clone(), rule_syntax);
                 }
@@ -224,7 +220,7 @@ impl Rules {
         for entry in walker {
             match entry {
                 Ok(entry) => {
-                    if entry.file_type().map_or(false, |t| !t.is_dir()) {
+                    if entry.file_type().is_some_and(|t| !t.is_dir()) {
                         yaml_files.push(entry.into_path());
                     }
                 }

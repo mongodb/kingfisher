@@ -23,6 +23,7 @@ logs/*
 !testdata/html_embedded_vulnerable.html
 !docs/viewer/index.html
 !docs-site/overrides/*.html
+private-notes/
 *.dot
 fuzz/*
 !fuzz/Cargo.toml
@@ -31,7 +32,8 @@ fuzz/*
 !fuzz/fuzz_targets/*.rs
 fuzz/corpus/
 fuzz/target/
-
+docs/benchmark/benchmark-*
+docs/benchmark/benchmark
 ### macOS ###
 # General
 .DS_Store
@@ -238,5 +240,6 @@ rust-project.json
 # MkDocs build output
 docs-site/site/
 
+.codegraph/
 # Created by https://www.toptal.com/developers/gitignore/api/python
 # Edit at https://www.toptal.com/developers/gitignore?templates=python

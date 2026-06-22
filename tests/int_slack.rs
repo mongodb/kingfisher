@@ -12,7 +12,7 @@ use kingfisher::{
             gitlab::GitLabRepoType,
             inputs::{ContentFilteringArgs, InputSpecifierArgs},
             output::{OutputArgs, ReportOutputFormat},
-            rules::RuleSpecifierArgs,
+            rules::{RuleCacheArgs, RuleSpecifierArgs},
             scan::{ConfidenceLevel, ScanArgs},
         },
         global::{Mode, TlsMode},
@@ -43,6 +43,7 @@ impl TestContext {
                 rule: vec!["all".into()],
                 load_builtins: true,
             },
+            rule_cache: RuleCacheArgs::default(),
             input_specifier_args: InputSpecifierArgs {
                 path_inputs: Vec::new(),
                 git_url: Vec::new(),
@@ -101,6 +102,12 @@ impl TestContext {
                 slack_api_url: Url::parse("https://slack.com/api/").unwrap(),
                 teams_query: None,
                 teams_api_url: Url::parse("https://graph.microsoft.com/").unwrap(),
+                postman_workspaces: Vec::new(),
+                postman_collections: Vec::new(),
+                postman_environments: Vec::new(),
+                postman_all: false,
+                postman_include_mocks_monitors: false,
+                postman_api_url: Url::parse("https://api.getpostman.com/").unwrap(),
                 s3_bucket: None,
                 s3_prefix: None,
                 role_arn: None,
@@ -110,6 +117,7 @@ impl TestContext {
                 gcs_service_account: None,
                 max_results: 10,
                 docker_image: Vec::new(),
+                docker_archive: Vec::new(),
                 git_clone: GitCloneMode::Bare,
                 git_history: GitHistoryMode::Full,
                 commit_metadata: true,
@@ -158,6 +166,14 @@ impl TestContext {
             validation_timeout: 10,
             full_validation_response: false,
             max_validation_response_length: 2048,
+            alert_webhook: Vec::new(),
+            alert_format: None,
+            alert_on: kingfisher::alerts::AlertOn::Findings,
+            alert_min_confidence: ConfidenceLevel::Medium,
+            alert_include_secret: false,
+            alert_report_url: None,
+            alert_detail: kingfisher::alerts::AlertDetail::Auto,
+            config_webhook_overrides: Vec::new(),
         };
 
         let loaded = RuleLoader::from_rule_specifiers(&scan_args.rules).load(&scan_args)?;
@@ -204,6 +220,7 @@ async fn test_scan_slack_messages() -> Result<()> {
             rule: vec!["all".into()],
             load_builtins: true,
         },
+        rule_cache: RuleCacheArgs::default(),
         input_specifier_args: InputSpecifierArgs {
             path_inputs: Vec::new(),
             git_url: Vec::new(),
@@ -262,6 +279,12 @@ async fn test_scan_slack_messages() -> Result<()> {
             slack_api_url: Url::parse(&format!("{}/", server.uri()))?,
             teams_query: None,
             teams_api_url: Url::parse("https://graph.microsoft.com/").unwrap(),
+            postman_workspaces: Vec::new(),
+            postman_collections: Vec::new(),
+            postman_environments: Vec::new(),
+            postman_all: false,
+            postman_include_mocks_monitors: false,
+            postman_api_url: Url::parse("https://api.getpostman.com/").unwrap(),
             max_results: 10,
             // s3
             s3_bucket: None,
@@ -272,6 +295,7 @@ async fn test_scan_slack_messages() -> Result<()> {
             gcs_prefix: None,
             gcs_service_account: None,
             docker_image: Vec::new(),
+            docker_archive: Vec::new(),
             git_clone: GitCloneMode::Bare,
             git_history: GitHistoryMode::Full,
             commit_metadata: true,
@@ -320,6 +344,14 @@ async fn test_scan_slack_messages() -> Result<()> {
         validation_timeout: 10,
         full_validation_response: false,
         max_validation_response_length: 2048,
+        alert_webhook: Vec::new(),
+        alert_format: None,
+        alert_on: kingfisher::alerts::AlertOn::Findings,
+        alert_min_confidence: ConfidenceLevel::Medium,
+        alert_include_secret: false,
+        alert_report_url: None,
+        alert_detail: kingfisher::alerts::AlertDetail::Auto,
+        config_webhook_overrides: Vec::new(),
     };
 
     let global_args = GlobalArgs {
@@ -333,13 +365,23 @@ async fn test_scan_slack_messages() -> Result<()> {
         user_agent_suffix: None,
         tls_mode: TlsMode::Strict,
         allow_internal_ips: false,
+        endpoint: Vec::new(),
+        endpoint_config: None,
+        config: None,
     };
 
     let datastore = Arc::new(Mutex::new(FindingsStore::new(clone_dir)));
     let update_status = UpdateStatus::default();
 
-    run_async_scan(&global_args, &scan_args, Arc::clone(&datastore), &ctx.rules_db, &update_status)
-        .await?;
+    run_async_scan(
+        &global_args,
+        &scan_args,
+        Arc::clone(&datastore),
+        &ctx.rules_db,
+        &update_status,
+        false,
+    )
+    .await?;
 
     let findings = {
         let ds = datastore.lock().unwrap();

@@ -69,8 +69,8 @@ def generate_markdown(rules):
     total = len(rules)
     detectors = sum(1 for r in rules if not r["dependent"])
     dependent = total - detectors
-    validated = sum(1 for r in rules if r["validates"])
-    revocable = sum(1 for r in rules if r["revokes"])
+    validated = sum(1 for r in rules if r["validates"] and not r["dependent"])
+    revocable = sum(1 for r in rules if r["revokes"] and not r["dependent"])
     providers = len(set(r["provider"] for r in rules))
 
     lines = [

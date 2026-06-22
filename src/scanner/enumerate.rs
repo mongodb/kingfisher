@@ -1,4 +1,5 @@
 use std::{
+    io::Read,
     marker::PhantomData,
     path::Path,
     process::Command,
@@ -30,7 +31,10 @@ use crate::{
     binary::is_binary,
     blob::{Blob, BlobAppearance, BlobId, BlobIdMap},
     cli::commands::{github::GitHistoryMode, scan},
-    decompress::{CompressedContent, decompress_file_to_temp},
+    decompress::{
+        CompressedContent, MAX_INMEM_ZIP_ARCHIVE_BYTES, ZIP_BASED_FORMATS, decompress_file_to_temp,
+        extract_zip_archive_in_memory, looks_like_zip,
+    },
     findings_store,
     git_commit_metadata::CommitMetadata,
     git_repo_enumerator::{GitBlobMetadata, GitBlobSource, MIN_SCANNABLE_BLOB_SIZE},
@@ -51,6 +55,7 @@ use crate::{
 
 type OwnedBlob = Blob<'static>;
 
+#[allow(clippy::too_many_arguments)]
 pub fn enumerate_filesystem_inputs(
     args: &scan::ScanArgs,
     datastore: Arc<Mutex<findings_store::FindingsStore>>,
@@ -107,7 +112,7 @@ pub fn enumerate_filesystem_inputs(
         ProgressBar::hidden()
     };
     let _input_enumerator = || -> Result<FilesystemEnumerator> {
-        let mut ie = FilesystemEnumerator::new(input_roots, &args)?;
+        let mut ie = FilesystemEnumerator::new(input_roots, args)?;
         ie.threads(args.num_jobs);
         ie.max_filesize(args.content_filtering_args.max_file_size_bytes());
         if args.input_specifier_args.git_history == GitHistoryMode::None {
@@ -156,6 +161,7 @@ pub fn enumerate_filesystem_inputs(
         repo_scan_timeout,
         exclude_globset: exclude_globset.clone(),
         git_diff: diff_config.clone(),
+        extract_archives: !args.content_filtering_args.no_extract_archives,
     };
     let (send_ds, recv_ds) = create_datastore_channel(args.num_jobs);
     let datastore_writer_thread =
@@ -167,10 +173,10 @@ pub fn enumerate_filesystem_inputs(
     let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
 
     let matcher = Matcher::new(
-        &rules_db,
+        rules_db,
         scanner_pool.clone(),
         &seen_blobs,
-        Some(&matcher_stats),
+        Some(matcher_stats),
         enable_profiling,
         if enable_profiling { Some(shared_profiler) } else { None },
         &args.extra_ignore_comments,
@@ -208,13 +214,11 @@ pub fn enumerate_filesystem_inputs(
                     }
                     Ok(entry) => entry,
                 };
-                // Check if this is an archive file
-                let is_archive = if let Origin::File(file_origin) = &origin.first() {
-                    is_compressed_file(&file_origin.path)
-                } else {
-                    false
-                };
-                let is_binary = is_binary(&blob.bytes());
+                // Check if this is an archive file. `blob_path()` covers both filesystem and git
+                // origins, so archive/binary filtering stays consistent across input modes.
+                let is_archive =
+                    origin.first().blob_path().map(is_compressed_file).unwrap_or(false);
+                let is_binary = is_binary(blob.bytes());
                 let should_skip = if is_archive {
                     // For archives: skip only if --no_extract_archives is true
                     args.content_filtering_args.no_extract_archives
@@ -290,7 +294,7 @@ fn make_fs_enumerator(
     if input_roots.is_empty() {
         Ok(None)
     } else {
-        let mut ie = FilesystemEnumerator::new(&input_roots, &args)?;
+        let mut ie = FilesystemEnumerator::new(&input_roots, args)?;
         ie.threads(args.num_jobs);
         ie.max_filesize(args.content_filtering_args.max_file_size_bytes());
         if args.input_specifier_args.git_history == GitHistoryMode::None {
@@ -489,7 +493,7 @@ impl ParallelBlobIterator for FileResult {
                 },
                 Err(e) => {
                     debug!("Failed to decompress {}: {}", self.path.display(), e);
-                    Ok(None) // Skip on decompression failure
+                    self.raw_blob_iter().map(Some)
                 }
             }
         } else {
@@ -517,10 +521,249 @@ impl FileResult {
     }
 }
 
+/// Extract an archive blob loaded from a git ODB.
+///
+/// `blob_path` is the in-tree path the blob was first seen at (used both to
+/// pick an extension and to label the resulting per-entry origins so reports
+/// look like `aws_leak.apk!classes4.dex`). `data` is the raw blob bytes.
+///
+/// Returns `Ok(None)` when the path is not a recognized archive format —
+/// the caller should fall back to scanning the blob's raw bytes. Returns
+/// `Ok(Some(entries))` with one element per extracted entry on success.
+/// Returns `Err` only on infrastructure failures (failed to write temp
+/// file, etc.); decompression errors return `Ok(None)` so the caller can
+/// still scan the raw blob.
+#[allow(clippy::type_complexity)]
+fn try_extract_git_blob_archive(
+    blob_path: &str,
+    data: &[u8],
+) -> Result<Option<Vec<(String, Vec<u8>)>>> {
+    let pb = PathBuf::from(blob_path);
+    if !is_compressed_file(&pb) {
+        return Ok(None);
+    }
+
+    // Use the repo-relative path in reports while staging the blob under its basename so the
+    // decompressor still dispatches on the original extension.
+    let archive_label = blob_path.to_string();
+    let staged_name = pb.file_name().and_then(|s| s.to_str()).unwrap_or("blob").to_string();
+
+    // ── fast path: ZIP-based archives extract entirely in memory ──
+    //
+    // For monorepos with many committed `.jar`/`.zip`/`.apk`/`.aar`
+    // artifacts, the disk-staging path below imposes substantial
+    // overhead per blob (mkdir + stage write + per-entry tempfile +
+    // re-read into memory). Since the blob bytes are already in memory
+    // here, we skip the round-trip entirely for ZIP-based formats —
+    // this is the dominant archive type committed to git in practice.
+    //
+    // Memory bound: archives larger than `MAX_INMEM_ZIP_ARCHIVE_BYTES`
+    // (64 MB) fall through to the disk-streaming path so a single
+    // worker never holds the archive bytes AND every decompressed
+    // entry resident at once. The fast path additionally caps total
+    // decompressed bytes per archive (see
+    // `MAX_INMEM_ZIP_DECOMPRESSED_BYTES` in `decompress.rs`).
+    let zip_based_ext = pb
+        .extension()
+        .and_then(|s| s.to_str())
+        .map(|s| s.to_ascii_lowercase())
+        .filter(|ext| ZIP_BASED_FORMATS.iter().any(|z| z == ext));
+
+    if let Some(_ext) = zip_based_ext.as_ref() {
+        // Cheap magic-byte check first: if a `.zip`-named blob is not
+        // actually a ZIP (truncated download, stub file, accidental
+        // rename), skip extraction so the caller scans the raw bytes.
+        if !looks_like_zip(data) {
+            return Ok(None);
+        }
+        if data.len() <= MAX_INMEM_ZIP_ARCHIVE_BYTES {
+            return match extract_zip_archive_in_memory(data, &archive_label) {
+                Ok(entries) => Ok(Some(entries)),
+                Err(e) => {
+                    debug!(
+                        "in-memory zip extract failed for {archive_label}: {e:#}; falling back to raw scan"
+                    );
+                    Ok(None)
+                }
+            };
+        }
+        debug!(
+            "{archive_label} is {} bytes (> {} MB cap); falling back to disk streaming extractor",
+            data.len(),
+            MAX_INMEM_ZIP_ARCHIVE_BYTES / (1024 * 1024)
+        );
+        // fall through to the disk-streaming path below
+    }
+
+    // ── slow path: tar/gz/bz2/xz/zlib/asar/hwp/egg etc. via tempfile,
+    //               and large ZIP-based archives that exceeded the
+    //               in-memory cap above. ──
+    let staging = tempfile::tempdir().context("Failed to create staging tempdir for git blob")?;
+    let staged_path = staging.path().join(&staged_name);
+    std::fs::write(&staged_path, data)
+        .with_context(|| format!("Failed to stage blob to {}", staged_path.display()))?;
+
+    let (content, _td) = match decompress_file_to_temp(&staged_path) {
+        Ok(c) => c,
+        Err(e) => {
+            debug!("decompress_file_to_temp({}) failed: {e:#}", staged_path.display());
+            return Ok(None);
+        }
+    };
+
+    use crate::decompress::CompressedContent;
+    let strip_logical_prefix = |logical: String| -> String {
+        // decompress_file_to_temp builds logicals as
+        // `<staged_path>!<entry>`. Replace the staged-path prefix with the
+        // real repo-relative archive path so report paths look like
+        // `dir/aws_leak.apk!res/values/strings.xml`.
+        match logical.split_once('!') {
+            Some((_, entry)) => format!("{}!{}", archive_label, entry),
+            None => format!("{}!{}", archive_label, logical),
+        }
+    };
+
+    // Aggregate cap on bytes accumulated by this wrapper. The on-disk
+    // entries themselves were already bounded during decompression by
+    // per-entry caps; this cap bounds the size of the final
+    // `Vec<(String, Vec<u8>)>` we hand back. Without it, a JAR with N
+    // medium-sized entries could push num_jobs * N * entry_size bytes
+    // resident across the rayon pool.
+    const MAX_DISK_PATH_AGGREGATE_BYTES: u64 = 256 * 1024 * 1024;
+
+    let entries = match content {
+        CompressedContent::Archive(files) => {
+            let mut out = Vec::with_capacity(files.len());
+            let mut total: u64 = 0;
+            for (logical, bytes) in files {
+                if total >= MAX_DISK_PATH_AGGREGATE_BYTES {
+                    debug!(
+                        "{archive_label} disk-archive aggregate cap of {MAX_DISK_PATH_AGGREGATE_BYTES} bytes reached; truncating remaining entries"
+                    );
+                    break;
+                }
+                let remaining = MAX_DISK_PATH_AGGREGATE_BYTES - total;
+                if bytes.len() as u64 > remaining {
+                    debug!(
+                        "{archive_label} disk-archive aggregate cap reached while reading {}; truncating entry",
+                        logical
+                    );
+                    let take = remaining as usize;
+                    out.push((strip_logical_prefix(logical), bytes[..take].to_vec()));
+                    break;
+                }
+                total += bytes.len() as u64;
+                out.push((strip_logical_prefix(logical), bytes));
+            }
+            out
+        }
+
+        CompressedContent::ArchiveFiles(disk_entries) => {
+            let mut out = Vec::with_capacity(disk_entries.len());
+            let mut total: u64 = 0;
+            for (logical, disk_path) in disk_entries {
+                if total >= MAX_DISK_PATH_AGGREGATE_BYTES {
+                    debug!(
+                        "{archive_label} disk-archive aggregate cap of {MAX_DISK_PATH_AGGREGATE_BYTES} bytes reached; truncating remaining entries"
+                    );
+                    break;
+                }
+                let remaining = MAX_DISK_PATH_AGGREGATE_BYTES - total;
+                let entry_len = match std::fs::metadata(&disk_path) {
+                    Ok(md) => md.len(),
+                    Err(e) => {
+                        debug!("Failed to stat extracted entry {}: {e}", disk_path.display());
+                        continue;
+                    }
+                };
+                let file = match std::fs::File::open(&disk_path) {
+                    Ok(file) => file,
+                    Err(e) => {
+                        debug!("Failed to open extracted entry {}: {e}", disk_path.display());
+                        continue;
+                    }
+                };
+                let to_read = entry_len.min(remaining);
+                let mut bytes = Vec::with_capacity(to_read as usize);
+                match file.take(to_read).read_to_end(&mut bytes) {
+                    Ok(_) => {
+                        total += bytes.len() as u64;
+                        out.push((strip_logical_prefix(logical), bytes));
+                        if entry_len > remaining {
+                            debug!(
+                                "{archive_label} disk-archive aggregate cap reached while reading {}; truncating entry",
+                                disk_path.display()
+                            );
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        debug!("Failed to read extracted entry {}: {e}", disk_path.display());
+                    }
+                }
+            }
+            out
+        }
+
+        // Single-stream decompression (gz/bz2/xz/zlib) gives one logical
+        // payload; cap it just like aggregate archive-entry reads.
+        CompressedContent::Raw(mut bytes) => {
+            if bytes.len() as u64 > MAX_DISK_PATH_AGGREGATE_BYTES {
+                debug!(
+                    "{archive_label} single-stream payload exceeded {MAX_DISK_PATH_AGGREGATE_BYTES} byte cap; truncating"
+                );
+                bytes.truncate(MAX_DISK_PATH_AGGREGATE_BYTES as usize);
+            }
+            vec![(format!("{}!content", archive_label), bytes)]
+        }
+        CompressedContent::RawFile(path) => {
+            let payload_len = match std::fs::metadata(&path) {
+                Ok(md) => md.len(),
+                Err(e) => {
+                    debug!("Failed to stat decompressed payload {}: {e}", path.display());
+                    return Ok(None);
+                }
+            };
+            let file = match std::fs::File::open(&path) {
+                Ok(file) => file,
+                Err(e) => {
+                    debug!("Failed to open decompressed payload {}: {e}", path.display());
+                    return Ok(None);
+                }
+            };
+            let to_read = payload_len.min(MAX_DISK_PATH_AGGREGATE_BYTES);
+            let mut bytes = Vec::with_capacity(to_read as usize);
+            if let Err(e) = file.take(to_read).read_to_end(&mut bytes) {
+                debug!("Failed to read decompressed payload {}: {e}", path.display());
+                return Ok(None);
+            }
+            if payload_len > MAX_DISK_PATH_AGGREGATE_BYTES {
+                debug!(
+                    "{archive_label} single-stream payload exceeded {MAX_DISK_PATH_AGGREGATE_BYTES} byte cap; truncating"
+                );
+            }
+            vec![(format!("{}!content", archive_label), bytes)]
+        }
+    };
+
+    if entries.is_empty() { Ok(None) } else { Ok(Some(entries)) }
+}
+
+fn archive_entry_suffix<'a>(entry_logical: &'a str, archive_path: &str) -> Option<&'a str> {
+    entry_logical.strip_prefix(archive_path).filter(|suffix| suffix.starts_with('!')).or_else(
+        || entry_logical.split_once('!').map(|(archive, _)| &entry_logical[archive.len()..]),
+    )
+}
+
 // A marker so the struct itself carries the lifetime.
 struct GitRepoResultIter<'a> {
     inner: GitRepoResult,
     deadline: std::time::Instant,
+    /// When true, blobs whose in-tree path matches a known archive format
+    /// (zip/jar/apk/tar/gz/...) are extracted before scanning, so secrets
+    /// inside the archive can be matched. When false, archive blobs are
+    /// scanned as raw compressed bytes (legacy behavior).
+    extract_archives: bool,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -534,6 +777,8 @@ impl ParallelBlobIterator for GitRepoResult {
         Ok(Some(GitRepoResultIter {
             inner: self,
             deadline: Instant::now() + PLACEHOLDER,
+            // Default to enabled; the dispatch site overrides from CLI args.
+            extract_archives: true,
             _marker: std::marker::PhantomData,
         }))
     }
@@ -551,12 +796,18 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
         let repo_path = Arc::new(self.inner.path.clone());
         let deadline = self.deadline;
         let flag = Arc::new(AtomicBool::new(false)); // first-timeout gate
+        let extract_archives = self.extract_archives;
 
+        // Loads one git blob and returns one *or more* `(OriginSet, Blob)`
+        // tuples: a single tuple for normal blobs, multiple tuples for
+        // archive blobs (zip/jar/apk/...) whose entries get unpacked into
+        // synthetic per-entry blobs so pattern matchers can see the
+        // contents. See `try_extract_git_blob_archive` below.
         let load_blob = {
             let repo_path = Arc::clone(&repo_path);
             let flag = Arc::clone(&flag);
 
-            move |repo: &mut GixRepo, md: GitBlobMetadata| -> Result<(OriginSet, Blob)> {
+            move |repo: &mut GixRepo, md: GitBlobMetadata| -> Result<Vec<(OriginSet, Blob<'a>)>> {
                 if StdInstant::now() > deadline {
                     if flag.swap(true, Ordering::Relaxed) {
                         bail!("__timeout_silenced__");
@@ -566,7 +817,61 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
 
                 let blob_id = md.blob_oid;
                 let mut raw = repo.find_object(blob_id)?.try_into_blob()?;
-                let blob = Blob::new(BlobId::from(&blob_id), std::mem::take(&mut raw.data));
+                let data = std::mem::take(&mut raw.data);
+
+                // Try archive extraction if any first-seen path looks like
+                // a known archive format. We don't need to keep the raw
+                // archive bytes around — its compressed contents won't
+                // produce useful matches anyway.
+                if extract_archives {
+                    let archive_path: Option<String> = md
+                        .first_seen
+                        .iter()
+                        .map(|e| String::from_utf8_lossy(&e.path).to_string())
+                        .find(|p| is_compressed_file(Path::new(p)));
+
+                    if let Some(archive_path) = archive_path {
+                        match try_extract_git_blob_archive(&archive_path, &data) {
+                            Ok(Some(entries)) => {
+                                let mut out = Vec::with_capacity(entries.len());
+                                for (entry_logical, entry_bytes) in entries {
+                                    let entry_suffix =
+                                        archive_entry_suffix(&entry_logical, &archive_path);
+                                    let origin =
+                                        OriginSet::try_from_iter(md.first_seen.iter().map(|e| {
+                                            let repo_relative_path =
+                                                String::from_utf8_lossy(&e.path).to_string();
+                                            let per_appearance_logical = entry_suffix
+                                                .map(|suffix| {
+                                                    format!("{repo_relative_path}{suffix}")
+                                                })
+                                                .unwrap_or_else(|| entry_logical.clone());
+                                            Origin::from_git_repo_with_first_commit(
+                                                Arc::clone(&repo_path),
+                                                Arc::clone(&e.commit_metadata),
+                                                per_appearance_logical,
+                                            )
+                                        }))
+                                        .unwrap_or_else(
+                                            || Origin::from_git_repo(Arc::clone(&repo_path)).into(),
+                                        );
+                                    out.push((origin, Blob::from_bytes(entry_bytes)));
+                                }
+                                return Ok(out);
+                            }
+                            Ok(None) => { /* not an archive we can crack — fall through */ }
+                            Err(e) => {
+                                debug!(
+                                    "Failed to extract git archive blob {} ({}): {e:#}",
+                                    blob_id, archive_path
+                                );
+                                // fall through and scan raw bytes
+                            }
+                        }
+                    }
+                }
+
+                let blob = Blob::new(BlobId::from(&blob_id), data);
 
                 let origin = OriginSet::try_from_iter(md.first_seen.iter().map(|e| {
                     Origin::from_git_repo_with_first_commit(
@@ -577,12 +882,30 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 }))
                 .unwrap_or_else(|| Origin::from_git_repo(Arc::clone(&repo_path)).into());
 
-                Ok((origin, blob))
+                Ok(vec![(origin, blob)])
             }
         };
 
-        let timeout_filter = |res: &Result<(OriginSet, Blob)>| -> bool {
+        // After flat-mapping, errors and successes both flow as
+        // `Result<(OriginSet, Blob<'a>)>`. Filter out the silenced timeout
+        // marker before handing items to the scan consumer.
+        let timeout_filter = |res: &Result<(OriginSet, Blob<'a>)>| -> bool {
             !matches!(res, Err(e) if e.to_string() == "__timeout_silenced__")
+        };
+
+        // Convert `Result<Vec<T>>` into a sequential iterator of `Result<T>`,
+        // suitable for rayon's `flat_map_iter`. A failed load yields a single
+        // `Err`; a successful load fans out into one item per extracted blob.
+        // A closure is used (rather than a free function) so the produced
+        // `Blob<'static>` items can coerce into the iterator's
+        // `Blob<'a>` Item type — Blob is covariant in its lifetime, but a
+        // free fn would lose that link.
+        let fan_out = |res: Result<Vec<(OriginSet, Blob<'a>)>>|
+         -> Box<dyn Iterator<Item = Result<(OriginSet, Blob<'a>)>> + Send + 'a> {
+            match res {
+                Ok(v) => Box::new(v.into_iter().map(Ok)),
+                Err(e) => Box::new(std::iter::once(Err(e))),
+            }
         };
 
         match self.inner.blobs {
@@ -592,12 +915,15 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                     .into_par_iter()
                     .with_min_len(1024)
                     .map_init(move || rs.to_thread_local(), load_blob)
+                    .flat_map_iter(fan_out)
                     .filter(timeout_filter)
                     .drive_unindexed(consumer)
             }
             GitBlobSource::StreamFromOdb => {
                 let (blob_tx, blob_rx) = crossbeam_channel::bounded(8192);
                 let enum_repo_sync = Arc::clone(&repo_sync);
+                let enum_repo_path = Arc::clone(&repo_path);
+                let enum_flag = Arc::clone(&flag);
 
                 std::thread::Builder::new()
                     .name("odb_enumerator".to_string())
@@ -614,6 +940,15 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                         for oid_result in iter
                             .with_ordering(OdbOrdering::PackAscendingOffsetThenLooseLexicographical)
                         {
+                            if StdInstant::now() > deadline {
+                                if !enum_flag.swap(true, Ordering::Relaxed) {
+                                    debug!(
+                                        "Git repo ODB enumeration at {} timed-out",
+                                        enum_repo_path.display()
+                                    );
+                                }
+                                break;
+                            }
                             let oid = match oid_result {
                                 Ok(oid) => oid,
                                 Err(_) => continue,
@@ -640,6 +975,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                     .into_iter()
                     .par_bridge()
                     .map_init(move || rs.to_thread_local(), load_blob)
+                    .flat_map_iter(fan_out)
                     .filter(timeout_filter)
                     .drive_unindexed(consumer)
             }
@@ -662,6 +998,7 @@ impl ParallelBlobIterator for EnumeratorFileResult {
         Ok(Some(EnumeratorFileIter { inner: self, reader, _marker: PhantomData }))
     }
 }
+#[allow(clippy::large_enum_variant)]
 enum FoundInputIter<'a> {
     File(FileResultIter<'a>),
     GitRepo(GitRepoResultIter<'a>),
@@ -763,59 +1100,26 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                 let collect_git_metadata = cfg.collect_git_metadata;
                 let timeout = cfg.repo_scan_timeout;
 
-                // Spawn an enumerator thread so we can time-out cleanly
-                let path_clone = path.to_path_buf();
-                let (tx, rx) = std::sync::mpsc::channel();
-                let exclude_globset = cfg.exclude_globset.clone();
-                let diff_cfg = cfg.git_diff.clone();
-                let handle = std::thread::spawn(move || {
-                    let res = if let Some(diff_cfg) = diff_cfg {
-                        enumerate_git_diff_repo(
-                            &path_clone,
-                            repository,
-                            diff_cfg,
-                            exclude_globset.clone(),
-                            collect_git_metadata,
-                        )
-                    } else if collect_git_metadata {
-                        GitRepoWithMetadataEnumerator::new(
-                            &path_clone,
-                            repository,
-                            exclude_globset.clone(),
-                        )
-                        .run()
-                    } else {
-                        GitRepoEnumerator::new(&path_clone, repository).run()
-                    };
-                    let _ = tx.send(res);
-                });
-
-                // Wait for enumeration, polling every 100 ms
-                let git_result = loop {
-                    if t_start.elapsed() > timeout {
-                        debug!(
-                            "Git repo enumeration at {} timed-out after {:.1}s (> {} s)",
-                            path.display(),
-                            t_start.elapsed().as_secs_f64(),
-                            timeout.as_secs()
-                        );
-                        // Abandon the worker thread and skip this repo
-                        return Ok(None);
-                    }
-
-                    match rx.try_recv() {
-                        Ok(res) => break res,
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {
-                            std::thread::sleep(std::time::Duration::from_millis(100));
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                            debug!("Enumerator thread disconnected for {}", path.display());
-                            return Ok(None);
-                        }
-                    }
+                let deadline = Instant::now() + timeout;
+                let git_result = if let Some(diff_cfg) = cfg.git_diff.clone() {
+                    enumerate_git_diff_repo(
+                        path,
+                        repository,
+                        diff_cfg,
+                        cfg.exclude_globset.clone(),
+                        collect_git_metadata,
+                        deadline,
+                    )
+                } else if collect_git_metadata {
+                    GitRepoWithMetadataEnumerator::new(
+                        path,
+                        repository,
+                        cfg.exclude_globset.clone(),
+                    )
+                    .run_with_deadline(Some(deadline))
+                } else {
+                    GitRepoEnumerator::new(path, repository).run()
                 };
-
-                let _ = handle.join(); // avoid leak
 
                 match git_result {
                     Err(e) => {
@@ -829,12 +1133,14 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                             t_start.elapsed().as_secs_f64()
                         );
 
-                        // Convert to a blob iterator, then patch the deadline
+                        // Convert to a blob iterator, then patch deadline + extraction.
+                        let extract_archives = cfg.extract_archives;
                         repo_result
                             .into_blob_iter() // Option<GitRepoResultIter>
                             .map(|iter| {
                                 iter.map(|mut gri| {
                                     gri.deadline = Instant::now() + timeout;
+                                    gri.extract_archives = extract_archives;
                                     FoundInputIter::GitRepo(gri)
                                 })
                             })
@@ -856,7 +1162,9 @@ fn enumerate_git_diff_repo(
     diff_cfg: GitDiffConfig,
     exclude_globset: Option<std::sync::Arc<globset::GlobSet>>,
     collect_commit_metadata: bool,
+    deadline: Instant,
 ) -> Result<GitRepoResult> {
+    check_repo_deadline(deadline, path, "git diff setup")?;
     let GitDiffConfig { since_ref, branch_ref, branch_root, staged } = diff_cfg;
 
     let (branch_ref, since_ref, branch_root) = if staged {
@@ -879,10 +1187,12 @@ fn enumerate_git_diff_repo(
     };
 
     let blobs = {
+        check_repo_deadline(deadline, path, "git diff ref resolution")?;
         let head_id = resolve_diff_ref(&repository, path, &branch_ref).with_context(|| {
             format!("Failed to resolve --branch '{}' in repository {}", branch_ref, path.display())
         })?;
 
+        check_repo_deadline(deadline, path, "git diff commit loading")?;
         let head_commit = head_id
             .object()
             .with_context(|| format!("Failed to load commit {} for diffing", head_id.to_hex()))?
@@ -896,6 +1206,7 @@ fn enumerate_git_diff_repo(
         let mut base_tree = None;
 
         if let Some(ref since_ref_value) = since_ref {
+            check_repo_deadline(deadline, path, "git diff base resolution")?;
             let base_id =
                 resolve_diff_ref(&repository, path, since_ref_value).with_context(|| {
                     format!(
@@ -918,6 +1229,7 @@ fn enumerate_git_diff_repo(
 
             base_tree = Some(tree);
         } else if let Some(ref branch_root_value) = branch_root {
+            check_repo_deadline(deadline, path, "git diff branch-root resolution")?;
             let root_id =
                 resolve_diff_ref(&repository, path, branch_root_value).with_context(|| {
                     format!(
@@ -953,6 +1265,7 @@ fn enumerate_git_diff_repo(
             }
         }
 
+        check_repo_deadline(deadline, path, "git diff computation")?;
         let changes = repository
             .diff_tree_to_tree(base_tree.as_ref(), Some(&head_tree), None)
             .with_context(|| {
@@ -989,6 +1302,7 @@ fn enumerate_git_diff_repo(
 
         let mut blobs = Vec::new();
         for change in changes {
+            check_repo_deadline(deadline, path, "git diff change enumeration")?;
             let (entry_mode, id, location) = match change {
                 ChangeDetached::Addition { entry_mode, id, location, .. } => {
                     (entry_mode, id, location)
@@ -1009,15 +1323,15 @@ fn enumerate_git_diff_repo(
 
             let relative_path_str = String::from_utf8_lossy(location.as_ref()).into_owned();
             let relative_path = Path::new(&relative_path_str);
-            if let Some(gs) = &exclude_globset {
-                if gs.is_match(relative_path) || gs.is_match(&path.join(relative_path)) {
-                    debug!(
-                        "Skipping {} due to --exclude while diffing {}",
-                        relative_path.display(),
-                        path.display()
-                    );
-                    continue;
-                }
+            if let Some(gs) = &exclude_globset
+                && (gs.is_match(relative_path) || gs.is_match(path.join(relative_path)))
+            {
+                debug!(
+                    "Skipping {} due to --exclude while diffing {}",
+                    relative_path.display(),
+                    path.display()
+                );
+                continue;
             }
 
             let appearance =
@@ -1033,6 +1347,13 @@ fn enumerate_git_diff_repo(
         path: path.to_owned(),
         blobs: GitBlobSource::Precomputed(blobs),
     })
+}
+
+fn check_repo_deadline(deadline: Instant, path: &Path, phase: &str) -> Result<()> {
+    if Instant::now() > deadline {
+        bail!("{phase} timed out for repo {}", path.display());
+    }
+    Ok(())
 }
 
 fn synthesize_staged_commit(path: &Path, parent_ref: &str) -> Result<String> {
@@ -1165,12 +1486,15 @@ fn reference_candidates(reference: &str) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use std::fs;
-    use std::path::Path;
+    use std::{fs, io::Write};
+    use std::{
+        path::Path,
+        time::{Duration, Instant},
+    };
 
     use super::{
         FileResult, GitBlobSource, GitDiffConfig, ParallelBlobIterator, enumerate_git_diff_repo,
-        reference_candidates,
+        reference_candidates, try_extract_git_blob_archive,
     };
     use anyhow::Result;
     use bstr::ByteSlice;
@@ -1179,6 +1503,7 @@ mod tests {
     use rayon::iter::ParallelIterator;
     use rusqlite::Connection;
     use tempfile::tempdir;
+    use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
     #[test]
     fn reference_candidates_for_plain_branch() {
@@ -1263,6 +1588,7 @@ mod tests {
             },
             None,
             false,
+            Instant::now() + Duration::from_secs(60),
         )?;
 
         let blobs = match result.blobs {
@@ -1275,6 +1601,40 @@ mod tests {
         let appearance_path = blob.first_seen[0].path.to_str_lossy();
         assert_eq!(appearance_path, "secret.txt");
 
+        Ok(())
+    }
+
+    #[test]
+    fn archive_entry_suffix_preserves_entry_component() {
+        assert_eq!(
+            super::archive_entry_suffix("dir/archive.zip!nested/secret.txt", "dir/archive.zip"),
+            Some("!nested/secret.txt")
+        );
+        assert_eq!(
+            super::archive_entry_suffix("archive.zip!nested/secret.txt", "other/archive.zip"),
+            Some("!nested/secret.txt")
+        );
+    }
+
+    #[test]
+    fn git_blob_archive_extraction_preserves_repo_relative_paths() -> Result<()> {
+        let mut cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = ZipWriter::new(&mut cursor);
+            let options = SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .unix_permissions(0o644);
+            zip.start_file("nested/secret.txt", options)?;
+            zip.write_all(b"token=not-a-real-secret")?;
+            zip.finish()?;
+        }
+
+        let entries = try_extract_git_blob_archive("dir/payload.zip", &cursor.into_inner())?
+            .expect("zip blob should extract");
+
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "dir/payload.zip!nested/secret.txt");
+        assert_eq!(entries[0].1, b"token=not-a-real-secret");
         Ok(())
     }
 
@@ -1310,6 +1670,32 @@ mod tests {
         assert_eq!(blobs.len(), 1);
         assert_eq!(blobs[0].0, path);
         assert_eq!(blobs[0].1, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn compressed_archives_fall_back_to_raw_bytes_when_extraction_fails() -> Result<()> {
+        let dir = tempdir()?;
+
+        for (name, expected) in [
+            ("broken.zip", b"not-a-real-zip".to_vec()),
+            ("broken.asar", b"not-a-real-asar".to_vec()),
+        ] {
+            let path = dir.path().join(name);
+            fs::write(&path, &expected)?;
+
+            let blobs = collect_file_bytes(FileResult {
+                path: path.clone(),
+                num_bytes: expected.len() as u64,
+                extract_archives: true,
+                extraction_depth: 2,
+            })?;
+
+            assert_eq!(blobs.len(), 1, "{} should fall back to raw bytes", name);
+            assert_eq!(blobs[0].0, path);
+            assert_eq!(blobs[0].1, expected);
+        }
+
         Ok(())
     }
 

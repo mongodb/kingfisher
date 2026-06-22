@@ -620,7 +620,7 @@ mod tests {
     #[test]
     fn rejects_file_too_small() {
         let tmp = tempfile::NamedTempFile::new().unwrap();
-        std::fs::write(tmp.path(), &[0u8; 4]).unwrap();
+        std::fs::write(tmp.path(), [0u8; 4]).unwrap();
         let result = extract_pyc_strings(tmp.path());
         assert!(result.is_err());
     }

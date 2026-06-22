@@ -8,8 +8,26 @@ impl DetailsReporter {
     ) -> Result<()> {
         let envelope = self.build_report_envelope(args)?;
         if !envelope.findings.is_empty() || envelope.access_map.is_some() {
-            serde_json::to_writer_pretty(&mut writer, &envelope)?;
-            writeln!(writer)?;
+            // Compact one-envelope-per-line so streaming emits (parallel
+            // scan path: one envelope per repo) concatenate into valid
+            // JSONL that `kingfisher view` can parse. Pipe through `jq .`
+            // for human-readable pretty output.
+            //
+            // Serialize into a single buffer and emit via a single
+            // `write_all` so callers that need cross-thread atomicity
+            // (e.g. the parallel scan path emitting one envelope per repo
+            // to stdout) can synchronize at the call site by holding
+            // `std::io::stdout().lock()` around this call. We intentionally
+            // do NOT acquire the stdout lock here because this method is
+            // generic over any `Write` and is also called with file
+            // writers and `Cursor<Vec<u8>>` in tests. Flushing is the
+            // caller's responsibility — flushing here would defeat
+            // upstream `BufWriter` buffering and turn an otherwise-benign
+            // BrokenPipe into a hard error.
+            let mut buf = Vec::with_capacity(8 * 1024);
+            serde_json::to_writer(&mut buf, &envelope)?;
+            buf.push(b'\n');
+            writer.write_all(&buf)?;
         }
         Ok(())
     }
@@ -39,7 +57,7 @@ mod tests {
     use super::*;
     use crate::cli::commands::github::GitCloneMode;
     use crate::cli::commands::github::GitHistoryMode;
-    use crate::cli::commands::rules::RuleSpecifierArgs;
+    use crate::cli::commands::rules::{RuleCacheArgs, RuleSpecifierArgs};
     use crate::matcher::{SerializableCapture, SerializableCaptures};
     use crate::rules::rule::{Confidence, Rule, RuleSyntax};
     use crate::util::intern;
@@ -79,6 +97,7 @@ mod tests {
                 rule: vec!["all".into()],
                 load_builtins: true,
             },
+            rule_cache: RuleCacheArgs::default(),
             input_specifier_args: InputSpecifierArgs {
                 // local path / git URL inputs
                 path_inputs: Vec::new(),
@@ -151,6 +170,12 @@ mod tests {
                 slack_api_url: Url::parse("https://slack.com/api/").unwrap(),
                 teams_query: None,
                 teams_api_url: Url::parse("https://graph.microsoft.com/").unwrap(),
+                postman_workspaces: Vec::new(),
+                postman_collections: Vec::new(),
+                postman_environments: Vec::new(),
+                postman_all: false,
+                postman_include_mocks_monitors: false,
+                postman_api_url: Url::parse("https://api.getpostman.com/").unwrap(),
                 // s3
                 s3_bucket: None,
                 s3_prefix: None,
@@ -161,6 +186,7 @@ mod tests {
                 gcs_service_account: None,
 
                 docker_image: Vec::new(),
+                docker_archive: Vec::new(),
                 // clone / history options
                 git_clone: GitCloneMode::Bare,
                 git_history: GitHistoryMode::Full,
@@ -208,6 +234,14 @@ mod tests {
             validation_rps_rule: Vec::new(),
             full_validation_response: false,
             max_validation_response_length: 2048,
+            alert_webhook: Vec::new(),
+            alert_format: None,
+            alert_on: crate::alerts::AlertOn::Findings,
+            alert_min_confidence: cli::commands::scan::ConfidenceLevel::Medium,
+            alert_include_secret: false,
+            alert_report_url: None,
+            alert_detail: crate::alerts::AlertDetail::Auto,
+            config_webhook_overrides: Vec::new(),
         }
     }
 
@@ -247,7 +281,7 @@ mod tests {
                 }],
             },
             blob_id: BlobId::new(b"mock_blob"),
-            finding_fingerprint: 0123,
+            finding_fingerprint: 123,
             rule,
             validation_response_body: validation_body::from_string("validation response"),
             validation_response_status: 200,

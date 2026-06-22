@@ -24,6 +24,7 @@ validation-http = [
     "dep:liquid-core",
     "dep:quick-xml",
     "dep:sha1",
+    "dep:hex",
     "dep:time",
 ]
 
@@ -166,43 +167,46 @@ tracing.workspace = true
 # ---- Optional validation dependencies ----
 
 # HTTP validation
-reqwest = { version = "0.12", default-features = false, features = [
-    "json", "gzip", "brotli", "deflate", "stream", "rustls-tls", "rustls-tls-native-roots", "multipart"
+reqwest = { version = "0.13", default-features = false, features = [
+    "json", "gzip", "brotli", "deflate", "form", "query", "stream", "rustls", "multipart"
 ], optional = true }
-tokio = { version = "1.51", features = ["net", "time", "sync", "io-util"], optional = true }
+tokio = { version = "1.52", features = ["net", "time", "sync", "io-util"], optional = true }
 liquid = { version = "0.26", optional = true }
 liquid-core = { version = "0.26", optional = true }
-quick-xml = { version = "0.39", features = ["serde", "serialize"], optional = true }
+quick-xml = { version = "0.40", features = ["serde", "serialize"], optional = true }
 sha1 = { workspace = true, optional = true }
 time = { workspace = true, optional = true }
-chrono = { version = "0.4.42", optional = true }
+chrono = { version = "0.4.45", optional = true }
 hmac = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
 pem = { version = "3.0.6", optional = true }
 percent-encoding = { workspace = true, optional = true }
 ring = { version = "0.17", optional = true }
 
-jsonwebtoken = { version = "10.3.0", features = ["aws-lc-rs"], optional = true }
+jsonwebtoken = { version = "10.4.0", default-features = false, features = ["rust_crypto"], optional = true }
 p256 = { version = "0.13.2", optional = true }
 ed25519-dalek = { version = "2.2", features = ["pkcs8"], optional = true }
 hex = { workspace = true, optional = true }
-url = { version = "2.5.7", optional = true }
-mongodb = { version = "3.4", default-features = false, features = ["rustls-tls", "aws-auth", "compat-3-0-0", "dns-resolver"], optional = true }
-mysql_async = { version = "0.36.2", default-features = false, features = ["default-rustls"], optional = true }
+url = { version = "2.5.8", optional = true }
+# Temporary Git pin: keeps MongoDB SRV validation enabled while using the upstream
+# Hickory 0.26 DNS-resolver fix before it is available in a crates.io release.
+# TODO: switch back to a crates.io mongodb release once it includes that fix.
+mongodb = { git = "https://github.com/mongodb/mongo-rust-driver", rev = "bdddefc50c4794d51d10b944320d42c6eb216b04", default-features = false, features = ["rustls-tls", "aws-auth", "compat-3-0-0", "dns-resolver"], optional = true }
+mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"], optional = true }
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"], optional = true }
-tokio-postgres-rustls = { version = "0.13.0", optional = true }
-rustls = { version = "0.23.35", optional = true }
-rustls-native-certs = { version = "0.8.2", optional = true }
+tokio-postgres-rustls = { version = "0.14.0", optional = true }
+rustls = { version = "0.23.40", optional = true }
+rustls-native-certs = { version = "0.8.4", optional = true }
 tokio-rustls = { version = "0.26.4", optional = true }
 # AWS validation
-aws-config = { version = "1.8.14", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
-aws-credential-types = { version = "1.2.12", optional = true }
-aws-sdk-iam = { version = "1.104.0", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
-aws-sdk-sts = { version = "1.98.0", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
-aws-types = { version = "1.3.12", optional = true }
-aws-smithy-http-client = { version = "1.1.10", optional = true }
-aws-smithy-runtime-api = { version = "1.11.4", optional = true }
-aws-smithy-types = { version = "1.4.4", optional = true }
+aws-config = { version = "1.8.18", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
+aws-credential-types = { version = "1.2.14", optional = true }
+aws-sdk-iam = { version = "1.113.0", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
+aws-sdk-sts = { version = "1.107.0", default-features = false, features = ["default-https-client", "rt-tokio"], optional = true }
+aws-types = { version = "1.3.16", optional = true }
+aws-smithy-http-client = { version = "1.1.13", optional = true }
+aws-smithy-runtime-api = { version = "1.12.3", optional = true }
+aws-smithy-types = { version = "1.5.0", optional = true }
 base32 = { version = "0.5", optional = true }
 byteorder = { version = "1.5", optional = true }
 rand = { version = "0.10", optional = true }
@@ -210,12 +214,12 @@ rand = { version = "0.10", optional = true }
 [target.'cfg(all(windows, target_arch = "aarch64"))'.dependencies]
 # ldap3's rustls backend still pulls ring 0.16, which fails to build on Windows ARM64.
 # Use the platform TLS backend there to keep the raw LDAP validator available.
-ldap3 = { version = "0.11.5", default-features = false, features = ["tls-native"], optional = true }
+ldap3 = { version = "0.12.1", default-features = false, features = ["tls-native"], optional = true }
 
 [target.'cfg(not(all(windows, target_arch = "aarch64")))'.dependencies]
-ldap3 = { version = "0.11.5", default-features = false, features = ["tls-rustls"], optional = true }
+ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-aws-lc-rs"], optional = true }
 
 [dev-dependencies]
 pretty_assertions = "1.4"
-tempfile = "3.23"
-tokio = { version = "1.51", features = ["macros", "rt"] }
+tempfile = "3.27"
+tokio = { version = "1.52", features = ["macros", "rt"] }

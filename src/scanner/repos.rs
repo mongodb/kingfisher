@@ -20,11 +20,12 @@ use crate::{
         global,
     },
     confluence, findings_store, gcs,
-    git_binary::{CloneMode, Git},
+    git_binary::{CloneMode, Git, ProviderHosts},
     git_url::GitUrl,
     gitea, github, gitlab, huggingface, jira,
     matcher::{Match, Matcher, MatcherStats},
     origin::{Origin, OriginSet},
+    postman,
     rules_database::RulesDatabase,
     s3,
     scanner::processing::BlobProcessor,
@@ -40,6 +41,70 @@ fn repo_host_contains(repo_url: &GitUrl, needle: &str) -> bool {
         .and_then(|url| url.host_str().map(|host| host.to_lowercase()))
         .map(|host| host.contains(needle))
         .unwrap_or(false)
+}
+
+/// Map a configured API/base URL to the host `git clone` actually contacts,
+/// including a non-default port. The SaaS API subdomains are folded back to
+/// their public clone hosts; every other host (i.e. self-hosted/enterprise) is
+/// already the clone host.
+fn clone_host(url: &Url) -> Option<String> {
+    let host = match url.host_str()?.to_ascii_lowercase().as_str() {
+        "api.github.com" => "github.com".to_string(),
+        "api.bitbucket.org" => "bitbucket.org".to_string(),
+        other => other.to_string(),
+    };
+    Some(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
+}
+
+/// Parse an `--endpoint` URL (which may omit the scheme) and return its clone host.
+fn endpoint_clone_host(raw: &str) -> Option<String> {
+    let trimmed = raw.trim();
+    let url = Url::parse(trimmed).or_else(|_| Url::parse(&format!("https://{trimmed}"))).ok()?;
+    clone_host(&url)
+}
+
+/// Derive the per-provider HTTPS hosts that credential helpers may target.
+///
+/// Starts from the public SaaS hosts and adds any host the user explicitly
+/// configured for a provider via `--<provider>-api-url`, `--azure-base-url`, or
+/// `--endpoint <provider>=URL`. Tokens are then offered only to these hosts,
+/// never to an arbitrary (possibly attacker-controlled) scan target.
+fn provider_hosts(args: &scan::ScanArgs, global_args: &global::GlobalArgs) -> ProviderHosts {
+    let mut hosts = ProviderHosts::saas_defaults();
+    let isa = &args.input_specifier_args;
+
+    for (list, url) in [
+        (&mut hosts.github, &isa.github_api_url),
+        (&mut hosts.gitlab, &isa.gitlab_api_url),
+        (&mut hosts.gitea, &isa.gitea_api_url),
+        (&mut hosts.bitbucket, &isa.bitbucket_api_url),
+        (&mut hosts.azure, &isa.azure_base_url),
+    ] {
+        if let Some(host) = clone_host(url) {
+            ProviderHosts::add(list, &host);
+        }
+    }
+
+    // `--endpoint PROVIDER=URL` only supports github/gitlab/gitea for git hosts.
+    for entry in &global_args.endpoint {
+        let Some((provider, url)) = entry.split_once('=') else {
+            continue;
+        };
+        let Some(host) = endpoint_clone_host(url) else {
+            continue;
+        };
+        match provider.trim().to_ascii_lowercase().replace('_', "-").as_str() {
+            "github" => ProviderHosts::add(&mut hosts.github, &host),
+            "gitlab" => ProviderHosts::add(&mut hosts.gitlab, &host),
+            "gitea" => ProviderHosts::add(&mut hosts.gitea, &host),
+            _ => {}
+        }
+    }
+
+    hosts
 }
 
 fn apply_repo_clone_limit(
@@ -112,9 +177,15 @@ where
         ProgressBar::hidden()
     };
 
-    let (ready_tx, ready_rx) = crossbeam_channel::unbounded();
     let clone_concurrency = std::cmp::max(1, args.num_jobs);
+    // Bound this internal channel so cloner workers block on `send` when the
+    // single-threaded dispatcher loop below can't forward fast enough (e.g.
+    // because the outer bounded scan channel is full). Without this bound,
+    // cloners would race ahead and fill `/tmp` with completed-but-unscanned
+    // clones, which is exactly the disk-overflow bug we're trying to fix.
+    let (ready_tx, ready_rx) = crossbeam_channel::bounded(std::cmp::max(2, clone_concurrency * 2));
     let ignore_certs = global_args.ignore_certs;
+    let provider_hosts = provider_hosts(args, global_args);
 
     ThreadPoolBuilder::new()
         .num_threads(clone_concurrency)
@@ -126,8 +197,9 @@ where
                 let datastore = Arc::clone(datastore);
                 let repo_url = repo_url.clone();
                 let progress = progress.clone();
+                let provider_hosts = provider_hosts.clone();
                 scope.spawn(move |_| {
-                    let git = Git::new(ignore_certs);
+                    let git = Git::with_provider_hosts(ignore_certs, &provider_hosts);
                     let output_dir = {
                         let datastore = datastore.lock().unwrap();
                         datastore.clone_destination(&repo_url)
@@ -221,6 +293,7 @@ pub async fn enumerate_github_repos(
                 &args.input_specifier_args.github_exclude,
                 args.input_specifier_args.repo_clone_limit,
                 global_args.use_progress(),
+                args.input_specifier_args.github_repo_type.into(),
             )
             .await
             {
@@ -741,6 +814,45 @@ pub async fn fetch_slack_messages(
     Ok(vec![output_dir])
 }
 
+pub async fn fetch_postman_resources(
+    args: &scan::ScanArgs,
+    global_args: &global::GlobalArgs,
+    datastore: &Arc<Mutex<findings_store::FindingsStore>>,
+) -> Result<Vec<PathBuf>> {
+    let selectors = postman::PostmanSelectors {
+        workspaces: args.input_specifier_args.postman_workspaces.clone(),
+        collections: args.input_specifier_args.postman_collections.clone(),
+        environments: args.input_specifier_args.postman_environments.clone(),
+        all: args.input_specifier_args.postman_all,
+        include_mocks_monitors: args.input_specifier_args.postman_include_mocks_monitors,
+    };
+    if selectors.is_empty() {
+        return Ok(Vec::new());
+    }
+    let api_url = args.input_specifier_args.postman_api_url.clone();
+    let max_results = args.input_specifier_args.max_results;
+    let output_root = {
+        let ds = datastore.lock().unwrap();
+        ds.clone_root()
+    };
+    let output_dir = output_root.join("postman");
+    let paths = postman::download_postman_to_dir(
+        api_url,
+        selectors,
+        max_results,
+        global_args.ignore_certs,
+        &output_dir,
+    )
+    .await?;
+    {
+        let mut ds = datastore.lock().unwrap();
+        for (path, link) in &paths {
+            ds.register_postman_resource(path.clone(), link.clone());
+        }
+    }
+    Ok(vec![output_dir])
+}
+
 pub async fn fetch_teams_messages(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
@@ -773,6 +885,11 @@ pub async fn fetch_teams_messages(
     Ok(vec![output_dir])
 }
 
+/// Streams per-repo artifact directories (issues/PRs/wikis) into `out_tx`
+/// as soon as each one is fetched, rather than collecting all results before
+/// returning. This lets the scan loop start consuming artifact dirs while
+/// remote fetches for other repos are still in flight.
+#[allow(clippy::too_many_arguments)]
 pub async fn fetch_git_host_artifacts(
     repo_urls: &[GitUrl],
     bitbucket_api_url: &Url,
@@ -780,67 +897,76 @@ pub async fn fetch_git_host_artifacts(
     bitbucket_host: Option<String>,
     global_args: &global::GlobalArgs,
     datastore: &Arc<Mutex<findings_store::FindingsStore>>,
-) -> Result<Vec<PathBuf>> {
+    concurrency: usize,
+    out_tx: crossbeam_channel::Sender<PathBuf>,
+) -> Result<()> {
+    use futures::stream::{self, StreamExt};
+
     let output_root = {
         let ds = datastore.lock().unwrap();
         ds.clone_root()
     };
-    let mut dirs = Vec::new();
-    for repo_url in repo_urls {
-        let host = Url::parse(repo_url.as_str())
-            .ok()
-            .and_then(|u| u.host_str().map(|s| s.to_string()))
-            .unwrap_or_default();
-        if host.contains("github") {
-            dirs.extend(
-                github::fetch_repo_items(
-                    repo_url,
-                    global_args.ignore_certs,
-                    &output_root,
-                    datastore,
-                )
-                .await?,
-            );
-        } else if host.contains("gitlab") {
-            dirs.extend(
-                gitlab::fetch_repo_items(
-                    repo_url,
-                    global_args.ignore_certs,
-                    &output_root,
-                    datastore,
-                )
-                .await?,
-            );
-        } else if host.contains("bitbucket")
-            || bitbucket_host
-                .as_deref()
-                .map(|expected| expected.eq_ignore_ascii_case(&host))
-                .unwrap_or(false)
-        {
-            dirs.extend(
-                bitbucket::fetch_repo_items(
-                    repo_url,
-                    bitbucket_api_url,
-                    bitbucket_auth,
-                    global_args.ignore_certs,
-                    &output_root,
-                    datastore,
-                )
-                .await?,
-            );
-        } else if host.contains("dev.azure") || host.contains("visualstudio.com") {
-            dirs.extend(
-                azure::fetch_repo_items(
-                    repo_url,
-                    global_args.ignore_certs,
-                    &output_root,
-                    datastore,
-                )
-                .await?,
-            );
+    let concurrency = std::cmp::max(1, concurrency);
+
+    // Fan out per-repo artifact fetches concurrently. Each completed fetch
+    // pushes its dirs into `out_tx` immediately so the scanner can pick them
+    // up while the remaining fetches are still running.
+    let mut stream = stream::iter(repo_urls.iter().cloned())
+        .map(|repo_url| {
+            let bitbucket_api_url = bitbucket_api_url.clone();
+            let bitbucket_auth = bitbucket_auth.clone();
+            let bitbucket_host = bitbucket_host.clone();
+            let output_root = output_root.clone();
+            let datastore = Arc::clone(datastore);
+            let ignore_certs = global_args.ignore_certs;
+            async move {
+                let host = Url::parse(repo_url.as_str())
+                    .ok()
+                    .and_then(|u| u.host_str().map(|s| s.to_string()))
+                    .unwrap_or_default();
+                if host.contains("github") {
+                    github::fetch_repo_items(&repo_url, ignore_certs, &output_root, &datastore)
+                        .await
+                } else if host.contains("gitlab") {
+                    gitlab::fetch_repo_items(&repo_url, ignore_certs, &output_root, &datastore)
+                        .await
+                } else if host.contains("bitbucket")
+                    || bitbucket_host
+                        .as_deref()
+                        .map(|expected| expected.eq_ignore_ascii_case(&host))
+                        .unwrap_or(false)
+                {
+                    bitbucket::fetch_repo_items(
+                        &repo_url,
+                        &bitbucket_api_url,
+                        &bitbucket_auth,
+                        ignore_certs,
+                        &output_root,
+                        &datastore,
+                    )
+                    .await
+                } else if host.contains("dev.azure") || host.contains("visualstudio.com") {
+                    azure::fetch_repo_items(&repo_url, ignore_certs, &output_root, &datastore).await
+                } else {
+                    Ok(Vec::new())
+                }
+            }
+        })
+        .buffer_unordered(concurrency);
+
+    while let Some(result) = stream.next().await {
+        let dirs = result?;
+        for d in dirs {
+            // Send may block if the bounded channel is full; that's the
+            // intended backpressure. Errors only occur if the receiver has
+            // been dropped (scan aborted), in which case we stop producing.
+            if out_tx.send(d).is_err() {
+                debug!("scan channel closed; stopping git-host artifact fetcher");
+                return Ok(());
+            }
         }
     }
-    Ok(dirs)
+    Ok(())
 }
 
 pub async fn fetch_s3_objects(

@@ -5,12 +5,13 @@ rules:
     # Matches keys starting with 'pa-' followed by 43 URL-safe base64 characters
     pattern: |
       (?x)
+      \b
       (
         pa-[a-zA-Z0-9\-_]{43}
       )
       \b
     min_entropy: 4.0
-    confidence: high
+    confidence: medium
     examples:
       - pa-r4yuCYCuPhNO-10Lu9aO7dR4jxUWlLmlUjm_NOVVdSs
     validation:
@@ -22,7 +23,56 @@ rules:
           headers:
             Authorization: "Bearer {{ TOKEN }}"
           response_matcher:
+            # 200 = key has /v1/files permission, 403 = valid key without that permission
+            # (e.g. an inference-only key). 401 with "Provided API key is invalid." is the
+            # only response Voyage AI returns for a bad key, so any non-401 status is live.
             - type: StatusMatch
-              status: [200]
+              status: [401]
+              negative: true
+            - type: WordMatch
+              words:
+                - "Provided API key is invalid"
+              negative: true
     references:
       - https://docs.voyageai.com/reference
+      - https://docs.voyageai.com/docs/api-key-and-installation
+
+  - name: Voyage AI API Key
+    id: kingfisher.voyageai.api_key.2
+    description: Detects Voyage AI API keys (al- prefix variant) used for embedding and retrieval models.
+    # Matches keys starting with 'al-' followed by 43 URL-safe base64 characters
+    pattern: |
+      (?x)
+      \b
+      (
+        al-[a-zA-Z0-9\-_]{43}
+      )
+      \b
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - al-Qf7M2bZ8xnLpvE4hRcDsJtAo1KyU93WgIBmXrNVoYTu
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.voyageai.com/v1/files
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            # 200 = key has /v1/files permission, 403 = valid key without that permission.
+            # 401 with "Provided API key is invalid." is the only invalid-key response.
+            - type: StatusMatch
+              status: [401]
+              negative: true
+            - type: WordMatch
+              words:
+                - "Provided API key is invalid"
+              negative: true
+    references:
+      - https://docs.voyageai.com/reference
+      - https://docs.voyageai.com/docs/api-key-and-installation
+# NOTE: Revocation is not implemented because Voyage AI does not document a public REST
+# endpoint for programmatic API key revocation. All probed admin/key-management paths
+# under api.voyageai.com return 404. Keys must be revoked via the Voyage AI dashboard.

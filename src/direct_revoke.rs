@@ -20,6 +20,7 @@ use tracing::debug;
 use crate::{
     cli::{commands::revoke::RevokeArgs, global::GlobalArgs},
     liquid_filters::register_all,
+    provider_endpoints::{ProviderEndpointOverrides, hydrate_endpoint_globals_for_rule},
     rule_loader::RuleLoader,
     template_vars::extract_template_vars,
     validation::GLOBAL_USER_AGENT,
@@ -138,15 +139,22 @@ fn get_global_var(globals: &Object, name: &str) -> Option<String> {
 
 /// Build the globals object for Liquid template rendering.
 fn build_globals(
+    rule_id: &str,
     secret: &str,
     args: &[String],
     variables: &[String],
     template_vars: &BTreeSet<String>,
+    endpoint_overrides: &ProviderEndpointOverrides,
 ) -> Result<Object> {
     let mut globals = Object::new();
     globals.insert("TOKEN".into(), Value::scalar(secret.to_string()));
 
-    let auto_assign_vars: Vec<&String> = template_vars.iter().filter(|v| *v != "TOKEN").collect();
+    endpoint_overrides.apply_defaults(&mut globals);
+
+    let auto_assign_vars: Vec<&String> = template_vars
+        .iter()
+        .filter(|v| *v != "TOKEN" && !globals.contains_key(v.as_str()))
+        .collect();
 
     for (i, arg_value) in args.iter().enumerate() {
         if i < auto_assign_vars.len() {
@@ -170,6 +178,8 @@ fn build_globals(
 
         globals.insert(name.into(), Value::scalar(value));
     }
+
+    hydrate_endpoint_globals_for_rule(rule_id, &mut globals);
 
     Ok(globals)
 }
@@ -254,8 +264,9 @@ fn extract_value_from_response(
                 serde_json::from_str(body).context("Response body is not valid JSON")?;
 
             // Simple JSONPath implementation supporting basic paths like:
-            // $.field, $.field.nested, $.array[0], $.array[0].field
-            let path_parts: Vec<&str> = path.trim_start_matches("$.").split('.').collect();
+            // $.field, $.field.nested, $.array[0], $.array[0].field, $[0], $[0].field
+            let normalized = path.trim_start_matches('$').trim_start_matches('.');
+            let path_parts: Vec<&str> = normalized.split('.').collect();
 
             let mut current = &json;
             for part in path_parts {
@@ -375,7 +386,7 @@ async fn execute_revocation_step(
     step_number: usize,
 ) -> Result<(reqwest::StatusCode, reqwest::header::HeaderMap, String)> {
     let default_step_name = format!("step_{}", step_number);
-    let step_name = step.name.as_ref().map(|s| s.as_str()).unwrap_or(&default_step_name);
+    let step_name = step.name.as_deref().unwrap_or(&default_step_name);
 
     debug!("Executing revocation step {}: {}", step_number, step_name);
 
@@ -553,6 +564,7 @@ pub async fn run_direct_revocation(
 
     let parser = register_all(liquid::ParserBuilder::with_stdlib()).build()?;
     let timeout = Duration::from_secs(args.timeout);
+    let endpoint_overrides = ProviderEndpointOverrides::from_global_args(global_args)?;
 
     let mut results = Vec::new();
 
@@ -597,7 +609,14 @@ pub async fn run_direct_revocation(
             }
         }
 
-        let globals = build_globals(&secret, &args.args, &args.variables, &template_vars)?;
+        let globals = build_globals(
+            &rule_id,
+            &secret,
+            &args.args,
+            &args.variables,
+            &template_vars,
+            &endpoint_overrides,
+        )?;
 
         if !non_token_vars.is_empty() && !args.args.is_empty() {
             debug!(
@@ -821,6 +840,25 @@ mod tests {
     }
 
     #[test]
+    fn jsonpath_root_array_index_field() {
+        // Used by kingfisher.jira.3 revocation: GET /rest/pat/latest/tokens
+        // returns a JSON array at the document root, and the rule extracts
+        // JIRA_TOKEN_ID with path "$[0].id".
+        let ext = ResponseExtractor::JsonPath { path: "$[0].id".into() };
+        let body = r#"[{"id":278,"name":"ITSYSENG-8330"}]"#;
+        let result = extract_value_from_response(&ext, body, &HeaderMap::new(), &StatusCode::OK);
+        assert_eq!(result.unwrap(), "278");
+    }
+
+    #[test]
+    fn jsonpath_root_array_index_scalar() {
+        let ext = ResponseExtractor::JsonPath { path: "$[1]".into() };
+        let body = r#"["a","b","c"]"#;
+        let result = extract_value_from_response(&ext, body, &HeaderMap::new(), &StatusCode::OK);
+        assert_eq!(result.unwrap(), "b");
+    }
+
+    #[test]
     fn jsonpath_missing_top_level_field() {
         let ext = ResponseExtractor::JsonPath { path: "$.nonexistent".into() };
         let body = r#"{"name":"alice"}"#;
@@ -1028,7 +1066,15 @@ mod tests {
     #[test]
     fn build_globals_sets_token() {
         let template_vars = BTreeSet::from(["TOKEN".to_string()]);
-        let globals = build_globals("my-secret", &[], &[], &template_vars).unwrap();
+        let globals = build_globals(
+            "kingfisher.test.1",
+            "my-secret",
+            &[],
+            &[],
+            &template_vars,
+            &ProviderEndpointOverrides::default(),
+        )
+        .unwrap();
         assert_eq!(globals.get("TOKEN"), Some(Value::scalar("my-secret".to_string())).as_ref());
     }
 
@@ -1037,7 +1083,15 @@ mod tests {
         let template_vars =
             BTreeSet::from(["TOKEN".to_string(), "AKID".to_string(), "REGION".to_string()]);
         let args = vec!["my-akid".to_string(), "us-east-1".to_string()];
-        let globals = build_globals("secret", &args, &[], &template_vars).unwrap();
+        let globals = build_globals(
+            "kingfisher.test.1",
+            "secret",
+            &args,
+            &[],
+            &template_vars,
+            &ProviderEndpointOverrides::default(),
+        )
+        .unwrap();
 
         assert_eq!(globals.get("TOKEN"), Some(Value::scalar("secret".to_string())).as_ref());
         assert_eq!(globals.get("AKID"), Some(Value::scalar("my-akid".to_string())).as_ref());
@@ -1048,7 +1102,15 @@ mod tests {
     fn build_globals_explicit_variables() {
         let template_vars = BTreeSet::from(["TOKEN".to_string(), "AKID".to_string()]);
         let vars = vec!["AKID=explicit-value".to_string()];
-        let globals = build_globals("secret", &[], &vars, &template_vars).unwrap();
+        let globals = build_globals(
+            "kingfisher.test.1",
+            "secret",
+            &[],
+            &vars,
+            &template_vars,
+            &ProviderEndpointOverrides::default(),
+        )
+        .unwrap();
 
         assert_eq!(globals.get("AKID"), Some(Value::scalar("explicit-value".to_string())).as_ref());
     }
@@ -1057,7 +1119,14 @@ mod tests {
     fn build_globals_invalid_var_format() {
         let template_vars = BTreeSet::new();
         let vars = vec!["NO_EQUALS_SIGN".to_string()];
-        let result = build_globals("secret", &[], &vars, &template_vars);
+        let result = build_globals(
+            "kingfisher.test.1",
+            "secret",
+            &[],
+            &vars,
+            &template_vars,
+            &ProviderEndpointOverrides::default(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("Expected NAME=VALUE"));
     }
@@ -1066,7 +1135,14 @@ mod tests {
     fn build_globals_empty_var_name() {
         let template_vars = BTreeSet::new();
         let vars = vec!["=value".to_string()];
-        let result = build_globals("secret", &[], &vars, &template_vars);
+        let result = build_globals(
+            "kingfisher.test.1",
+            "secret",
+            &[],
+            &vars,
+            &template_vars,
+            &ProviderEndpointOverrides::default(),
+        );
         assert!(result.is_err());
         assert!(result.unwrap_err().to_string().contains("cannot be empty"));
     }

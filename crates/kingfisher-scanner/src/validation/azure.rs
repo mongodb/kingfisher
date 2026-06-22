@@ -3,7 +3,7 @@ use std::time::Duration;
 use anyhow::{Result, anyhow};
 use base64::{Engine as _, engine::general_purpose::STANDARD as b64};
 use chrono::Utc;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use http::StatusCode;
 use quick_xml::{Reader, events::Event};
 use reqwest::{Client, header::HeaderValue};
@@ -18,7 +18,7 @@ pub fn generate_azure_cache_key(azure_json: &str) -> String {
     use sha1::{Digest, Sha1};
     let mut h = Sha1::new();
     h.update(azure_json.as_bytes());
-    format!("AZURE:{:x}", h.finalize())
+    format!("AZURE:{}", hex::encode(h.finalize()))
 }
 
 /// Validate Azure Storage credentials without Azure SDK crates.
@@ -98,7 +98,7 @@ pub async fn validate_azure_storage_credentials(
             Ok(Event::Eof) => break,
             Ok(Event::Start(e)) if e.name().as_ref().eq_ignore_ascii_case(b"name") => {
                 let text = reader.read_text(e.name())?;
-                names.push(text.into_owned());
+                names.push(text.decode()?.into_owned());
             }
             Err(e) => return Err(anyhow!("XML parse error: {e}")),
             _ => {}

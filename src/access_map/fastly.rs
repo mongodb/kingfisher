@@ -118,24 +118,23 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     }
 
     // If superuser, try to fetch customer details
-    if role == "superuser" {
-        if let Some(customer_id) = &user.customer_id {
-            let customer =
-                fetch_customer(&client, token, customer_id).await.unwrap_or_else(|err| {
-                    warn!("Fastly access-map: customer lookup failed: {err}");
-                    None
-                });
+    if role == "superuser"
+        && let Some(customer_id) = &user.customer_id
+    {
+        let customer = fetch_customer(&client, token, customer_id).await.unwrap_or_else(|err| {
+            warn!("Fastly access-map: customer lookup failed: {err}");
+            None
+        });
 
-            if let Some(cust) = customer {
-                let cust_name = cust.name.unwrap_or_else(|| customer_id.clone());
-                resources.push(ResourceExposure {
-                    resource_type: "customer".into(),
-                    name: cust_name,
-                    permissions: vec!["customer:admin".to_string()],
-                    risk: severity_to_str(Severity::Critical).to_string(),
-                    reason: "Full customer account access via superuser role".to_string(),
-                });
-            }
+        if let Some(cust) = customer {
+            let cust_name = cust.name.unwrap_or_else(|| customer_id.clone());
+            resources.push(ResourceExposure {
+                resource_type: "customer".into(),
+                name: cust_name,
+                permissions: vec!["customer:admin".to_string()],
+                risk: severity_to_str(Severity::Critical).to_string(),
+                reason: "Full customer account access via superuser role".to_string(),
+            });
         }
     }
 
@@ -177,7 +176,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     permissions.read_only.sort();
     permissions.read_only.dedup();
 
-    let severity = derive_severity(&role, &services);
+    let severity = derive_severity(&role);
 
     if services.is_empty() {
         resources.push(ResourceExposure {
@@ -314,24 +313,12 @@ fn role_permissions(role: &str) -> Vec<String> {
     }
 }
 
-fn derive_severity(role: &str, services: &[FastlyService]) -> Severity {
+fn derive_severity(role: &str) -> Severity {
     match classify_role(role) {
         RoleRisk::Superuser => Severity::Critical,
-        RoleRisk::Engineer => {
-            if services.len() > 5 {
-                Severity::High
-            } else {
-                Severity::High
-            }
-        }
+        RoleRisk::Engineer => Severity::High,
         RoleRisk::Billing => Severity::Medium,
-        RoleRisk::ReadOnly => {
-            if services.is_empty() {
-                Severity::Low
-            } else {
-                Severity::Low
-            }
-        }
+        RoleRisk::ReadOnly => Severity::Low,
     }
 }
 

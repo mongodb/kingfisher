@@ -9,7 +9,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.94"
+rust-version = "1.96"
 license = "Apache-2.0"
 authors = ["Mick Grove <mick.grove@mongodb.com>"]
 homepage = "https://github.com/mongodb/kingfisher"
@@ -21,7 +21,7 @@ anyhow = "1.0"
 thiserror = "2.0.18"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-schemars = "0.8"
+schemars = "1.2"
 regex = "1.12"
 bstr = { version = "1.12", features = ["serde"] }
 smallvec = { version = "1", features = ["const_generics", "const_new", "union"] }
@@ -32,14 +32,14 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 ignore = "0.4"
 walkdir = "2.5"
 include_dir = "0.7"
-sha1 = "0.10"
-sha2 = "0.10"
-hmac = "0.12"
+sha1 = "0.11"
+sha2 = "0.11"
+hmac = "0.13"
 base32 = "0.5.1"
 base64 = "0.22"
 percent-encoding = "2.3"
 time = "0.3"
-uuid = "1.19"
+uuid = "1.23"
 rand = "0.10"
 hex = "0.4"
 rustc-hash = "2.1"
@@ -48,7 +48,7 @@ http = "1.4"
 
 [package]
 name = "kingfisher"
-version = "1.97.0"
+version = "1.104.0"
 description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -83,7 +83,7 @@ kingfisher-core = { path = "crates/kingfisher-core" }
 kingfisher-rules = { path = "crates/kingfisher-rules" }
 kingfisher-scanner = { path = "crates/kingfisher-scanner", features = ["validation-all"] }
 
-clap = { version = "4.5", features = [
+clap = { version = "4.6", features = [
     "cargo",
     "derive",
     "env",
@@ -94,143 +94,154 @@ clap = { version = "4.5", features = [
 anyhow = "1.0"
 bstr = { version = "1.12", features = ["serde"] }
 fixedbitset = "0.5"
-gix = { version = "0.81", features = ["max-performance-safe", "serde", "blocking-network-client"] }
+gix = { version = "0.84", features = ["max-performance-safe", "serde", "blocking-network-client"] }
 ignore = "0.4"
 petgraph = "0.8"
-roaring = "0.11.3"
-schemars = "0.8"
+roaring = "0.11.4"
+schemars = "1.2"
 serde = { version = "1.0", features = ["derive", "rc"] }
 smallvec = { version = "1", features = [
     "const_generics",
     "const_new",
     "union",
 ] }
-tracing = "0.1.43"
+tracing = "0.1.44"
 indicatif = { version = "0.18", features = ["improved_unicode"] }
-rayon = "1.11"
+rayon = "1.12"
 hex = "0.4.3"
 vectorscan-rs = "0.0.6"
-regex = "1.12.2"
-serde_json = "1.0.145"
-toon-format = { version = "0.4.4", default-features = false }
-url = "2.5.7"
+regex = "1.12.4"
+serde_json = "1.0.150"
+toon-format = { version = "0.5.0", default-features = false }
+url = "2.5.8"
 include_dir = { version = "0.7", features = ["glob"] }
 strum = { version = "0.28", features = ["derive"] }
-sysinfo = "0.38.4"
-webbrowser = "1.0.5"
-reqwest = { version = "0.12", default-features = false, features = [
+sysinfo = "0.39.3"
+webbrowser = "1.2.1"
+reqwest = { version = "0.13", default-features = false, features = [
     "json",
     "gzip",
     "brotli",
-    "deflate", 
+    "deflate",
+    "form",
+    "query",
     "stream",
-    "rustls-tls",
-    "rustls-tls-native-roots",
+    "rustls",
     "blocking",
     "multipart",
+] }
+# gouqi 0.20 exposes reqwest 0.12's Client in its public async constructor.
+reqwest_0_12 = { package = "reqwest", version = "0.12.28", default-features = false, features = [
+    "json",
+    "rustls-tls",
 ] }
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
 
 
-chrono = "0.4.42"
+chrono = "0.4.45"
 thiserror = "2.0.18"
-tokio = { version = "1.48.0", features = ["full"] }
+tokio = { version = "1.52.3", features = ["full"] }
 base64 = "0.22.1"
 crossbeam-channel = "0.5.15"
 indenter = "0.3.4"
-serde-sarif = "0.4"
+serde-sarif = "0.8"
 console = "0.16.3"
-tempfile = "3.23.0"
-http = "1.4.0"
+tempfile = "3.27.0"
+http = "1.4.2"
 liquid = "0.26.11"
 liquid-core = "0.26.11"
 flate2 = "1.1"
 thousands = "0.2.0"
 crossbeam-skiplist = "0.1.3"
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
-mongodb = { version = "3.4", default-features = false, features = ["rustls-tls", "aws-auth", "compat-3-0-0", "dns-resolver"] }
-mysql_async = { version = "0.36.2", default-features = false, features = ["default-rustls"] }
-aws-config = { version = "1.8.14", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso"] }
-aws-credential-types = "1.2.12"
-aws-sdk-sts = { version = "1.98.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-types = "1.3.12"
+# Temporary Git pin: keeps MongoDB SRV validation enabled while using the upstream
+# Hickory 0.26 DNS-resolver fix before it is available in a crates.io release.
+# TODO: switch back to a crates.io mongodb release once it includes that fix.
+mongodb = { git = "https://github.com/mongodb/mongo-rust-driver", rev = "bdddefc50c4794d51d10b944320d42c6eb216b04", default-features = false, features = ["rustls-tls", "aws-auth", "compat-3-0-0", "dns-resolver"] }
+mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"] }
+aws-config = { version = "1.8.18", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso"] }
+aws-credential-types = "1.2.14"
+aws-sdk-sts = { version = "1.107.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-types = "1.3.16"
 parking_lot = "0.12.5"
-octorust =  "0.10.0"
-reqwest-middleware-octorust = { package = "reqwest-middleware", version = "0.4.2" }
-tracing-subscriber = {version = "0.3.22", features = ["env-filter"] }
-tracing-core = "0.1.35"
-aws-smithy-http-client = "1.1.10"
-aws-smithy-runtime-api = "1.11.4"
-aws-smithy-types = "1.4.4"
+tracing-subscriber = {version = "0.3.23", features = ["env-filter"] }
+tracing-core = "0.1.36"
+aws-smithy-http-client = "1.1.13"
+aws-smithy-runtime-api = "1.12.3"
+aws-smithy-types = "1.5.0"
 cssparser = { version = "0.37.0", default-features = false }
 tl = "0.7.8"
 tree_magic_mini = "3.2"
 content_inspector = "0.2.4"
-rustc-hash = "2.1.1"
+rustc-hash = "2.1.2"
 bzip2-rs = "0.1.2"
-zip = { version = "8.5.0", default-features = false, features = ["deflate", "deflate64", "time"] }
-tar = "0.4.44"
+zip = { version = "8.6.0", default-features = false, features = ["deflate", "deflate64", "time"] }
+tar = "0.4.46"
 lzma-rs = "0.3.0"
 asar = "0.3.0"
 cfb = "0.14"
-rusqlite = { version = "0.39", features = ["bundled"] }
-blake3 = "1.8.2"
-memchr = "2.7"
-memmap2 = "0.9.9"
-futures = "0.3.31"
-dashmap = "6.1.0"
+rusqlite = { version = "0.40", features = ["bundled"] }
+blake3 = "1.8.5"
+memchr = "2.8"
+memmap2 = "0.9.10"
+futures = "0.3.32"
+dashmap = "6.2.1"
 xxhash-rust = { version = "0.8.15", features = ["xxh3", "const_xxh3"] }
 serde_yaml = "0.9.34"
-hmac = "0.13.0"
+hmac = { workspace = true }
 sha1 = { workspace = true }
-sha2 = "0.11.0"
+sha2 = { workspace = true }
 humantime = "2.3.0"
 path-dedot = "3.1.1"
-quick-xml = { version = "0.39.2", features = ["serde", "serialize"] }
-rustls = "0.23.35"
-tokio-postgres-rustls = "0.13.0"
-rustls-native-certs = "0.8.2"
+quick-xml = { version = "0.40.1", features = ["serde", "serialize"] }
+rustls = "0.23.40"
+tokio-postgres-rustls = "0.14.0"
+rustls-native-certs = "0.8.4"
 color-backtrace = "0.7.2"
-mimalloc = { version = "0.1.48", features = ["override"] }
+mimalloc = { version = "0.1.52", features = ["override"] }
 thread_local = "1.1.9"
 bloomfilter = "3.0.1"
-uuid = "1.19.0"
+uuid = "1.23.3"
 rand = "0.10.1"
 percent-encoding = "2.3.2"
 self_update = { version = "0.44.0", default-features = false, features = ["reqwest", "rustls", "archive-tar", "archive-zip", "compression-flate2"] }
-semver = "1.0.27"
+semver = "1.0.28"
 globset = "0.4.18"
-ipnet = "2.11.0"
+ipnet = "2.12.0"
 gouqi = { version = "0.20.0", features = ["async"] }
-oci-client = { version = "0.16", default-features = false, features = ["rustls-tls"] }
+oci-client = { version = "0.17", default-features = false, features = ["rustls-tls"] }
 walkdir = "2.5.0"
-aws-sdk-s3 = { version = "1.123.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-iam = { version = "1.104.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-ec2 = { version = "1.211.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-dynamodb = { version = "1.105.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-lambda = { version = "1.116.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-kms = { version = "1.100.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-secretsmanager = { version = "1.100.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-sqs = { version = "1.90.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-sns = { version = "1.89.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-rds = { version = "1.110.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-ecr = { version = "1.94.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-aws-sdk-ssm = { version = "1.102.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
-gcloud-storage = { version = "1.1.1", default-features = false, features = [
+aws-sdk-s3 = { version = "1.137.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-iam = { version = "1.113.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-ec2 = { version = "1.232.1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-dynamodb = { version = "1.116.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-lambda = { version = "1.128.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-kms = { version = "1.111.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-secretsmanager = { version = "1.108.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sqs = { version = "1.102.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-sns = { version = "1.104.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-rds = { version = "1.137.1", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-ecr = { version = "1.120.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-ssm = { version = "1.113.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+gcloud-storage = { version = "1.3.0", default-features = false, features = [
     "rustls-tls",
     "auth",
-    "jwt-aws-lc-rs",
+    "jwt-rust-crypto",
 ] }
 tokei = "14.0.0"
 crc32fast = "1.5.0"
-bytes = "1.11.1"
+bytes = "1.12.0"
 tokio-rustls = "0.26.4"
-h2 = "0.4.13"
+h2 = "0.4.15"
+wait-timeout = "0.2"
 
 
 [dependencies.tikv-jemallocator]
-version = "0.6"
+version = "0.7"
 optional = true
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [features]
 default = ["use-mimalloc"]
@@ -242,20 +253,24 @@ system-alloc = [] # Darwin-only: force the system allocator
 pretty_assertions = "1.4"
 temp-env = "0.3.6"
 wiremock = "0.6.5"
-git2 = { version = "0.20.3", default-features = false }
+git2 = { version = "0.21.0", default-features = false }
 rand_chacha = "0.10.0"
-testcontainers = "0.27.2"
-predicates = "3.1.3"
-assert_cmd = "2.1.1"
-proptest = "1.9.0"
+testcontainers = "0.27.3"
+predicates = "3.1.4"
+assert_cmd = "2.2.2"
+proptest = "1.11.0"
+jsonwebtoken = { version = "10.4.0", default-features = false, features = ["rust_crypto"] }
+# Test-only: generate an ephemeral RSA keypair for the RS256 JWT regression test.
+# `getrandom` enables `rsa::rand_core::OsRng`; `pem` is on by default for PEM export.
+rsa = { version = "0.9.10", features = ["getrandom"] }
 
 [profile.release]
 debug = false
-strip = true #"debuginfo"
-opt-level = 3           # Maximum optimization for performance
+strip = true
+opt-level = "s"          # Optimize for smaller binary size over speed
 lto = true              # Enable Link Time Optimization
 codegen-units = 1       # Optimize for size but slower compilation
-panic = "abort"           # Remove unwind tables for panics
+panic = "abort"          # Remove unwind tables for panics
 rpath = false           # Don't embed path dependencies
 incremental = false
 

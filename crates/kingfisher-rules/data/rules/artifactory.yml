@@ -32,7 +32,7 @@ rules:
                 - 200
               type: StatusMatch
             - type: JsonValid
-          url: https://{{ JFROGURL }}/artifactory/api/repositories
+          url: '{{ ARTIFACTORY_BASE_URL }}/artifactory/api/repositories'
     references:
       - https://jfrog.com/help/r/jfrog-platform-administration-documentation/access-tokens
       - https://jfrog.com/help/r/jfrog-rest-apis/authentication
@@ -93,7 +93,7 @@ rules:
             - status:
                 - 200
               type: StatusMatch
-          url: https://{{ JFROGURL }}/artifactory/api/repositories
+          url: '{{ ARTIFACTORY_BASE_URL }}/artifactory/api/repositories'
     references:
       - https://jfrog.com/help/r/jfrog-platform-administration-documentation/access-tokens
       - https://jfrog.com/help/r/jfrog-rest-apis/authentication

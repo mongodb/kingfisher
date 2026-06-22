@@ -39,6 +39,5 @@ rules:
               status: [200]
             - type: WordMatch
               words:
-                - '"data"'
-                - '"me"'
-              match_all_words: true
+                - '"Not Authorized"'
+              negative: true

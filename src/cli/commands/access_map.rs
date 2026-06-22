@@ -1,6 +1,9 @@
 use std::path::PathBuf;
 
-use clap::{Args, ValueEnum};
+use clap::{Args, ValueEnum, ValueHint};
+use strum::Display;
+
+use crate::util::get_writer_for_file_or_stdout;
 
 /// Inspect a cloud credential and derive the effective identity and blast radius.
 #[derive(Args, Debug)]
@@ -13,13 +16,37 @@ pub struct AccessMapArgs {
     #[clap(value_parser, value_name = "CREDENTIAL", required = false)]
     pub credential_path: Option<PathBuf>,
 
-    /// Optional path to write an interactive D3.js HTML report
-    #[clap(long, value_name = "PATH")]
-    pub html_out: Option<PathBuf>,
+    #[command(flatten)]
+    pub output_args: AccessMapOutputArgs,
+}
 
-    /// Optional path to write JSON output (otherwise JSON goes to stdout)
-    #[clap(long, value_name = "PATH")]
-    pub json_out: Option<PathBuf>,
+#[derive(Args, Debug, Clone)]
+#[command(next_help_heading = "Output Options")]
+pub struct AccessMapOutputArgs {
+    /// Write output to the specified path (stdout if not given)
+    #[arg(long, short = 'o', value_hint = ValueHint::FilePath)]
+    pub output: Option<PathBuf>,
+
+    /// Output format
+    #[arg(long, short = 'f', default_value = "json")]
+    pub format: AccessMapOutputFormat,
+}
+
+impl AccessMapOutputArgs {
+    /// Return a writer for the specified output destination
+    pub fn get_writer(&self) -> std::io::Result<Box<dyn std::io::Write>> {
+        get_writer_for_file_or_stdout(self.output.as_ref())
+    }
+}
+
+#[derive(Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum)]
+#[strum(serialize_all = "kebab-case")]
+pub enum AccessMapOutputFormat {
+    /// Pretty-printed JSON
+    Json,
+
+    /// Standalone HTML access-map report
+    Html,
 }
 
 /// Supported cloud providers for identity mapping.
@@ -129,4 +156,7 @@ pub enum AccessMapProvider {
     Monday,
     /// Asana
     Asana,
+    /// Pinecone
+    #[clap(alias = "pinecone.io")]
+    Pinecone,
 }

@@ -278,14 +278,14 @@ async fn list_service_items(
                 Ok(Event::Eof) => break,
                 Ok(Event::Start(e)) if e.name().as_ref().eq_ignore_ascii_case(b"name") => {
                     let text = reader.read_text(e.name())?;
-                    let name = text.into_owned();
+                    let name = text.decode()?.into_owned();
                     if !name.is_empty() {
                         items.insert(name);
                     }
                 }
                 Ok(Event::Start(e)) if e.name().as_ref().eq_ignore_ascii_case(b"nextmarker") => {
                     let text = reader.read_text(e.name())?;
-                    let value = text.into_owned();
+                    let value = text.decode()?.into_owned();
                     if !value.trim().is_empty() {
                         next_marker = Some(value);
                     }

@@ -52,7 +52,7 @@ jobs:
           echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
 
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ steps.version.outputs.tag }}
 
@@ -113,12 +113,12 @@ jobs:
           scripts/build-pypi-wheel.sh \
             --binary "$linux_x64" \
             --version "$version" \
-            --plat-name musllinux_1_2_x86_64
+            --plat-name manylinux_2_17_x86_64.musllinux_1_2_x86_64
 
           scripts/build-pypi-wheel.sh \
             --binary "$linux_arm64" \
             --version "$version" \
-            --plat-name musllinux_1_2_aarch64
+            --plat-name manylinux_2_17_aarch64.musllinux_1_2_aarch64
 
           scripts/build-pypi-wheel.sh \
             --binary "$mac_x64" \
@@ -140,8 +140,20 @@ jobs:
             --version "$version" \
             --plat-name win_arm64
 
+      - name: Verify all wheels are platform-specific
+        shell: bash
+        run: |
+          set -euo pipefail
+          if ls dist-pypi/*-py3-none-any.whl >/dev/null 2>&1; then
+            echo "::error::Refusing to publish: pure-Python wheel found in dist-pypi/." >&2
+            ls -la dist-pypi/ >&2
+            exit 1
+          fi
+          echo "Wheels to publish:"
+          ls -la dist-pypi/
+
       - name: Publish to PyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b # release/v1
         with:
           packages-dir: dist-pypi
           verbose: true

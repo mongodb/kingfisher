@@ -146,7 +146,7 @@ impl<'a> Display for PrettyFindingRecord<'a> {
             writeln!(
                 f,
                 " |Validation....: {}",
-                reporter.style_finding_active_heading(&finding.validation.status).to_string()
+                reporter.style_finding_active_heading(&finding.validation.status)
             )?;
         } else {
             writeln!(f, " |Validation....: {}", finding.validation.status)?;

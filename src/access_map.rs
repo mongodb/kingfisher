@@ -1,8 +1,10 @@
+use std::io::Write;
+
 use anyhow::Result;
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::cli::commands::access_map::{AccessMapArgs, AccessMapProvider};
+use crate::cli::commands::access_map::{AccessMapArgs, AccessMapOutputFormat, AccessMapProvider};
 
 mod airtable;
 mod algolia;
@@ -34,6 +36,7 @@ pub(crate) mod mongodb;
 pub(crate) mod mysql;
 mod openai;
 mod paypal;
+mod pinecone;
 mod plaid;
 pub(crate) mod postgres;
 mod report;
@@ -110,17 +113,19 @@ pub async fn run(args: AccessMapArgs) -> Result<()> {
         AccessMapProvider::Xray => xray::map_access(&args).await?,
         AccessMapProvider::Monday => monday::map_access(&args).await?,
         AccessMapProvider::Asana => asana::map_access(&args).await?,
+        AccessMapProvider::Pinecone => pinecone::map_access(&args).await?,
     };
 
-    let json = serde_json::to_string_pretty(&result)?;
-    if let Some(path) = args.json_out {
-        std::fs::write(path, json)?;
-    } else {
-        println!("{json}");
-    }
-
-    if let Some(path) = args.html_out {
-        report::generate_html_report_multi(&[result], &path)?;
+    let mut writer = args.output_args.get_writer()?;
+    match args.output_args.format {
+        AccessMapOutputFormat::Json => {
+            serde_json::to_writer_pretty(&mut writer, &result)?;
+            writeln!(writer)?;
+        }
+        AccessMapOutputFormat::Html => {
+            let html = report::render_html_report_multi(&[result])?;
+            writer.write_all(html.as_bytes())?;
+        }
     }
 
     Ok(())
@@ -225,6 +230,8 @@ pub enum AccessMapRequest {
     Monday { token: String, fingerprint: String },
     /// An Asana personal access token / OAuth token.
     Asana { token: String, fingerprint: String },
+    /// A Pinecone API key.
+    Pinecone { token: String, fingerprint: String },
 }
 
 /// Structured output describing the resolved identity and its risk profile.
@@ -289,7 +296,7 @@ pub struct RoleBinding {
 }
 
 /// Summarized permissions grouped by risk profile.
-#[derive(Debug, Serialize, Default, Clone)]
+#[derive(Debug, Serialize, Default, Clone, JsonSchema)]
 pub struct PermissionSummary {
     /// Administrator or owner-level permissions.
     pub admin: Vec<String>,
@@ -299,6 +306,19 @@ pub struct PermissionSummary {
     pub risky: Vec<String>,
     /// Lower-risk read-only permissions.
     pub read_only: Vec<String>,
+}
+
+impl PermissionSummary {
+    pub fn is_empty(&self) -> bool {
+        self.admin.is_empty()
+            && self.privilege_escalation.is_empty()
+            && self.risky.is_empty()
+            && self.read_only.is_empty()
+    }
+
+    pub fn total(&self) -> usize {
+        self.admin.len() + self.privilege_escalation.len() + self.risky.len() + self.read_only.len()
+    }
 }
 
 /// Exposed resources and their assessed risk.
@@ -562,6 +582,9 @@ pub async fn map_requests(requests: Vec<AccessMapRequest>) -> Vec<AccessMapResul
             }
             AccessMapRequest::Asana { token, fingerprint } => {
                 (map_token(&AsanaMapper, &token).await, fingerprint)
+            }
+            AccessMapRequest::Pinecone { token, fingerprint } => {
+                (map_token(&PineconeMapper, &token).await, fingerprint)
             }
         };
 
@@ -899,6 +922,19 @@ impl TokenAccessMapper for AsanaMapper {
 
     async fn map_access_from_token(&self, token: &str) -> Result<AccessMapResult> {
         asana::map_access_from_token(token).await
+    }
+}
+
+/// Pinecone access mapper.
+pub struct PineconeMapper;
+
+impl TokenAccessMapper for PineconeMapper {
+    fn cloud_name(&self) -> &'static str {
+        "pinecone"
+    }
+
+    async fn map_access_from_token(&self, token: &str) -> Result<AccessMapResult> {
+        pinecone::map_access_from_token(token).await
     }
 }
 

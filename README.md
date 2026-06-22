@@ -7,19 +7,22 @@
     <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License" style="height: 24px;" />
   </a>
   <a href="https://github.com/mongodb/kingfisher">
-    <img src="https://img.shields.io/badge/Detection%20Rules-942-2ea043.svg" alt="Detection Rules" style="height: 24px;" />
+    <img src="https://img.shields.io/badge/Detection%20Rules-954-2ea043.svg" alt="Detection Rules" style="height: 24px;" />
   </a>
   <br>
   <a href="https://github.com/mongodb/kingfisher/pkgs/container/kingfisher">
     <img src="https://ghcr-badge.elias.eu.org/shield/mongodb/kingfisher/kingfisher" alt="ghcr downloads" />
   </a>
+  <a href="https://github.com/mongodb/kingfisher/releases">
+    <img src="https://img.shields.io/github/downloads/mongodb/kingfisher/total" alt="GitHub Downloads" style="height: 24px;" />
+  </a>
   <br>
 
 Kingfisher is an open source secret scanner and **live secret validation** tool built in Rust.
 
-It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale, and ships with [942 built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/) to detect, **validate**, and triage leaked API keys, tokens, and credentials before they ever reach production.
+It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale, and ships with [950+ built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/) to detect, **validate**, and triage leaked API keys, tokens, and credentials before they ever reach production.
 
-Kingfisher also ships a **browser-based report viewer** that visualizes and triages findings from Kingfisher **and** from Gitleaks and TruffleHog JSON reports — so you can import scans from other tools and triage them in the same UI. A [hosted copy of the viewer](https://mongodb.github.io/kingfisher/viewer/) is published on the Kingfisher docs site.
+Kingfisher also ships a **browser-based report viewer** that visualizes and triages findings from Kingfisher **and** from Gitleaks and TruffleHog JSON reports — so you can import scans from other tools and triage them in the same UI. A [hosted copy of the viewer](https://mongodb.github.io/kingfisher/viewer/) is published on the Kingfisher docs site [or run locally](#3-scan-and-view-results-in-browser)
 
 Designed for offensive security engineers and blue-team defenders alike, Kingfisher helps you scan repositories, cloud storage, chat, docs, and CI pipelines to find and verify exposed secrets quickly.
 
@@ -31,7 +34,7 @@ Designed for offensive security engineers and blue-team defenders alike, Kingfis
 
 Kingfisher is a high-performance, open source secret detection tool for source code and developer platforms. If you are searching for a "GitHub secret scanner," "API key scanner," "token leak detection," or "Git secrets scanner," this project is built for that workflow.
 
-- Scan code, Git history, and integrated platforms (GitHub, GitLab, Azure Repos, Bitbucket, Gitea, Hugging Face, Jira, Confluence, Slack, Microsoft Teams, Docker, AWS S3, and Google Cloud Storage)
+- Scan code, Git history, and integrated platforms (GitHub, GitLab, Azure Repos, Bitbucket, Gitea, Hugging Face, Jira, Confluence, Slack, Microsoft Teams, Postman, Docker, AWS S3, and Google Cloud Storage)
 - Validate discovered credentials against provider APIs to reduce false positives
 - Revoke supported secrets directly from the CLI
 - Generate JSON, SARIF, TOON, and HTML outputs for security teams, compliance, and CI
@@ -45,18 +48,18 @@ Kingfisher is a high-performance, open source secret detection tool for source c
 |:-------------:|:----------:|:------:|:------:|:-------------:|:----------:|:------:|:-------------:|
 | <img src="./docs/assets/icons/files.svg" height="40" alt="Files / Dirs"/><br/><sub>Files / Dirs</sub> | <img src="./docs/assets/icons/local-git.svg" height="40" alt="Local Git"/><br/><sub>Local Git</sub> | <img src="./docs/assets/icons/github.svg" height="40" alt="GitHub"/><br/><sub>GitHub</sub> | <img src="./docs/assets/icons/gitlab.svg" height="40" alt="GitLab"/><br/><sub>GitLab</sub> | <img src="./docs/assets/icons/azure-devops.svg" height="40" alt="Azure Repos"/><br/><sub>Azure Repos</sub> | <img src="./docs/assets/icons/bitbucket.svg" height="40" alt="Bitbucket"/><br/><sub>Bitbucket</sub> | <img src="./docs/assets/icons/gitea.svg" height="40" alt="Gitea"/><br/><sub>Gitea</sub> |<img src="./docs/assets/icons/huggingface.svg" height="40" width="40" alt="Hugging Face"/><br/><sub>Hugging Face</sub> |
 
-| Docker | Jira | Confluence | Slack | Teams | AWS S3 | Google Cloud |
-|:------:|:----:|:-----------:|:-----:|:-----:|:------:|:---:|
-| <img src="./docs/assets/icons/docker.svg" height="40" alt="Docker"/><br/><sub>Docker</sub> | <img src="./docs/assets/icons/jira.svg" height="40" alt="Jira"/><br/><sub>Jira</sub> | <img src="./docs/assets/icons/confluence.svg" height="40" alt="Confluence"/><br/><sub>Confluence</sub> | <img src="./docs/assets/icons/slack.svg" height="40" alt="Slack"/><br/><sub>Slack</sub> | <img src="./docs/assets/icons/teams.svg" height="40" alt="Microsoft Teams"/><br/><sub>Teams</sub> | <img src="./docs/assets/icons/aws-s3.svg" height="40" alt="AWS S3"/><br/><sub>AWS&nbsp;S3</sub> |  <img src="./docs/assets/icons/gcs.svg" height="40" alt="Google Cloud Storage"/><br/><sub>Cloud Storage</sub> |
+| Docker | Jira | Confluence | Slack | Teams | Postman | AWS S3 | Google Cloud |
+|:------:|:----:|:-----------:|:-----:|:-----:|:-------:|:------:|:---:|
+| <img src="./docs/assets/icons/docker.svg" height="40" alt="Docker"/><br/><sub>Docker</sub> | <img src="./docs/assets/icons/jira.svg" height="40" alt="Jira"/><br/><sub>Jira</sub> | <img src="./docs/assets/icons/confluence.svg" height="40" alt="Confluence"/><br/><sub>Confluence</sub> | <img src="./docs/assets/icons/slack.svg" height="40" alt="Slack"/><br/><sub>Slack</sub> | <img src="./docs/assets/icons/teams.svg" height="40" alt="Microsoft Teams"/><br/><sub>Teams</sub> | <img src="./docs/assets/icons/postman.svg" height="40" alt="Postman"/><br/><sub>Postman</sub> | <img src="./docs/assets/icons/aws-s3.svg" height="40" alt="AWS S3"/><br/><sub>AWS&nbsp;S3</sub> |  <img src="./docs/assets/icons/gcs.svg" height="40" alt="Google Cloud Storage"/><br/><sub>Cloud Storage</sub> |
 
 </div>
 
-### Performance, Accuracy, and 942 Rules
+### Performance, Accuracy, and 954 Rules
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
-- **Extensible rules**: 942 built-in rules (484 with live validation) plus YAML-defined custom rules ([docs/RULES.md](/docs/RULES.md))
+- **Extensible rules**: 954 built-in rules plus YAML-defined custom rules ([docs/RULES.md](/docs/RULES.md))
 - **Validate & Revoke**: live validation of discovered secrets, plus direct revocation for supported platforms (GitHub, GitLab, Slack, AWS, GCP, and more) ([docs/USAGE.md](/docs/USAGE.md))
 - **Revocation support matrix**: current built-in revocation coverage across providers and rule IDs ([docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
-- **Blast Radius Mapping**: instantly map leaked keys to their effective cloud identities and exposed resources with `--access-map`. Supports 42 providers (see table below).
+- **Blast Radius Mapping**: instantly map leaked keys to their effective cloud identities and exposed resources with `--access-map` (alias `--blast-radius`). Supports 43 providers (see table below).
 - **Broad AI SaaS coverage**: finds and validates tokens for OpenAI, Anthropic, Google Gemini, Cohere, AWS Bedrock, Voyage AI, Mistral, Stability AI, Replicate, xAI (Grok), Ollama, Langchain, Perplexity, Weights & Biases, Cerebras, Friendli, Fireworks.ai, NVIDIA NIM, Together.ai, Zhipu, and many more
 - **Compressed Files**: Supports extracting and scanning compressed files for secrets, including `tar.gz`/`bz2`/`xz`, ZIP-family containers (`zip`, `jar`, `docx`, `xlsx`, `pptx`, `odt`, `epub`, `hwpx`, and more), `asar`, HWP (Hancom OLE2/CFBF binary with DEFLATE/zlib stream decoding), and EGG (ALZip; raw-byte scanning)
 - **SQLite Database Scanning**: Automatically extracts and scans SQLite database contents for secrets stored in table rows
@@ -191,7 +194,7 @@ KF_GITLAB_TOKEN="glpat-..." kingfisher scan gitlab --group my-group
 ### 8: Scan Azure Repos
 
 ```bash
-KF_AZURE_PAT="pat" kingfisher scan azure --organization my-org
+KF_AZURE_PAT="pat" kingfisher scan azure --azure-organization my-org
 ```
 
 ### 9: Scan Bitbucket workspace
@@ -209,7 +212,7 @@ KF_GITEA_TOKEN="token" kingfisher scan gitea --organization my-org
 ### 11: Scan Hugging Face
 
 ```bash
-KF_HUGGINGFACE_TOKEN="hf_..." kingfisher scan huggingface --organization my-org
+KF_HUGGINGFACE_TOKEN="hf_..." kingfisher scan huggingface --huggingface-organization my-org
 ```
 
 ### 12: Scan an S3 bucket
@@ -224,10 +227,11 @@ kingfisher scan s3 bucket-name --prefix path/
 kingfisher scan gcs bucket-name --prefix path/
 ```
 
-### 14: Scan a Docker image
+### 14: Scan a Docker image or saved image archive
 
 ```bash
 kingfisher scan docker ghcr.io/org/image:latest
+kingfisher scan docker --archive image.tar
 ```
 
 ### 15: Scan Jira issues
@@ -313,20 +317,52 @@ Kingfisher supports multiple installation methods:
 
 **For complete installation instructions and pre-commit hook setup, see [docs/INSTALLATION.md](docs/INSTALLATION.md).**
 
+### Faster Pre-commit and CI Runs
+
+Repeated hook and CI scans can reuse Kingfisher's compiled Vectorscan rule database:
+
+```bash
+kingfisher rules compile-cache
+kingfisher scan . --staged
+```
+
+Kingfisher caches compiled rules by default and uses a platform default cache directory unless `--rule-cache-dir` or `KF_RULE_CACHE_DIR` is set. For Docker runs, mount a host cache directory and set `KF_RULE_CACHE_DIR` so repeated disposable containers can reuse it. Custom rules loaded with `--rules-path` are included in the cache key, so changing a rule automatically refreshes the cache entry. Use `--no-rule-cache` to opt out, and `--prune-rule-cache` or `kingfisher rules prune-cache` to remove old entries. See [Compiled Rule Cache](docs/ADVANCED.md#compiled-rule-cache) for details.
+
 ## Verifying Releases
 
-Every Kingfisher release includes GitHub build attestations so you can verify that artifacts were built by our CI pipeline and haven't been tampered with.
+Every release ships [SLSA v1 build-provenance attestations](https://github.com/actions/attest-build-provenance) (Sigstore keyless OIDC) proving the artifact was built by our CI workflow at a known commit and hasn't been tampered with. Attestations are available via the GitHub attestation store or as the `multiple.intoto.jsonl` release asset.
 
-### GitHub attestations
+**Option 1 — `gh attestation verify`** (simplest; requires [GitHub CLI](https://cli.github.com/))
 
-Release artifacts have GitHub build attestations, verifiable with the GitHub CLI:
+```bash
+gh release download <version> --repo mongodb/kingfisher --pattern 'kingfisher-linux-x64.tgz'
+gh attestation verify kingfisher-linux-x64.tgz --repo mongodb/kingfisher
+```
+
+**Option 2 — `cosign`** (offline-friendly; requires [cosign](https://docs.sigstore.dev/system_config/installation/) ≥ 2.x)
 
 ```bash
 gh release download <version> --repo mongodb/kingfisher \
-  --pattern 'kingfisher-linux-x64.tgz'
+  --pattern 'kingfisher-linux-x64.tgz' --pattern 'multiple.intoto.jsonl'
 
-gh attestation verify kingfisher-linux-x64.tgz --repo mongodb/kingfisher
+cosign verify-blob-attestation \
+  --bundle multiple.intoto.jsonl \
+  --new-bundle-format \
+  --certificate-identity-regexp '^https://github.com/mongodb/kingfisher/\.github/workflows/release\.yml@refs/tags/v.*$' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  kingfisher-linux-x64.tgz
 ```
+
+**Option 3 — `slsa-verifier`** (requires [slsa-verifier](https://github.com/slsa-framework/slsa-verifier))
+
+```bash
+slsa-verifier verify-artifact kingfisher-linux-x64.tgz \
+  --provenance-path multiple.intoto.jsonl \
+  --source-uri github.com/mongodb/kingfisher \
+  --source-tag <version>
+```
+
+A successful verification prints `Verified OK`. The attestation proves the artifact's SHA-256, the signing identity (the release workflow at a specific tag), and the source commit — all recorded in the public [Rekor transparency log](https://search.sigstore.dev/).
 
 
 ## Report Viewer (local and hosted)
@@ -375,7 +411,7 @@ kingfisher scan /path/to/scan --access-map --view-report
 
 # Detection Rules
 
-Kingfisher ships with [942 built-in rules](crates/kingfisher-rules/data/rules/) covering cloud keys, AI tokens, CI/CD secrets, database credentials, and SaaS API keys. Below is an overview — see the full list in [crates/kingfisher-rules/data/rules/](crates/kingfisher-rules/data/rules/):
+Kingfisher ships with [954 built-in rules](crates/kingfisher-rules/data/rules/) covering cloud keys, AI tokens, CI/CD secrets, database credentials, and SaaS API keys. Below is an overview — see the full list in [crates/kingfisher-rules/data/rules/](crates/kingfisher-rules/data/rules/):
 
 | Category | What we catch |
 |----------|---------------|
@@ -392,7 +428,7 @@ Kingfisher ships with [942 built-in rules](crates/kingfisher-rules/data/rules/) 
 
 ## Write Custom Rules
 
-Kingfisher ships with 484 built-in rules that include HTTP and service-specific validation checks (AWS, Azure, GCP, etc.) to confirm if a detected string is a live credential.
+Kingfisher ships with 954 built-in rules.
 
 However, you may want to add your own custom rules, or modify a detection to better suit your needs / environment.
 
@@ -478,7 +514,7 @@ The viewer can import Gitleaks JSON and TruffleHog JSON/JSONL in addition to nat
 
 > **Use the access map functionality only when you are authorized to inspect the target account, as Kingfisher will issue additional network requests to determine what access the secret grants**
 
-### Supported Access Map Providers (42)
+### Supported Access Map Providers (43)
 
 | Cloud & Infra | DevOps & CI/CD | SaaS & APIs | Data & Messaging |
 |:---|:---|:---|:---|
@@ -489,7 +525,7 @@ The viewer can import Gitleaks JSON and TruffleHog JSON/JSONL in addition to nat
 | DigitalOcean | Buildkite | Salesforce | Sendinblue / Brevo |
 | IBM Cloud | CircleCI | Shopify | Slack |
 | Terraform Cloud | Harness | Zendesk | Microsoft Teams |
-| | JFrog Artifactory | Stripe | |
+| | JFrog Artifactory | Stripe | Pinecone |
 | | JFrog Xray | Square | |
 | | Jira | PayPal | |
 | | | Plaid | |
@@ -620,6 +656,7 @@ Kingfisher can scan multiple platforms and services directly:
 - Confluence (pages via CQL queries)
 - Slack (messages via search queries)
 - Microsoft Teams (messages via Microsoft Graph search)
+- Postman (workspaces, collections, and environments — including plaintext "secret"-typed environment variables)
 
 See **[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md)** for complete integration documentation and authentication setup.
 
@@ -635,6 +672,9 @@ kingfisher scan gcs bucket-name
 # Scan Docker image
 kingfisher scan docker ghcr.io/owasp/wrongsecrets/wrongsecrets-master:latest-master
 
+# Scan Docker image archive produced by docker save
+kingfisher scan docker --archive image.tar
+
 # Scan GitHub organization
 kingfisher scan github --organization my-org
 
@@ -642,7 +682,7 @@ kingfisher scan github --organization my-org
 kingfisher scan gitlab --group my-group
 
 # Scan Azure Repos
-kingfisher scan azure --organization my-org
+kingfisher scan azure --azure-organization my-org
 
 # Scan Jira issues
 KF_JIRA_TOKEN="token" kingfisher scan jira --url https://jira.company.com \
@@ -663,6 +703,9 @@ KF_SLACK_TOKEN="xoxp-..." kingfisher scan slack "from:username has:link"
 
 # Scan Microsoft Teams messages
 KF_TEAMS_TOKEN="eyJ0..." kingfisher scan teams "password OR api_key"
+
+# Scan every Postman workspace, collection, and environment visible to the API key
+KF_POSTMAN_TOKEN="PMAK-..." kingfisher scan postman --all
 ```
 
 **For detailed integration instructions and authentication setup, see [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).**
@@ -687,6 +730,7 @@ KF_TEAMS_TOKEN="eyJ0..." kingfisher scan teams "password OR api_key"
 | `KF_CONFLUENCE_TOKEN` | Confluence API token      |
 | `KF_SLACK_TOKEN`  | Slack API token              |
 | `KF_TEAMS_TOKEN`  | Microsoft Graph API token for Teams message search |
+| `KF_POSTMAN_TOKEN` / `POSTMAN_API_KEY` | Postman API key for workspace, collection, and environment scanning |
 | `KF_DOCKER_TOKEN` | Docker registry token (`user:pass` or bearer token). If unset, credentials from the Docker keychain are used |
 | `KF_AWS_KEY`, `KF_AWS_SECRET`, and `KF_AWS_SESSION_TOKEN` | AWS credentials for S3 bucket scanning. Session token is optional, for temporary credentials |
 
@@ -758,7 +802,7 @@ kingfisher scan /tmp/repo --branch feature-1 \
 |----------|-------------|
 | [INSTALLATION.md](docs/INSTALLATION.md) | Complete installation guide including pre-commit hooks setup for git, pre-commit framework, and Husky |
 | [INTEGRATIONS.md](docs/INTEGRATIONS.md) | Platform-specific scanning guide (GitHub, GitLab, AWS S3, Docker, Jira, Confluence, Slack, etc.) |
-| [ACCESS_MAP.md](docs/ACCESS_MAP.md) | Access map: supported tokens and credential formats (42 providers including AWS, GCP, Azure, Alibaba Cloud, Stripe, Jira, monday.com, Asana, and more) |
+| [ACCESS_MAP.md](docs/ACCESS_MAP.md) | Access map: supported tokens and credential formats (43 providers including AWS, GCP, Azure, Alibaba Cloud, Stripe, Jira, monday.com, Asana, Pinecone, and more) |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | High-level Mermaid architecture diagram of the CLI, scanner pipeline, validation, access map, and outputs |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment models for self-serve CLI use, CI/pre-commit enforcement, centralized scanning, and embedded library integrations |
 | [ADVANCED.md](docs/ADVANCED.md) | Advanced features: baselines, confidence levels, validation tuning, CI scanning, and more |
@@ -796,7 +840,7 @@ Since then it has evolved far beyond that starting point, introducing live valid
 - **Hundreds of new built-in rules** and an expanded YAML rule schema  
 - **Baseline management** to suppress known findings over time  
 - **Parser-based context verification** layered on Hyperscan for language-aware detection  
-- **More scan targets** (GitLab, Bitbucket, Gitea, Jira, Confluence, Slack, Microsoft Teams, S3, GCS, Docker, Hugging Face, etc.)  
+- **More scan targets** (GitLab, Bitbucket, Gitea, Jira, Confluence, Slack, Microsoft Teams, Postman, S3, GCS, Docker, Hugging Face, etc.)  
 - **Compressed Files**, **SQLite database**, and **Python bytecode (.pyc)** scanning support
 - **New storage model** (in-memory + Bloom filter, replacing SQLite)  
 - **Unified workflow** with JSON/BSON/SARIF outputs  

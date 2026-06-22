@@ -163,10 +163,10 @@ async fn probe_webhook(client: &Client, webhook_url: &str) -> bool {
     match resp {
         Ok(r) => {
             let status = r.status();
-            if status.as_u16() == 400 {
-                if let Ok(body) = r.text().await {
-                    return body.contains("Text is required");
-                }
+            if status.as_u16() == 400
+                && let Ok(body) = r.text().await
+            {
+                return body.contains("Text is required");
             }
             status.is_success()
         }

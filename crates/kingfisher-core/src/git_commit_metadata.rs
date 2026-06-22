@@ -3,9 +3,12 @@
 //! This module provides types for tracking commit information associated
 //! with blobs found in git history.
 
+use std::borrow::Cow;
+
 use gix::{ObjectId, date::Time};
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 
 // Wrapper for serializing gix::date::Time as text
 #[repr(transparent)]
@@ -61,12 +64,12 @@ mod text_time {
 }
 
 impl JsonSchema for TextTime {
-    fn schema_name() -> String {
+    fn schema_name() -> Cow<'static, str> {
         "Time".into()
     }
 
-    fn json_schema(r#gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-        String::json_schema(r#gen)
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        String::json_schema(generator)
     }
 }
 
@@ -124,17 +127,16 @@ mod hex_object_id {
 }
 
 impl JsonSchema for HexObjectId {
-    fn schema_name() -> String {
+    fn schema_name() -> Cow<'static, str> {
         "ObjectId".into()
     }
 
-    fn json_schema(r#gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-        let s = String::json_schema(r#gen);
-        let mut o = s.into_object();
-        o.string().pattern = Some("[0-9a-f]{40}".into());
-        let md = o.metadata();
-        md.description = Some("A hex-encoded object ID as computed by Git".into());
-        schemars::schema::Schema::Object(o)
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let mut schema = String::json_schema(generator);
+        schema.insert("pattern".to_owned(), json!("[0-9a-f]{40}"));
+        schema
+            .insert("description".to_owned(), json!("A hex-encoded object ID as computed by Git"));
+        schema
     }
 }
 

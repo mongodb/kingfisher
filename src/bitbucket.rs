@@ -75,12 +75,11 @@ impl AuthConfig {
         let mut bearer_token =
             normalized(bearer_token).or_else(|| env_var("KF_BITBUCKET_OAUTH_TOKEN"));
 
-        if bearer_token.is_none() {
-            if let Some(password) = &password {
-                if is_bitbucket_access_token(password) {
-                    bearer_token = Some(password.clone());
-                }
-            }
+        if bearer_token.is_none()
+            && let Some(password) = &password
+            && is_bitbucket_access_token(password)
+        {
+            bearer_token = Some(password.clone());
         }
         Self { username, password, bearer_token }
     }
@@ -172,10 +171,10 @@ fn parse_excluded_repo(raw: &str) -> Option<String> {
         return Some(name);
     }
 
-    if let Some(idx) = trimmed.rfind(':') {
-        if let Some(name) = parse_repo_name_from_path(&trimmed[idx + 1..]) {
-            return Some(name);
-        }
+    if let Some(idx) = trimmed.rfind(':')
+        && let Some(name) = parse_repo_name_from_path(&trimmed[idx + 1..])
+    {
+        return Some(name);
     }
 
     parse_repo_name_from_path(trimmed)
@@ -519,6 +518,7 @@ pub async fn enumerate_repo_urls(
     Ok(repo_urls)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn list_repositories(
     api_url: Url,
     auth: AuthConfig,
@@ -671,7 +671,7 @@ mod tests {
     #[test]
     fn auth_config_ignores_empty_environment_values() {
         temp_env::with_vars(
-            &[
+            [
                 ("KF_BITBUCKET_USERNAME", Some("")),
                 ("KF_BITBUCKET_APP_PASSWORD", Some("")),
                 ("KF_BITBUCKET_OAUTH_TOKEN", Some("   ")),
@@ -688,7 +688,7 @@ mod tests {
     #[test]
     fn auth_config_prefers_basic_auth_when_bearer_is_empty() {
         temp_env::with_vars(
-            &[
+            [
                 ("KF_BITBUCKET_USERNAME", Some("user")),
                 ("KF_BITBUCKET_APP_PASSWORD", Some("pass")),
                 ("KF_BITBUCKET_OAUTH_TOKEN", Some("")),
@@ -705,7 +705,7 @@ mod tests {
     #[test]
     fn auth_config_trims_environment_whitespace() {
         temp_env::with_vars(
-            &[
+            [
                 ("KF_BITBUCKET_USERNAME", Some("  user  ")),
                 ("KF_BITBUCKET_APP_PASSWORD", Some("  pass\n")),
             ],
@@ -721,7 +721,7 @@ mod tests {
     fn auth_config_treats_access_token_as_bearer() {
         let token = "AT1234567890_ACCESS_TOKEN_EXAMPLE_WITH_UNDERSCORE";
         temp_env::with_vars(
-            &[("KF_BITBUCKET_USERNAME", Some("user")), ("KF_BITBUCKET_TOKEN", Some(token))],
+            [("KF_BITBUCKET_USERNAME", Some("user")), ("KF_BITBUCKET_TOKEN", Some(token))],
             || {
                 let auth = AuthConfig::from_env();
                 assert_eq!(auth.username.as_deref(), Some("user"));

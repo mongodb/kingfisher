@@ -198,7 +198,7 @@ fn derive_roles_from_arn(arn: &str) -> Vec<RoleBinding> {
 async fn expand_permissions(
     iam: &IamClient,
     arn: &str,
-    roles: &mut Vec<RoleBinding>,
+    roles: &mut [RoleBinding],
     risk_notes: &mut Vec<String>,
 ) -> Result<PermissionSummary> {
     let access_type = classify_identity(arn);

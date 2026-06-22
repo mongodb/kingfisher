@@ -1,0 +1,77 @@
+rules:
+  - name: HTTP Basic Authorization Header
+    id: kingfisher.auth.1
+    pattern: |
+      (?x)
+      \b
+      Basic\s+
+      (
+        [A-Za-z0-9+/]{12,}={0,2}
+      )
+      (?:[^A-Za-z0-9+/=]|$)
+    pattern_requirements:
+      min_digits: 1
+      min_lowercase: 1
+      ignore_if_contains:
+        - "dXNlcjpwYXNz"          # user:pass
+        - "dXNlcjpwYXNzd29yZA"    # user:password
+        - "YWRtaW46YWRtaW4"       # admin:admin
+        - "YWRtaW46cGFzc3dvcmQ"   # admin:password
+        - "Zm9vOmJhcg"            # foo:bar
+        - "Zm9vOmZvbw"            # foo:foo
+        - "dGVzdDp0ZXN0"          # test:test
+        - "ZGVtbzpkZW1v"          # demo:demo
+        - "Z3Vlc3Q6Z3Vlc3Q"      # guest:guest
+        - "cm9vdDpyb290"          # root:root
+        - "cm9vdDp0b29y"          # root:toor
+        - "ZXhhbXBsZTpleGFtcGxl"  # example:example
+        - "dXNlcm5hbWU6cGFzc3dvcmQ" # username:password
+        - "Og=="                   # base64 of ":" alone
+        - "{{"
+        - "<token>"
+        - "<credentials>"
+        - "YOUR_"
+        - "$BASIC"
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "Authorization: Basic SWxqcmpxZDpld3B3IGdlZmhtZA=="
+      - "Authorization: Basic bXpnaGd6cTpsbmFrdWF6cXNx"
+      - "headers['Authorization'] = 'Basic WnVtemZzcjptdWxtIHhyenJ6aQ=='"
+    references:
+      - https://datatracker.ietf.org/doc/html/rfc7617
+
+  - name: HTTP Bearer Authorization Header (non-JWT)
+    id: kingfisher.auth.2
+    pattern: |
+      (?x)
+      \b
+      Bearer\s+
+      (
+        [A-Za-z0-9._\-]{32,}
+      )
+      (?:[^A-Za-z0-9._\-]|$)
+    pattern_requirements:
+      min_digits: 1
+      ignore_if_contains:
+        - "eyJ"            # any JWT (covered by kingfisher.jwt.1)
+        - "ewogIC"         # pretty-printed JWT header
+        - "<token>"
+        - "<your_token>"
+        - "{{"
+        - "YOUR_TOKEN"
+        - "ACCESS_TOKEN"
+        - "BEARER_TOKEN"
+        - "REPLACE_ME"
+        - "INSERT_TOKEN"
+        - "0000000000000000"
+        - "1234567890abcdef"
+        - "xxxxxxxxxxxxxxxx"
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "Authorization: Bearer d1fc83f09661bcaf3cb3591ec4b93fe93b07087ef020886a4ead09e8efd8c0df"
+      - "  - Bearer 7727d2fa5e8f7d37de25ef385ff8766d265ee2e7384efb311c04069d9c892c6b"
+      - "headers={'Authorization': 'Bearer 4f8a2b6c1d9e7f30a5b2c8d4e6f1a3b7c9d2e8f4a6b0c5d1e9f3a7b2c4d6e8f0'}"
+    references:
+      - https://datatracker.ietf.org/doc/html/rfc6750

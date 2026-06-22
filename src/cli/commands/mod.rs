@@ -1,6 +1,7 @@
 pub mod access_map;
 pub mod azure;
 pub mod bitbucket;
+pub mod config_command;
 pub mod gitea;
 pub mod github;
 pub mod gitlab;

@@ -23,6 +23,7 @@ rules:
     references:
       - https://docs.pinecone.io/reference/api/authentication
       - https://docs.pinecone.io/reference/api/2025-10/control-plane/list_indexes
+      - https://docs.pinecone.io/guides/projects/manage-api-keys
     validation:
       type: Http
       content:

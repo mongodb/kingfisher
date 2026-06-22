@@ -39,10 +39,10 @@ fn uri_targets_localhost(uri: &str) -> bool {
             host = &host[1..host.len() - 1];
         }
 
-        if let Some(idx) = host.rfind(':') {
-            if host[idx + 1..].chars().all(|c| c.is_ascii_digit()) {
-                host = &host[..idx];
-            }
+        if let Some(idx) = host.rfind(':')
+            && host[idx + 1..].chars().all(|c| c.is_ascii_digit())
+        {
+            host = &host[..idx];
         }
 
         if is_local_host(host) {
@@ -147,5 +147,5 @@ pub fn generate_mongodb_cache_key(mongodb_uri: &str) -> String {
     use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
     hasher.update(mongodb_uri.as_bytes());
-    format!("MongoDB:{:x}", hasher.finalize())
+    format!("MongoDB:{}", hex::encode(hasher.finalize()))
 }

@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use gouqi::{Credentials, SearchOptions, r#async::Jira};
-use reqwest::Client;
-use std::path::PathBuf;
+use reqwest_0_12::Client;
+use std::path::{Path, PathBuf};
 use url::Url;
 
 // Re-export the Issue type from gouqi so callers don't depend on the crate.
@@ -81,12 +81,13 @@ fn extract_adf_text(node: &serde_json::Value) -> String {
             ch: char,
             pending_separator: &mut Option<PendingSeparator<'_>>,
         ) -> bool {
-            if let Some(pending_separator) = pending_separator.take() {
-                if !pending_separator.previous_ended_whitespace && !ch.is_whitespace() {
-                    self.text.push_str(pending_separator.separator);
-                    if let Some(last_char) = pending_separator.separator.chars().last() {
-                        self.last_char_is_whitespace = last_char.is_whitespace();
-                    }
+            if let Some(pending_separator) = pending_separator.take()
+                && !pending_separator.previous_ended_whitespace
+                && !ch.is_whitespace()
+            {
+                self.text.push_str(pending_separator.separator);
+                if let Some(last_char) = pending_separator.separator.chars().last() {
+                    self.last_char_is_whitespace = last_char.is_whitespace();
                 }
             }
 
@@ -200,37 +201,35 @@ fn flatten_adf_fields(issue_value: &mut serde_json::Value) {
     // Jira Cloud API v3 returns descriptions as Atlassian Document Format (ADF),
     // a nested JSON tree whose leaf text nodes contain the actual content.
     // Flatten ADF to a plain string so the secret scanner can match against it.
-    if let Some(desc) = issue_value.pointer("/fields/description") {
-        if is_adf(desc) {
-            let plain_text = extract_adf_text(desc);
-            if let Some(fields) =
-                issue_value.pointer_mut("/fields").and_then(|value| value.as_object_mut())
-            {
-                fields.insert(
-                    "description".to_string(),
-                    serde_json::Value::String(plain_text.trim_end_matches('\n').to_string()),
-                );
-            }
+    if let Some(desc) = issue_value.pointer("/fields/description")
+        && is_adf(desc)
+    {
+        let plain_text = extract_adf_text(desc);
+        if let Some(fields) =
+            issue_value.pointer_mut("/fields").and_then(|value| value.as_object_mut())
+        {
+            fields.insert(
+                "description".to_string(),
+                serde_json::Value::String(plain_text.trim_end_matches('\n').to_string()),
+            );
         }
     }
 
     // Apply the same ADF flattening to comment bodies.
-    if let Some(comments) = issue_value.pointer_mut("/fields/comment/comments") {
-        if let Some(arr) = comments.as_array_mut() {
-            for comment in arr.iter_mut() {
-                let plain_text = comment.get("body").and_then(|body| {
-                    if is_adf(body) { Some(extract_adf_text(body)) } else { None }
-                });
-                if let Some(plain_text) = plain_text {
-                    if let Some(comment_obj) = comment.as_object_mut() {
-                        comment_obj.insert(
-                            "body".to_string(),
-                            serde_json::Value::String(
-                                plain_text.trim_end_matches('\n').to_string(),
-                            ),
-                        );
-                    }
-                }
+    if let Some(comments) = issue_value.pointer_mut("/fields/comment/comments")
+        && let Some(arr) = comments.as_array_mut()
+    {
+        for comment in arr.iter_mut() {
+            let plain_text = comment
+                .get("body")
+                .and_then(|body| if is_adf(body) { Some(extract_adf_text(body)) } else { None });
+            if let Some(plain_text) = plain_text
+                && let Some(comment_obj) = comment.as_object_mut()
+            {
+                comment_obj.insert(
+                    "body".to_string(),
+                    serde_json::Value::String(plain_text.trim_end_matches('\n').to_string()),
+                );
             }
         }
     }
@@ -241,13 +240,13 @@ fn flatten_comment_bodies(comments: &mut [serde_json::Value]) {
         let plain_text = comment
             .get("body")
             .and_then(|body| if is_adf(body) { Some(extract_adf_text(body)) } else { None });
-        if let Some(plain_text) = plain_text {
-            if let Some(comment_obj) = comment.as_object_mut() {
-                comment_obj.insert(
-                    "body".to_string(),
-                    serde_json::Value::String(plain_text.trim_end_matches('\n').to_string()),
-                );
-            }
+        if let Some(plain_text) = plain_text
+            && let Some(comment_obj) = comment.as_object_mut()
+        {
+            comment_obj.insert(
+                "body".to_string(),
+                serde_json::Value::String(plain_text.trim_end_matches('\n').to_string()),
+            );
         }
     }
 }
@@ -307,7 +306,7 @@ fn extract_embedded_comments(issue: &JiraIssue) -> Result<Option<(Vec<serde_json
     Ok(Some((comments_json, is_complete)))
 }
 
-fn issue_artifact_dir(output_dir: &PathBuf, issue_key: &str) -> PathBuf {
+fn issue_artifact_dir(output_dir: &Path, issue_key: &str) -> PathBuf {
     output_dir.join(issue_key)
 }
 
@@ -753,12 +752,15 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_comments_paginates_all_pages() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
             .and(path("/rest/api/latest/issue/TEST-1/comment"))
             .and(query_param("startAt", "0"))
-            .and(query_param("maxResults", &JIRA_COMMENTS_PAGE_SIZE.to_string()))
+            .and(query_param("maxResults", JIRA_COMMENTS_PAGE_SIZE.to_string()))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "comments": [
                     {"id": "1", "body": "first"},
@@ -774,7 +776,7 @@ mod tests {
         Mock::given(method("GET"))
             .and(path("/rest/api/latest/issue/TEST-1/comment"))
             .and(query_param("startAt", "2"))
-            .and(query_param("maxResults", &JIRA_COMMENTS_PAGE_SIZE.to_string()))
+            .and(query_param("maxResults", JIRA_COMMENTS_PAGE_SIZE.to_string()))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "comments": [
                     {"id": "3", "body": "third"}
@@ -798,12 +800,15 @@ mod tests {
 
     #[tokio::test]
     async fn fetch_comments_preserves_base_path() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
         let server = MockServer::start().await;
 
         Mock::given(method("GET"))
             .and(path("/jira/rest/api/latest/issue/TEST-1/comment"))
             .and(query_param("startAt", "0"))
-            .and(query_param("maxResults", &JIRA_COMMENTS_PAGE_SIZE.to_string()))
+            .and(query_param("maxResults", JIRA_COMMENTS_PAGE_SIZE.to_string()))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "comments": [
                     {"id": "1", "body": "first"}

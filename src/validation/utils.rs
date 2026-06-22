@@ -153,7 +153,7 @@ pub fn process_captures(captures: &SerializableCaptures) -> Vec<(String, String,
 
 pub fn find_closest_variable(
     captures: &[(String, String, usize, usize)],
-    target_value: &String,
+    target_value: &str,
     target_variable_name: &str,
     search_variable_name: &str,
 ) -> Option<String> {
@@ -161,7 +161,7 @@ pub fn find_closest_variable(
     // compare relative offsets with candidate variables.
     let mut target_positions = Vec::new();
     for (name, value, start, end) in captures {
-        if name == target_variable_name && value == target_value {
+        if name == target_variable_name && value.as_str() == target_value {
             target_positions.push((*start, *end));
         }
     }
@@ -346,8 +346,7 @@ mod tests {
             ("AKID".to_string(), "following".to_string(), 180usize, 200usize),
         ];
 
-        let result =
-            find_closest_variable(&captures, &"secret".to_string(), "TOKEN", "AKID").unwrap();
+        let result = find_closest_variable(&captures, "secret", "TOKEN", "AKID").unwrap();
 
         assert_eq!(result, "preceding".to_string());
     }
@@ -359,8 +358,7 @@ mod tests {
             ("AKID".to_string(), "after".to_string(), 60usize, 80usize),
         ];
 
-        let result =
-            find_closest_variable(&captures, &"secret".to_string(), "TOKEN", "AKID").unwrap();
+        let result = find_closest_variable(&captures, "secret", "TOKEN", "AKID").unwrap();
 
         assert_eq!(result, "after".to_string());
     }

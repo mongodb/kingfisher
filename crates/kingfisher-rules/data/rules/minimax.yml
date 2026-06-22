@@ -28,3 +28,5 @@ rules:
             - type: StatusMatch
               status: [200]
             - type: JsonValid
+            - type: WordMatch
+              words: ['"status_code":0']

@@ -48,7 +48,7 @@ const CONTEXT_VERIFIER_MIN_LIMIT: usize = 0; // allow context verification start
 
 #[inline]
 pub(crate) fn should_attempt_context_verification(blob_len: usize) -> bool {
-    blob_len <= CONTEXT_VERIFIER_MAX_LIMIT && blob_len >= CONTEXT_VERIFIER_MIN_LIMIT
+    (CONTEXT_VERIFIER_MIN_LIMIT..=CONTEXT_VERIFIER_MAX_LIMIT).contains(&blob_len)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -171,6 +171,7 @@ impl<'a> Matcher<'a> {
     ///
     /// If `global_stats` is provided, it will be updated with the local stats
     /// from this `Matcher` when it is dropped.
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         rules_db: &'a RulesDatabase,
         scanner_pool: Arc<ScannerPool>,
@@ -238,6 +239,7 @@ impl<'a> Matcher<'a> {
         Ok(())
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn process_raw_matches<'b>(
         &self,
         blob: &'b Blob,
@@ -320,7 +322,7 @@ impl<'a> Matcher<'a> {
             .unwrap_or("unknown_file")
             .to_string();
         // Perform the scan
-        self.scan_bytes_raw(&blob.bytes(), &filename)?;
+        self.scan_bytes_raw(blob.bytes(), &filename)?;
 
         // Opportunistically look for standalone Base64 blobs. If neither
         // the raw scan nor this check yields anything, we can return early
@@ -1065,11 +1067,8 @@ line2
         let caps = re.captures(b"ghp_ABC12").expect("expected captures");
 
         let serialized = SerializableCaptures::from_captures(&caps, b"", &re);
-        let entries: Vec<(Option<&str>, i32, &str)> = serialized
-            .captures
-            .iter()
-            .map(|cap| (cap.name.as_deref(), cap.match_number, cap.value))
-            .collect();
+        let entries: Vec<(Option<&str>, i32, &str)> =
+            serialized.captures.iter().map(|cap| (cap.name, cap.match_number, cap.value)).collect();
 
         assert_eq!(entries.len(), 3);
 

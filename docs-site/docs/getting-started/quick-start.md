@@ -104,5 +104,5 @@ kingfisher scan /path/to/code --format json --output findings.json
 - [Basic Scanning](../usage/basic-scanning.md) — full scanning guide with all options
 - [Platform Integrations](../usage/integrations.md) — GitHub, GitLab, S3, Docker, Slack, and more
 - [Writing Custom Rules](../rules/overview.md) — create detection rules for your own patterns
-- [Access Map](../features/access-map.md) — blast radius mapping for 42 providers
+- [Access Map](../features/access-map.md) — blast radius mapping for 43 providers
 - [Report Viewer & Triager](../features/report-viewer.md) — local and hosted viewer for Kingfisher, Gitleaks, and TruffleHog JSON reports

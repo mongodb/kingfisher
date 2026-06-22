@@ -60,7 +60,7 @@ pub fn generate_http_cache_key_parts(
         hasher.update(b"\0");
     }
 
-    format!("HTTP:{:x}", hasher.finalize())
+    format!("HTTP:{}", hex::encode(hasher.finalize()))
 }
 
 /// Parse an HTTP method from a string.
@@ -115,6 +115,7 @@ pub fn with_cache_key_template_globals(globals: &Object) -> Object {
 }
 
 /// Build a reqwest RequestBuilder using the provided parameters.
+#[allow(clippy::too_many_arguments)]
 pub fn build_request_builder(
     client: &Client,
     method_str: &str,

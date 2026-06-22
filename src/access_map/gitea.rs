@@ -333,10 +333,10 @@ fn derive_severity(user: &GiteaUser, repos: &[GiteaRepo]) -> Severity {
     let mut severity = Severity::Low;
     for repo in repos {
         let perms = repo.permissions.as_ref();
-        if perms.map_or(false, |p| p.admin) {
+        if perms.is_some_and(|p| p.admin) {
             return Severity::High;
         }
-        if perms.map_or(false, |p| p.push) {
+        if perms.is_some_and(|p| p.push) {
             severity = Severity::Medium;
         }
     }

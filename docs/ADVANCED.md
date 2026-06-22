@@ -17,6 +17,7 @@ This guide covers advanced Kingfisher features for power users.
     - [Inline Ignore Directives](#inline-ignore-directives)
   - [Validation Tuning](#validation-tuning)
   - [Scanning in CI Pipelines](#scanning-in-ci-pipelines)
+    - [Compiled Rule Cache](#compiled-rule-cache)
   - [Custom Rules](#custom-rules)
     - [Scan with only custom rules](#scan-with-only-custom-rules)
     - [Add custom rules alongside built-ins](#add-custom-rules-alongside-built-ins)
@@ -295,9 +296,74 @@ kingfisher scan ./my-project \
   -v
 ```
 
+### Compiled Rule Cache
+
+Kingfisher persists the compiled Vectorscan rule database by default so repeated short runs, such as pre-commit hooks and CI jobs, do not pay the full database compilation cost every time.
+
+If no cache directory is specified, Kingfisher uses a platform default:
+
+- Windows: `%LOCALAPPDATA%\Kingfisher\rule-cache`
+- macOS: `~/Library/Caches/kingfisher/rule-cache`
+- Linux/Unix: `$XDG_CACHE_HOME/kingfisher/rule-cache`, then `~/.cache/kingfisher/rule-cache`
+
+```bash
+kingfisher scan . --staged
+
+KF_RULE_CACHE_DIR=.kingfisher-cache kingfisher scan . --staged
+
+kingfisher scan . --staged --rule-cache-dir .kingfisher-cache
+```
+
+For Docker runs, the default cache directory lives inside the container and is lost when the container is removed. Mount a host directory and set `KF_RULE_CACHE_DIR` so repeated `docker run --rm` scans reuse the cache:
+
+```bash
+docker run --rm \
+  -v "$PWD":/src \
+  -v "$HOME/.cache/kingfisher-rule-cache":/kf-cache \
+  -e KF_RULE_CACHE_DIR=/kf-cache \
+  ghcr.io/mongodb/kingfisher:latest scan /src --staged
+```
+
+Use `--no-rule-cache` to disable the cache for a scan:
+
+```bash
+kingfisher scan . --staged --no-rule-cache
+```
+
+To pre-warm the cache before the first scan, run:
+
+```bash
+kingfisher rules compile-cache
+```
+
+Cache pruning is opt-in. To remove old compiled databases during a scan, pass `--prune-rule-cache`. By default, pruning keeps at least 10 cache entries and removes only entries older than 30 days. Tune those thresholds with `--rule-cache-max-entries` and `--rule-cache-max-age`:
+
+```bash
+kingfisher scan . --staged --prune-rule-cache
+
+kingfisher scan . --staged \
+  --prune-rule-cache \
+  --rule-cache-max-entries 20 \
+  --rule-cache-max-age 14d
+```
+
+To inspect or prune the cache without scanning, use `kingfisher rules prune-cache`:
+
+```bash
+kingfisher rules prune-cache --dry-run
+
+kingfisher rules prune-cache \
+  --rule-cache-max-entries 20 \
+  --rule-cache-max-age 14d
+```
+
+By default, Kingfisher logs the cache directory in use. Pass `--debug` or `-v` to see cache hit/miss details and when new entries are written.
+
+The cache key includes the resolved rule order, rule patterns, platform, cache format, and Vectorscan runtime version. This works with built-in rules and custom rules loaded through `--rules-path`. When built-in rules, custom rule patterns, or the Vectorscan runtime version change, Kingfisher uses a new cache entry automatically. If a cache entry is missing, corrupt, or incompatible with the current platform, Kingfisher falls back to compiling normally and refreshes the cache.
+
 ## Custom Rules
 
-Kingfisher currently ships with 942 built-in rules, but you may want to add your own custom rules or modify existing detection to better suit your needs.
+Kingfisher currently ships with 954 built-in rules, but you may want to add your own custom rules or modify existing detection to better suit your needs.
 
 First, review [RULES.md](RULES.md) to learn how to create custom Kingfisher rules.
 
@@ -435,11 +501,17 @@ See [FINGERPRINT.md](FINGERPRINT.md) for complete details.
 
 ## Update Checks
 
-Kingfisher automatically queries GitHub for a newer release when it starts and tells you whether an update is available.
+Kingfisher automatically queries GitHub for a newer release when it starts and tells you whether an update is available. The check is informational only — the binary is not modified unless you explicitly opt in.
 
-- **Manual update** – Run `kingfisher update` to update the binary without scanning
+- **Update and exit** – Run `kingfisher self-update` (alias `kingfisher update`) to download the latest release, replace the running binary in place, and exit. No scanning occurs.
 
-- **Disable version checks** – Pass `--no-update-check` to skip both the startup and shutdown checks entirely
+- **Update then run with the new version** – Pass the global `--self-update` flag (alias `--update`) on any scan or other command. If a newer release exists, Kingfisher downloads it, replaces the on-disk binary, and **re-execs into the freshly installed binary** so the current invocation completes with the new code (including the latest detection rules). On Unix this is a true `exec()` (same PID); on Windows the new binary is spawned and the parent exits with its status code. If no update is available, the command runs normally with no extra steps.
+
+- **Disable version checks** – Pass `--no-update-check` to skip both the startup and shutdown checks entirely. Recommended for CI runs to keep behavior reproducible.
+
+Self-update writes to wherever the running binary lives, so it requires the calling user to have write access to that location. If you installed Kingfisher via a package manager (Homebrew, the `.deb`/`.rpm` packages, the PyPI wrapper, etc.), use that package manager's upgrade command instead — Kingfisher will detect the permission error and tell you so.
+
+Self-update supports all six release platforms: Linux x64/arm64, macOS x64/arm64, and Windows x64/arm64.
 
 ## Exit Codes
 

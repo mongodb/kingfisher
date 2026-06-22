@@ -182,10 +182,10 @@ fn parse_salesforce_credentials(raw: &str) -> Result<(String, String)> {
         .map(str::trim)
         .filter(|line| !line.is_empty() && !line.starts_with('#'))
         .collect();
-    if lines.len() >= 2 {
-        if let Some(instance) = normalize_instance(lines[1]) {
-            return Ok((lines[0].to_string(), instance));
-        }
+    if lines.len() >= 2
+        && let Some(instance) = normalize_instance(lines[1])
+    {
+        return Ok((lines[0].to_string(), instance));
     }
 
     Err(anyhow!(
@@ -272,10 +272,10 @@ async fn list_sobjects(client: &Client, token: &str, base_url: &str) -> Result<V
     let mut names = Vec::new();
     if let Some(arr) = body.get("sobjects").and_then(|v| v.as_array()) {
         for item in arr {
-            if let Some(name) = value_as_string(item, &["name", "label"]) {
-                if !name.is_empty() {
-                    names.push(name);
-                }
+            if let Some(name) = value_as_string(item, &["name", "label"])
+                && !name.is_empty()
+            {
+                names.push(name);
             }
         }
     }

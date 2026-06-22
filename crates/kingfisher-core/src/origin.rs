@@ -7,14 +7,16 @@
 //! - [`OriginSet`] - A non-empty collection of origins
 
 use std::{
+    borrow::Cow,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
 };
 
 use dashmap::DashMap;
 use rustc_hash::FxHashSet;
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize, ser::SerializeSeq};
+use serde_json::json;
 use smallvec::SmallVec;
 
 use crate::git_commit_metadata::CommitMetadata;
@@ -65,7 +67,6 @@ pub fn get_repo_url(repo_path: &Path) -> anyhow::Result<Arc<str>> {
 /// The provenance of a scanned blob.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 #[serde(rename_all = "snake_case", tag = "kind")]
-#[expect(clippy::large_enum_variant)]
 pub enum Origin {
     /// Content from a file on disk.
     File(FileOrigin),
@@ -212,17 +213,15 @@ impl serde::Serialize for OriginSet {
 }
 
 impl JsonSchema for OriginSet {
-    fn schema_name() -> String {
+    fn schema_name() -> Cow<'static, str> {
         "OriginSet".into()
     }
 
-    fn json_schema(r#gen: &mut schemars::r#gen::SchemaGenerator) -> schemars::schema::Schema {
-        let s = <Vec<Origin>>::json_schema(r#gen);
-        let mut o = s.into_object();
-        o.array().min_items = Some(1);
-        let md = o.metadata();
-        md.description = Some("A non-empty set of `Origin` entries".into());
-        schemars::schema::Schema::Object(o)
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        let mut schema = <Vec<Origin>>::json_schema(generator);
+        schema.insert("minItems".to_owned(), json!(1));
+        schema.insert("description".to_owned(), json!("A non-empty set of `Origin` entries"));
+        schema
     }
 }
 
@@ -239,10 +238,10 @@ impl OriginSet {
     pub fn new(origin: Origin, more_origin: Vec<Origin>) -> Self {
         let mut git_repos_with_detailed: FxHashSet<Arc<PathBuf>> = FxHashSet::default();
         for p in std::iter::once(&origin).chain(&more_origin) {
-            if let Origin::GitRepo(e) = p {
-                if e.first_commit.is_some() {
-                    git_repos_with_detailed.insert(e.repo_path.clone());
-                }
+            if let Origin::GitRepo(e) = p
+                && e.first_commit.is_some()
+            {
+                git_repos_with_detailed.insert(e.repo_path.clone());
             }
         }
         let mut filtered = std::iter::once(origin).chain(more_origin).filter(|p| match p {
@@ -296,7 +295,7 @@ impl IntoIterator for OriginSet {
 
     #[inline]
     fn into_iter(self) -> Self::IntoIter {
-        std::iter::once(self.origin).chain(self.more_provenance.into_vec().into_iter())
+        std::iter::once(self.origin).chain(self.more_provenance.into_vec())
     }
 }
 

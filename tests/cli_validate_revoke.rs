@@ -181,6 +181,117 @@ mod validate {
             .stdout(contains("Rule:").and(contains("Result:")));
     }
 
+    /// HTTP infrastructure failures (DNS, SSRF preflight, connection
+    /// refused, etc.) must surface as a structured DirectValidationResult
+    /// rather than short-circuiting the validate command. Also verifies
+    /// the secret is not leaked into stdout via the error message.
+    #[test]
+    fn validate_http_failure_emits_structured_result() {
+        let secret = "ghp_redaction_test_secret_value_xyz";
+        let assert = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "validate",
+                "--rule",
+                "kingfisher.github.2",
+                secret,
+                "--format",
+                "json",
+                "--allow-internal-ips",
+                "--endpoint",
+                "github=http://127.0.0.1:1",
+                "--timeout",
+                "2",
+                "--retries",
+                "0",
+                "--no-update-check",
+            ])
+            .assert();
+        let output = assert.get_output();
+        assert!(output.status.code().is_some_and(|code| code == 0 || code == 1));
+        let stdout = String::from_utf8(output.stdout.clone()).expect("stdout should be UTF-8");
+        let decoded: Value = serde_json::from_str(&stdout).expect("json should decode");
+        assert_eq!(decoded.get("rule_id").and_then(|v| v.as_str()), Some("kingfisher.github.2"));
+        assert_eq!(decoded.get("is_valid").and_then(|v| v.as_bool()), Some(false));
+        let message = decoded.get("message").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(
+            message.contains("HTTP validation failed"),
+            "message should explain the failure, got: {message}"
+        );
+        // The CLI must never echo the user's secret back to stdout, even
+        // when the upstream validation fails. We emit a generic error
+        // message and only log the underlying detail at debug level.
+        assert!(!stdout.contains(secret), "secret must not appear in stdout output, got: {stdout}");
+    }
+
+    /// gRPC infrastructure failures must surface as a structured
+    /// DirectValidationResult and must not leak the secret into stdout.
+    /// Mirrors `validate_http_failure_emits_structured_result` for the
+    /// gRPC code path.
+    #[test]
+    fn validate_grpc_failure_emits_structured_result() {
+        let tmp = TempDir::new().unwrap();
+        // Custom rule with gRPC validation pointing at an unreachable port
+        // so we deterministically trigger a connection failure rather than
+        // depending on any built-in provider's reachability.
+        fs::write(
+            tmp.path().join("custom_grpc_rule.yml"),
+            r#"
+rules:
+  - name: Custom gRPC Rule
+    id: test.custom.grpc
+    pattern: "grpc_[a-z0-9]{8}"
+    validation:
+      type: Grpc
+      content:
+        request:
+          url: http://127.0.0.1:1/example.Service/Method
+          headers:
+            content-type: application/grpc
+            x-token: "{{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: HeaderMatch
+              header: grpc-status
+              expected:
+                - "0"
+"#,
+        )
+        .unwrap();
+
+        let secret = "grpc_redaction_test_secret_xyz";
+        let assert = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "validate",
+                "--rule",
+                "test.custom.grpc",
+                secret,
+                "--rules-path",
+                tmp.path().to_str().unwrap(),
+                "--no-builtins",
+                "--format",
+                "json",
+                "--allow-internal-ips",
+                "--timeout",
+                "2",
+                "--retries",
+                "0",
+                "--no-update-check",
+            ])
+            .assert();
+        let output = assert.get_output();
+        assert!(output.status.code().is_some_and(|code| code == 0 || code == 1));
+        let stdout = String::from_utf8(output.stdout.clone()).expect("stdout should be UTF-8");
+        let decoded: Value = serde_json::from_str(&stdout).expect("json should decode");
+        assert_eq!(decoded.get("rule_id").and_then(|v| v.as_str()), Some("test.custom.grpc"));
+        assert_eq!(decoded.get("is_valid").and_then(|v| v.as_bool()), Some(false));
+        let message = decoded.get("message").and_then(|v| v.as_str()).unwrap_or("");
+        assert!(
+            message.contains("gRPC validation failed"),
+            "message should explain the failure, got: {message}"
+        );
+        assert!(!stdout.contains(secret), "secret must not appear in stdout output, got: {stdout}");
+    }
+
     #[test]
     fn validate_with_timeout() {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))

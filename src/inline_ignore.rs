@@ -193,7 +193,7 @@ fn looks_like_encoded_secret_body(trimmed: &[u8]) -> bool {
         return true;
     }
 
-    let is_hexish = trimmed.iter().all(|&b| matches!(b, b'0'..=b'9' | b'a'..=b'f' | b'A'..=b'F'));
+    let is_hexish = trimmed.iter().all(|&b| b.is_ascii_hexdigit());
     if is_hexish {
         return true;
     }

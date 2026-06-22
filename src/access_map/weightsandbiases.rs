@@ -87,14 +87,13 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
         permissions: vec![format!("token:{token_kind}")],
     });
 
-    let mut resources = Vec::new();
-    resources.push(ResourceExposure {
+    let resources = vec![ResourceExposure {
         resource_type: "account".into(),
         name: identity_id.clone(),
         permissions: vec!["viewer:read".to_string(), "workspace:api_access".to_string()],
         risk: severity_to_str(Severity::Medium).to_string(),
         reason: "W&B account reachable with this API key".to_string(),
-    });
+    }];
 
     let risk_notes = vec![
         "W&B does not expose fine-grained token scopes in this introspection path".to_string(),

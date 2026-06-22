@@ -4,13 +4,31 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 25
+    cooldown:
+      default-days: 7
+      include:
+        - "*"
+    groups:
+      cargo-patch:
+        update-types: ["patch"]
+      cargo-minor:
+        update-types: ["minor"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 25
+    cooldown:
+      default-days: 7
+      include:
+        - "*"
+    groups:
+      actions-patch:
+        update-types: ["patch"]
+      actions-minor:
+        update-types: ["minor"]
     ignore:
       - dependency-name: "actions/checkout"
         update-types: ["version-update:semver-major"]

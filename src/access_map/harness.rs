@@ -314,22 +314,22 @@ fn parse_collection<T: DeserializeOwned>(value: Value) -> Vec<T> {
         if let Ok(items) = serde_json::from_value::<Vec<T>>(data.clone()) {
             return items;
         }
-        if let Some(content) = data.get("content") {
-            if let Ok(items) = serde_json::from_value::<Vec<T>>(content.clone()) {
-                return items;
-            }
+        if let Some(content) = data.get("content")
+            && let Ok(items) = serde_json::from_value::<Vec<T>>(content.clone())
+        {
+            return items;
         }
-        if let Some(items) = data.get("items") {
-            if let Ok(items) = serde_json::from_value::<Vec<T>>(items.clone()) {
-                return items;
-            }
+        if let Some(items) = data.get("items")
+            && let Ok(items) = serde_json::from_value::<Vec<T>>(items.clone())
+        {
+            return items;
         }
     }
 
-    if let Some(content) = value.get("content") {
-        if let Ok(items) = serde_json::from_value::<Vec<T>>(content.clone()) {
-            return items;
-        }
+    if let Some(content) = value.get("content")
+        && let Ok(items) = serde_json::from_value::<Vec<T>>(content.clone())
+    {
+        return items;
     }
 
     Vec::new()
@@ -354,18 +354,18 @@ fn extract_first_string_vec(value: Option<&Value>, paths: &[&str]) -> Vec<String
     };
 
     for path in paths {
-        if let Some(v) = value_at_path(value, path) {
-            if let Some(arr) = v.as_array() {
-                let mut out: Vec<String> = arr
-                    .iter()
-                    .filter_map(|x| x.as_str().map(|s| s.to_string()))
-                    .filter(|s| !s.is_empty())
-                    .collect();
-                out.sort();
-                out.dedup();
-                if !out.is_empty() {
-                    return out;
-                }
+        if let Some(v) = value_at_path(value, path)
+            && let Some(arr) = v.as_array()
+        {
+            let mut out: Vec<String> = arr
+                .iter()
+                .filter_map(|x| x.as_str().map(|s| s.to_string()))
+                .filter(|s| !s.is_empty())
+                .collect();
+            out.sort();
+            out.dedup();
+            if !out.is_empty() {
+                return out;
             }
         }
     }

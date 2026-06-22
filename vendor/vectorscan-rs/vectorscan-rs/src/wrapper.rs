@@ -1,7 +1,7 @@
 use crate::error::{AsResult, Error};
 use bitflags::bitflags;
 use foreign_types::{foreign_type, ForeignType};
-use std::{ffi::CString, mem::MaybeUninit, ptr};
+use std::{ffi::CString, mem::MaybeUninit, ptr, slice};
 use vectorscan_rs_sys as hs;
 
 foreign_type! {
@@ -138,6 +138,12 @@ impl Database {
         }
     }
 
+    /// Serializes the database into an owned byte vector.
+    pub fn serialize_to_vec(&self) -> Result<Vec<u8>, Error> {
+        let sdb = self.serialize()?;
+        Ok(sdb.as_bytes().to_vec())
+    }
+
     /// Deserializes a database using `hs_deserialize_database`.
     pub fn deserialize(sdb: SerializedDatabase) -> Result<Self, Error> {
         let mut db_ptr = MaybeUninit::zeroed();
@@ -145,6 +151,20 @@ impl Database {
             hs::hs_deserialize_database(sdb.bytes, sdb.length, db_ptr.as_mut_ptr())
                 .ok()
                 .map(|()| Database::from_ptr(db_ptr.assume_init()))
+        }
+    }
+
+    /// Deserializes a database from bytes produced by `hs_serialize_database`.
+    pub fn deserialize_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        let mut db_ptr = MaybeUninit::zeroed();
+        unsafe {
+            hs::hs_deserialize_database(
+                bytes.as_ptr() as *const std::os::raw::c_char,
+                bytes.len(),
+                db_ptr.as_mut_ptr(),
+            )
+            .ok()
+            .map(|()| Database::from_ptr(db_ptr.assume_init()))
         }
     }
 
@@ -186,6 +206,11 @@ impl SerializedDatabase {
     #[inline]
     pub fn deserialize(self) -> Result<Database, Error> {
         Database::deserialize(self)
+    }
+
+    #[inline]
+    pub fn as_bytes(&self) -> &[u8] {
+        unsafe { slice::from_raw_parts(self.bytes as *const u8, self.length) }
     }
 
     /// Gets the size in bytes required to deserialize this database using

@@ -7,7 +7,7 @@ use jsonwebtoken::{
 };
 use reqwest::{Client, Url, redirect::Policy};
 use serde::Deserialize;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Once};
 
 /// Global redirect-free client with strict TLS validation.
 static STRICT_CLIENT: LazyLock<Client> = LazyLock::new(|| {
@@ -29,6 +29,14 @@ static LAX_CLIENT: LazyLock<Client> = LazyLock::new(|| {
 
 fn get_client(lax_tls: bool) -> &'static Client {
     if lax_tls { &LAX_CLIENT } else { &STRICT_CLIENT }
+}
+
+static JWT_CRYPTO_PROVIDER: Once = Once::new();
+
+pub fn ensure_crypto_provider() {
+    JWT_CRYPTO_PROVIDER.call_once(|| {
+        let _ = jsonwebtoken::crypto::rust_crypto::DEFAULT_PROVIDER.install_default();
+    });
 }
 
 #[derive(Debug, Deserialize)]
@@ -76,6 +84,8 @@ pub async fn validate_jwt_with(
     lax_tls: bool,
     allow_internal_ips: bool,
 ) -> Result<(bool, String)> {
+    ensure_crypto_provider();
+
     let client = get_client(lax_tls);
     let claims: Claims = {
         let payload_b64 = token.split('.').nth(1).ok_or_else(|| anyhow!("invalid JWT format"))?;
@@ -86,15 +96,15 @@ pub async fn validate_jwt_with(
     };
 
     let now = Utc::now().timestamp();
-    if let Some(nbf) = claims.nbf {
-        if now < nbf {
-            return Ok((false, format!("Token not valid before {nbf}")));
-        }
+    if let Some(nbf) = claims.nbf
+        && now < nbf
+    {
+        return Ok((false, format!("Token not valid before {nbf}")));
     }
-    if let Some(exp) = claims.exp {
-        if now > exp {
-            return Ok((false, format!("Token expired at {exp}")));
-        }
+    if let Some(exp) = claims.exp
+        && now > exp
+    {
+        return Ok((false, format!("Token expired at {exp}")));
     }
 
     let header_b64 = token.split('.').next().ok_or_else(|| anyhow!("invalid JWT format"))?;
@@ -240,10 +250,10 @@ fn normalize_issuer_url(issuer: &str) -> Result<Url> {
         return Err(anyhow!("invalid iss: empty issuer"));
     }
 
-    if let Ok(url) = Url::parse(trimmed) {
-        if url.host_str().is_some() {
-            return Ok(url);
-        }
+    if let Ok(url) = Url::parse(trimmed)
+        && url.host_str().is_some()
+    {
+        return Ok(url);
     }
 
     if !trimmed.contains("://") {

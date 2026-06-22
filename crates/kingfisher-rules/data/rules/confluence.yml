@@ -40,7 +40,7 @@ rules:
             - type: WordMatch
               words:
                 - '"type":"known"'
-          url: https://{{ CONFLUENCEDCDOMAIN }}/rest/api/user/current
+          url: '{{ CONFLUENCE_BASE_URL }}/rest/api/user/current'
     depends_on_rule:
       - rule_id: kingfisher.confluence.2
         variable: CONFLUENCEDCDOMAIN

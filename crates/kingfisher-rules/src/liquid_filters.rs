@@ -2,7 +2,7 @@
 
 use base64::{Engine, engine::general_purpose};
 use crc32fast::Hasher;
-use hmac::{Hmac, Mac};
+use hmac::{Hmac, KeyInit, Mac};
 use liquid_core::{
     Display_filter, Error as LiquidError, Expression, Filter, FilterParameters, FilterReflection,
     FromFilterParameters, ParseFilter, Result, Runtime, Value, ValueView,
@@ -471,8 +471,6 @@ impl Filter for Prefix {
     description = "Encodes the input string using Base64 encoding",
     parsed(B64EncFilter)
 )]
-// pub struct B64EncFilterParser;
-
 pub struct B64EncFilter;
 
 impl std::fmt::Display for B64EncFilter {
@@ -536,7 +534,7 @@ static_filter!(
     |input: &dyn ValueView| -> String {
         let mut h = Sha256::new();
         h.update(input.to_kstr().as_bytes());
-        format!("{:x}", h.finalize())
+        hex::encode(h.finalize())
     }
 );
 
@@ -819,15 +817,14 @@ impl Filter for Base62 {
         if let Some(width) = args.width.and_then(|value| {
             let scalar = Value::scalar(value);
             value_to_usize(&scalar)
-        }) {
-            if encoded.len() < width {
-                let mut padded = String::with_capacity(width);
-                for _ in 0..(width - encoded.len()) {
-                    padded.push('0');
-                }
-                padded.push_str(&encoded);
-                encoded = padded;
+        }) && encoded.len() < width
+        {
+            let mut padded = String::with_capacity(width);
+            for _ in 0..(width - encoded.len()) {
+                padded.push('0');
             }
+            padded.push_str(&encoded);
+            encoded = padded;
         }
 
         Ok(Value::scalar(encoded))
@@ -913,15 +910,14 @@ impl Filter for Base36 {
         if let Some(width) = args.width.and_then(|value| {
             let scalar = Value::scalar(value);
             value_to_usize(&scalar)
-        }) {
-            if encoded.len() < width {
-                let mut padded = String::with_capacity(width);
-                for _ in 0..(width - encoded.len()) {
-                    padded.push('0');
-                }
-                padded.push_str(&encoded);
-                encoded = padded;
+        }) && encoded.len() < width
+        {
+            let mut padded = String::with_capacity(width);
+            for _ in 0..(width - encoded.len()) {
+                padded.push('0');
             }
+            padded.push_str(&encoded);
+            encoded = padded;
         }
 
         Ok(Value::scalar(encoded))
@@ -1091,44 +1087,44 @@ static_filter!(
 pub fn register_all(builder: liquid::ParserBuilder) -> liquid::ParserBuilder {
     builder
         // zero-arg helpers
-        .filter(Replace::default())
-        .filter(B64UrlEncFilter::default())
-        .filter(B64UrlDecFilter::default())
-        .filter(Sha256Filter::default())
-        .filter(Sha256B32Filter::default())
-        .filter(UrlEncodeFilter::default())
-        .filter(JsonEscapeFilter::default())
-        .filter(UnixTimestampFilter::default())
-        .filter(UnixTimestampMsFilter::default())
-        .filter(IsoTimestampFilter::default())
-        .filter(IsoTimestampNoFracFilter::default())
-        .filter(Rfc1123DateFilter::default())
-        .filter(UuidFilter::default())
-        .filter(JwtHeaderFilter::default())
-        .filter(B64EncFilter::default())
-        .filter(B64DecFilter::default())
-        .filter(NewlineFilter::default())
-        .filter(RandomStringFilter::default())
-        .filter(SuffixFilter::default())
-        .filter(PrefixFilter::default())
-        .filter(LstripChars::default())
-        .filter(Crc32Filter::default())
-        .filter(Crc32DecFilter::default())
-        .filter(Crc32HexFilter::default())
-        .filter(Crc32LeB64Filter::default())
-        .filter(Base62Filter::default())
-        .filter(Base36Filter::default())
-        .filter(HmacSha256::default())
-        .filter(HmacSha256B64Key::default())
-        .filter(HmacSha1::default())
-        .filter(HmacSha384::default())
-        .filter(HmacSha384Hex::default())
+        .filter(Replace)
+        .filter(B64UrlEncFilter)
+        .filter(B64UrlDecFilter)
+        .filter(Sha256Filter)
+        .filter(Sha256B32Filter)
+        .filter(UrlEncodeFilter)
+        .filter(JsonEscapeFilter)
+        .filter(UnixTimestampFilter)
+        .filter(UnixTimestampMsFilter)
+        .filter(IsoTimestampFilter)
+        .filter(IsoTimestampNoFracFilter)
+        .filter(Rfc1123DateFilter)
+        .filter(UuidFilter)
+        .filter(JwtHeaderFilter)
+        .filter(B64EncFilter)
+        .filter(B64DecFilter)
+        .filter(NewlineFilter)
+        .filter(RandomStringFilter)
+        .filter(SuffixFilter)
+        .filter(PrefixFilter)
+        .filter(LstripChars)
+        .filter(Crc32Filter)
+        .filter(Crc32DecFilter)
+        .filter(Crc32HexFilter)
+        .filter(Crc32LeB64Filter)
+        .filter(Base62Filter)
+        .filter(Base36Filter)
+        .filter(HmacSha256)
+        .filter(HmacSha256B64Key)
+        .filter(HmacSha1)
+        .filter(HmacSha384)
+        .filter(HmacSha384Hex)
 }
 
 #[cfg(test)]
 mod tests {
     use base64::{Engine as _, engine::general_purpose};
-    use hmac::{Hmac, Mac};
+    use hmac::{Hmac, KeyInit, Mac};
     use liquid::{ParserBuilder, object};
     use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
     use regex::Regex;
@@ -1162,7 +1158,7 @@ mod tests {
 
     #[test]
     fn sha256_filter() {
-        let expect = format!("{:x}", Sha256::digest(b"hello"));
+        let expect = hex::encode(Sha256::digest(b"hello"));
         assert_eq!(render(r#"{{ "hello" | sha256 }}"#), expect);
     }
 

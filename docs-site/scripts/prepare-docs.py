@@ -52,6 +52,11 @@ DOC_MAP = {
         "Deployment",
         "Deployment strategies for Kingfisher: self-serve CLI, CI/pre-commit enforcement, centralized scanning, and embedded library.",
     ),
+    "CONFIG.md": (
+        "usage/configuration.md",
+        "Project Configuration (kingfisher.yaml)",
+        "Use kingfisher.yaml as project-default policy: confidence, filters, output, alerts, and global flags. Loaded only via --config FILE.",
+    ),
     "ACCESS_MAP.md": (
         "features/access-map.md",
         "Access Map (Blast Radius)",
@@ -108,6 +113,7 @@ LINK_REWRITES = {
     "ADVANCED.md": "../usage/advanced.md",
     "BASELINE.md": "../usage/baseline.md",
     "DEPLOYMENT.md": "../usage/deployment.md",
+    "CONFIG.md": "../usage/configuration.md",
     "ACCESS_MAP.md": "../features/access-map.md",
     "REVOCATION_PROVIDERS.md": "../features/revocation.md",
     "TOKEN_REVOCATION_SUPPORT.md": "../features/revocation.md",
@@ -120,6 +126,7 @@ LINK_REWRITES = {
     "LIBRARY.md": "../reference/library.md",
     "PYPI.md": "../reference/python-bindings.md",
     "COMPARISON.md": "../reference/comparison.md",
+    "ALERTS.md": "https://github.com/mongodb/kingfisher/blob/main/docs/ALERTS.md",
 }
 
 

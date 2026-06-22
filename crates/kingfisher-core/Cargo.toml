@@ -31,14 +31,14 @@ parking_lot.workspace = true
 # Collections
 smallvec.workspace = true
 rustc-hash.workspace = true
-dashmap = "6.1"
+dashmap = "6.2"
 
 # Byte string handling
 bstr.workspace = true
-memchr = "2.7"
+memchr = "2.8"
 
 # Git types (minimal, for ObjectId and Time)
-gix = { version = "0.81", default-features = false, features = ["serde", "sha1"] }
+gix = { version = "0.84", default-features = false, features = ["serde", "sha1"] }
 
 # Console formatting
 console = "0.16"

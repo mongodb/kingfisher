@@ -56,7 +56,7 @@ pub fn generate_mysql_cache_key(mysql_url: &str) -> String {
 
     let mut hasher = Sha1::new();
     hasher.update(mysql_url.as_bytes());
-    format!("MySQL:{:x}", hasher.finalize())
+    format!("MySQL:{}", hex::encode(hasher.finalize()))
 }
 
 fn is_local_host(host: &str) -> bool {

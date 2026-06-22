@@ -104,10 +104,10 @@ pub async fn revoke_gcp_service_account_key(
     let project_id = token_info["project_id"].as_str().unwrap_or("").to_string();
     let client_email = token_info["client_email"].as_str().unwrap_or("").to_string();
     let mut key_id = token_info["private_key_id"].as_str().unwrap_or("").to_string();
-    if let Some(override_id) = key_id_override {
-        if !override_id.trim().is_empty() {
-            key_id = override_id.trim().to_string();
-        }
+    if let Some(override_id) = key_id_override
+        && !override_id.trim().is_empty()
+    {
+        key_id = override_id.trim().to_string();
     }
 
     if project_id.is_empty() || client_email.is_empty() || key_id.is_empty() {
@@ -142,7 +142,7 @@ pub fn generate_gcp_cache_key(gcp_json: &str) -> String {
     use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
     hasher.update(gcp_json.as_bytes());
-    format!("GCP:{:x}", hasher.finalize())
+    format!("GCP:{}", hex::encode(hasher.finalize()))
 }
 
 impl GcpValidator {
@@ -203,7 +203,7 @@ impl GcpValidator {
         let message = format!("{}.{}", header, claims_encoded);
 
         let pem = parse(private_key_pem).map_err(|e| anyhow!("Failed to parse PEM: {}", e))?;
-        let key_pair = signature::RsaKeyPair::from_pkcs8(&pem.contents())
+        let key_pair = signature::RsaKeyPair::from_pkcs8(pem.contents())
             .map_err(|_| anyhow!("Invalid RSA private key"))?;
 
         let rng = rand::SystemRandom::new();

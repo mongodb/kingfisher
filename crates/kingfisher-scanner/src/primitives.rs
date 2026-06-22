@@ -60,10 +60,10 @@ pub fn get_base64_strings(input: &[u8]) -> Vec<DecodedData> {
                 .or_else(|_| general_purpose::URL_SAFE.decode(base64_slice))
                 .or_else(|_| general_purpose::URL_SAFE_NO_PAD.decode(base64_slice));
 
-            if let Ok(decoded) = decode_result {
-                if decoded.is_ascii() {
-                    results.push(DecodedData { decoded, pos_start: start, pos_end: end });
-                }
+            if let Ok(decoded) = decode_result
+                && decoded.is_ascii()
+            {
+                results.push(DecodedData { decoded, pos_start: start, pos_end: end });
             }
         }
     }

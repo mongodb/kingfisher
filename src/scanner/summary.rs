@@ -119,6 +119,7 @@ pub fn compute_scan_totals(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn print_scan_summary(
     start_time: Instant,
     scan_started_at: chrono::DateTime<Local>,
@@ -134,36 +135,36 @@ pub fn print_scan_summary(
     precomputed_summary: Option<(ScanSummaryTotals, Vec<(&'static str, usize)>)>,
 ) {
     if global_args.quiet {
-        if args.rule_stats {
-            if let Some(prof) = profiler {
-                let stats = prof.generate_report();
-                if !stats.is_empty() {
-                    let name_w = stats.iter().map(|s| s.rule_name.len()).max().unwrap_or(4);
-                    let id_w = stats.iter().map(|s| s.rule_id.len()).max().unwrap_or(2);
-                    safe_println!("\n{:-^1$}", " Rule Performance Stats ", name_w + id_w + 47);
+        if args.rule_stats
+            && let Some(prof) = profiler
+        {
+            let stats = prof.generate_report();
+            if !stats.is_empty() {
+                let name_w = stats.iter().map(|s| s.rule_name.len()).max().unwrap_or(4);
+                let id_w = stats.iter().map(|s| s.rule_id.len()).max().unwrap_or(2);
+                safe_println!("\n{:-^1$}", " Rule Performance Stats ", name_w + id_w + 47);
+                safe_println!(
+                    "{: <name_w$}  {: <id_w$}  {: >8}  {: >15}  {: >15}",
+                    "Rule",
+                    "ID",
+                    "Matches",
+                    "Slowest",
+                    "Average",
+                    name_w = name_w,
+                    id_w = id_w
+                );
+                safe_println!("{:-<width$}", "", width = name_w + id_w + 49);
+                for rs in stats {
                     safe_println!(
-                        "{: <name_w$}  {: <id_w$}  {: >8}  {: >15}  {: >15}",
-                        "Rule",
-                        "ID",
-                        "Matches",
-                        "Slowest",
-                        "Average",
+                        "{: <name_w$}  {: <id_w$}  {: >8}  {: >15?}  {: >15?}",
+                        rs.rule_name,
+                        rs.rule_id,
+                        rs.total_matches,
+                        rs.slowest_match_time,
+                        rs.average_match_time,
                         name_w = name_w,
                         id_w = id_w
                     );
-                    safe_println!("{:-<width$}", "", width = name_w + id_w + 49);
-                    for rs in stats {
-                        safe_println!(
-                            "{: <name_w$}  {: <id_w$}  {: >8}  {: >15?}  {: >15?}",
-                            rs.rule_name,
-                            rs.rule_id,
-                            rs.total_matches,
-                            rs.slowest_match_time,
-                            rs.average_match_time,
-                            name_w = name_w,
-                            id_w = id_w
-                        );
-                    }
                 }
             }
         }
@@ -177,7 +178,7 @@ pub fn print_scan_summary(
         let num_rules = rules_db.num_rules();
         let findings_by_rule = ds.get_summary();
         let mut sorted: Vec<_> = findings_by_rule.into_iter().collect();
-        sorted.sort_by(|a, b| b.1.cmp(&a.1));
+        sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
         (num_rules, sorted)
     };
     let duration = start_time.elapsed();
@@ -295,37 +296,38 @@ pub fn print_scan_summary(
         }
     }
 
-    if should_print_overall && args.rule_stats {
-        if let Some(prof) = profiler {
-            let stats = prof.generate_report();
-            if !stats.is_empty() {
-                let name_w = stats.iter().map(|s| s.rule_name.len()).max().unwrap_or(4);
-                let id_w = stats.iter().map(|s| s.rule_id.len()).max().unwrap_or(2);
-                safe_println!("\n{:-^1$}", " Rule Performance Stats ", name_w + id_w + 47);
+    if should_print_overall
+        && args.rule_stats
+        && let Some(prof) = profiler
+    {
+        let stats = prof.generate_report();
+        if !stats.is_empty() {
+            let name_w = stats.iter().map(|s| s.rule_name.len()).max().unwrap_or(4);
+            let id_w = stats.iter().map(|s| s.rule_id.len()).max().unwrap_or(2);
+            safe_println!("\n{:-^1$}", " Rule Performance Stats ", name_w + id_w + 47);
+            safe_println!(
+                "{: <name_w$}  {: <id_w$}  {: >8}  {: >15}  {: >15}",
+                "Rule",
+                "ID",
+                "Matches",
+                "Slowest",
+                "Average",
+                name_w = name_w,
+                id_w = id_w
+            );
+            safe_println!("{:-<width$}", "", width = name_w + id_w + 49);
+
+            for rs in stats {
                 safe_println!(
-                    "{: <name_w$}  {: <id_w$}  {: >8}  {: >15}  {: >15}",
-                    "Rule",
-                    "ID",
-                    "Matches",
-                    "Slowest",
-                    "Average",
+                    "{: <name_w$}  {: <id_w$}  {: >8}  {: >15?}  {: >15?}",
+                    rs.rule_name,
+                    rs.rule_id,
+                    rs.total_matches,
+                    rs.slowest_match_time,
+                    rs.average_match_time,
                     name_w = name_w,
                     id_w = id_w
                 );
-                safe_println!("{:-<width$}", "", width = name_w + id_w + 49);
-
-                for rs in stats {
-                    safe_println!(
-                        "{: <name_w$}  {: <id_w$}  {: >8}  {: >15?}  {: >15?}",
-                        rs.rule_name,
-                        rs.rule_id,
-                        rs.total_matches,
-                        rs.slowest_match_time,
-                        rs.average_match_time,
-                        name_w = name_w,
-                        id_w = id_w
-                    );
-                }
             }
         }
     }

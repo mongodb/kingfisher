@@ -35,6 +35,12 @@ struct ProfilerState {
     start_times: HashMap<(String, String), (Instant, String)>, /* (rule_id, filename) ->
                                                                 * (start_time, filename) */
 }
+impl Default for ConcurrentRuleProfiler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ConcurrentRuleProfiler {
     pub fn new() -> Self {
         Self { inner: Arc::new(RwLock::new(ProfilerState::default())) }
@@ -110,7 +116,7 @@ impl ConcurrentRuleProfiler {
         // let rules_present: Vec<_> = state.rules.keys().collect();
         // debug!("Rules present: {:?}", rules_present);
         let mut stats: Vec<_> = state.rules.values().cloned().collect();
-        stats.sort_by(|a, b| b.slowest_match_time.cmp(&a.slowest_match_time));
+        stats.sort_by_key(|b| std::cmp::Reverse(b.slowest_match_time));
         stats
     }
 

@@ -15,7 +15,7 @@ use kingfisher::{
             gitlab::GitLabRepoType,
             inputs::{ContentFilteringArgs, InputSpecifierArgs},
             output::{OutputArgs, ReportOutputFormat},
-            rules::RuleSpecifierArgs,
+            rules::{RuleCacheArgs, RuleSpecifierArgs},
             scan::{ConfidenceLevel, ScanArgs},
         },
         global::{Mode, TlsMode},
@@ -72,6 +72,7 @@ fn run_skiplist(skip_regex: Vec<String>, skip_skipword: Vec<String>) -> Result<u
             rule: vec!["all".into()],
             load_builtins: false,
         },
+        rule_cache: RuleCacheArgs::default(),
         input_specifier_args: InputSpecifierArgs {
             path_inputs: vec![inputs_dir.join("a.txt")],
             git_url: Vec::new(),
@@ -128,6 +129,12 @@ fn run_skiplist(skip_regex: Vec<String>, skip_skipword: Vec<String>) -> Result<u
             slack_api_url: Url::parse("https://slack.com/api/").unwrap(),
             teams_query: None,
             teams_api_url: Url::parse("https://graph.microsoft.com/").unwrap(),
+            postman_workspaces: Vec::new(),
+            postman_collections: Vec::new(),
+            postman_environments: Vec::new(),
+            postman_all: false,
+            postman_include_mocks_monitors: false,
+            postman_api_url: Url::parse("https://api.getpostman.com/").unwrap(),
             max_results: 100,
             s3_bucket: None,
             s3_prefix: None,
@@ -137,6 +144,7 @@ fn run_skiplist(skip_regex: Vec<String>, skip_skipword: Vec<String>) -> Result<u
             gcs_prefix: None,
             gcs_service_account: None,
             docker_image: Vec::new(),
+            docker_archive: Vec::new(),
             git_clone: GitCloneMode::Bare,
             git_history: GitHistoryMode::Full,
             commit_metadata: true,
@@ -169,7 +177,7 @@ fn run_skiplist(skip_regex: Vec<String>, skip_skipword: Vec<String>) -> Result<u
         view_report: false,
         baseline_file: None,
         manage_baseline: false,
-        skip_regex: skip_regex,
+        skip_regex,
         skip_word: skip_skipword,
         skip_aws_account: Vec::new(),
         skip_aws_account_file: None,
@@ -185,6 +193,14 @@ fn run_skiplist(skip_regex: Vec<String>, skip_skipword: Vec<String>) -> Result<u
         validation_timeout: 10,
         full_validation_response: false,
         max_validation_response_length: 2048,
+        alert_webhook: Vec::new(),
+        alert_format: None,
+        alert_on: kingfisher::alerts::AlertOn::Findings,
+        alert_min_confidence: ConfidenceLevel::Medium,
+        alert_include_secret: false,
+        alert_report_url: None,
+        alert_detail: kingfisher::alerts::AlertDetail::Auto,
+        config_webhook_overrides: Vec::new(),
     };
 
     let global_args = GlobalArgs {
@@ -198,6 +214,9 @@ fn run_skiplist(skip_regex: Vec<String>, skip_skipword: Vec<String>) -> Result<u
         user_agent_suffix: None,
         tls_mode: TlsMode::Strict,
         allow_internal_ips: false,
+        endpoint: Vec::new(),
+        endpoint_config: None,
+        config: None,
     };
 
     let loaded = RuleLoader::from_rule_specifiers(&scan_args.rules).load(&scan_args)?;
@@ -213,10 +232,10 @@ fn run_skiplist(skip_regex: Vec<String>, skip_skipword: Vec<String>) -> Result<u
         Arc::clone(&datastore),
         &rules_db,
         &update_status,
+        false,
     ))?;
 
-    let x = Ok(datastore.lock().unwrap().get_matches().len());
-    x
+    Ok(datastore.lock().unwrap().get_matches().len())
 }
 
 #[test]

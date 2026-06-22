@@ -299,6 +299,22 @@ docker run --rm -v "$(pwd)":/src ghcr.io/mongodb/kingfisher:latest scan /src --s
 kingfisher scan . --staged --quiet --no-update-check
 ```
 
+For faster repeated hook runs, pre-warm the compiled rule cache:
+
+```bash
+kingfisher rules compile-cache
+kingfisher scan . --staged --quiet --no-update-check
+```
+
+Kingfisher caches compiled rules by default and uses a platform default cache directory when `--rule-cache-dir` is omitted. See [ADVANCED.md](../usage/advanced.md#compiled-rule-cache) for cache locations, custom-rule behavior, and the `--no-rule-cache` opt-out.
+
+For long-lived developer machines or shared CI cache volumes, prune old compiled rule databases explicitly:
+
+```bash
+kingfisher rules prune-cache --dry-run
+kingfisher rules prune-cache
+```
+
 **Windows with PowerShell:**
 
 For Windows users preferring native PowerShell over Git Bash, create a `.husky/pre-commit.ps1` or add to your hook:
@@ -356,6 +372,21 @@ docker run --rm ghcr.io/mongodb/kingfisher:latest --version
 docker run --rm \
   -v "$PWD":/src \
   ghcr.io/mongodb/kingfisher:latest scan /src
+
+# Reuse the compiled rule cache across disposable containers:
+# mount a host cache directory and set KF_RULE_CACHE_DIR.
+docker run --rm \
+  -v "$PWD":/src \
+  -v "$HOME/.cache/kingfisher-rule-cache":/kf-cache \
+  -e KF_RULE_CACHE_DIR=/kf-cache \
+  ghcr.io/mongodb/kingfisher:latest scan /src
+
+# Optionally prune old mounted cache entries during the scan.
+docker run --rm \
+  -v "$PWD":/src \
+  -v "$HOME/.cache/kingfisher-rule-cache":/kf-cache \
+  -e KF_RULE_CACHE_DIR=/kf-cache \
+  ghcr.io/mongodb/kingfisher:latest scan /src --prune-rule-cache
 
 
 # Scan while providing a GitHub token

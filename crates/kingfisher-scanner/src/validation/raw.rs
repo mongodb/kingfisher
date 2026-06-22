@@ -108,7 +108,8 @@ pub async fn validate_raw(
     allow_internal_ips: bool,
 ) -> Result<RawValidationOutcome> {
     if let Some(url) = raw_validation_target_url(kind, globals)? {
-        if let Err(e) = check_url_resolvable(&url, allow_internal_ips).await {
+        let resolvable = check_url_resolvable(&url, allow_internal_ips).await;
+        if let Err(e) = resolvable {
             return Ok(RawValidationOutcome {
                 valid: false,
                 status: StatusCode::PRECONDITION_REQUIRED,
@@ -378,10 +379,11 @@ where
             _ => {}
         }
 
-        if let Some(prefix) = &code_prefix {
-            if trimmed.starts_with(prefix) && trimmed.as_bytes()[3] == b' ' {
-                return Ok((code.parse().unwrap_or(0), body));
-            }
+        if let Some(prefix) = &code_prefix
+            && trimmed.starts_with(prefix)
+            && trimmed.as_bytes()[3] == b' '
+        {
+            return Ok((code.parse().unwrap_or(0), body));
         }
     }
 }

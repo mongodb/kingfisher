@@ -53,7 +53,7 @@ rules:
             - status:
                 - 200
               type: StatusMatch
-          url: https://{{ DOMAIN }}/rest/api/3/dashboard
+          url: '{{ JIRA_CLOUD_BASE_URL }}/rest/api/3/dashboard'
     references:
       - https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/
     depends_on_rule:
@@ -97,7 +97,7 @@ rules:
                 - 200
               type: StatusMatch
             - type: JsonValid
-          url: https://{{ JIRADCDOMAIN }}/rest/api/latest/myself
+          url: '{{ JIRA_BASE_URL }}/rest/api/latest/myself'
     revocation:
       type: HttpMultiStep
       content:
@@ -105,7 +105,7 @@ rules:
           - name: lookup_token_id
             request:
               method: GET
-              url: https://{{ JIRADCDOMAIN }}/rest/pat/latest/tokens
+              url: '{{ JIRA_BASE_URL }}/rest/pat/latest/tokens'
               headers:
                 Accept: application/json
                 Authorization: Bearer {{ TOKEN }}
@@ -120,7 +120,7 @@ rules:
           - name: revoke_token
             request:
               method: DELETE
-              url: https://{{ JIRADCDOMAIN }}/rest/pat/latest/tokens/{{ JIRA_TOKEN_ID }}
+              url: '{{ JIRA_BASE_URL }}/rest/pat/latest/tokens/{{ JIRA_TOKEN_ID }}'
               headers:
                 Authorization: Bearer {{ TOKEN }}
               response_matcher:

@@ -1,9 +1,28 @@
 #!/bin/bash -eu
 
-# Install build dependencies required by vendored vectorscan (C/C++)
-apt-get update -qq
-apt-get install -y --no-install-recommends \
-    cmake pkg-config libboost-dev patch ragel
+# Install build dependencies required by vendored vectorscan (C/C++).
+#
+# OSS-Fuzz's Ubuntu 20.04 mirrors are intermittently flaky from the
+# ClusterFuzzLite runners — a single connection-failed on archive.ubuntu.com
+# while fetching e.g. libxml2 used to fail the entire build. Retry the
+# update + install up to 5 times with `--fix-missing` so a transient hiccup
+# doesn't block a PR.
+APT_PACKAGES=(cmake pkg-config libboost-dev patch ragel)
+apt_install_with_retry() {
+    local attempt
+    for attempt in 1 2 3 4 5; do
+        if apt-get update -qq \
+            && apt-get install -y --no-install-recommends --fix-missing \
+                "${APT_PACKAGES[@]}"; then
+            return 0
+        fi
+        echo "apt-get attempt ${attempt} failed; retrying after backoff..." >&2
+        sleep $((attempt * 5))
+    done
+    echo "apt-get failed after 5 attempts" >&2
+    return 1
+}
+apt_install_with_retry
 
 cd "$SRC/kingfisher"
 

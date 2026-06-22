@@ -10,11 +10,16 @@ use super::AccessMapResult;
 
 /// Generate a standalone HTML report with a simple, collapsible tree view (no D3 dependency).
 pub fn generate_html_report_multi(results: &[AccessMapResult], path: &Path) -> Result<()> {
-    let json = serde_json::to_string(results)?;
-    let compressed = gzip_base64(&json)?;
-    let html = build_html(&json, &compressed);
+    let html = render_html_report_multi(results)?;
     std::fs::write(path, html)?;
     Ok(())
+}
+
+/// Render a standalone HTML report for a collection of access-map results.
+pub fn render_html_report_multi(results: &[AccessMapResult]) -> Result<String> {
+    let json = serde_json::to_string(results)?;
+    let compressed = gzip_base64(&json)?;
+    Ok(build_html(&json, &compressed))
 }
 
 fn gzip_base64(json_str: &str) -> Result<String> {

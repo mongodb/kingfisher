@@ -37,7 +37,7 @@ pub struct BaselineFinding {
 
 pub fn load_baseline(path: &Path) -> Result<BaselineFile> {
     let data = fs::read_to_string(path).context("read baseline file")?;
-    Ok(serde_yaml::from_str(&data).context("parse baseline yaml")?)
+    serde_yaml::from_str(&data).context("parse baseline yaml")
 }
 
 /// Parse a baseline fingerprint string into its canonical u64 form(s).
@@ -75,10 +75,10 @@ fn parse_fingerprint(s: &str) -> FingerprintForms {
         if let Ok(v) = trimmed.parse::<u64>() {
             out.push(v);
         }
-        if let Ok(v) = u64::from_str_radix(trimmed, 16) {
-            if !out.contains(&v) {
-                out.push(v);
-            }
+        if let Ok(v) = u64::from_str_radix(trimmed, 16)
+            && !out.contains(&v)
+        {
+            out.push(v);
         }
         return out;
     }
@@ -95,10 +95,10 @@ pub fn save_baseline(path: &Path, baseline: &BaselineFile) -> Result<()> {
 
 fn normalize_path(p: &Path, roots: &[PathBuf]) -> String {
     for root in roots {
-        if let Ok(stripped) = p.strip_prefix(root) {
-            if let Some(name) = root.file_name() {
-                return PathBuf::from(name).join(stripped).to_string_lossy().replace('\\', "/");
-            }
+        if let Ok(stripped) = p.strip_prefix(root)
+            && let Some(name) = root.file_name()
+        {
+            return PathBuf::from(name).join(stripped).to_string_lossy().replace('\\', "/");
         }
     }
     p.to_string_lossy().replace('\\', "/")

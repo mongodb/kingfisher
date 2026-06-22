@@ -1,9 +1,18 @@
 use foreign_types::ForeignType;
-use std::ffi::{c_int, c_uint, c_ulonglong, c_void};
+use std::ffi::{CStr, c_int, c_uint, c_ulonglong, c_void};
 use std::mem::MaybeUninit;
 use vectorscan_rs_sys as hs;
 
 use super::{wrapper, AsResult, Error, HyperscanErrorCode, Pattern, ScanMode};
+
+/// Return the Vectorscan/Hyperscan runtime version string.
+pub fn version() -> String {
+    unsafe {
+        CStr::from_ptr(hs::hs_version())
+            .to_string_lossy()
+            .into_owned()
+    }
+}
 
 // -------------------------------------------------------------------------------------------------
 // Scan Callback
@@ -42,6 +51,17 @@ impl BlockDatabase {
     /// Get the size in bytes of the database
     pub fn size(&self) -> Result<usize, Error> {
         self.inner.size()
+    }
+
+    /// Serialize this database into bytes that can be deserialized later.
+    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
+        self.inner.serialize_to_vec()
+    }
+
+    /// Deserialize a block database from bytes produced by [`BlockDatabase::serialize`].
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
+        let inner = wrapper::Database::deserialize_bytes(bytes)?;
+        Ok(Self { inner })
     }
 }
 

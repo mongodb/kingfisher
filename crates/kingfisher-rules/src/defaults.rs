@@ -22,7 +22,7 @@ fn collect_yaml_files<'a>(dir: &'a Dir<'a>, files: &mut Vec<(&'a Path, &'a [u8])
         match entry {
             DirEntry::Dir(subdir) => collect_yaml_files(subdir, files),
             DirEntry::File(file) => {
-                if file.path().extension().map_or(false, |ext| ext == "yml" || ext == "yaml") {
+                if file.path().extension().is_some_and(|ext| ext == "yml" || ext == "yaml") {
                     files.push((file.path(), file.contents()));
                 }
             }

@@ -138,8 +138,7 @@ pub async fn map_access_from_token(token: &str, organization: &str) -> Result<Ac
             "Accessible Azure DevOps repository".to_string()
         };
 
-        let mut repo_permissions = Vec::new();
-        repo_permissions.push("repo:read".to_string());
+        let repo_permissions = vec!["repo:read".to_string()];
         permissions.read_only.push("repo:read".to_string());
 
         let repo_name = match repo.project.name.as_deref() {
@@ -311,7 +310,7 @@ async fn fetch_profile(
 }
 
 fn normalize_org(raw: &str) -> String {
-    raw.trim().trim_matches('/').split('/').last().unwrap_or("").trim().to_string()
+    raw.trim().trim_matches('/').split('/').next_back().unwrap_or("").trim().to_string()
 }
 
 fn build_auth_header(token: &str) -> Result<header::HeaderValue> {

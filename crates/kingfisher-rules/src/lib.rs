@@ -27,7 +27,7 @@ pub use rule::{
 pub use rules::{Rules, RulesError};
 
 // Re-export RulesDatabase
-pub use rules_database::{RulesDatabase, format_regex_pattern};
+pub use rules_database::{RuleCacheConfig, RulesDatabase, format_regex_pattern};
 
 // Re-export defaults
 pub use defaults::get_builtin_rules;

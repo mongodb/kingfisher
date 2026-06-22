@@ -1,5 +1,4 @@
-use std::path::Path;
-use std::sync::LazyLock;
+use std::{cmp::Reverse, path::Path, sync::LazyLock};
 use tokei::LanguageType;
 
 // Precompute all (shebang_prefix_bytes, language) pairs once.
@@ -12,7 +11,7 @@ static SHEBANG_PREFIXES: LazyLock<Vec<(&'static [u8], LanguageType)>> = LazyLock
         }
     }
     // Longest prefix first to prefer e.g. "#!/usr/bin/env python3" over "#!/usr/bin/env python"
-    v.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
+    v.sort_by_key(|(prefix, _)| Reverse(prefix.len()));
     v
 });
 
@@ -143,12 +142,12 @@ impl ContentInspector {
         let sample = &content[..content.len().min(Self::LANGUAGE_SAMPLE_BYTES)];
 
         // 3) Shebang detection (in-memory): match by longest prefix, byte-wise (no UTF-8 needed).
-        if let Some(first_line) = sample.split(|&b| b == b'\n').next() {
-            if first_line.starts_with(b"#!") {
-                for (prefix, lang) in SHEBANG_PREFIXES.iter() {
-                    if first_line.starts_with(prefix) {
-                        return Some(lang.name().to_string());
-                    }
+        if let Some(first_line) = sample.split(|&b| b == b'\n').next()
+            && first_line.starts_with(b"#!")
+        {
+            for (prefix, lang) in SHEBANG_PREFIXES.iter() {
+                if first_line.starts_with(prefix) {
+                    return Some(lang.name().to_string());
                 }
             }
         }

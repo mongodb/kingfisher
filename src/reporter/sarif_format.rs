@@ -20,16 +20,14 @@ impl DetailsReporter {
     fn record_to_sarif_result(&self, record: &FindingReporterRecord) -> Result<sarif::Result> {
         let finding = &record.finding;
         let artifact_location =
-            sarif::ArtifactLocationBuilder::default().uri(finding.path.clone()).build()?;
-        let region = sarif::RegionBuilder::default()
+            sarif::ArtifactLocation::builder().uri(finding.path.clone()).build();
+        let region = sarif::Region::builder()
             .start_line(finding.line as i64)
             .start_column(finding.column_start as i64)
             .end_line(finding.line as i64)
             .end_column(finding.column_end as i64)
-            .snippet(
-                sarif::ArtifactContentBuilder::default().text(finding.snippet.clone()).build()?,
-            )
-            .build()?;
+            .snippet(sarif::ArtifactContent::builder().text(finding.snippet.clone()).build())
+            .build();
 
         let mut props = BTreeMap::new();
         props.insert("validation_status".to_string(), serde_json::json!(finding.validation.status));
@@ -43,31 +41,30 @@ impl DetailsReporter {
         if let Some(revoke_cmd) = &finding.revoke_command {
             props.insert("revoke_command".to_string(), serde_json::json!(revoke_cmd));
         }
-        let properties =
-            sarif::PropertyBagBuilder::default().additional_properties(props).build()?;
+        let properties = sarif::PropertyBag::builder().additional_properties(props).build();
 
-        let location = sarif::LocationBuilder::default()
+        let location = sarif::Location::builder()
             .physical_location(
-                sarif::PhysicalLocationBuilder::default()
+                sarif::PhysicalLocation::builder()
                     .artifact_location(artifact_location)
                     .region(region)
-                    .build()?,
+                    .build(),
             )
             .properties(properties)
-            .build()?;
+            .build();
 
-        let message = sarif::MessageBuilder::default()
+        let message = sarif::Message::builder()
             .text(format!("Rule {} matched {}", record.rule.name, finding.path))
-            .build()?;
+            .build();
 
-        let result = sarif::ResultBuilder::default()
+        let result = sarif::Result::builder()
             .rule_id(&record.rule.name)
             .message(message)
-            .kind(sarif::ResultKind::Review.to_string())
+            .kind(sarif::ResultKind::Review)
             .locations(vec![location])
-            .level(Self::sarif_level_for_confidence(&finding.confidence).to_string())
+            .level(Self::sarif_level_for_confidence(&finding.confidence))
             .partial_fingerprints([("fingerprint".to_string(), finding.fingerprint.clone())])
-            .build()?;
+            .build();
         Ok(result)
     }
 
@@ -85,64 +82,58 @@ impl DetailsReporter {
             .par_bridge()
             .filter_map(|rule| {
                 if finding_rule_ids.contains(&rule.name) {
-                    let help = sarif::MultiformatMessageStringBuilder::default()
-                        .text(&rule.references.join("\n"))
-                        .build()
-                        .ok()?;
-                    let description = sarif::MultiformatMessageStringBuilder::default()
-                        .text(&rule.name)
-                        .build()
-                        .ok()?;
-                    sarif::ReportingDescriptorBuilder::default()
-                        .id(&rule.name)
-                        .short_description(description)
-                        .help(help)
-                        .build()
-                        .ok()
+                    let help = sarif::MultiformatMessageString::builder()
+                        .text(rule.references.join("\n"))
+                        .build();
+                    let description =
+                        sarif::MultiformatMessageString::builder().text(&rule.name).build();
+                    Some(
+                        sarif::ReportingDescriptor::builder()
+                            .id(&rule.name)
+                            .short_description(description)
+                            .help(help)
+                            .build(),
+                    )
                 } else {
                     None
                 }
             })
             .collect();
-        let tool = sarif::ToolBuilder::default()
+        let tool = sarif::Tool::builder()
             .driver(
-                sarif::ToolComponentBuilder::default()
+                sarif::ToolComponent::builder()
                     .name(env!("CARGO_PKG_NAME").to_string())
                     .semantic_version(env!("CARGO_PKG_VERSION").to_string())
                     .full_name(format!("Kingfisher {}", env!("CARGO_PKG_VERSION")))
                     .information_uri(env!("CARGO_PKG_HOMEPAGE").to_string())
                     .download_uri(env!("CARGO_PKG_REPOSITORY").to_string())
                     .short_description(
-                        sarif::MultiformatMessageStringBuilder::default()
+                        sarif::MultiformatMessageString::builder()
                             .text(env!("CARGO_PKG_DESCRIPTION"))
-                            .build()?,
+                            .build(),
                     )
                     .rules(rules)
-                    .build()?,
+                    .build(),
             )
-            .build()?;
+            .build();
 
         let sarif_results: Vec<sarif::Result> =
             envelope.findings.iter().filter_map(|r| self.record_to_sarif_result(r).ok()).collect();
 
-        let mut run_builder = sarif::RunBuilder::default();
-        run_builder.tool(tool);
-        run_builder.results(sarif_results);
-
-        if let Some(access_map) = envelope.access_map {
+        let run_builder = sarif::Run::builder().tool(tool).results(sarif_results);
+        let run = if let Some(access_map) = envelope.access_map {
             let mut props = BTreeMap::new();
             props.insert("access_map".to_string(), serde_json::to_value(access_map)?);
-            let property_bag =
-                sarif::PropertyBagBuilder::default().additional_properties(props).build()?;
-            run_builder.properties(property_bag);
-        }
-
-        let run = run_builder.build()?;
-        let sarif = sarif::SarifBuilder::default()
+            let property_bag = sarif::PropertyBag::builder().additional_properties(props).build();
+            run_builder.properties(property_bag).build()
+        } else {
+            run_builder.build()
+        };
+        let sarif = sarif::Sarif::builder()
             .version(sarif::Version::V2_1_0.to_string())
             .schema(sarif::SCHEMA_URL)
             .runs(vec![run])
-            .build()?;
+            .build();
         serde_json::to_writer_pretty(&mut writer, &sarif)?;
         writeln!(writer)?;
         Ok(())
@@ -203,17 +194,8 @@ mod tests {
         let expected_medium = sarif::ResultLevel::Warning.to_string();
         let expected_high = sarif::ResultLevel::Error.to_string();
 
-        assert_eq!(
-            low.level.as_ref().and_then(|level| level.as_str()),
-            Some(expected_low.as_str())
-        );
-        assert_eq!(
-            medium.level.as_ref().and_then(|level| level.as_str()),
-            Some(expected_medium.as_str())
-        );
-        assert_eq!(
-            high.level.as_ref().and_then(|level| level.as_str()),
-            Some(expected_high.as_str())
-        );
+        assert_eq!(low.level.map(|level| level.to_string()), Some(expected_low));
+        assert_eq!(medium.level.map(|level| level.to_string()), Some(expected_medium));
+        assert_eq!(high.level.map(|level| level.to_string()), Some(expected_high));
     }
 }

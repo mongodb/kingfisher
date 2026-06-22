@@ -1,14 +1,88 @@
 use std::{
+    io::Read,
     path::Path,
-    process::{Command, ExitStatus, Output, Stdio},
+    process::{Command, ExitStatus, Stdio},
+    time::Duration,
 };
 
-use tracing::{debug, debug_span};
+use tracing::{debug, debug_span, warn};
 use url::Url;
+use wait_timeout::ChildExt;
 
 use crate::{bitbucket::is_bitbucket_access_token, git_url::GitUrl};
 
-const BITBUCKET_CREDENTIAL_HELPER: &str = r#"credential.helper=!_bbcreds() {
+/// Default time budget for a fresh `git clone`. Generous so well-formed clones
+/// of large monorepos complete on slow networks, but bounded so a single
+/// unresponsive remote cannot park a clone worker indefinitely. Override per
+/// invocation via `KF_GIT_CLONE_TIMEOUT_SECS`.
+const DEFAULT_GIT_CLONE_TIMEOUT_SECS: u64 = 1200;
+
+/// Default time budget for `git remote update --prune` on an existing clone.
+/// Shorter than clone because the working tree already exists; the operation
+/// is fetching incremental refs. Override via `KF_GIT_UPDATE_TIMEOUT_SECS`.
+const DEFAULT_GIT_UPDATE_TIMEOUT_SECS: u64 = 600;
+
+fn timeout_from_env(var: &str, default_secs: u64) -> Duration {
+    std::env::var(var)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .map(Duration::from_secs)
+        .unwrap_or_else(|| Duration::from_secs(default_secs))
+}
+
+fn git_clone_timeout() -> Duration {
+    timeout_from_env("KF_GIT_CLONE_TIMEOUT_SECS", DEFAULT_GIT_CLONE_TIMEOUT_SECS)
+}
+
+fn git_update_timeout() -> Duration {
+    timeout_from_env("KF_GIT_UPDATE_TIMEOUT_SECS", DEFAULT_GIT_UPDATE_TIMEOUT_SECS)
+}
+
+/// Spawn the child as the leader of its own process group.
+///
+/// `git` routinely spawns helper processes — `git-remote-https`, `ssh`,
+/// credential helpers — and on a clone timeout those are exactly the
+/// processes likely wedged on network I/O. SIGKILL'ing only the immediate
+/// child would orphan them; they'd be reparented to init and keep running,
+/// accumulating across a large scan. Isolating the group lets
+/// [`kill_process_tree`] take down the entire tree at once.
+///
+/// Trade-off: because the child no longer shares Kingfisher's process group,
+/// a terminal `Ctrl-C` (SIGINT to the foreground group) no longer reaches
+/// `git` directly; the wall-clock timeout is what guarantees cleanup.
+///
+/// On Windows this is a no-op — tearing down the whole tree there requires a
+/// Job Object, which we don't set up; the immediate child is still killed.
+#[cfg(unix)]
+fn set_own_process_group(cmd: &mut Command) {
+    use std::os::unix::process::CommandExt;
+    cmd.process_group(0);
+}
+
+#[cfg(not(unix))]
+fn set_own_process_group(_cmd: &mut Command) {}
+
+/// Kill the child and, on Unix, its entire process group, then reap the
+/// direct child to avoid leaving a zombie. Group members are reparented to
+/// init and reaped by it.
+#[cfg(unix)]
+fn kill_process_tree(child: &mut std::process::Child) {
+    // Negative PID targets the whole group, whose pgid equals the child's pid
+    // because we spawned it via `process_group(0)`.
+    let pgid = child.id() as i32;
+    unsafe {
+        libc::kill(-pgid, libc::SIGKILL);
+    }
+    let _ = child.wait();
+}
+
+#[cfg(not(unix))]
+fn kill_process_tree(child: &mut std::process::Child) {
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
+const BITBUCKET_CREDENTIAL_HELPER: &str = r#"!_bbcreds() {
     if [ -n "$KF_BITBUCKET_OAUTH_TOKEN" ]; then
         echo username="x-token-auth";
         echo password="$KF_BITBUCKET_OAUTH_TOKEN";
@@ -29,7 +103,7 @@ const BITBUCKET_CREDENTIAL_HELPER: &str = r#"credential.helper=!_bbcreds() {
     fi
 }; _bbcreds"#;
 
-const GITEA_CREDENTIAL_HELPER: &str = r#"credential.helper=!_gteacreds() {
+const GITEA_CREDENTIAL_HELPER: &str = r#"!_gteacreds() {
     if [ -n "$KF_GITEA_TOKEN" ]; then
         user="${KF_GITEA_USERNAME:-gitea}";
         echo username="$user";
@@ -37,7 +111,7 @@ const GITEA_CREDENTIAL_HELPER: &str = r#"credential.helper=!_gteacreds() {
     fi
 }; _gteacreds"#;
 
-const AZURE_CREDENTIAL_HELPER: &str = r#"credential.helper=!_azcreds() {
+const AZURE_CREDENTIAL_HELPER: &str = r#"!_azcreds() {
     token="${KF_AZURE_TOKEN:-${KF_AZURE_PAT:-}}";
     if [ -n "$token" ]; then
         user="${KF_AZURE_USERNAME:-pat}";
@@ -46,7 +120,7 @@ const AZURE_CREDENTIAL_HELPER: &str = r#"credential.helper=!_azcreds() {
     fi
 }; _azcreds"#;
 
-const HUGGINGFACE_CREDENTIAL_HELPER: &str = r#"credential.helper=!_hfcreds() {
+const HUGGINGFACE_CREDENTIAL_HELPER: &str = r#"!_hfcreds() {
     token="$KF_HUGGINGFACE_TOKEN";
     if [ -n "$token" ]; then
         user="${KF_HUGGINGFACE_USERNAME:-hf_user}";
@@ -54,6 +128,52 @@ const HUGGINGFACE_CREDENTIAL_HELPER: &str = r#"credential.helper=!_hfcreds() {
         echo password="$token";
     fi
 }; _hfcreds"#;
+
+const GITHUB_CREDENTIAL_HELPER: &str =
+    r#"!_ghcreds() { echo username="kingfisher"; echo password="$KF_GITHUB_TOKEN"; }; _ghcreds"#;
+
+const GITLAB_CREDENTIAL_HELPER: &str =
+    r#"!_glcreds() { echo username="oauth2"; echo password="$KF_GITLAB_TOKEN"; }; _glcreds"#;
+
+/// HTTPS hosts that each provider's credential helper is allowed to target.
+///
+/// Credential helpers echo provider tokens to whatever remote `git` is talking
+/// to. Installing them as unscoped `credential.helper` entries leaks those
+/// tokens to any HTTP(S) remote that issues an auth challenge — including an
+/// attacker-controlled scan target. Each helper is therefore bound to a
+/// `credential.https://<host>.helper` key so `git` only invokes it for the
+/// provider's own host(s).
+#[derive(Debug, Clone, Default)]
+pub struct ProviderHosts {
+    pub github: Vec<String>,
+    pub gitlab: Vec<String>,
+    pub gitea: Vec<String>,
+    pub bitbucket: Vec<String>,
+    pub azure: Vec<String>,
+    pub huggingface: Vec<String>,
+}
+
+impl ProviderHosts {
+    /// Well-known public SaaS clone hosts for each supported provider.
+    pub fn saas_defaults() -> Self {
+        Self {
+            github: vec!["github.com".to_string()],
+            gitlab: vec!["gitlab.com".to_string()],
+            gitea: vec!["gitea.com".to_string()],
+            bitbucket: vec!["bitbucket.org".to_string()],
+            azure: vec!["dev.azure.com".to_string()],
+            huggingface: vec!["huggingface.co".to_string()],
+        }
+    }
+
+    /// Add a trusted host to `list`, normalizing case and de-duplicating.
+    pub fn add(list: &mut Vec<String>, host: &str) {
+        let host = host.trim().to_ascii_lowercase();
+        if !host.is_empty() && !list.iter().any(|existing| existing == &host) {
+            list.push(host);
+        }
+    }
+}
 
 /// Represents errors that can occur when interacting with the `git` CLI.
 #[derive(Debug, thiserror::Error)]
@@ -67,6 +187,12 @@ pub enum GitError {
         summary = format_git_error_summary(.stdout.as_slice(), .stderr.as_slice())
     )]
     GitError { stdout: Vec<u8>, stderr: Vec<u8>, status: ExitStatus },
+
+    /// `git` exceeded the configured per-operation time budget and was killed.
+    /// Surfaced to the caller so a single stuck repo doesn't park a clone
+    /// worker forever during large multi-repo scans.
+    #[error("git execution timed out after {secs} seconds")]
+    Timeout { secs: u64 },
 }
 
 fn format_exit_status(status: &ExitStatus) -> String {
@@ -103,10 +229,19 @@ pub struct Git {
 }
 
 impl Git {
-    /// Create a new `Git` instance.
+    /// Create a new `Git` instance that trusts only the public SaaS hosts.
     ///
     /// * `ignore_certs`: If `true`, disables SSL certificate verification for `git` operations.
     pub fn new(ignore_certs: bool) -> Self {
+        Self::with_provider_hosts(ignore_certs, &ProviderHosts::saas_defaults())
+    }
+
+    /// Create a new `Git` instance whose credential helpers are scoped to the
+    /// hosts in `provider_hosts`. Each provider token is offered only to that
+    /// provider's configured HTTPS host(s), never to an arbitrary scan target.
+    ///
+    /// * `ignore_certs`: If `true`, disables SSL certificate verification for `git` operations.
+    pub fn with_provider_hosts(ignore_certs: bool, provider_hosts: &ProviderHosts) -> Self {
         let mut credentials = Vec::new();
 
         fn normalized_env_var(name: &str) -> Option<String> {
@@ -155,11 +290,8 @@ impl Git {
             (bitbucket_username.clone(), bitbucket_basic_password.clone())
         {
             Some((username, password))
-        } else if let Some(token) = bitbucket_token.clone() {
-            // Allow token-only authentication (common for x-token-auth URLs).
-            Some(("x-token-auth".to_string(), token))
         } else {
-            None
+            bitbucket_token.clone().map(|token| ("x-token-auth".to_string(), token))
         };
         let has_bitbucket_username = bitbucket_username.is_some();
         let has_bitbucket_password = bitbucket_app_password.is_some()
@@ -188,42 +320,34 @@ impl Git {
             credentials.push(r#"credential.helper="#.into());
         }
 
-        // Inject GitHub token helper
+        // Install each provider's helper scoped to that provider's HTTPS
+        // host(s). `git` consults a `credential.https://<host>.helper` entry
+        // only for remotes matching that host, so a provider token is never
+        // echoed to an unrelated (possibly attacker-controlled) clone target.
+        let mut push_scoped = |hosts: &[String], snippet: &str| {
+            for host in hosts {
+                credentials.push("-c".into());
+                credentials.push(format!("credential.https://{host}.helper={snippet}"));
+            }
+        };
+
         if has_github_token {
-            credentials.push("-c".into());
-            credentials.push(
-                r#"credential.helper=!_ghcreds() { echo username="kingfisher"; echo password="$KF_GITHUB_TOKEN"; }; _ghcreds"#.into(),
-            );
+            push_scoped(&provider_hosts.github, GITHUB_CREDENTIAL_HELPER);
         }
-
-        // Inject GitLab token helper
         if has_gitlab_token {
-            credentials.push("-c".into());
-            credentials.push(
-                r#"credential.helper=!_glcreds() { echo username="oauth2"; echo password="$KF_GITLAB_TOKEN"; }; _glcreds"#.into(),
-            );
+            push_scoped(&provider_hosts.gitlab, GITLAB_CREDENTIAL_HELPER);
         }
-
-        // Inject Gitea token helper
         if has_gitea_token {
-            credentials.push("-c".into());
-            credentials.push(GITEA_CREDENTIAL_HELPER.into());
+            push_scoped(&provider_hosts.gitea, GITEA_CREDENTIAL_HELPER);
         }
-
-        // Inject Bitbucket credential helper for OAuth tokens or basic auth.
         if has_bitbucket_credentials {
-            credentials.push("-c".into());
-            credentials.push(BITBUCKET_CREDENTIAL_HELPER.into());
+            push_scoped(&provider_hosts.bitbucket, BITBUCKET_CREDENTIAL_HELPER);
         }
-
         if has_azure_token {
-            credentials.push("-c".into());
-            credentials.push(AZURE_CREDENTIAL_HELPER.into());
+            push_scoped(&provider_hosts.azure, AZURE_CREDENTIAL_HELPER);
         }
-
         if has_huggingface_token {
-            credentials.push("-c".into());
-            credentials.push(HUGGINGFACE_CREDENTIAL_HELPER.into());
+            push_scoped(&provider_hosts.huggingface, HUGGINGFACE_CREDENTIAL_HELPER);
         }
 
         Self {
@@ -258,18 +382,73 @@ impl Git {
         cmd
     }
 
-    /// Helper to run the constructed `git` command and capture its output.
+    /// Run the constructed `git` command with a hard wall-clock timeout.
     ///
-    /// Returns an error if the command fails or exits with a non-zero status.
-    fn run_cmd(&self, mut cmd: Command) -> Result<(), GitError> {
+    /// Spawns the child, drains stdout/stderr in dedicated reader threads
+    /// (otherwise a child that fills its pipe buffer would block before
+    /// the deadline could fire), and uses `wait-timeout` to wait without a
+    /// per-process polling loop. On timeout the child is SIGKILL'd and a
+    /// [`GitError::Timeout`] is returned so callers can surface the stuck
+    /// repo and move on instead of parking a clone worker forever.
+    fn run_cmd(&self, mut cmd: Command, timeout: Duration) -> Result<(), GitError> {
         debug!("{cmd:#?}");
-        let output: Output = cmd.output()?;
-        if !output.status.success() {
-            return Err(GitError::GitError {
-                stdout: output.stdout,
-                stderr: output.stderr,
-                status: output.status,
-            });
+        cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
+        // Put `git` in its own process group so that on timeout we can signal
+        // the entire tree, not just the immediate child (see
+        // `set_own_process_group`).
+        set_own_process_group(&mut cmd);
+        let mut child = cmd.spawn()?;
+
+        // Drain stdout/stderr off the main thread. Reader threads exit as
+        // soon as the child closes its end of the pipe, so this adds two
+        // short-lived threads per `git` invocation — comparable to what
+        // `Command::output()` does internally.
+        let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
+        let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
+        let stdout_reader = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
+            let mut buf = Vec::new();
+            stdout_pipe.read_to_end(&mut buf)?;
+            Ok(buf)
+        });
+        let stderr_reader = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
+            let mut buf = Vec::new();
+            stderr_pipe.read_to_end(&mut buf)?;
+            Ok(buf)
+        });
+
+        let status = match child.wait_timeout(timeout) {
+            Ok(Some(status)) => status,
+            Ok(None) => {
+                // Timeout. Killing the whole process group closes every
+                // writer on the stdout/stderr pipes — including helpers like
+                // `git-remote-https`/`ssh` that may have inherited git's pipe
+                // ends — which unblocks the reader threads. `kill_process_tree`
+                // also reaps the direct child so we don't leave a zombie.
+                let secs = timeout.as_secs();
+                warn!(
+                    "git command exceeded {secs}s timeout; killing process group of pid {}",
+                    child.id()
+                );
+                kill_process_tree(&mut child);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(GitError::Timeout { secs });
+            }
+            Err(e) => {
+                // wait_timeout itself failed — kill defensively so we don't
+                // leak the child (or its helpers), then surface the I/O error.
+                kill_process_tree(&mut child);
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
+                return Err(GitError::IOError(e));
+            }
+        };
+
+        let stdout = stdout_reader.join().unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
+        let stderr = stderr_reader.join().unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
+
+        if !status.success() {
+            return Err(GitError::GitError { stdout, stderr, status });
         }
         Ok(())
     }
@@ -293,7 +472,7 @@ impl Git {
         cmd.arg("update");
         cmd.arg("--prune");
         debug!("{cmd:#?}");
-        self.run_cmd(cmd)
+        self.run_cmd(cmd, git_update_timeout())
     }
 
     /// Create a fresh clone of the specified repository in either bare or mirror mode.
@@ -320,23 +499,27 @@ impl Git {
         cmd.arg(self.repo_arg_for_clone(repo_url));
         cmd.arg(output_dir);
         debug!("{cmd:#?}");
-        self.run_cmd(cmd)
+        self.run_cmd(cmd, git_clone_timeout())
     }
 
     fn repo_arg_for_clone(&self, repo_url: &GitUrl) -> String {
-        if let Some((username, password)) = &self.bitbucket_basic_auth {
-            if let Ok(mut url) = Url::parse(repo_url.as_str()) {
-                if url
-                    .host_str()
-                    .map(|host| host.eq_ignore_ascii_case("bitbucket.org"))
-                    .unwrap_or(false)
-                {
-                    if url.set_username(username).is_ok()
-                        && url.set_password(Some(password)).is_ok()
-                    {
-                        return url.into();
-                    }
-                }
+        if let Some((username, password)) = &self.bitbucket_basic_auth
+            && let Ok(mut url) = Url::parse(repo_url.as_str())
+        {
+            let is_bitbucket = url
+                .host_str()
+                .map(|host| host.eq_ignore_ascii_case("bitbucket.org"))
+                .unwrap_or(false);
+            // Embed credentials only on HTTPS bitbucket.org remotes. The
+            // scoped credential helper is HTTPS-only for the same reason:
+            // putting a token in a plaintext http:// URL would send it over
+            // the wire in the clear.
+            if url.scheme() == "https"
+                && is_bitbucket
+                && url.set_username(username).is_ok()
+                && url.set_password(Some(password)).is_ok()
+            {
+                return url.into();
             }
         }
 
@@ -375,14 +558,20 @@ impl CloneMode {
 
 #[cfg(test)]
 mod tests {
+    use std::net::ToSocketAddrs;
+
     use tempfile::TempDir;
 
     use super::*;
 
+    fn github_is_reachable() -> bool {
+        ("github.com", 443).to_socket_addrs().is_ok()
+    }
+
     #[test]
     fn test_git_new() {
         temp_env::with_vars(
-            &[
+            [
                 ("KF_GITHUB_TOKEN", None::<&str>),
                 ("KF_BITBUCKET_OAUTH_TOKEN", None::<&str>),
                 ("KF_BITBUCKET_ACCESS_TOKEN", None::<&str>),
@@ -408,7 +597,10 @@ mod tests {
         temp_env::with_var("KF_BITBUCKET_OAUTH_TOKEN", Some("oauth"), || {
             let git = Git::new(false);
             assert_eq!(git.credentials.len(), 4);
-            assert!(git.credentials.iter().any(|value| value == BITBUCKET_CREDENTIAL_HELPER));
+            assert!(git.credentials.iter().any(|value| value
+                == &format!(
+                    "credential.https://bitbucket.org.helper={BITBUCKET_CREDENTIAL_HELPER}"
+                )));
             assert!(git.bitbucket_access_token.is_none());
         });
     }
@@ -416,14 +608,17 @@ mod tests {
     #[test]
     fn test_git_new_bitbucket_basic_auth() {
         temp_env::with_vars(
-            &[
+            [
                 ("KF_BITBUCKET_USERNAME", Some("user")),
                 ("KF_BITBUCKET_APP_PASSWORD", Some("password")),
             ],
             || {
                 let git = Git::new(false);
                 assert_eq!(git.credentials.len(), 4);
-                assert!(git.credentials.iter().any(|value| value == BITBUCKET_CREDENTIAL_HELPER));
+                assert!(git.credentials.iter().any(|value| value
+                    == &format!(
+                        "credential.https://bitbucket.org.helper={BITBUCKET_CREDENTIAL_HELPER}"
+                    )));
                 assert!(git.bitbucket_access_token.is_none());
             },
         );
@@ -436,7 +631,7 @@ mod tests {
                 .unwrap();
 
         temp_env::with_vars(
-            &[
+            [
                 ("KF_BITBUCKET_USERNAME", Some("user")),
                 ("KF_BITBUCKET_APP_PASSWORD", Some("secret")),
             ],
@@ -456,7 +651,7 @@ mod tests {
             GitUrl::try_from(url::Url::parse("https://bitbucket.org/workspace/demo.git").unwrap())
                 .unwrap();
 
-        temp_env::with_vars(&[("KF_BITBUCKET_OAUTH_TOKEN", Some("token123"))], || {
+        temp_env::with_vars([("KF_BITBUCKET_OAUTH_TOKEN", Some("token123"))], || {
             let git = Git::new(false);
             assert_eq!(
                 git.repo_arg_for_clone(&url),
@@ -471,12 +666,27 @@ mod tests {
             GitUrl::try_from(url::Url::parse("https://bitbucket.org/workspace/demo.git").unwrap())
                 .unwrap();
 
-        temp_env::with_vars(&[("KF_BITBUCKET_TOKEN", Some("token123"))], || {
+        temp_env::with_vars([("KF_BITBUCKET_TOKEN", Some("token123"))], || {
             let git = Git::new(false);
             assert_eq!(
                 git.repo_arg_for_clone(&url),
                 "https://x-token-auth:token123@bitbucket.org/workspace/demo.git"
             );
+        });
+    }
+
+    #[test]
+    fn test_repo_arg_for_clone_skips_plaintext_http_bitbucket() {
+        // A plaintext http:// bitbucket.org remote must NOT receive embedded
+        // credentials — that would leak the token over the wire and bypass the
+        // HTTPS-only credential-helper scoping.
+        let url =
+            GitUrl::try_from(url::Url::parse("http://bitbucket.org/workspace/demo.git").unwrap())
+                .unwrap();
+
+        temp_env::with_vars([("KF_BITBUCKET_OAUTH_TOKEN", Some("token123"))], || {
+            let git = Git::new(false);
+            assert_eq!(git.repo_arg_for_clone(&url), url.as_str());
         });
     }
 
@@ -488,7 +698,7 @@ mod tests {
         .unwrap();
 
         temp_env::with_vars(
-            &[
+            [
                 ("KF_BITBUCKET_USERNAME", Some("user")),
                 ("KF_BITBUCKET_APP_PASSWORD", Some("secret")),
             ],
@@ -505,7 +715,10 @@ mod tests {
         temp_env::with_var("KF_BITBUCKET_TOKEN", Some(token), || {
             let git = Git::new(false);
             assert_eq!(git.credentials.len(), 4);
-            assert!(git.credentials.iter().any(|value| value == BITBUCKET_CREDENTIAL_HELPER));
+            assert!(git.credentials.iter().any(|value| value
+                == &format!(
+                    "credential.https://bitbucket.org.helper={BITBUCKET_CREDENTIAL_HELPER}"
+                )));
             assert_eq!(git.bitbucket_access_token.as_deref(), Some(token));
         });
     }
@@ -515,7 +728,10 @@ mod tests {
         temp_env::with_var("KF_BITBUCKET_TOKEN", Some("token123"), || {
             let git = Git::new(false);
             assert_eq!(git.credentials.len(), 4);
-            assert!(git.credentials.iter().any(|value| value == BITBUCKET_CREDENTIAL_HELPER));
+            assert!(git.credentials.iter().any(|value| value
+                == &format!(
+                    "credential.https://bitbucket.org.helper={BITBUCKET_CREDENTIAL_HELPER}"
+                )));
             assert_eq!(git.bitbucket_access_token.as_deref(), None);
             assert_eq!(
                 git.bitbucket_basic_auth,
@@ -530,7 +746,7 @@ mod tests {
         let token = format!("  {trimmed_token}  \n");
 
         temp_env::with_vars(
-            &[("KF_BITBUCKET_USERNAME", Some("  user\n")), ("KF_BITBUCKET_TOKEN", Some(&token))],
+            [("KF_BITBUCKET_USERNAME", Some("  user\n")), ("KF_BITBUCKET_TOKEN", Some(&token))],
             || {
                 let git = Git::new(false);
 
@@ -542,7 +758,10 @@ mod tests {
                     ],
                 );
                 assert_eq!(git.credentials.len(), 4);
-                assert!(git.credentials.iter().any(|value| value == BITBUCKET_CREDENTIAL_HELPER));
+                assert!(git.credentials.iter().any(|value| value
+                    == &format!(
+                        "credential.https://bitbucket.org.helper={BITBUCKET_CREDENTIAL_HELPER}"
+                    )));
                 assert_eq!(git.bitbucket_access_token.as_deref(), Some(trimmed_token));
             },
         );
@@ -557,6 +776,9 @@ mod tests {
 
     #[test]
     fn test_create_fresh_clone() -> Result<(), GitError> {
+        if !github_is_reachable() {
+            return Ok(());
+        }
         let temp_dir = TempDir::new()?;
         let git = Git::default();
         let url = GitUrl::try_from(
@@ -570,6 +792,9 @@ mod tests {
 
     #[test]
     fn test_update_clone() -> Result<(), GitError> {
+        if !github_is_reachable() {
+            return Ok(());
+        }
         let temp_dir = TempDir::new()?;
         let git = Git::default();
         let url = GitUrl::try_from(
@@ -581,6 +806,41 @@ mod tests {
         Ok(())
     }
 
+    #[cfg(unix)]
+    #[test]
+    fn test_run_cmd_kills_on_timeout() {
+        // Use `sleep` as a controlled long-running stand-in for a stuck `git`.
+        // The point is to verify that the timeout path kills the child and
+        // surfaces GitError::Timeout instead of hanging the caller.
+        let git = Git::default();
+        let mut cmd = std::process::Command::new("sleep");
+        cmd.arg("30");
+        let start = std::time::Instant::now();
+        let err = git.run_cmd(cmd, Duration::from_millis(200)).unwrap_err();
+        let elapsed = start.elapsed();
+
+        assert!(matches!(err, GitError::Timeout { secs: 0 }), "expected Timeout, got {err:?}");
+        // Allow generous slack for slow CI but make sure we didn't actually
+        // wait the full 30s.
+        assert!(elapsed < Duration::from_secs(5), "should have killed promptly, took {elapsed:?}");
+    }
+
+    #[test]
+    fn test_timeout_from_env_parses_and_falls_back() {
+        // Fallback when unset.
+        temp_env::with_var("KF_GIT_FAKE_TIMEOUT", None::<&str>, || {
+            assert_eq!(timeout_from_env("KF_GIT_FAKE_TIMEOUT", 42).as_secs(), 42);
+        });
+        // Parses a valid value.
+        temp_env::with_var("KF_GIT_FAKE_TIMEOUT", Some("7"), || {
+            assert_eq!(timeout_from_env("KF_GIT_FAKE_TIMEOUT", 42).as_secs(), 7);
+        });
+        // Garbage falls back to default rather than blowing up.
+        temp_env::with_var("KF_GIT_FAKE_TIMEOUT", Some("not a number"), || {
+            assert_eq!(timeout_from_env("KF_GIT_FAKE_TIMEOUT", 42).as_secs(), 42);
+        });
+    }
+
     #[test]
     fn test_git_error() {
         let temp_dir = TempDir::new().unwrap();
@@ -590,5 +850,58 @@ mod tests {
         let err =
             git.create_fresh_clone(&invalid_url, temp_dir.path(), CloneMode::Bare).unwrap_err();
         assert!(matches!(err, GitError::GitError { .. }));
+    }
+
+    #[test]
+    fn github_helper_is_scoped_to_provider_host_only() {
+        temp_env::with_var("KF_GITHUB_TOKEN", Some("test_token"), || {
+            let git = Git::new(false);
+
+            // The only bare `credential.helper=` entry is the empty reset that
+            // clears inherited helpers. The token-bearing helper must never be
+            // installed unscoped — an unscoped helper is what leaked provider
+            // tokens to any remote that issued an auth challenge.
+            let unscoped: Vec<&String> = git
+                .credentials
+                .iter()
+                .filter(|value| value.starts_with("credential.helper="))
+                .collect();
+            assert_eq!(unscoped, vec![&"credential.helper=".to_string()]);
+
+            // The GitHub helper is bound to https://github.com.
+            assert!(git.credentials.iter().any(|value| value
+                == &format!("credential.https://github.com.helper={GITHUB_CREDENTIAL_HELPER}")));
+
+            // No credential entry targets an unrelated/attacker host.
+            assert!(!git.credentials.iter().any(|value| value.contains("127.0.0.1")));
+        });
+    }
+
+    #[test]
+    fn provider_helper_scoped_to_each_configured_host() {
+        let hosts = ProviderHosts {
+            github: vec!["github.com".to_string(), "ghe.corp.example.com".to_string()],
+            ..ProviderHosts::default()
+        };
+        temp_env::with_var("KF_GITHUB_TOKEN", Some("test_token"), || {
+            let git = Git::with_provider_hosts(false, &hosts);
+            assert!(git.credentials.iter().any(|value| value
+                == &format!("credential.https://github.com.helper={GITHUB_CREDENTIAL_HELPER}")));
+            assert!(git.credentials.iter().any(|value| value
+                == &format!(
+                    "credential.https://ghe.corp.example.com.helper={GITHUB_CREDENTIAL_HELPER}"
+                )));
+        });
+    }
+
+    #[test]
+    fn no_helper_installed_for_provider_without_trusted_host() {
+        // An empty host list means the token has nowhere safe to go: no helper
+        // is installed, so the token cannot leak even to its own SaaS host.
+        let hosts = ProviderHosts { github: Vec::new(), ..ProviderHosts::default() };
+        temp_env::with_var("KF_GITHUB_TOKEN", Some("test_token"), || {
+            let git = Git::with_provider_hosts(false, &hosts);
+            assert!(!git.credentials.iter().any(|value| value.contains("_ghcreds")));
+        });
     }
 }

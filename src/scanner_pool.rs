@@ -26,6 +26,6 @@ impl ScannerPool {
                     .expect("Vectorscan scratch alloc"),
             )
         });
-        f(&mut *cell.borrow_mut())
+        f(&mut cell.borrow_mut())
     }
 }

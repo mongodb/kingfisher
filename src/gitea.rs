@@ -72,23 +72,23 @@ fn parse_excluded_repo(raw: &str) -> Option<String> {
         return None;
     }
 
-    if let Ok(url) = Url::parse(trimmed) {
-        if let Some(name) = normalize_repo_identifier(url.path()) {
-            return Some(name);
-        }
+    if let Ok(url) = Url::parse(trimmed)
+        && let Some(name) = normalize_repo_identifier(url.path())
+    {
+        return Some(name);
     }
 
-    if let Some(idx) = trimmed.rfind(':') {
-        if let Some(name) = normalize_repo_identifier(&trimmed[idx + 1..]) {
-            return Some(name);
-        }
+    if let Some(idx) = trimmed.rfind(':')
+        && let Some(name) = normalize_repo_identifier(&trimmed[idx + 1..])
+    {
+        return Some(name);
     }
 
     normalize_repo_identifier(trimmed)
 }
 
 fn build_exclude_matcher(exclude_repos: &[String]) -> git_host::ExcludeMatcher {
-    git_host::build_exclude_matcher(exclude_repos, |raw| parse_excluded_repo(raw), "Gitea")
+    git_host::build_exclude_matcher(exclude_repos, parse_excluded_repo, "Gitea")
 }
 
 fn should_exclude_repo(repo: &GiteaRepository, excludes: &git_host::ExcludeMatcher) -> bool {
@@ -296,6 +296,7 @@ pub async fn enumerate_repo_urls(
     Ok(repos)
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn list_repositories(
     api_url: Url,
     ignore_certs: bool,

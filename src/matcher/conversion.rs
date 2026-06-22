@@ -45,7 +45,7 @@ impl OwnedBlobMatch {
             blob_id: m.blob_id,
             finding_fingerprint: m.finding_fingerprint,
             // matching_input: m.snippet.matching.0.to_vec(),
-            matching_input_offset_span: m.location.offset_span.clone(),
+            matching_input_offset_span: m.location.offset_span,
             captures: m.groups.clone(),
             validation_response_body: m.validation_response_body.clone(),
             validation_response_status: StatusCode::from_u16(m.validation_response_status)
@@ -71,13 +71,13 @@ impl OwnedBlobMatch {
             .captures
             .captures
             .get(1)
-            .or_else(|| blob_match.captures.captures.get(0))
+            .or_else(|| blob_match.captures.captures.first())
             .map(|capture| capture.raw_value().as_bytes().to_vec())
-            .unwrap_or_else(Vec::new);
+            .unwrap_or_default();
 
         let mut owned_blob_match = OwnedBlobMatch {
             rule: blob_match.rule,
-            blob_id: blob_match.blob_id.clone(),
+            blob_id: *blob_match.blob_id,
             matching_input_offset_span: blob_match.matching_input_offset_span,
             captures: blob_match.captures.clone(),
             validation_response_body: blob_match.validation_response_body,
@@ -170,7 +170,7 @@ impl Match {
             .captures
             .captures
             .get(1)
-            .or_else(|| owned_blob_match.captures.captures.get(0))
+            .or_else(|| owned_blob_match.captures.captures.first())
             .map(|capture| capture.raw_value().as_bytes())
             .unwrap_or_default();
 
@@ -212,7 +212,7 @@ impl Match {
 
     /// Returns the `blob_id` of the match.
     pub fn get_blob_id(&self) -> BlobId {
-        self.blob_id.clone()
+        self.blob_id
     }
 
     pub fn finding_id(&self) -> String {

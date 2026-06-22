@@ -116,7 +116,11 @@ fn verify_match_in_context_text(re: &Regex, expected_secret: &[u8], text: &[u8])
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, fs, path::PathBuf};
+    use std::{
+        collections::BTreeMap,
+        fs,
+        path::{Path, PathBuf},
+    };
 
     use super::*;
 
@@ -144,7 +148,7 @@ mod tests {
     }
 
     fn current_capture_texts(
-        root: &PathBuf,
+        root: &Path,
         cases: &[(Language, &'static str)],
     ) -> BTreeMap<String, Vec<String>> {
         let mut current = BTreeMap::new();
@@ -284,6 +288,33 @@ mod tests {
         assert!(
             texts.iter().any(|text| text.contains("div = visible text")),
             "expected visible non-script HTML text to remain available for verification"
+        );
+    }
+
+    #[test]
+    fn html_multiline_script_assignment_extracts_context() {
+        let source = br#"
+            <html>
+              <body>
+                <script>
+                  const auth0_client_secret =
+                    "abcd1234abcd1234abcd1234abcd1234";
+                </script>
+              </body>
+            </html>
+        "#;
+        let mut texts = Vec::new();
+        stream_context_candidates(source, &Language::Html, |text| {
+            texts.push(text.to_string());
+            true
+        })
+        .unwrap();
+
+        assert!(
+            texts
+                .iter()
+                .any(|text| text == "auth0_client_secret = abcd1234abcd1234abcd1234abcd1234"),
+            "expected multiline script assignment candidate, got {texts:?}"
         );
     }
 

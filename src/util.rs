@@ -1,6 +1,6 @@
 use std::{
     borrow::Cow,
-    fs::File,
+    fs::{File, OpenOptions},
     io::{BufReader, BufWriter, stdin, stdout},
     path::Path,
     sync::atomic::{AtomicBool, Ordering},
@@ -13,8 +13,23 @@ use dashmap::DashSet;
 use path_dedot::ParseDot;
 use rand::RngExt;
 // Generate a random salt once and use it for the entire application runtime
-static APP_SALT: LazyLock<String> = LazyLock::new(|| generate_salt());
+static APP_SALT: LazyLock<String> = LazyLock::new(generate_salt);
 static REDACTION_ENABLED: AtomicBool = AtomicBool::new(false);
+
+const MIN_TOKIO_BLOCKING_THREADS: usize = 32;
+const TOKIO_BLOCKING_THREADS_PER_JOB: usize = 8;
+const MAX_TOKIO_BLOCKING_THREADS: usize = 256;
+
+/// Per-runtime cap for Tokio's blocking thread pool.
+///
+/// Tokio defaults to 512 blocking threads per runtime. Kingfisher can run the
+/// main and artifact-fetcher runtimes at the same time, so keeping each runtime
+/// below that default avoids runaway thread growth during validation-heavy scans.
+pub fn tokio_blocking_threads_limit(num_jobs: usize) -> usize {
+    num_jobs
+        .saturating_mul(TOKIO_BLOCKING_THREADS_PER_JOB)
+        .clamp(MIN_TOKIO_BLOCKING_THREADS, MAX_TOKIO_BLOCKING_THREADS)
+}
 
 /// Interns a string once and returns a `'static` reference to it.
 pub fn intern(s: &str) -> &'static str {
@@ -106,7 +121,49 @@ pub fn get_writer_for_file_or_stdout<P: AsRef<Path>>(
 ) -> std::io::Result<Box<dyn std::io::Write>> {
     match path {
         None => Ok(Box::new(BufWriter::new(stdout()))),
-        Some(p) => Ok(Box::new(BufWriter::new(File::create(p)?))),
+        Some(p) => Ok(Box::new(BufWriter::new(create_no_follow(p.as_ref())?))),
+    }
+}
+
+/// Create (truncating) a file for writing, refusing to follow a symlink at the
+/// final path component.
+///
+/// A scanned repository can contain a symlink at the report output path (e.g.
+/// `report.json` in the workspace). Plain `File::create` follows it and
+/// truncates whatever the link targets, letting a malicious repo clobber files
+/// outside the workspace as the scanner user. `O_NOFOLLOW` makes the open fail
+/// atomically when the final component is a symlink, closing the TOCTOU window.
+fn create_no_follow(path: &Path) -> std::io::Result<File> {
+    let mut opts = OpenOptions::new();
+    opts.write(true).create(true).truncate(true);
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        opts.custom_flags(libc::O_NOFOLLOW);
+    }
+
+    // Without O_NOFOLLOW, fall back to a pre-open symlink check. This is racy
+    // (TOCTOU) but still rejects the common case of a committed symlink sitting
+    // at the report path.
+    #[cfg(not(unix))]
+    if std::fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink()) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("refusing to write output through symlink: {}", path.display()),
+        ));
+    }
+
+    match opts.open(path) {
+        Ok(file) => Ok(file),
+        // O_NOFOLLOW surfaces a symlinked final component as ELOOP; report it as
+        // a clear refusal rather than the opaque OS message.
+        #[cfg(unix)]
+        Err(e) if e.raw_os_error() == Some(libc::ELOOP) => Err(std::io::Error::new(
+            std::io::ErrorKind::AlreadyExists,
+            format!("refusing to write output through symlink: {}", path.display()),
+        )),
+        Err(e) => Err(e),
     }
 }
 /// Returns a buffered reader for a specified file path or stdin if none is
@@ -121,7 +178,7 @@ pub fn get_reader_for_file_or_stdin<P: AsRef<Path>>(
 }
 /// Determines whether the input string is valid Base64.
 pub fn is_base64(input: &str) -> bool {
-    input.len() % 4 == 0
+    input.len().is_multiple_of(4)
         && input
             .bytes()
             .all(|b| matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' | b'='))
@@ -133,15 +190,15 @@ pub fn is_base64(input: &str) -> bool {
 /// "example" in any path component. Case-insensitive.
 pub fn is_test_like_path(path: &Path) -> bool {
     path.components().any(|c| {
-        if let std::path::Component::Normal(os) = c {
-            if let Some(name) = os.to_str() {
-                let name = name.to_ascii_lowercase();
-                return name.contains("test")
-                    || name.contains("spec")
-                    || name.contains("fixture")
-                    || name.contains("example")
-                    || name.contains("sample");
-            }
+        if let std::path::Component::Normal(os) = c
+            && let Some(name) = os.to_str()
+        {
+            let name = name.to_ascii_lowercase();
+            return name.contains("test")
+                || name.contains("spec")
+                || name.contains("fixture")
+                || name.contains("example")
+                || name.contains("sample");
         }
         false
     })
@@ -155,6 +212,16 @@ mod tests {
     };
 
     use super::{is_test_like_path, *};
+
+    #[test]
+    fn tokio_blocking_threads_limit_scales_and_caps() {
+        assert_eq!(tokio_blocking_threads_limit(0), 32);
+        assert_eq!(tokio_blocking_threads_limit(1), 32);
+        assert_eq!(tokio_blocking_threads_limit(4), 32);
+        assert_eq!(tokio_blocking_threads_limit(8), 64);
+        assert_eq!(tokio_blocking_threads_limit(32), 256);
+        assert_eq!(tokio_blocking_threads_limit(usize::MAX), 256);
+    }
 
     /// Paths that **should** be classified as test-like.
     #[test]
@@ -230,6 +297,34 @@ mod tests {
         let mut file_content = String::new();
         std::fs::File::open(&path).unwrap().read_to_string(&mut file_content).unwrap();
         assert_eq!(file_content, "Test content");
+    }
+    #[cfg(unix)]
+    #[test]
+    fn test_get_writer_for_file_refuses_symlink() {
+        use std::io::Write;
+
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("target.txt");
+        std::fs::write(&target, b"ORIGINAL_CONTENT").unwrap();
+
+        // Simulate a malicious symlink planted at the report output path.
+        let link = dir.path().join("report.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        let err = get_writer_for_file_or_stdout(Some(&link)).err();
+        assert!(err.is_some(), "writer must refuse a symlinked output path");
+
+        // The symlink target must be left untouched (not truncated).
+        assert_eq!(std::fs::read(&target).unwrap(), b"ORIGINAL_CONTENT");
+
+        // A regular (non-symlink) path still works and truncates as before.
+        let regular = dir.path().join("plain.json");
+        std::fs::write(&regular, b"stale").unwrap();
+        let mut writer = get_writer_for_file_or_stdout(Some(&regular)).unwrap();
+        writer.write_all(b"fresh").unwrap();
+        writer.flush().unwrap();
+        drop(writer);
+        assert_eq!(std::fs::read(&regular).unwrap(), b"fresh");
     }
     #[test]
     fn test_get_reader_for_file_or_stdin_stdin() {

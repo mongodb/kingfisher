@@ -13,10 +13,15 @@ fn library_crates_work_from_external_project() -> anyhow::Result<()> {
     let core_path = toml_escape_path(&repo_root.join("crates/kingfisher-core"));
     let rules_path = toml_escape_path(&repo_root.join("crates/kingfisher-rules"));
     let scanner_path = toml_escape_path(&repo_root.join("crates/kingfisher-scanner"));
+    let vectorscan_rs_path =
+        toml_escape_path(&repo_root.join("vendor/vectorscan-rs/vectorscan-rs"));
+    let vectorscan_rs_sys_path =
+        toml_escape_path(&repo_root.join("vendor/vectorscan-rs/vectorscan-rs-sys"));
 
     let temp = tempfile::tempdir()?;
     let project_dir = temp.path().join("external-kingfisher-consumer");
     fs::create_dir_all(project_dir.join("src"))?;
+    fs::copy(repo_root.join("Cargo.lock"), project_dir.join("Cargo.lock"))?;
 
     fs::write(
         project_dir.join("Cargo.toml"),
@@ -32,6 +37,10 @@ kingfisher-rules = {{ path = "{rules_path}" }}
 
 [target.'cfg(not(windows))'.dependencies]
 kingfisher-scanner = {{ path = "{scanner_path}" }}
+
+[patch.crates-io]
+vectorscan-rs = {{ path = "{vectorscan_rs_path}" }}
+vectorscan-rs-sys = {{ path = "{vectorscan_rs_sys_path}" }}
 "#
         ),
     )?;
@@ -74,8 +83,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 "#,
     )?;
 
-    let output =
-        Command::new("cargo").arg("run").arg("--quiet").current_dir(&project_dir).output()?;
+    let lock_output = Command::new("cargo")
+        .arg("generate-lockfile")
+        .arg("--offline")
+        .current_dir(&project_dir)
+        .output()?;
+    let lock_stdout = String::from_utf8_lossy(&lock_output.stdout);
+    let lock_stderr = String::from_utf8_lossy(&lock_output.stderr);
+    assert!(
+        lock_output.status.success(),
+        "external project lockfile generation failed\nstdout:\n{lock_stdout}\nstderr:\n{lock_stderr}"
+    );
+
+    let output = Command::new("cargo")
+        .arg("run")
+        .arg("--quiet")
+        .arg("--frozen")
+        .current_dir(&project_dir)
+        .output()?;
 
     let stdout = String::from_utf8_lossy(&output.stdout);
     let stderr = String::from_utf8_lossy(&output.stderr);

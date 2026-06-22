@@ -527,10 +527,10 @@ fn derive_severity(repos: &[GitHubRepo]) -> Severity {
     let mut severity = Severity::Low;
     for repo in repos {
         let perms = repo.permissions.as_ref();
-        if perms.map_or(false, |p| p.admin) {
+        if perms.is_some_and(|p| p.admin) {
             return Severity::High;
         }
-        if perms.map_or(false, |p| p.push) {
+        if perms.is_some_and(|p| p.push) {
             severity = Severity::Medium;
         }
     }
@@ -643,6 +643,7 @@ async fn list_installation_repos(
 ///
 /// Returns `(repo_permissions, user_permissions)` where each is a sorted vec
 /// of `(permission_name, access_level)`.
+#[allow(clippy::type_complexity)]
 fn categorize_installation_permissions(
     perms: &BTreeMap<String, String>,
 ) -> (Vec<(String, String)>, Vec<(String, String)>) {

@@ -1,4 +1,9 @@
-use std::{ffi::OsString, fs, path::Path, process::Command};
+use std::{
+    ffi::{OsStr, OsString},
+    fs,
+    path::Path,
+    process::Command,
+};
 
 use anyhow::{Context, Result};
 use serde_json::{Deserializer, Value};
@@ -17,9 +22,7 @@ fn scan_inputs_without_parser_fixtures() -> Result<Vec<OsString>> {
 
     Ok(inputs
         .into_iter()
-        .filter_map(|(name, path)| {
-            (name != OsString::from("parsers")).then_some(path.into_os_string())
-        })
+        .filter_map(|(name, path)| (name != OsStr::new("parsers")).then_some(path.into_os_string()))
         .collect())
 }
 
@@ -77,7 +80,7 @@ fn scan_findings_match_pre_removal_baseline() -> Result<()> {
             })
         })
         .collect::<Vec<_>>();
-    actual.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+    actual.sort_by_key(|left| left.to_string());
     actual.dedup();
 
     let mut expected = serde_json::from_str::<Vec<Value>>(
@@ -101,7 +104,7 @@ fn scan_findings_match_pre_removal_baseline() -> Result<()> {
             .unwrap_or(true)
     })
     .collect::<Vec<_>>();
-    expected.sort_by(|left, right| left.to_string().cmp(&right.to_string()));
+    expected.sort_by_key(|left| left.to_string());
     expected.dedup();
 
     assert_eq!(actual, expected);

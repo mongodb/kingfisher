@@ -4,6 +4,7 @@ pub use kingfisher_rules;
 pub use kingfisher_scanner;
 
 pub mod access_map;
+pub mod alerts;
 pub mod azure;
 pub mod baseline;
 pub mod binary;
@@ -40,6 +41,8 @@ pub mod location;
 pub mod matcher;
 pub mod origin;
 pub mod parser;
+pub mod postman;
+pub mod provider_endpoints;
 pub mod pyc;
 pub mod reporter;
 pub mod rule_loader;
@@ -91,6 +94,9 @@ struct EnumeratorConfig {
     repo_scan_timeout: Duration,
     exclude_globset: Option<std::sync::Arc<GlobSet>>,
     git_diff: Option<GitDiffConfig>,
+    /// Whether archive blobs encountered during git scanning should be
+    /// transparently extracted before pattern matching.
+    extract_archives: bool,
 }
 
 pub enum FoundInput {

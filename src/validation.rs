@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     fs,
     hash::{Hash, Hasher},
+    panic::AssertUnwindSafe,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -15,14 +16,17 @@ use http::StatusCode;
 use liquid::Object;
 use liquid_core::{Value, ValueView};
 use reqwest::{Client, Url, header, header::HeaderValue, multipart};
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::{sync::Notify, time};
-use tracing::{debug, trace};
+use tracing::{debug, trace, warn};
 
 use crate::{
     cli::global::TlsMode,
     location::OffsetSpan,
     matcher::{OwnedBlobMatch, SerializableCaptures},
+    provider_endpoints::{
+        ProviderEndpointOverrides, endpoint_var_names, hydrate_endpoint_globals_for_rule,
+    },
     rules::rule::Validation,
     validation_body::{self},
 };
@@ -257,7 +261,9 @@ type Cache = kingfisher_scanner::validation::Cache;
 /// Returns an opaque 64-bit key for internal validation deduplication.
 ///
 /// This is an INTERNAL key used only for validation deduplication within a single scan.
-/// It uses `captures.get(0)` to get the primary secret value.
+/// It uses `captures.get(0)` to get the primary secret value. Rules with dependent
+/// variables also include blob location because validation can depend on nearby context
+/// such as an AWS access-key ID paired with a secret access key.
 ///
 /// **Important**: This is distinct from the EXTERNAL `finding_fingerprint` used for:
 /// - Baseline comparisons across scans
@@ -272,10 +278,17 @@ fn validation_dedup_key(m: &OwnedBlobMatch) -> u64 {
 
     // Use the first capture (primary secret) for deduplication.
     // Note: capture_value is stored in a variable because it's also used in trace! below.
-    let capture_value = m.captures.captures.get(0).map(|c| c.raw_value());
+    let capture_value = m.captures.captures.first().map(|c| c.raw_value());
     if let Some(val) = capture_value {
         val.hash(&mut hasher);
     }
+
+    if !m.rule.syntax().depends_on_rule.is_empty() {
+        m.blob_id.hash(&mut hasher);
+        m.matching_input_offset_span.start.hash(&mut hasher);
+        m.matching_input_offset_span.end.hash(&mut hasher);
+    }
+
     let key = hasher.finish();
 
     trace!(
@@ -290,6 +303,24 @@ fn validation_dedup_key(m: &OwnedBlobMatch) -> u64 {
 
 static VALIDATION_CACHE: OnceLock<DashMap<u64, CachedResponse>> = OnceLock::new();
 static IN_FLIGHT: OnceLock<DashMap<u64, Arc<Notify>>> = OnceLock::new();
+
+fn cache_validation_result(fp: u64, m: &OwnedBlobMatch) {
+    VALIDATION_CACHE.get_or_init(DashMap::new).insert(
+        fp,
+        CachedResponse {
+            body: m.validation_response_body.clone(),
+            status: m.validation_response_status,
+            is_valid: m.validation_success,
+            timestamp: Instant::now(),
+        },
+    );
+}
+
+fn clear_in_flight_validation(fp: u64) {
+    if let Some((_, notify)) = IN_FLIGHT.get_or_init(DashMap::new).remove(&fp) {
+        notify.notify_waiters();
+    }
+}
 
 /// Call this once near program start (e.g. in `main()`)
 pub fn init_validation_caches() {
@@ -334,6 +365,7 @@ pub fn is_parseable_mysql_uri(uri: &str) -> bool {
 }
 
 /// Collect dependent variables and missing dependencies from the provided matches.
+#[allow(clippy::type_complexity)]
 pub fn collect_variables_and_dependencies(
     matches: &[OwnedBlobMatch],
 ) -> (FxHashMap<String, Vec<(String, OffsetSpan)>>, FxHashMap<String, Vec<String>>) {
@@ -359,15 +391,12 @@ pub fn collect_variables_and_dependencies(
                     let matching_input = other_match
                         .captures
                         .captures
-                        .get(0)
+                        .first()
                         .expect("Expected at least one capture");
-                    variable_map
-                        .entry(dependency.variable.to_uppercase())
-                        .or_insert_with(Vec::new)
-                        .push((
-                            matching_input.raw_value().to_string(),
-                            other_match.matching_input_offset_span,
-                        ));
+                    variable_map.entry(dependency.variable.to_uppercase()).or_default().push((
+                        matching_input.raw_value().to_string(),
+                        other_match.matching_input_offset_span,
+                    ));
                 }
             } else {
                 missing_deps.entry(rule_id.clone()).or_default().push(dependency.rule_id.clone());
@@ -431,6 +460,7 @@ async fn render_template(
 }
 
 /// Validate a single match with a configurable timeout.
+#[allow(clippy::too_many_arguments)]
 pub async fn validate_single_match(
     m: &mut OwnedBlobMatch,
     parser: &liquid::Parser,
@@ -441,47 +471,60 @@ pub async fn validate_single_match(
     validation_timeout: Duration,
     validation_retries: u32,
     rate_limiter: Option<&crate::validation_rate_limit::ValidationRateLimiter>,
+    provider_endpoints: &ProviderEndpointOverrides,
     max_body_len: usize,
 ) {
     let fp = validation_dedup_key(m);
+    // Keep the unwind boundary inside this module so the process-wide
+    // validation de-dupe state is cleared before the caller observes a panic.
+    // The panic branch below overwrites the match with a deterministic failure.
     let timeout_result = time::timeout(
         validation_timeout,
-        timed_validate_single_match(
-            m,
-            parser,
-            clients,
-            dependent_variables,
-            missing_dependencies,
-            cache,
-            validation_timeout,
-            validation_retries,
-            rate_limiter,
-            max_body_len,
+        AssertUnwindSafe(
+            timed_validate_single_match(
+                m,
+                parser,
+                clients,
+                dependent_variables,
+                missing_dependencies,
+                cache,
+                validation_timeout,
+                validation_retries,
+                rate_limiter,
+                provider_endpoints,
+                max_body_len,
+            )
+            .boxed(),
         )
-        .boxed(),
+        .catch_unwind(),
     )
     .await;
 
-    if timeout_result.is_err() {
-        m.validation_success = false;
-        m.validation_response_body = validation_body::from_string(format!(
-            "Validation timed out after {} seconds",
-            validation_timeout.as_secs()
-        ));
-        m.validation_response_status = StatusCode::REQUEST_TIMEOUT;
-
-        VALIDATION_CACHE.get_or_init(DashMap::new).insert(
-            fp,
-            CachedResponse {
-                body: m.validation_response_body.clone(),
-                status: m.validation_response_status,
-                is_valid: false,
-                timestamp: Instant::now(),
-            },
-        );
-
-        if let Some((_, notify)) = IN_FLIGHT.get_or_init(DashMap::new).remove(&fp) {
-            notify.notify_waiters();
+    match timeout_result {
+        Ok(Ok(())) => {}
+        Ok(Err(_panic_payload)) => {
+            warn!(
+                rule_id = %m.rule.syntax().id,
+                "validator panicked; marking match as failed",
+            );
+            m.validation_success = false;
+            m.validation_response_body = validation_body::from_string(format!(
+                "Validation panicked for rule {}",
+                m.rule.syntax().id
+            ));
+            m.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
+            cache_validation_result(fp, m);
+            clear_in_flight_validation(fp);
+        }
+        Err(_) => {
+            m.validation_success = false;
+            m.validation_response_body = validation_body::from_string(format!(
+                "Validation timed out after {} seconds",
+                validation_timeout.as_secs()
+            ));
+            m.validation_response_status = StatusCode::REQUEST_TIMEOUT;
+            cache_validation_result(fp, m);
+            clear_in_flight_validation(fp);
         }
     }
 }
@@ -489,7 +532,8 @@ pub async fn validate_single_match(
 /// Perform the actual validation of a match.
 /// Guarantees that each <RULE-ID>|<secret> is validated only once per process,
 /// even when `--no-dedup` is used.
-async fn timed_validate_single_match<'a>(
+#[allow(clippy::too_many_arguments)]
+async fn timed_validate_single_match(
     m: &mut OwnedBlobMatch,
     parser: &liquid::Parser,
     clients: &ValidationClients,
@@ -499,6 +543,7 @@ async fn timed_validate_single_match<'a>(
     validation_timeout: Duration,
     validation_retries: u32,
     rate_limiter: Option<&crate::validation_rate_limit::ValidationRateLimiter>,
+    provider_endpoints: &ProviderEndpointOverrides,
     max_body_len: usize,
 ) {
     // Select the appropriate HTTP client based on rule's TLS mode preference
@@ -510,13 +555,13 @@ async fn timed_validate_single_match<'a>(
     // ──────────────────────────────────────────────────────────
     let fp = validation_dedup_key(m);
 
-    if let Some(entry) = VALIDATION_CACHE.get_or_init(DashMap::new).get(&fp) {
-        if entry.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
-            m.validation_success = entry.is_valid;
-            m.validation_response_body = entry.body.clone();
-            m.validation_response_status = entry.status;
-            return;
-        }
+    if let Some(entry) = VALIDATION_CACHE.get_or_init(DashMap::new).get(&fp)
+        && entry.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS)
+    {
+        m.validation_success = entry.is_valid;
+        m.validation_response_body = entry.body.clone();
+        m.validation_response_status = entry.status;
+        return;
     }
     if let Some(wait) =
         IN_FLIGHT.get_or_init(DashMap::new).get(&fp).map(|entry| entry.value().clone())
@@ -529,37 +574,27 @@ async fn timed_validate_single_match<'a>(
         }
         return;
     }
-    let notify = Arc::new(Notify::new());
-    IN_FLIGHT.get().unwrap().insert(fp, notify.clone());
+    IN_FLIGHT.get().unwrap().insert(fp, Arc::new(Notify::new()));
 
     // helper to persist result + notify waiters
     let commit_and_return = |m: &OwnedBlobMatch| {
-        VALIDATION_CACHE.get().unwrap().insert(
-            fp,
-            CachedResponse {
-                body: m.validation_response_body.clone(),
-                status: m.validation_response_status,
-                is_valid: m.validation_success,
-                timestamp: Instant::now(),
-            },
-        );
-        IN_FLIGHT.get().unwrap().remove(&fp);
-        notify.notify_waiters();
+        cache_validation_result(fp, m);
+        clear_in_flight_validation(fp);
     };
     // ──────────────────────────────────────────────────────────
 
     // 2. dependency check
-    if let Some(missing) = missing_dependencies.get(&m.rule.syntax().id) {
-        if !missing.is_empty() {
-            m.validation_success = false;
-            m.validation_response_body = validation_body::from_string(format!(
-                "Validation skipped - missing dependent rules: {}",
-                missing.join(", ")
-            ));
-            m.validation_response_status = StatusCode::PRECONDITION_REQUIRED;
-            commit_and_return(m);
-            return;
-        }
+    if let Some(missing) = missing_dependencies.get(&m.rule.syntax().id)
+        && !missing.is_empty()
+    {
+        m.validation_success = false;
+        m.validation_response_body = validation_body::from_string(format!(
+            "Validation skipped - missing dependent rules: {}",
+            missing.join(", ")
+        ));
+        m.validation_response_status = StatusCode::PRECONDITION_REQUIRED;
+        commit_and_return(m);
+        return;
     }
 
     // 3. capture processing
@@ -595,6 +630,8 @@ async fn timed_validate_single_match<'a>(
 
     let mut globals = Object::new();
     populate_globals_from_captures(&mut globals, &captured_values);
+    hydrate_endpoint_globals_for_rule(m.rule.id(), &mut globals);
+    provider_endpoints.apply_scan_overrides(&mut globals);
 
     // Persist named captures (non-TOKEN) for validate/revoke command generation.
     // This is especially important for gRPC validators like Modal where TOKEN_ID is required.
@@ -604,13 +641,20 @@ async fn timed_validate_single_match<'a>(
         }
         m.dependent_captures.entry(k.to_uppercase()).or_insert_with(|| v.clone());
     }
+    for endpoint_var in endpoint_var_names() {
+        if let Some(value) = globals.get(*endpoint_var).and_then(|v| v.as_scalar()) {
+            m.dependent_captures
+                .entry((*endpoint_var).to_string())
+                .or_insert_with(|| value.to_kstr().to_string());
+        }
+    }
 
     {
         let rule_syntax = m.rule.syntax();
-        if let (Some(limiter), Some(validation)) = (rate_limiter, rule_syntax.validation.as_ref()) {
-            if should_rate_limit_validation(validation) {
-                limiter.wait_for_rule(m.rule.id()).await;
-            }
+        if let (Some(limiter), Some(validation)) = (rate_limiter, rule_syntax.validation.as_ref())
+            && should_rate_limit_validation(validation)
+        {
+            limiter.wait_for_rule(m.rule.id()).await;
         }
     }
 
@@ -678,7 +722,7 @@ async fn timed_validate_single_match<'a>(
             validate_jwt_rule(m, &captured_values, use_lax_tls, clients.allow_internal_ips).await;
         }
         Some(Validation::AWS) => {
-            validate_aws_rule(m, &captured_values, cache).await;
+            validate_aws_rule(m, &captured_values, dependent_variables, cache).await;
         }
         Some(Validation::GCP) => {
             validate_gcp_rule(m, &globals, cache).await;
@@ -708,6 +752,7 @@ async fn timed_validate_single_match<'a>(
 // Extracted validator functions
 // ═══════════════════════════════════════════════════════════════
 
+#[allow(clippy::too_many_arguments)]
 async fn validate_http(
     m: &mut OwnedBlobMatch,
     http_validation: &kingfisher_rules::rule::HttpValidation,
@@ -964,6 +1009,7 @@ async fn validate_http(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn validate_grpc(
     m: &mut OwnedBlobMatch,
     grpc_validation_cfg: &kingfisher_rules::rule::GrpcValidation,
@@ -1023,9 +1069,9 @@ async fn validate_grpc(
         headers.get("grpc-message").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
     if grpc_status == "0" {
         body = "grpc-status=0".to_string();
-    } else if body.trim().is_empty() && (!grpc_status.is_empty() || !grpc_message.is_empty()) {
-        body = format!("grpc-status={grpc_status} grpc-message={grpc_message}");
-    } else if body.as_bytes().contains(&0) {
+    } else if (body.trim().is_empty() && (!grpc_status.is_empty() || !grpc_message.is_empty()))
+        || body.as_bytes().contains(&0)
+    {
         body = format!("grpc-status={grpc_status} grpc-message={grpc_message}");
     }
     if max_body_len > 0 {
@@ -1171,7 +1217,7 @@ async fn validate_azure_storage(
         .map(|(_, v, ..)| v.clone())
         .unwrap_or_default();
     let storage_account =
-        utils::find_closest_variable(captured_values, &storage_key, "TOKEN", "AZURENAME")
+        utils::find_closest_variable(captured_values, storage_key.as_str(), "TOKEN", "AZURENAME")
             .unwrap_or_default();
 
     if storage_account.is_empty() || storage_key.is_empty() {
@@ -1376,6 +1422,7 @@ async fn validate_jwt_rule(
 async fn validate_aws_rule(
     m: &mut OwnedBlobMatch,
     captured_values: &[(String, String, usize, usize)],
+    dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
     cache: &Cache,
 ) {
     let secret = captured_values
@@ -1383,10 +1430,8 @@ async fn validate_aws_rule(
         .find(|(n, ..)| n == "TOKEN")
         .map(|(_, v, ..)| v.clone())
         .unwrap_or_default();
-    let akid =
-        utils::find_closest_variable(captured_values, &secret, "TOKEN", "AKID").unwrap_or_default();
 
-    if akid.is_empty() || secret.is_empty() {
+    if secret.is_empty() {
         m.validation_success = false;
         m.validation_response_body =
             validation_body::from_string("Missing AWS access-key ID or secret.".to_string());
@@ -1394,77 +1439,167 @@ async fn validate_aws_rule(
         return;
     }
 
-    let cache_key = aws::generate_aws_cache_key(&akid, &secret);
-    if let Some(cached) = cache.get(&cache_key) {
-        let c = cached.value();
-        if c.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
-            m.validation_success = c.is_valid;
-            m.validation_response_body = c.body.clone();
-            m.validation_response_status = c.status;
-            return;
-        }
-    }
+    let akid_candidates = aws_akid_candidates(
+        captured_values,
+        dependent_variables.get("AKID"),
+        m.matching_input_offset_span,
+        &secret,
+    );
 
-    if let Some(account_id) = aws::should_skip_aws_validation(&akid) {
-        m.validation_success = false;
-        m.validation_response_body = validation_body::from_string(format!(
-            "(skip list entry) AWS validation not attempted for account {}.",
-            account_id
-        ));
-        m.validation_response_status = StatusCode::PRECONDITION_REQUIRED;
-        cache.insert(
-            cache_key,
-            CachedResponse {
-                body: m.validation_response_body.clone(),
-                status: m.validation_response_status,
-                is_valid: m.validation_success,
-                timestamp: Instant::now(),
-            },
-        );
-        return;
-    }
-
-    if let Err(e) = aws::validate_aws_credentials_input(&akid, &secret) {
+    if akid_candidates.is_empty() {
         m.validation_success = false;
         m.validation_response_body =
-            validation_body::from_string(format!("Invalid AWS credentials ({}): {}", akid, e));
+            validation_body::from_string("Missing AWS access-key ID or secret.".to_string());
         m.validation_response_status = StatusCode::BAD_REQUEST;
         return;
     }
 
-    match aws::validate_aws_credentials(&akid, &secret).await {
-        Ok((ok, msg)) => {
-            m.validation_success = ok;
-            if ok {
-                let mut body = format!("{} --- ARN: {}", akid, msg);
-                if let Ok(acct) = aws::aws_key_to_account_number(&akid) {
-                    body.push_str(&format!(" --- AWS Account Number: {:012}", acct));
+    let mut last_body = None;
+    let mut last_status = StatusCode::UNAUTHORIZED;
+
+    for akid in akid_candidates {
+        let cache_key = aws::generate_aws_cache_key(&akid, &secret);
+        if let Some(cached) = cache.get(&cache_key) {
+            let c = cached.value();
+            if c.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
+                if c.is_valid {
+                    m.validation_success = c.is_valid;
+                    m.validation_response_body = c.body.clone();
+                    m.validation_response_status = c.status;
+                    return;
                 }
-                m.validation_response_body = validation_body::from_string(body);
-                m.validation_response_status = StatusCode::OK;
-            } else {
-                m.validation_response_body = validation_body::from_string(format!(
-                    "AWS validation error ({}): {}",
-                    akid, msg
-                ));
-                m.validation_response_status = StatusCode::UNAUTHORIZED;
+                last_body = Some(c.body.clone());
+                last_status = c.status;
+                continue;
             }
+        }
+
+        if let Some(account_id) = aws::should_skip_aws_validation(&akid) {
+            let body = validation_body::from_string(format!(
+                "(skip list entry) AWS validation not attempted for account {}.",
+                account_id
+            ));
             cache.insert(
                 cache_key,
                 CachedResponse {
-                    body: m.validation_response_body.clone(),
-                    status: m.validation_response_status,
-                    is_valid: m.validation_success,
+                    body: body.clone(),
+                    status: StatusCode::PRECONDITION_REQUIRED,
+                    is_valid: false,
                     timestamp: Instant::now(),
                 },
             );
+            last_body = Some(body);
+            last_status = StatusCode::PRECONDITION_REQUIRED;
+            continue;
         }
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("AWS validation error ({}): {}", akid, e));
-            m.validation_response_status = StatusCode::BAD_GATEWAY;
+
+        if let Err(e) = aws::validate_aws_credentials_input(&akid, &secret) {
+            let body =
+                validation_body::from_string(format!("Invalid AWS credentials ({}): {}", akid, e));
+            cache.insert(
+                cache_key,
+                CachedResponse {
+                    body: body.clone(),
+                    status: StatusCode::BAD_REQUEST,
+                    is_valid: false,
+                    timestamp: Instant::now(),
+                },
+            );
+            last_body = Some(body);
+            last_status = StatusCode::BAD_REQUEST;
+            continue;
         }
+
+        match aws::validate_aws_credentials(&akid, &secret).await {
+            Ok((ok, msg)) => {
+                if ok {
+                    m.validation_success = true;
+                    let mut body = format!("{} --- ARN: {}", akid, msg);
+                    if let Ok(acct) = aws::aws_key_to_account_number(&akid) {
+                        body.push_str(&format!(" --- AWS Account Number: {:012}", acct));
+                    }
+                    m.validation_response_body = validation_body::from_string(body);
+                    m.validation_response_status = StatusCode::OK;
+                    cache.insert(
+                        cache_key,
+                        CachedResponse {
+                            body: m.validation_response_body.clone(),
+                            status: m.validation_response_status,
+                            is_valid: true,
+                            timestamp: Instant::now(),
+                        },
+                    );
+                    return;
+                }
+
+                let body = validation_body::from_string(format!(
+                    "AWS validation error ({}): {}",
+                    akid, msg
+                ));
+                cache.insert(
+                    cache_key,
+                    CachedResponse {
+                        body: body.clone(),
+                        status: StatusCode::UNAUTHORIZED,
+                        is_valid: false,
+                        timestamp: Instant::now(),
+                    },
+                );
+                last_body = Some(body);
+                last_status = StatusCode::UNAUTHORIZED;
+            }
+            Err(e) => {
+                last_body = Some(validation_body::from_string(format!(
+                    "AWS validation error ({}): {}",
+                    akid, e
+                )));
+                last_status = StatusCode::BAD_GATEWAY;
+            }
+        }
+    }
+
+    m.validation_success = false;
+    m.validation_response_body = last_body.unwrap_or_else(|| {
+        validation_body::from_string("AWS validation failed for all nearby access-key IDs.")
+    });
+    m.validation_response_status = last_status;
+}
+
+fn aws_akid_candidates(
+    captured_values: &[(String, String, usize, usize)],
+    dependent_akids: Option<&Vec<(String, OffsetSpan)>>,
+    target_span: OffsetSpan,
+    secret: &str,
+) -> Vec<String> {
+    let mut candidates = Vec::new();
+
+    if let Some(closest) = utils::find_closest_variable(captured_values, secret, "TOKEN", "AKID") {
+        candidates.push((0usize, closest));
+    }
+
+    if let Some(values) = dependent_akids {
+        candidates.extend(
+            values
+                .iter()
+                .map(|(value, span)| (dependency_distance(*span, target_span), value.clone())),
+        );
+    }
+
+    candidates.sort_by_key(|(distance, _)| *distance);
+
+    let mut seen = FxHashSet::default();
+    candidates
+        .into_iter()
+        .filter_map(|(_, value)| if seen.insert(value.clone()) { Some(value) } else { None })
+        .take(64)
+        .collect()
+}
+
+fn dependency_distance(span: OffsetSpan, target_span: OffsetSpan) -> usize {
+    if span.end <= target_span.start {
+        target_span.start - span.end
+    } else {
+        span.start.saturating_sub(target_span.end)
     }
 }
 
@@ -1495,7 +1630,7 @@ async fn validate_gcp_rule(m: &mut OwnedBlobMatch, globals: &Object, cache: &Cac
     }
 
     match gcp::GcpValidator::global() {
-        Ok(validator) => match validator.validate_gcp_credentials(&gcp_json.as_bytes()).await {
+        Ok(validator) => match validator.validate_gcp_credentials(gcp_json.as_bytes()).await {
             Ok((ok, meta)) => {
                 m.validation_success = ok;
                 m.validation_response_body = validation_body::from_string(meta.join("\n"));
@@ -1609,7 +1744,7 @@ fn populate_globals_from_captures(
 
     for (k, v, ..) in captured_values {
         if k.eq_ignore_ascii_case("TOKEN") {
-            if best_token.map_or(true, |best| v.len() >= best.len()) {
+            if best_token.is_none_or(|best| v.len() >= best.len()) {
                 best_token = Some(v);
             }
         } else {
@@ -1729,6 +1864,47 @@ mod tests {
 
         assert_eq!(selected.0, "first");
         assert_eq!(selected.1, OffsetSpan::from_range(70..80));
+    }
+
+    #[test]
+    fn aws_akid_candidates_orders_by_proximity_and_deduplicates() {
+        let captured_values = vec![
+            ("TOKEN".to_string(), "secret".to_string(), 100usize, 140usize),
+            ("AKID".to_string(), "closest_capture".to_string(), 80usize, 90usize),
+        ];
+        let dependent_akids = vec![
+            ("far_before".to_string(), OffsetSpan::from_range(10..20)),
+            ("near_after".to_string(), OffsetSpan::from_range(150..160)),
+            ("overlap".to_string(), OffsetSpan::from_range(110..120)),
+            ("closest_capture".to_string(), OffsetSpan::from_range(80..90)),
+        ];
+
+        let candidates = aws_akid_candidates(
+            &captured_values,
+            Some(&dependent_akids),
+            OffsetSpan::from_range(100..140),
+            "secret",
+        );
+
+        assert_eq!(candidates, vec!["closest_capture", "overlap", "near_after", "far_before"]);
+    }
+
+    #[test]
+    fn aws_akid_candidates_caps_unique_candidates() {
+        let dependent_akids = (0..70)
+            .map(|i| (format!("akid{i}"), OffsetSpan::from_range((i * 2)..(i * 2 + 1))))
+            .collect::<Vec<_>>();
+
+        let candidates = aws_akid_candidates(
+            &[],
+            Some(&dependent_akids),
+            OffsetSpan::from_range(1_000..1_010),
+            "secret",
+        );
+
+        assert_eq!(candidates.len(), 64);
+        assert_eq!(candidates.first().map(String::as_str), Some("akid69"));
+        assert_eq!(candidates.last().map(String::as_str), Some("akid6"));
     }
 
     #[test]

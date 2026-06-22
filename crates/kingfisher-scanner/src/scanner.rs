@@ -314,7 +314,7 @@ impl Scanner {
 
         for item in b64_items {
             // Try to match decoded content against all rules
-            for (_rule_id, rule) in self.rules_db.rules().iter().enumerate() {
+            for rule in self.rules_db.rules() {
                 let regex = match rule.syntax().as_regex() {
                     Ok(r) => r,
                     Err(_) => continue,

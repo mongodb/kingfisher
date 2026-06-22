@@ -8,6 +8,11 @@ There are two ways to produce access maps:
   Kingfisher validates detected secrets and automatically generates access-map entries for supported credential types.
 - **Standalone**: `kingfisher access-map <provider> [credential_file]`  
   This reads a credential artifact from disk and maps it directly.
+  Standalone access-map defaults to JSON output. The examples below use
+  `--format json` explicitly so the output type stays unambiguous when
+  redirecting to a file. Use `--format html` for a standalone HTML report,
+  and `--output <PATH>` if you prefer writing directly instead of using shell
+  redirection.
 
 > Access mapping runs additional network requests. Only use it when you are authorized to inspect the target account/workspace.
 
@@ -22,8 +27,7 @@ flowchart LR
     Dispatch --> Provider[Provider mapper]
     Provider --> APIs[Provider APIs]
     APIs --> Result[AccessMapResult]
-    Result --> JSON[JSON stdout or file]
-    Result --> HTML[Optional HTML report]
+    Result --> Output[JSON or HTML output]
 ```
 
 ### Scan-Time Flow
@@ -77,7 +81,7 @@ Access map only runs for credential types Kingfisher knows how to authenticate w
 
 ```bash
 printf '%s' 'ghp_example...' > ./github.token
-kingfisher access-map github ./github.token --json-out github.access-map.json
+kingfisher access-map github ./github.token --format json > github.access-map.json
 ```
 
 #### Notes (GitHub)
@@ -94,7 +98,7 @@ kingfisher access-map github ./github.token --json-out github.access-map.json
 
 ```bash
 printf '%s' 'glpat-example...' > ./gitlab.token
-kingfisher access-map gitlab ./gitlab.token --json-out gitlab.access-map.json
+kingfisher access-map gitlab ./gitlab.token --format json > gitlab.access-map.json
 ```
 
 #### Notes (GitLab)
@@ -111,7 +115,7 @@ kingfisher access-map gitlab ./gitlab.token --json-out gitlab.access-map.json
 
 ```bash
 printf '%s' 'xoxp-example...' > ./slack.token
-kingfisher access-map slack ./slack.token --json-out slack.access-map.json
+kingfisher access-map slack ./slack.token --format json > slack.access-map.json
 ```
 
 ### AWS (`aws`)
@@ -138,7 +142,7 @@ cat > ./aws.json <<'EOF'
 }
 EOF
 
-kingfisher access-map aws ./aws.json --json-out aws.access-map.json
+kingfisher access-map aws ./aws.json --format json > aws.access-map.json
 ```
 
 ```bash
@@ -148,7 +152,7 @@ aws_secret_access_key=....
 aws_session_token=....
 EOF
 
-kingfisher access-map aws ./aws.env --json-out aws.access-map.json
+kingfisher access-map aws ./aws.env --format json > aws.access-map.json
 ```
 
 Kingfisher performs read-only enumeration for the IAM principal and, when allowed by the credential, visible resources in several common AWS services including S3, EC2, IAM, Lambda, DynamoDB, KMS, Secrets Manager, SQS, SNS, RDS, ECR, and SSM Parameter Store.
@@ -177,7 +181,7 @@ cat > ./alibaba.json <<'EOF'
 }
 EOF
 
-kingfisher access-map alibaba ./alibaba.json --json-out alibaba.access-map.json
+kingfisher access-map alibaba ./alibaba.json --format json > alibaba.access-map.json
 ```
 
 ```bash
@@ -187,7 +191,7 @@ access_key_secret=....
 security_token=....
 EOF
 
-kingfisher access-map alibaba ./alibaba.env --json-out alibaba.access-map.json
+kingfisher access-map alibaba ./alibaba.env --format json > alibaba.access-map.json
 ```
 
 Kingfisher resolves the Alibaba Cloud caller identity with `sts:GetCallerIdentity` for both long-lived access key pairs and STS temporary credentials discovered during scanning. Current coverage is identity-focused: it maps the account and resolved RAM principal, and records that broader Alibaba service enumeration is not yet available.
@@ -199,7 +203,7 @@ Kingfisher resolves the Alibaba Cloud caller identity with `sts:GetCallerIdentit
 #### Standalone example (GCP)
 
 ```bash
-kingfisher access-map gcp ./service-account.json --json-out gcp.access-map.json
+kingfisher access-map gcp ./service-account.json --format json > gcp.access-map.json
 ```
 
 ### Azure Storage (`azure`)
@@ -218,7 +222,7 @@ cat > ./azure-storage.json <<'EOF'
 }
 EOF
 
-kingfisher access-map azure ./azure-storage.json --json-out azure.access-map.json
+kingfisher access-map azure ./azure-storage.json --format json > azure.access-map.json
 ```
 
 Kingfisher treats the account key as full-control Storage credentials and performs best-effort enumeration across Blob containers, File shares, and Queue resources reachable with that key.
@@ -235,7 +239,7 @@ Azure DevOps access mapping is supported when a **validated Azure DevOps PAT** i
 
 ```bash
 printf '%s' 'postgres://user:pass@db.example.com:5432/mydb' > ./postgres.uri
-kingfisher access-map postgres ./postgres.uri --json-out postgres.access-map.json
+kingfisher access-map postgres ./postgres.uri --format json > postgres.access-map.json
 ```
 
 ### MongoDB (`mongodb` / `mongo`)
@@ -246,7 +250,7 @@ kingfisher access-map postgres ./postgres.uri --json-out postgres.access-map.jso
 
 ```bash
 printf '%s' 'mongodb+srv://user:pass@cluster.example.net/?retryWrites=true&w=majority' > ./mongodb.uri
-kingfisher access-map mongodb ./mongodb.uri --json-out mongodb.access-map.json
+kingfisher access-map mongodb ./mongodb.uri --format json > mongodb.access-map.json
 ```
 
 ### Hugging Face (`huggingface` / `hf`)
@@ -262,7 +266,7 @@ Kingfisher queries the `/api/whoami-v2` endpoint to resolve the token identity, 
 
 ```bash
 printf '%s' 'hf_example...' > ./huggingface.token
-kingfisher access-map huggingface ./huggingface.token --json-out huggingface.access-map.json
+kingfisher access-map huggingface ./huggingface.token --format json > huggingface.access-map.json
 ```
 
 #### Notes (Hugging Face)
@@ -281,7 +285,7 @@ Kingfisher queries `/api/v1/user` for identity, enumerates organizations via `/a
 
 ```bash
 printf '%s' 'your_gitea_pat...' > ./gitea.token
-kingfisher access-map gitea ./gitea.token --json-out gitea.access-map.json
+kingfisher access-map gitea ./gitea.token --format json > gitea.access-map.json
 ```
 
 #### Notes (Gitea)
@@ -300,7 +304,7 @@ Kingfisher queries `/2.0/user` for identity, enumerates workspace memberships an
 
 ```bash
 printf '%s' 'your_bitbucket_token...' > ./bitbucket.token
-kingfisher access-map bitbucket ./bitbucket.token --json-out bitbucket.access-map.json
+kingfisher access-map bitbucket ./bitbucket.token --format json > bitbucket.access-map.json
 ```
 
 #### Notes (Bitbucket)
@@ -319,7 +323,7 @@ Kingfisher queries `/v2/access-token` for token metadata and scopes, `/v2/user` 
 
 ```bash
 printf '%s' 'bkua_example...' > ./buildkite.token
-kingfisher access-map buildkite ./buildkite.token --json-out buildkite.access-map.json
+kingfisher access-map buildkite ./buildkite.token --format json > buildkite.access-map.json
 ```
 
 #### Notes (Buildkite)
@@ -343,7 +347,7 @@ If organizations/projects are not enumerable (scope-limited keys), Kingfisher st
 
 ```bash
 printf '%s' 'pat.example...' > ./harness.token
-kingfisher access-map harness ./harness.token --json-out harness.access-map.json
+kingfisher access-map harness ./harness.token --format json > harness.access-map.json
 ```
 
 #### Notes (Harness)
@@ -368,7 +372,7 @@ Kingfisher performs read-only scope probing and best-effort resource enumeration
 
 ```bash
 printf '%s' 'sk-example...' > ./openai.token
-kingfisher access-map openai ./openai.token --json-out openai.access-map.json
+kingfisher access-map openai ./openai.token --format json > openai.access-map.json
 ```
 
 #### Notes (OpenAI)
@@ -390,7 +394,7 @@ Kingfisher performs read-only enumeration via:
 
 ```bash
 printf '%s' 'sk-ant-api-example...' > ./anthropic.token
-kingfisher access-map anthropic ./anthropic.token --json-out anthropic.access-map.json
+kingfisher access-map anthropic ./anthropic.token --format json > anthropic.access-map.json
 ```
 
 #### Notes (Anthropic)
@@ -425,7 +429,7 @@ cat > ./salesforce.json <<'EOF'
 }
 EOF
 
-kingfisher access-map salesforce ./salesforce.json --json-out salesforce.access-map.json
+kingfisher access-map salesforce ./salesforce.json --format json > salesforce.access-map.json
 ```
 
 #### Notes (Salesforce)
@@ -447,7 +451,7 @@ Kingfisher performs read-only identity resolution via:
 
 ```bash
 printf '%s' 'wandb_v1_example...' > ./wandb.token
-kingfisher access-map weightsandbiases ./wandb.token --json-out wandb.access-map.json
+kingfisher access-map weightsandbiases ./wandb.token --format json > wandb.access-map.json
 ```
 
 #### Notes (Weights & Biases)
@@ -468,7 +472,7 @@ Kingfisher parses the webhook URL to extract the tenant ID and webhook identity,
 
 ```bash
 printf '%s' 'https://contoso.webhook.office.com/webhookb2/...' > ./teams.webhook
-kingfisher access-map microsoftteams ./teams.webhook --json-out teams.access-map.json
+kingfisher access-map microsoftteams ./teams.webhook --format json > teams.access-map.json
 ```
 
 #### Notes (Microsoft Teams)
@@ -494,7 +498,7 @@ Severity is Critical for account administrators, High for standard members with 
 
 ```bash
 printf '%s' 'eyJhbGciOi...' > ./monday.token
-kingfisher access-map monday ./monday.token --json-out monday.access-map.json
+kingfisher access-map monday ./monday.token --format json > monday.access-map.json
 ```
 
 #### Notes (monday.com)
@@ -524,7 +528,7 @@ Severity is High when the token reaches an organization workspace with more than
 
 ```bash
 printf '%s' '2/12345.../abcdef...' > ./asana.token
-kingfisher access-map asana ./asana.token --json-out asana.access-map.json
+kingfisher access-map asana ./asana.token --format json > asana.access-map.json
 ```
 
 #### Notes (Asana)
@@ -533,8 +537,35 @@ kingfisher access-map asana ./asana.token --json-out asana.access-map.json
 - `token_details.token_type` is classified from the token prefix (`personal_access_token_v2`, `personal_access_token_v1`, `oauth_or_legacy_pat`, or generic `asana_token`).
 - Recorded during `scan --access-map` for validated `kingfisher.asana.3`, `kingfisher.asana.4`, and `kingfisher.asana.5` findings only. `kingfisher.asana.1` is a client ID and `kingfisher.asana.2` is a client secret (requiring the client ID for an OAuth exchange), so neither is used on its own to enumerate user-level resources.
 
+### Pinecone (`pinecone`)
+
+- **Credential**: a single Pinecone API key (read from a file for `kingfisher access-map pinecone <FILE>`).
+- **Token types supported**: API keys accepted by Pinecone's control-plane API with the `Api-Key: <KEY>` header.
+
+Kingfisher performs read-only enumeration against `https://api.pinecone.io` (`X-Pinecone-API-Version: 2025-10`):
+
+- `GET /indexes` for index inventory, dimension, metric, status, deletion-protection state, and serverless cloud/region or pod environment/type
+- `GET /collections` for collection inventory in pod-based projects (gracefully skipped on serverless-only projects)
+
+Severity is High when the token reaches more than 10 indexes, Medium when it reaches one or more indexes (especially with deletion protection disabled) or any collections, and Low for empty projects or validation failures.
+
+#### Standalone example (Pinecone)
+
+```bash
+printf '%s' '62b0dbfe-3489-4b79-b850-34d911527c88' > ./pinecone.key
+kingfisher access-map pinecone ./pinecone.key --format json > pinecone.access-map.json
+```
+
+The `kingfisher blast-radius` and `kingfisher blast_radius` aliases also work for any provider, e.g. `kingfisher blast-radius pinecone ./pinecone.key`.
+
+#### Notes (Pinecone)
+
+- Pinecone API keys do not carry granular scopes; access follows the API key's project-level permissions, which include read and write (upsert/delete) against any index in the project.
+- Indexes with `deletion_protection: enabled` are flagged in the resource record but still accessible for read/write.
+- Recorded during `scan --access-map` (or the `--blast-radius` alias) for validated `kingfisher.pinecone.1` findings.
+
 ## Notes on access-map generation during `scan --access-map`
 
 - Access-map entries are only recorded for **validated** findings.
 - Some providers require extra context that Kingfisher infers from the finding context or validation response (for example, Azure DevOps organization name).
-- Validated Hugging Face, Gitea, Bitbucket, Buildkite, Harness, OpenAI, Anthropic, Salesforce, Weights & Biases, Microsoft Teams, monday.com, and Asana credentials discovered during scans with `--access-map` are automatically collected and mapped, matching the existing behavior for other platforms.
+- Validated Hugging Face, Gitea, Bitbucket, Buildkite, Harness, OpenAI, Anthropic, Salesforce, Weights & Biases, Microsoft Teams, monday.com, Asana, and Pinecone credentials discovered during scans with `--access-map` (or the `--blast-radius` alias) are automatically collected and mapped, matching the existing behavior for other platforms.

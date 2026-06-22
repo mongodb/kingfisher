@@ -106,39 +106,38 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
         roles.push(RoleBinding { name: role_name, source, permissions });
     }
 
-    if roles.is_empty() {
-        if let Some(project) = project_id.as_deref() {
-            let mut tested_permissions =
-                test_project_permissions(&http_client, &access_token, project)
-                    .await
-                    .unwrap_or_else(|e| {
-                        verbose_warn!("GCP access-map: failed testIamPermissions fallback: {e}");
-                        Vec::new()
-                    });
+    if roles.is_empty()
+        && let Some(project) = project_id.as_deref()
+    {
+        let mut tested_permissions = test_project_permissions(&http_client, &access_token, project)
+            .await
+            .unwrap_or_else(|e| {
+                verbose_warn!("GCP access-map: failed testIamPermissions fallback: {e}");
+                Vec::new()
+            });
 
-            if tested_permissions.is_empty() {
-                tested_permissions = test_service_account_permissions(
-                    &http_client,
-                    &access_token,
-                    project,
-                    &client_email,
-                )
-                .await
-                .unwrap_or_else(|e| {
-                    verbose_warn!(
-                        "GCP access-map: failed serviceAccount testIamPermissions fallback: {e}"
-                    );
-                    Vec::new()
-                });
-            }
+        if tested_permissions.is_empty() {
+            tested_permissions = test_service_account_permissions(
+                &http_client,
+                &access_token,
+                project,
+                &client_email,
+            )
+            .await
+            .unwrap_or_else(|e| {
+                verbose_warn!(
+                    "GCP access-map: failed serviceAccount testIamPermissions fallback: {e}"
+                );
+                Vec::new()
+            });
+        }
 
-            if !tested_permissions.is_empty() {
-                roles.push(RoleBinding {
-                    name: "testIamPermissions".into(),
-                    source: "project".into(),
-                    permissions: tested_permissions,
-                });
-            }
+        if !tested_permissions.is_empty() {
+            roles.push(RoleBinding {
+                name: "testIamPermissions".into(),
+                source: "project".into(),
+                permissions: tested_permissions,
+            });
         }
     }
 
@@ -323,12 +322,11 @@ async fn fetch_project_ancestry(
     let mut ancestors = Vec::new();
     if let Some(arr) = json.get("ancestor").and_then(|a| a.as_array()) {
         for item in arr {
-            if let Some(resource) = item.get("resourceId") {
-                if let (Some(kind), Some(id)) = (resource.get("type"), resource.get("id")) {
-                    if let (Some(kind), Some(id)) = (kind.as_str(), id.as_str()) {
-                        ancestors.push(Ancestor { kind: kind.to_string(), id: id.to_string() });
-                    }
-                }
+            if let Some(resource) = item.get("resourceId")
+                && let (Some(kind), Some(id)) = (resource.get("type"), resource.get("id"))
+                && let (Some(kind), Some(id)) = (kind.as_str(), id.as_str())
+            {
+                ancestors.push(Ancestor { kind: kind.to_string(), id: id.to_string() });
             }
         }
     }
@@ -501,9 +499,10 @@ async fn fetch_role_permissions(
     token: &str,
     role_name: &str,
 ) -> Result<Vec<String>> {
-    let url = if role_name.starts_with("roles/") {
-        format!("https://iam.googleapis.com/v1/{role_name}")
-    } else if role_name.starts_with("projects/") || role_name.starts_with("organizations/") {
+    let url = if role_name.starts_with("roles/")
+        || role_name.starts_with("projects/")
+        || role_name.starts_with("organizations/")
+    {
         format!("https://iam.googleapis.com/v1/{role_name}")
     } else {
         format!("https://iam.googleapis.com/v1/roles/{role_name}")

@@ -910,6 +910,154 @@
     .badge-github { background: #f4f4f5; color: #18181b; border-color: #d4d4d8; }
     .badge-gitlab { background: #fff1f2; color: #be123c; border-color: #fecdd3; }
     .badge-perm { background: #ecfdf5; color: #16a34a; border-color: #bbf7d0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
+    .badge-perm--admin    { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+    .badge-perm--privesc  { background: #fff7ed; color: #c2410c; border-color: #fed7aa; }
+    .badge-perm--risky    { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+    .badge-perm--readonly { background: #ecfdf5; color: #16a34a; border-color: #bbf7d0; }
+
+    /* Severity rollup chips on the card header */
+    .id-card__rollup {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      margin-top: 6px;
+    }
+
+    .rollup-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      padding: 2px 8px;
+      border-radius: 999px;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid transparent;
+      letter-spacing: 0.01em;
+    }
+
+    .rollup-chip--admin    { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
+    .rollup-chip--privesc  { background: #fff7ed; color: #c2410c; border-color: #fed7aa; }
+    .rollup-chip--risky    { background: #fffbeb; color: #b45309; border-color: #fde68a; }
+    .rollup-chip--readonly { background: #ecfdf5; color: #16a34a; border-color: #bbf7d0; }
+
+    /* Identity discriminator subtitle */
+    .id-card__discriminator {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      word-break: break-all;
+    }
+
+    /* Provider section header */
+    .am-provider-section { margin-bottom: 18px; }
+    .am-provider-header {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding: 10px 14px;
+      background: linear-gradient(180deg, rgba(0, 237, 100, 0.04), transparent), var(--surface-muted);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      cursor: pointer;
+      user-select: none;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    .am-provider-header:hover { border-color: var(--border-strong); }
+    .am-provider-header__caret { font-size: 11px; color: var(--text-muted); width: 10px; }
+    .am-provider-header__title { font-weight: 700; }
+    .am-provider-header__sub {
+      color: var(--text-muted);
+      font-size: 12px;
+      margin-left: auto;
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+    .am-provider-section__cards { display: flex; flex-direction: column; gap: 12px; }
+    .am-provider-section.collapsed .am-provider-section__cards { display: none; }
+    .am-provider-section.collapsed .am-provider-header__caret { transform: rotate(-90deg); }
+
+    /* Group inside expanded card body */
+    .perm-group {
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .perm-group:last-child { margin-bottom: 0; }
+    .perm-group__resources {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 10px;
+    }
+    .perm-group__resource {
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: 11px;
+      padding: 4px 8px;
+      border-radius: 8px;
+      background: var(--surface-muted);
+      border: 1px solid var(--border);
+      color: var(--text-main);
+      word-break: break-all;
+    }
+    .perm-group__resource a {
+      color: var(--brand);
+      margin-left: 4px;
+      font-size: 10px;
+    }
+    .perm-group__shared-note {
+      font-size: 11px;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+      font-style: italic;
+    }
+
+    /* Severity sub-section inside a permission group */
+    .perm-severity {
+      margin-top: 8px;
+    }
+    .perm-severity__title {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+      color: var(--text-muted);
+      margin-bottom: 6px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .perm-severity__title .perm-severity__caret { font-size: 10px; }
+    .perm-severity__pills { display: flex; flex-wrap: wrap; gap: 3px; }
+    .perm-severity.collapsed .perm-severity__pills { display: none; }
+    .perm-severity.collapsed .perm-severity__caret { transform: rotate(-90deg); }
+
+    /* Critical-only filter toggle */
+    .am-toolbar__toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      padding: 4px 10px;
+      border: 1px solid var(--border);
+      border-radius: 999px;
+      background: var(--surface);
+      user-select: none;
+    }
+    .am-toolbar__toggle input { margin: 0; cursor: pointer; }
+    .am-toolbar__toggle.active {
+      border-color: #fca5a5;
+      color: #b91c1c;
+      background: #fef2f2;
+    }
 
     .detail-grid {
       display: grid;
@@ -2199,8 +2347,12 @@
               <div id="am-empty-notice" class="am-empty-hint hidden">No Access Map entries in this report. Run a scan with <code>--access-map</code> to map credential blast radius.</div>
               <div class="am-container" id="am-container">
                 <div id="am-stats-bar" class="am-stats hidden"></div>
-                <div class="am-toolbar">
-                  <input id="tree-search" type="text" placeholder="Filter by identity, resource, or permission…">
+                <div class="am-toolbar" style="display:flex; gap:10px; align-items:center;">
+                  <input id="tree-search" type="text" placeholder="Filter by identity, resource, or permission…" style="flex:1;">
+                  <label id="am-critical-toggle" class="am-toolbar__toggle" title="Hide read-only permissions and identities with no admin / privilege-escalation / risky permissions.">
+                    <input type="checkbox" id="am-critical-checkbox">
+                    <span>Critical only</span>
+                  </label>
                 </div>
                 <div id="am-card-list" class="am-card-list">
                   <div style="color:var(--text-muted); font-size:13px; text-align:center; padding:32px 0;">
@@ -2675,6 +2827,22 @@
     treeSearch.addEventListener("input", (e) => {
       renderAccessMapTree(e.target.value || "");
     });
+
+    const criticalCheckbox = document.getElementById("am-critical-checkbox");
+    const criticalToggleWrap = document.getElementById("am-critical-toggle");
+    if (criticalCheckbox) {
+      criticalCheckbox.checked = isCriticalOnly();
+      if (criticalToggleWrap) {
+        criticalToggleWrap.classList.toggle("active", criticalCheckbox.checked);
+      }
+      criticalCheckbox.addEventListener("change", () => {
+        setCriticalOnly(criticalCheckbox.checked);
+        if (criticalToggleWrap) {
+          criticalToggleWrap.classList.toggle("active", criticalCheckbox.checked);
+        }
+        renderAccessMapTree(treeSearch.value || "");
+      });
+    }
 
     if (amToggle) {
       amToggle.addEventListener("click", () => {
@@ -6107,6 +6275,79 @@
       win.focus();
     }
 
+    // Local-storage key for the "Critical only" preset.
+    const AM_CRITICAL_KEY = "kf-access-map-critical-only";
+
+    function isCriticalOnly() {
+      try { return localStorage.getItem(AM_CRITICAL_KEY) === "1"; }
+      catch (_) { return false; }
+    }
+
+    function setCriticalOnly(value) {
+      try { localStorage.setItem(AM_CRITICAL_KEY, value ? "1" : "0"); }
+      catch (_) { /* ignore */ }
+    }
+
+    // SEVERITY_ORDER and labels used throughout the renderer.
+    const SEVERITY_BUCKETS = [
+      { key: "admin",                label: "Admin",                cls: "admin"    },
+      { key: "privilege_escalation", label: "Privilege Escalation", cls: "privesc"  },
+      { key: "risky",                label: "Risky",                cls: "risky"    },
+      { key: "read_only",            label: "Read Only",            cls: "readonly" },
+    ];
+
+    // Classify a permission list using the identity's permissions_by_severity
+    // map when available; otherwise treat all permissions as "risky" (unknown
+    // classification — better than green "read only" by default).
+    function classifyPermissions(perms, byClass) {
+      const out = { admin: [], privilege_escalation: [], risky: [], read_only: [] };
+      if (!perms || !perms.length) return out;
+      if (!byClass) {
+        out.risky = perms.slice();
+        return out;
+      }
+      const lookup = new Map();
+      Object.keys(out).forEach((k) => {
+        (byClass[k] || []).forEach((p) => lookup.set(String(p).toLowerCase(), k));
+      });
+      perms.forEach((p) => {
+        const cls = lookup.get(String(p).toLowerCase()) || "risky";
+        out[cls].push(p);
+      });
+      return out;
+    }
+
+    // Aggregate per-identity severity counts across all groups.
+    function summarizeSeverity(entry) {
+      const byClass = entry.identity && entry.identity.permissions_by_severity;
+      if (byClass) {
+        return {
+          admin: (byClass.admin || []).length,
+          privilege_escalation: (byClass.privilege_escalation || []).length,
+          risky: (byClass.risky || []).length,
+          read_only: (byClass.read_only || []).length,
+        };
+      }
+      const all = new Set();
+      (entry.groups || []).forEach((g) => (g.permissions || []).forEach((p) => all.add(p)));
+      return { admin: 0, privilege_escalation: 0, risky: all.size, read_only: 0 };
+    }
+
+    function entryHasCritical(entry) {
+      const s = summarizeSeverity(entry);
+      return s.admin + s.privilege_escalation + s.risky > 0;
+    }
+
+    // Strip read_only permissions from a group when in "Critical only" mode.
+    function applyCriticalFilter(group, byClass) {
+      if (!isCriticalOnly()) return group;
+      const perms = group.permissions || [];
+      if (!perms.length) return group;
+      const cls = classifyPermissions(perms, byClass);
+      const kept = [...cls.admin, ...cls.privilege_escalation, ...cls.risky];
+      return { ...group, permissions: kept };
+    }
+
     function renderAccessMapTree(filter = "") {
       const list = document.getElementById("am-card-list");
       list.innerHTML = "";
@@ -6116,18 +6357,141 @@
       const hasAccess = Array.isArray(accessMap) && accessMap.length > 0;
       syncAccessMapUi(hasAccess);
       renderAccessMapStats();
+      syncCriticalToggleVisibility();
 
-      if (!filteredAccessMapView || filteredAccessMapView.length === 0) {
+      // When "Critical only" is active, drop entries that have no admin/privesc/risky perms.
+      let visible = filteredAccessMapView;
+      if (isCriticalOnly()) {
+        visible = visible.filter(entryHasCritical);
+      }
+
+      if (!visible || visible.length === 0) {
         list.innerHTML =
           `<div style="padding:32px 16px; text-align:center; color:var(--text-muted); font-size:13px;">${getAccessMapEmptyMessage()}</div>`;
         return;
       }
 
+      // Group by provider.
+      const byProvider = new Map();
+      visible.forEach((entry) => {
+        const prov = String(entry.identity.provider || "unknown").toLowerCase();
+        if (!byProvider.has(prov)) byProvider.set(prov, []);
+        byProvider.get(prov).push(entry);
+      });
+
+      // Provider order: those with admin perms first, then by entry count desc, then alpha.
+      const providerOrder = [...byProvider.keys()].sort((a, b) => {
+        const aHasAdmin = byProvider.get(a).some((e) => summarizeSeverity(e).admin > 0);
+        const bHasAdmin = byProvider.get(b).some((e) => summarizeSeverity(e).admin > 0);
+        if (aHasAdmin !== bHasAdmin) return aHasAdmin ? -1 : 1;
+        const sizeDiff = byProvider.get(b).length - byProvider.get(a).length;
+        if (sizeDiff) return sizeDiff;
+        return a.localeCompare(b);
+      });
+
       const frag = document.createDocumentFragment();
-      filteredAccessMapView.forEach((entry) => {
-        frag.appendChild(buildIdentityCard(entry));
+      providerOrder.forEach((prov) => {
+        const entries = byProvider.get(prov);
+        frag.appendChild(buildProviderSection(prov, entries));
       });
       list.appendChild(frag);
+    }
+
+    function buildProviderSection(provider, entries) {
+      const section = document.createElement("div");
+      section.className = "am-provider-section";
+
+      // In "Critical only" mode, the cards rendered below exclude read-only
+      // permissions; aggregate the section header stats from the same
+      // filtered view so resource / unique-perm counts and the severity
+      // chips match what the user actually sees.
+      const criticalMode = isCriticalOnly();
+      let totalRes = 0;
+      const permSet = new Set();
+      let admin = 0;
+      let privesc = 0;
+      let risky = 0;
+      entries.forEach((e) => {
+        const byClass = e.identity && e.identity.permissions_by_severity;
+        const groups = criticalMode
+          ? (e.groups || []).map((g) => applyCriticalFilter(g, byClass))
+          : (e.groups || []);
+        groups.forEach((g) => {
+          totalRes += (g.resources || []).length;
+          (g.permissions || []).forEach((p) => permSet.add(p));
+        });
+        const s = summarizeSeverity(e);
+        admin += s.admin;
+        privesc += s.privilege_escalation;
+        risky += s.risky;
+      });
+
+      const header = document.createElement("div");
+      header.className = "am-provider-header";
+
+      const caret = document.createElement("span");
+      caret.className = "am-provider-header__caret";
+      caret.textContent = "▼";
+      header.appendChild(caret);
+
+      const provBadge = document.createElement("span");
+      provBadge.className = "badge " + providerBadgeClass(provider);
+      provBadge.textContent = provider.toUpperCase();
+      header.appendChild(provBadge);
+
+      const title = document.createElement("span");
+      title.className = "am-provider-header__title";
+      title.textContent = `${entries.length} identit${entries.length !== 1 ? "ies" : "y"}`;
+      header.appendChild(title);
+
+      const sub = document.createElement("span");
+      sub.className = "am-provider-header__sub";
+      const subParts = [
+        `${totalRes} resource${totalRes !== 1 ? "s" : ""}`,
+        `${permSet.size} unique perm${permSet.size !== 1 ? "s" : ""}`,
+      ];
+      if (admin) subParts.push(`<span class="rollup-chip rollup-chip--admin">⚠ ${admin} admin</span>`);
+      else if (privesc) subParts.push(`<span class="rollup-chip rollup-chip--privesc">${privesc} privesc</span>`);
+      else if (risky) subParts.push(`<span class="rollup-chip rollup-chip--risky">${risky} risky</span>`);
+      sub.innerHTML = subParts.map((p) => `<span>${typeof p === "string" && p.startsWith("<") ? p : escapeHtml(p)}</span>`).join("");
+      header.appendChild(sub);
+
+      const cards = document.createElement("div");
+      cards.className = "am-provider-section__cards";
+      entries.forEach((entry) => cards.appendChild(buildIdentityCard(entry)));
+
+      header.addEventListener("click", () => {
+        section.classList.toggle("collapsed");
+        caret.textContent = section.classList.contains("collapsed") ? "▶" : "▼";
+      });
+
+      section.appendChild(header);
+      section.appendChild(cards);
+      return section;
+    }
+
+    function syncCriticalToggleVisibility() {
+      const wrap = document.getElementById("am-critical-toggle");
+      if (!wrap) return;
+      const anyClassified = (accessMap || []).some(
+        (e) => e && e.permissions_by_severity && (
+          (e.permissions_by_severity.admin || []).length
+          + (e.permissions_by_severity.privilege_escalation || []).length
+          + (e.permissions_by_severity.risky || []).length
+          + (e.permissions_by_severity.read_only || []).length
+        ) > 0
+      );
+      // When no entries are classified, the toggle is meaningless — but if
+      // the user previously enabled it, the persisted setting would still
+      // drive the filter and could leave them with an empty access-map view
+      // and no UI to disable it. Clear the persisted state and uncheck the
+      // input so the filter no longer applies on this report.
+      if (!anyClassified) {
+        const input = wrap.querySelector('input[type="checkbox"]');
+        if (input) input.checked = false;
+        setCriticalOnly(false);
+      }
+      wrap.style.display = anyClassified ? "" : "none";
     }
 
     function renderAccessMapStats() {
@@ -6141,31 +6505,43 @@
       let totalRes = 0;
       const permSet = new Set();
       const providerSet = new Set();
+      let totalAdmin = 0;
+      let identitiesWithAdmin = 0;
       accessMap.forEach((entry) => {
         providerSet.add((entry.provider || "unknown").toUpperCase());
         (entry.groups || []).forEach((g) => {
           totalRes += (g.resources || []).length;
           (g.permissions || []).forEach((p) => permSet.add(p));
         });
+        const s = summarizeSeverity({ identity: entry, groups: entry.groups || [] });
+        totalAdmin += s.admin;
+        if (s.admin > 0) identitiesWithAdmin += 1;
       });
 
       bar.classList.remove("hidden");
+      const adminStat = totalAdmin > 0
+        ? `<div class="am-stat"><span class="am-stat-value" style="color:#b91c1c;">⚠ ${totalAdmin}</span><span class="am-stat-label">admin perm${totalAdmin !== 1 ? "s" : ""} / ${identitiesWithAdmin} identit${identitiesWithAdmin !== 1 ? "ies" : "y"}</span></div>`
+        : "";
       bar.innerHTML = `
         <div class="am-stat"><span class="am-stat-value">${accessMap.length}</span><span class="am-stat-label">Identities</span></div>
         <div class="am-stat"><span class="am-stat-value">${totalRes}</span><span class="am-stat-label">Resources</span></div>
         <div class="am-stat"><span class="am-stat-value">${permSet.size}</span><span class="am-stat-label">Unique Permissions</span></div>
+        ${adminStat}
         <div class="am-stat">${[...providerSet].map((p) => '<span class="badge ' + providerBadgeClass(p) + '">' + escapeHtml(p) + '</span>').join(" ")}</div>
       `;
     }
 
     function buildIdentityCard(entry) {
       const identity = entry.identity;
-      const groups = entry.groups;
+      const byClass = identity.permissions_by_severity || null;
       const provider = (identity.provider || "unknown");
       const account = identity.account || "(unknown identity)";
       const fingerprint = identity.fingerprint || "";
 
-      // Count resources and collect all permissions
+      // Apply "Critical only" filter to the groups before rendering.
+      const groups = (entry.groups || []).map((g) => applyCriticalFilter(g, byClass));
+
+      // Count resources and collect all permissions across (filtered) groups.
       let resCount = 0;
       const allPerms = new Set();
       groups.forEach((g) => {
@@ -6173,6 +6549,7 @@
         (g.permissions || []).forEach((p) => allPerms.add(p));
       });
       const permArr = [...allPerms];
+      const sevSummary = summarizeSeverity(entry);
 
       // Card container
       const card = document.createElement("div");
@@ -6198,6 +6575,32 @@
       nameRow.appendChild(provBadge);
       info.appendChild(nameRow);
 
+      // Discriminator subtitle (helps tell duplicate-named identities apart).
+      // Skip context fields that are equal to the account name — those are
+      // redundant (e.g., MongoDB admin/admin) and don't help the user
+      // distinguish duplicates.
+      const discParts = [];
+      const ctx = identity.context || {};
+      const seen = new Set([String(account).toLowerCase()]);
+      const pushDistinct = (v) => {
+        if (!v) return;
+        const k = String(v).toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        discParts.push(v);
+      };
+      pushDistinct(ctx.identity_id);
+      pushDistinct(ctx.project);
+      pushDistinct(ctx.tenant);
+      pushDistinct(ctx.account_id);
+      pushDistinct(ctx.access_type);
+      if (discParts.length) {
+        const disc = document.createElement("div");
+        disc.className = "id-card__discriminator";
+        disc.textContent = discParts.join(" · ");
+        info.appendChild(disc);
+      }
+
       // Meta row
       const meta = document.createElement("div");
       meta.className = "id-card__meta";
@@ -6221,8 +6624,26 @@
       }
       info.appendChild(meta);
 
-      // Permission preview (top 6)
-      if (permArr.length > 0) {
+      // Severity rollup chips replace the per-permission preview.
+      // In "Critical only" mode the expanded view hides read-only permissions;
+      // suppress the read_only chip too so the rollup matches what's rendered
+      // (otherwise the header still advertises a count the body never shows).
+      const rollupCriticalMode = isCriticalOnly();
+      if (byClass && (sevSummary.admin + sevSummary.privilege_escalation + sevSummary.risky + sevSummary.read_only) > 0) {
+        const rollup = document.createElement("div");
+        rollup.className = "id-card__rollup";
+        SEVERITY_BUCKETS.forEach(({ key, label, cls }) => {
+          if (rollupCriticalMode && key === "read_only") return;
+          const n = sevSummary[key];
+          if (!n) return;
+          const chip = document.createElement("span");
+          chip.className = "rollup-chip rollup-chip--" + cls;
+          chip.textContent = (key === "admin" ? "⚠ " : "") + n + " " + label;
+          rollup.appendChild(chip);
+        });
+        info.appendChild(rollup);
+      } else if (permArr.length > 0) {
+        // Fallback for entries without classification (e.g. imported reports).
         const preview = document.createElement("div");
         preview.className = "id-card__perms-preview";
         const limit = 6;
@@ -6257,77 +6678,104 @@
       const body = document.createElement("div");
       body.className = "id-card__body";
 
-      // Resources section
+      // Resources / permissions — rendered as one block per group.
+      // Each group is a (resources, permissions) pair where permissions are
+      // shared across all resources in the group, so we render them ONCE.
       const resSection = document.createElement("div");
       resSection.className = "id-card__section";
       const resTitle = document.createElement("div");
       resTitle.className = "id-card__section-title";
-      resTitle.textContent = "Resources (" + resCount + ")";
+      resTitle.textContent = "Resources & permissions (" + resCount + " resource" + (resCount !== 1 ? "s" : "") + ", " + groups.length + " group" + (groups.length !== 1 ? "s" : "") + ")";
       resSection.appendChild(resTitle);
 
-      const resGrid = document.createElement("div");
-      resGrid.className = "resource-grid";
-
-      groups.forEach((group) => {
+      groups.forEach((group, idx) => {
         const resources = group.resources || [];
         const perms = group.permissions || [];
+        if (resources.length === 0 && perms.length === 0) return;
 
-        if (resources.length === 0 && perms.length > 0) {
-          const chip = document.createElement("div");
-          chip.className = "resource-chip";
-          const chipName = document.createElement("div");
-          chipName.className = "resource-chip__name";
-          chipName.textContent = "Project-wide / Unscoped";
-          chip.appendChild(chipName);
-          const chipPerms = document.createElement("div");
-          chipPerms.className = "resource-chip__perms";
-          perms.forEach((p) => {
-            const tag = document.createElement("span");
-            tag.className = "badge badge-perm";
-            tag.style.fontSize = "10px";
-            tag.textContent = p;
-            chipPerms.appendChild(tag);
+        const block = document.createElement("div");
+        block.className = "perm-group";
+
+        // Resource chips at the top of the block (no per-chip permissions —
+        // they share the permission set rendered below).
+        if (resources.length > 0) {
+          const resBox = document.createElement("div");
+          resBox.className = "perm-group__resources";
+          resources.forEach((resName) => {
+            const chip = document.createElement("span");
+            chip.className = "perm-group__resource";
+            chip.textContent = String(resName);
+
+            const { resourceType, resourceName } = extractResourceParts(String(resName));
+            const consoleLink = buildResourceConsoleLink(provider, resourceType, resourceName);
+            if (consoleLink) {
+              const a = document.createElement("a");
+              a.href = consoleLink;
+              a.target = "_blank";
+              a.rel = "noopener noreferrer";
+              a.textContent = "↗";
+              a.title = "Open in console";
+              a.addEventListener("click", (e) => e.stopPropagation());
+              chip.appendChild(a);
+            }
+            resBox.appendChild(chip);
           });
-          chip.appendChild(chipPerms);
-          resGrid.appendChild(chip);
+          block.appendChild(resBox);
+        } else if (perms.length > 0) {
+          const note = document.createElement("div");
+          note.className = "perm-group__shared-note";
+          note.textContent = "Project-wide / Unscoped permissions:";
+          block.appendChild(note);
         }
 
-        resources.forEach((resName) => {
-          const chip = document.createElement("div");
-          chip.className = "resource-chip";
-          const chipName = document.createElement("div");
-          chipName.className = "resource-chip__name";
-          chipName.textContent = String(resName);
+        if (resources.length > 1 && perms.length > 0) {
+          const note = document.createElement("div");
+          note.className = "perm-group__shared-note";
+          note.textContent = "These permissions apply to all " + resources.length + " resources above.";
+          block.appendChild(note);
+        }
 
-          // Console link
-          const { resourceType, resourceName } = extractResourceParts(String(resName));
-          const consoleLink = buildResourceConsoleLink(provider, resourceType, resourceName);
-          if (consoleLink) {
-            const a = document.createElement("a");
-            a.href = consoleLink;
-            a.target = "_blank";
-            a.rel = "noopener noreferrer";
-            a.textContent = "open in console ↗";
-            chipName.appendChild(a);
-          }
-          chip.appendChild(chipName);
+        // Permissions classified by severity.
+        if (perms.length > 0) {
+          const cls = classifyPermissions(perms, byClass);
+          SEVERITY_BUCKETS.forEach(({ key, label, cls: sevCls }) => {
+            const list = cls[key] || [];
+            if (!list.length) return;
+            const wrap = document.createElement("div");
+            wrap.className = "perm-severity";
+            // Default-collapse Read Only when the group has any non-read-only perms.
+            const hasOther = (cls.admin.length + cls.privilege_escalation.length + cls.risky.length) > 0;
+            if (key === "read_only" && hasOther) wrap.classList.add("collapsed");
 
-          if (perms.length > 0) {
-            const chipPerms = document.createElement("div");
-            chipPerms.className = "resource-chip__perms";
-            perms.forEach((p) => {
+            const titleEl = document.createElement("div");
+            titleEl.className = "perm-severity__title";
+            titleEl.innerHTML = `<span class="perm-severity__caret">▼</span> ${escapeHtml(label)} <span style="color:var(--text-main); font-weight:700;">${list.length}</span>`;
+
+            const pills = document.createElement("div");
+            pills.className = "perm-severity__pills";
+            list.forEach((p) => {
               const tag = document.createElement("span");
-              tag.className = "badge badge-perm";
+              tag.className = "badge badge-perm badge-perm--" + sevCls;
               tag.style.fontSize = "10px";
               tag.textContent = p;
-              chipPerms.appendChild(tag);
+              pills.appendChild(tag);
             });
-            chip.appendChild(chipPerms);
-          }
-          resGrid.appendChild(chip);
-        });
+
+            titleEl.addEventListener("click", (e) => {
+              e.stopPropagation();
+              wrap.classList.toggle("collapsed");
+              const c = titleEl.querySelector(".perm-severity__caret");
+              if (c) c.textContent = wrap.classList.contains("collapsed") ? "▶" : "▼";
+            });
+
+            wrap.appendChild(titleEl);
+            wrap.appendChild(pills);
+            block.appendChild(wrap);
+          });
+        }
+
+        resSection.appendChild(block);
       });
-      resSection.appendChild(resGrid);
       body.appendChild(resSection);
 
       // Token details section

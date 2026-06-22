@@ -87,22 +87,22 @@ fn scan_rules_has_no_validated_findings() -> Result<()> {
     // envelope is present (because something validated) and tells us which
     // rule's example triggered it.
     let mut validated_rule_ids: Vec<String> = Vec::new();
-    if let Some(env) = &envelope {
-        if let Some(findings) = env.get("findings").and_then(|v| v.as_array()) {
-            for finding in findings {
-                let status = finding
-                    .pointer("/finding/validation/status")
+    if let Some(env) = &envelope
+        && let Some(findings) = env.get("findings").and_then(|v| v.as_array())
+    {
+        for finding in findings {
+            let status = finding
+                .pointer("/finding/validation/status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            if status.contains("active") && !status.contains("inactive") {
+                let id = finding
+                    .pointer("/rule/id")
                     .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_ascii_lowercase();
-                if status.contains("active") && !status.contains("inactive") {
-                    let id = finding
-                        .pointer("/rule/id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("unknown")
-                        .to_string();
-                    validated_rule_ids.push(id);
-                }
+                    .unwrap_or("unknown")
+                    .to_string();
+                validated_rule_ids.push(id);
             }
         }
     }

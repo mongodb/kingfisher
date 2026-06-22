@@ -4,7 +4,7 @@ use std::{
     time::Instant,
 };
 
-use anyhow::Result;
+use anyhow::{Result, bail};
 use bstr::ByteSlice;
 use gix::{
     ObjectId, Repository,
@@ -69,10 +69,15 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
     }
 
     pub fn run(self) -> Result<GitRepoResult> {
+        self.run_with_deadline(None)
+    }
+
+    pub fn run_with_deadline(self, deadline: Option<Instant>) -> Result<GitRepoResult> {
         let started = Instant::now();
         // let _span = debug_span!("enumerate_git_with_metadata", path = ?self.path).entered();
+        check_deadline(deadline, "git repository metadata enumeration", self.path)?;
         let odb = &self.repo.objects;
-        let object_index = RepositoryIndex::new(odb)?;
+        let object_index = RepositoryIndex::new_with_deadline(odb, deadline, self.path)?;
 
         debug!(
             "Indexed {} objects in {:.6}s; {} blobs; {} commits",
@@ -88,6 +93,7 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
         // Build commit graph first; materialize committer metadata only for commits that
         // actually introduce blobs.
         for commit_oid in object_index.commits() {
+            check_deadline(deadline, "git commit graph enumeration", self.path)?;
             let commit = match odb.find_commit(commit_oid, &mut scratch) {
                 Ok(commit) => commit,
                 Err(e) => {
@@ -114,10 +120,11 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
         debug!("Built metadata graph in {:.6}s", started.elapsed().as_secs_f64());
 
         // Compute metadata once, then get all blob IDs (in pack-ascending order)
-        let meta_result = metadata_graph.get_repo_metadata(
+        let meta_result = metadata_graph.get_repo_metadata_with_deadline(
             &object_index,
             &self.repo,
             self.exclude_globset.as_deref(),
+            deadline,
         );
         let all_blobs = object_index.into_blobs();
 
@@ -125,10 +132,12 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
         let blobs = match meta_result {
             Err(e) => {
                 debug!("Failed to compute reachable blobs; ignoring metadata: {e}");
-                all_blobs
-                    .into_iter()
-                    .map(|blob_oid| GitBlobMetadata { blob_oid, first_seen: Default::default() })
-                    .collect()
+                let mut blobs = Vec::with_capacity(all_blobs.len());
+                for blob_oid in all_blobs {
+                    check_deadline(deadline, "git blob metadata assembly", self.path)?;
+                    blobs.push(GitBlobMetadata { blob_oid, first_seen: Default::default() });
+                }
+                blobs
             }
             Ok(metadata) => {
                 let mut commit_metadata: HashMap<ObjectId, Arc<CommitMetadata>> =
@@ -137,6 +146,7 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
                     HashMap::with_capacity_and_hasher(all_blobs.len(), Default::default());
 
                 for e in metadata {
+                    check_deadline(deadline, "git commit metadata assembly", self.path)?;
                     if e.introduced_blobs.is_empty() {
                         continue;
                     }
@@ -184,37 +194,36 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
                 }
 
                 // Iterate in pack-ascending order (from RepositoryIndex) for I/O locality
-                all_blobs
-                    .into_iter()
-                    .filter_map(|blob_oid| {
-                        let appearances = blob_appearances.remove(&blob_oid).unwrap_or_default();
-                        if appearances.is_empty() {
-                            return Some(GitBlobMetadata { blob_oid, first_seen: appearances });
-                        }
-                        let filtered = appearances
-                            .into_iter()
-                            .filter(|entry| match entry.path.to_path() {
-                                Ok(p) => {
-                                    if let Some(gs) = &self.exclude_globset {
-                                        let m = gs.is_match(p);
-                                        if m {
-                                            debug!("Skipping {} due to --exclude", p.display());
-                                        }
-                                        !m
-                                    } else {
-                                        true
+                let mut blobs = Vec::with_capacity(all_blobs.len());
+                for blob_oid in all_blobs {
+                    check_deadline(deadline, "git blob metadata assembly", self.path)?;
+                    let appearances = blob_appearances.remove(&blob_oid).unwrap_or_default();
+                    if appearances.is_empty() {
+                        blobs.push(GitBlobMetadata { blob_oid, first_seen: appearances });
+                        continue;
+                    }
+                    let filtered = appearances
+                        .into_iter()
+                        .filter(|entry| match entry.path.to_path() {
+                            Ok(p) => {
+                                if let Some(gs) = &self.exclude_globset {
+                                    let m = gs.is_match(p);
+                                    if m {
+                                        debug!("Skipping {} due to --exclude", p.display());
                                     }
+                                    !m
+                                } else {
+                                    true
                                 }
-                                Err(_) => true,
-                            })
-                            .collect::<SmallVec<_>>();
-                        if filtered.is_empty() {
-                            None
-                        } else {
-                            Some(GitBlobMetadata { blob_oid, first_seen: filtered })
-                        }
-                    })
-                    .collect()
+                            }
+                            Err(_) => true,
+                        })
+                        .collect::<SmallVec<_>>();
+                    if !filtered.is_empty() {
+                        blobs.push(GitBlobMetadata { blob_oid, first_seen: filtered });
+                    }
+                }
+                blobs
             }
         };
 
@@ -224,6 +233,14 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
             blobs: GitBlobSource::Precomputed(blobs),
         })
     }
+}
+
+#[inline]
+fn check_deadline(deadline: Option<Instant>, phase: &str, path: &Path) -> Result<()> {
+    if deadline.is_some_and(|deadline| Instant::now() > deadline) {
+        bail!("{phase} timed out for {}", path.display())
+    }
+    Ok(())
 }
 
 pub struct GitRepoEnumerator<'a> {

@@ -84,6 +84,8 @@ pub enum GitHubRepoType {
     /// Only fork repositories
     #[value(alias = "forks")]
     Fork,
+    /// All repositories (source and forks)
+    All,
 }
 
 impl From<GitHubRepoType> for crate::github::RepoType {
@@ -91,6 +93,7 @@ impl From<GitHubRepoType> for crate::github::RepoType {
         match val {
             GitHubRepoType::Source => crate::github::RepoType::Source,
             GitHubRepoType::Fork => crate::github::RepoType::Fork,
+            GitHubRepoType::All => crate::github::RepoType::All,
         }
     }
 }

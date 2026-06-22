@@ -16,11 +16,7 @@ use liquid::{
     object,
 };
 use regex::Regex;
-use schemars::{
-    JsonSchema,
-    r#gen::SchemaGenerator,
-    schema::{Schema, SchemaObject},
-};
+use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
 // use sha1::{Digest, Sha1};
@@ -264,29 +260,23 @@ impl PatternRequirements {
         }
 
         // Check ignore-if-contains requirement
-        if respect_ignore_if_contains {
-            if let Some(ignore_terms) = self.ignore_if_contains.as_ref() {
-                let lowercase_input = s.to_lowercase();
-                if let Some(matched_term) = ignore_terms
-                    .iter()
-                    .filter_map(|term| {
-                        let trimmed = term.trim();
-                        if trimmed.is_empty() {
-                            None
-                        } else {
-                            Some((trimmed, trimmed.to_lowercase()))
-                        }
-                    })
-                    .find_map(|(original, lowered)| {
-                        if lowercase_input.contains(&lowered) {
-                            Some(original.to_string())
-                        } else {
-                            None
-                        }
-                    })
-                {
-                    return PatternValidationResult::IgnoredBySubstring { matched_term };
-                }
+        if respect_ignore_if_contains && let Some(ignore_terms) = self.ignore_if_contains.as_ref() {
+            let lowercase_input = s.to_lowercase();
+            if let Some(matched_term) = ignore_terms
+                .iter()
+                .filter_map(|term| {
+                    let trimmed = term.trim();
+                    if trimmed.is_empty() { None } else { Some((trimmed, trimmed.to_lowercase())) }
+                })
+                .find_map(|(original, lowered)| {
+                    if lowercase_input.contains(&lowered) {
+                        Some(original.to_string())
+                    } else {
+                        None
+                    }
+                })
+            {
+                return PatternValidationResult::IgnoredBySubstring { matched_term };
             }
         }
 
@@ -299,14 +289,14 @@ impl PatternRequirements {
                 };
             };
 
-            if let Some(required) = checksum.actual.requires_capture.as_deref() {
-                if ctx.captures.name(required).is_none() {
-                    return if checksum.skip_if_missing {
-                        PatternValidationResult::Passed
-                    } else {
-                        PatternValidationResult::Failed
-                    };
-                }
+            if let Some(required) = checksum.actual.requires_capture.as_deref()
+                && ctx.captures.name(required).is_none()
+            {
+                return if checksum.skip_if_missing {
+                    PatternValidationResult::Passed
+                } else {
+                    PatternValidationResult::Failed
+                };
             }
 
             let mut globals = object!({
@@ -499,17 +489,12 @@ pub enum ResponseMatcher {
 }
 
 /// The confidence level associated with a rule.
-#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, Hash, PartialEq, Eq, Clone, Copy, Default)]
 pub enum Confidence {
     Low,
+    #[default]
     Medium,
     High,
-}
-
-impl Default for Confidence {
-    fn default() -> Self {
-        Confidence::Medium
-    }
 }
 
 impl PartialOrd for Confidence {
@@ -535,14 +520,7 @@ impl Ord for Confidence {
 impl Confidence {
     /// Returns true if the current confidence is at least as high as `other`.
     pub fn is_at_least(&self, other: &Confidence) -> bool {
-        match (self, other) {
-            (Confidence::High, _) => true,
-            (Confidence::Medium, Confidence::Low) | (Confidence::Medium, Confidence::Medium) => {
-                true
-            }
-            (Confidence::Low, Confidence::Low) => true,
-            _ => false,
-        }
+        self >= other
     }
 }
 
@@ -571,18 +549,14 @@ impl FromStr for Confidence {
 }
 
 impl JsonSchema for Confidence {
-    fn schema_name() -> String {
-        "Confidence".to_string()
+    fn schema_name() -> Cow<'static, str> {
+        "Confidence".into()
     }
 
     fn json_schema(_gen: &mut SchemaGenerator) -> Schema {
-        let mut schema = SchemaObject::default();
-        schema.enum_values = Some(vec![
-            serde_json::to_value("Low").unwrap(),
-            serde_json::to_value("Medium").unwrap(),
-            serde_json::to_value("High").unwrap(),
-        ]);
-        Schema::Object(schema)
+        schemars::json_schema!({
+            "enum": ["Low", "Medium", "High"]
+        })
     }
 }
 

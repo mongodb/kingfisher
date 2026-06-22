@@ -70,7 +70,7 @@ impl ServerCertVerifier for LaxCertVerifier {
 pub fn generate_postgres_cache_key(postgres_url: &str) -> String {
     let mut hasher = Sha1::new();
     hasher.update(postgres_url.as_bytes());
-    format!("Postgres:{:x}", hasher.finalize())
+    format!("Postgres:{}", hex::encode(hasher.finalize()))
 }
 
 pub fn parse_postgres_url(postgres_url: &str) -> Result<Config> {

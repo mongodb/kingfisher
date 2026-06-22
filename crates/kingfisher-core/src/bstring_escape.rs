@@ -21,9 +21,7 @@ fn escape_nonprinting(s: &str) -> Cow<'_, str> {
 
     // Allocate with extra capacity for possible escape sequences
     let mut escaped = String::with_capacity(s.len() * 2);
-    let mut chars = s.chars().peekable();
-
-    while let Some(ch) = chars.next() {
+    for ch in s.chars() {
         match ch {
             // Handle ANSI escape sequences
             '\x1B' => continue,

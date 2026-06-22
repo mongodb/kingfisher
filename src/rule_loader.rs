@@ -34,6 +34,12 @@ pub struct RuleLoader {
     enabled_rule_ids: Option<Vec<String>>,
 }
 
+impl Default for RuleLoader {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl RuleLoader {
     pub fn new() -> Self {
         Self {
