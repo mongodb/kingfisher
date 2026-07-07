@@ -7,6 +7,11 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v1.106.0]
+- Merged the open dependabot "bump" PRs from `main`: CI/action bumps for `dtolnay/rust-toolchain`, `actions/setup-python` (6.2.0 → 6.3.0), and `google/clusterfuzzlite` build/run fuzzers actions (82652fb → 884713a) across the `cflite_batch` and `cflite_pr` workflows.
+- Bumped `gix` from 0.84 to 0.85 in `kingfisher-core`, and applied cargo minor/patch updates: `aws-sdk-ec2` 1.232.1 → 1.233.0, `aws-sdk-lambda` 1.128.0 → 1.129.0, plus the cargo-patch group (8 crate updates) and a `rand` 0.10.0 → 0.10.1 bump in the `fuzz` crate.
+- Reconciled the workspace and `fuzz` lockfiles after stacking the dependabot updates, and removed a duplicate `base32` package block that PR #330 introduced into `fuzz/Cargo.lock`.
+
 ## [v1.105.0]
 - Fixed the Dynatrace token rule with a corrected regex and tenant-scoped validation.
   Thanks @beer4code. [#413](https://github.com/mongodb/kingfisher/pull/413)
