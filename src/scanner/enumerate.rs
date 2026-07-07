@@ -47,7 +47,7 @@ use crate::{
     scanner::{
         processing::BlobProcessor,
         runner::{create_datastore_channel, spawn_datastore_writer_thread},
-        util::{is_compressed_file, is_pyc_file, is_sqlite_file},
+        util::{is_compressed_content, is_compressed_file, is_pyc_file, is_sqlite_file},
     },
     scanner_pool::ScannerPool,
     sqlite::extract_sqlite_contents,
@@ -216,8 +216,13 @@ pub fn enumerate_filesystem_inputs(
                 };
                 // Check if this is an archive file. `blob_path()` covers both filesystem and git
                 // origins, so archive/binary filtering stays consistent across input modes.
-                let is_archive =
-                    origin.first().blob_path().map(is_compressed_file).unwrap_or(false);
+                // Byte sniffing also catches ZIP containers with no archive extension (e.g. a
+                // Terraform `tf.plan`).
+                let is_archive = origin
+                    .first()
+                    .blob_path()
+                    .map(|path| is_compressed_content(path, blob.bytes()))
+                    .unwrap_or(false);
                 let is_binary = is_binary(blob.bytes());
                 let should_skip = if is_archive {
                     // For archives: skip only if --no_extract_archives is true
@@ -341,6 +346,26 @@ impl<'a> ParallelIterator for FileResultIter<'a> {
     }
 }
 
+/// Peek a file's leading bytes to detect a ZIP container whose name carries no
+/// recognized archive extension (e.g. a Terraform `tf.plan`). Callers check the
+/// cheap [`is_compressed_file`] extension test first; this reads at most four
+/// bytes. A short read or I/O error is treated as "not an archive" so the
+/// caller falls back to its normal read path.
+fn file_header_looks_like_zip(path: &Path) -> bool {
+    use std::io::Read;
+
+    let mut header = [0u8; 4];
+    let Ok(mut file) = std::fs::File::open(path) else {
+        return false;
+    };
+    // A file shorter than the signature cannot be a ZIP, so a partial read is
+    // simply "not an archive".
+    if file.read_exact(&mut header).is_err() {
+        return false;
+    }
+    looks_like_zip(&header)
+}
+
 impl ParallelBlobIterator for FileResult {
     type Iter<'a> = FileResultIter<'a>;
 
@@ -392,7 +417,9 @@ impl ParallelBlobIterator for FileResult {
                     self.raw_blob_iter().map(Some)
                 }
             }
-        } else if extraction_enabled && is_compressed_file(&self.path) {
+        } else if extraction_enabled
+            && (is_compressed_file(&self.path) || file_header_looks_like_zip(&self.path))
+        {
             match decompress_file_to_temp(&self.path) {
                 Ok((content, _temp_dir)) => match content {
                     // Single-file decompression fully in memory.
@@ -539,7 +566,10 @@ fn try_extract_git_blob_archive(
     data: &[u8],
 ) -> Result<Option<Vec<(String, Vec<u8>)>>> {
     let pb = PathBuf::from(blob_path);
-    if !is_compressed_file(&pb) {
+    // A blob qualifies for extraction when its name matches a known archive
+    // format, or its bytes are a ZIP regardless of name (e.g. a `tfplan`).
+    let is_zip_body = looks_like_zip(data);
+    if !is_compressed_file(&pb) && !is_zip_body {
         return Ok(None);
     }
 
@@ -569,15 +599,16 @@ fn try_extract_git_blob_archive(
         .map(|s| s.to_ascii_lowercase())
         .filter(|ext| ZIP_BASED_FORMATS.iter().any(|z| z == ext));
 
-    if let Some(_ext) = zip_based_ext.as_ref() {
-        // Cheap magic-byte check first: if a `.zip`-named blob is not
-        // actually a ZIP (truncated download, stub file, accidental
-        // rename), skip extraction so the caller scans the raw bytes.
-        if !looks_like_zip(data) {
+    if zip_based_ext.is_some() || is_zip_body {
+        // A ZIP-based extension with non-ZIP bytes (truncated download, stub
+        // file, accidental rename) is skipped so the caller scans raw bytes.
+        if !is_zip_body {
             return Ok(None);
         }
         if data.len() <= MAX_INMEM_ZIP_ARCHIVE_BYTES {
             return match extract_zip_archive_in_memory(data, &archive_label) {
+                // No entries (e.g. an empty ZIP): let the caller scan raw bytes.
+                Ok(entries) if entries.is_empty() => Ok(None),
                 Ok(entries) => Ok(Some(entries)),
                 Err(e) => {
                     debug!(
@@ -820,15 +851,28 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 let data = std::mem::take(&mut raw.data);
 
                 // Try archive extraction if any first-seen path looks like
-                // a known archive format. We don't need to keep the raw
-                // archive bytes around — its compressed contents won't
-                // produce useful matches anyway.
+                // a known archive format, or the blob bytes are a ZIP under a
+                // name with no archive extension (e.g. a committed `tfplan`).
+                // We don't need to keep the raw archive bytes around — its
+                // compressed contents won't produce useful matches anyway.
                 if extract_archives {
+                    // Prefer an appearance whose name is a recognized archive so
+                    // report paths stay stable; fall back to the first appearance
+                    // only when the bytes are a ZIP with no archive extension.
                     let archive_path: Option<String> = md
                         .first_seen
                         .iter()
                         .map(|e| String::from_utf8_lossy(&e.path).to_string())
-                        .find(|p| is_compressed_file(Path::new(p)));
+                        .find(|p| is_compressed_file(Path::new(p)))
+                        .or_else(|| {
+                            if looks_like_zip(&data) {
+                                md.first_seen
+                                    .first()
+                                    .map(|e| String::from_utf8_lossy(&e.path).to_string())
+                            } else {
+                                None
+                            }
+                        });
 
                     if let Some(archive_path) = archive_path {
                         match try_extract_git_blob_archive(&archive_path, &data) {
