@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.106.0]
+- Added content-based ZIP detection so Terraform plan files (e.g. `tfplan`, `*.plan` — real ZIPs with no archive extension) are extracted and scanned instead of treated as opaque compressed bytes; a file whose bytes begin with a ZIP signature is now extracted regardless of name, reusing the existing `looks_like_zip()` magic-byte helper. Non-ZIP files are untouched, so plain-text `*.plan` files are not mis-extracted. Content-detected ZIPs go through the same bounded in-memory extractor with unchanged zip-slip protection and zip-bomb caps, respect `--no-extract-archives` and `--no-binary`, and empty or unreadable ZIPs fall back to raw-byte scanning. The only added cost is a single 4-byte header read per file whose extension is not already a recognized archive. Verified against a real Terraform plan: 0 → 9 findings (AWS keys, Vault token, JWT, bcrypt hashes). @beer4code
+- Merged the open dependabot "bump" PRs from `main`: CI/action bumps for `dtolnay/rust-toolchain`, `actions/setup-python` (6.2.0 → 6.3.0), and `google/clusterfuzzlite` build/run fuzzers actions (82652fb → 884713a) across the `cflite_batch` and `cflite_pr` workflows.
+- Bumped `gix` from 0.84 to 0.85 in `kingfisher-core`, and applied cargo minor/patch updates: `aws-sdk-ec2` 1.232.1 → 1.233.0, `aws-sdk-lambda` 1.128.0 → 1.129.0, plus the cargo-patch group (8 crate updates) and a `rand` 0.10.0 → 0.10.1 bump in the `fuzz` crate.
+- Reconciled the workspace and `fuzz` lockfiles after stacking the dependabot updates, and removed a duplicate `base32` package block that PR #330 introduced into `fuzz/Cargo.lock`.
+
 ## [v1.105.0]
 - Fixed the Dynatrace token rule with a corrected regex and tenant-scoped validation.
   Thanks @beer4code. [#413](https://github.com/mongodb/kingfisher/pull/413)

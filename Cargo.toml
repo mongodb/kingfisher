@@ -48,7 +48,7 @@ http = "1.4"
 
 [package]
 name = "kingfisher"
-version = "1.105.0"
+version = "1.106.0"
 description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -94,7 +94,7 @@ clap = { version = "4.6", features = [
 anyhow = "1.0"
 bstr = { version = "1.12", features = ["serde"] }
 fixedbitset = "0.5"
-gix = { version = "0.84", features = ["max-performance-safe", "serde", "blocking-network-client"] }
+gix = { version = "0.85", features = ["max-performance-safe", "serde", "blocking-network-client"] }
 ignore = "0.4"
 petgraph = "0.8"
 roaring = "0.11.4"
