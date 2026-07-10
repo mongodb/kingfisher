@@ -82,12 +82,30 @@ limitations under the License.
 --------------------------------------------------------------------
 
 Certain detection rules:
+ * crates/kingfisher-rules/data/rules/airtable.yml
+ * crates/kingfisher-rules/data/rules/civo.yml
+ * crates/kingfisher-rules/data/rules/exoscale.yml
+ * crates/kingfisher-rules/data/rules/greptile.yml
+ * crates/kingfisher-rules/data/rules/infomaniak.yml
+ * crates/kingfisher-rules/data/rules/jwt.yml
+ * crates/kingfisher-rules/data/rules/kimi.yml
+ * crates/kingfisher-rules/data/rules/lighton.yml
+ * crates/kingfisher-rules/data/rules/linear.yml
+ * crates/kingfisher-rules/data/rules/mailgun.yml
+ * crates/kingfisher-rules/data/rules/messagebird.yml
+ * crates/kingfisher-rules/data/rules/newrelic.yml
  * crates/kingfisher-rules/data/rules/octopusdeploy.yml
  * crates/kingfisher-rules/data/rules/openshift.yml
+ * crates/kingfisher-rules/data/rules/ovh.yml
+ * crates/kingfisher-rules/data/rules/planetscale.yml
  * crates/kingfisher-rules/data/rules/polymarket.yml
  * crates/kingfisher-rules/data/rules/privateai.yml
  * crates/kingfisher-rules/data/rules/settlemint.yml
  * crates/kingfisher-rules/data/rules/sidekiq.yml
+ * crates/kingfisher-rules/data/rules/slack.yml
+ * crates/kingfisher-rules/data/rules/twitter.yml
+ * crates/kingfisher-rules/data/rules/upstage.yml
+ * crates/kingfisher-rules/data/rules/yandex.yml
 
 are derived in part from Betterleaks
 (https://github.com/betterleaks/betterleaks), which is licensed under the MIT

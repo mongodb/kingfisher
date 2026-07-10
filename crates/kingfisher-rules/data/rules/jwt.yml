@@ -27,3 +27,33 @@ rules:
     validation:
       type: JWT
     tls_mode: lax
+
+  - name: Base64-Encoded JSON Web Token
+    id: kingfisher.jwt.2
+    pattern: |
+      (?xi)
+      \b
+      (
+        ZXlK
+        (?:aGJHY2lPaU|aGNIVWlPaU|aGNIWWlPaU|aGRXUWlPaU|aU5qUWlP|amNtbDBJanBi|amRIa2lPaU|bGNHc2lPbn|bGJtTWlPaU|cWEzVWlPaU|cWQyc2lPb|cGMzTWlPaU|cGRpSTZJ|cmFXUWlP|clpYbGZiM0J6SWpwY|cmRIa2lPaUp|dWIyNWpaU0k2|d01tTWlP|d01uTWlPaU|d2NIUWlPaU|emRXSWlPaU|emRuUWlP|MFlXY2lPaU|MGVYQWlPaUp|MWNtd2l|MWMyVWlPaUp|MlpYSWlPaU|MlpYSnphVzl1SWpv|NElqb2|NE5XTWlP|NE5YUWlPaU|NE5YUWpVekkxTmlJNkl|NE5YVWlPaU|NmFYQWlPaU)
+        [a-zA-Z0-9/\\_+\-]{40,}
+        ={0,2}
+      )
+    pattern_requirements:
+      min_digits: 2
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - ZXlKaGJHY2lPaUpGVXpJMU5pSjkuZXlKcGMzTWlPaUpxYjJVaUxDSmxlSEFpYjNKbE9qUTBPRFV5TlRBMElHTTBMakF4TmkweE1qTXdKVEl5TWpKbU1qQXhOREU1TVRjM016a3pOak0yT1RrMU5UVTBMakF4T0RVMU5UUXpPVGMyTnpNekxqazBPRFV4TmpBd05ERXpNREEwTURJMU5EYzNOemt6TmpnMk9UazVOVGMyT1RjMk9UUTBNalkyTmpFMU1UTTJNQzQwTURZek1qZzBPVFU0TmpVME9UazVNelU0T0RZek5UUTBOalUzTnpJM01EUTBNRGd6T0RZek9UTTBOelUyT1RrMU5qVXhORGQwT1RrME5qWXdZakUyTWpNek9UYzVNalUyT1RrM01qYzFNelV3T1RZMU1EY3pPVEUwTnpnMUNESXNJbUZ3YTJScFpYTWlPalUxT2pFMU9UQTJMVFUzTWpVd09ERXRPV1UwT1RJek9UazJYMk5VSWwxOS5kQmpmdEplWjRDVlBtQjkySzI3dWhiVUpVMXAxcg
+    references:
+      - https://en.wikipedia.org/wiki/JSON_Web_Token
+      - https://datatracker.ietf.org/doc/html/rfc7519
+      - https://www.iana.org/assignments/jose/jose.xhtml
+      - https://datatracker.ietf.org/doc/html/rfc4648
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/jwt.go#L77
+    # No validation: a base64-encoded JWT wraps a standard JWT (which can be
+    # validated via the JWT typed validator once decoded). The base64 layer
+    # means the inner JWT's issuer (iss) claim is not directly available to
+    # fetch JWKS keys for signature verification. The base64 prefix `ZXlK`
+    # decodes to `eyJ` (base64 of `{"`), confirming the inner content is a JWT.
+    tls_mode: lax

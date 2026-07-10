@@ -1,0 +1,36 @@
+rules:
+  - name: LightOn Paradigm API Key
+    id: kingfisher.lighton.1
+    pattern: |
+      (?xi)
+      \b
+      (?:lighton|paradigm)
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [A-Za-z0-9_\-]{40,80}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - paradigm_api_key = "aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789aBcDeFgHiJkL"
+      - lighton_api_key = "AbCdEf1234567890GhIjKlMnOpQrStUvWxYz0123456789"
+    references:
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/lighton.go#L9
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://paradigm.lighton.ai/api/v2/models
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]

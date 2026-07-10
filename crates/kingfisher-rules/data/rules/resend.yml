@@ -6,11 +6,12 @@ rules:
       \b
       (
         re_
-        [A-Za-z0-9]{8}
+        [1-9A-HJ-NP-Za-km-z]{8}
         _
-        [A-Za-z0-9]{24}
+        [1-9A-HJ-NP-Za-km-z]{24}
       )
       \b
+    # Base58 alphabet (excludes 0, O, I, l) per the Resend team's own format spec.
     min_entropy: 3.2
     confidence: high
     categories:
@@ -20,6 +21,7 @@ rules:
       - 'RESEND_API_KEY="re_EbtXGAbq_2E1LZ8WYqYsrrDfjEHf6DxEK"'
       - "Authorization: Bearer re_jZmz3GSH_MqwC1vjBjZpQH88W4dLsTPpu"
     references:
+      - https://github.com/gitleaks/gitleaks/pull/2185
       - https://resend.com/docs/api-reference/introduction
       - https://resend.com/docs/api-reference/domains/list-domains
       - https://resend.com/docs/api-reference/errors

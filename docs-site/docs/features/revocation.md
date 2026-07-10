@@ -8,8 +8,8 @@ description: "Revoke compromised credentials directly from the CLI using built-i
 Kingfisher supports direct secret revocation through rule-level `revocation:` blocks.
 
 Current coverage in built-in rules:
-- `34` provider families
-- `53` revocation-enabled rules
+- `36` provider families
+- `61` revocation-enabled rules
 
 Use `kingfisher revoke --rule <rule-id> <secret>` to invoke these flows. See [USAGE.md](../usage/basic-scanning.md#direct-secret-revocation-with-kingfisher-revoke) for command details.
 
@@ -27,22 +27,24 @@ Use `kingfisher revoke --rule <rule-id> <secret>` to invoke these flows. See [US
 | `digitalocean` | 1 | `kingfisher.digitalocean.1` |
 | `discord` | 1 | `kingfisher.discord.1` |
 | `doppler` | 6 | `kingfisher.doppler.1`, `kingfisher.doppler.2`, `kingfisher.doppler.3`, `kingfisher.doppler.4`, `kingfisher.doppler.5`, `kingfisher.doppler.6` |
+| `falai` | 1 | `kingfisher.falai.1` |
 | `gcp` | 1 | `kingfisher.gcp.1` |
-| `github` | 3 | `kingfisher.github.1`, `kingfisher.github.2`, `kingfisher.github.5` |
+| `github` | 7 | `kingfisher.github.1`, `kingfisher.github.2`, `kingfisher.github.3`, `kingfisher.github.4`, `kingfisher.github.5`, `kingfisher.github.6`, `kingfisher.github.9` |
 | `gitlab` | 2 | `kingfisher.gitlab.1`, `kingfisher.gitlab.4` |
 | `google` | 2 | `kingfisher.google.4`, `kingfisher.google.oauth2.1` |
 | `harness` | 1 | `kingfisher.harness.pat.1` |
 | `heroku` | 2 | `kingfisher.heroku.1`, `kingfisher.heroku.2` |
+| `jira` | 1 | `kingfisher.jira.3` |
 | `launchdarkly` | 1 | `kingfisher.launchdarkly.1` |
 | `linode` | 1 | `kingfisher.linode.1` |
 | `mapbox` | 1 | `kingfisher.mapbox.2` |
 | `mongodb` | 1 | `kingfisher.mongodb.1` |
 | `netlify` | 2 | `kingfisher.netlify.1`, `kingfisher.netlify.2` |
 | `npm` | 2 | `kingfisher.npm.1`, `kingfisher.npm.2` |
-| `particle.io` | 2 | `kingfisher.particleio.1`, `kingfisher.particleio.2` |
+| `particleio` | 2 | `kingfisher.particleio.1`, `kingfisher.particleio.2` |
 | `resend` | 1 | `kingfisher.resend.api_key.1` |
 | `sendgrid` | 1 | `kingfisher.sendgrid.1` |
-| `slack` | 2 | `kingfisher.slack.1`, `kingfisher.slack.2` |
+| `slack` | 4 | `kingfisher.slack.1`, `kingfisher.slack.2`, `kingfisher.slack.7`, `kingfisher.slack.8` |
 | `sumologic` | 1 | `kingfisher.sumologic.2` |
 | `tailscale` | 1 | `kingfisher.tailscale.1` |
 | `twilio` | 1 | `kingfisher.twilio.2` |

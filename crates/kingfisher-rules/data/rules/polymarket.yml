@@ -83,3 +83,73 @@ rules:
       - 'polymarket_api_key: a1b2c3d4-e5f6-789a-bcde-f0123456789a'
     references:
       - https://docs.polymarket.com/trading/orders/attribution
+
+  - name: Polymarket Wallet Address
+    id: kingfisher.polymarket.4
+    pattern: |
+      (?xi)
+      \b
+      poly(?:market)?
+      (?:.|[\n\r]){0,32}?
+      (?:builder|api)?
+      (?:.|[\n\r]){0,16}?
+      address
+      (?:.|[\n\r]){0,12}?
+      (
+        0x[a-fA-F0-9]{40}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 6
+    min_entropy: 3.5
+    confidence: medium
+    visible: false
+    examples:
+      - POLY_BUILDER_ADDRESS=0x1234567890abcdef1234567890abcdef12345678
+      - 'polymarket_address: 0xabcdef1234567890abcdef1234567890abcdef12'
+    references:
+      - https://docs.polymarket.com/trading/orders/attribution
+      - https://docs.polymarket.com/trading/orders/order-signing
+      - https://github.com/Polymarket/py-clob-client/blob/b076b04d61135657e25dccc1bbd6866a96bd8c6e/
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/polymarket.go#L38
+    # No validation: the wallet address is a public Ethereum address (0x + 40
+    # hex chars) used as part of the Polymarket builder credentials triad
+    # (API key, passphrase, wallet address). It is not a secret and cannot be
+    # validated independently. See the py-clob-client SDK:
+    # https://github.com/Polymarket/py-clob-client/blob/b076b04d61135657e25dccc1bbd6866a96bd8c6e/
+
+  - name: Polymarket Private Key
+    id: kingfisher.polymarket.5
+    pattern: |
+      (?xi)
+      \b
+      poly(?:market)?
+      (?:.|[\n\r]){0,32}?
+      (?:builder|api)?
+      (?:.|[\n\r]){0,16}?
+      private
+      (?:.|[\n\r]){0,16}?
+      key
+      (?:.|[\n\r]){0,12}?
+      (
+        0x[a-fA-F0-9]{64}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 6
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - POLY_PRIVATE_KEY=0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+      - 'polymarket_private_key: 0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
+    references:
+      - https://docs.polymarket.com/trading/orders/attribution
+      - https://docs.polymarket.com/trading/orders/order-signing
+      - https://eips.ethereum.org/EIPS/eip-712
+      - https://github.com/Polymarket/py-clob-client/blob/b076b04d61135657e25dccc1bbd6866a96bd8c6e/
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/polymarket.go#L88
+    # No validation: the private key is an EIP-712 signing key (0x + 64 hex
+    # chars) used to sign Polymarket L2 orders. It cannot be validated via a
+    # simple HTTP request — it must be used with HMAC-SHA256 signing of order
+    # payloads. See the py-clob-client SDK for the signing flow:
+    # https://github.com/Polymarket/py-clob-client/blob/b076b04d61135657e25dccc1bbd6866a96bd8c6e/
