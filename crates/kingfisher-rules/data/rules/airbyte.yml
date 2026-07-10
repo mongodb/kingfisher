@@ -1,0 +1,69 @@
+rules:
+  - name: Airbyte Application Client ID
+    id: kingfisher.airbyte.1
+    pattern: |
+      (?xi)
+      \b
+      (?:AIRBYTE|airbyte)
+      (?:.|[\n\r]){0,64}?
+      client[\s_-]*id
+      (?:.|[\n\r]){0,16}?
+      [=:]\s*["']?
+      (
+        [A-Za-z0-9_-]{8,128}
+      )
+      \b
+    min_entropy: 3.0
+    confidence: medium
+    visible: false
+    examples:
+      - 'AIRBYTE_CLIENT_ID=abclient_7M2qN8vR4xL9sD1w'
+      - 'airbyte client_id: "app_4Pz7Km2Qv9Xr5Nd8"'
+    references:
+      - https://reference.airbyte.com/reference/authentication
+
+  - name: Airbyte Application Client Secret
+    id: kingfisher.airbyte.2
+    pattern: |
+      (?xi)
+      \b
+      (?:AIRBYTE|airbyte)
+      (?:.|[\n\r]){0,64}?
+      client[\s_-]*secret
+      (?:.|[\n\r]){0,16}?
+      [=:]\s*["']?
+      (
+        [A-Za-z0-9_-]{16,128}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    pattern_requirements:
+      min_digits: 1
+      min_uppercase: 1
+      min_lowercase: 1
+    examples:
+      - 'AIRBYTE_CLIENT_SECRET=4f7Qa2mZ9xL3vR8kN1sD6wC5hJ0pByTu'
+      - 'airbyte client_secret: "9Xr4Km7Qv2Nd8Ws1Lc6Hj3ByTuEfGqM5"'
+    references:
+      - https://reference.airbyte.com/reference/authentication
+      - https://reference.airbyte.com/reference/createaccesstoken
+    depends_on_rule:
+      - rule_id: kingfisher.airbyte.1
+        variable: AIRBYTE_CLIENT_ID
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://api.airbyte.com/v1/applications/token
+          headers:
+            Content-Type: application/json
+            Accept: application/json
+          body: '{"client_id":"{{ AIRBYTE_CLIENT_ID | json_escape }}","client_secret":"{{ TOKEN | json_escape }}","grant-type":"client_credentials"}'
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+    # Airbyte application deletion is managed in the UI; no public client-secret revocation endpoint is documented.

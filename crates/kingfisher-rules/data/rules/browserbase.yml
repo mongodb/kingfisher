@@ -1,0 +1,37 @@
+rules:
+  - name: Browserbase API Key
+    id: kingfisher.browserbase.1
+    pattern: |
+      (?x)
+      \b
+      (
+        bb_(?:live|test)_[A-Za-z0-9_-]{20,}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    pattern_requirements:
+      min_digits: 1
+      min_uppercase: 1
+      min_lowercase: 1
+    examples:
+      - 'BROWSERBASE_API_KEY=bb_live_M4Kv8qL2nR7xW9dP3sT6yZ1aBcDeFgHi'
+      - 'browserbaseApiKey: "bb_test_Q7mN2pR8vX4kL9sD1wC6hJ3fGbYeTaUi"'
+    references:
+      - https://docs.browserbase.com/integrations/agent-browser/quickstart
+      - https://docs.browserbase.com/reference/api/list-sessions
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.browserbase.com/v1/sessions
+          headers:
+            X-BB-API-Key: "{{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+    # API-key rotation is managed in Browserbase settings; no public same-key revocation endpoint is documented.

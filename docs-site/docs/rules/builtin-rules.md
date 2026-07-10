@@ -1,13 +1,13 @@
 ---
 title: "Built-in Rules List"
-description: "Complete list of all 998 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
+description: "Complete list of all 1004 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
 ---
 
 # Built-in Rules
 
-Kingfisher ships with **998 detection rules** across **595 providers**
-(868 detectors + 130 dependent rules).
-Of these, **504** include live validation and **52** support direct revocation.
+Kingfisher ships with **1004 detection rules** across **600 providers**
+(873 detectors + 131 dependent rules).
+Of these, **508** include live validation and **52** support direct revocation.
 
 !!! tip "Search"
     Use the search box below to filter rules by provider name, rule ID, or confidence level.
@@ -183,6 +183,22 @@ Of these, **504** include live validation and **52** support direct revocation.
 <td>Airbrake</td>
 <td>Airbrake User Key</td>
 <td><code>kingfisher.airbrake.1</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Airbyte</td>
+<td>Airbyte Application Client ID</td>
+<td><code>kingfisher.airbyte.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Airbyte</td>
+<td>Airbyte Application Client Secret</td>
+<td><code>kingfisher.airbyte.2</code></td>
 <td>Medium</td>
 <td>Yes</td>
 <td></td>
@@ -1216,6 +1232,14 @@ Of these, **504** include live validation and **52** support direct revocation.
 <td>Brevo API Token</td>
 <td><code>kingfisher.brevo.1</code></td>
 <td>High</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Browserbase</td>
+<td>Browserbase API Key</td>
+<td><code>kingfisher.browserbase.1</code></td>
+<td>Medium</td>
 <td>Yes</td>
 <td></td>
 </tr>
@@ -4836,6 +4860,14 @@ Of these, **504** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
+<td>Nango</td>
+<td>Nango Secret Key</td>
+<td><code>kingfisher.nango.1</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
 <td>Nasa</td>
 <td>NASA API Key</td>
 <td><code>kingfisher.nasa.1</code></td>
@@ -4977,6 +5009,14 @@ Of these, **504** include live validation and **52** support direct revocation.
 <td><code>kingfisher.notion.3</code></td>
 <td>Medium</td>
 <td></td>
+<td></td>
+</tr>
+<tr>
+<td>Novu</td>
+<td>Novu Secret Key</td>
+<td><code>kingfisher.novu.1</code></td>
+<td>Medium</td>
+<td>Yes</td>
 <td></td>
 </tr>
 <tr>
@@ -7271,6 +7311,14 @@ Of these, **504** include live validation and **52** support direct revocation.
 <td>Truenas</td>
 <td>TrueNAS API Key (keyword proximity)</td>
 <td><code>kingfisher.truenas.4</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Turso</td>
+<td>Turso Platform API Token</td>
+<td><code>kingfisher.turso.1</code></td>
 <td>Medium</td>
 <td>Yes</td>
 <td></td>

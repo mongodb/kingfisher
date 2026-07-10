@@ -1,0 +1,45 @@
+rules:
+  - name: Novu Secret Key
+    id: kingfisher.novu.1
+    pattern: |
+      (?xi)
+      \b
+      (?:NOVU|novu)
+      (?:.|[\n\r]){0,48}?
+      (?:secret[\s_-]*key|api[\s_-]*key|token|key)
+      (?:.|[\n\r]){0,16}?
+      [=:]\s*["']?
+      (
+        [A-Za-z0-9_-]{24,128}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    pattern_requirements:
+      min_digits: 1
+      min_uppercase: 1
+      min_lowercase: 1
+      ignore_if_contains:
+        - example
+        - placeholder
+    examples:
+      - 'NOVU_SECRET_KEY="4f7Qa2mZ9xL3vR8kN1sD6wC5hJ0pByTuEfGqM4n"'
+      - 'novu api_key: 9Xr4Km7Qv2Nd8Ws1Lc6Hj3ByTuEfGqM5nZ0pRa'
+    references:
+      - https://docs.novu.co/platform/developer/api-keys
+      - https://docs.novu.co/api-reference/subscribers/search-subscribers
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.novu.co/v2/subscribers?limit=1
+          headers:
+            Authorization: "ApiKey {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+    # Novu documents per-key deletion and rotation in its dashboard, not a public key-revocation API.

@@ -1,0 +1,43 @@
+rules:
+  - name: Nango Secret Key
+    id: kingfisher.nango.1
+    pattern: |
+      (?xi)
+      \b
+      (?:nango|NANGO_(?:SECRET_?)?KEY)
+      (?:.|[\n\r]){0,48}?
+      (?:secret[\s_-]*key|api[\s_-]*key|token|key)
+      (?:.|[\n\r]){0,16}?
+      [=:]\s*["']?
+      (
+        SK_[A-Za-z0-9_-]{16,}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    pattern_requirements:
+      min_digits: 1
+      min_uppercase: 2
+      min_lowercase: 2
+    examples:
+      - 'NANGO_SECRET_KEY=SK_7M2qN8vR4xL9sD1wC6hJ3fGbYeTaUiKo'
+      - 'nango secret_key: "SK_4Pz7Km2Qv9Xr5Nd8Ws1Lc6Hj3ByTuEfG"'
+    references:
+      - https://nango.dev/docs/reference/backend/http-api/sync/environment-variables
+      - https://nango.dev/docs/reference/backend/http-api/integration/list
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.nango.dev/integrations
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            # A scoped key can authenticate successfully but lack integrations:list.
+            - type: StatusMatch
+              status: [200, 403]
+            - type: JsonValid
+    # API-key rotation is managed in the Nango dashboard; no public same-key revocation endpoint is documented.

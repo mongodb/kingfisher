@@ -1,0 +1,38 @@
+rules:
+  - name: Turso Platform API Token
+    id: kingfisher.turso.1
+    pattern: |
+      (?xi)
+      \b
+      (?:TURSO|turso)
+      (?:.|[\n\r]){0,64}?
+      (?:api[\s_-]*token|auth[\s_-]*token|token)
+      (?:.|[\n\r]){0,16}?
+      [=:]\s*["']?
+      (
+        eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'TURSO_API_TOKEN=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJvcmctYWNtZSIsInNjb3BlIjoiZnVsbC1hY2Nlc3MifQ.m4Kv8qL2nR7xW9dP3sT6yZ1aBcDeFgHi'
+      - 'turso auth_token: "eyJraWQiOiJrZXktMSJ9.eyJvcmdhbml6YXRpb24iOiJkZW1vIiwicmVhZF9vbmx5Ijp0cnVlfQ.Q7mN2pR8vX4kL9sD1wC6hJ3fGbYeTaUi"'
+    references:
+      - https://docs.turso.tech/api-reference/authentication
+      - https://docs.turso.tech/api-reference/organizations/list
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.turso.tech/v1/organizations
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+    # The platform API documents token minting, but not a safe current-token deletion endpoint.
