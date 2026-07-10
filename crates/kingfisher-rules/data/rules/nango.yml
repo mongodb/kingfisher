@@ -2,29 +2,31 @@ rules:
   - name: Nango Secret Key
     id: kingfisher.nango.1
     pattern: |
-      (?xi)
+      (?x)
       \b
-      (?:nango|NANGO_(?:SECRET_?)?KEY)
-      (?:.|[\n\r]){0,48}?
-      (?:secret[\s_-]*key|api[\s_-]*key|token|key)
-      (?:.|[\n\r]){0,16}?
-      [=:]\s*["']?
+      (?:
+        NANGO_(?:API_KEY|SECRET_KEY(?:_[A-Z0-9]+)*)
+        |
+        nango[\s_-]*(?:api|secret)[\s_-]*key
+      )
+      \s*[=:]\s*["']?
       (
-        SK_[A-Za-z0-9_-]{16,}
+        [0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}
       )
       \b
-    min_entropy: 3.5
+    min_entropy: 3.0
     confidence: medium
-    pattern_requirements:
-      min_digits: 1
-      min_uppercase: 2
-      min_lowercase: 2
     examples:
-      - 'NANGO_SECRET_KEY=SK_7M2qN8vR4xL9sD1wC6hJ3fGbYeTaUiKo'
-      - 'nango secret_key: "SK_4Pz7Km2Qv9Xr5Nd8Ws1Lc6Hj3ByTuEfG"'
+      # Synthetic, format-valid examples; these are not issued credentials.
+      - 'NANGO_SECRET_KEY=123e4567-e89b-42d3-a456-426614174000'
+      - 'nango api_key: "7f2c1a90-5b3d-4e68-9a21-c0d4e6f8b135"'
     references:
       - https://nango.dev/docs/reference/backend/http-api/sync/environment-variables
       - https://nango.dev/docs/reference/backend/http-api/integration/list
+      - https://nango.dev/docs/reference/backend/http-api/api-keys
+      - https://github.com/NangoHQ/nango/blob/214d010e7c4da819fdb4c8e4f8303c9d07bb6904/packages/shared/lib/services/customerKey.service.ts#L36-L54
+      - https://github.com/PipedreamHQ/pipedream/blob/a0acaac123a26cfa496ec90bd09ffd7685d28082/components/nango/nango.app.mjs
+      - https://github.com/triggerdotdev/trigger.dev/blob/2cac63f13ab151ae408282c44d42f01295cf9f64/docs/guides/frameworks/nango.mdx
     validation:
       type: Http
       content:

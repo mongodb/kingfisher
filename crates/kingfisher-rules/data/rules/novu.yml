@@ -2,32 +2,30 @@ rules:
   - name: Novu Secret Key
     id: kingfisher.novu.1
     pattern: |
-      (?xi)
+      (?x)
       \b
-      (?:NOVU|novu)
-      (?:.|[\n\r]){0,48}?
-      (?:secret[\s_-]*key|api[\s_-]*key|token|key)
-      (?:.|[\n\r]){0,16}?
-      [=:]\s*["']?
+      (?:
+        NOVU_SECRET_KEY
+        |
+        novu[\s_-]*secret[\s_-]*key
+      )
+      \s*[=:]\s*["']?
       (
-        [A-Za-z0-9_-]{24,128}
+        [0-9a-f]{32}
       )
       \b
     min_entropy: 3.5
     confidence: medium
-    pattern_requirements:
-      min_digits: 1
-      min_uppercase: 1
-      min_lowercase: 1
-      ignore_if_contains:
-        - example
-        - placeholder
     examples:
-      - 'NOVU_SECRET_KEY="4f7Qa2mZ9xL3vR8kN1sD6wC5hJ0pByTuEfGqM4n"'
-      - 'novu api_key: 9Xr4Km7Qv2Nd8Ws1Lc6Hj3ByTuEfGqM5nZ0pRa'
+      # Synthetic, format-valid examples; these are not issued credentials.
+      - 'NOVU_SECRET_KEY="4f7ca2b9d3e8f1a6c5b0d7e2f9a4c8b1"'
+      - 'novu secret_key: 9e2d7c4b1a8f5e3d0c6b9a2f7e4d1c8b'
     references:
       - https://docs.novu.co/platform/developer/api-keys
       - https://docs.novu.co/api-reference/subscribers/search-subscribers
+      - https://github.com/novuhq/novu/blob/99ef8c4164a2fcd918e83a7b65ce721af3b51d2b/apps/api/src/app/environments-v1/usecases/generate-unique-api-key/generate-unique-api-key.usecase.ts#L36-L41
+      - https://github.com/novuhq/novu/blob/99ef8c4164a2fcd918e83a7b65ce721af3b51d2b/packages/agent-toolkit/README.md
+      - https://github.com/novuhq/novu/blob/99ef8c4164a2fcd918e83a7b65ce721af3b51d2b/packages/novu/README.MD
     validation:
       type: Http
       content:

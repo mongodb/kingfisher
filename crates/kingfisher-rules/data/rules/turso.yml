@@ -1,38 +1,46 @@
 rules:
-  - name: Turso Platform API Token
+  - name: Turso Auth Token
     id: kingfisher.turso.1
     pattern: |
-      (?xi)
+      (?x)
       \b
-      (?:TURSO|turso)
-      (?:.|[\n\r]){0,64}?
-      (?:api[\s_-]*token|auth[\s_-]*token|token)
-      (?:.|[\n\r]){0,16}?
-      [=:]\s*["']?
+      (?:
+        TURSO_(?:AUTH_TOKEN|API_TOKEN)
+        |
+        turso[\s_-]*(?:auth|api)[\s_-]*token
+      )
+      \s*[=:]\s*["']?
       (
-        eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}
+        eyJ[A-Za-z0-9_-]+\.eyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+
       )
       \b
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'TURSO_API_TOKEN=eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJvcmctYWNtZSIsInNjb3BlIjoiZnVsbC1hY2Nlc3MifQ.m4Kv8qL2nR7xW9dP3sT6yZ1aBcDeFgHi'
-      - 'turso auth_token: "eyJraWQiOiJrZXktMSJ9.eyJvcmdhbml6YXRpb24iOiJkZW1vIiwicmVhZF9vbmx5Ijp0cnVlfQ.Q7mN2pR8vX4kL9sD1wC6hJ3fGbYeTaUi"'
+      - 'TURSO_AUTH_TOKEN=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0dXJzby1hdXRoLXRva2VuIiwiaWF0IjoxNTE2MjM5MDIyfQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'
+      - 'turso api_token="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJ0dXJzby1hcGktdG9rZW4iLCJvcmciOiJteS1vcmcifQ.k3OFAEWF0XnJzxk5hfn3OPD89In5Mrtw5cJiwk3c8"'
     references:
+      - https://docs.turso.tech/sdk/authorization
       - https://docs.turso.tech/api-reference/authentication
-      - https://docs.turso.tech/api-reference/organizations/list
+      - https://docs.turso.tech/api-reference/tokens/create
+      - https://docs.turso.tech/sdk/authentication
+      - https://github.com/tursodatabase/turso-docs/blob/2558aded557c9daa18ed07184c5bc1e83024ec3f/sdk/authorization.mdx#L5-L29
+      - https://github.com/tursodatabase/sqlalchemy-libsql/blob/1561796825980a28fe6e744e02484ff00a06fd8a/README.md
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: https://api.turso.tech/v1/organizations
+          url: https://api.turso.tech/v1/auth/api-tokens
           headers:
             Authorization: "Bearer {{ TOKEN }}"
-            Accept: application/json
+            Accept: "application/json"
           response_matcher:
             - report_response: true
             - type: StatusMatch
               status: [200]
             - type: JsonValid
-    # The platform API documents token minting, but not a safe current-token deletion endpoint.
+    # Platform API tokens can be revoked via DELETE /v1/auth/api-tokens/{tokenId}
+    # or in the Turso dashboard. Database auth tokens can be invalidated with
+    # `turso db tokens invalidate <database>` or the Platform API endpoint
+    # POST /v1/organizations/{org}/databases/{db}/auth/tokens/invalidate.

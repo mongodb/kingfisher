@@ -542,19 +542,12 @@ mod tests {
         // An insertion into an *empty* filter is guaranteed genuine — no
         // bits are set, so `check` cannot return true — so the sentinel is
         // definitely stored in the (soon-to-be-retired) first filter.
-        assert!(
-            !filter.contains_or_insert(11),
-            "insert into empty filter must be new"
-        );
+        assert!(!filter.contains_or_insert(11), "insert into empty filter must be new");
         let sentinel = 11u64;
 
         // Force the filter rotation that the test name promises.
         filter.grow();
-        assert_eq!(
-            filter.filters.len(),
-            2,
-            "grow() must add a second filter"
-        );
+        assert_eq!(filter.filters.len(), 2, "grow() must add a second filter");
 
         // After rotation the sentinel lives only in the older filter,
         // which `contains_or_insert` must still consult.

@@ -1,13 +1,13 @@
 ---
 title: "Built-in Rules List"
-description: "Complete list of all 1004 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
+description: "Complete list of all 1005 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
 ---
 
 # Built-in Rules
 
-Kingfisher ships with **1004 detection rules** across **600 providers**
-(873 detectors + 131 dependent rules).
-Of these, **508** include live validation and **52** support direct revocation.
+Kingfisher ships with **1005 detection rules** across **601 providers**
+(875 detectors + 130 dependent rules).
+Of these, **511** include live validation and **52** support direct revocation.
 
 !!! tip "Search"
     Use the search box below to filter rules by provider name, rule ID, or confidence level.
@@ -183,22 +183,6 @@ Of these, **508** include live validation and **52** support direct revocation.
 <td>Airbrake</td>
 <td>Airbrake User Key</td>
 <td><code>kingfisher.airbrake.1</code></td>
-<td>Medium</td>
-<td>Yes</td>
-<td></td>
-</tr>
-<tr>
-<td>Airbyte</td>
-<td>Airbyte Application Client ID</td>
-<td><code>kingfisher.airbyte.1</code></td>
-<td>Medium</td>
-<td></td>
-<td></td>
-</tr>
-<tr>
-<td>Airbyte</td>
-<td>Airbyte Application Client Secret</td>
-<td><code>kingfisher.airbyte.2</code></td>
 <td>Medium</td>
 <td>Yes</td>
 <td></td>
@@ -1329,6 +1313,14 @@ Of these, **508** include live validation and **52** support direct revocation.
 <td><code>kingfisher.canva.2</code></td>
 <td>Medium</td>
 <td></td>
+<td></td>
+</tr>
+<tr>
+<td>Cartesia</td>
+<td>Cartesia API Key</td>
+<td><code>kingfisher.cartesia.1</code></td>
+<td>Medium</td>
+<td>Yes</td>
 <td></td>
 </tr>
 <tr>
@@ -6572,6 +6564,14 @@ Of these, **508** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
+<td>Siliconflow</td>
+<td>SiliconFlow API Key</td>
+<td><code>kingfisher.siliconflow.1</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
 <td>Slack</td>
 <td>Slack App Token</td>
 <td><code>kingfisher.slack.1</code></td>
@@ -7317,7 +7317,7 @@ Of these, **508** include live validation and **52** support direct revocation.
 </tr>
 <tr>
 <td>Turso</td>
-<td>Turso Platform API Token</td>
+<td>Turso Auth Token</td>
 <td><code>kingfisher.turso.1</code></td>
 <td>Medium</td>
 <td>Yes</td>
@@ -7649,6 +7649,14 @@ Of these, **508** include live validation and **52** support direct revocation.
 <td><code>kingfisher.volcengine.1</code></td>
 <td>Medium</td>
 <td></td>
+<td></td>
+</tr>
+<tr>
+<td>Volcengine</td>
+<td>VolcEngine Ark API Key</td>
+<td><code>kingfisher.volcengine.2</code></td>
+<td>Medium</td>
+<td>Yes</td>
 <td></td>
 </tr>
 <tr>
