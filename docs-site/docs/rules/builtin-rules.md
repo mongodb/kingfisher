@@ -1,12 +1,12 @@
 ---
 title: "Built-in Rules List"
-description: "Complete list of all 993 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
+description: "Complete list of all 998 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
 ---
 
 # Built-in Rules
 
-Kingfisher ships with **993 detection rules** across **592 providers**
-(864 detectors + 129 dependent rules).
+Kingfisher ships with **998 detection rules** across **595 providers**
+(868 detectors + 130 dependent rules).
 Of these, **504** include live validation and **52** support direct revocation.
 
 !!! tip "Search"
@@ -337,6 +337,14 @@ Of these, **504** include live validation and **52** support direct revocation.
 <td><code>kingfisher.amplitude.1</code></td>
 <td>Medium</td>
 <td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Ansible</td>
+<td>Ansible Vault Encrypted Secret</td>
+<td><code>kingfisher.ansible.1</code></td>
+<td>Medium</td>
+<td></td>
 <td></td>
 </tr>
 <tr>
@@ -3636,6 +3644,14 @@ Of these, **504** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
+<td>Html</td>
+<td>HTML Password Input Pre-populated Credential</td>
+<td><code>kingfisher.html.1</code></td>
+<td>Low</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
 <td>Http</td>
 <td>HTTP Basic Authentication</td>
 <td><code>kingfisher.http.1</code></td>
@@ -3833,6 +3849,30 @@ Of these, **504** include live validation and **52** support direct revocation.
 <td><code>kingfisher.iterative.1</code></td>
 <td>Medium</td>
 <td></td>
+<td></td>
+</tr>
+<tr>
+<td>Jamf</td>
+<td>JAMF Pro Server URL</td>
+<td><code>kingfisher.jamf.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Jamf</td>
+<td>JAMF Pro API Client ID</td>
+<td><code>kingfisher.jamf.2</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Jamf</td>
+<td>JAMF Pro Credential</td>
+<td><code>kingfisher.jamf.3</code></td>
+<td>Medium</td>
+<td>Yes</td>
 <td></td>
 </tr>
 <tr>

@@ -709,6 +709,8 @@ fn has_self_identifying_shape(normalized_pattern: &str) -> bool {
         "aizasy",
         "pypi-ageichlwas5vcmc",
         "https://hooks\\.slack\\.com/services/",
+        "$ansible_vault",
+        "<input",
     ];
 
     if LITERAL_MARKERS.iter().any(|needle| normalized_pattern.contains(needle)) {

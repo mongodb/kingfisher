@@ -2,11 +2,11 @@ rules:
   - name: Kimi (Moonshot AI) API Key
     id: kingfisher.kimi.1
     pattern: |
-      (?xi)
+      (?x)
       \b
-      (?:kimi|moonshot)
+      (?i:kimi|moonshot)
       (?:.|[\n\r]){0,32}?
-      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?i:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,32}?
       \b
       (

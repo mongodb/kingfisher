@@ -34,7 +34,7 @@ rules:
           headers:
             Authorization: "Bearer {{ TOKEN }}"
             Content-Type: application/json
-          body: '{"jsonrpc":"2.0","id":1,"method":"ping"}'
+          body: '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"list_custom_context","arguments":{}}}'
           response_matcher:
             - report_response: true
             - type: StatusMatch

@@ -140,6 +140,10 @@
     "snippet": "https://hooks.slack.com/services/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"
   },
   {
+    "rule_id": "kingfisher.slack.7",
+    "snippet": "xoxb-34532454-e039d02840a0b9379c"
+  },
+  {
     "rule_id": "kingfisher.stripe.1",
     "snippet": "pk_live_bu9JFVJtII3FINL1rOKcNpveXD4hSMtSDx7opOWDEFGHIJKLMNOPQRSTUVWXYZ"
   },
