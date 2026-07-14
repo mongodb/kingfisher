@@ -57,8 +57,11 @@ tracing.workspace = true
 walkdir.workspace = true
 ignore.workspace = true
 
-# Embedded rule files
-include_dir.workspace = true
+# Embedded rule bundle
+flate2 = "1.1"
+
+[build-dependencies]
+flate2 = "1.1"
 
 [dev-dependencies]
 pretty_assertions = "1.4"

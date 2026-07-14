@@ -1,12 +1,13 @@
 use std::sync::{Arc, OnceLock};
 
 use anyhow::{Result, anyhow};
+use aws_lc_rs::signature::KeyPair;
+use aws_lc_rs::{rand, signature};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration as ChronoDuration, Utc};
 use pem::parse;
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{Client, Proxy};
-use ring::{rand, signature};
 use serde_json::Value as JsonValue;
 use tokio::sync::Semaphore;
 use tracing::debug;
@@ -207,7 +208,7 @@ impl GcpValidator {
             .map_err(|_| anyhow!("Invalid RSA private key"))?;
 
         let rng = rand::SystemRandom::new();
-        let mut signature = vec![0; key_pair.public().modulus_len()];
+        let mut signature = vec![0; key_pair.public_key().modulus_len()];
         key_pair
             .sign(&signature::RSA_PKCS1_SHA256, &rng, message.as_bytes(), &mut signature)
             .map_err(|_| anyhow!("Failed to sign JWT"))?;

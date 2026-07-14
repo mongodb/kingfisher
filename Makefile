@@ -3,6 +3,7 @@ SHELL := /usr/bin/env bash
 
 PROJECT_NAME := kingfisher
 ZIG_VERSION ?= 0.15.1
+SKIP_TESTS ?= 0
 
 # Determine OS and whether to use gtar on darwin
 OS := $(shell uname)
@@ -64,8 +65,8 @@ default: help
 help:
 	@echo "Available targets:"
 	@echo "  linux              Build Linux archive for current host arch via Docker"
-	@echo "  linux-x64          Build Linux x64 archive via Docker"
-	@echo "  linux-arm64        Build Linux arm64 archive via Docker"
+	@echo "  linux-x64          Build Linux x64 archive via Docker (SKIP_TESTS=1 to skip tests)"
+	@echo "  linux-arm64        Build Linux arm64 archive via Docker (SKIP_TESTS=1 to skip tests)"
 	@echo "  linux-all          Build Linux x64 and arm64 archives via Docker"
 	@echo "  ubuntu-x64         Build Linux x64 archive with Zig on Ubuntu"
 	@echo "  ubuntu-arm64       Build Linux arm64 archive with Zig on Ubuntu"
@@ -609,6 +610,7 @@ linux-x64: check-docker create-dockerignore
 	docker run --platform linux/amd64 --rm \
           -v "$$(pwd):/src" -w /src rust:1.96-alpine sh -eu -c '\
 		apk add --no-cache \
+		    bash \
 		    musl-dev \
 		    gcc g++ make cmake pkgconfig \
 		    zlib-dev  zlib-static \
@@ -618,15 +620,16 @@ linux-x64: check-docker create-dockerignore
 		    patch perl ragel \
 	        git openssl-dev curl && \
 		\
-		cargo test --workspace --all-targets ; \
-		\
+		export CARGO_TARGET_DIR=/src/target-docker && \
 		rustup target add x86_64-unknown-linux-musl && \
+		\
+		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --workspace --all-targets --jobs 1 --target x86_64-unknown-linux-musl; fi ; \
 		\
 		export PKG_CONFIG_ALLOW_CROSS=1 ; \
 		export RUSTFLAGS="-C target-feature=+crt-static" ; \
 		\
 		cargo build --release --target x86_64-unknown-linux-musl && \
-		cd target/x86_64-unknown-linux-musl/release && \
+		cd target-docker/x86_64-unknown-linux-musl/release && \
 	    sha256sum kingfisher > CHECKSUM.txt && \
 	    tar -czf /src/target/release/kingfisher-linux-x64.tgz \
 	        kingfisher CHECKSUM.txt \
@@ -638,6 +641,7 @@ linux-arm64: check-docker create-dockerignore
 	docker run --platform linux/arm64 --rm \
           -v "$$(pwd):/src" -w /src rust:1.96-alpine sh -eu -c '\
 		apk add --no-cache \
+		    bash \
 		    musl-dev \
 		    gcc g++ make cmake pkgconfig \
 		    zlib-dev  zlib-static \
@@ -647,16 +651,17 @@ linux-arm64: check-docker create-dockerignore
 		    patch perl ragel \
 	        git openssl-dev curl && \
 		\
+		export CARGO_TARGET_DIR=/src/target-docker && \
 		rustup target add aarch64-unknown-linux-musl && \
 		\
-		cargo test --workspace --all-targets ; \
+		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --workspace --all-targets --jobs 1 --target aarch64-unknown-linux-musl; fi ; \
 		\
 		export PKG_CONFIG_ALLOW_CROSS=1 ; \
 		export RUSTFLAGS="-C target-feature=+crt-static" ; \
 		\
 		cargo build --release --target aarch64-unknown-linux-musl && \
 		\
-		cd target/aarch64-unknown-linux-musl/release && \
+		cd target-docker/aarch64-unknown-linux-musl/release && \
 	    sha256sum kingfisher > CHECKSUM.txt && \
 	    tar -czf /src/target/release/kingfisher-linux-arm64.tgz \
 	        kingfisher CHECKSUM.txt \
@@ -844,6 +849,7 @@ clean:
 	@echo "Cleaning build artifacts..."
 	cargo clean
 	rm -f .dockerignore
+	rm -rf target-docker
 	rm -rf docs-site/site
 
 notices:

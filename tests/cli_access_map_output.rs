@@ -1,7 +1,7 @@
 use clap::Parser;
 
 use kingfisher::cli::{
-    commands::access_map::AccessMapOutputFormat,
+    commands::access_map::{AccessMapOutputFormat, AccessMapProvider},
     global::{Command, CommandLineArgs},
 };
 
@@ -53,4 +53,31 @@ fn access_map_rejects_legacy_output_flags() {
             "expected error to mention {legacy_flag}: {rendered}"
         );
     }
+}
+
+#[test]
+fn access_map_provider_aliases_still_parse() -> anyhow::Result<()> {
+    for (raw, expected) in [
+        ("mongo", AccessMapProvider::Mongodb),
+        ("hf", AccessMapProvider::Huggingface),
+        ("wandb", AccessMapProvider::Weightsandbiases),
+        ("monday.com", AccessMapProvider::Monday),
+        ("pinecone.io", AccessMapProvider::Pinecone),
+    ] {
+        let args = CommandLineArgs::try_parse_from([
+            "kingfisher",
+            "access-map",
+            raw,
+            "--no-update-check",
+        ])?;
+
+        let command = match args.command {
+            Command::AccessMap(args) => args,
+            other => panic!("unexpected command parsed: {:?}", other),
+        };
+
+        assert_eq!(command.provider, expected, "alias `{raw}` should map to the expected provider");
+    }
+
+    Ok(())
 }

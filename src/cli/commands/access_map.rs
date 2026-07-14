@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::str::FromStr;
 
 use clap::{Args, ValueEnum, ValueHint};
 use strum::Display;
@@ -9,7 +10,7 @@ use crate::util::get_writer_for_file_or_stdout;
 #[derive(Args, Debug)]
 pub struct AccessMapArgs {
     /// Cloud provider for identity mapping
-    #[clap(value_parser, value_name = "PROVIDER")]
+    #[clap(value_parser = parse_access_map_provider, value_name = "PROVIDER")]
     pub provider: AccessMapProvider,
 
     /// Path to a credential artifact (for example, a GCP key or Azure credential document)
@@ -50,7 +51,7 @@ pub enum AccessMapOutputFormat {
 }
 
 /// Supported cloud providers for identity mapping.
-#[derive(Clone, Debug, ValueEnum)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum AccessMapProvider {
     /// Amazon Web Services
     Aws,
@@ -67,10 +68,8 @@ pub enum AccessMapProvider {
     /// PostgreSQL database
     Postgres,
     /// MongoDB database
-    #[clap(alias = "mongo")]
     Mongodb,
     /// Hugging Face
-    #[clap(alias = "hf")]
     Huggingface,
     /// Gitea
     Gitea,
@@ -87,76 +86,163 @@ pub enum AccessMapProvider {
     /// Salesforce
     Salesforce,
     /// Weights & Biases
-    #[clap(alias = "wandb")]
     Weightsandbiases,
     /// Microsoft Teams
-    #[clap(alias = "msteams")]
     Microsoftteams,
     /// Airtable
     Airtable,
     /// Alibaba Cloud
-    #[clap(alias = "aliyun")]
     Alibaba,
     /// CircleCI
     Circleci,
     /// DigitalOcean
-    #[clap(alias = "do")]
     Digitalocean,
     /// Fastly
     Fastly,
     /// HubSpot
     Hubspot,
     /// IBM Cloud
-    #[clap(alias = "ibm")]
     Ibmcloud,
     /// SendGrid
     Sendgrid,
     /// Brevo (Sendinblue)
-    #[clap(alias = "brevo")]
     Sendinblue,
     /// Stripe
     Stripe,
     /// Terraform Cloud
-    #[clap(alias = "tfc")]
     Terraform,
     /// Square
     Square,
     /// Jira
-    #[clap(alias = "jira")]
     Jira,
     /// MySQL database
-    #[clap(alias = "mysql")]
     Mysql,
     /// Algolia
-    #[clap(alias = "algolia")]
     Algolia,
     /// Auth0
-    #[clap(alias = "auth0")]
     Auth0,
     /// PayPal
-    #[clap(alias = "paypal")]
     Paypal,
     /// Plaid
-    #[clap(alias = "plaid")]
     Plaid,
     /// Shopify
-    #[clap(alias = "shopify")]
     Shopify,
     /// Zendesk
-    #[clap(alias = "zendesk")]
     Zendesk,
     /// JFrog Artifactory
-    #[clap(alias = "jfrog-art")]
     Artifactory,
     /// JFrog Xray
-    #[clap(alias = "jfrog-xray")]
     Xray,
     /// monday.com
-    #[clap(alias = "monday.com")]
     Monday,
     /// Asana
     Asana,
     /// Pinecone
-    #[clap(alias = "pinecone.io")]
     Pinecone,
+}
+
+impl FromStr for AccessMapProvider {
+    type Err = String;
+
+    fn from_str(raw: &str) -> Result<Self, Self::Err> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "aws" => Ok(Self::Aws),
+            "gcp" => Ok(Self::Gcp),
+            "azure" => Ok(Self::Azure),
+            "github" => Ok(Self::Github),
+            "gitlab" => Ok(Self::Gitlab),
+            "slack" => Ok(Self::Slack),
+            "postgres" => Ok(Self::Postgres),
+            "mongodb" | "mongo" => Ok(Self::Mongodb),
+            "huggingface" | "hf" => Ok(Self::Huggingface),
+            "gitea" => Ok(Self::Gitea),
+            "bitbucket" => Ok(Self::Bitbucket),
+            "buildkite" => Ok(Self::Buildkite),
+            "harness" => Ok(Self::Harness),
+            "openai" => Ok(Self::Openai),
+            "anthropic" => Ok(Self::Anthropic),
+            "salesforce" => Ok(Self::Salesforce),
+            "weightsandbiases" | "weights-and-biases" | "wandb" => Ok(Self::Weightsandbiases),
+            "microsoftteams" | "microsoft-teams" | "msteams" => Ok(Self::Microsoftteams),
+            "airtable" => Ok(Self::Airtable),
+            "alibaba" | "aliyun" => Ok(Self::Alibaba),
+            "circleci" => Ok(Self::Circleci),
+            "digitalocean" | "digital-ocean" | "do" => Ok(Self::Digitalocean),
+            "fastly" => Ok(Self::Fastly),
+            "hubspot" | "hub-spot" => Ok(Self::Hubspot),
+            "ibmcloud" | "ibm-cloud" | "ibm" => Ok(Self::Ibmcloud),
+            "sendgrid" | "send-grid" => Ok(Self::Sendgrid),
+            "sendinblue" | "send-in-blue" | "brevo" => Ok(Self::Sendinblue),
+            "stripe" => Ok(Self::Stripe),
+            "terraform" | "tfc" => Ok(Self::Terraform),
+            "square" => Ok(Self::Square),
+            "jira" => Ok(Self::Jira),
+            "mysql" => Ok(Self::Mysql),
+            "algolia" => Ok(Self::Algolia),
+            "auth0" => Ok(Self::Auth0),
+            "paypal" | "pay-pal" => Ok(Self::Paypal),
+            "plaid" => Ok(Self::Plaid),
+            "shopify" => Ok(Self::Shopify),
+            "zendesk" => Ok(Self::Zendesk),
+            "artifactory" | "jfrog-art" => Ok(Self::Artifactory),
+            "xray" | "jfrog-xray" => Ok(Self::Xray),
+            "monday" | "monday.com" => Ok(Self::Monday),
+            "asana" => Ok(Self::Asana),
+            "pinecone" | "pinecone.io" => Ok(Self::Pinecone),
+            _ => Err(format!(
+                "invalid provider `{raw}`; expected one of: {}",
+                ACCESS_MAP_PROVIDER_NAMES.join(", ")
+            )),
+        }
+    }
+}
+
+const ACCESS_MAP_PROVIDER_NAMES: &[&str] = &[
+    "aws",
+    "gcp",
+    "azure",
+    "github",
+    "gitlab",
+    "slack",
+    "postgres",
+    "mongodb",
+    "huggingface",
+    "gitea",
+    "bitbucket",
+    "buildkite",
+    "harness",
+    "openai",
+    "anthropic",
+    "salesforce",
+    "weightsandbiases",
+    "microsoftteams",
+    "airtable",
+    "alibaba",
+    "circleci",
+    "digitalocean",
+    "fastly",
+    "hubspot",
+    "ibmcloud",
+    "sendgrid",
+    "sendinblue",
+    "stripe",
+    "terraform",
+    "square",
+    "jira",
+    "mysql",
+    "algolia",
+    "auth0",
+    "paypal",
+    "plaid",
+    "shopify",
+    "zendesk",
+    "artifactory",
+    "xray",
+    "monday",
+    "asana",
+    "pinecone",
+];
+
+fn parse_access_map_provider(raw: &str) -> Result<AccessMapProvider, String> {
+    AccessMapProvider::from_str(raw)
 }

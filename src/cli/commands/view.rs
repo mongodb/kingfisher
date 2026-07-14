@@ -1,8 +1,10 @@
 use std::{
+    collections::HashMap,
+    io::Read,
     net::SocketAddr,
     net::TcpListener as StdTcpListener,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -14,13 +16,84 @@ use axum::{
     response::Response,
     routing::get,
 };
-use include_dir::{Dir, include_dir};
+use flate2::read::GzDecoder;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
 
 pub const DEFAULT_PORT: u16 = 7890;
-// Embedded viewer assets - force rebuild
-static VIEWER_ASSETS: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/docs/viewer");
+
+// Embedded viewer assets (gzip-compressed at build time, decompressed lazily).
+const VIEWER_BUNDLE_MAGIC: &[u8] = b"KFVIEW\x01";
+static COMPRESSED_VIEWER_ASSETS: &[u8] =
+    include_bytes!(concat!(env!("OUT_DIR"), "/viewer-assets.gz"));
+static VIEWER_ASSETS: OnceLock<HashMap<String, Vec<u8>>> = OnceLock::new();
+
+/// Lazily decompress the embedded viewer asset bundle into a path → contents map.
+fn viewer_assets() -> &'static HashMap<String, Vec<u8>> {
+    VIEWER_ASSETS.get_or_init(|| {
+        decompress_viewer_bundle(COMPRESSED_VIEWER_ASSETS).unwrap_or_else(|err| {
+            warn!(%err, "failed to decompress embedded viewer asset bundle");
+            HashMap::new()
+        })
+    })
+}
+
+fn decompress_viewer_bundle(data: &[u8]) -> Result<HashMap<String, Vec<u8>>> {
+    let mut decoded = Vec::new();
+    GzDecoder::new(data)
+        .read_to_end(&mut decoded)
+        .context("failed to decompress embedded viewer asset bundle")?;
+
+    let mut cursor = BundleCursor::new(&decoded);
+    if cursor.take(VIEWER_BUNDLE_MAGIC.len())? != VIEWER_BUNDLE_MAGIC {
+        anyhow::bail!("embedded viewer asset bundle has an invalid header");
+    }
+
+    let mut assets = HashMap::new();
+    loop {
+        let name_len = usize::try_from(cursor.u32()?)
+            .map_err(|_| anyhow!("embedded viewer asset path length exceeds platform limits"))?;
+        if name_len == 0 {
+            break;
+        }
+        let contents_len = usize::try_from(cursor.u64()?).map_err(|_| {
+            anyhow!("embedded viewer asset contents length exceeds platform limits")
+        })?;
+        let name = std::str::from_utf8(cursor.take(name_len)?)
+            .context("embedded viewer asset bundle contains a non-UTF-8 path")?;
+        assets.insert(name.to_owned(), cursor.take(contents_len)?.to_vec());
+    }
+    Ok(assets)
+}
+
+struct BundleCursor<'a> {
+    remaining: &'a [u8],
+}
+
+impl<'a> BundleCursor<'a> {
+    fn new(contents: &'a [u8]) -> Self {
+        Self { remaining: contents }
+    }
+
+    fn take(&mut self, length: usize) -> Result<&'a [u8]> {
+        if self.remaining.len() < length {
+            anyhow::bail!("embedded viewer asset bundle is truncated");
+        }
+        let (result, remaining) = self.remaining.split_at(length);
+        self.remaining = remaining;
+        Ok(result)
+    }
+
+    fn u32(&mut self) -> Result<u32> {
+        let bytes: [u8; 4] = self.take(4)?.try_into().expect("slice length is checked");
+        Ok(u32::from_le_bytes(bytes))
+    }
+
+    fn u64(&mut self) -> Result<u64> {
+        let bytes: [u8; 8] = self.take(8)?.try_into().expect("slice length is checked");
+        Ok(u64::from_le_bytes(bytes))
+    }
+}
 
 /// Default bind address for the report viewer (localhost only for security).
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1";
@@ -288,8 +361,8 @@ async fn serve_report(State(state): State<Arc<AppState>>) -> Response {
 }
 
 fn serve_asset_at(path: &str) -> Option<Response> {
-    let file = VIEWER_ASSETS.get_file(path)?;
-    let body = Body::from(file.contents().to_vec());
+    let contents = viewer_assets().get(path)?;
+    let body = Body::from(contents.clone());
     let content_type = content_type_for(path);
 
     Response::builder()

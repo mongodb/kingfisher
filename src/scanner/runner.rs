@@ -329,18 +329,13 @@ async fn enumerate_all_repos(
 ) -> Result<RepoEnumeration> {
     let mut repo_urls = enumerate_github_repos(args, global_args).await?;
     let github_event_targets = enumerate_github_event_targets(args, global_args).await?;
-    let gitlab_repo_urls = enumerate_gitlab_repos(args, global_args).await?;
-    let gitea_repo_urls = enumerate_gitea_repos(args, global_args).await?;
-    let huggingface_repo_urls = enumerate_huggingface_repos(args, global_args).await?;
-    let bitbucket_repo_urls = enumerate_bitbucket_repos(args, global_args).await?;
-    let azure_repo_urls = enumerate_azure_repos(args, global_args).await?;
 
     repo_urls.extend(github_event_targets.iter().map(|target| target.repo_url.clone()));
-    repo_urls.extend(gitlab_repo_urls);
-    repo_urls.extend(gitea_repo_urls);
-    repo_urls.extend(huggingface_repo_urls);
-    repo_urls.extend(bitbucket_repo_urls);
-    repo_urls.extend(azure_repo_urls);
+    repo_urls.extend(enumerate_gitlab_repos(args, global_args).await?);
+    repo_urls.extend(enumerate_gitea_repos(args, global_args).await?);
+    repo_urls.extend(enumerate_huggingface_repos(args, global_args).await?);
+    repo_urls.extend(enumerate_bitbucket_repos(args, global_args).await?);
+    repo_urls.extend(enumerate_azure_repos(args, global_args).await?);
 
     // Add wiki repositories for each URL when requested
     if args.input_specifier_args.repo_artifacts {

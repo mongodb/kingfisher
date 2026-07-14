@@ -104,7 +104,6 @@ use crate::cli::commands::{
 
 fn main() -> anyhow::Result<()> {
     raise_nproc_soft_limit();
-    color_backtrace::install();
 
     // Run the real entry point on a thread with an explicit, larger stack so that
     // deeply-nested async state machines (validation pipeline) cannot overflow the
@@ -151,9 +150,8 @@ fn raise_nproc_soft_limit() {
 fn raise_nproc_soft_limit() {}
 
 fn run() -> anyhow::Result<()> {
-    // Rustls 0.23 requires an explicit crypto provider selection when multiple
-    // providers are present in the dependency graph.
-    match rustls::crypto::ring::default_provider().install_default() {
+    // Install the AWS-LC Rustls provider before initializing any TLS clients.
+    match rustls::crypto::aws_lc_rs::default_provider().install_default() {
         Ok(()) => {}
         Err(_already_installed) => {
             // Another crate already installed a provider. This is unusual for a CLI, but
