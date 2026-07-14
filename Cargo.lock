@@ -449,9 +449,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-ec2"
-version = "1.233.0"
+version = "1.236.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3652743d6ceefbe1aaa48b2d438e8fb9023efca7d9c616bc0243bcda092a9a89"
+checksum = "28ed92717d884f32913e3fc2960f58cf6cd970fc99a08925f1313c2e00708844"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -551,9 +551,9 @@ dependencies = [
 
 [[package]]
 name = "aws-sdk-lambda"
-version = "1.129.0"
+version = "1.130.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a5ff6989897073d319e106b22e0ee9abbb2c95bdc5227f5b8fcec64e2a95cfa"
+checksum = "33489208bd2568aa0189cdb640343d56d6bc7fd5ba01b9e1e34d4c2a4a2bda6d"
 dependencies = [
  "arc-swap",
  "aws-credential-types",
@@ -4323,9 +4323,9 @@ dependencies = [
 
 [[package]]
 name = "humantime"
-version = "2.3.0"
+version = "2.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "135b12329e5e3ce057a9f972339ea52bc954fe1e9358ef27f95e89716fbc5424"
+checksum = "15cdd26707701c53297e2fa6afb323d55fbc1d0810c3aec078ae3ef0424c3c15"
 
 [[package]]
 name = "humantime-serde"
