@@ -1,7 +1,10 @@
 use std::path::PathBuf;
 use std::str::FromStr;
 
-use clap::{Args, ValueEnum, ValueHint};
+use clap::{
+    Args, ValueEnum, ValueHint,
+    builder::{PossibleValue, PossibleValuesParser, TypedValueParser},
+};
 use strum::Display;
 
 use crate::util::get_writer_for_file_or_stdout;
@@ -10,7 +13,11 @@ use crate::util::get_writer_for_file_or_stdout;
 #[derive(Args, Debug)]
 pub struct AccessMapArgs {
     /// Cloud provider for identity mapping
-    #[clap(value_parser = parse_access_map_provider, value_name = "PROVIDER")]
+    #[clap(
+        value_parser = access_map_provider_parser(),
+        value_name = "PROVIDER",
+        ignore_case = true
+    )]
     pub provider: AccessMapProvider,
 
     /// Path to a credential artifact (for example, a GCP key or Azure credential document)
@@ -242,6 +249,61 @@ const ACCESS_MAP_PROVIDER_NAMES: &[&str] = &[
     "asana",
     "pinecone",
 ];
+
+fn access_map_provider_parser() -> impl TypedValueParser<Value = AccessMapProvider> {
+    PossibleValuesParser::new(access_map_provider_values()).map(|raw| {
+        parse_access_map_provider(&raw)
+            .expect("access-map provider possible values must parse successfully")
+    })
+}
+
+fn access_map_provider_values() -> Vec<PossibleValue> {
+    vec![
+        PossibleValue::new("aws"),
+        PossibleValue::new("gcp"),
+        PossibleValue::new("azure"),
+        PossibleValue::new("github"),
+        PossibleValue::new("gitlab"),
+        PossibleValue::new("slack"),
+        PossibleValue::new("postgres"),
+        PossibleValue::new("mongodb").alias("mongo"),
+        PossibleValue::new("huggingface").alias("hf"),
+        PossibleValue::new("gitea"),
+        PossibleValue::new("bitbucket"),
+        PossibleValue::new("buildkite"),
+        PossibleValue::new("harness"),
+        PossibleValue::new("openai"),
+        PossibleValue::new("anthropic"),
+        PossibleValue::new("salesforce"),
+        PossibleValue::new("weightsandbiases").aliases(["weights-and-biases", "wandb"]),
+        PossibleValue::new("microsoftteams").aliases(["microsoft-teams", "msteams"]),
+        PossibleValue::new("airtable"),
+        PossibleValue::new("alibaba").alias("aliyun"),
+        PossibleValue::new("circleci"),
+        PossibleValue::new("digitalocean").aliases(["digital-ocean", "do"]),
+        PossibleValue::new("fastly"),
+        PossibleValue::new("hubspot").alias("hub-spot"),
+        PossibleValue::new("ibmcloud").aliases(["ibm-cloud", "ibm"]),
+        PossibleValue::new("sendgrid").alias("send-grid"),
+        PossibleValue::new("sendinblue").aliases(["send-in-blue", "brevo"]),
+        PossibleValue::new("stripe"),
+        PossibleValue::new("terraform").alias("tfc"),
+        PossibleValue::new("square"),
+        PossibleValue::new("jira"),
+        PossibleValue::new("mysql"),
+        PossibleValue::new("algolia"),
+        PossibleValue::new("auth0"),
+        PossibleValue::new("paypal").alias("pay-pal"),
+        PossibleValue::new("plaid"),
+        PossibleValue::new("shopify"),
+        PossibleValue::new("zendesk"),
+        PossibleValue::new("artifactory").alias("jfrog-art"),
+        PossibleValue::new("xray").alias("jfrog-xray"),
+        PossibleValue::new("monday").alias("monday.com"),
+        PossibleValue::new("asana"),
+        PossibleValue::new("pinecone").alias("pinecone.io"),
+    ]
+}
 
 fn parse_access_map_provider(raw: &str) -> Result<AccessMapProvider, String> {
     AccessMapProvider::from_str(raw)
