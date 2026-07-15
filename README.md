@@ -546,7 +546,7 @@ The viewer can import SARIF, Gitleaks JSON, and TruffleHog JSON/JSONL in additio
 > **Use the access map functionality only when you are authorized to inspect the target account, as Kingfisher will issue additional network requests to determine what access the secret grants**
 
 
-![](docs/access-map.png)
+![Access map example](docs/access-map.png)
 
 ### Supported Access Map Providers (43)
 

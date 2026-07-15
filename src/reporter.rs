@@ -192,8 +192,9 @@ fn format_validation_response(validation_body: &str, redact: bool, full_response
     }
 
     const MAX_RESPONSE_LENGTH: usize = 512;
-    let truncated_body: String = validation_body.chars().take(MAX_RESPONSE_LENGTH).collect();
-    let ellipsis = if validation_body.chars().count() > MAX_RESPONSE_LENGTH { "..." } else { "" };
+    let mut chars = validation_body.chars();
+    let truncated_body: String = chars.by_ref().take(MAX_RESPONSE_LENGTH).collect();
+    let ellipsis = if chars.next().is_some() { "..." } else { "" };
     format!("{truncated_body}{ellipsis}")
 }
 
