@@ -16,6 +16,7 @@ use axum::{
     response::Response,
     routing::get,
 };
+use bytes::Bytes;
 use flate2::read::GzDecoder;
 use tokio::net::TcpListener;
 use tracing::{info, warn};
@@ -26,10 +27,10 @@ pub const DEFAULT_PORT: u16 = 7890;
 const VIEWER_BUNDLE_MAGIC: &[u8] = b"KFVIEW\x01";
 static COMPRESSED_VIEWER_ASSETS: &[u8] =
     include_bytes!(concat!(env!("OUT_DIR"), "/viewer-assets.gz"));
-static VIEWER_ASSETS: OnceLock<HashMap<String, Vec<u8>>> = OnceLock::new();
+static VIEWER_ASSETS: OnceLock<HashMap<String, Bytes>> = OnceLock::new();
 
 /// Lazily decompress the embedded viewer asset bundle into a path → contents map.
-fn viewer_assets() -> &'static HashMap<String, Vec<u8>> {
+fn viewer_assets() -> &'static HashMap<String, Bytes> {
     VIEWER_ASSETS.get_or_init(|| {
         decompress_viewer_bundle(COMPRESSED_VIEWER_ASSETS).unwrap_or_else(|err| {
             warn!(%err, "failed to decompress embedded viewer asset bundle");
@@ -38,7 +39,7 @@ fn viewer_assets() -> &'static HashMap<String, Vec<u8>> {
     })
 }
 
-fn decompress_viewer_bundle(data: &[u8]) -> Result<HashMap<String, Vec<u8>>> {
+fn decompress_viewer_bundle(data: &[u8]) -> Result<HashMap<String, Bytes>> {
     let mut decoded = Vec::new();
     GzDecoder::new(data)
         .read_to_end(&mut decoded)
@@ -61,7 +62,7 @@ fn decompress_viewer_bundle(data: &[u8]) -> Result<HashMap<String, Vec<u8>>> {
         })?;
         let name = std::str::from_utf8(cursor.take(name_len)?)
             .context("embedded viewer asset bundle contains a non-UTF-8 path")?;
-        assets.insert(name.to_owned(), cursor.take(contents_len)?.to_vec());
+        assets.insert(name.to_owned(), Bytes::copy_from_slice(cursor.take(contents_len)?));
     }
     if !cursor.remaining.is_empty() {
         anyhow::bail!("embedded viewer asset bundle has trailing data");
