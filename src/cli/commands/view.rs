@@ -63,6 +63,9 @@ fn decompress_viewer_bundle(data: &[u8]) -> Result<HashMap<String, Vec<u8>>> {
             .context("embedded viewer asset bundle contains a non-UTF-8 path")?;
         assets.insert(name.to_owned(), cursor.take(contents_len)?.to_vec());
     }
+    if !cursor.remaining.is_empty() {
+        anyhow::bail!("embedded viewer asset bundle has trailing data");
+    }
     Ok(assets)
 }
 
@@ -439,7 +442,27 @@ fn expand_tilde(path: &Path) -> Result<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{ensure_port_available, is_report_extension};
+    use std::io::Write;
+
+    use flate2::{Compression, write::GzEncoder};
+
+    use super::{
+        VIEWER_BUNDLE_MAGIC, decompress_viewer_bundle, ensure_port_available, is_report_extension,
+    };
+
+    #[test]
+    fn decompress_viewer_bundle_rejects_trailing_data() {
+        let mut bundle = VIEWER_BUNDLE_MAGIC.to_vec();
+        bundle.extend_from_slice(&0_u32.to_le_bytes());
+        bundle.push(0);
+
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
+        encoder.write_all(&bundle).unwrap();
+        let compressed_bundle = encoder.finish().unwrap();
+
+        let err = decompress_viewer_bundle(&compressed_bundle).unwrap_err();
+        assert!(err.to_string().contains("trailing data"));
+    }
 
     #[test]
     fn ensure_port_available_uses_passed_flag_name_in_error() {
