@@ -429,7 +429,9 @@ async fn render_and_parse_url(
 
     // Check if the URL is resolvable (with SSRF protection).
     utils::check_url_resolvable(&url, allow_internal_ips).await.map_err(|e| {
-        let error_msg = format!("URL <{}> resolution failed: {}", &url, e);
+        // Rendered URLs can carry the candidate secret in a query string.
+        // This error is persisted in reports, so do not include the URL.
+        let error_msg = format!("Validation endpoint resolution failed: {}", e);
         error_msg
     })?;
 

@@ -8,6 +8,7 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 All notable changes to this project will be documented in this file.
 
 ## [v1.107.0]
+- Security: fixed validation redaction bypasses, redacted webhook report metadata, and bounded TAR extraction.
 - Added detection and validation rules for 25+ new provider families: Anthropic, Airtable, Browserbase, Cartesia, Cielo, Civo, Exoscale, Greptile, Infomaniak, Kimi (Moonshot AI), LightOn, Mailgun, MessageBird, Nango, New Relic, Novu, OVHcloud, PlanetScale, Polymarket, Silicon Flow, Twitter/X, Turso, Upstage, Yandex — plus expanded Slack, Volcengine, JWT, Linear, and Pinecone coverage. Built-in coverage is now 1,005 rules (875 standalone detectors + 130 dependent rules), with 511 standalone detectors supporting live validation.
 - Migrated the TLS and JWT-signing crypto backend from `ring` to `aws-lc-rs` across all validators (GCP, Postgres, raw), the main binary's default provider installation, the MongoDB driver, and gcloud-storage, consolidating on a single FIPS-eligible crypto provider.
 - Reduced dependency footprint and binary size: removed `include_dir` and `color-backtrace`; trimmed `clap` to `default-features = false` and `tokio` from `"full"` to specific features; added per-package `opt-level = "z"` for cold crates in the release profile. Viewer assets and builtin rules are now gzip-compressed at build time via `build.rs` and lazily decompressed at runtime, replacing `include_dir` directory embedding.
