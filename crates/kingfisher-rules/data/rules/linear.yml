@@ -37,3 +37,35 @@ rules:
               status: [200]
             - type: WordMatch
               words: ['"issues":', '"nodes":']
+
+  - name: Linear Client Secret
+    id: kingfisher.linear.2
+    pattern: |
+      (?xi)
+      \b
+      linear
+      (?:.|[\n\r]){0,32}?
+      (?:SECRET|PRIVATE|CLIENT)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        [a-f0-9]{32}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - linear_client_secret = "a1b2c3d4e5f67890a1b2c3d4e5f67890"
+    references:
+      - https://developers.linear.app/docs/oauth-authentication
+      - https://developers.linear.app/docs/getting-started#personal-api-keys
+      - https://github.com/pocketbase/pocketbase/blob/de3c3f715bcab86d87ce51af96fdc05570afb25e/tools/auth/linear.go
+      - https://github.com/linear/linear/blob/202a5e0fbce142cd1f0cd5c5265c3a310f629702/packages/sdk/src/client.ts
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/linear.go#L36
+    # No validation: Linear OAuth uses authorization_code grant only (no
+    # client_credentials). The client secret is paired with a client_id and
+    # an authorization code to obtain an access token. Without an auth code,
+    # the secret cannot be validated. See pocketbase's implementation:
+    # https://github.com/pocketbase/pocketbase/blob/de3c3f715bcab86d87ce51af96fdc05570afb25e/tools/auth/linear.go

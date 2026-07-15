@@ -525,19 +525,35 @@ mod tests {
 
     #[test]
     fn dedup_filter_remains_monotonic_across_growth() {
-        // capacity=2 triggers growth after two insertions. With a 2-item Bloom
-        // filter (~29 bits, 10 hash functions), the third item has ~2.5% FP
-        // probability, so we only assert "new" for items 1-2 (inserted into
-        // an empty or near-empty filter where FP is negligible) and just
-        // trigger growth for item 3 without asserting its novelty.
+        // The invariant under test is *monotonicity*: an item recorded
+        // before a filter rotation must still be reported as contained
+        // afterwards. Bloom filters never produce false negatives, so the
+        // bug this guards against is `contains_or_insert` failing to
+        // consult older filters after `grow()` swaps in a new active one.
+        //
+        // We do NOT assert "new" on insertions into a non-empty filter:
+        // with capacity=2 the Bloom filter is only ~29 bits wide and can
+        // legitimately false-positive on small keys, which would also
+        // prevent `active_items` from ever reaching capacity and thus
+        // never trigger growth via the public API. Calling the private
+        // `grow()` directly makes the rotation deterministic.
         let mut filter = DedupBloomSet::with_capacity(2);
 
-        assert!(!filter.contains_or_insert(11));
-        assert!(!filter.contains_or_insert(22));
-        let _ = filter.contains_or_insert(33); // triggers growth; FP-rate too high to assert
+        // An insertion into an *empty* filter is guaranteed genuine — no
+        // bits are set, so `check` cannot return true — so the sentinel is
+        // definitely stored in the (soon-to-be-retired) first filter.
+        assert!(!filter.contains_or_insert(11), "insert into empty filter must be new");
+        let sentinel = 11u64;
 
-        assert!(filter.contains_or_insert(11), "item 11 must be found after growth");
-        assert!(filter.contains_or_insert(22), "item 22 must be found after growth");
-        assert!(filter.contains_or_insert(33), "item 33 must be found after growth");
+        // Force the filter rotation that the test name promises.
+        filter.grow();
+        assert_eq!(filter.filters.len(), 2, "grow() must add a second filter");
+
+        // After rotation the sentinel lives only in the older filter,
+        // which `contains_or_insert` must still consult.
+        assert!(
+            filter.contains_or_insert(sentinel),
+            "item inserted before growth must still be found afterwards"
+        );
     }
 }

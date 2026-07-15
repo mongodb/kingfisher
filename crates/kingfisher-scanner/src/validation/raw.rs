@@ -16,7 +16,7 @@ use liquid_core::ValueView;
 use percent_encoding::percent_decode_str;
 use reqwest::Client;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{CryptoProvider, ring, verify_tls12_signature, verify_tls13_signature};
+use rustls::crypto::{CryptoProvider, aws_lc_rs, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{ClientConfig, DigitallySignedStruct, RootCertStore, SignatureScheme};
 use sha2::{Digest, Sha256, Sha512};
@@ -41,7 +41,7 @@ static LAX_PROVIDER: OnceLock<Arc<CryptoProvider>> = OnceLock::new();
 
 fn ensure_crypto_provider() {
     INIT_PROVIDER.get_or_init(|| {
-        let _ = CryptoProvider::install_default(ring::default_provider());
+        let _ = CryptoProvider::install_default(aws_lc_rs::default_provider());
     });
 }
 
@@ -177,7 +177,7 @@ fn build_root_store() -> Result<RootCertStore> {
 }
 
 fn lax_provider() -> Arc<CryptoProvider> {
-    LAX_PROVIDER.get_or_init(|| Arc::new(ring::default_provider())).clone()
+    LAX_PROVIDER.get_or_init(|| Arc::new(aws_lc_rs::default_provider())).clone()
 }
 
 fn tls_connector(use_lax_tls: bool) -> Result<TlsConnector> {

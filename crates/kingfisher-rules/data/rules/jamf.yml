@@ -1,0 +1,86 @@
+rules:
+  - name: JAMF Pro Server URL
+    id: kingfisher.jamf.1
+    pattern: |
+      (?xi)
+      jamf_url\s*[:=]\s*["']?https?://
+      (
+        [a-z0-9.-]+
+      )
+    min_entropy: 2.0
+    confidence: medium
+    visible: false
+    examples:
+      - JAMF_URL=https://myorg.jamfcloud.com
+      - 'JAMF_URL = "https://jamf.internal.corp.com"'
+    references:
+      - https://developer.jamf.com/jamf-pro/docs/jamf-pro-api-overview
+
+  - name: JAMF Pro API Client ID
+    id: kingfisher.jamf.2
+    pattern: |
+      (?xi)
+      jamf_client_id\s*[:=]\s*["']?
+      (
+        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+      )
+    min_entropy: 2.0
+    confidence: medium
+    visible: false
+    examples:
+      - JAMF_CLIENT_ID=fac3f438-c990-4b6e-965d-f7a42e12b2b2
+      - 'JAMF_CLIENT_ID = "6cabf059-21c9-44d6-bbde-02898f7430dd"'
+    references:
+      - https://developer.jamf.com/jamf-pro/docs/client-credentials
+
+  - name: JAMF Pro Credential
+    id: kingfisher.jamf.3
+    pattern: |
+      (?xi)
+      (?:jamf|jss|jamfcloud)
+      (?:.|[\n\r]){0,40}?
+      (?:TOKEN|KEY|SECRET|PASSWORD|CREDENTIAL|AUTH)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [A-Za-z0-9][A-Za-z0-9_\-]{28,}[A-Za-z0-9]
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - 'JAMF_CLIENT_SECRET=Xdp2eBpvEXAMPLEu37fN33th5OFLjU2tP8ETLEwzoJgWaLIXAfa7KzriZPmwywG2'
+      - 'jamf_api_token = "a3B8f29E4d1C6a0578e23D9f41b6C8e2qR7tY4uI5mN6vL2jH"'
+      - 'export JSS_TOKEN=9f4B2d7E1a3c8056d2E7f1b94A6c3d80mN5vL2jHpQ8wX1zKr3'
+      - 'JAMF_PASSWORD="E7d2A1f849c3B05d6e81F2a794c3D5b0pQ8wX1zKlM4nR9tYu"'
+      - |
+        JAMF_URL=https://myorg.jamfcloud.com
+        JAMF_CLIENT_ID=fac3f438-c990-4b6e-965d-f7a42e12b2b2
+        JAMF_CLIENT_SECRET=kVp3xRs7nW2yQ9mL5jT8dF1bH6cA4eG0iU2oP7sK3wX5zJ9nM
+    depends_on_rule:
+      - rule_id: kingfisher.jamf.1
+        variable: JAMF_URL
+      - rule_id: kingfisher.jamf.2
+        variable: CLIENT_ID
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://{{ JAMF_URL }}/api/v1/oauth/token
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+            Accept: application/json
+          body: 'grant_type=client_credentials&client_id={{ CLIENT_ID | url_encode }}&client_secret={{ TOKEN | url_encode }}'
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+    references:
+      - https://developer.jamf.com/jamf-pro/docs/jamf-pro-api-overview
+      - https://developer.jamf.com/jamf-pro/docs/client-credentials
+      - https://learn.jamf.com/en-US/bundle/jamf-pro-documentation/page/API_Roles_and_Clients.html
+      - https://github.com/praetorian-inc/titus/blob/e566cacf5ab4bf2c05f40defa21dadd57564162c/pkg/rule/rules/jamf.yml

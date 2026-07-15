@@ -31,7 +31,6 @@ vectorscan-rs = "0.0.6"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 ignore = "0.4"
 walkdir = "2.5"
-include_dir = "0.7"
 sha1 = "0.11"
 sha2 = "0.11"
 hmac = "0.13"
@@ -48,7 +47,7 @@ http = "1.4"
 
 [package]
 name = "kingfisher"
-version = "1.106.0"
+version = "1.107.0"
 description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -65,7 +64,10 @@ depends = "$auto"
 section = "utils"
 priority = "optional"
 assets = [
-    ["target/release/kingfisher", "/usr/bin/kingfisher", "755"]
+    ["target/release/kingfisher", "/usr/bin/kingfisher", "755"],
+    ["NOTICE", "/usr/share/doc/kingfisher/NOTICE", "644"],
+    ["THIRD_PARTY_NOTICES", "/usr/share/doc/kingfisher/THIRD_PARTY_NOTICES", "644"],
+    ["vendor/vectorscan-rs/NOTICE", "/usr/share/doc/kingfisher/vectorscan-rs-NOTICE", "644"]
 ]
 
 [package.metadata.generate-rpm]
@@ -74,7 +76,10 @@ summary = "MongoDB's blazingly fast and accurate secret scanning and validation 
 license = "Apache-2.0"
 url = "https://github.com/mongodb/kingfisher"
 assets = [
-    { source = "target/release/kingfisher", dest = "/usr/bin/kingfisher", mode = "755" }
+    { source = "target/release/kingfisher", dest = "/usr/bin/kingfisher", mode = "755" },
+    { source = "NOTICE", dest = "/usr/share/doc/kingfisher/NOTICE", mode = "644", doc = true },
+    { source = "THIRD_PARTY_NOTICES", dest = "/usr/share/doc/kingfisher/THIRD_PARTY_NOTICES", mode = "644", doc = true },
+    { source = "vendor/vectorscan-rs/NOTICE", dest = "/usr/share/doc/kingfisher/vectorscan-rs-NOTICE", mode = "644", doc = true }
 ]
 
 [dependencies]
@@ -83,12 +88,13 @@ kingfisher-core = { path = "crates/kingfisher-core" }
 kingfisher-rules = { path = "crates/kingfisher-rules" }
 kingfisher-scanner = { path = "crates/kingfisher-scanner", features = ["validation-all"] }
 
-clap = { version = "4.6", features = [
-    "cargo",
+clap = { version = "4.6", default-features = false, features = [
     "derive",
     "env",
-    "unicode",
-    "wrap_help",
+    "error-context",
+    "help",
+    "std",
+    "usage",
 ] }
 
 anyhow = "1.0"
@@ -114,7 +120,6 @@ regex = "1.12.4"
 serde_json = "1.0.150"
 toon-format = { version = "0.5.0", default-features = false }
 url = "2.5.8"
-include_dir = { version = "0.7", features = ["glob"] }
 strum = { version = "0.28", features = ["derive"] }
 sysinfo = "0.39.3"
 webbrowser = "1.2.1"
@@ -134,13 +139,24 @@ reqwest = { version = "0.13", default-features = false, features = [
 reqwest_0_12 = { package = "reqwest", version = "0.12.28", default-features = false, features = [
     "json",
     "rustls-tls",
+    "blocking",
+    "multipart",
 ] }
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
 
 
 chrono = "0.4.45"
 thiserror = "2.0.18"
-tokio = { version = "1.52.3", features = ["full"] }
+tokio = { version = "1.52.3", features = [
+    "fs",
+    "io-util",
+    "macros",
+    "net",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
 base64 = "0.22.1"
 crossbeam-channel = "0.5.15"
 indenter = "0.3.4"
@@ -157,7 +173,7 @@ tokio-postgres = { version = "0.7", default-features = false, features = ["runti
 # Temporary Git pin: keeps MongoDB SRV validation enabled while using the upstream
 # Hickory 0.26 DNS-resolver fix before it is available in a crates.io release.
 # TODO: switch back to a crates.io mongodb release once it includes that fix.
-mongodb = { git = "https://github.com/mongodb/mongo-rust-driver", rev = "bdddefc50c4794d51d10b944320d42c6eb216b04", default-features = false, features = ["rustls-tls", "aws-auth", "compat-3-0-0", "dns-resolver"] }
+mongodb = { git = "https://github.com/mongodb/mongo-rust-driver", rev = "bdddefc50c4794d51d10b944320d42c6eb216b04", default-features = false, features = ["rustls-tls-aws-lc", "aws-auth", "compat-3-0-0", "dns-resolver"] }
 mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"] }
 aws-config = { version = "1.8.18", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso"] }
 aws-credential-types = "1.2.14"
@@ -197,14 +213,13 @@ quick-xml = { version = "0.40.1", features = ["serde", "serialize"] }
 rustls = "0.23.40"
 tokio-postgres-rustls = "0.14.0"
 rustls-native-certs = "0.8.4"
-color-backtrace = "0.7.2"
 mimalloc = { version = "0.1.52", features = ["override"] }
 thread_local = "1.1.9"
 bloomfilter = "3.0.1"
 uuid = "1.23.3"
 rand = "0.10.1"
 percent-encoding = "2.3.2"
-self_update = { version = "0.44.0", default-features = false, features = ["reqwest", "rustls", "archive-tar", "archive-zip", "compression-flate2"] }
+self_update = { version = "0.44.0", default-features = false, features = ["reqwest", "rustls", "archive-tar", "archive-zip", "compression-flate2", "compression-zip-deflate"] }
 semver = "1.0.28"
 globset = "0.4.18"
 ipnet = "2.12.0"
@@ -226,7 +241,7 @@ aws-sdk-ssm = { version = "1.113.0", default-features = false, features = ["defa
 gcloud-storage = { version = "1.3.0", default-features = false, features = [
     "rustls-tls",
     "auth",
-    "jwt-rust-crypto",
+    "jwt-aws-lc-rs",
 ] }
 tokei = "14.0.0"
 crc32fast = "1.5.0"
@@ -242,6 +257,9 @@ optional = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[build-dependencies]
+flate2 = "1.1"
 
 [features]
 default = ["use-mimalloc"]
@@ -273,6 +291,314 @@ codegen-units = 1       # Optimize for size but slower compilation
 panic = "abort"          # Remove unwind tables for panics
 rpath = false           # Don't embed path dependencies
 incremental = false
+
+
+
+# Keep throughput-sensitive scanner, matcher, crypto, and transport crates at
+# the global `s` level.  The crates below are cold or infrequently used in the
+# common local-repository scan path, so `z` is a safer size trade-off.
+#
+# Hot-path crates kept at `s` include: vectorscan-rs, regex, bstr, memmap2,
+# memchr, ignore, walkdir, rayon, xxhash-rust, rustc-hash, crossbeam-*, smallvec,
+# dashmap, bloomfilter, globset, rusqlite, tree-magic-mini, content_inspector,
+# cssparser, tl, gix, petgraph, roaring, fixedbitset, path-dedot, serde_json,
+# serde_yaml, chrono, parking_lot, rustls, reqwest, tokio, hyper, and the
+# kingfisher-* workspace crates.
+
+# ── CLI / startup-only ────────────────────────────────────────────────
+[profile.release.package.clap]
+opt-level = "z"
+
+[profile.release.package.clap_builder]
+opt-level = "z"
+
+[profile.release.package.strum]
+opt-level = "z"
+
+[profile.release.package.sysinfo]
+opt-level = "z"
+
+[profile.release.package.semver]
+opt-level = "z"
+
+# ── Panic / backtrace (only reached on crash) ────────────────────────
+[profile.release.package.backtrace]
+opt-level = "z"
+
+[profile.release.package.object]
+opt-level = "z"
+
+[profile.release.package.color-eyre]
+opt-level = "z"
+
+# ── Update / browser / collaboration-platform integrations ───────────
+[profile.release.package.gouqi]
+opt-level = "z"
+
+[profile.release.package.self_update]
+opt-level = "z"
+
+[profile.release.package.webbrowser]
+opt-level = "z"
+
+# ── AWS SDK and Smithy (credential validation only) ──────────────────
+# aws-lc-rs / aws-lc-sys are intentionally excluded — they are the
+# crypto/TLS backend for rustls and remain at the global `s` level.
+[profile.release.package.aws-config]
+opt-level = "z"
+
+[profile.release.package.aws-credential-types]
+opt-level = "z"
+
+[profile.release.package.aws-runtime]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-dynamodb]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-ec2]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-ecr]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-iam]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-kms]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-lambda]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-rds]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-s3]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-secretsmanager]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-sns]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-sqs]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-sso]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-ssooidc]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-ssm]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-sts]
+opt-level = "z"
+
+[profile.release.package.aws-sigv4]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-async]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-checksums]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-eventstream]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-http]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-http-client]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-json]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-observability]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-query]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-runtime]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-runtime-api]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-schema]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-types]
+opt-level = "z"
+
+[profile.release.package.aws-smithy-xml]
+opt-level = "z"
+
+[profile.release.package.aws-types]
+opt-level = "z"
+
+# ── Database validation (MongoDB / MySQL / Postgres — I/O-bound) ─────
+[profile.release.package.mongodb]
+opt-level = "z"
+
+[profile.release.package.bson]
+opt-level = "z"
+
+[profile.release.package.mysql_async]
+opt-level = "z"
+
+[profile.release.package.mysql_common]
+opt-level = "z"
+
+[profile.release.package.tokio-postgres]
+opt-level = "z"
+
+[profile.release.package.tokio-postgres-rustls]
+opt-level = "z"
+
+[profile.release.package.rustc_version_runtime]
+opt-level = "z"
+
+# ── GCP validation ───────────────────────────────────────────────────
+[profile.release.package.gcloud-storage]
+opt-level = "z"
+
+[profile.release.package.gcloud-auth]
+opt-level = "z"
+
+[profile.release.package.gcloud-metadata]
+opt-level = "z"
+
+# ── Other validation: OCI / LDAP / DNS / TLS / HTTP2 ─────────────────
+[profile.release.package.oci-client]
+opt-level = "z"
+
+[profile.release.package.ldap3]
+opt-level = "z"
+
+[profile.release.package.lber]
+opt-level = "z"
+
+[profile.release.package.hickory-resolver]
+opt-level = "z"
+
+[profile.release.package.hickory-net]
+opt-level = "z"
+
+[profile.release.package.hickory-proto]
+opt-level = "z"
+
+[profile.release.package.tokio-rustls]
+opt-level = "z"
+
+[profile.release.package.hyper-rustls]
+opt-level = "z"
+
+[profile.release.package.h2]
+opt-level = "z"
+
+[profile.release.package.wait-timeout]
+opt-level = "z"
+
+# ── Report / output formatting (not scan compute) ────────────────────
+[profile.release.package.liquid]
+opt-level = "z"
+
+[profile.release.package.liquid-core]
+opt-level = "z"
+
+[profile.release.package.pest]
+opt-level = "z"
+
+[profile.release.package.serde-sarif]
+opt-level = "z"
+
+[profile.release.package.tokei]
+opt-level = "z"
+
+[profile.release.package.tera]
+opt-level = "z"
+
+[profile.release.package.chrono-tz]
+opt-level = "z"
+
+[profile.release.package.jiff]
+opt-level = "z"
+
+[profile.release.package.env_logger]
+opt-level = "z"
+
+[profile.release.package.indicatif]
+opt-level = "z"
+
+[profile.release.package.console]
+opt-level = "z"
+
+[profile.release.package.thousands]
+opt-level = "z"
+
+[profile.release.package.humantime]
+opt-level = "z"
+
+[profile.release.package.indenter]
+opt-level = "z"
+
+# ── Access map (not local-scan hot path) ─────────────────────────────
+[profile.release.package.quick-xml]
+opt-level = "z"
+
+[profile.release.package.ipnet]
+opt-level = "z"
+
+# ── Web framework (view command / Slack integration only) ───────────
+[profile.release.package.axum]
+opt-level = "z"
+
+[profile.release.package.axum-core]
+opt-level = "z"
+
+[profile.release.package.tower]
+opt-level = "z"
+
+[profile.release.package.tower-layer]
+opt-level = "z"
+
+[profile.release.package.tower-service]
+opt-level = "z"
+
+[profile.release.package.tower-http]
+opt-level = "z"
+
+# ── Archive extraction (slow path: tar/gz/bz2/xz/zip/asar/cfb) ───────
+[profile.release.package.asar]
+opt-level = "z"
+
+[profile.release.package.cfb]
+opt-level = "z"
+
+[profile.release.package.bzip2-rs]
+opt-level = "z"
+
+[profile.release.package.lzma-rs]
+opt-level = "z"
+
+[profile.release.package.tar]
+opt-level = "z"
+
+[profile.release.package.flate2]
+opt-level = "z"
+
+[profile.release.package.zip]
+opt-level = "z"
+
+[profile.release.package.crc32fast]
+opt-level = "z"
 
 [profile.dev]
 opt-level = 0

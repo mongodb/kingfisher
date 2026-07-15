@@ -38,3 +38,40 @@ rules:
             - type: StatusMatch
               status: [200]
             - type: JsonValid
+
+  - name: Pinecone API Key (pcsk_)
+    id: kingfisher.pinecone.2
+    pattern: |
+      (?x)
+      \b
+      (
+        pcsk_
+        [A-Za-z0-9]{5,6}
+        _
+        [A-Za-z0-9]{63}
+      )
+      \b
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - 'PINECONE_API_KEY=pcsk_abcde_aB1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uV1wX2yZ3aB4cD5eF6gH7iJ8kL9mN0aB7'
+      - pcsk_AbCdE_aB1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uV1wX2yZ3aB4cD5eF6gH7iJ8kL9mN0aB7
+    references:
+      - https://github.com/gitleaks/gitleaks/pull/2177
+      - https://docs.pinecone.io/reference/api/authentication
+      - https://docs.pinecone.io/reference/api/2025-10/control-plane/list_indexes
+      - https://docs.pinecone.io/guides/projects/manage-api-keys
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.pinecone.io/indexes
+          headers:
+            Api-Key: "{{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid

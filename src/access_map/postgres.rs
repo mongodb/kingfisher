@@ -5,7 +5,7 @@ use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{CryptoProvider, ring, verify_tls12_signature, verify_tls13_signature};
+use rustls::crypto::{CryptoProvider, aws_lc_rs, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme, client::ClientConfig};
 use tokio::time::timeout;
@@ -27,7 +27,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(8);
 static INIT_PROVIDER: OnceLock<()> = OnceLock::new();
 fn ensure_crypto_provider() {
     INIT_PROVIDER.get_or_init(|| {
-        let _ = CryptoProvider::install_default(ring::default_provider());
+        let _ = CryptoProvider::install_default(aws_lc_rs::default_provider());
     });
 }
 
@@ -335,7 +335,7 @@ async fn connect(pg_url: &str) -> Result<Client> {
             timeout(CONNECT_TIMEOUT, async {
                 ensure_crypto_provider();
                 let tls_cfg = {
-                    let provider = Arc::new(ring::default_provider());
+                    let provider = Arc::new(aws_lc_rs::default_provider());
                     ClientConfig::builder()
                         .dangerous()
                         .with_custom_certificate_verifier(Arc::new(LaxCertVerifier(provider)))

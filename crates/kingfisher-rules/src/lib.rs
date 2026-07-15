@@ -30,7 +30,7 @@ pub use rules::{Rules, RulesError};
 pub use rules_database::{RuleCacheConfig, RulesDatabase, format_regex_pattern};
 
 // Re-export defaults
-pub use defaults::get_builtin_rules;
+pub use defaults::{get_builtin_rule_files, get_builtin_rules};
 
 // Re-export liquid_filters registration
 pub use liquid_filters::register_all as register_liquid_filters;

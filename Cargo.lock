@@ -1593,8 +1593,6 @@ dependencies = [
  "clap_lex",
  "strsim",
  "terminal_size",
- "unicase",
- "unicode-width",
 ]
 
 [[package]]
@@ -1638,16 +1636,6 @@ name = "cmov"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0c9ea0ac24bc397ab3c98583a3c9ba74fa56b09a4449bbe172b9b1ddb016027a"
-
-[[package]]
-name = "color-backtrace"
-version = "0.7.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "308329d5d62e877ba02943db3a8e8c052de9fde7ab48283395ba0e6494efbabd"
-dependencies = [
- "backtrace",
- "termcolor",
-]
 
 [[package]]
 name = "color-eyre"
@@ -4601,26 +4589,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "include_dir"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "923d117408f1e49d914f1a379a309cffe4f18c05cf4e3d12e613a15fc81bd0dd"
-dependencies = [
- "glob",
- "include_dir_macros",
-]
-
-[[package]]
-name = "include_dir_macros"
-version = "0.7.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7cab85a7ed0bd5f0e76d93846e0147172bed2e2d3f859bcc33a8d9699cad1a75"
-dependencies = [
- "proc-macro2",
- "quote",
-]
-
-[[package]]
 name = "indenter"
 version = "0.3.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4892,7 +4860,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher"
-version = "1.106.0"
+version = "1.107.0"
 dependencies = [
  "anyhow",
  "asar",
@@ -4926,7 +4894,6 @@ dependencies = [
  "cfb",
  "chrono",
  "clap",
- "color-backtrace",
  "console",
  "content_inspector",
  "crc32fast",
@@ -4948,7 +4915,6 @@ dependencies = [
  "http 1.4.2",
  "humantime",
  "ignore",
- "include_dir",
  "indenter",
  "indicatif",
  "ipnet",
@@ -5060,10 +5026,10 @@ dependencies = [
  "base32",
  "base64",
  "crc32fast",
+ "flate2",
  "hex",
  "hmac 0.13.0",
  "ignore",
- "include_dir",
  "kingfisher-core",
  "liquid",
  "liquid-core",
@@ -5094,6 +5060,7 @@ dependencies = [
  "anyhow",
  "aws-config",
  "aws-credential-types",
+ "aws-lc-rs",
  "aws-sdk-iam",
  "aws-sdk-sts",
  "aws-smithy-http-client",
@@ -5127,7 +5094,6 @@ dependencies = [
  "rand 0.10.1",
  "regex",
  "reqwest 0.13.4",
- "ring",
  "rustc-hash",
  "rustls",
  "rustls-native-certs",
@@ -9967,9 +9933,11 @@ checksum = "eb2a05c7c36fde6c09b08576c9f7fb4cda705990f73b58fe011abf7dfb24168b"
 dependencies = [
  "arbitrary",
  "crc32fast",
+ "flate2",
  "indexmap 2.14.0",
  "memchr",
  "time",
+ "zopfli",
 ]
 
 [[package]]

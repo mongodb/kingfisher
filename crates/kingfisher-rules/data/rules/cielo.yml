@@ -1,0 +1,76 @@
+rules:
+  - name: Cielo Client ID
+    id: kingfisher.cielo.1
+    pattern: |
+      (?xi)
+      \b
+      cielo
+      (?:.|[\n\r]){0,32}?
+      (?:CLIENT_?ID|MERCHANT_?ID|ID)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 1
+    min_entropy: 3.0
+    confidence: medium
+    visible: false
+    examples:
+      - 'CIELO_CLIENT_ID="aa11bb22-cc33-dd44-ee55-ff6677889900"'
+      - 'cielo_merchant_id = aa11bb22-cc33-dd44-ee55-ff6677889900'
+    references:
+      - https://github.com/gitleaks/gitleaks/pull/2118
+      - https://docs.cielo.com.br/ecommerce-cielo
+      - https://docs.cielo.com.br/ecommerce-cielo/docs/sop
+
+  - name: Cielo Client Secret
+    id: kingfisher.cielo.2
+    pattern: |
+      (?xi)
+      \b
+      cielo
+      (?:.|[\n\r]){0,32}?
+      (?:CLIENT_?SECRET|MERCHANT_?KEY|SECRET|KEY|TOKEN|API_?KEY)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        [a-zA-Z0-9]{20,64}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'CIELO_CLIENT_SECRET="LBphAfgBYlKksUJRkgJsMZHi24GD60Uf"'
+      - 'cielo_merchant_key = SIqNqWnyX8UkQnNBCyJwz1vXZk4MrW4AB8Z0YsUg'
+    references:
+      - https://github.com/gitleaks/gitleaks/pull/2118
+      - https://docs.cielo.com.br/ecommerce-cielo
+      - https://docs.cielo.com.br/ecommerce-cielo/docs/sop
+    depends_on_rule:
+      - rule_id: kingfisher.cielo.1
+        variable: CLIENT_ID
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://auth.braspag.com.br/oauth2/token
+          headers:
+            Authorization: 'Basic {{ CLIENT_ID | append: ":" | append: TOKEN | b64enc }}'
+            Content-Type: application/x-www-form-urlencoded
+            Accept: application/json
+          body: "grant_type=client_credentials"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+            - type: WordMatch
+              words:
+                - access_token
+    # Revocation not added: Cielo/Braspag Client ID + Client Secret (Silent Order
+    # Post OAuth2 credentials) are created and revoked in the Cielo developer
+    # portal/site, not via a self-revoke API endpoint.

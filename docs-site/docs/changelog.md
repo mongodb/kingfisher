@@ -7,7 +7,17 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v1.107.0]
+- Security: fixed validation redaction bypasses, redacted webhook report metadata, and bounded TAR extraction.
+- Added detection and validation rules for 25+ new provider families: Anthropic, Airtable, Browserbase, Cartesia, Cielo, Civo, Exoscale, Greptile, Infomaniak, Kimi (Moonshot AI), LightOn, Mailgun, MessageBird, Nango, New Relic, Novu, OVHcloud, PlanetScale, Polymarket, Silicon Flow, Twitter/X, Turso, Upstage, Yandex — plus expanded Slack, Volcengine, JWT, Linear, and Pinecone coverage. Built-in coverage is now 1,006 rules (876 standalone detectors + 130 dependent rules), with 511 standalone detectors supporting live validation.
+- Migrated the TLS and JWT-signing crypto backend from `ring` to `aws-lc-rs` across all validators (GCP, Postgres, raw), the main binary's default provider installation, the MongoDB driver, and gcloud-storage, consolidating on a single FIPS-eligible crypto provider.
+- Reduced dependency footprint and binary size: removed `include_dir` and `color-backtrace`; trimmed `clap` to `default-features = false` and `tokio` from `"full"` to specific features; added per-package `opt-level = "z"` for cold crates in the release profile. Viewer assets and builtin rules are now gzip-compressed at build time via `build.rs` and lazily decompressed at runtime, replacing `include_dir` directory embedding.
+- Improved Docker builds in the Makefile: added `SKIP_TESTS=1` to skip tests, a separate `CARGO_TARGET_DIR=target-docker` to avoid clobbering host build artifacts, and `bash` to the Alpine package list.
+- Reworked `--access-map` provider parsing from clap `ValueEnum` to a custom `FromStr` parser with flexible aliases (`mongo`, `hf`, `wandb`, `msteams`, `brevo`, `do`, `ibm`, `tfc`, etc.) and clearer error messages.
+
 ## [v1.106.0]
+- Added 3 detection rules derived from Titus: `kingfisher.ansible.1` (Ansible Vault encrypted secret blobs), `kingfisher.html.1` (credentials pre-populated in HTML `<input type="password">` value attributes), and `kingfisher.jamf.3` (JAMF Pro API client credentials with OAuth2 client-credentials validation via the Jamf Pro `/api/v1/oauth/token` endpoint). Also added `kingfisher.jamf.1` and `kingfisher.jamf.2` as invisible helper rules capturing the Jamf Pro server URL and API client ID. Built-in coverage is now 1,005 rules (875 standalone detectors + 130 dependent rules), with 511 standalone detectors supporting live validation.
+- Added `$ANSIBLE_VAULT` and `<input` to the self-identifying pattern markers in `rules_database.rs` so these structurally-anchored rules bypass the HTML/CSS parser context gate.
 - Added content-based ZIP detection so Terraform plan files (e.g. `tfplan`, `*.plan` — real ZIPs with no archive extension) are extracted and scanned instead of treated as opaque compressed bytes; a file whose bytes begin with a ZIP signature is now extracted regardless of name, reusing the existing `looks_like_zip()` magic-byte helper. Non-ZIP files are untouched, so plain-text `*.plan` files are not mis-extracted. Content-detected ZIPs go through the same bounded in-memory extractor with unchanged zip-slip protection and zip-bomb caps, respect `--no-extract-archives` and `--no-binary`, and empty or unreadable ZIPs fall back to raw-byte scanning. The only added cost is a single 4-byte header read per file whose extension is not already a recognized archive. Verified against a real Terraform plan: 0 → 9 findings (AWS keys, Vault token, JWT, bcrypt hashes). @beer4code
 - Merged the open dependabot "bump" PRs from `main`: CI/action bumps for `dtolnay/rust-toolchain`, `actions/setup-python` (6.2.0 → 6.3.0), and `google/clusterfuzzlite` build/run fuzzers actions (82652fb → 884713a) across the `cflite_batch` and `cflite_pr` workflows.
 - Bumped `gix` from 0.84 to 0.85 in `kingfisher-core`, and applied cargo minor/patch updates: `aws-sdk-ec2` 1.232.1 → 1.233.0, `aws-sdk-lambda` 1.128.0 → 1.129.0, plus the cargo-patch group (8 crate updates) and a `rand` 0.10.0 → 0.10.1 bump in the `fuzz` crate.
@@ -23,6 +33,7 @@ All notable changes to this project will be documented in this file.
 - Added rule selection exclusions for scans via repeated `--exclude-rule` flags and `rules.disabled` in `kingfisher.yaml`, alongside the existing include selectors.
 - Improved the access-map docs and HTML viewer for the new Azure, AWS, Hugging Face, and Salesforce resource mappings.
 - Added SARIF import support to the report viewer, including `.sarif` uploads and Kingfisher SARIF metadata recovery alongside existing JSON/JSONL support.
+
 
 ## [v1.104.0]
 - Compiled Vectorscan rule caching is now enabled by default, with `--no-rule-cache` available for opt-out and `--rule-cache-dir` / `KF_RULE_CACHE_DIR` for custom or Docker-mounted cache locations.

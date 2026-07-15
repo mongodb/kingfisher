@@ -6,7 +6,7 @@ use std::{
 
 use anyhow::{Result, anyhow};
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
-use rustls::crypto::{CryptoProvider, ring, verify_tls12_signature, verify_tls13_signature};
+use rustls::crypto::{CryptoProvider, aws_lc_rs, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, RootCertStore, SignatureScheme, client::ClientConfig};
 use rustls_native_certs::{CertificateResult, load_native_certs};
@@ -25,7 +25,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 static INIT_PROVIDER: OnceLock<()> = OnceLock::new();
 fn ensure_crypto_provider() {
     INIT_PROVIDER.get_or_init(|| {
-        let _ = CryptoProvider::install_default(ring::default_provider());
+        let _ = CryptoProvider::install_default(aws_lc_rs::default_provider());
     });
 }
 
@@ -161,7 +161,7 @@ async fn check_postgres_db_connection(
 
                 let tls_cfg = if lax_tls {
                     debug!("Using lax TLS mode for Postgres connection");
-                    let provider = Arc::new(ring::default_provider());
+                    let provider = Arc::new(aws_lc_rs::default_provider());
                     ClientConfig::builder()
                         .dangerous()
                         .with_custom_certificate_verifier(Arc::new(LaxCertVerifier(provider)))

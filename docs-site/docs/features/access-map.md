@@ -344,7 +344,12 @@ kingfisher access-map mongodb ./mongodb.uri --format json > mongodb.access-map.j
   - User access tokens (commonly `hf_...`)
   - Organization API tokens (commonly `api_org_...`)
 
-Kingfisher queries the `/api/whoami-v2` endpoint to resolve the token identity, role, and organization memberships. It also performs best-effort enumeration of authored models, datasets, and Spaces for the user and visible organizations to assess the blast radius.
+Kingfisher queries the `/api/whoami-v2` endpoint to resolve the token identity,
+role, and organization memberships. It uses Hugging Face's unified repository
+storage listing when available, with best-effort fallback enumeration, to map
+visible models, datasets, Spaces, and storage buckets. Resource visibility
+(`public`, `private`, or protected Spaces) and storage usage are included when
+reported by the API.
 
 #### Standalone example (Hugging Face)
 
@@ -356,7 +361,14 @@ kingfisher access-map huggingface ./huggingface.token --format json > huggingfac
 #### Notes (Hugging Face)
 
 - Access map uses `https://huggingface.co/api` as the API base.
-- Token role (read, write, admin, fineGrained) is derived from the `auth` section of the whoami response when available.
+- Token role (`read`, `write`, or `fineGrained`) is derived from the `auth`
+  section of the whoami response when available.
+- Fine-grained tokens are not treated as administrator tokens. Their exact
+  per-resource scopes are not exposed by `whoami`, so the map reports resources
+  the token could enumerate and notes that limitation.
+- Organization roles (`no_access`, `read`, `contributor`, `write`, and `admin`)
+  are recorded separately from the token role because effective access is the
+  intersection of both.
 
 ### Gitea (`gitea`)
 
@@ -495,13 +507,17 @@ kingfisher access-map anthropic ./anthropic.token --format json > anthropic.acce
     - `instance_url` (or `instance`), such as `https://mydomain.my.salesforce.com`
   - Free-form text containing both:
     - a Salesforce access token (`00...!...`)
-    - an instance host (`<instance>.my.salesforce.com`)
+    - an instance host (`<instance>.my.salesforce.com`, a sandbox My Domain, or a legacy host such as `na123.salesforce.com`)
 
 Kingfisher performs read-only enumeration via:
 
-- `GET /services/data/v60.0/limits` to confirm API access and gather account-level API context.
+- `GET /services/data/` to negotiate the newest API version advertised by the org (falling back to `v60.0` if discovery fails).
+- `GET /services/data/<version>/limits` to confirm API access and gather account-level API context.
 - `GET /services/oauth2/userinfo` for identity metadata when available.
-- `GET /services/data/v60.0/sobjects` for visible object metadata (best-effort).
+- `GET /services/data/<version>/sobjects` for effective per-object query, search, create, update, delete, and undelete capabilities.
+- Read-only SOQL queries for the current user's profile and role, assigned permission sets and permission-set groups, and high-signal effective permissions exposed by `UserPermissionAccess` (best-effort).
+
+Object capabilities are prioritized so sensitive CRM, identity, content, audit, and custom objects remain visible when an org exposes more than the report limit. Salesforce record sharing and field-level security can further restrict the records and fields available within an object.
 
 #### Standalone example (Salesforce)
 
@@ -518,7 +534,8 @@ kingfisher access-map salesforce ./salesforce.json --format json > salesforce.ac
 
 #### Notes (Salesforce)
 
-- Access map currently targets `https://<instance>.my.salesforce.com` and API version `v60.0`.
+- Access map accepts production My Domain, sandbox My Domain, and legacy Salesforce instance hosts. Authentication hosts such as `login.salesforce.com` and non-Salesforce hosts are rejected.
+- The mapper is read-only and does not issue record-count, export, or data-retrieval queries.
 
 ### Weights & Biases (`weightsandbiases` / `wandb`)
 

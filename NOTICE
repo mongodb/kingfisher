@@ -1,5 +1,9 @@
 NOTICE file corresponding to Section 4 (d) of the Apache License, Version 2.0
 
+This file contains manual attributions for incorporated or derived source
+material. Rust dependency notices are generated separately in
+THIRD_PARTY_NOTICES.
+
 --------------------------------------------------------------------
 Notices for Kingfisher
 --------------------------------------------------------------------
@@ -57,6 +61,9 @@ Certain detection rules:
  * crates/kingfisher-rules/data/rules/wakatime.yml
  * crates/kingfisher-rules/data/rules/zapier.yml
  * crates/kingfisher-rules/data/rules/zendesk.yml
+ * crates/kingfisher-rules/data/rules/ansible.yml
+ * crates/kingfisher-rules/data/rules/html.yml
+ * crates/kingfisher-rules/data/rules/jamf.yml
 
 are derived in part from Titus (https://github.com/praetorian-inc/titus),
 which is licensed under the Apache License, Version 2.0.
@@ -82,12 +89,30 @@ limitations under the License.
 --------------------------------------------------------------------
 
 Certain detection rules:
+ * crates/kingfisher-rules/data/rules/airtable.yml
+ * crates/kingfisher-rules/data/rules/civo.yml
+ * crates/kingfisher-rules/data/rules/exoscale.yml
+ * crates/kingfisher-rules/data/rules/greptile.yml
+ * crates/kingfisher-rules/data/rules/infomaniak.yml
+ * crates/kingfisher-rules/data/rules/jwt.yml
+ * crates/kingfisher-rules/data/rules/kimi.yml
+ * crates/kingfisher-rules/data/rules/lighton.yml
+ * crates/kingfisher-rules/data/rules/linear.yml
+ * crates/kingfisher-rules/data/rules/mailgun.yml
+ * crates/kingfisher-rules/data/rules/messagebird.yml
+ * crates/kingfisher-rules/data/rules/newrelic.yml
  * crates/kingfisher-rules/data/rules/octopusdeploy.yml
  * crates/kingfisher-rules/data/rules/openshift.yml
+ * crates/kingfisher-rules/data/rules/ovh.yml
+ * crates/kingfisher-rules/data/rules/planetscale.yml
  * crates/kingfisher-rules/data/rules/polymarket.yml
  * crates/kingfisher-rules/data/rules/privateai.yml
  * crates/kingfisher-rules/data/rules/settlemint.yml
  * crates/kingfisher-rules/data/rules/sidekiq.yml
+ * crates/kingfisher-rules/data/rules/slack.yml
+ * crates/kingfisher-rules/data/rules/twitter.yml
+ * crates/kingfisher-rules/data/rules/upstage.yml
+ * crates/kingfisher-rules/data/rules/yandex.yml
 
 are derived in part from Betterleaks
 (https://github.com/betterleaks/betterleaks), which is licensed under the MIT
@@ -117,12 +142,16 @@ SOFTWARE.
 --------------------------------------------------------------------
 
 Certain detection rules:
+ * crates/kingfisher-rules/data/rules/anthropic.yml
+ * crates/kingfisher-rules/data/rules/cielo.yml
  * crates/kingfisher-rules/data/rules/etsy.yml
  * crates/kingfisher-rules/data/rules/flutterwave.yml
  * crates/kingfisher-rules/data/rules/freemius.yml
  * crates/kingfisher-rules/data/rules/jfrog.yml
  * crates/kingfisher-rules/data/rules/kraken.yml
  * crates/kingfisher-rules/data/rules/kucoin.yml
+ * crates/kingfisher-rules/data/rules/pinecone.yml
+ * crates/kingfisher-rules/data/rules/resend.yml
  * crates/kingfisher-rules/data/rules/trello.yml
 
 are derived in part from Gitleaks (https://github.com/gitleaks/gitleaks),

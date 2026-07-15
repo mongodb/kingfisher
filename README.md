@@ -7,7 +7,7 @@
     <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License" style="height: 24px;" />
   </a>
   <a href="https://github.com/mongodb/kingfisher">
-    <img src="https://img.shields.io/badge/Detection%20Rules-958-2ea043.svg" alt="Detection Rules" style="height: 24px;" />
+    <img src="https://img.shields.io/badge/Detection%20Rules-1006-2ea043.svg" alt="Detection Rules" style="height: 24px;" />
   </a>
   <br>
   <a href="https://github.com/mongodb/kingfisher/pkgs/container/kingfisher">
@@ -20,7 +20,7 @@
 
 Kingfisher is an open source secret scanner and **live secret validation** tool built in Rust.
 
-It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale, and ships with [958 built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/) to detect, **validate**, and triage leaked API keys, tokens, and credentials before they ever reach production.
+It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale, and ships with [1,006 built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/) to detect, **validate**, and triage leaked API keys, tokens, and credentials before they ever reach production.
 
 Kingfisher also ships a **browser-based report viewer** that visualizes and triages findings from Kingfisher, SARIF, Gitleaks, and TruffleHog reports — so you can import scans from other tools and triage them in the same UI. A [hosted copy of the viewer](https://mongodb.github.io/kingfisher/viewer/) is published on the Kingfisher docs site [or run locally](#3-scan-and-view-results-in-browser)
 
@@ -55,9 +55,9 @@ Kingfisher is a high-performance, open source secret detection tool for source c
 
 </div>
 
-### Performance, Accuracy, and 958 Rules
+### Performance, Accuracy, and 1,006 Rules
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
-- **Extensible rules**: 958 built-in rules plus YAML-defined custom rules ([docs/RULES.md](/docs/RULES.md))
+- **Extensible rules**: 1,006 built-in rules plus YAML-defined custom rules ([docs/RULES.md](/docs/RULES.md))
 - **Validate & Revoke**: live validation of discovered secrets, plus direct revocation for supported platforms (GitHub, GitLab, Slack, AWS, GCP, and more) ([docs/USAGE.md](/docs/USAGE.md))
 - **Revocation support matrix**: current built-in revocation coverage across providers and rule IDs ([docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
 - **Blast Radius Mapping**: instantly map leaked keys to their effective cloud identities and exposed resources with `--access-map` (alias `--blast-radius`). Supports 43 providers (see table below).
@@ -441,24 +441,24 @@ For payload shapes, per-webhook overrides, and config-file examples, see [docs/A
 
 # Detection Rules
 
-Kingfisher ships with [958 built-in rules](crates/kingfisher-rules/data/rules/) covering cloud keys, AI tokens, CI/CD secrets, database credentials, and SaaS API keys. Below is an overview — see the full list in [crates/kingfisher-rules/data/rules/](crates/kingfisher-rules/data/rules/):
+Kingfisher ships with [1,006 built-in rules](crates/kingfisher-rules/data/rules/) covering cloud keys, AI tokens, CI/CD secrets, database credentials, and SaaS API keys. Below is an overview — see the full list in [crates/kingfisher-rules/data/rules/](crates/kingfisher-rules/data/rules/):
 
 | Category | What we catch |
 |----------|---------------|
-| **Cloud Providers** | AWS, GCP, Azure (Storage, DevOps, OpenAI, Speech, Translator), Alibaba Cloud, DigitalOcean, IBM Cloud, Cloudflare, Heroku, Fly.io, Railway, Render, Temporal Cloud, and more |
-| **AI & ML** | OpenAI, Anthropic, Google Gemini, Azure OpenAI, Cohere, Mistral, DeepSeek, Groq, xAI (Grok), Stability AI, Replicate, ElevenLabs, Ollama, Langchain, Perplexity, Weights & Biases, NVIDIA NIM, Fireworks.ai, Together.ai, Cerebras, Friendli, Hugging Face, Pinecone, Cursor, Zhipu, and more |
-| **Dev & CI/CD** | GitHub, GitLab, Bitbucket, Buildkite, CircleCI, TravisCI, TeamCity, Jenkins, Drone CI, Harness, Docker Hub, npm, PyPI, RubyGems, Crates.io, NuGet, Vercel, Netlify, Pulumi, Terraform, and more |
-| **Databases** | PostgreSQL, MySQL, MongoDB, Redis, PlanetScale, Supabase, Neon, ClickHouse, DataStax Astra, Firebase, JDBC, ODBC, and more |
-| **Messaging & Email** | Slack, Discord, Microsoft Teams, Telegram, Twilio, SendGrid, Mailgun, Mailchimp, Mailjet, Postmark, Brevo (Sendinblue), Resend, and more |
+| **Cloud Providers** | AWS, GCP, Azure (Storage, DevOps, OpenAI, Speech, Translator), Alibaba Cloud, DigitalOcean, IBM Cloud, Cloudflare, Heroku, Fly.io, Railway, Render, Temporal Cloud, Civo, Exoscale, OVHcloud, Infomaniak, and more |
+| **AI & ML** | OpenAI, Anthropic, Google Gemini, Azure OpenAI, Cohere, Mistral, DeepSeek, Groq, xAI (Grok), Stability AI, Replicate, ElevenLabs, Ollama, Langchain, Perplexity, Weights & Biases, NVIDIA NIM, Fireworks.ai, Together.ai, Cerebras, Friendli, Hugging Face, Pinecone, Cursor, Zhipu, Kimi (Moonshot AI), LightOn Paradigm, Upstage, and more |
+| **Dev & CI/CD** | GitHub, GitLab, Bitbucket, Buildkite, CircleCI, TravisCI, TeamCity, Jenkins, Drone CI, Harness, Docker Hub, npm, PyPI, RubyGems, Crates.io, NuGet, Vercel, Netlify, Browserbase, Nango, Pulumi, Terraform, Greptile, and more |
+| **Databases** | PostgreSQL, MySQL, MongoDB, Redis, PlanetScale, Supabase, Neon, Turso, ClickHouse, DataStax Astra, Firebase, JDBC, ODBC, and more |
+| **Messaging & Email** | Slack, Discord, Microsoft Teams, Telegram, Twilio, SendGrid, Mailgun, Mailchimp, Mailjet, Postmark, Brevo (Sendinblue), Resend, Novu, and more |
 | **Observability** | Datadog, Grafana, New Relic, Sentry, Dynatrace, Honeycomb, PagerDuty, OpsGenie, Sumo Logic, Better Stack, and more |
-| **Payments & Fintech** | Stripe, PayPal, Square, GoCardless, Flutterwave, Razorpay, Plaid, Coinbase, and more |
+| **Payments & Fintech** | Stripe, PayPal, Square, GoCardless, Flutterwave, Razorpay, Plaid, Coinbase, Cielo, Mercado Pago, PagSeguro/PagBank, and more |
 | **Security & Identity** | Snyk, Auth0, Okta, Clerk, LaunchDarkly, 1Password, JFrog Artifactory/Xray, SonarCloud, Endor Labs, Dependency-Track, StackHawk, and more |
-| **CRM & Business SaaS** | Salesforce, HubSpot, Jira, Confluence, Asana, Linear, Monday.com, Zendesk, Intercom, Shopify, and more |
+| **CRM & Business SaaS** | Salesforce, HubSpot, Jira, Confluence, Asana, Linear, Monday.com, Zendesk, Intercom, Shopify, Airbyte, and more |
 | **Crypto Material** | Private keys (PEM, PGP/GPG, SSH), JWTs, age encryption keys, WireGuard keys, and more |
 
 ## Write Custom Rules
 
-Kingfisher ships with 958 built-in rules.
+Kingfisher ships with 1,006 built-in rules.
 
 However, you may want to add your own custom rules, or modify a detection to better suit your needs / environment.
 
@@ -544,6 +544,9 @@ kingfisher view ./reports/
 The viewer can import SARIF, Gitleaks JSON, and TruffleHog JSON/JSONL in addition to native Kingfisher reports. Imported findings are normalized for browsing, filtering, and export. Kingfisher-produced SARIF can preserve compatible validation status, command, fingerprint, and `access_map` properties when present; generic imported reports remain display-oriented and full blast-radius linking still requires a Kingfisher scan.
 
 > **Use the access map functionality only when you are authorized to inspect the target account, as Kingfisher will issue additional network requests to determine what access the secret grants**
+
+
+![Access map example](docs/access-map.png)
 
 ### Supported Access Map Providers (43)
 

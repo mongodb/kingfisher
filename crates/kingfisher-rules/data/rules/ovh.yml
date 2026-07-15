@@ -57,3 +57,40 @@ rules:
     # No simple validation: OVH API uses time-based HMAC-SHA1 request signing
     # with application_key, consumer_key, timestamp, and method. Cannot
     # validate with a static header approach.
+
+  - name: OVH Consumer Key
+    id: kingfisher.ovh.3
+    pattern: |
+      (?xi)
+      \b
+      (?:ovh|ovhcloud)
+      (?:.|[\n\r]){0,32}?
+      \b(?:consumer[_-]?key)\b
+      (?:.|[\n\r]){0,16}?
+      [=:"'\s]
+      \b
+      (
+        [A-Za-z0-9]{32}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+      min_uppercase: 2
+      min_lowercase: 4
+    min_entropy: 3.0
+    confidence: low
+    visible: false
+    examples:
+      - "[ovh-eu]\nconsumer_key=AbCdEf1234GhIjKl5678MnOpQr90StUv"
+      - "OVH_CONSUMER_KEY=AbCdEf1234GhIjKl5678MnOpQr90StUv"
+    references:
+      - https://api.ovh.com/
+      - https://api.ovh.com/console/#/me/api/credential
+      - https://help.ovhcloud.com/csm/en-api-first-steps?id=kb_article_view&sysparm_article=KB0048011
+      - https://github.com/ovh/go-ovh/blob/3557ca425d191faf7c96757d30a9df67a61b2298/ovh.go
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/ovh.go#L32
+    # No validation: OVH API requests use time-based HMAC-SHA1 request signing
+    # with the application key, application secret, consumer key, timestamp, and
+    # request details. This cannot be expressed as a simple HTTP validation.
+    # See the go-ovh client for the signing implementation:
+    # https://github.com/ovh/go-ovh/blob/3557ca425d191faf7c96757d30a9df67a61b2298/ovh.go

@@ -3,6 +3,7 @@ SHELL := /usr/bin/env bash
 
 PROJECT_NAME := kingfisher
 ZIG_VERSION ?= 0.15.1
+SKIP_TESTS ?= 0
 
 # Determine OS and whether to use gtar on darwin
 OS := $(shell uname)
@@ -56,7 +57,7 @@ SUDO_CMD := $(shell command -v sudo 2>/dev/null)
         ubuntu-x64 ubuntu-arm64 linux-x64 linux-arm64 linux linux-all \
         darwin-arm64 darwin-x64 darwin-dev darwin darwin-all \
         require-windows-host windows-x64 windows-arm64 windows-test-x64 windows-test-arm64 windows-test windows \
-        all list-archives check-docker check-rust clean tests audit-deps fuzz \
+        all list-archives prepare-release-notices check-docker check-rust clean tests audit-deps fuzz \
         dockerfile docs-build docs-serve docs-clean notices
 
 default: help
@@ -64,8 +65,8 @@ default: help
 help:
 	@echo "Available targets:"
 	@echo "  linux              Build Linux archive for current host arch via Docker"
-	@echo "  linux-x64          Build Linux x64 archive via Docker"
-	@echo "  linux-arm64        Build Linux arm64 archive via Docker"
+	@echo "  linux-x64          Build Linux x64 archive via Docker (SKIP_TESTS=1 to skip tests)"
+	@echo "  linux-arm64        Build Linux arm64 archive via Docker (SKIP_TESTS=1 to skip tests)"
 	@echo "  linux-all          Build Linux x64 and arm64 archives via Docker"
 	@echo "  ubuntu-x64         Build Linux x64 archive with Zig on Ubuntu"
 	@echo "  ubuntu-arm64       Build Linux arm64 archive with Zig on Ubuntu"
@@ -92,6 +93,12 @@ help:
 
 create-dockerignore:
 	@printf '%s\n' target/ .git/ .vscode/ bin/ > .dockerignore
+
+prepare-release-notices:
+	@mkdir -p target/release/notices
+	@cp NOTICE target/release/notices/NOTICE
+	@cp THIRD_PARTY_NOTICES target/release/notices/THIRD_PARTY_NOTICES
+	@cp vendor/vectorscan-rs/NOTICE target/release/notices/vectorscan-rs-NOTICE
 
 
 setup-zig:
@@ -155,7 +162,7 @@ setup-zig:
 # -------------------------------------------------------------------------------------------------
 # ubuntu-x64 — native static build for x86_64-unknown-linux-musl via Zig. Tested on Ubuntu 24.04.
 # -------------------------------------------------------------------------------------------------
-ubuntu-x64: setup-zig   # ensures Zig & cargo-zigbuild exist
+ubuntu-x64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild exist
 	@echo "Checking Rust toolchain…"
 	@$(MAKE) check-rust || { \
             echo "🦀  Installing Rust 1.96.0 …"; \
@@ -186,7 +193,7 @@ ubuntu-x64: setup-zig   # ensures Zig & cargo-zigbuild exist
 	@cp target/x86_64-unknown-linux-musl/release/CHECKSUM.txt target/release/CHECKSUM-linux-x64.txt
 	@cd target/release && \
 	    rm -rf $(PROJECT_NAME)-linux-x64.tgz && \
-	    $(ARCHIVE_CMD) $(PROJECT_NAME)-linux-x64.tgz $(PROJECT_NAME) CHECKSUM-linux-x64.txt && \
+	    $(ARCHIVE_CMD) $(PROJECT_NAME)-linux-x64.tgz $(PROJECT_NAME) CHECKSUM-linux-x64.txt notices && \
 	    sha256sum $(PROJECT_NAME)-linux-x64.tgz >> CHECKSUM-linux-x64.txt
 
 	$(MAKE) list-archives
@@ -195,7 +202,7 @@ ubuntu-x64: setup-zig   # ensures Zig & cargo-zigbuild exist
 # -------------------------------------------------------------------------------------------------
 # ubuntu-arm64 — native cross-compile to aarch64-unknown-linux-musl via Zig. Tested on Ubuntu 24.04.
 # -------------------------------------------------------------------------------------------------
-ubuntu-arm64: setup-zig   # ensures Zig & cargo-zigbuild exist
+ubuntu-arm64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild exist
 	@echo "Checking Rust toolchain…"
 	@$(MAKE) check-rust || { \
             echo "🦀  Installing Rust 1.96.0 …"; \
@@ -226,12 +233,12 @@ ubuntu-arm64: setup-zig   # ensures Zig & cargo-zigbuild exist
 	@cp target/aarch64-unknown-linux-musl/release/CHECKSUM.txt target/release/CHECKSUM-linux-arm64.txt
 	@cd target/release && \
 	    rm -rf $(PROJECT_NAME)-linux-arm64.tgz && \
-	    $(ARCHIVE_CMD) $(PROJECT_NAME)-linux-arm64.tgz $(PROJECT_NAME) CHECKSUM-linux-arm64.txt && \
+	    $(ARCHIVE_CMD) $(PROJECT_NAME)-linux-arm64.tgz $(PROJECT_NAME) CHECKSUM-linux-arm64.txt notices && \
 	    sha256sum $(PROJECT_NAME)-linux-arm64.tgz >> CHECKSUM-linux-arm64.txt
 
 	$(MAKE) list-archives
 
-darwin-arm64:
+darwin-arm64: prepare-release-notices
 	@echo "Checking Rust for darwin-arm64..."
 	@$(MAKE) check-rust || ( \
 		echo "Rust not found or out-of-date. Installing via Homebrew..." && \
@@ -249,7 +256,7 @@ darwin-arm64:
 	@cp target/aarch64-apple-darwin/release/CHECKSUM.txt target/release/CHECKSUM-darwin-arm64.txt
 	@cd target/release && \
 	    rm -rf $(PROJECT_NAME)-darwin-arm64.tgz && \
-		$(ARCHIVE_CMD) $(PROJECT_NAME)-darwin-arm64.tgz $(PROJECT_NAME) CHECKSUM-darwin-arm64.txt && \
+		$(ARCHIVE_CMD) $(PROJECT_NAME)-darwin-arm64.tgz $(PROJECT_NAME) CHECKSUM-darwin-arm64.txt notices && \
 		if [ -f $(PROJECT_NAME)-darwin-arm64.tgz ]; then \
 		  shasum -a 256 $(PROJECT_NAME)-darwin-arm64.tgz >> CHECKSUM-darwin-arm64.txt; \
 		fi
@@ -258,7 +265,7 @@ darwin-arm64:
 darwin-dev:
 	cargo build --profile=dev --target aarch64-apple-darwin --features system-alloc
 
-darwin-x64:
+darwin-x64: prepare-release-notices
 	@echo "Checking Rust for darwin-x64..."
 	@$(MAKE) check-rust || ( \
 		echo "Rust not found or out-of-date. Installing via Homebrew..." && \
@@ -276,7 +283,7 @@ darwin-x64:
 	@cp target/x86_64-apple-darwin/release/CHECKSUM.txt target/release/CHECKSUM-darwin-x64.txt
 	@cd target/release && \
 	    rm -rf $(PROJECT_NAME)-darwin-x64.tgz && \
-		$(ARCHIVE_CMD) $(PROJECT_NAME)-darwin-x64.tgz $(PROJECT_NAME) CHECKSUM-darwin-x64.txt && \
+		$(ARCHIVE_CMD) $(PROJECT_NAME)-darwin-x64.tgz $(PROJECT_NAME) CHECKSUM-darwin-x64.txt notices && \
 		if [ -f $(PROJECT_NAME)-darwin-x64.tgz ]; then \
 		  shasum -a 256 $(PROJECT_NAME)-darwin-x64.tgz >> CHECKSUM-darwin-x64.txt; \
 		fi
@@ -290,7 +297,7 @@ else
 endif
 
 # Windows x64 build path for MSYS2/MinGW (GNU toolchain + vectorscan from source)
-windows-x64: require-windows-host
+windows-x64: require-windows-host prepare-release-notices
 	@bash -eu -o pipefail -c '\
 	  command -v pacman >/dev/null 2>&1 || { \
 	    echo "MSYS2 pacman not found. Run this target from an MSYS2 MinGW64 shell."; \
@@ -414,14 +421,14 @@ windows-x64: require-windows-host
 	  cd target/release; \
 	  sha256sum $(PROJECT_NAME).exe > CHECKSUM-windows-x64.txt; \
 	  rm -f $(PROJECT_NAME)-windows-x64.zip; \
-	  powershell.exe -NoProfile -Command "Compress-Archive -Path '\''$(PROJECT_NAME).exe'\'','\''CHECKSUM-windows-x64.txt'\'' -DestinationPath '\''$(PROJECT_NAME)-windows-x64.zip'\'' -Force"; \
+	  powershell.exe -NoProfile -Command "Compress-Archive -Path '\''$(PROJECT_NAME).exe'\'','\''CHECKSUM-windows-x64.txt'\'','\''notices'\'' -DestinationPath '\''$(PROJECT_NAME)-windows-x64.zip'\'' -Force"; \
 	  sha256sum $(PROJECT_NAME)-windows-x64.zip >> CHECKSUM-windows-x64.txt; \
 	  echo "Built binary: target/release/$(PROJECT_NAME).exe"; \
 	  echo "Built archive: target/release/$(PROJECT_NAME)-windows-x64.zip"; \
 	'
 
 # Windows ARM64 build path for MSYS2/clangarm64 (GNU/LLVM MinGW)
-windows-arm64: require-windows-host
+windows-arm64: require-windows-host prepare-release-notices
 	@bash -eu -o pipefail -c '\
 	  command -v pacman >/dev/null 2>&1 || { \
 	    echo "MSYS2 pacman not found. Run this target from an MSYS2 shell."; \
@@ -538,7 +545,7 @@ windows-arm64: require-windows-host
 	  cd target/release; \
 	  sha256sum $(PROJECT_NAME).exe > CHECKSUM-windows-arm64.txt; \
 	  rm -f $(PROJECT_NAME)-windows-arm64.zip; \
-	  powershell.exe -NoProfile -Command "Compress-Archive -Path '\''$(PROJECT_NAME).exe'\'','\''CHECKSUM-windows-arm64.txt'\'' -DestinationPath '\''$(PROJECT_NAME)-windows-arm64.zip'\'' -Force"; \
+	  powershell.exe -NoProfile -Command "Compress-Archive -Path '\''$(PROJECT_NAME).exe'\'','\''CHECKSUM-windows-arm64.txt'\'','\''notices'\'' -DestinationPath '\''$(PROJECT_NAME)-windows-arm64.zip'\'' -Force"; \
 	  sha256sum $(PROJECT_NAME)-windows-arm64.zip >> CHECKSUM-windows-arm64.txt; \
 	  echo "Built binary: target/release/$(PROJECT_NAME).exe"; \
 	  echo "Built archive: target/release/$(PROJECT_NAME)-windows-arm64.zip"; \
@@ -604,11 +611,12 @@ windows-test: windows-test-x64 windows-test-arm64
 # =============  DOCKER-BASED BUILDS =============
 # #
 
-linux-x64: check-docker create-dockerignore
+linux-x64: check-docker create-dockerignore prepare-release-notices
 	@mkdir -p target/release
 	docker run --platform linux/amd64 --rm \
           -v "$$(pwd):/src" -w /src rust:1.96-alpine sh -eu -c '\
 		apk add --no-cache \
+		    bash \
 		    musl-dev \
 		    gcc g++ make cmake pkgconfig \
 		    zlib-dev  zlib-static \
@@ -618,26 +626,28 @@ linux-x64: check-docker create-dockerignore
 		    patch perl ragel \
 	        git openssl-dev curl && \
 		\
-		cargo test --workspace --all-targets ; \
-		\
+		export CARGO_TARGET_DIR=/src/target-docker && \
 		rustup target add x86_64-unknown-linux-musl && \
+		\
+		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --workspace --all-targets --jobs 1 --target x86_64-unknown-linux-musl; fi ; \
 		\
 		export PKG_CONFIG_ALLOW_CROSS=1 ; \
 		export RUSTFLAGS="-C target-feature=+crt-static" ; \
 		\
 		cargo build --release --target x86_64-unknown-linux-musl && \
-		cd target/x86_64-unknown-linux-musl/release && \
+		cd target-docker/x86_64-unknown-linux-musl/release && \
 	    sha256sum kingfisher > CHECKSUM.txt && \
 	    tar -czf /src/target/release/kingfisher-linux-x64.tgz \
-	        kingfisher CHECKSUM.txt \
+	        kingfisher CHECKSUM.txt -C /src/target/release notices \
 	'
 	$(MAKE) list-archives
 
-linux-arm64: check-docker create-dockerignore
+linux-arm64: check-docker create-dockerignore prepare-release-notices
 	@mkdir -p target/release
 	docker run --platform linux/arm64 --rm \
           -v "$$(pwd):/src" -w /src rust:1.96-alpine sh -eu -c '\
 		apk add --no-cache \
+		    bash \
 		    musl-dev \
 		    gcc g++ make cmake pkgconfig \
 		    zlib-dev  zlib-static \
@@ -647,19 +657,20 @@ linux-arm64: check-docker create-dockerignore
 		    patch perl ragel \
 	        git openssl-dev curl && \
 		\
+		export CARGO_TARGET_DIR=/src/target-docker && \
 		rustup target add aarch64-unknown-linux-musl && \
 		\
-		cargo test --workspace --all-targets ; \
+		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --workspace --all-targets --jobs 1 --target aarch64-unknown-linux-musl; fi ; \
 		\
 		export PKG_CONFIG_ALLOW_CROSS=1 ; \
 		export RUSTFLAGS="-C target-feature=+crt-static" ; \
 		\
 		cargo build --release --target aarch64-unknown-linux-musl && \
 		\
-		cd target/aarch64-unknown-linux-musl/release && \
+		cd target-docker/aarch64-unknown-linux-musl/release && \
 	    sha256sum kingfisher > CHECKSUM.txt && \
 	    tar -czf /src/target/release/kingfisher-linux-arm64.tgz \
-	        kingfisher CHECKSUM.txt \
+	        kingfisher CHECKSUM.txt -C /src/target/release notices \
 	'
 	$(MAKE) list-archives
 
@@ -844,6 +855,7 @@ clean:
 	@echo "Cleaning build artifacts..."
 	cargo clean
 	rm -f .dockerignore
+	rm -rf target-docker
 	rm -rf docs-site/site
 
 notices:

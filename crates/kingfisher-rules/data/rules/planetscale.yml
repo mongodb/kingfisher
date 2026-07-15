@@ -37,6 +37,66 @@ rules:
       - rule_id: kingfisher.planetscale.2
         variable: USERNAME
 
+  - name: PlanetScale Database Password
+    id: kingfisher.planetscale.3
+    pattern: |
+      (?xi)
+      \b
+      (
+        pscale_pw_
+        [\w=\.-]{32,64}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - pscale_pw_abcdefghi12lmnopqrstuvwxyZ1234567890_ABCDEF
+      - pscale_pw_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0
+    references:
+      - https://planetscale.com/docs/api
+      - https://github.com/planetscale/planetscale-go/blob/64f294913a7e47f30410805e17dcd9801321f4ed/planetscale.go
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/planetscale.go#L10
+    # No validation: the database password (pscale_pw_) is used as a MySQL
+    # password over a TLS connection to the PlanetScale proxy host. It cannot
+    # be validated via HTTP. See the planetscale-go client for connection usage:
+    # https://github.com/planetscale/planetscale-go/blob/64f294913a7e47f30410805e17dcd9801321f4ed/planetscale.go
+
+  - name: PlanetScale OAuth Token
+    id: kingfisher.planetscale.4
+    pattern: |
+      (?xi)
+      \b
+      (
+        pscale_oauth_
+        [\w=\.-]{32,64}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - pscale_oauth_abcdefghi12lmnopqrstuvwxyZ1234567890_ABCDEF
+      - pscale_oauth_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+    references:
+      - https://planetscale.com/docs/api
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/planetscale.go#L83
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          method: GET
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+          url: https://api.planetscale.com/v1/organizations
+
   - name: PlanetScale Username
     id: kingfisher.planetscale.2
     pattern: |

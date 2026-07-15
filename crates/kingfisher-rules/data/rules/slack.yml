@@ -151,3 +151,177 @@ rules:
                 - "invalid_token"
               negative: true
           url: "{{ TOKEN }}"
+
+  - name: Slack Session Cookie
+    id: kingfisher.slack.5
+    pattern: |
+      (?xi)
+      (
+        xoxd-
+        [\w/\\+-]{100,}
+        ={0,2}
+      )
+      (?:[^\w/+=-]|$)
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'XOXD_TOKEN = "xoxd-RWAqM1zwIRrr2XACnx2j85Nmnq7jXRq08nLu92OuSVSDOqJrB6huw1E7SYpflbEhm7gKHZsqNX3mypdDoskWs9xDXCS74jne9GFhai5C8C5pxXVy60iJTU685IypCMgGzGnIiGmv03uQUCuEBtrLAVOjxqeLlunHjtjotJQAgBX2fJuQVq59uDyGb7SNSH5YWJEFrqdJFA6i0nxDrY2"'
+    references:
+      - https://slack.engineering/catching-compromised-cookies/
+      - https://www.papermtn.co.uk/retrieving-and-using-slack-cookies-for-authentication/
+      - https://blog.tw1sm.io/p/abusing-slack-for-offensive-operations
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/slack.go#L300
+    # No validation: the xoxd- session cookie is an HTTP cookie sent in Cookie
+    # headers to slack.com for browser/desktop session authentication. It has
+    # no corresponding API endpoint for token verification — it must be sent
+    # as a Cookie header in a web request. See Slack's engineering blog post:
+    # https://slack.engineering/catching-compromised-cookies/
+
+  - name: Slack Session Token
+    id: kingfisher.slack.6
+    pattern: |
+      (?xi)
+      \b
+      (
+        xoxc-
+        \d{9,15}-
+        \d{9,15}-
+        \d{9,15}-
+        [a-f0-9]{64}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 4
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'xoxc-2541715624-2536568458595-2560197464944-23a188852dc1e585a9b594b4facd7d96339fb1d45c592c67a2385fb02f3cd453'
+    references:
+      - https://api.slack.com/methods/auth.test
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/slack.go#L325
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Content-Type: application/json; charset=utf-8
+          method: POST
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"ok":true'
+          url: https://slack.com/api/auth.test
+
+  - name: Slack Legacy Bot Token
+    id: kingfisher.slack.7
+    pattern: |
+      (?xi)
+      \b
+      (
+        xoxb-
+        [0-9]{8,14}-
+        [a-zA-Z0-9]{18,26}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 4
+    min_entropy: 2.0
+    confidence: medium
+    examples:
+      - xoxb-263594206564-FGqddMF8t08v8N7Oq4i57vs1
+      - xoxb-282029623751-BVtmnS3BQitmjZvjpQL7PSGP
+      - xoxb-47834520726-N3otsrwj8Cf99cs8GhiRZsX1
+      - xoxb-123456789012-Xw937qtWSXJss1lFaKe
+    references:
+      - https://api.slack.com/authentication/token-types#legacy_bot
+      - https://api.slack.com/methods/auth.test
+      - https://api.slack.com/methods/auth.revoke
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/slack.go#L153
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Content-Type: application/json; charset=utf-8
+          method: POST
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"ok":true'
+          url: https://slack.com/api/auth.test
+    revocation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Content-Type: application/x-www-form-urlencoded
+          method: POST
+          body: "token={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - '"ok":true'
+                - '"revoked":true'
+          url: https://slack.com/api/auth.revoke
+
+  - name: Slack Legacy Workspace Token
+    id: kingfisher.slack.8
+    pattern: |
+      (?xi)
+      \b
+      (
+        xox[ar]-
+        (?:\d-)?
+        [0-9a-zA-Z]{8,48}
+        (?:-[0-9a-zA-Z]{8,64}){0,6}
+      )
+      \b
+    min_entropy: 2.0
+    confidence: low
+    examples:
+      - xoxa-2-511111111-31111111111-3111111111111-e039d02840a0b9379c
+      - xoxa-511111111311
+      - xoxr-2-511111111-31111111111
+    references:
+      - https://api.slack.com/authentication/token-types#workspace
+      - https://api.slack.com/methods/auth.test
+      - https://api.slack.com/methods/auth.revoke
+      - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/slack.go#L197
+    validation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Content-Type: application/json; charset=utf-8
+          method: POST
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - '"ok":true'
+          url: https://slack.com/api/auth.test
+    revocation:
+      type: Http
+      content:
+        request:
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Content-Type: application/x-www-form-urlencoded
+          method: POST
+          body: "token={{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - match_all_words: true
+              type: WordMatch
+              words:
+                - '"ok":true'
+                - '"revoked":true'
+          url: https://slack.com/api/auth.revoke

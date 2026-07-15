@@ -1,4 +1,6 @@
+use std::future::Future;
 use std::io::Write;
+use std::pin::Pin;
 
 use anyhow::Result;
 use schemars::JsonSchema;
@@ -70,51 +72,7 @@ pub trait TokenAccessMapper: Send + Sync {
 
 /// Run the identity mapping workflow for the selected cloud provider.
 pub async fn run(args: AccessMapArgs) -> Result<()> {
-    let result = match args.provider {
-        AccessMapProvider::Gcp => gcp::map_access(args.credential_path.as_deref()).await?,
-        AccessMapProvider::Aws => aws::map_access(&args).await?,
-        AccessMapProvider::Azure => azure::map_access(&args).await?,
-        AccessMapProvider::Github => github::map_access(&args).await?,
-        AccessMapProvider::Gitlab => gitlab::map_access(&args).await?,
-        AccessMapProvider::Slack => slack::map_access(&args).await?,
-        AccessMapProvider::Postgres => postgres::map_access(&args).await?,
-        AccessMapProvider::Mongodb => mongodb::map_access(&args).await?,
-        AccessMapProvider::Huggingface => huggingface::map_access(&args).await?,
-        AccessMapProvider::Gitea => gitea::map_access(&args).await?,
-        AccessMapProvider::Bitbucket => bitbucket::map_access(&args).await?,
-        AccessMapProvider::Buildkite => buildkite::map_access(&args).await?,
-        AccessMapProvider::Harness => harness::map_access(&args).await?,
-        AccessMapProvider::Openai => openai::map_access(&args).await?,
-        AccessMapProvider::Anthropic => anthropic::map_access(&args).await?,
-        AccessMapProvider::Salesforce => salesforce::map_access(&args).await?,
-        AccessMapProvider::Weightsandbiases => weightsandbiases::map_access(&args).await?,
-        AccessMapProvider::Microsoftteams => microsoft_teams::map_access(&args).await?,
-        AccessMapProvider::Airtable => airtable::map_access(&args).await?,
-        AccessMapProvider::Alibaba => alibaba::map_access(&args).await?,
-        AccessMapProvider::Circleci => circleci::map_access(&args).await?,
-        AccessMapProvider::Digitalocean => digitalocean::map_access(&args).await?,
-        AccessMapProvider::Fastly => fastly::map_access(&args).await?,
-        AccessMapProvider::Hubspot => hubspot::map_access(&args).await?,
-        AccessMapProvider::Ibmcloud => ibm_cloud::map_access(&args).await?,
-        AccessMapProvider::Sendgrid => sendgrid::map_access(&args).await?,
-        AccessMapProvider::Sendinblue => sendinblue::map_access(&args).await?,
-        AccessMapProvider::Stripe => stripe::map_access(&args).await?,
-        AccessMapProvider::Terraform => terraform::map_access(&args).await?,
-        AccessMapProvider::Square => square::map_access(&args).await?,
-        AccessMapProvider::Jira => jira::map_access(&args).await?,
-        AccessMapProvider::Mysql => mysql::map_access(&args).await?,
-        AccessMapProvider::Algolia => algolia::map_access(&args).await?,
-        AccessMapProvider::Auth0 => auth0::map_access(&args).await?,
-        AccessMapProvider::Paypal => paypal::map_access(&args).await?,
-        AccessMapProvider::Plaid => plaid::map_access(&args).await?,
-        AccessMapProvider::Shopify => shopify::map_access(&args).await?,
-        AccessMapProvider::Zendesk => zendesk::map_access(&args).await?,
-        AccessMapProvider::Artifactory => artifactory::map_access(&args).await?,
-        AccessMapProvider::Xray => xray::map_access(&args).await?,
-        AccessMapProvider::Monday => monday::map_access(&args).await?,
-        AccessMapProvider::Asana => asana::map_access(&args).await?,
-        AccessMapProvider::Pinecone => pinecone::map_access(&args).await?,
-    };
+    let result = dispatch_cli_request(&args).await?;
 
     let mut writer = args.output_args.get_writer()?;
     match args.output_args.format {
@@ -129,6 +87,57 @@ pub async fn run(args: AccessMapArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+type AccessMapResultFuture<'a> = Pin<Box<dyn Future<Output = Result<AccessMapResult>> + Send + 'a>>;
+type MappedRequestFuture = Pin<Box<dyn Future<Output = (AccessMapResult, String)> + Send>>;
+
+fn dispatch_cli_request(args: &AccessMapArgs) -> AccessMapResultFuture<'_> {
+    match &args.provider {
+        AccessMapProvider::Gcp => Box::pin(gcp::map_access(args.credential_path.as_deref())),
+        AccessMapProvider::Aws => Box::pin(aws::map_access(args)),
+        AccessMapProvider::Azure => Box::pin(azure::map_access(args)),
+        AccessMapProvider::Github => Box::pin(github::map_access(args)),
+        AccessMapProvider::Gitlab => Box::pin(gitlab::map_access(args)),
+        AccessMapProvider::Slack => Box::pin(slack::map_access(args)),
+        AccessMapProvider::Postgres => Box::pin(postgres::map_access(args)),
+        AccessMapProvider::Mongodb => Box::pin(mongodb::map_access(args)),
+        AccessMapProvider::Huggingface => Box::pin(huggingface::map_access(args)),
+        AccessMapProvider::Gitea => Box::pin(gitea::map_access(args)),
+        AccessMapProvider::Bitbucket => Box::pin(bitbucket::map_access(args)),
+        AccessMapProvider::Buildkite => Box::pin(buildkite::map_access(args)),
+        AccessMapProvider::Harness => Box::pin(harness::map_access(args)),
+        AccessMapProvider::Openai => Box::pin(openai::map_access(args)),
+        AccessMapProvider::Anthropic => Box::pin(anthropic::map_access(args)),
+        AccessMapProvider::Salesforce => Box::pin(salesforce::map_access(args)),
+        AccessMapProvider::Weightsandbiases => Box::pin(weightsandbiases::map_access(args)),
+        AccessMapProvider::Microsoftteams => Box::pin(microsoft_teams::map_access(args)),
+        AccessMapProvider::Airtable => Box::pin(airtable::map_access(args)),
+        AccessMapProvider::Alibaba => Box::pin(alibaba::map_access(args)),
+        AccessMapProvider::Circleci => Box::pin(circleci::map_access(args)),
+        AccessMapProvider::Digitalocean => Box::pin(digitalocean::map_access(args)),
+        AccessMapProvider::Fastly => Box::pin(fastly::map_access(args)),
+        AccessMapProvider::Hubspot => Box::pin(hubspot::map_access(args)),
+        AccessMapProvider::Ibmcloud => Box::pin(ibm_cloud::map_access(args)),
+        AccessMapProvider::Sendgrid => Box::pin(sendgrid::map_access(args)),
+        AccessMapProvider::Sendinblue => Box::pin(sendinblue::map_access(args)),
+        AccessMapProvider::Stripe => Box::pin(stripe::map_access(args)),
+        AccessMapProvider::Terraform => Box::pin(terraform::map_access(args)),
+        AccessMapProvider::Square => Box::pin(square::map_access(args)),
+        AccessMapProvider::Jira => Box::pin(jira::map_access(args)),
+        AccessMapProvider::Mysql => Box::pin(mysql::map_access(args)),
+        AccessMapProvider::Algolia => Box::pin(algolia::map_access(args)),
+        AccessMapProvider::Auth0 => Box::pin(auth0::map_access(args)),
+        AccessMapProvider::Paypal => Box::pin(paypal::map_access(args)),
+        AccessMapProvider::Plaid => Box::pin(plaid::map_access(args)),
+        AccessMapProvider::Shopify => Box::pin(shopify::map_access(args)),
+        AccessMapProvider::Zendesk => Box::pin(zendesk::map_access(args)),
+        AccessMapProvider::Artifactory => Box::pin(artifactory::map_access(args)),
+        AccessMapProvider::Xray => Box::pin(xray::map_access(args)),
+        AccessMapProvider::Monday => Box::pin(monday::map_access(args)),
+        AccessMapProvider::Asana => Box::pin(asana::map_access(args)),
+        AccessMapProvider::Pinecone => Box::pin(pinecone::map_access(args)),
+    }
 }
 
 /// A validated credential that can be mapped to an identity.
@@ -380,219 +389,233 @@ pub async fn map_requests(requests: Vec<AccessMapRequest>) -> Vec<AccessMapResul
     let mut results = Vec::new();
 
     for request in requests {
-        let (mut mapped, fp) = match request {
-            AccessMapRequest::Aws { access_key, secret_key, session_token, fingerprint } => (
-                aws::map_access_with_credentials(
-                    &access_key,
-                    &secret_key,
-                    session_token.as_deref(),
-                )
-                .await
-                .unwrap_or_else(|err| build_failed_result("aws", &access_key, err)),
-                fingerprint,
-            ),
-            AccessMapRequest::Gcp { credential_json, fingerprint } => (
-                gcp::map_access_from_json(&credential_json)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("gcp", "service_account", err)),
-                fingerprint,
-            ),
-            AccessMapRequest::Azure { credential_json, containers, fingerprint } => (
-                azure::map_access_from_json_with_hints(&credential_json, containers.as_deref())
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("azure", "credential", err)),
-                fingerprint,
-            ),
-            AccessMapRequest::AzureDevops { token, organization, fingerprint } => (
-                azure_devops::map_access_from_token(&token, &organization)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("azure_devops", "pat", err)),
-                fingerprint,
-            ),
-            AccessMapRequest::Github { token, fingerprint } => {
-                (map_token(&GithubMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Gitlab { token, fingerprint } => {
-                (map_token(&GitlabMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Slack { token, fingerprint } => {
-                (map_token(&SlackMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Postgres { uri, fingerprint } => (
-                postgres::map_access_from_uri(&uri)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("postgres", "uri", err)),
-                fingerprint,
-            ),
-            AccessMapRequest::MongoDB { uri, fingerprint } => (
-                mongodb::map_access_from_uri(&uri)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("mongodb", "uri", err)),
-                fingerprint,
-            ),
-            AccessMapRequest::HuggingFace { token, fingerprint } => {
-                (map_token(&HuggingFaceMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Gitea { token, fingerprint } => {
-                (map_token(&GiteaMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Bitbucket { token, fingerprint } => {
-                (map_token(&BitbucketMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Buildkite { token, fingerprint } => {
-                (map_token(&BuildkiteMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Harness { token, fingerprint } => {
-                (map_token(&HarnessMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::OpenAI { token, fingerprint } => {
-                (map_token(&OpenAiMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Anthropic { token, fingerprint } => {
-                (map_token(&AnthropicMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Salesforce { token, instance, fingerprint } => (
-                salesforce::map_access_from_token_and_instance(&token, &instance)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("salesforce", "token", err)),
-                fingerprint,
-            ),
-            AccessMapRequest::WeightsAndBiases { token, fingerprint } => {
-                (map_token(&WeightsAndBiasesMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::MicrosoftTeams { webhook_url, fingerprint } => (
-                microsoft_teams::map_access_from_webhook_url(&webhook_url)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("microsoft_teams", "webhook", err)),
-                fingerprint,
-            ),
-            AccessMapRequest::Airtable { token, fingerprint } => {
-                (map_token(&AirtableMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Alibaba { access_key, secret_key, session_token, fingerprint } => (
-                alibaba::map_access_with_credentials(
-                    &access_key,
-                    &secret_key,
-                    session_token.as_deref(),
-                )
-                .await
-                .unwrap_or_else(|err| build_failed_result("alibaba", &access_key, err)),
-                fingerprint,
-            ),
-            AccessMapRequest::CircleCI { token, fingerprint } => {
-                (map_token(&CircleCiMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::DigitalOcean { token, fingerprint } => {
-                (map_token(&DigitalOceanMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Fastly { token, fingerprint } => {
-                (map_token(&FastlyMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::HubSpot { token, fingerprint } => {
-                (map_token(&HubSpotMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::IbmCloud { token, fingerprint } => {
-                (map_token(&IbmCloudMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::SendGrid { token, fingerprint } => {
-                (map_token(&SendGridMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Sendinblue { token, fingerprint } => {
-                (map_token(&SendinblueMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Stripe { token, fingerprint } => {
-                (map_token(&StripeMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Terraform { token, fingerprint } => {
-                (map_token(&TerraformMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Square { token, fingerprint } => {
-                (map_token(&SquareMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Jira { token, base_url, fingerprint } => (
-                jira::map_access_from_token_and_url(&token, &base_url)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("jira", "token", err)),
-                fingerprint,
-            ),
-            AccessMapRequest::MySQL { uri, fingerprint } => (
-                mysql::map_access_from_uri(&uri)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("mysql", "uri", err)),
-                fingerprint,
-            ),
-            AccessMapRequest::Algolia { app_id, api_key, fingerprint } => (
-                algolia::map_access_from_credentials(&app_id, &api_key)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("algolia", &app_id, err)),
-                fingerprint,
-            ),
-            AccessMapRequest::Auth0 { client_id, client_secret, domain, fingerprint } => (
-                auth0::map_access_from_credentials(&client_id, &client_secret, &domain)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("auth0", &client_id, err)),
-                fingerprint,
-            ),
-            AccessMapRequest::PayPal { client_id, client_secret, fingerprint } => (
-                paypal::map_access_from_credentials(&client_id, &client_secret)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("paypal", &client_id, err)),
-                fingerprint,
-            ),
-            AccessMapRequest::Plaid { client_id, secret, fingerprint } => (
-                plaid::map_access_from_credentials(&client_id, &secret)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("plaid", &client_id, err)),
-                fingerprint,
-            ),
-            AccessMapRequest::Shopify { token, subdomain, fingerprint } => (
-                shopify::map_access_from_token_and_subdomain(&token, &subdomain)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("shopify", &subdomain, err)),
-                fingerprint,
-            ),
-            AccessMapRequest::Zendesk { token, subdomain, fingerprint } => (
-                zendesk::map_access_from_token_and_subdomain(&token, &subdomain)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("zendesk", &subdomain, err)),
-                fingerprint,
-            ),
-            AccessMapRequest::Artifactory { token, base_url, fingerprint } => {
-                let res: Result<AccessMapResult> = match base_url {
-                    Some(url) => artifactory::map_access_from_token_and_url(&token, &url).await,
-                    None => artifactory::map_access_from_token(&token).await,
-                };
-                (
-                    res.unwrap_or_else(|err| build_failed_result("artifactory", "token", err)),
-                    fingerprint,
-                )
-            }
-            AccessMapRequest::Xray { token, base_url, fingerprint } => {
-                let res: Result<AccessMapResult> = match base_url {
-                    Some(url) => xray::map_access_from_token_and_url(&token, &url).await,
-                    None => xray::map_access_from_token(&token).await,
-                };
-                (
-                    res.unwrap_or_else(|err| build_failed_result("jfrog_xray", "token", err)),
-                    fingerprint,
-                )
-            }
-            AccessMapRequest::Monday { token, fingerprint } => {
-                (map_token(&MondayMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Asana { token, fingerprint } => {
-                (map_token(&AsanaMapper, &token).await, fingerprint)
-            }
-            AccessMapRequest::Pinecone { token, fingerprint } => {
-                (map_token(&PineconeMapper, &token).await, fingerprint)
-            }
-        };
+        let (mut mapped, fp) = dispatch_access_map_request(request).await;
 
         mapped.fingerprint = Some(fp);
         results.push(mapped);
     }
 
     results
+}
+
+fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture {
+    match request {
+        AccessMapRequest::Aws { access_key, secret_key, session_token, fingerprint } => {
+            Box::pin(async move {
+                let mapped = aws::map_access_with_credentials(
+                    &access_key,
+                    &secret_key,
+                    session_token.as_deref(),
+                )
+                .await
+                .unwrap_or_else(|err| build_failed_result("aws", &access_key, err));
+                (mapped, fingerprint)
+            })
+        }
+        AccessMapRequest::Gcp { credential_json, fingerprint } => Box::pin(async move {
+            let mapped = gcp::map_access_from_json(&credential_json)
+                .await
+                .unwrap_or_else(|err| build_failed_result("gcp", "service_account", err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::Azure { credential_json, containers, fingerprint } => {
+            Box::pin(async move {
+                let mapped =
+                    azure::map_access_from_json_with_hints(&credential_json, containers.as_deref())
+                        .await
+                        .unwrap_or_else(|err| build_failed_result("azure", "credential", err));
+                (mapped, fingerprint)
+            })
+        }
+        AccessMapRequest::AzureDevops { token, organization, fingerprint } => {
+            Box::pin(async move {
+                let mapped = azure_devops::map_access_from_token(&token, &organization)
+                    .await
+                    .unwrap_or_else(|err| build_failed_result("azure_devops", "pat", err));
+                (mapped, fingerprint)
+            })
+        }
+        AccessMapRequest::Github { token, fingerprint } => {
+            Box::pin(async move { (map_token(&GithubMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Gitlab { token, fingerprint } => {
+            Box::pin(async move { (map_token(&GitlabMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Slack { token, fingerprint } => {
+            Box::pin(async move { (map_token(&SlackMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Postgres { uri, fingerprint } => Box::pin(async move {
+            let mapped = postgres::map_access_from_uri(&uri)
+                .await
+                .unwrap_or_else(|err| build_failed_result("postgres", "uri", err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::MongoDB { uri, fingerprint } => Box::pin(async move {
+            let mapped = mongodb::map_access_from_uri(&uri)
+                .await
+                .unwrap_or_else(|err| build_failed_result("mongodb", "uri", err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::HuggingFace { token, fingerprint } => {
+            Box::pin(async move { (map_token(&HuggingFaceMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Gitea { token, fingerprint } => {
+            Box::pin(async move { (map_token(&GiteaMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Bitbucket { token, fingerprint } => {
+            Box::pin(async move { (map_token(&BitbucketMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Buildkite { token, fingerprint } => {
+            Box::pin(async move { (map_token(&BuildkiteMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Harness { token, fingerprint } => {
+            Box::pin(async move { (map_token(&HarnessMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::OpenAI { token, fingerprint } => {
+            Box::pin(async move { (map_token(&OpenAiMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Anthropic { token, fingerprint } => {
+            Box::pin(async move { (map_token(&AnthropicMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Salesforce { token, instance, fingerprint } => Box::pin(async move {
+            let mapped = salesforce::map_access_from_token_and_instance(&token, &instance)
+                .await
+                .unwrap_or_else(|err| build_failed_result("salesforce", "token", err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::WeightsAndBiases { token, fingerprint } => {
+            Box::pin(async move { (map_token(&WeightsAndBiasesMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::MicrosoftTeams { webhook_url, fingerprint } => Box::pin(async move {
+            let mapped = microsoft_teams::map_access_from_webhook_url(&webhook_url)
+                .await
+                .unwrap_or_else(|err| build_failed_result("microsoft_teams", "webhook", err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::Airtable { token, fingerprint } => {
+            Box::pin(async move { (map_token(&AirtableMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Alibaba { access_key, secret_key, session_token, fingerprint } => {
+            Box::pin(async move {
+                let mapped = alibaba::map_access_with_credentials(
+                    &access_key,
+                    &secret_key,
+                    session_token.as_deref(),
+                )
+                .await
+                .unwrap_or_else(|err| build_failed_result("alibaba", &access_key, err));
+                (mapped, fingerprint)
+            })
+        }
+        AccessMapRequest::CircleCI { token, fingerprint } => {
+            Box::pin(async move { (map_token(&CircleCiMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::DigitalOcean { token, fingerprint } => {
+            Box::pin(async move { (map_token(&DigitalOceanMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Fastly { token, fingerprint } => {
+            Box::pin(async move { (map_token(&FastlyMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::HubSpot { token, fingerprint } => {
+            Box::pin(async move { (map_token(&HubSpotMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::IbmCloud { token, fingerprint } => {
+            Box::pin(async move { (map_token(&IbmCloudMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::SendGrid { token, fingerprint } => {
+            Box::pin(async move { (map_token(&SendGridMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Sendinblue { token, fingerprint } => {
+            Box::pin(async move { (map_token(&SendinblueMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Stripe { token, fingerprint } => {
+            Box::pin(async move { (map_token(&StripeMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Terraform { token, fingerprint } => {
+            Box::pin(async move { (map_token(&TerraformMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Square { token, fingerprint } => {
+            Box::pin(async move { (map_token(&SquareMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Jira { token, base_url, fingerprint } => Box::pin(async move {
+            let mapped = jira::map_access_from_token_and_url(&token, &base_url)
+                .await
+                .unwrap_or_else(|err| build_failed_result("jira", "token", err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::MySQL { uri, fingerprint } => Box::pin(async move {
+            let mapped = mysql::map_access_from_uri(&uri)
+                .await
+                .unwrap_or_else(|err| build_failed_result("mysql", "uri", err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::Algolia { app_id, api_key, fingerprint } => Box::pin(async move {
+            let mapped = algolia::map_access_from_credentials(&app_id, &api_key)
+                .await
+                .unwrap_or_else(|err| build_failed_result("algolia", &app_id, err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::Auth0 { client_id, client_secret, domain, fingerprint } => {
+            Box::pin(async move {
+                let mapped =
+                    auth0::map_access_from_credentials(&client_id, &client_secret, &domain)
+                        .await
+                        .unwrap_or_else(|err| build_failed_result("auth0", &client_id, err));
+                (mapped, fingerprint)
+            })
+        }
+        AccessMapRequest::PayPal { client_id, client_secret, fingerprint } => {
+            Box::pin(async move {
+                let mapped = paypal::map_access_from_credentials(&client_id, &client_secret)
+                    .await
+                    .unwrap_or_else(|err| build_failed_result("paypal", &client_id, err));
+                (mapped, fingerprint)
+            })
+        }
+        AccessMapRequest::Plaid { client_id, secret, fingerprint } => Box::pin(async move {
+            let mapped = plaid::map_access_from_credentials(&client_id, &secret)
+                .await
+                .unwrap_or_else(|err| build_failed_result("plaid", &client_id, err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::Shopify { token, subdomain, fingerprint } => Box::pin(async move {
+            let mapped = shopify::map_access_from_token_and_subdomain(&token, &subdomain)
+                .await
+                .unwrap_or_else(|err| build_failed_result("shopify", &subdomain, err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::Zendesk { token, subdomain, fingerprint } => Box::pin(async move {
+            let mapped = zendesk::map_access_from_token_and_subdomain(&token, &subdomain)
+                .await
+                .unwrap_or_else(|err| build_failed_result("zendesk", &subdomain, err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::Artifactory { token, base_url, fingerprint } => Box::pin(async move {
+            let mapped = match base_url {
+                Some(url) => artifactory::map_access_from_token_and_url(&token, &url).await,
+                None => artifactory::map_access_from_token(&token).await,
+            }
+            .unwrap_or_else(|err| build_failed_result("artifactory", "token", err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::Xray { token, base_url, fingerprint } => Box::pin(async move {
+            let mapped = match base_url {
+                Some(url) => xray::map_access_from_token_and_url(&token, &url).await,
+                None => xray::map_access_from_token(&token).await,
+            }
+            .unwrap_or_else(|err| build_failed_result("jfrog_xray", "token", err));
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::Monday { token, fingerprint } => {
+            Box::pin(async move { (map_token(&MondayMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Asana { token, fingerprint } => {
+            Box::pin(async move { (map_token(&AsanaMapper, &token).await, fingerprint) })
+        }
+        AccessMapRequest::Pinecone { token, fingerprint } => {
+            Box::pin(async move { (map_token(&PineconeMapper, &token).await, fingerprint) })
+        }
+    }
 }
 
 /// Maps a token credential using a `TokenAccessMapper`, with fallback error handling.

@@ -85,3 +85,84 @@ rules:
             - type: StatusMatch
               status: [200]
             - type: JsonValid
+
+  - name: Anthropic Claude Code OAuth Access Token
+    id: kingfisher.anthropic.3
+    pattern: |
+      (?x)
+      \b
+      (
+        sk-ant-oat01-
+        [A-Za-z0-9_-]{40,}
+      )
+    pattern_requirements:
+      min_digits: 1
+      min_uppercase: 1
+      min_lowercase: 1
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'CLAUDE_CODE_OAUTH_TOKEN="sk-ant-oat01-aB3x5YpQr7sT2uV9wXy1Zb4cD6eF8gH0iJ2kL4mN6oP8q"'
+      - sk-ant-oat01-zQ9wX8cV7bN6mD5sT4fR3gH2yJ1kL0pAuZ9xC8vN7mB6lD5qK4jF3hG2sY1tAw
+    references:
+      - https://github.com/gitleaks/gitleaks/pull/2105
+      - https://github.com/gitleaks/gitleaks/pull/2159
+      - https://docs.claude.com/en/docs/claude-code/authentication
+    validation:
+      type: Http
+      content:
+        request:
+          body: |
+            {
+              "model": "claude-3-haiku-20240307",
+              "max_tokens": 1024,
+              "messages": [
+                {"role": "user", "content": "respond only with 'success'"}
+              ]
+            }
+          headers:
+            Content-Type: application/json
+            anthropic-version: "2023-06-01"
+            Authorization: "Bearer {{ TOKEN }}"
+          method: POST
+          response_matcher:
+            - report_response: true
+            - status:
+                - 200
+              type: StatusMatch
+            - type: WordMatch
+              words:
+                - '"type":"message"'
+                - 'credit balance is too low'
+          url: https://api.anthropic.com/v1/messages
+    # Revocation not added: Claude Code OAuth tokens are managed via `claude auth
+    # logout` / `/logout` and the credentials file; no public HTTP self-revoke
+    # endpoint is documented for the sk-ant-oat01- token family.
+
+  - name: Anthropic Claude Code OAuth Refresh Token
+    id: kingfisher.anthropic.4
+    pattern: |
+      (?x)
+      \b
+      (
+        sk-ant-ort01-
+        [A-Za-z0-9_-]{40,}
+      )
+    pattern_requirements:
+      min_digits: 1
+      min_uppercase: 1
+      min_lowercase: 1
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'refreshToken="sk-ant-ort01-zQ9wX8cV7bN6mD5sT4fR3gH2yJ1kL0pAuZ9xC8vN7mB6lD5qK4jF3hG2sY1tA"'
+      - sk-ant-ort01-aB3x5YpQr7sT2uV9wXy1Zb4cD6eF8gH0iJ2kL4mN6oP8qRsT0uVwXyZ
+    references:
+      - https://github.com/gitleaks/gitleaks/pull/2159
+      - https://github.com/gitleaks/gitleaks/pull/2178
+      - https://docs.claude.com/en/docs/claude-code/authentication
+    # Validation not added: the only way to prove a refresh token is live is to
+    # exchange it for a new access token at the OAuth token endpoint, which both
+    # has side effects (mints a new access token) and may rotate/invalidate the
+    # refresh token under Anthropic's policy, so it is not a safe idempotent
+    # check. Revocation likewise has no documented HTTP self-revoke endpoint.

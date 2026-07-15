@@ -86,13 +86,49 @@ fn is_zip_format(ext: &str) -> bool {
 /* ───────────────────────────────────────────────────────────────
 helpers for streaming archives
 ───────────────────────────────────────────────────────────── */
+/// Maximum number of TAR entries inspected from one archive. This bounds work
+/// and output-file creation for archives containing huge numbers of tiny files.
+pub const MAX_TAR_ARCHIVE_ENTRIES: usize = 10_000;
+
+/// Maximum uncompressed size accepted for one TAR file entry.
+pub const MAX_TAR_ENTRY_DECOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Aggregate uncompressed TAR output allowed for one archive. This matches the
+/// streaming ZIP extractor's aggregate budget so parallel scans cannot fill the
+/// temporary extraction directory without bound.
+pub const MAX_TAR_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
+
+#[derive(Clone, Copy)]
+struct TarExtractionLimits {
+    max_entries: usize,
+    max_entry_bytes: u64,
+    max_total_bytes: u64,
+}
+
+const TAR_EXTRACTION_LIMITS: TarExtractionLimits = TarExtractionLimits {
+    max_entries: MAX_TAR_ARCHIVE_ENTRIES,
+    max_entry_bytes: MAX_TAR_ENTRY_DECOMPRESSED_BYTES,
+    max_total_bytes: MAX_TAR_DECOMPRESSED_BYTES,
+};
+
 fn handle_tar_archive_streaming(
     file: &mut fs::File,
     archive_path: &Path,
     base_dir: &Path,
 ) -> Result<CompressedContent> {
+    handle_tar_archive_streaming_with_limits(file, archive_path, base_dir, TAR_EXTRACTION_LIMITS)
+}
+
+fn handle_tar_archive_streaming_with_limits(
+    file: &mut fs::File,
+    archive_path: &Path,
+    base_dir: &Path,
+    limits: TarExtractionLimits,
+) -> Result<CompressedContent> {
     let mut archive = Archive::new(file);
     let mut entries_on_disk = Vec::new();
+    let mut entries_seen = 0;
+    let mut total_decompressed = 0;
     let mut truncated = false;
 
     let entries = match archive.entries() {
@@ -104,6 +140,17 @@ fn handle_tar_archive_streaming(
     };
 
     for entry in entries {
+        if entries_seen >= limits.max_entries {
+            tracing::debug!(
+                "tar archive {} exceeded {} entry cap; truncating",
+                archive_path.display(),
+                limits.max_entries
+            );
+            truncated = true;
+            break;
+        }
+        entries_seen += 1;
+
         let mut entry = match entry {
             Ok(entry) => entry,
             Err(e) => {
@@ -129,6 +176,30 @@ fn handle_tar_archive_streaming(
                 tracing::debug!("unsafe tar path: {path_in_tar}");
                 continue;
             }
+
+            let expected_size = entry.size();
+            if expected_size > limits.max_entry_bytes {
+                tracing::debug!(
+                    "tar entry {} in {} exceeds {} byte per-entry cap; skipping",
+                    path_in_tar,
+                    archive_path.display(),
+                    limits.max_entry_bytes
+                );
+                truncated = true;
+                continue;
+            }
+
+            let remaining = limits.max_total_bytes.saturating_sub(total_decompressed);
+            if expected_size > remaining {
+                tracing::debug!(
+                    "tar archive {} exceeded {} byte aggregate cap; truncating",
+                    archive_path.display(),
+                    limits.max_total_bytes
+                );
+                truncated = true;
+                break;
+            }
+
             let logical_path = format!("{}!{}", archive_path.display(), path_in_tar);
 
             let out_path = base_dir.join(&path_in_tar);
@@ -140,8 +211,10 @@ fn handle_tar_archive_streaming(
             }
             match fs::File::create(&out_path) {
                 Ok(mut out_file) => {
-                    let expected_size = entry.size();
-                    let copied = match std::io::copy(&mut entry, &mut out_file) {
+                    // Keep the read bounded even if a malformed entry stream
+                    // does not honor the size advertised in its TAR header.
+                    let mut limited = (&mut entry).take(expected_size);
+                    let copied = match std::io::copy(&mut limited, &mut out_file) {
                         Ok(n) => n,
                         Err(e) => {
                             tracing::debug!("failed to extract {}: {}", out_path.display(), e);
@@ -165,6 +238,7 @@ fn handle_tar_archive_streaming(
                         truncated = true;
                         break;
                     }
+                    total_decompressed += copied;
                     entries_on_disk.push((logical_path, out_path));
                 }
                 Err(e) => {
@@ -841,6 +915,90 @@ mod tests {
             base_dir,
             super::MAX_SINGLE_STREAM_DECOMPRESSED_BYTES,
         )
+    }
+
+    fn write_tar(path: &Path, entries: &[(&str, &[u8])]) -> anyhow::Result<()> {
+        let file = File::create(path)?;
+        let mut tar = Builder::new(file);
+        for (name, contents) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(contents.len() as u64);
+            header.set_mode(0o644);
+            header.set_cksum();
+            tar.append_data(&mut header, name, *contents)?;
+        }
+        tar.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn tar_streaming_skips_entries_over_the_per_entry_cap() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let archive_path = dir.path().join("payload.tar");
+        write_tar(
+            &archive_path,
+            &[("small.txt", b"tiny"), ("too-large.txt", b"oversized"), ("after.txt", b"kept")],
+        )?;
+
+        let extraction_dir = tempdir()?;
+        let mut archive_file = File::open(&archive_path)?;
+        let content = super::handle_tar_archive_streaming_with_limits(
+            &mut archive_file,
+            &archive_path,
+            extraction_dir.path(),
+            super::TarExtractionLimits { max_entries: 10, max_entry_bytes: 8, max_total_bytes: 16 },
+        )?;
+
+        let CompressedContent::ArchiveFiles(entries) = content else {
+            panic!("expected TAR entries to be extracted");
+        };
+        assert_eq!(entries.len(), 2);
+        assert!(entries.iter().any(|(logical, _)| logical.ends_with("!small.txt")));
+        assert!(entries.iter().any(|(logical, _)| logical.ends_with("!after.txt")));
+        assert!(!entries.iter().any(|(logical, _)| logical.ends_with("!too-large.txt")));
+        assert!(!extraction_dir.path().join("too-large.txt").exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn tar_streaming_stops_at_aggregate_and_entry_count_caps() -> anyhow::Result<()> {
+        let dir = tempdir()?;
+        let archive_path = dir.path().join("payload.tar");
+        write_tar(
+            &archive_path,
+            &[("first.txt", b"1234"), ("second.txt", b"5678"), ("third.txt", b"9012")],
+        )?;
+
+        let aggregate_dir = tempdir()?;
+        let mut aggregate_file = File::open(&archive_path)?;
+        let aggregate_content = super::handle_tar_archive_streaming_with_limits(
+            &mut aggregate_file,
+            &archive_path,
+            aggregate_dir.path(),
+            super::TarExtractionLimits { max_entries: 10, max_entry_bytes: 8, max_total_bytes: 6 },
+        )?;
+        let CompressedContent::ArchiveFiles(aggregate_entries) = aggregate_content else {
+            panic!("expected TAR entries to be extracted");
+        };
+        assert_eq!(aggregate_entries.len(), 1);
+        assert!(aggregate_entries[0].0.ends_with("!first.txt"));
+
+        let count_dir = tempdir()?;
+        let mut count_file = File::open(&archive_path)?;
+        let count_content = super::handle_tar_archive_streaming_with_limits(
+            &mut count_file,
+            &archive_path,
+            count_dir.path(),
+            super::TarExtractionLimits { max_entries: 1, max_entry_bytes: 8, max_total_bytes: 16 },
+        )?;
+        let CompressedContent::ArchiveFiles(count_entries) = count_content else {
+            panic!("expected TAR entries to be extracted");
+        };
+        assert_eq!(count_entries.len(), 1);
+        assert!(count_entries[0].0.ends_with("!first.txt"));
+
+        Ok(())
     }
 
     /// A ZIP body written under a name with no recognized archive extension

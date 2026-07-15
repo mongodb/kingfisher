@@ -131,7 +131,8 @@ fn is_sensitive_arg_key(key: &str) -> bool {
         return true;
     }
 
-    let contains = ["token", "secret", "password", "apikey", "api-key", "auth", "credential"];
+    let contains =
+        ["token", "secret", "password", "apikey", "api-key", "auth", "credential", "webhook"];
     contains.iter().any(|candidate| normalized.contains(candidate))
 }
 
@@ -176,6 +177,25 @@ fn sanitize_command_line_args(args: &[String]) -> Vec<String> {
     }
 
     sanitized
+}
+
+fn format_validation_response(validation_body: &str, redact: bool, full_response: bool) -> String {
+    if redact {
+        // Validation errors can include a rendered request URL, whose query
+        // string may contain the finding's secret. Redact the entire body so
+        // report formats cannot expose it through an error path.
+        return crate::util::redact_value(validation_body);
+    }
+
+    if full_response {
+        return validation_body.to_string();
+    }
+
+    const MAX_RESPONSE_LENGTH: usize = 512;
+    let mut chars = validation_body.chars();
+    let truncated_body: String = chars.by_ref().take(MAX_RESPONSE_LENGTH).collect();
+    let ellipsis = if chars.next().is_some() { "..." } else { "" };
+    format!("{truncated_body}{ellipsis}")
 }
 
 fn required_vars_for_revocation(revocation: &Revocation) -> BTreeSet<String> {
@@ -931,16 +951,11 @@ impl DetailsReporter {
         };
 
         let validation_body_str = validation_body::as_str(&rm.validation_response_body);
-        let response_body = if args.full_validation_response {
-            validation_body_str.to_string()
-        } else {
-            const MAX_RESPONSE_LENGTH: usize = 512;
-            let truncated_body: String =
-                validation_body_str.chars().take(MAX_RESPONSE_LENGTH).collect();
-            let ellipsis =
-                if validation_body_str.chars().count() > MAX_RESPONSE_LENGTH { "..." } else { "" };
-            format!("{}{}", truncated_body, ellipsis)
-        };
+        let response_body = format_validation_response(
+            validation_body_str,
+            args.redact,
+            args.full_validation_response,
+        );
 
         let git_metadata_val = rm
             .origin
@@ -1967,7 +1982,11 @@ mod tests {
         (report_match, blob_path)
     }
 
-    fn build_validation_response(validation_body: &str, full_response: bool) -> String {
+    fn build_validation_response(
+        validation_body: &str,
+        redact: bool,
+        full_response: bool,
+    ) -> String {
         let temp = tempdir().unwrap();
         let datastore =
             Arc::new(Mutex::new(findings_store::FindingsStore::new(temp.path().to_path_buf())));
@@ -1980,6 +1999,7 @@ mod tests {
 
         let (report_match, _) = sample_report_match(validation_body, StatusCode::OK.as_u16(), true);
         let mut scan_args = sample_scan_args();
+        scan_args.redact = redact;
         scan_args.full_validation_response = full_response;
 
         let record = reporter.build_finding_record(&report_match, &scan_args);
@@ -2046,21 +2066,21 @@ mod tests {
     #[test]
     fn validation_response_truncates_when_flag_off() {
         let body = "a".repeat(513);
-        let response = build_validation_response(&body, false);
+        let response = build_validation_response(&body, false, false);
         assert_eq!(response, format!("{}...", "a".repeat(512)));
     }
 
     #[test]
     fn validation_response_full_when_flag_on() {
         let body = "a".repeat(513);
-        let response = build_validation_response(&body, true);
+        let response = build_validation_response(&body, false, true);
         assert_eq!(response, body);
     }
 
     #[test]
     fn validation_response_truncation_counts_chars() {
         let body = "é".repeat(513);
-        let response = build_validation_response(&body, false);
+        let response = build_validation_response(&body, false, false);
 
         assert!(response.ends_with("..."));
         assert_eq!(response.chars().count(), 515);
@@ -2078,6 +2098,9 @@ mod tests {
             "--arg=TOP_SECRET".to_string(),
             "--var".to_string(),
             "TOKEN=inline".to_string(),
+            "--alert-webhook".to_string(),
+            "https://hooks.slack.com/services/T000/B000/webhook-secret".to_string(),
+            "--alert-webhook=https://example.test/hook-secret".to_string(),
             "--path".to_string(),
             "./repo".to_string(),
         ];
@@ -2089,6 +2112,21 @@ mod tests {
         assert_eq!(sanitized[5], "--arg=***REDACTED***");
         assert_eq!(sanitized[6], "--var");
         assert_eq!(sanitized[7], "***REDACTED***");
+        assert_eq!(sanitized[8], "--alert-webhook");
+        assert_eq!(sanitized[9], "***REDACTED***");
+        assert_eq!(sanitized[10], "--alert-webhook=***REDACTED***");
+    }
+
+    #[test]
+    fn validation_errors_are_redacted_when_report_redaction_is_enabled() {
+        let secret = "validation-secret-should-not-appear";
+        let body =
+            format!("Validation endpoint resolution failed: https://example.test/?token={secret}");
+
+        let response = build_validation_response(&body, true, true);
+
+        assert!(!response.contains(secret));
+        assert!(response.starts_with("[REDACTED:"));
     }
 
     #[test]
