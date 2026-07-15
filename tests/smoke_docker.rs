@@ -55,8 +55,16 @@ fn smoke_scan_docker_image() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    let report: Value = serde_json::from_slice(&output.stdout)?;
-    assert!(report["blobs_scanned"].as_u64().unwrap_or_default() > 0);
+    let summary = output
+        .stdout
+        .split(|&byte| byte == b'\n')
+        .filter(|line| !line.is_empty())
+        .find_map(|line| {
+            let value: Value = serde_json::from_slice(line).ok()?;
+            value.get("blobs_scanned").is_some().then_some(value)
+        })
+        .expect("scan output must contain a JSON summary");
+    assert!(summary["blobs_scanned"].as_u64().unwrap_or_default() > 0);
     Ok(())
 }
 

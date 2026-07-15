@@ -11,7 +11,10 @@ use crate::rules::Rules;
 const BUNDLE_MAGIC: &[u8] = b"KFRULES\x01";
 const DEFAULT_RULE_BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin-rules.gz"));
 
-fn get_default_rule_files() -> Result<Vec<(PathBuf, Vec<u8>)>> {
+/// Return the paths and contents of the embedded builtin YAML rule files.
+///
+/// The returned paths are relative to the bundled rules directory.
+pub fn get_builtin_rule_files() -> Result<Vec<(PathBuf, Vec<u8>)>> {
     let mut decoded = Vec::new();
     GzDecoder::new(DEFAULT_RULE_BUNDLE)
         .read_to_end(&mut decoded)
@@ -47,7 +50,7 @@ fn get_default_rule_files() -> Result<Vec<(PathBuf, Vec<u8>)>> {
 /// If no confidence is specified, defaults to `Confidence::Medium`.
 pub fn get_builtin_rules(confidence: Option<Confidence>) -> Result<Rules> {
     let confidence = confidence.unwrap_or(Confidence::Medium);
-    let files = get_default_rule_files()?;
+    let files = get_builtin_rule_files()?;
     Rules::from_paths_and_contents(
         files.iter().map(|(path, contents)| (path.as_path(), contents.as_slice())),
         confidence,
@@ -98,7 +101,7 @@ mod test {
 
     #[test]
     fn bundled_rule_files_are_sorted_and_complete() {
-        let files = get_default_rule_files().unwrap();
+        let files = get_builtin_rule_files().unwrap();
         assert!(files.len() >= 100);
         assert!(files.windows(2).all(|pair| pair[0].0 <= pair[1].0));
     }

@@ -47,7 +47,9 @@ fn write_viewer_bundle(viewer_dir: &Path, output: &Path) -> std::io::Result<()> 
         let relative = path
             .strip_prefix(viewer_dir)
             .expect("viewer asset path must be under viewer directory");
-        let name = relative.to_str().expect("viewer asset paths must be UTF-8");
+        // Bundle paths are used as URL paths by the viewer, which always uses
+        // forward slashes regardless of the platform that built the binary.
+        let name = relative.to_str().expect("viewer asset paths must be UTF-8").replace('\\', "/");
         let contents = fs::read(&path)?;
         let name_len = u32::try_from(name.len()).expect("viewer asset path exceeds bundle limit");
         let contents_len =
