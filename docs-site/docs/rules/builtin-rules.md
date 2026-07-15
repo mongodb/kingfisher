@@ -1,12 +1,12 @@
 ---
 title: "Built-in Rules List"
-description: "Complete list of all 1005 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
+description: "Complete list of all 1006 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
 ---
 
 # Built-in Rules
 
-Kingfisher ships with **1005 detection rules** across **601 providers**
-(875 detectors + 130 dependent rules).
+Kingfisher ships with **1006 detection rules** across **601 providers**
+(876 detectors + 130 dependent rules).
 Of these, **511** include live validation and **52** support direct revocation.
 
 !!! tip "Search"
@@ -3663,6 +3663,14 @@ Of these, **511** include live validation and **52** support direct revocation.
 <td>Html</td>
 <td>HTML Password Input Pre-populated Credential</td>
 <td><code>kingfisher.html.1</code></td>
+<td>Low</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Html</td>
+<td>HTML Password Input Pre-populated Credential (Value Before Type)</td>
+<td><code>kingfisher.html.2</code></td>
 <td>Low</td>
 <td></td>
 <td></td>

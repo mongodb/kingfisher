@@ -1,6 +1,6 @@
 //! Builtin rules embedded in the kingfisher-rules crate.
 
-use std::{io::Read, path::PathBuf};
+use std::{io::Read, path::PathBuf, sync::OnceLock};
 
 use anyhow::{Context, Result, anyhow, bail};
 use flate2::read::GzDecoder;
@@ -10,11 +10,26 @@ use crate::rules::Rules;
 
 const BUNDLE_MAGIC: &[u8] = b"KFRULES\x01";
 const DEFAULT_RULE_BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin-rules.gz"));
+type BuiltinRuleFiles = Vec<(PathBuf, Vec<u8>)>;
+type CachedBuiltinRuleFiles = Result<BuiltinRuleFiles, String>;
+
+static BUILTIN_RULE_FILES: OnceLock<CachedBuiltinRuleFiles> = OnceLock::new();
 
 /// Return the paths and contents of the embedded builtin YAML rule files.
 ///
 /// The returned paths are relative to the bundled rules directory.
 pub fn get_builtin_rule_files() -> Result<Vec<(PathBuf, Vec<u8>)>> {
+    Ok(builtin_rule_files()?.to_vec())
+}
+
+fn builtin_rule_files() -> Result<&'static [(PathBuf, Vec<u8>)]> {
+    BUILTIN_RULE_FILES
+        .get_or_init(|| load_builtin_rule_files().map_err(|err| format!("{err:#}")))
+        .as_deref()
+        .map_err(|err| anyhow!("failed to load embedded builtin rules: {err}"))
+}
+
+fn load_builtin_rule_files() -> Result<BuiltinRuleFiles> {
     let mut decoded = Vec::new();
     GzDecoder::new(DEFAULT_RULE_BUNDLE)
         .read_to_end(&mut decoded)
@@ -50,7 +65,7 @@ pub fn get_builtin_rule_files() -> Result<Vec<(PathBuf, Vec<u8>)>> {
 /// If no confidence is specified, defaults to `Confidence::Medium`.
 pub fn get_builtin_rules(confidence: Option<Confidence>) -> Result<Rules> {
     let confidence = confidence.unwrap_or(Confidence::Medium);
-    let files = get_builtin_rule_files()?;
+    let files = builtin_rule_files()?;
     Rules::from_paths_and_contents(
         files.iter().map(|(path, contents)| (path.as_path(), contents.as_slice())),
         confidence,
@@ -104,5 +119,43 @@ mod test {
         let files = get_builtin_rule_files().unwrap();
         assert!(files.len() >= 100);
         assert!(files.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+    }
+
+    #[test]
+    fn builtin_rule_files_are_cached() {
+        assert!(std::ptr::eq(builtin_rule_files().unwrap(), builtin_rule_files().unwrap()));
+    }
+
+    #[test]
+    fn builtin_rules_capture_full_secrets() -> Result<()> {
+        let rules = get_builtin_rules(Some(Confidence::Low))?;
+        for (rule_id, input, expected_secret) in [
+            (
+                "kingfisher.slack.8",
+                "xoxa-2-511111111-31111111111-3111111111111-e039d02840a0b9379c",
+                "xoxa-2-511111111-31111111111-3111111111111-e039d02840a0b9379c",
+            ),
+            (
+                "kingfisher.html.1",
+                "<input type=\"password\" value=\"Jasper@Admin2024!\" />",
+                "Jasper@Admin2024!",
+            ),
+            (
+                "kingfisher.html.2",
+                "<input value=\"jasper_secret_XYZ!\" type=\"password\" />",
+                "jasper_secret_XYZ!",
+            ),
+        ] {
+            let rule = rules.rules.get(rule_id).expect("builtin rule should exist");
+            let regex = rule.as_regex()?;
+            let captures = regex
+                .captures(input.as_bytes())
+                .unwrap_or_else(|| panic!("{rule_id} should match its example"));
+            let capture = captures
+                .get(1)
+                .unwrap_or_else(|| panic!("{rule_id} should capture its example secret"));
+            assert_eq!(capture.as_bytes(), expected_secret.as_bytes(), "{rule_id}");
+        }
+        Ok(())
     }
 }
