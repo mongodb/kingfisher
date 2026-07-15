@@ -64,7 +64,10 @@ depends = "$auto"
 section = "utils"
 priority = "optional"
 assets = [
-    ["target/release/kingfisher", "/usr/bin/kingfisher", "755"]
+    ["target/release/kingfisher", "/usr/bin/kingfisher", "755"],
+    ["NOTICE", "/usr/share/doc/kingfisher/NOTICE", "644"],
+    ["THIRD_PARTY_NOTICES", "/usr/share/doc/kingfisher/THIRD_PARTY_NOTICES", "644"],
+    ["vendor/vectorscan-rs/NOTICE", "/usr/share/doc/kingfisher/vectorscan-rs-NOTICE", "644"]
 ]
 
 [package.metadata.generate-rpm]
@@ -73,7 +76,10 @@ summary = "MongoDB's blazingly fast and accurate secret scanning and validation 
 license = "Apache-2.0"
 url = "https://github.com/mongodb/kingfisher"
 assets = [
-    { source = "target/release/kingfisher", dest = "/usr/bin/kingfisher", mode = "755" }
+    { source = "target/release/kingfisher", dest = "/usr/bin/kingfisher", mode = "755" },
+    { source = "NOTICE", dest = "/usr/share/doc/kingfisher/NOTICE", mode = "644", doc = true },
+    { source = "THIRD_PARTY_NOTICES", dest = "/usr/share/doc/kingfisher/THIRD_PARTY_NOTICES", mode = "644", doc = true },
+    { source = "vendor/vectorscan-rs/NOTICE", dest = "/usr/share/doc/kingfisher/vectorscan-rs-NOTICE", mode = "644", doc = true }
 ]
 
 [dependencies]

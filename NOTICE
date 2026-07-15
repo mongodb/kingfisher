@@ -1,5 +1,9 @@
 NOTICE file corresponding to Section 4 (d) of the Apache License, Version 2.0
 
+This file contains manual attributions for incorporated or derived source
+material. Rust dependency notices are generated separately in
+THIRD_PARTY_NOTICES.
+
 --------------------------------------------------------------------
 Notices for Kingfisher
 --------------------------------------------------------------------
@@ -138,12 +142,16 @@ SOFTWARE.
 --------------------------------------------------------------------
 
 Certain detection rules:
+ * crates/kingfisher-rules/data/rules/anthropic.yml
+ * crates/kingfisher-rules/data/rules/cielo.yml
  * crates/kingfisher-rules/data/rules/etsy.yml
  * crates/kingfisher-rules/data/rules/flutterwave.yml
  * crates/kingfisher-rules/data/rules/freemius.yml
  * crates/kingfisher-rules/data/rules/jfrog.yml
  * crates/kingfisher-rules/data/rules/kraken.yml
  * crates/kingfisher-rules/data/rules/kucoin.yml
+ * crates/kingfisher-rules/data/rules/pinecone.yml
+ * crates/kingfisher-rules/data/rules/resend.yml
  * crates/kingfisher-rules/data/rules/trello.yml
 
 are derived in part from Gitleaks (https://github.com/gitleaks/gitleaks),

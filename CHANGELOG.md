@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.107.0]
+- Added detection and validation rules for 25+ new provider families: Anthropic, Airtable, Browserbase, Cartesia, Cielo, Civo, Exoscale, Greptile, Infomaniak, Kimi (Moonshot AI), LightOn, Mailgun, MessageBird, Nango, New Relic, Novu, OVHcloud, PlanetScale, Polymarket, Silicon Flow, Twitter/X, Turso, Upstage, Yandex — plus expanded Slack, Volcengine, JWT, Linear, and Pinecone coverage. Built-in coverage is now 1,005 rules (875 standalone detectors + 130 dependent rules), with 511 standalone detectors supporting live validation.
+- Migrated the TLS and JWT-signing crypto backend from `ring` to `aws-lc-rs` across all validators (GCP, Postgres, raw), the main binary's default provider installation, the MongoDB driver, and gcloud-storage, consolidating on a single FIPS-eligible crypto provider.
+- Reduced dependency footprint and binary size: removed `include_dir` and `color-backtrace`; trimmed `clap` to `default-features = false` and `tokio` from `"full"` to specific features; added per-package `opt-level = "z"` for cold crates in the release profile. Viewer assets and builtin rules are now gzip-compressed at build time via `build.rs` and lazily decompressed at runtime, replacing `include_dir` directory embedding.
+- Improved Docker builds in the Makefile: added `SKIP_TESTS=1` to skip tests, a separate `CARGO_TARGET_DIR=target-docker` to avoid clobbering host build artifacts, and `bash` to the Alpine package list.
+- Reworked `--access-map` provider parsing from clap `ValueEnum` to a custom `FromStr` parser with flexible aliases (`mongo`, `hf`, `wandb`, `msteams`, `brevo`, `do`, `ibm`, `tfc`, etc.) and clearer error messages.
+
 ## [v1.106.0]
 - Added 3 detection rules derived from Titus: `kingfisher.ansible.1` (Ansible Vault encrypted secret blobs), `kingfisher.html.1` (credentials pre-populated in HTML `<input type="password">` value attributes), and `kingfisher.jamf.3` (JAMF Pro API client credentials with OAuth2 client-credentials validation via the Jamf Pro `/api/v1/oauth/token` endpoint). Also added `kingfisher.jamf.1` and `kingfisher.jamf.2` as invisible helper rules capturing the Jamf Pro server URL and API client ID. Built-in coverage is now 1,005 rules (875 standalone detectors + 130 dependent rules), with 511 standalone detectors supporting live validation.
 - Added `$ANSIBLE_VAULT` and `<input` to the self-identifying pattern markers in `rules_database.rs` so these structurally-anchored rules bypass the HTML/CSS parser context gate.
