@@ -1,13 +1,13 @@
 ---
 title: "Built-in Rules List"
-description: "Complete list of all 1006 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
+description: "Complete list of all 1007 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
 ---
 
 # Built-in Rules
 
-Kingfisher ships with **1006 detection rules** across **601 providers**
-(876 detectors + 130 dependent rules).
-Of these, **511** include live validation and **52** support direct revocation.
+Kingfisher ships with **1007 detection rules** across **601 providers**
+(877 detectors + 130 dependent rules).
+Of these, **512** include live validation and **52** support direct revocation.
 
 !!! tip "Search"
     Use the search box below to filter rules by provider name, rule ID, or confidence level.
@@ -2207,6 +2207,14 @@ Of these, **511** include live validation and **52** support direct revocation.
 <td>Disqus</td>
 <td>Disqus API Key</td>
 <td><code>kingfisher.disqus.1</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Disqus</td>
+<td>Disqus API Secret</td>
+<td><code>kingfisher.disqus.2</code></td>
 <td>Medium</td>
 <td>Yes</td>
 <td></td>
