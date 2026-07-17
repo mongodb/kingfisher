@@ -13,7 +13,7 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - 'Bearer: ciotgp8BGZBlX192iExSQPm0SrUlBunG8zd'
+      - "Bearer: ciotgp8BGZBlX192iExSQPm0SrUlBunG8zd"
     references:
       - https://blog.rust-lang.org/2023/09/22/crates-io-usage-policy-rfc
       - https://github.com/rust-lang/crates.io/tree/main/src

@@ -1,7 +1,7 @@
 rules:
   - name: AssemblyAI API Key
     id: kingfisher.assemblyai.1
-    pattern: |         
+    pattern: |
       (?xi)        
       \b
       assemblyai
@@ -20,8 +20,8 @@ rules:
       - assemblyai = fa0ed91518b345468f9df7570f31f18a
       - assemblyai_token = a741b921ae1f4446826a784726b6a71a
     references:
-      - https://www.assemblyai.com/docs/api-reference/overview  
-      - https://www.assemblyai.com/docs/api-reference/transcripts/list 
+      - https://www.assemblyai.com/docs/api-reference/overview
+      - https://www.assemblyai.com/docs/api-reference/transcripts/list
 
     validation:
       type: Http
@@ -30,12 +30,12 @@ rules:
           method: GET
           url: https://api.assemblyai.com/v2/transcript?limit=1
           headers:
-            Authorization: '{{ TOKEN }}'
+            Authorization: "{{ TOKEN }}"
           response_matcher:
             - report_response: true
-            - type: StatusMatch       
+            - type: StatusMatch
               status: [200]
             - type: JsonValid
-            - type: WordMatch         
+            - type: WordMatch
               match_all_words: true
               words: ['"page_details"', '"transcripts"']

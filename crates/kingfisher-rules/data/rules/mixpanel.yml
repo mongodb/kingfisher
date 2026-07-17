@@ -24,7 +24,7 @@ rules:
       - "Mixpanel SECRET Token\na2813cd4502f94a77de470f2d7adc8d7" # nosemgrep
     negative_examples:
       - 'MIXPANEL_URL="https://api.mixpanel.com"'
-      - 'mixpanel_project_id=12345'
+      - "mixpanel_project_id=12345"
     references:
       - https://developer.mixpanel.com/reference/authentication
       - https://developer.mixpanel.com/reference/overview
@@ -134,7 +134,7 @@ rules:
     confidence: medium
     visible: false
     examples:
-      - 'MIXPANEL_USERNAME=kingfisher-svc-1.b500ae.mp-service-account'
-      - 'kingfisher-svc-2.6c6256.mp-service-account'
+      - "MIXPANEL_USERNAME=kingfisher-svc-1.b500ae.mp-service-account"
+      - "kingfisher-svc-2.6c6256.mp-service-account"
     references:
       - https://developer.mixpanel.com/reference/service-accounts

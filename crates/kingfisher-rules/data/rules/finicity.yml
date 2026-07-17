@@ -27,7 +27,7 @@ rules:
           url: https://api.finicity.com/aggregation/v2/transactions
           headers:
             Content-Type: application/json
-            x-finicity-app-key: '{{ TOKEN }}'
+            x-finicity-app-key: "{{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: WordMatch
@@ -35,7 +35,7 @@ rules:
                 - '"transactions":'
     references:
       - https://docs.finicity.com/
-    
+
   - name: Finicity client secret
     id: kingfisher.finicity.2
     pattern: |
@@ -47,7 +47,7 @@ rules:
       (                        
         [a-z0-9]{20}
       )                        
-      \b                       
+      \b
     min_entropy: 3.5
     confidence: medium
     examples:
@@ -60,7 +60,7 @@ rules:
           url: https://api.finicity.com/aggregation/v2/customers
           headers:
             Content-Type: application/json
-            x-finicity-secret: '{{ TOKEN }}'
+            x-finicity-secret: "{{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

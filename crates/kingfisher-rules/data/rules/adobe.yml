@@ -25,8 +25,8 @@ rules:
       content:
         request:
           headers:
-            x-api-key: '{{ TOKEN }}'
-            x-product: '{{ PRODUCTID }}'
+            x-api-key: "{{ TOKEN }}"
+            x-product: "{{ PRODUCTID }}"
           method: GET
           response_matcher:
             - report_response: true
@@ -69,12 +69,12 @@ rules:
     min_entropy: 3.5
     examples:
       - |
-          {
-            "adobe_client_credentials": {
-              "client_id": "a65b0146769d433a835f36660881db50",
-              "client_secret": "p8e-ibndcvsmAp9ZgPBZ606FSlYIZVlsZ-g5"
-            }
+        {
+          "adobe_client_credentials": {
+            "client_id": "a65b0146769d433a835f36660881db50",
+            "client_secret": "p8e-ibndcvsmAp9ZgPBZ606FSlYIZVlsZ-g5"
           }
+        }
     depends_on_rule:
       - rule_id: "kingfisher.adobe.4"
         variable: ADOBE_CLIENT_ID
@@ -88,7 +88,7 @@ rules:
             Authorization: 'Basic {{ ADOBE_CLIENT_ID | append: ":" | append: TOKEN | b64enc }}'
             Content-Type: application/x-www-form-urlencoded
             Accept: application/json
-          body: 'code=invalid_code&grant_type=authorization_code'
+          body: "code=invalid_code&grant_type=authorization_code"
           response_matcher:
             - report_response: true
             - type: StatusMatch
@@ -119,9 +119,9 @@ rules:
     visible: false
     examples:
       - |
-          {
-            "adobe_client_credentials": {
-              "client_id": "a65b0146769d433a835f36660881db50",
-              "client_secret": "p8e-ibndcvsmAp9ZgPBZ606FSlYIZVlsZ-g5"
-            }
+        {
+          "adobe_client_credentials": {
+            "client_id": "a65b0146769d433a835f36660881db50",
+            "client_secret": "p8e-ibndcvsmAp9ZgPBZ606FSlYIZVlsZ-g5"
           }
+        }

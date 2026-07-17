@@ -13,8 +13,8 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'XATA_API_KEY=xau_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q'
-      - 'Authorization: Bearer xau_Z9y8X7w6V5u4T3s2R1qPoNmLkJiHgFeDc'
+      - "XATA_API_KEY=xau_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6Q"
+      - "Authorization: Bearer xau_Z9y8X7w6V5u4T3s2R1qPoNmLkJiHgFeDc"
     references:
       - https://xata.io/docs/concepts/api-keys
     validation:

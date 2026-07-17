@@ -17,7 +17,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'beamer = b_ByDfulghx2vmHbArJSF9QhxemJPQHOwplxuydlKEEbfe'
+      - "beamer = b_ByDfulghx2vmHbArJSF9QhxemJPQHOwplxuydlKEEbfe"
       - "BEAMER_key = 'b_ByDfulghxvvmHb3rJSFfQhxe5JPQHOwplxuydlKEEbfe'"
     references:
       - https://getbeamer-api.pages.dev/
@@ -26,7 +26,7 @@ rules:
       content:
         request:
           headers:
-            Beamer-Api-Key: '{{ TOKEN }}'
+            Beamer-Api-Key: "{{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true

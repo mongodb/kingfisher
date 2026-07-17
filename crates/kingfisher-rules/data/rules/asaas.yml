@@ -12,8 +12,8 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'ASAAS_API_KEY=$aact_prod_abcdefghijklmnop1234567890ABCDEF'
-      - 'api_token: $aact_hmlg_abcdefghijklmnop1234567890ABCDEF'
+      - "ASAAS_API_KEY=$aact_prod_abcdefghijklmnop1234567890ABCDEF"
+      - "api_token: $aact_hmlg_abcdefghijklmnop1234567890ABCDEF"
     validation:
       type: Http
       content:

@@ -34,8 +34,8 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - 'FRESHDESK_API_KEY=abcdefghij1234567890'
-      - 'freshdesk token: ABCDEFGHIJ1234567890'
+      - "FRESHDESK_API_KEY=abcdefghij1234567890"
+      - "freshdesk token: ABCDEFGHIJ1234567890"
     references:
       - https://developers.freshdesk.com/api/#authentication
       - https://developers.freshworks.com/docs/app-sdk/v3.0/support_agent/rest-apis/
@@ -51,7 +51,7 @@ rules:
           headers:
             Accept: application/json
             # Freshdesk API key auth is HTTP Basic where username=apikey and password can be any dummy value (commonly "X").
-            # Docs note you can use a dummy password and (when using Authorization header) base64("apikey:X")  
+            # Docs note you can use a dummy password and (when using Authorization header) base64("apikey:X")
             Authorization: "Basic {{ TOKEN | append: ':X' | b64enc }}"
           response_matcher:
             - report_response: true

@@ -23,7 +23,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'ELASTIC_CLOUD_API_KEY=VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=='
+      - "ELASTIC_CLOUD_API_KEY=VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=="
     references:
       - https://www.elastic.co/docs/deploy-manage/api-keys/elastic-cloud-api-keys
     validation:
@@ -59,7 +59,7 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'Authorization: ApiKey VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=='
+      - "Authorization: ApiKey VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=="
     references:
       - https://www.elastic.co/guide/en/elasticsearch/reference/current/security-api-create-api-key.html
     validation:

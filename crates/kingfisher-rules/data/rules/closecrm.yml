@@ -20,7 +20,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'CLOSE_API_KEY=api_7b8KOSMa0OevK9qJvT6F9s.2H3Bt8ktGaQ9kVK45P7j7p'
+      - "CLOSE_API_KEY=api_7b8KOSMa0OevK9qJvT6F9s.2H3Bt8ktGaQ9kVK45P7j7p"
       - 'close_key: "api_aBcDeFgHiJkLmNoPqRsT.uVwXyZ0123456789abcD"'
     references:
       - https://developer.close.com/

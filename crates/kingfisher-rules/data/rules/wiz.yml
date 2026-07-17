@@ -58,7 +58,7 @@ rules:
           url: https://auth.app.wiz.io/oauth/token
           headers:
             Content-Type: application/x-www-form-urlencoded
-          body: 'grant_type=client_credentials&client_id={{ CLIENT_ID }}&client_secret={{ TOKEN }}&audience=wiz-api'
+          body: "grant_type=client_credentials&client_id={{ CLIENT_ID }}&client_secret={{ TOKEN }}&audience=wiz-api"
           response_matcher:
             - report_response: true
             - type: StatusMatch

@@ -28,6 +28,6 @@ rules:
             - type: StatusMatch
               status: [200]
             - type: WordMatch
-              words: ["id", "versionId"] 
+              words: ["id", "versionId"]
     references:
       - https://docs.nvidia.com/cloud-functions/index.html

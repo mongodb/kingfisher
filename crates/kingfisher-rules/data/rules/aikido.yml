@@ -16,7 +16,7 @@ rules:
     confidence: medium
     visible: false
     examples:
-      - 'AIK_CLIENT_ID=AIK_CLIENT_a1B2c3D4e5F6g7H8i9J0k1L2'
+      - "AIK_CLIENT_ID=AIK_CLIENT_a1B2c3D4e5F6g7H8i9J0k1L2"
     references:
       - https://apidocs.aikido.dev/reference/authorization
       - https://apidocs.aikido.dev/reference/getaccesstoken
@@ -37,7 +37,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'AIK_CLIENT_SECRET=AIK_SECRET_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V2w3X4y5Z6a7B8c9D0e1F2'
+      - "AIK_CLIENT_SECRET=AIK_SECRET_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V2w3X4y5Z6a7B8c9D0e1F2"
     depends_on_rule:
       - rule_id: kingfisher.aikido.2
         variable: CLIENT_ID
@@ -77,7 +77,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'AIKIDO_TOKEN=AIK_CI_a1B2c3D4e5F6g7H8i9J0k1L2'
+      - "AIKIDO_TOKEN=AIK_CI_a1B2c3D4e5F6g7H8i9J0k1L2"
     references:
       - https://help.aikido.dev/pr-and-release-gating/cli-for-pr-and-release-gating/aikido-ci-api
     validation:
@@ -89,7 +89,7 @@ rules:
           headers:
             X-AIK-API-SECRET: "{{ TOKEN }}"
             Content-Type: application/json
-          body: '{}'
+          body: "{}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

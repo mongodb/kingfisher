@@ -16,7 +16,7 @@ rules:
     confidence: medium
     examples:
       - 'DRYRUN_API_KEY="dryrunsec_XRO3RsNlZm4M3VyZoPb02PzTv7yaEWoF"'
-      - 'Authorization: Bearer dryrunsec_hdKJINE3Bbe4SI3MsP4RoeCp5oY31MLZ'
+      - "Authorization: Bearer dryrunsec_hdKJINE3Bbe4SI3MsP4RoeCp5oY31MLZ"
       - "dryrun_token=dryrunsec_1lTU5w3SuCqJ59aqmri3rhLVJtabQ0BM"
     references:
       - https://docs.dryrun.security/

@@ -14,7 +14,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'AWS_ACCESS_KEY_ID=LSIAQAAAAAAVNCBMPN59'
-      - 'aws_access_key=LKIAQAAAAAAVNCBMPN59'
+      - "AWS_ACCESS_KEY_ID=LSIAQAAAAAAVNCBMPN59"
+      - "aws_access_key=LKIAQAAAAAAVNCBMPN59"
     references:
       - https://docs.localstack.cloud/aws/capabilities/config/credentials/

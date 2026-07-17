@@ -19,8 +19,8 @@ rules:
     min_entropy: 3.5
     confidence: high
     examples:
-      - "configuration.api_key['api-secret-key'] = \"A1B2C3D4-123F-789B-8730-BFB8F436C404:8C8ABCB9-C17A-4074-B439-C80F512FCC8A:0b84PcDP8pMKfhY28a5cTXL03bgrMnPYHzuKLxwvz8U=\""
-      - "api_secret_key = \"E5F6A7B8-1234-5678-ABCD-EF0123456789:12345678-ABCD-1234-ABCD-123456789ABC:Xk93PcDP8pMKfhY28a5cTXL03bgrMnPYHzuKLxwvXY=\""
+      - 'configuration.api_key[''api-secret-key''] = "A1B2C3D4-123F-789B-8730-BFB8F436C404:8C8ABCB9-C17A-4074-B439-C80F512FCC8A:0b84PcDP8pMKfhY28a5cTXL03bgrMnPYHzuKLxwvz8U="'
+      - 'api_secret_key = "E5F6A7B8-1234-5678-ABCD-EF0123456789:12345678-ABCD-1234-ABCD-123456789ABC:Xk93PcDP8pMKfhY28a5cTXL03bgrMnPYHzuKLxwvXY="'
     references:
       - https://automation.deepsecurity.trendmicro.com/article/20_0/api-reference/
       - https://cloudone.trendmicro.com/docs/account-and-user-management/c1-api-key/
@@ -58,7 +58,7 @@ rules:
     min_entropy: 3.5
     confidence: high
     examples:
-      - "apikey = \"tmc19x73r7hegUnG30NSt8BO3UxoY3Z:8TdvS0r4ncyB7audRVbMSc2rSehMQWfXCkSJ9crBr0F0rc3GU4nd3rBr0bLernrSp8\""
+      - 'apikey = "tmc19x73r7hegUnG30NSt8BO3UxoY3Z:8TdvS0r4ncyB7audRVbMSc2rSehMQWfXCkSJ9crBr0F0rc3GU4nd3rBr0bLernrSp8"'
       - "TMC_API_KEY=tmc1AbCdEfGhIjKlMnOpQrStUvWxYz12:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB"
     references:
       - https://cloudone.trendmicro.com/docs/account-and-user-management/c1-api-key/

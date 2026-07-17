@@ -48,7 +48,7 @@ rules:
       content:
         request:
           headers:
-            Accept: '*/*'
+            Accept: "*/*"
             Authorization: "Basic {{ TWILIOID | append: ':' | append: TOKEN | b64enc }}"
             Content-Type: application/x-www-form-urlencoded
           method: GET
@@ -65,7 +65,7 @@ rules:
     depends_on_rule:
       - rule_id: "kingfisher.twilio.1"
         variable: TWILIOID
-    
+
     revocation:
       type: HttpMultiStep
       content:
@@ -87,7 +87,7 @@ rules:
               ACCOUNT_SID:
                 type: JsonPath
                 path: "$.accounts[0].sid"
-          
+
           # Step 2: Delete the API key using the TWILIOID (should be SK...) and ACCOUNT_SID
           # Note: This assumes TWILIOID is an API Key SID (SK...). If it's an Account SID (AC...),
           # this will fail, but you typically don't delete account SIDs.

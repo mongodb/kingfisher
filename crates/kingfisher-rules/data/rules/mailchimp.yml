@@ -19,7 +19,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'mailchimp_token = abcdef1234567890abcdef1234567890-us1'
+      - "mailchimp_token = abcdef1234567890abcdef1234567890-us1"
       - 'mailchimp_key = "0123456789abcdeffedcba9876543210-us20"'
     validation:
       type: Http

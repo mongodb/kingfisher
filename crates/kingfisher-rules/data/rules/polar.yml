@@ -5,7 +5,7 @@ rules:
       (?x)
       \b
       (
-        polar_(?:at|oat|rt)_[a-zA-Z0-9_-]{20,100}
+        polar_(?:at|oat|rt)_[a-zA-Z0-9_-]{20,60}
       )
       \b
     pattern_requirements:
@@ -14,10 +14,13 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'POLAR_TOKEN=polar_at_AbCdEfGhIjKlMnOpQrStUvWxYz1234'
-      - 'polar_org_token: polar_oat_AbCdEfGhIjKlMnOpQrStUvWx12'
+      - "POLAR_TOKEN=polar_at_AbCdEfGhIjKlMnOpQrStUvWxYz1234"
+      - "polar_org_token: polar_oat_AbCdEfGhIjKlMnOpQrStUvWx12"
     references:
       - https://docs.polar.sh/api/authentication
+      - https://polar.sh/docs/integrate/oauth2/connect
+      - https://github.com/polarsource/polar/blob/4208a33491927431a6d5a84b4a8ae5616bc0813a/docs/integrate/oauth2/connect.mdx
+      - https://github.com/polarsource/polar-js/blob/63510677499a41e9694be83a96aafbafc750d7f6/src/funcs/customerPortalCustomersGet.ts
     validation:
       type: Http
       content:

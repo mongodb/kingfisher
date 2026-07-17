@@ -6,9 +6,9 @@ rules:
     confidence: low
     pattern_requirements:
       ignore_if_contains:
-        - "ZXhhbXBsZQ=="     # "example" (base64)
-        - "cGFzc3dvcmQ="     # "password" (base64)
-        - "Y2hhbmdlbWU="     # "changeme" (base64)
+        - "ZXhhbXBsZQ==" # "example" (base64)
+        - "cGFzc3dvcmQ=" # "password" (base64)
+        - "Y2hhbmdlbWU=" # "changeme" (base64)
     examples:
       - '<Pass encoding="base64">VGhpc0lzQVRlc3RQYXNzd29yZA==</Pass>'
       - '<FileZilla3><RecentServers><Server><Pass encoding="base64">NjllNWU5ZWMwZDU0MmU5Y2QwOTY4MWM5YzZhMDdkYWVmNjg3OWE3MDMzM2Q4MWJmCg==</Pass></Server></RecentServers></FileZilla3>'

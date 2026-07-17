@@ -105,7 +105,7 @@ rules:
             - match_all_words: true
               type: WordMatch
               words:
-                - 'data:'
+                - "data:"
                 - email
                 - name
           url: https://app.asana.com/api/1.0/users/me
@@ -149,7 +149,7 @@ rules:
             - match_all_words: true
               type: WordMatch
               words:
-                - 'data:'
+                - "data:"
                 - email
                 - name
           url: https://app.asana.com/api/1.0/users/me
@@ -195,7 +195,7 @@ rules:
             - match_all_words: true
               type: WordMatch
               words:
-                - 'data:'
+                - "data:"
                 - email
                 - name
           url: https://app.asana.com/api/1.0/users/me

@@ -129,11 +129,11 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - 'TRUENAS_API_KEY=8-Lp22ov7halMBLUpG97Wg4y7fibQi3CW19VJiZcCu746zgCs0mdDdTCoOcpgEucgu'
+      - "TRUENAS_API_KEY=8-Lp22ov7halMBLUpG97Wg4y7fibQi3CW19VJiZcCu746zgCs0mdDdTCoOcpgEucgu"
       - 'truenas_token: "10-6LZBVhNq8zze0rzXJptfSWDBoskWuThnQb3fUVw4sVNgJ7GKT3ITVIovhwPf34oL"'
       - '"truenas_api_key": "9-hTSZDBPyg0PjRZvWb8omoxJ7X2gAjRGmiPKql9ENGIUP9OPtEAzz5f6g9YIMVbZT"'
       - 'tn_api_key = "8-Lp22ov7halMBLUpG97Wg4y7fibQi3CW19VJiZcCu746zgCs0mdDdTCoOcpgEucgu"'
-      - 'true-nas_secret=9-hTSZDBPyg0PjRZvWb8omoxJ7X2gAjRGmiPKql9ENGIUP9OPtEAzz5f6g9YIMVbZT'
+      - "true-nas_secret=9-hTSZDBPyg0PjRZvWb8omoxJ7X2gAjRGmiPKql9ENGIUP9OPtEAzz5f6g9YIMVbZT"
     references:
       - https://www.truenas.com/docs/api/core_websocket_api.html
       - https://www.truenas.com/docs/api/scale_rest_api.html

@@ -25,7 +25,7 @@ rules:
           method: GET
           url: https://app.launchdarkly.com/api/v2/members
           headers:
-            Authorization: '{{ TOKEN }}'
+            Authorization: "{{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true

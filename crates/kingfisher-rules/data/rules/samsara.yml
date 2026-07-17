@@ -16,7 +16,7 @@ rules:
     min_entropy: 3.0
     confidence: high
     examples:
-      - "access_token = \"samsara_api_8ZWXxCINWCRGi9qRl9JEz90x5lxAHU\""
+      - 'access_token = "samsara_api_8ZWXxCINWCRGi9qRl9JEz90x5lxAHU"'
       - "SAMSARA_TOKEN=samsara_api_AbCdEfGhIjKlMnOpQrStUvWxYz0123"
     references:
       - https://developers.samsara.com/reference

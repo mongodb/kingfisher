@@ -18,7 +18,7 @@ rules:
     confidence: medium
     examples:
       - 'duplocloud token = "AQAAANCMnd8BFdERjHor3J1TWDtkwtDDb_xHKas1VOqg6YYZYn9ZhyiA4uoRgnatmUdjAWtGSU8po_799NksnRH9ucAUsdMlHUvTCQCyEZDz-TddJ8HyS5SUkCnD8zRA9a9SkpXz9w3QlY7Zkuvqdt7s8Stqcbnr3yBdGBLEPH1qhT61qtc4xatws8phP9nhFyJfm5di4PzJ59FHz5r1pY4OjE2jBMptUsGr7CmY_uCu3ZR1zTOlUcR64cXQLioDnkHIfxIq2HZt-PlJhx2jIcl"'
-      - 'duplocloud_api_key: AQAAANCMnd8BFdERjHoHkCiHp6bR1IqfEouHgxzNNAL5wIScGebcy8F5n3-YNBDRzrZSgqbjG3uhkWKFLf6xuI5aHUQPFeNBTxaQWk8JzFalHlsZfYcMMDktXP-tKsf2rcDkdfrUnW5gcF_Ha6ili8GjHEAD6-Wj9KfzjsQGMrb9h_ImB_LK777pzNk8cL6j5IXAAjlsHUqJoUD-_Ydua_5ZMs1SWOpQaPRYpzbLGViYXjU2JgJngKtFI3OyV2dZAkg'
+      - "duplocloud_api_key: AQAAANCMnd8BFdERjHoHkCiHp6bR1IqfEouHgxzNNAL5wIScGebcy8F5n3-YNBDRzrZSgqbjG3uhkWKFLf6xuI5aHUQPFeNBTxaQWk8JzFalHlsZfYcMMDktXP-tKsf2rcDkdfrUnW5gcF_Ha6ili8GjHEAD6-Wj9KfzjsQGMrb9h_ImB_LK777pzNk8cL6j5IXAAjlsHUqJoUD-_Ydua_5ZMs1SWOpQaPRYpzbLGViYXjU2JgJngKtFI3OyV2dZAkg"
     references:
       - https://docs.duplocloud.com/docs/user-administration/access-control/api-tokens
     # DuploCloud API keys are tenant-scoped DPAPI tokens encrypted with DPAPI (Windows Data Protection API).

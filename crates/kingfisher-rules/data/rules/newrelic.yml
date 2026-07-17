@@ -28,8 +28,8 @@ rules:
         request:
           method: GET
           headers:
-            X-Api-Key: '{{ TOKEN }}'
-          url: https://api.newrelic.com/v2/servers.json   
+            X-Api-Key: "{{ TOKEN }}"
+          url: https://api.newrelic.com/v2/servers.json
           response_matcher:
             - report_response: true
             - type: StatusMatch

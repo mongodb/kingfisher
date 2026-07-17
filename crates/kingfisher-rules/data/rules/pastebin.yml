@@ -25,7 +25,7 @@ rules:
       content:
         request:
           method: POST
-          url: https://pastebin.com/api/api_login.php    
+          url: https://pastebin.com/api/api_login.php
           headers:
             Content-Type: application/x-www-form-urlencoded
           body: |
@@ -33,9 +33,9 @@ rules:
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status: [200]                                   
-            - type: WordMatch                                
-              words: ['invalid api_dev_key']
+              status: [200]
+            - type: WordMatch
+              words: ["invalid api_dev_key"]
               negative: true
     references:
       - https://pastebin.com/doc_api

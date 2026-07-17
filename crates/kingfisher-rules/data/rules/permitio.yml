@@ -15,10 +15,12 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'PERMIT_API_KEY=permit_key_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789ABCDEFGHIJKLMNOPQRSTUVW'
-      - 'permit_key: "permit_key_9876543210zyxwvutsrqponmlkjihgfedcbaZYXWVUTSRQPONMLKJIHGFEDCBA9876543210zyxwvutsrqponm"'
+      - "PERMIT_API_KEY=permit_key_j0ZtQbuIqRaz5adIpZJB4JneoffsVGGyny71WrpD7NwISEFOElIhx1uhZdFuBwsDVpbeJ8mBqht7ydrCWWqQuP"
+      - 'permit_key: "permit_key_dyl2zhOIm2EXssDKP33JGbqGKKPiZarQjl0AcL7ZYvsYsLz2zFGDWcdRghccmR0EEJF5TS8c99g5ItDHl87alW"'
     references:
       - https://docs.permit.io/overview/get-api-key/
+      - https://github.com/permitio/docs/blob/4a891fcc32d802d259985bc6165565f9946d91e7/docs/overview/use-the-permit-api-and-sdk.mdx
+      - https://github.com/permitio/permit-cli/blob/12b46b87b00fbba0b95217e3a072fbd4d89105f1/README.md
     validation:
       type: Http
       content:

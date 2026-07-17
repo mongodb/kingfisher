@@ -33,7 +33,7 @@ rules:
           url: https://api.unsplash.com/photos?page=1&per_page=1
           headers:
             Accept-Version: v1
-            Authorization: 'Client-ID {{ TOKEN }}'
+            Authorization: "Client-ID {{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

@@ -40,6 +40,6 @@ rules:
               type: WordMatch
               words:
                 - "Text is required"
-          url: '{{ TOKEN }}'
+          url: "{{ TOKEN }}"
     references:
       - https://learn.microsoft.com/en-us/microsoftteams/platform/webhooks-and-connectors/how-to/add-incoming-webhook

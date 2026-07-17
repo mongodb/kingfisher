@@ -18,7 +18,7 @@ rules:
     min_entropy: 3.5
     confidence: high
     examples:
-      - "nx_cloud_token = \"UDM4ZGY4NWUtZDU4ZS01Z2I4LWNkZWUtYjcyMTAzN2RjOGI0fHJlYWQtd3JpdGU=\""
+      - 'nx_cloud_token = "UDM4ZGY4NWUtZDU4ZS01Z2I4LWNkZWUtYjcyMTAzN2RjOGI0fHJlYWQtd3JpdGU="'
       - "NX_CLOUD_TOKEN=VEN5ZWY5NmYtZTY5Zi02aGM5LWRlZmYtYzgzMjE0OGVkOWM1fHJlYWQtb25seQ==\n"
     references:
       - https://nx.dev/ci/recipes/security/personal-access-tokens

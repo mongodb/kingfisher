@@ -16,7 +16,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'VOLCENGINE_ACCESS_KEY=AKLTY2IwOGJIMTdiZmI5NGU1MWFiNWE3MWJkNWY2MDdmOGUxYz'
+      - "VOLCENGINE_ACCESS_KEY=AKLTY2IwOGJIMTdiZmI5NGU1MWFiNWE3MWJkNWY2MDdmOGUxYz"
     references:
       - https://www.volcengine.com/docs/6291/65568
 
@@ -52,7 +52,7 @@ rules:
     confidence: medium
     examples:
       - 'ARK_API_KEY="9f5a7c2e-4b10-47d8-9f2a-6b3c1d0e8a42"'
-      - 'volcengine_ark_api_key: 2a8f6d40-1c3e-4b7a-8d05-9e1f2c3a4b58'
+      - "volcengine_ark_api_key: 2a8f6d40-1c3e-4b7a-8d05-9e1f2c3a4b58"
       - 'doubao_api_key = "6e3d4c2b-9a81-4f70-b6c5-1d2e3f4a5b67"'
     references:
       - https://github.com/BenedictKing/ccx/blob/7835222674d5d1ebd475ff996856c8acdd2ba65e/frontend/src/utils/quickInputParser.ts#L72-L100

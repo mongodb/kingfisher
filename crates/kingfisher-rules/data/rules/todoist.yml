@@ -31,7 +31,7 @@ rules:
           method: GET
           url: https://api.todoist.com/api/v1/user
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

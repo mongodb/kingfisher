@@ -22,19 +22,18 @@ rules:
           method: POST
           url: https://www.nuget.org/api/v2/package/create-verification-key/Newtonsoft.Json
           headers:
-            X-NuGet-ApiKey: '{{ TOKEN }}'
-            X-NuGet-Protocol-Version: '4.1.0'
-            Content-Length: '0'
+            X-NuGet-ApiKey: "{{ TOKEN }}"
+            X-NuGet-Protocol-Version: "4.1.0"
+            Content-Length: "0"
           response_matcher:
             - report_response: true
-            - type: StatusMatch          
+            - type: StatusMatch
               status: [200]
-            - type: WordMatch            
-              words: ['"Key":']             
+            - type: WordMatch
+              words: ['"Key":']
     references:
       - https://learn.microsoft.com/en-us/nuget/api/overview#authentication
 
-          
   - name: NuGet API Key
     id: kingfisher.nuget.2
     pattern: |
@@ -59,14 +58,14 @@ rules:
           method: POST
           url: https://www.nuget.org/api/v2/package/create-verification-key/Newtonsoft.Json
           headers:
-            X-NuGet-ApiKey: '{{ TOKEN }}'
-            X-NuGet-Protocol-Version: '4.1.0'
-            Content-Length: '0'
+            X-NuGet-ApiKey: "{{ TOKEN }}"
+            X-NuGet-Protocol-Version: "4.1.0"
+            Content-Length: "0"
           response_matcher:
             - report_response: true
-            - type: StatusMatch          
+            - type: StatusMatch
               status: [200]
-            - type: WordMatch           
-              words: ['"Key":']         
+            - type: WordMatch
+              words: ['"Key":']
     references:
       - https://learn.microsoft.com/en-us/nuget/api/overview#authentication

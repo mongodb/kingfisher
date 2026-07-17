@@ -22,10 +22,10 @@ rules:
     min_entropy: 3.3
     confidence: high
     examples:
-      - 'x-api-token: 659c9fddb16335e48cc67114694b52074e812e03'
-      - 'PIPEDRIVE_API_TOKEN=740dd23ada464336f353b4d08e83c4a801fc1d86'
-      - 'x-api-token: 2592440cff58a695e33e5776160c4ee5e73e1b9c'
-      - 'pipedrive token: bbbe1b93ebbf4b0a68a752916b58c8df9b1acae8'
+      - "x-api-token: 659c9fddb16335e48cc67114694b52074e812e03"
+      - "PIPEDRIVE_API_TOKEN=740dd23ada464336f353b4d08e83c4a801fc1d86"
+      - "x-api-token: 2592440cff58a695e33e5776160c4ee5e73e1b9c"
+      - "pipedrive token: bbbe1b93ebbf4b0a68a752916b58c8df9b1acae8"
       - |
         curl --request GET \
         --url "https://companydomain.pipedrive.com/api/v2/deals" \

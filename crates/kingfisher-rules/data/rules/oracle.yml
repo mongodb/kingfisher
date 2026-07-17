@@ -15,7 +15,7 @@ rules:
     min_entropy: 2.5
     confidence: medium
     examples:
-      - "CONNECTION_URI=\"oracle://dbuser:Tr0ub4dor&3@prod-db.example.com:1521/orcl\""
+      - 'CONNECTION_URI="oracle://dbuser:Tr0ub4dor&3@prod-db.example.com:1521/orcl"'
       - "ORACLE_URL=oracle://root:p53pgsx0pf@db.internal:5434/mydb"
     references:
       - https://docs.oracle.com/en/database/oracle/oracle-database/index.html

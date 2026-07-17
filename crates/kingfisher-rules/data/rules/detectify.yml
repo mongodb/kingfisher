@@ -18,7 +18,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'DETECTIFY_API_KEY=2230dbea-051a-47f1-bc1d-c1b73b609420'
+      - "DETECTIFY_API_KEY=2230dbea-051a-47f1-bc1d-c1b73b609420"
     references:
       - https://developer.detectify.com/
     validation:

@@ -22,7 +22,7 @@ rules:
       - clarifai_api = cf3cacafabe747988298298bffcbb459
     references:
       - https://docs.gitguardian.com/secrets-detection/secrets-detection-engine/detectors/specifics/clarifai_key
-      - https://docs.clarifai.com/control/authentication/key/ 
+      - https://docs.clarifai.com/control/authentication/key/
     validation:
       type: Http
       content:

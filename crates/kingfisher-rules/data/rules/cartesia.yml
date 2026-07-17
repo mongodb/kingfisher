@@ -15,8 +15,8 @@ rules:
       - secret
     examples:
       # Synthetic, format-valid examples; these are not issued credentials.
-      - 'CARTESIA_API_KEY=sk_car_aB3dE5fG7hI9jK1lM3nP'
-      - 'Authorization: Bearer sk_car_Jk9Lm2Np3Qr4St5Uv6Wx'
+      - "CARTESIA_API_KEY=sk_car_aB3dE5fG7hI9jK1lM3nP"
+      - "Authorization: Bearer sk_car_Jk9Lm2Np3Qr4St5Uv6Wx"
     references:
       - https://docs.cartesia.ai/use-the-api/api-conventions
       - https://docs.cartesia.ai/api-reference/voices/list

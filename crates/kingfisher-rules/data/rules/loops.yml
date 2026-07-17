@@ -18,9 +18,11 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'LOOPS_API_KEY=d2d561f5ff80136f69b4b5a31b9fb3c9'
+      - "LOOPS_API_KEY=d2d561f5ff80136f69b4b5a31b9fb3c9"
+      - "LOOPS_API_KEY=a2b94928dca54f3e9444e0b39a9ac79f"
     references:
       - https://loops.so/docs/api-reference/intro
+      - https://loops.so/docs/api-reference/api-key
     validation:
       type: Http
       content:
@@ -37,5 +39,5 @@ rules:
             - type: WordMatch
               words:
                 - '"success"'
-                - 'true'
+                - "true"
               match_all_words: true

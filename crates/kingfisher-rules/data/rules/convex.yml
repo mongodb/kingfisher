@@ -17,9 +17,9 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'CONVEX_DEPLOY_KEY=prod:qualified-jaguar-123|eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiIwMThmNmY5NThmNTI3NjkwYjE1M2NkNDMiLCJpYXQiOjE3MjQ3NzA4MTJ9.bQkJz3sXt'
-      - 'CONVEX_DEPLOY_KEY=preview:my-team:my-project|eyJ2ZXIiOiIxIiwiYWxnIjoiSFMyNTYifQ.eyJpc3MiOiJjb252ZXgifQ.dGVzdA=='
-      - 'CONVEX_DEPLOY_KEY=project:my-team:my-project|eyJ2ZXIiOiIxIiwiYWxnIjoiSFMyNTYifQ.eyJpc3MiOiJjb252ZXgifQ.dGVzdA=='
+      - "CONVEX_DEPLOY_KEY=prod:qualified-jaguar-123|eyJhbGciOiJIUzI1NiJ9.eyJpc3MiOiIwMThmNmY5NThmNTI3NjkwYjE1M2NkNDMiLCJpYXQiOjE3MjQ3NzA4MTJ9.bQkJz3sXt"
+      - "CONVEX_DEPLOY_KEY=preview:my-team:my-project|eyJ2ZXIiOiIxIiwiYWxnIjoiSFMyNTYifQ.eyJpc3MiOiJjb252ZXgifQ.dGVzdA=="
+      - "CONVEX_DEPLOY_KEY=project:my-team:my-project|eyJ2ZXIiOiIxIiwiYWxnIjoiSFMyNTYifQ.eyJpc3MiOiJjb252ZXgifQ.dGVzdA=="
     references:
       - https://docs.convex.dev/cli/deploy-key-types
 
@@ -38,8 +38,8 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'CONVEX_TEAM_ACCESS_TOKEN=eyJ2MiI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIn0='
-      - 'CONVEX_PAT=eyJ2MiI6IjE1MDVkZTcxMTVjMzRlMWM5Yjg3Y2VlMGQ2NzgxNGUzIn0='
+      - "CONVEX_TEAM_ACCESS_TOKEN=eyJ2MiI6IjAxMjM0NTY3ODlhYmNkZWYwMTIzNDU2Nzg5YWJjZGVmIn0="
+      - "CONVEX_PAT=eyJ2MiI6IjE1MDVkZTcxMTVjMzRlMWM5Yjg3Y2VlMGQ2NzgxNGUzIn0="
     references:
       - https://docs.convex.dev/platform-apis
       - https://docs.convex.dev/management-api

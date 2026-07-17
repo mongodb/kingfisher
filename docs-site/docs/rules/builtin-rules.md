@@ -5,9 +5,9 @@ description: "Complete list of all 1006 built-in secret detection rules in Kingf
 
 # Built-in Rules
 
-Kingfisher ships with **1006 detection rules** across **601 providers**
+Kingfisher ships with **1006 detection rules** across **600 providers**
 (876 detectors + 130 dependent rules).
-Of these, **511** include live validation and **52** support direct revocation.
+Of these, **512** include live validation and **52** support direct revocation.
 
 !!! tip "Search"
     Use the search box below to filter rules by provider name, rule ID, or confidence level.
@@ -2212,6 +2212,14 @@ Of these, **511** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
+<td>Disqus</td>
+<td>Disqus API Secret</td>
+<td><code>kingfisher.disqus.2</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
 <td>Django</td>
 <td>Django Secret Key</td>
 <td><code>kingfisher.django.1</code></td>
@@ -3625,14 +3633,6 @@ Of these, **511** include live validation and **52** support direct revocation.
 <td><code>kingfisher.hexpm.1</code></td>
 <td>Medium</td>
 <td></td>
-<td></td>
-</tr>
-<tr>
-<td>Highnote</td>
-<td>Highnote API Key</td>
-<td><code>kingfisher.highnote.1</code></td>
-<td>Medium</td>
-<td>Yes</td>
 <td></td>
 </tr>
 <tr>
@@ -5704,7 +5704,7 @@ Of these, **511** include live validation and **52** support direct revocation.
 <td>Pollinations Secret Key</td>
 <td><code>kingfisher.pollinations.1</code></td>
 <td>Medium</td>
-<td></td>
+<td>Yes</td>
 <td></td>
 </tr>
 <tr>

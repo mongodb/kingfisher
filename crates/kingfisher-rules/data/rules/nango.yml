@@ -18,7 +18,7 @@ rules:
     confidence: medium
     examples:
       # Synthetic, format-valid examples; these are not issued credentials.
-      - 'NANGO_SECRET_KEY=123e4567-e89b-42d3-a456-426614174000'
+      - "NANGO_SECRET_KEY=123e4567-e89b-42d3-a456-426614174000"
       - 'nango api_key: "7f2c1a90-5b3d-4e68-9a21-c0d4e6f8b135"'
     references:
       - https://nango.dev/docs/reference/backend/http-api/sync/environment-variables

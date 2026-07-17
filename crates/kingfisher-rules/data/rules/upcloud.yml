@@ -14,7 +14,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'UPCLOUD_API_TOKEN=ucat_01KPW6N68RKV5WV44Y2C5CKTZY'
+      - "UPCLOUD_API_TOKEN=ucat_01KPW6N68RKV5WV44Y2C5CKTZY"
       - 'upcloud_token: "ucat_01J9K4BNZM3RGXW7VDQFTHY5PC"'
     references:
       - https://upcloud.com/docs/guides/managing-api-tokens/

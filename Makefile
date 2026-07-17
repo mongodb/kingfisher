@@ -58,7 +58,7 @@ SUDO_CMD := $(shell command -v sudo 2>/dev/null)
         darwin-arm64 darwin-x64 darwin-dev darwin darwin-all \
         require-windows-host windows-x64 windows-arm64 windows-test-x64 windows-test-arm64 windows-test windows \
         all list-archives prepare-release-notices check-docker check-rust clean tests audit-deps fuzz \
-        dockerfile docs-build docs-serve docs-clean notices
+        dockerfile docs-build docs-serve docs-clean notices yaml-fmt
 
 default: help
 
@@ -89,6 +89,7 @@ help:
 	@echo "  docs-build         Build the documentation site"
 	@echo "  docs-serve         Serve the documentation site locally"
 	@echo "  notices            Generate third-party notices"
+	@echo "  yaml-fmt           Format all built-in YAML rule files with prettier"
 	@echo "  clean              Remove build artifacts"
 
 create-dockerignore:
@@ -862,3 +863,17 @@ notices:
 	@echo "Generating third-party notices..."
 	@cargo install cargo-bundle-licenses
 	@cargo bundle-licenses --format yaml --output THIRD_PARTY_NOTICES
+
+yaml-fmt:
+	@echo "📝 Formatting YAML rule files…"
+	@if command -v prettier >/dev/null 2>&1; then \
+	    prettier --tab-width 2 --no-editorconfig --write \
+	      'crates/kingfisher-rules/data/rules/*.yml'; \
+	elif command -v npx >/dev/null 2>&1; then \
+	    npx --yes prettier --tab-width 2 --no-editorconfig --write \
+	      'crates/kingfisher-rules/data/rules/*.yml'; \
+	else \
+	    echo "❌ prettier not found. Install it via \`npm install -g prettier\` or \`brew install prettier\`."; \
+	    exit 1; \
+	fi
+	@echo "✅ YAML rule files formatted"

@@ -21,9 +21,8 @@ rules:
     confidence: medium
     examples:
       - |
-          $config = array(
-            "secret_key" => "sk_ubb4yN3mzqGR2x8#P7r5&@*xC$utE",
-          );
+        $config = array(
+          "secret_key" => "sk_ubb4yN3mzqGR2x8#P7r5&@*xC$utE",
+        );
     references:
       - https://freemius.com/help/documentation/wordpress-sdk/integrating-freemius-sdk/
-

@@ -71,7 +71,7 @@ rules:
           headers:
             Content-Type: application/x-www-form-urlencoded
             Accept: application/json
-          body: 'grant_type=client_credentials&client_id={{ CLIENT_ID | url_encode }}&client_secret={{ TOKEN | url_encode }}'
+          body: "grant_type=client_credentials&client_id={{ CLIENT_ID | url_encode }}&client_secret={{ TOKEN | url_encode }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

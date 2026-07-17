@@ -18,7 +18,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'Fastly token: fgsb3ef237afd6c1b9d91f81cdba64f3'
+      - "Fastly token: fgsb3ef237afd6c1b9d91f81cdba64f3"
     references:
       - https://developer.fastly.com/reference/api/#authentication
     validation:
@@ -26,7 +26,7 @@ rules:
       content:
         request:
           headers:
-            Fastly-Key: '{{ TOKEN }}'
+            Fastly-Key: "{{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true

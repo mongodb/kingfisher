@@ -54,7 +54,7 @@ rules:
     min_entropy: 3.8
     confidence: medium
     examples:
-      - 'Authorization: Bearer sha256~kV46hPnEYhCWFnB85r5NrprAxggzgb6GOeLbgcKNsH0'
+      - "Authorization: Bearer sha256~kV46hPnEYhCWFnB85r5NrprAxggzgb6GOeLbgcKNsH0"
       - oc login --token=sha256~ZBMKw9VAayhdnyANaHvjJeXDiGwA7Fsr5gtLKj3-eh- --server=https://api.cluster.example.com:6443
     references:
       - https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html/oauth_apis/oauthaccesstoken-oauth-openshift-io-v1
@@ -67,9 +67,9 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ OPENSHIFT_API_SERVER }}/apis/user.openshift.io/v1/users'
+          url: "{{ OPENSHIFT_API_SERVER }}/apis/user.openshift.io/v1/users"
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true

@@ -25,7 +25,7 @@ rules:
     categories: [api, key]
     examples:
       - AZURE_COSMOSDB_KEY=oqb4TdY9T0hphvktd5fJnMiHuQqzVy1jd5sSuOpAbGkaoqTlrHl0BOJN2okcasinVLOJzfDbZo1L+ASt68RAhA==
-      - 'DocumentDbAuthKey=B/1EVX2Ui47X09tqU3GI/j+Nko9r5COPm0Hea9tfzitF9MQX9lZZiNO3tYQckWnt+rtlGIWS+sCx+AStkq8ZLg=='
+      - "DocumentDbAuthKey=B/1EVX2Ui47X09tqU3GI/j+Nko9r5COPm0Hea9tfzitF9MQX9lZZiNO3tYQckWnt+rtlGIWS+sCx+AStkq8ZLg=="
     references:
       - https://learn.microsoft.com/en-us/azure/cosmos-db/how-to-obtain-account-keys
 
@@ -48,7 +48,7 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'AccountEndpoint=https://myaccount.documents.azure.com:443;AccountKey=oqb4TdY9T0hphvktd5fJnMiHuQqzVy1jd5sSuOpAbGkaoqTlrHl0BOJN2okcasinVLOJzfDbZo1L+ASt68RAhA==;'
+      - "AccountEndpoint=https://myaccount.documents.azure.com:443;AccountKey=oqb4TdY9T0hphvktd5fJnMiHuQqzVy1jd5sSuOpAbGkaoqTlrHl0BOJN2okcasinVLOJzfDbZo1L+ASt68RAhA==;"
     validation:
       type: Http
       content:
@@ -57,7 +57,7 @@ rules:
           url: "{{ COSMOS_ENDPOINT }}/dbs"
           headers:
             Accept: application/json
-            x-ms-date: '{{ REQUEST_RFC1123_DATE | downcase }}'
+            x-ms-date: "{{ REQUEST_RFC1123_DATE | downcase }}"
             x-ms-version: "2018-12-31"
             Authorization: |
               {%- assign x_ms_date = REQUEST_RFC1123_DATE | downcase -%}

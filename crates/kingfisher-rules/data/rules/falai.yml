@@ -28,10 +28,10 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'FAL_KEY=847c02a9-db27-42d5-b781-9cf5c72b3e0d:48299b8e125e5861715a35fc653a0855'
-      - 'fal.ai api key: 56673bfb-3727-48e1-a3c4-2297a7133693:f8ca0f7de94702dbe0b6797f3e8f4b42'
-      - 'falai token = 17b2a0a9-362e-4756-b981-c4ac07e77e2f:f88af09b578212a6ddc7503e314c1c94'
-      - 'fal-api = 6adacb14-1d60-4f64-85d7-b7624fa3e8e9:a30520804ec44185a563e107349cf7b7'
+      - "FAL_KEY=847c02a9-db27-42d5-b781-9cf5c72b3e0d:48299b8e125e5861715a35fc653a0855"
+      - "fal.ai api key: 56673bfb-3727-48e1-a3c4-2297a7133693:f8ca0f7de94702dbe0b6797f3e8f4b42"
+      - "falai token = 17b2a0a9-362e-4756-b981-c4ac07e77e2f:f88af09b578212a6ddc7503e314c1c94"
+      - "fal-api = 6adacb14-1d60-4f64-85d7-b7624fa3e8e9:a30520804ec44185a563e107349cf7b7"
     references:
       - https://docs.fal.ai/platform-apis/v1/keys/create
       - https://docs.fal.ai/platform-apis/v1/models/pricing

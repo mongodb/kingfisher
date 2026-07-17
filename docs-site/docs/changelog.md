@@ -7,7 +7,14 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v1.108.0]
+- Fixed Disqus API key and secret detection and validation by using the documented `pages/list` endpoint and requiring a successful response envelope.
+- Fixed Sentry token detection and validation false negatives by supporting documented user and organization token formats and treating authenticated `403` responses without `org:read` as active.
+- Refreshed built-in rule documentation to reflect the current rule and provider counts.
+- Improvements and refinements to detection rules and validation across several providers.
+
 ## [v1.107.0]
+- Fixed Windows self-updates for Deflate-compressed ZIP releases.
 - Security: fixed validation redaction bypasses, redacted webhook report metadata, and bounded TAR extraction.
 - Added detection and validation rules for 25+ new provider families: Anthropic, Airtable, Browserbase, Cartesia, Cielo, Civo, Exoscale, Greptile, Infomaniak, Kimi (Moonshot AI), LightOn, Mailgun, MessageBird, Nango, New Relic, Novu, OVHcloud, PlanetScale, Polymarket, Silicon Flow, Twitter/X, Turso, Upstage, Yandex — plus expanded Slack, Volcengine, JWT, Linear, and Pinecone coverage. Built-in coverage is now 1,006 rules (876 standalone detectors + 130 dependent rules), with 511 standalone detectors supporting live validation.
 - Migrated the TLS and JWT-signing crypto backend from `ring` to `aws-lc-rs` across all validators (GCP, Postgres, raw), the main binary's default provider installation, the MongoDB driver, and gcloud-storage, consolidating on a single FIPS-eligible crypto provider.

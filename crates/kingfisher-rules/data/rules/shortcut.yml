@@ -40,7 +40,7 @@ rules:
           method: GET
           url: https://api.app.shortcut.com/api/v3/member
           headers:
-            Shortcut-Token: '{{ TOKEN }}'
+            Shortcut-Token: "{{ TOKEN }}"
             Content-Type: application/json
           response_matcher:
             - report_response: true

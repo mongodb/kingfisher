@@ -20,7 +20,7 @@ rules:
       - "SAUCE_USERNAME=oauth-someusername-487ea"
       - SAUCE_USERNAME="oauth-ci-bot-487ea"
       - '"sauce_username":"build-user"'
-      - 'saucelabs user oauth-release-bot'
+      - "saucelabs user oauth-release-bot"
   - name: Sauce Labs API Endpoint
     id: kingfisher.saucelabs.2
     pattern: |
@@ -79,4 +79,3 @@ rules:
       - https://docs.saucelabs.com/dev/api/#authentication
     examples:
       - "SAUCE_ACCESS_KEY=1736468d-b178-39cd-bfde-30fabdc371e4"
-

@@ -17,7 +17,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'CLICKUP_API_TOKEN=pk_204249739_138RCYNYCVO0GRJ8INODHFRMXN0QSV75'
+      - "CLICKUP_API_TOKEN=pk_204249739_138RCYNYCVO0GRJ8INODHFRMXN0QSV75"
       - 'clickup_token: "pk_204249739_GSJCPRLQEX43KH4WN8093RZ9DW3CJGM4"'
     references:
       - https://clickup.com/api/

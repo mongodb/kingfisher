@@ -62,7 +62,7 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'docker swarm join --token SWMTKN-1-3pu6hszjas19xyp7ghgosyx9k8atbfcr8p2is99znpy26u2lkl-1awxwuwd3z9j1z3puu7rcgdbx 192.168.99.100:2377'
+      - "docker swarm join --token SWMTKN-1-3pu6hszjas19xyp7ghgosyx9k8atbfcr8p2is99znpy26u2lkl-1awxwuwd3z9j1z3puu7rcgdbx 192.168.99.100:2377"
     references:
       - https://docs.docker.com/engine/swarm/join-nodes/
 
@@ -81,6 +81,6 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'docker swarm unlock --key SWMKEY-1-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFG'
+      - "docker swarm unlock --key SWMKEY-1-AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFG"
     references:
       - https://docs.docker.com/engine/swarm/swarm_manager_locking/

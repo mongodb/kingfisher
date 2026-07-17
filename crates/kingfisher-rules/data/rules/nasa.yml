@@ -17,8 +17,8 @@ rules:
       min_digits: 2
     examples:
       - |
-          get('https://api.nasa.gov/planetary/earth/imagery?api_key=fWfSMcDzyHfMuH8BW6jiIUBYaj0hKRyKBRTBqgEQ')
-            .then(...)
+        get('https://api.nasa.gov/planetary/earth/imagery?api_key=fWfSMcDzyHfMuH8BW6jiIUBYaj0hKRyKBRTBqgEQ')
+          .then(...)
     references:
       - https://api.nasa.gov
     validation:
@@ -31,7 +31,7 @@ rules:
             Accept: application/json
           response_matcher:
             - report_response: true
-            - type: StatusMatch         
+            - type: StatusMatch
               status: [200]
             - type: WordMatch
               words:

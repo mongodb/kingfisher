@@ -65,6 +65,6 @@ rules:
     visible: false
     examples:
       - KRAKEN_API_KEY=Ab12Cd34Ef56Gh78Ij90Kl12Mn34Op56
-      - 'kraken_key: 5A6b7C8d9E0f1G2h3I4J5K6L7M8N9P0Q'
+      - "kraken_key: 5A6b7C8d9E0f1G2h3I4J5K6L7M8N9P0Q"
     references:
       - https://docs.kraken.com/api/docs/guides/spot-rest-auth/

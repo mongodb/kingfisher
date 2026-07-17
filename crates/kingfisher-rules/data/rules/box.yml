@@ -25,7 +25,7 @@ rules:
         box_access_token = 'A4bC5dE6fG7hI8jK9lM0nO1pQ2rS3tU4'
     negative_examples:
       - 'BOX_DOC_URL="https://developer.box.com"'
-      - 'sandbox_mode = true'
+      - "sandbox_mode = true"
     references:
       - https://developer.box.com/reference/
       - https://developer.box.com/guides/authentication/tokens/developer-tokens/
@@ -36,7 +36,7 @@ rules:
           method: GET
           url: https://api.box.com/2.0/users/me
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

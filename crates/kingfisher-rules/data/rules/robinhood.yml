@@ -14,8 +14,9 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'ROBINHOOD_API_KEY=rh-api-a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+      - "ROBINHOOD_API_KEY=rh-api-65d3f394-3bb6-4b8b-96fb-fd94793df611"
       - 'rh_api_key: "rh-api-12345678-abcd-ef01-2345-6789abcdef01"'
     references:
+      # Documentation states: "*API keys issued after August 13, 2024 will be formatted as "rh-api-[uuid].
       - https://docs.robinhood.com/crypto/trading/
     # No validation: Robinhood Crypto requests require an API key plus Ed25519 request signing.

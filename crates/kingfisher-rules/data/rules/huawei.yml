@@ -20,7 +20,7 @@ rules:
     confidence: medium
     visible: false
     examples:
-      - "{ \"Huawei\": { \"ClientId\": \"100809947\", \"ClientSecret\": \"...\" } }"
+      - '{ "Huawei": { "ClientId": "100809947", "ClientSecret": "..." } }'
       - "HUAWEI_APP_ID=100023456"
     references:
       - https://developer.huawei.com/consumer/en/doc/development/HMS-Guides/38054564
@@ -45,7 +45,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - "{ \"Huawei\": { \"ClientId\": \"100809947\", \"ClientSecret\": \"9c94020cf0aed099bc88c0e57b613fdd55cdcec2590b55fa5693a9d672cad2d5\" } }"
+      - '{ "Huawei": { "ClientId": "100809947", "ClientSecret": "9c94020cf0aed099bc88c0e57b613fdd55cdcec2590b55fa5693a9d672cad2d5" } }'
       - "huawei\nclient_secret=1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b"
     references:
       - https://developer.huawei.com/consumer/en/doc/development/HMS-Guides/38054564

@@ -14,7 +14,7 @@ rules:
     min_entropy: 3.0
     confidence: high
     examples:
-      - "API_KEY = \"BBUS-kDvT2Vrm6JThnHZvgzNyO2K7DAHdWs12abc\""
+      - 'API_KEY = "BBUS-kDvT2Vrm6JThnHZvgzNyO2K7DAHdWs12abc"'
       - "UBIDOTS_TOKEN=BBUS-AbCdEfGhIjKlMnOpQrStUvWxYz0123456"
     validation:
       type: Http

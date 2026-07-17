@@ -13,20 +13,20 @@ rules:
       min_digits: 1
       min_lowercase: 1
       ignore_if_contains:
-        - "dXNlcjpwYXNz"          # user:pass
-        - "dXNlcjpwYXNzd29yZA"    # user:password
-        - "YWRtaW46YWRtaW4"       # admin:admin
-        - "YWRtaW46cGFzc3dvcmQ"   # admin:password
-        - "Zm9vOmJhcg"            # foo:bar
-        - "Zm9vOmZvbw"            # foo:foo
-        - "dGVzdDp0ZXN0"          # test:test
-        - "ZGVtbzpkZW1v"          # demo:demo
-        - "Z3Vlc3Q6Z3Vlc3Q"      # guest:guest
-        - "cm9vdDpyb290"          # root:root
-        - "cm9vdDp0b29y"          # root:toor
-        - "ZXhhbXBsZTpleGFtcGxl"  # example:example
+        - "dXNlcjpwYXNz" # user:pass
+        - "dXNlcjpwYXNzd29yZA" # user:password
+        - "YWRtaW46YWRtaW4" # admin:admin
+        - "YWRtaW46cGFzc3dvcmQ" # admin:password
+        - "Zm9vOmJhcg" # foo:bar
+        - "Zm9vOmZvbw" # foo:foo
+        - "dGVzdDp0ZXN0" # test:test
+        - "ZGVtbzpkZW1v" # demo:demo
+        - "Z3Vlc3Q6Z3Vlc3Q" # guest:guest
+        - "cm9vdDpyb290" # root:root
+        - "cm9vdDp0b29y" # root:toor
+        - "ZXhhbXBsZTpleGFtcGxl" # example:example
         - "dXNlcm5hbWU6cGFzc3dvcmQ" # username:password
-        - "Og=="                   # base64 of ":" alone
+        - "Og==" # base64 of ":" alone
         - "{{"
         - "<token>"
         - "<credentials>"
@@ -54,8 +54,8 @@ rules:
     pattern_requirements:
       min_digits: 1
       ignore_if_contains:
-        - "eyJ"            # any JWT (covered by kingfisher.jwt.1)
-        - "ewogIC"         # pretty-printed JWT header
+        - "eyJ" # any JWT (covered by kingfisher.jwt.1)
+        - "ewogIC" # pretty-printed JWT header
         - "<token>"
         - "<your_token>"
         - "{{"

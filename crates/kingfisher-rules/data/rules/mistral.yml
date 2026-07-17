@@ -20,7 +20,7 @@ rules:
     examples:
       - mistral_token = 47cFZMzkoEo9DBapfvhrmMst3zfV2EIh
       - mistral_api_key = olI6zlb3F0jO8jjDQUi34skQLPzvox84
-      - 'mistral secret: kMrbwHjG78fYzneT934Pn34NQxVSxniq'
+      - "mistral secret: kMrbwHjG78fYzneT934Pn34NQxVSxniq"
     references:
       - https://docs.mistral.ai/getting-started/quickstart :contentReference[oaicite:1]{index=1}
       - https://docs.mistral.ai/api/ :contentReference[oaicite:2]{index=2}

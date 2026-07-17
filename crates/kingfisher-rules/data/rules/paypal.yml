@@ -44,7 +44,7 @@ rules:
       content:
         request:
           method: POST
-          url: https://api-m.paypal.com/v1/oauth2/token    
+          url: https://api-m.paypal.com/v1/oauth2/token
           headers:
             Accept: application/json
             Accept-Language: en_US
@@ -55,7 +55,7 @@ rules:
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status: [200]                                  
+              status: [200]
       depends_on_rule:
         - rule_id: kingfisher.paypal.1
           variable: CLIENTID

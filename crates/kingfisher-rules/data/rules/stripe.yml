@@ -46,12 +46,12 @@ rules:
           headers:
             Authorization: Bearer {{ TOKEN }}
             Accept: application/json
-          url: https://api.stripe.com/v1/account        
+          url: https://api.stripe.com/v1/account
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status: [200]                             
+              status: [200]
             - type: WordMatch
-              words: ['"object":"account"','"id":']
+              words: ['"object":"account"', '"id":']
     references:
       - https://stripe.com/docs/api/authentication

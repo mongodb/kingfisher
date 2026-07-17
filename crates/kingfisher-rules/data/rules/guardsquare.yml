@@ -11,6 +11,6 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'APPSWEEP_API_KEY=gs_appsweep_a1B2c3D4e5F6g7H8i9J0k1L2'
+      - "APPSWEEP_API_KEY=gs_appsweep_a1B2c3D4e5F6g7H8i9J0k1L2"
     references:
       - https://www.guardsquare.com/appsweep

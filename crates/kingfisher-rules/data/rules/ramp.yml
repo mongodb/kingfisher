@@ -11,7 +11,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'RAMP_CLIENT_ID=ramp_id_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0'
+      - "RAMP_CLIENT_ID=ramp_id_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0"
     references:
       - https://docs.ramp.com/developer-api/v1/authorization
 
@@ -27,7 +27,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'RAMP_CLIENT_SECRET=ramp_sec_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V2w3X4'
+      - "RAMP_CLIENT_SECRET=ramp_sec_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V2w3X4"
     references:
       - https://docs.ramp.com/developer-api/v1/authorization
     depends_on_rule:
@@ -43,7 +43,7 @@ rules:
             Accept: application/json
             Content-Type: application/x-www-form-urlencoded
             Authorization: 'Basic {{ CLIENT_ID | append: ":" | append: TOKEN | b64enc }}'
-          body: 'grant_type=client_credentials&scope=users%3Aread'
+          body: "grant_type=client_credentials&scope=users%3Aread"
           response_matcher:
             - report_response: true
             - type: StatusMatch

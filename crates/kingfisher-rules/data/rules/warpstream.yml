@@ -11,10 +11,11 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'WARPSTREAM_API_KEY=aks_a51b1fb20ac4a3af549503bb08cd309672fcada1030c5a494850e87ce5d4c613'
+      - "WARPSTREAM_API_KEY=aks_a51b1fb20ac4a3af549503bb08cd309672fcada1030c5a494850e87ce5d4c613"
     references:
       - https://docs.warpstream.com/warpstream/reference/api-reference/api-keys
       - https://docs.warpstream.com/warpstream/reference/api-reference/api-keys/list
+      - https://github.com/warpstreamlabs/terraform-provider-warpstream/blob/52616af024c04a72a0cb0fbfeb9060f26dcdd48a/docs/data-sources/account.md
     validation:
       type: Http
       content:

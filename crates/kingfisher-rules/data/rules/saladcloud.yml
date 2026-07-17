@@ -1,11 +1,11 @@
 rules:
-  - name: SaladCloud API Key
+  - name: SaladCloud User API Key
     id: kingfisher.saladcloud.1
     pattern: |
       (?x)
       \b
       (
-        salad_cloud_[0-9A-Za-z]{1,7}_[0-9A-Za-z]{7,40}
+        salad_cloud_user_[0-9A-Za-z]{49}
       )
       \b
     pattern_requirements:
@@ -14,21 +14,31 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'SALAD_API_KEY=salad_cloud_abc1234_xY9zW8vU7tS6rQ5pN4mL3kJ2iH1gF0e'
-      - 'salad_key: "salad_cloud_org42_a1B2c3D4e5F6g7H8i9J0"'
+      - "SALAD_API_KEY=salad_cloud_user_svrRvHWA5OczVom6OLNjUwIV9j0l3RDk4dvmOQL33Gl4JRVii"
+      - 'salad_key: "salad_cloud_user_YwRSFwOTfAkg42fDCLn1zN58CwvHVj5mdIE0uVF7SgF2YnwLQ"'
+      - "SALAD_CLOUD_API_KEY=salad_cloud_user_frTRLp0nXfnQKOScB0JgHtJp2ltxy3doSmnDFCwGkaE3m1SSm"
     references:
-      - https://docs.salad.com/reference/api-reference
+      - https://docs.salad.com/reference/saladcloud-api
+      - https://docs.salad.com/reference/api-usage
+      - https://docs.salad.com/container-engine/how-to-guides/platform-integrations/installation-helm-chart
+      - https://github.com/SaladTechnologies/salad-cloud-docs/blob/cdd6fbc2be82574d1db1639d10f15a9d371ce018/ai-gateway/tutorials/getting-started.mdx
+      - https://github.com/SaladTechnologies/salad-cloud-docs/blob/cdd6fbc2be82574d1db1639d10f15a9d371ce018/container-engine/reference/recipes/gromacs-kelpie.mdx
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: https://api.salad.com/api/public/organizations
+          # All documented endpoints require an organization name. This sentinel
+          # organization lets the API authenticate the key without requiring a
+          # second finding for an organization under the same account.
+          url: https://api.salad.com/api/public/organizations/kingfisher-validation/gpu-classes
           headers:
             Accept: application/json
             Salad-Api-Key: "{{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status: [200]
+              # 403 and 404 prove authentication succeeded but the caller is
+              # not authorized for, or cannot find, the sentinel organization.
+              status: [200, 403, 404]
             - type: JsonValid

@@ -67,7 +67,7 @@ rules:
             {%- endcapture -%}
             {%- assign encoded_params = params | replace: "+", "%20" | replace: "*", "%2A" | replace: "%7E", "~" -%}
             {%- assign query_string = encoded_params | url_encode | replace: "%2D", "-" | replace: "%2E", "." -%}
-            
+
             {%- assign signature_base_string = "GET&%2F&" | append: query_string -%}
             {%- assign token_amp = TOKEN | append: "&" -%}
 

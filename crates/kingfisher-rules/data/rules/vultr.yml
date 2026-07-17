@@ -18,7 +18,7 @@ rules:
     confidence: medium
     examples:
       - VULTR_API_KEY="7a1c3e5f7092ab4cd6ef80123456789abcde"
-      - 'export VULTR_TOKEN=0123456789abcdef0123456789abcedf1234  # vultr'
+      - "export VULTR_TOKEN=0123456789abcdef0123456789abcedf1234  # vultr"
     references:
       - https://docs.vultr.com/platform/other/api/current-user/list-api-key
       - https://docs.vultr.com/platform/other/api/current-user/delete-api-key

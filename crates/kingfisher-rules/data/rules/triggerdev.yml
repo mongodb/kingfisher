@@ -15,8 +15,8 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'TRIGGER_SECRET_KEY=tr_dev_AN0MnvS4n4GdfhELPUMU'
-      - 'TRIGGER_SECRET_KEY=tr_prod_KCqL36ucD5LTPa9kdnMj'
+      - "TRIGGER_SECRET_KEY=tr_dev_AN0MnvS4n4GdfhELPUMU"
+      - "TRIGGER_SECRET_KEY=tr_prod_KCqL36ucD5LTPa9kdnMj"
     references:
       - https://trigger.dev/docs/management/authentication
       - https://trigger.dev/docs/management/envvars/list
@@ -54,7 +54,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'TRIGGER_ACCESS_TOKEN=tr_pat_G8DwRcZEc0ONFMtkVHt8'
+      - "TRIGGER_ACCESS_TOKEN=tr_pat_G8DwRcZEc0ONFMtkVHt8"
     references:
       - https://trigger.dev/docs/management/authentication
       - https://trigger.dev/docs/management/envvars/list
@@ -66,7 +66,7 @@ rules:
       content:
         request:
           method: GET
-          url: 'https://api.trigger.dev/api/v1/projects/{{ TRIGGER_PROJECT_REF }}/envvars/dev'
+          url: "https://api.trigger.dev/api/v1/projects/{{ TRIGGER_PROJECT_REF }}/envvars/dev"
           headers:
             Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
@@ -92,7 +92,7 @@ rules:
     confidence: medium
     visible: false
     examples:
-      - 'TRIGGER_PROJECT_REF=proj_yubjwjsfkxnylobaqvqz'
+      - "TRIGGER_PROJECT_REF=proj_yubjwjsfkxnylobaqvqz"
       - 'projectRef: "proj_yubjwjsfkxnylobaqvqz"'
     references:
       - https://trigger.dev/docs/management/envvars/list

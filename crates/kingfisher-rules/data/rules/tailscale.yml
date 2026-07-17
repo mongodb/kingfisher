@@ -30,7 +30,7 @@ rules:
             - report_response: true
             - type: StatusMatch
               status: [200]
-    
+
     revocation:
       type: HttpMultiStep
       content:
@@ -52,7 +52,7 @@ rules:
               KEY_ID:
                 type: JsonPath
                 path: "$.keys[0].id"
-          
+
           # Step 2: Delete the key using its ID
           - name: delete_key
             request:

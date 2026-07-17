@@ -23,7 +23,7 @@ rules:
     confidence: medium
     examples:
       - 'fullcontact.api_key = "u8jzPde0IgxLd6GncfBAepfJBd0Kh8oO"'
-      - 'X-FullContact-APIKey: OL8dKLzdocJ2isAjIhKt40RlgLKOmxgJ'
+      - "X-FullContact-APIKey: OL8dKLzdocJ2isAjIhKt40RlgLKOmxgJ"
     references:
       - https://platform.fullcontact.com/docs/apis/enrich/authorization
     validation:

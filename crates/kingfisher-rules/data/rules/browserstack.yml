@@ -15,7 +15,7 @@ rules:
     confidence: medium
     min_entropy: 3.0
     examples:
-      - 'BROWSERSTACK_ACCESS_KEY=qA1bC2dE3fG4hI5jK6lM'
+      - "BROWSERSTACK_ACCESS_KEY=qA1bC2dE3fG4hI5jK6lM"
       - 'browserstack.access_key = "rN7oP8qR9sT0uV1wX2yZ"'
     references:
       - https://www.browserstack.com/docs/automate/api-reference/selenium/introduction
@@ -69,5 +69,5 @@ rules:
     confidence: medium
     min_entropy: 1.0
     examples:
-      - 'BROWSERSTACK_USERNAME=build-user'
+      - "BROWSERSTACK_USERNAME=build-user"
       - 'browserstack_user: "ci_bot_01"'

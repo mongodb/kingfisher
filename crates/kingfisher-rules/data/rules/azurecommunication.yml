@@ -15,6 +15,6 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'endpoint=https://myresource.communication.azure.com/;accesskey=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGHIJKLMNOPQRS+/=='
+      - "endpoint=https://myresource.communication.azure.com/;accesskey=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGHIJKLMNOPQRS+/=="
     references:
       - https://learn.microsoft.com/en-us/azure/communication-services/

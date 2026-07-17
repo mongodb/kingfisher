@@ -15,7 +15,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'PORTAINER_API_KEY=ptr_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345678901'
+      - "PORTAINER_API_KEY=ptr_aBcDeFgHiJkLmNoPqRsTuVwXyZ012345678901"
       - 'portainer_token: "ptr_xY9zW8vU7tS6rQ5pN4mL3kJ2iH1gF0eD9cB8aZ7"'
     references:
       - https://docs.portainer.io/api/access

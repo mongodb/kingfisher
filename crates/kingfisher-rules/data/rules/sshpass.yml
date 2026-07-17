@@ -16,7 +16,7 @@ rules:
     confidence: low
     examples:
       - "sshpass -p 'hkjento6hjfdaiwbhC' scp /home/user/data/*.js sftp-user@files.example.com:data/"
-      - "sshpass -p \"xY3#mK81wP\" ssh deploy@prod.example.com"
+      - 'sshpass -p "xY3#mK81wP" ssh deploy@prod.example.com'
     references:
       - https://linux.die.net/man/1/sshpass
     # No public validation endpoint: SSH servers are instance-specific.

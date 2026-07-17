@@ -5,15 +5,17 @@ rules:
       (?x)
       \b
       (
-        isat_[a-zA-Z0-9_-]{20,80}
+        isat_[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}
       )
       \b
     pattern_requirements:
-      min_digits: 2
+      min_digits: 4
     min_entropy: 3.5
     confidence: medium
     categories: [api, key]
     examples:
-      - 'DVC_STUDIO_TOKEN=isat_AbCdEfGhIjKlMnOpQrStUvWxYz123456'
+      - "DVC_STUDIO_TOKEN=isat_d2e2c6c0-c8a1-22ee-a517-0242ac120003"
+      - "isat_a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     references:
       - https://dvc.org/doc/command-reference/studio/token
+      - https://dvc.org/doc/command-reference/studio/login

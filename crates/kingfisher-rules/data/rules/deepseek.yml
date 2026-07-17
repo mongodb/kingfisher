@@ -1,6 +1,6 @@
 rules:
   - name: DeepSeek API Key
-    id:   kingfisher.deepseek.1
+    id: kingfisher.deepseek.1
     pattern: |
       (?x)
       \b
@@ -30,8 +30,8 @@ rules:
             - type: StatusMatch
               status: [200]
             - type: WordMatch
-              words: ['"data"']             
+              words: ['"data"']
               match_all_words: true
     references:
-      - https://api-docs.deepseek.com/   
-      - https://api-docs.deepseek.com/api/list-models  
+      - https://api-docs.deepseek.com/
+      - https://api-docs.deepseek.com/api/list-models

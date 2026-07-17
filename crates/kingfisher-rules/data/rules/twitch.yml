@@ -30,7 +30,7 @@ rules:
           method: GET
           url: https://id.twitch.tv/oauth2/validate
           headers:
-            Authorization: 'OAuth {{ TOKEN }}'
+            Authorization: "OAuth {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true
@@ -46,7 +46,7 @@ rules:
               method: GET
               url: https://id.twitch.tv/oauth2/validate
               headers:
-                Authorization: 'OAuth {{ TOKEN }}'
+                Authorization: "OAuth {{ TOKEN }}"
                 Accept: application/json
               response_matcher:
                 - type: StatusMatch

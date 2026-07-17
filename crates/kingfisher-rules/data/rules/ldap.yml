@@ -47,7 +47,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - "ldap_pass = \"zX#mK91wP$3n=Q7!\""
+      - 'ldap_pass = "zX#mK91wP$3n=Q7!"'
       - "ldap_pwd = 'Tr0ub4dor&3!'"
       - "LDAP_PASSWORD=s3cur3P@ssw0rd\n"
     references:

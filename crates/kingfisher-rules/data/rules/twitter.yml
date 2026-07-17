@@ -1,6 +1,6 @@
 rules:
   - name: X / Twitter Bearer Token (App-only)
-    id:   kingfisher.twitter.1
+    id: kingfisher.twitter.1
     pattern: |
       (?xi)           
       \b                       
@@ -72,7 +72,7 @@ rules:
     examples:
       - "TWITTER_SECRET=ZGwXeK2DNCqv49Z9ofwYdqlBgeoHDyh8uoAgHju6OeYC7wTQJq"
     references:
-          - https://developer.x.com/en/docs/authentication/oauth-2-0/application-only
+      - https://developer.x.com/en/docs/authentication/oauth-2-0/application-only
     validation:
       type: Http
       content:

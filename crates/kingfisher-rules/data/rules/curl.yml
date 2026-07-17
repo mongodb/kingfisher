@@ -7,9 +7,9 @@ rules:
     references:
       - https://curl.se/docs/manpage.html#-u
     examples:
-      - 'curl --cacert ca.crt -u elastic:P@ssw0rd$1 https://localhost:9200'
-      - 'curl -u developer:yqDVtkqPECriaLRi'
-      - 'curl --user roger23@gmail.com:pQ9wTxu4Fg https://www.dropbox.com'
+      - "curl --cacert ca.crt -u elastic:P@ssw0rd$1 https://localhost:9200"
+      - "curl -u developer:yqDVtkqPECriaLRi"
+      - "curl --user roger23@gmail.com:pQ9wTxu4Fg https://www.dropbox.com"
 
   - name: Curl Header Authentication
     id: kingfisher.curl.2
@@ -19,6 +19,6 @@ rules:
     references:
       - https://curl.se/docs/manpage.html#-H
     examples:
-      - 'curl -H ''Authorization: Basic YnJvd3Nlcjo='''
+      - "curl -H 'Authorization: Basic YnJvd3Nlcjo='"
       - 'curl -H "Authorization: Bearer cfcabd11c7ed9a41b1a3e063c32d5114"'
       - 'curl -H "Authorization: Token 22cb987851bc5659229114c62e60c79abd0d2c08"'

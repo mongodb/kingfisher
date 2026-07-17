@@ -29,9 +29,9 @@ rules:
       content:
         request:
           method: GET
-          url: 'https://{{ AZUREHOST }}/openai/models?api-version=2024-10-21'
+          url: "https://{{ AZUREHOST }}/openai/models?api-version=2024-10-21"
           headers:
-            Api-Key: '{{ TOKEN }}'
+            Api-Key: "{{ TOKEN }}"
           response_matcher:
             - report_response: true
             - status:

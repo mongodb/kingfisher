@@ -13,9 +13,9 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - 'odt_KTJlDq2AGGGlqG4riKdT7p980AW8RlU5'
-      - 'odt_ABCDDq2AGxGlrF4ribBT7p98AOM9TlU8'
-      - 'odt_FHxhQGh77JAHHIYpZ818UQ0aYjXIdMIxxgeR'
+      - "odt_KTJlDq2AGGGlqG4riKdT7p980AW8RlU5"
+      - "odt_ABCDDq2AGxGlrF4ribBT7p98AOM9TlU8"
+      - "odt_FHxhQGh77JAHHIYpZ818UQ0aYjXIdMIxxgeR"
     references:
       - https://docs.dependencytrack.org/integrations/rest-api/#authentication
     # validation:

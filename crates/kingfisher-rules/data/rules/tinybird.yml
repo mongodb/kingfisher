@@ -16,12 +16,13 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'workspace admin token: p.eyJ1IjogIjdmMmM5YTQxLWI2ZDgtNGUwMy05MWFhLTU4YzI0YjdkMGU5NiIsICJpZCI6ICI1YTBiOGM3MS1kM2U0LTRmMjktOGI2NS0wYzlkMmU3YTRmMTMiLCAiaG9zdCI6ICJnY3AtZXVyb3BlLXdlc3QyIn0.QgGQO4xKgNTfZ6GHe8_sBeTk4b2axbZLEdvzCQYvHnw' # nosemgrep: generic-jwt-token
+      - "workspace admin token: p.eyJ1IjogIjdmMmM5YTQxLWI2ZDgtNGUwMy05MWFhLTU4YzI0YjdkMGU5NiIsICJpZCI6ICI1YTBiOGM3MS1kM2U0LTRmMjktOGI2NS0wYzlkMmU3YTRmMTMiLCAiaG9zdCI6ICJnY3AtZXVyb3BlLXdlc3QyIn0.QgGQO4xKgNTfZ6GHe8_sBeTk4b2axbZLEdvzCQYvHnw" # nosemgrep: generic-jwt-token
       - 'admin token: "p.eyJ1IjogImM5NGE3ZDUyLThmMDMtNDdiZS05YTE2LTJlODBkNWI3YzM0MSIsICJpZCI6ICIwZDdiMmY0OC02YTkxLTRjNWUtOGYzMC1iMmE2ZDU5ZTAxN2MiLCAiaG9zdCI6ICJnY3AtdXMtZWFzdDEifQ.rziyKeAZJYhenUJChcWxV1K8n_3ejHiS4XlzXK49jFI"' # nosemgrep: generic-jwt-token
-      - 'user token: p.eyJ1IjogIjNiOGU3MmQwLWE5MTQtNGY2Yy04NmQxLTA1YzdlMjlhNGI2OCIsICJpZCI6ICJlMTdjNmYzMC00YjhhLTQxZDktOTI3ZS02YTA1YjM4YzJmNzQiLCAiaG9zdCI6ICJhd3MtdXMtZWFzdC0xIn0.IIU-mUxglkE7kOSc8tweaZIcwACiBNCqoGAnoeluISA' # nosemgrep: generic-jwt-token
+      - "user token: p.eyJ1IjogIjNiOGU3MmQwLWE5MTQtNGY2Yy04NmQxLTA1YzdlMjlhNGI2OCIsICJpZCI6ICJlMTdjNmYzMC00YjhhLTQxZDktOTI3ZS02YTA1YjM4YzJmNzQiLCAiaG9zdCI6ICJhd3MtdXMtZWFzdC0xIn0.IIU-mUxglkE7kOSc8tweaZIcwACiBNCqoGAnoeluISA" # nosemgrep: generic-jwt-token
     references:
       - https://www.tinybird.co/docs/api-reference/token-api
       - https://tinybird.co/docs/forward/administration/tokens/static-tokens
+      - https://www.tinybird.co/docs/forward/core-concepts/tokens
     # Validation decodes the JWT payload to extract the "host" field, maps it to
     # the correct regional API base URL, then calls GET /v0/pipes/ which requires
     # only read scope and returns 200 for any valid token with pipe-read access.

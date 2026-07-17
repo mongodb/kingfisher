@@ -23,7 +23,7 @@ rules:
       - 'temporal_api_key="eyJhbGciOiJFUzI1NiIsImtpZCI6IlNhbXBsZSJ9.eyJhY2NvdW50X2lkIjoic2FtcGxlIiwiYXVkIjpbInRlbXBvcmFsLmlvIl0sImlzcyI6InRlbXBvcmFsLmlvIiwia2V5X2lkIjoic2FtcGxlLWtleSIsInN1YiI6InVzZXItMTIzIiwiZXhwIjoyMDAwMDAwMDAwfQ.c2lnbmF0dXJlX3BsYWNlaG9sZGVyXzEyMzQ1Njc4OTA"'
       - 'temporal --profile cloud config set --prop api_key --value "eyJhbGciOiJFUzI1NiIsImtpZCI6IkFub3RoZXJLZXkifQ.eyJhY2NvdW50X2lkIjoidGVzdC1hY2N0IiwiYXVkIjpbInRlbXBvcmFsLmlvIl0sImlzcyI6InRlbXBvcmFsLmlvIiwia2V5X2lkIjoidGVzdC1rZXktaWQiLCJzdWIiOiJ1c2VyLXRlc3QiLCJleHAiOjIwMDAwMDAwMDB9.c2lnbmF0dXJlX3Rlc3RfdmFsdWVfMDEyMzQ1Njc4OTAi'
     negative_examples:
-      - 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInN1YiI6InVzZXIiLCJleHAiOjE5NzIxNzI0NjF9.WQWcwBAQFNE259f2o8ruFln_UMLTFEnEaUD7KHrs9Aw'
+      - "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInN1YiI6InVzZXIiLCJleHAiOjE5NzIxNzI0NjF9.WQWcwBAQFNE259f2o8ruFln_UMLTFEnEaUD7KHrs9Aw"
     references:
       - https://docs.temporal.io/cloud/api-keys
       - https://docs.temporal.io/cli/env-config

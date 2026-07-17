@@ -10,8 +10,8 @@ rules:
       \b
     confidence: medium
     examples:
-      - 'AXIOM_TOKEN=xaat-fa97e617-e653-45a8-2f3b-f1c0ccf731ae'
-      - 'Authorization: Bearer xaat-deadbeef-1234-5678-9abc-def012345678'
+      - "AXIOM_TOKEN=xaat-fa97e617-e653-45a8-2f3b-f1c0ccf731ae"
+      - "Authorization: Bearer xaat-deadbeef-1234-5678-9abc-def012345678"
     references:
       - https://axiom.co/docs/reference/tokens
       - https://axiom.co/docs/restapi/endpoints/getDatasets
@@ -41,8 +41,8 @@ rules:
       \b
     confidence: medium
     examples:
-      - 'AXIOM_TOKEN=xapt-726c99a4-1d8c-4ccb-8e54-e89f21b25f4e'
-      - 'Authorization: Bearer xapt-deadbeef-1234-5678-9abc-def012345678'
+      - "AXIOM_TOKEN=xapt-726c99a4-1d8c-4ccb-8e54-e89f21b25f4e"
+      - "Authorization: Bearer xapt-deadbeef-1234-5678-9abc-def012345678"
     references:
       - https://axiom.co/docs/reference/tokens
     validation:

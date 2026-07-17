@@ -34,7 +34,7 @@ rules:
     confidence: medium
     examples:
       - PRIVATEAI_API_KEY=4fa2d7c81be9063d4ea8bc1f6d2a7e9c
-      - 'privateai_x_api_key: 2ab4d6e8f0c1a3b5d7e9f1a2b4c6d8e0'
+      - "privateai_x_api_key: 2ab4d6e8f0c1a3b5d7e9f1a2b4c6d8e0"
     references:
       - https://docs.private-ai.com/fundamentals/getting-started
       - https://docs.private-ai.com/reference/4.0.0/operation/ner_text_ner_text_post/
@@ -46,7 +46,7 @@ rules:
           url: https://api.private-ai.com/community/v4/process/text
           headers:
             Content-Type: application/json
-            x-api-key: '{{ TOKEN }}'
+            x-api-key: "{{ TOKEN }}"
           body: '{"text":["Hello Jane Doe"]}'
           response_matcher:
             - report_response: true

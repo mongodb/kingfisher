@@ -9,7 +9,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        pa_[A-Za-z0-9]{24,44}
+        pa_[A-Za-z0-9]{32,48}
       )
       \b
     pattern_requirements:
@@ -17,7 +17,9 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'PIRSCH_ACCESS_KEY=pa_a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6'
+      - "PIRSCH_ACCESS_KEY=pa_xsykowZrx3rr5U4o6t8Uepr5CseGOhzb8lLV3Z8YwhBQ"
       - 'pirsch_client_secret = "pa_xK8m2LpQr5nW0vYz3cJ7aB4dE6fG8hI0"'
     references:
       - https://docs.pirsch.io/api-sdks/api-guide
+      - https://docs.pirsch.io/api-sdks/api-guide-v1
+      - https://github.com/pirsch-analytics/pirsch-js-sdk/blob/aca0001a8e7a294f0598ebfd1905d18b8bf7a336/src/core.ts

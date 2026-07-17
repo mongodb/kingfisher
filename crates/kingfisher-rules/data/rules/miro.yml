@@ -36,7 +36,7 @@ rules:
           url: https://api.miro.com/v1/oauth-token
           headers:
             Accept: application/json
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch
@@ -64,7 +64,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'MIRO_CLIENT_SECRET=5VEWim0jDbaytgKXN7ReM7MkfpQ8Rm3d' # nosemgrep
+      - "MIRO_CLIENT_SECRET=5VEWim0jDbaytgKXN7ReM7MkfpQ8Rm3d" # nosemgrep
     references:
       - https://developers.miro.com/docs/getting-started-with-oauth
     depends_on_rule:
@@ -104,6 +104,6 @@ rules:
     confidence: medium
     visible: false
     examples:
-      - 'MIRO_CLIENT_ID=3458764668142796369'
+      - "MIRO_CLIENT_ID=3458764668142796369"
     references:
       - https://developers.miro.com/docs/getting-started-with-oauth

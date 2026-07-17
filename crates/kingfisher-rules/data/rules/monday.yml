@@ -20,12 +20,12 @@ rules:
     validation:
       type: Http
       content:
-        request: 
+        request:
           url: https://api.monday.com/v2
           method: POST
           headers:
             Content-Type: application/json
-            Authorization: '{{ TOKEN }}'
+            Authorization: "{{ TOKEN }}"
           body: |
             {"query": "query { me { id name } }"}
           response_matcher:

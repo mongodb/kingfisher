@@ -18,7 +18,7 @@ rules:
     min_entropy: 4.0
     confidence: medium
     examples:
-      - 'MORALIS_API_KEY=aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789aBcDeFgHiJkLmNoPqRsTuVwXy012'
+      - "MORALIS_API_KEY=aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789aBcDeFgHiJkLmNoPqRsTuVwXy012"
     references:
       - https://docs.moralis.io/web3-data-api/evm/reference
     validation:

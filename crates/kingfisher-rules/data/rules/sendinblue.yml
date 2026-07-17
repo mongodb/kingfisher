@@ -24,7 +24,7 @@ rules:
           method: GET
           url: https://api.sendinblue.com/v3/account
           headers:
-            api-key: '{{ TOKEN }}'
+            api-key: "{{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true

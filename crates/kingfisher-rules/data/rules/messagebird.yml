@@ -16,7 +16,7 @@ rules:
     min_entropy: 3.4
     confidence: medium
     examples:
-      - 'MESSAGEBIRD_API_KEY=abcdefghijklmno12rstuvwxy'
+      - "MESSAGEBIRD_API_KEY=abcdefghijklmno12rstuvwxy"
       - "messagebird_token: 'abcde12345fghij67890klmno'"
     references:
       - https://developers.messagebird.com/api/#authentication
@@ -27,7 +27,7 @@ rules:
           method: GET
           url: https://rest.messagebird.com/balance
           headers:
-            Authorization: 'AccessKey {{ TOKEN }}'
+            Authorization: "AccessKey {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true

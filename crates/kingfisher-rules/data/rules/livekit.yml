@@ -17,7 +17,7 @@ rules:
     min_entropy: 2.5
     confidence: medium
     examples:
-      - 'LIVEKIT_API_KEY=APIAb1Cd2Ef3Gh4'
+      - "LIVEKIT_API_KEY=APIAb1Cd2Ef3Gh4"
       - 'livekit_key: "APIQw2Er3Ty4Ui5"'
     references:
       - https://docs.livekit.io/home/get-started/authentication/
@@ -51,7 +51,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'LIVEKIT_API_SECRET=AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AaBbCcDd'
+      - "LIVEKIT_API_SECRET=AbCdEfGhIjKlMnOpQrStUvWxYz0123456789AaBbCcDd"
     references:
       - https://docs.livekit.io/home/get-started/authentication/
       - https://docs.livekit.io/reference/other/roomservice-api.md
@@ -102,7 +102,7 @@ rules:
     confidence: medium
     visible: false
     examples:
-      - 'LIVEKIT_URL=wss://acme-demo.livekit.cloud'
-      - 'livekit_host=https://acme-voice.livekit.cloud'
+      - "LIVEKIT_URL=wss://acme-demo.livekit.cloud"
+      - "livekit_host=https://acme-voice.livekit.cloud"
     references:
       - https://docs.livekit.io/home/get-started/authentication/

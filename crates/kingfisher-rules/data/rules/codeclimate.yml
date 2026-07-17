@@ -15,7 +15,7 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - ' - RAILS_ENV=test CODECLIMATE_REPO_TOKEN=d37a8b9e09642cb73cfcf4e1284815fc3d6a55a7714110187ac59856ae4ab5ad'
+      - " - RAILS_ENV=test CODECLIMATE_REPO_TOKEN=d37a8b9e09642cb73cfcf4e1284815fc3d6a55a7714110187ac59856ae4ab5ad"
       - |
         - uses: paambaati/codeclimate-action@v2.2.4
         env:
@@ -29,10 +29,10 @@ rules:
       content:
         request:
           method: GET
-          url: 'https://api.codeclimate.com/v1/orgs'
+          url: "https://api.codeclimate.com/v1/orgs"
           headers:
-            Accept: 'application/vnd.api+json'
-            Authorization: 'Token token={{ TOKEN }}'
+            Accept: "application/vnd.api+json"
+            Authorization: "Token token={{ TOKEN }}"
           response_matcher:
             - report_response: true
             - status:

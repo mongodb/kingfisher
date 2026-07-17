@@ -17,7 +17,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'GHOST_ADMIN_API_KEY=1efedd9db174adee2d23d982:4b74dca0219bad629852191af326a45037346c2231240e0f7aec1f9371cc14e8'
+      - "GHOST_ADMIN_API_KEY=1efedd9db174adee2d23d982:4b74dca0219bad629852191af326a45037346c2231240e0f7aec1f9371cc14e8"
       - 'ghost_key = "6101c750c9d0ab0e34567890:abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"'
     references:
       - https://ghost.org/docs/admin-api/
@@ -41,7 +41,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'GHOST_CONTENT_API_KEY=22444f78447824223cefc48062'
+      - "GHOST_CONTENT_API_KEY=22444f78447824223cefc48062"
       - 'ghost_api_key: "a1b2c3d4e5f6a7b8c9d0e1f2a3"'
     references:
       - https://ghost.org/docs/content-api/

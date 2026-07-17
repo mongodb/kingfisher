@@ -11,7 +11,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'MINIMAX_API_KEY=MINIMAX-A1B2C3D4-E5F6G7H8-I9J0K1L2-M3N4O5P6'
+      - "MINIMAX_API_KEY=MINIMAX-A1B2C3D4-E5F6G7H8-I9J0K1L2-M3N4O5P6"
     references:
       - https://platform.minimax.io/docs/token-plan/quickstart
     validation:

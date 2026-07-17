@@ -67,7 +67,7 @@ rules:
           method: GET
           url: https://{{ JFROG_HOST }}/artifactory/api/repositories
           headers:
-            X-JFrog-Art-Api: '{{ TOKEN }}'
+            X-JFrog-Art-Api: "{{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true
@@ -120,7 +120,7 @@ rules:
           method: GET
           url: https://{{ JFROG_HOST }}/artifactory/api/repositories
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true

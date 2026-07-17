@@ -1,7 +1,7 @@
 rules:
   - name: Runway API Key
     id: kingfisher.runway.1
-    pattern: |          
+    pattern: |
       (?x)
       \b
       (               

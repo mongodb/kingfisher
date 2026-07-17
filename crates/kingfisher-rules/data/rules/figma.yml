@@ -22,13 +22,13 @@ rules:
       content:
         request:
           headers:
-            X-Figma-Token: '{{ TOKEN }}'
+            X-Figma-Token: "{{ TOKEN }}"
           method: GET
           url: https://api.figma.com/v1/me
           response_matcher:
             - report_response: true
             - type: WordMatch
-              words: 
+              words:
                 - "Invalid token"
               negative: true
 
@@ -55,12 +55,12 @@ rules:
       content:
         request:
           headers:
-            X-Figma-Token: '{{ TOKEN }}'
+            X-Figma-Token: "{{ TOKEN }}"
           method: GET
           url: https://api.figma.com/v1/me
           response_matcher:
             - report_response: true
             - type: WordMatch
-              words: 
+              words:
                 - "Invalid token"
               negative: true

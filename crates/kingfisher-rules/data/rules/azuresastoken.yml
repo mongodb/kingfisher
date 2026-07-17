@@ -14,7 +14,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'sv=2021-06-08&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2024-12-31&st=2024-01-01&spr=https&sig=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890%2BABCDE%3D'
+      - "sv=2021-06-08&ss=bfqt&srt=sco&sp=rwdlacupiytfx&se=2024-12-31&st=2024-01-01&spr=https&sig=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890%2BABCDE%3D"
     references:
       - https://learn.microsoft.com/en-us/azure/storage/common/storage-sas-overview
 
@@ -32,7 +32,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'https://mystorageaccount.blob.core.windows.net/mycontainer/myblob?sv=2021-06-08&st=2024-01-01&se=2024-12-31&sr=b&sp=r&sig=AbCdEfGhIjKlMnOp%2BQrStUvWxYz%3D'
+      - "https://mystorageaccount.blob.core.windows.net/mycontainer/myblob?sv=2021-06-08&st=2024-01-01&se=2024-12-31&sr=b&sp=r&sig=AbCdEfGhIjKlMnOp%2BQrStUvWxYz%3D"
     validation:
       type: Http
       content:

@@ -14,7 +14,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'ROOTLY_API_KEY=rootly_abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
+      - "ROOTLY_API_KEY=rootly_abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
     validation:
       type: Http
       content:

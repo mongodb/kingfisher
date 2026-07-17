@@ -19,7 +19,7 @@ rules:
     confidence: medium
     examples:
       - 'confluence_pat: "MjQzMjkzMDQyNTI1OgTGWAoKFZTh/Is7cl+cdAI0Lbxo"'
-      - 'wiki_PAT=MDgxODgyOTYwNTA5OkFSuEyq1mtrLTVNGAPyka+/Vyfv'
+      - "wiki_PAT=MDgxODgyOTYwNTA5OkFSuEyq1mtrLTVNGAPyka+/Vyfv"
     references:
       - https://confluence.atlassian.com/enterprise/using-personal-access-tokens-1026032365.html
       - https://developer.atlassian.com/server/confluence/confluence-server-rest-api/
@@ -40,7 +40,7 @@ rules:
             - type: WordMatch
               words:
                 - '"type":"known"'
-          url: '{{ CONFLUENCE_BASE_URL }}/rest/api/user/current'
+          url: "{{ CONFLUENCE_BASE_URL }}/rest/api/user/current"
     depends_on_rule:
       - rule_id: kingfisher.confluence.2
         variable: CONFLUENCEDCDOMAIN

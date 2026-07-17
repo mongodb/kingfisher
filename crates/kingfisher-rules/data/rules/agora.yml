@@ -46,7 +46,7 @@ rules:
     confidence: medium
     examples:
       - "agora.app_certificate=397a3af3db1950bdbd84f4e4ec18ebef"
-      - "agora.app_secret = \"127a3af3db1950b8dbd4fe440c28ebef\""
+      - 'agora.app_secret = "127a3af3db1950b8dbd4fe440c28ebef"'
     validation:
       type: Http
       content:

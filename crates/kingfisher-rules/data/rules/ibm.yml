@@ -20,8 +20,8 @@ rules:
       - ibmcloud_apikey = abcdef0123_56789abcdef0123456789abcdef01234
       - ibm_platform_key="f-_RrJDVnuVh07HNTcmnQx_b6CbcQsxmEarVm9P_RWtF"
     references:
-      - https://cloud.ibm.com/docs/account?topic=account-userapikey 
-      - https://cloud.ibm.com/apidocs/iam-identity-token-api 
+      - https://cloud.ibm.com/docs/account?topic=account-userapikey
+      - https://cloud.ibm.com/apidocs/iam-identity-token-api
 
     validation:
       type: Http
@@ -29,10 +29,10 @@ rules:
         request:
           method: GET
           headers:
-            Authorization: Basic Yng6Yng=        # public “bx:bx” client credentials
+            Authorization: Basic Yng6Yng= # public “bx:bx” client credentials
             Accept: application/json
           url: https://iam.cloud.ibm.com/v1/apikeys/details?apikey={{ TOKEN }}
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status: [200]                       
+              status: [200]

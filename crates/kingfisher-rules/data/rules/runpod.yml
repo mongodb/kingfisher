@@ -14,7 +14,7 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'RUNPOD_API_KEY=rpa_ABC123DEF456GHI789JKL012MNO345PQR678STUVX9y2z7'
+      - "RUNPOD_API_KEY=rpa_ABC123DEF456GHI789JKL012MNO345PQR678STUVX9y2z7"
     validation:
       type: Http
       content:

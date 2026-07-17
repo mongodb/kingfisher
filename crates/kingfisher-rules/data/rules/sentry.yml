@@ -22,20 +22,24 @@ rules:
       - '"sentry-key": "3214567890cbadef3214567890cbadef3214567890cbadef3214567890cbadef"'
     references:
       - https://docs.sentry.io/api/auth/
+      - https://docs.sentry.io/api/organizations/
+      - https://docs.sentry.io/api/permissions/
+      - https://github.com/getsentry/sentry-cli/blob/0f55bf46f56e544503dc355eb7df3336414d49c2/src/utils/auth_token/user_auth_token.rs
+    # Validator: 200=organization access; 403=authenticated without org:read (active);
+    # 401=expired, revoked, absent, or invalid.
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: https://sentry.io/api/0/projects/
+          url: https://sentry.io/api/0/organizations/
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status:
-                - 200
+              status: [200, 403]
 
   - name: Sentry Organization Token
     id: kingfisher.sentry.2
@@ -43,19 +47,13 @@ rules:
       (?x)
       \b
       (
-        sntrys_eyJpYXQiO
-        [a-zA-Z0-9+/]{10,192}
-        (?:
-          LCJyZWdpb25fdXJs
-          | InJlZ2lvbl91cmwi
-          | cmVnaW9uX3VybCI6
-        )
-        [a-zA-Z0-9+/]{10,192}
+        sntrys_
+        [a-zA-Z0-9+/]{16,512}
         ={0,2}
         _
         [a-zA-Z0-9+/]{43}
       )
-      \b
+      (?:$|[^A-Za-z0-9+/])
     pattern_requirements:
       min_digits: 2
     min_entropy: 4.5
@@ -65,21 +63,26 @@ rules:
       - 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
     references:
       - https://docs.sentry.io/api/auth/
-      - https://github.com/getsentry/rfcs/blob/main/text/0091-ci-upload-tokens.md
+      - https://docs.sentry.io/account/auth-tokens/
+      - https://docs.sentry.io/api/organizations/
+      - https://docs.sentry.io/api/permissions/
+      - https://github.com/getsentry/rfcs/blob/3ffac9cc6a50ab179aa26a21ec0efc2eddb41271/text/0091-ci-upload-tokens.md
+      - https://github.com/getsentry/sentry-cli/blob/0f55bf46f56e544503dc355eb7df3336414d49c2/src/utils/auth_token/org_auth_token.rs
+    # Validator: 200=organization access; 403=authenticated without org:read (active);
+    # 401=expired, revoked, absent, or invalid.
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: https://sentry.io/api/0/projects/
+          url: https://sentry.io/api/0/organizations/
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status:
-                - 200
+              status: [200, 403]
 
   - name: Sentry User Token
     id: kingfisher.sentry.3
@@ -87,7 +90,8 @@ rules:
       (?xi)
       \b
       (
-        sntryu_[a-f0-9]{64}
+        sntryu_
+        [a-f0-9]{64}
       )
       \b
     pattern_requirements:
@@ -99,17 +103,21 @@ rules:
       - SNTRY_USER="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"
     references:
       - https://docs.sentry.io/api/auth/
+      - https://docs.sentry.io/api/organizations/
+      - https://docs.sentry.io/api/permissions/
+      - https://github.com/getsentry/sentry-cli/blob/0f55bf46f56e544503dc355eb7df3336414d49c2/src/utils/auth_token/user_auth_token.rs
+    # Validator: 200=organization access; 403=authenticated without org:read (active);
+    # 401=expired, revoked, absent, or invalid.
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: https://sentry.io/api/0/projects/
+          url: https://sentry.io/api/0/organizations/
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status:
-                - 200
+              status: [200, 403]

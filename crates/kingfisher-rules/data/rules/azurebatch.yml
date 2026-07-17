@@ -22,17 +22,17 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'AZURE_BATCH_KEY=oqb4TdY9T0hphvktd5fJnMiHuQqzVy1jd5sSuOpAbGkaoqTlrHl0BOJN2okcasinVLOJzfDbZo1L+ASt68RAhA=='
+      - "AZURE_BATCH_KEY=oqb4TdY9T0hphvktd5fJnMiHuQqzVy1jd5sSuOpAbGkaoqTlrHl0BOJN2okcasinVLOJzfDbZo1L+ASt68RAhA=="
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: '{{ BATCH_URL }}/applications?api-version=2020-09-01.12.0'
+          url: "{{ BATCH_URL }}/applications?api-version=2020-09-01.12.0"
           headers:
             Accept: application/json
             Content-Type: application/json
-            Date: '{{ REQUEST_RFC1123_DATE }}'
+            Date: "{{ REQUEST_RFC1123_DATE }}"
             Authorization: |
               {%- assign host = BATCH_URL | split: "://" | last | split: "/" | first -%}
               {%- assign account_name = host | split: "." | first -%}

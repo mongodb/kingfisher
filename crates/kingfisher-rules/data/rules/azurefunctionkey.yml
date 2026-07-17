@@ -13,7 +13,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'https://myfunc.azurewebsites.net/api/HttpTrigger1?code=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/+=='
+      - "https://myfunc.azurewebsites.net/api/HttpTrigger1?code=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890/+=="
     validation:
       type: Http
       content:
@@ -50,7 +50,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'AZURE_FUNCTION_KEY=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGH/+=='
-      - 'x-functions-key: AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGH'
+      - "AZURE_FUNCTION_KEY=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGH/+=="
+      - "x-functions-key: AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGH"
     references:
       - https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-http-webhook-trigger

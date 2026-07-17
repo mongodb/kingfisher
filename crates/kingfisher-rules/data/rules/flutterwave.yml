@@ -36,7 +36,7 @@ rules:
     confidence: medium
     examples:
       - FLW_SECRET_KEY=FLWSECK_TEST-a514d8f1abd080db1502a144f22954dc-X
-      - 'Authorization: Bearer FLWSECK_TEST-5b1f0a33de9c41748c2a7e9b51d3c6af-X'
+      - "Authorization: Bearer FLWSECK_TEST-5b1f0a33de9c41748c2a7e9b51d3c6af-X"
       - seckey=FLWSECK-e6db11d1f8a6208de8cb2f94e293450e-X
     validation:
       type: Http

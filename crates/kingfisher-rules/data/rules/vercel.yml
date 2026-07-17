@@ -328,7 +328,7 @@ rules:
             - type: WordMatch
               words:
                 - '"choices"'
-                - 'valid credit card'
+                - "valid credit card"
               match_all_words: false
     references:
       - https://vercel.com/docs/ai-gateway/authentication-and-byok/authentication

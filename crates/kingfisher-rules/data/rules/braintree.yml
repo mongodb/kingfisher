@@ -24,7 +24,7 @@ rules:
     confidence: medium
     examples:
       - 'BRAINTREE_TOKENIZATION_KEY="sandbox_f252zhq7_hh4cpc39zq4rgjcg"'
-      - 'braintree_token = production_abc12def_ghij34klmnop5678'
+      - "braintree_token = production_abc12def_ghij34klmnop5678"
     negative_examples:
       - sandbox_f252zhq7_hh4cpc39zq4rgjcg
       - 'BRAINTREE_URL="https://api.braintreegateway.com"'

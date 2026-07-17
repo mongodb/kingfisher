@@ -19,7 +19,7 @@ rules:
     confidence: medium
     examples:
       - clockwork_api_key=5a1c7e9d3b6f0a4c8d2e1f7a9b3c5d6e8f0a1b2c
-      - 'clockworksms access token: 9f0e1d2c3b4a59687766554433221100abcde123'
+      - "clockworksms access token: 9f0e1d2c3b4a59687766554433221100abcde123"
     references:
       - https://www.clockworksms.com/doc/
       - https://www.clockworksms.com/doc/reference/faqs/security/

@@ -14,9 +14,9 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'BUILDER_PRIVATE_KEY=bpk-326204939cb941afb1431bf19bdc007d'
+      - "BUILDER_PRIVATE_KEY=bpk-326204939cb941afb1431bf19bdc007d"
       - 'builder_key: "bpk-7e3094a4265949f69b98a02b80e82cb8"'
-      - 'bpk-3d990a73da74423ca9ac00b9a2cf0f08'
+      - "bpk-3d990a73da74423ca9ac00b9a2cf0f08"
     references:
       - https://www.builder.io/c/docs/using-your-api-key
       - https://www.builder.io/c/docs/write-api

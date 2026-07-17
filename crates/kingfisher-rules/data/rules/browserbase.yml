@@ -12,7 +12,7 @@ rules:
     confidence: medium
     examples:
       # Synthetic, format-valid examples; these are not issued credentials.
-      - 'BROWSERBASE_API_KEY=bb_live_a1b2c3d4e5f6g7h8i9j0k1l2m3n'
+      - "BROWSERBASE_API_KEY=bb_live_a1b2c3d4e5f6g7h8i9j0k1l2m3n"
       - 'browserbaseApiKey: "bb_test_Z9y8X7w6V5u4T3s2R1q0Pn_Ml-K"'
     references:
       - https://docs.browserbase.com/integrations/agent-browser/quickstart

@@ -13,7 +13,7 @@ rules:
     pattern_requirements:
       min_digits: 2
       min_uppercase: 1
-      min_lowercase: 1    
+      min_lowercase: 1
     min_entropy: 3.3
     confidence: medium
     examples:
@@ -36,7 +36,7 @@ rules:
           headers:
             Content-Type: application/json
             anthropic-version: "2023-06-01"
-            x-api-key: '{{ TOKEN }}'
+            x-api-key: "{{ TOKEN }}"
           method: POST
           response_matcher:
             - report_response: true
@@ -47,7 +47,7 @@ rules:
             - type: WordMatch
               words:
                 - '"type":"message"'
-                - 'credit balance is too low'
+                - "credit balance is too low"
           url: https://api.anthropic.com/v1/messages
 
   - name: Anthropic Admin API Key
@@ -77,7 +77,7 @@ rules:
           method: GET
           url: https://api.anthropic.com/v1/organizations/me
           headers:
-            x-api-key: '{{ TOKEN }}'
+            x-api-key: "{{ TOKEN }}"
             anthropic-version: "2023-06-01"
             content-type: application/json
           response_matcher:
@@ -133,7 +133,7 @@ rules:
             - type: WordMatch
               words:
                 - '"type":"message"'
-                - 'credit balance is too low'
+                - "credit balance is too low"
           url: https://api.anthropic.com/v1/messages
     # Revocation not added: Claude Code OAuth tokens are managed via `claude auth
     # logout` / `/logout` and the credentials file; no public HTTP self-revoke

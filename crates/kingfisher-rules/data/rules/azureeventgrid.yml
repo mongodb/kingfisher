@@ -22,7 +22,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'AZURE_EVENT_GRID_KEY=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFG=='
-      - 'aeg-sas-key: AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFG=='
+      - "AZURE_EVENT_GRID_KEY=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFG=="
+      - "aeg-sas-key: AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFG=="
     references:
       - https://learn.microsoft.com/en-us/azure/event-grid/

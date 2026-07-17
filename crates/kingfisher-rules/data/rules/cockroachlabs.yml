@@ -16,9 +16,9 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'CCDB1_z4m5MjGmTx3O4sK2IxvHIh_zv4Cbt3lNujc7f9TO9cZ1qGU7tyJhxrw01I0rWnZ'
-      - 'CCDB1_z6ju5QJ1vZf1SGhBr2yM97_vqqya4b8lKf2ZRfI3OFHZ478xfi6SbqcIbts4nyp'
-      - 'CCDB1_OMxzun9l3g5vjIJRqKqPP7_9HUwzxJDBGpEvtbN3HjJb7L7zirVo3qSCAi1MCct'
+      - "CCDB1_z4m5MjGmTx3O4sK2IxvHIh_zv4Cbt3lNujc7f9TO9cZ1qGU7tyJhxrw01I0rWnZ"
+      - "CCDB1_z6ju5QJ1vZf1SGhBr2yM97_vqqya4b8lKf2ZRfI3OFHZ478xfi6SbqcIbts4nyp"
+      - "CCDB1_OMxzun9l3g5vjIJRqKqPP7_9HUwzxJDBGpEvtbN3HjJb7L7zirVo3qSCAi1MCct"
     validation:
       type: Http
       content:

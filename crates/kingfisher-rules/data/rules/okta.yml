@@ -16,8 +16,8 @@ rules:
     min_entropy: 3.3
     examples:
       - okta_api_token=00hqNORUpnTcdFWA5WEM4YwOkw6RXeFw21lFDRKmY1
-      - 'okta_secret:  00QCjAl4MlV-WPXM-ABCDEFGHIJKL-0HmjFx-vbGua'
-      - 'Authorization: SSWS 00QCjAl4MlV-WPXM-ABCDEFGHIJKL-0HmjFx-vbGua'
+      - "okta_secret:  00QCjAl4MlV-WPXM-ABCDEFGHIJKL-0HmjFx-vbGua"
+      - "Authorization: SSWS 00QCjAl4MlV-WPXM-ABCDEFGHIJKL-0HmjFx-vbGua"
       - |
         variable "corp_okta_api_token" {
           default = "004EWTpRQT_HJtG_nL-agxacgzYHjxPcF99kJsFzWg"

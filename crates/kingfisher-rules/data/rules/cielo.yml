@@ -20,7 +20,7 @@ rules:
     visible: false
     examples:
       - 'CIELO_CLIENT_ID="aa11bb22-cc33-dd44-ee55-ff6677889900"'
-      - 'cielo_merchant_id = aa11bb22-cc33-dd44-ee55-ff6677889900'
+      - "cielo_merchant_id = aa11bb22-cc33-dd44-ee55-ff6677889900"
     references:
       - https://github.com/gitleaks/gitleaks/pull/2118
       - https://docs.cielo.com.br/ecommerce-cielo
@@ -44,7 +44,7 @@ rules:
     confidence: medium
     examples:
       - 'CIELO_CLIENT_SECRET="LBphAfgBYlKksUJRkgJsMZHi24GD60Uf"'
-      - 'cielo_merchant_key = SIqNqWnyX8UkQnNBCyJwz1vXZk4MrW4AB8Z0YsUg'
+      - "cielo_merchant_key = SIqNqWnyX8UkQnNBCyJwz1vXZk4MrW4AB8Z0YsUg"
     references:
       - https://github.com/gitleaks/gitleaks/pull/2118
       - https://docs.cielo.com.br/ecommerce-cielo

@@ -38,4 +38,3 @@ rules:
               words:
                 - '"cidr"'
               match_all_words: true
-

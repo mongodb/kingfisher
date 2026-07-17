@@ -5,7 +5,7 @@ rules:
       (?x)
       \b
       (
-        ptk_[a-zA-Z0-9_-]{20,80}
+        ptk_[a-zA-Z0-9_-]{40,80}
       )
       \b
     pattern_requirements:
@@ -14,9 +14,12 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'HOP_TOKEN=ptk_AbCdEfGhIjKlMnOpQrStUvWxYz123456'
+      - "HOP_TOKEN=ptk_c183M2U0N2RlYzZjZTQ1ZmM5M2MxNmViNWNiZWU0ZWIwMV81MDcyNjAzNjAyNjc2MTIzM0"
     references:
       - https://docs.hop.io/reference/rest-api
+      - https://docs.hop.io/reference/project-tokens
+      - https://github.com/hopinc/docs/blob/16f3b923f0d52f7ae675d88d399de903b1140182/reference/rest-api.mdx
+      - https://github.com/hopinc/js/blob/adfc06da14c6a4ad32efaa291b4f35da26f0f208/README.md
     validation:
       type: Http
       content:
@@ -38,7 +41,7 @@ rules:
       (?x)
       (?:^|['"\x60\s>=:(,])
       (
-        hop_pat_[a-zA-Z0-9_-]{20,80}
+        hop_pat_[a-zA-Z0-9_-]{20,50}
       )
       (?:$|['"\x60\s<),])
     pattern_requirements:
@@ -50,6 +53,9 @@ rules:
       - 'HOP_PAT="hop_pat_AbCdEfGhIjKlMnOpQrStUvWxYz123456"'
     references:
       - https://docs.hop.io/reference/rest-api
+      - https://docs.hop.io/reference/project-tokens
+      - https://github.com/hopinc/docs/blob/16f3b923f0d52f7ae675d88d399de903b1140182/reference/rest-api.mdx
+      - https://github.com/hopinc/js/blob/adfc06da14c6a4ad32efaa291b4f35da26f0f208/README.md
     validation:
       type: Http
       content:
