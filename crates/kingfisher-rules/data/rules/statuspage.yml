@@ -21,7 +21,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'statuspage_api: OAuth 89a229ce1a8dbcf9ff30430fbe35eb4c0426574bca932061892cefd2138aa4b1'
+      - "statuspage_api: OAuth 89a229ce1a8dbcf9ff30430fbe35eb4c0426574bca932061892cefd2138aa4b1"
       - statuspage_key = 123e4567-e89b-12d3-a456-426614174000
     references:
       - https://developer.statuspage.io/

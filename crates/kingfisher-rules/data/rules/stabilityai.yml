@@ -1,7 +1,7 @@
 rules:
   - name: Stability AI API Key
     id: kingfisher.stabilityai.1
-    pattern: |           
+    pattern: |
       (?x)
       \b
       (                

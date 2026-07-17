@@ -42,10 +42,10 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - '// SumoLogic Private Token: M7nP4qR2tV9wX5yZ8aB1cD3eF5gH7iJ9kL2mN4oP6qR8sT0uV2wX4yZ6aB8cD0eF'
+      - "// SumoLogic Private Token: M7nP4qR2tV9wX5yZ8aB1cD3eF5gH7iJ9kL2mN4oP6qR8sT0uV2wX4yZ6aB8cD0eF"
     references:
       - https://help.sumologic.com/docs/manage/security/access-keys/
-    
+
     validation:
       type: Http
       content:
@@ -63,7 +63,7 @@ rules:
     depends_on_rule:
       - rule_id: "kingfisher.sumologic.1"
         variable: ACCESS_ID
-    
+
     revocation:
       type: Http
       content:

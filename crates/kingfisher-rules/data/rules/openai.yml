@@ -22,7 +22,7 @@ rules:
       content:
         request:
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true
@@ -55,7 +55,7 @@ rules:
       content:
         request:
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true
@@ -86,7 +86,7 @@ rules:
       content:
         request:
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true

@@ -10,7 +10,7 @@ rules:
       )
       \b
     pattern_requirements:
-      min_digits: 2      
+      min_digits: 2
     min_entropy: 3.5
     confidence: medium
     examples:
@@ -24,13 +24,13 @@ rules:
         request:
           method: POST
           headers:
-            Authorization: '{{ TOKEN }}'
+            Authorization: "{{ TOKEN }}"
             Content-Type: application/json
           body: >
             {
               "query": "query { issues(first: 1) { nodes { id } } }"
             }
-          url: https://api.linear.app/graphql 
+          url: https://api.linear.app/graphql
           response_matcher:
             - report_response: true
             - type: StatusMatch

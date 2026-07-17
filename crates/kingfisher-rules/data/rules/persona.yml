@@ -15,8 +15,8 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'PERSONA_API_KEY=persona_production_abc123def456ghi789jkl012mno345pqr'
-      - 'api_key: persona_sandbox_abc123def456ghi789jkl012mno345pqr'
+      - "PERSONA_API_KEY=persona_production_abc123def456ghi789jkl012mno345pqr"
+      - "api_key: persona_sandbox_abc123def456ghi789jkl012mno345pqr"
     validation:
       type: Http
       content:

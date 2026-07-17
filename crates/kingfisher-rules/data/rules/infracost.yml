@@ -24,7 +24,7 @@ rules:
           method: POST
           url: https://pricing.api.infracost.io/graphql
           headers:
-            X-Api-Key: '{{ TOKEN }}'
+            X-Api-Key: "{{ TOKEN }}"
             Content-Type: application/json
             Accept: application/json
           body: '{"query":"{ ping }"}'

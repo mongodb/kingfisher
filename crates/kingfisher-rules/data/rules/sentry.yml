@@ -34,7 +34,7 @@ rules:
           method: GET
           url: https://sentry.io/api/0/organizations/
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true
@@ -77,7 +77,7 @@ rules:
           method: GET
           url: https://sentry.io/api/0/organizations/
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true
@@ -115,7 +115,7 @@ rules:
           method: GET
           url: https://sentry.io/api/0/organizations/
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true

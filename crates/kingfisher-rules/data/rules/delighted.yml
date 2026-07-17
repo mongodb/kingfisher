@@ -17,8 +17,8 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - 'DELIGHTED_API_KEY=dELi1a2B3c4D5e6F7g8H9i0JkLm1N2o3P'
-      - 'delighted_api_key: Rq4s5T6u7V8w9X0yZ1a2B3c4D5e6F7'
+      - "DELIGHTED_API_KEY=dELi1a2B3c4D5e6F7g8H9i0JkLm1N2o3P"
+      - "delighted_api_key: Rq4s5T6u7V8w9X0yZ1a2B3c4D5e6F7"
     references:
       - https://app.delighted.com/docs/api
     validation:

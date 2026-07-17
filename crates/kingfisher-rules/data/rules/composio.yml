@@ -15,7 +15,7 @@ rules:
     confidence: medium
     examples:
       - 'COMPOSIO_API_KEY="ak_LPktODfyN3W_btXn_d47"'
-      - 'composio x-api-key: ak_0f1e2d3c4b5a69788796'
+      - "composio x-api-key: ak_0f1e2d3c4b5a69788796"
     references:
       - https://docs.composio.dev/reference/authentication
       - https://docs.composio.dev/api-reference/projects/post-org-project-by-project-id-api-keys-create

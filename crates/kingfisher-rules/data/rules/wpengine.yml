@@ -53,5 +53,5 @@ rules:
     confidence: medium
     min_entropy: 1.0
     examples:
-      - 'WPE_ACCOUNT_NAME=prod-account'
+      - "WPE_ACCOUNT_NAME=prod-account"
       - 'account_name: "team-site-1"'

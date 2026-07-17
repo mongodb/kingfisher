@@ -17,7 +17,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'CALENDLY_TOKEN=eyJraWQiOiIxMjM0NTY3ODkwYWJjZGVmMDEyMzQ1Njc4OTBhYmNkZWYiLCJ0eXAiOiJQQVQiLCJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJodHRwczovL2F1dGguY2FsZW5kbHkuY29tIiwiaWF0IjoxNzAwMDAwMDAwLCJ1c2VyX3V1aWQiOiIxMjM0NTY3OC1hYmNkIn0.Yz2Kx8mN4pR6tV8xZ0bD2fH4jL6nP8rT0vX2zA4cE6gIk5mQw7hJ9pL3sU1yB'
+      - "CALENDLY_TOKEN=eyJraWQiOiIxMjM0NTY3ODkwYWJjZGVmMDEyMzQ1Njc4OTBhYmNkZWYiLCJ0eXAiOiJQQVQiLCJhbGciOiJFUzI1NiJ9.eyJpc3MiOiJodHRwczovL2F1dGguY2FsZW5kbHkuY29tIiwiaWF0IjoxNzAwMDAwMDAwLCJ1c2VyX3V1aWQiOiIxMjM0NTY3OC1hYmNkIn0.Yz2Kx8mN4pR6tV8xZ0bD2fH4jL6nP8rT0vX2zA4cE6gIk5mQw7hJ9pL3sU1yB"
       - 'calendly_api_key: "eyJraWQiOiJhYmNkZWYwMTIzNDU2Nzg5MGFiY2RlZjAxMjM0NTY3ODkwMTIzIiwidHlwIjoiUEFUIiwiYWxnIjoiRVMyNTYifQ.eyJpc3MiOiJodHRwczovL2F1dGguY2FsZW5kbHkuY29tIiwiaWF0IjoxNzI5NDM3MDAwfQ.Rq4s5T6u7V8w9X0yZ1a2B3c4D5e6F7gH8iJ9kL0mN1oP2qR3sT4uV5wX6yZ7a"'
     references:
       - https://developer.calendly.com/how-to-authenticate-with-personal-access-tokens
@@ -35,4 +35,3 @@ rules:
             - report_response: true
             - type: StatusMatch
               status: [200]
-

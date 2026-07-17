@@ -17,7 +17,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - "CARTO_KEY=\"eyJhbGciOiJIUzI1NiJ9.eyJhIjoiYWNfMjQ2M3dpNCIsImp0aSI6ImNkMDI2ZDk5In0.N2mk5Zg-e7_XC3NtLIM9UD8usbFz5pKRalGVYGkgZbZ\""
+      - 'CARTO_KEY="eyJhbGciOiJIUzI1NiJ9.eyJhIjoiYWNfMjQ2M3dpNCIsImp0aSI6ImNkMDI2ZDk5In0.N2mk5Zg-e7_XC3NtLIM9UD8usbFz5pKRalGVYGkgZbZ"'
       - "carto_api_key = 'eyJhbGciOiJIUzI1NiJ9.eyJhIjoiYWNfY2RlZmdoIiwianRpIjoiYWI2MTIzNDUifQ.BcDeFgHiJkLmNoPqRsTuVwXy'"
     references:
       - https://api-docs.carto.com

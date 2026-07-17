@@ -25,7 +25,7 @@ rules:
     confidence: medium
     examples:
       - KUCOIN_API_KEY=4f4ecb6f11b1a70001c8e2ff
-      - 'kucoin_api_key: a1b2c3d4e5f60718293a4b5c'
+      - "kucoin_api_key: a1b2c3d4e5f60718293a4b5c"
     references:
       - https://www.kucoin.com/docs-new/authentication
       - https://www.kucoin.com/docs-new/api-3470125
@@ -56,7 +56,7 @@ rules:
     confidence: medium
     examples:
       - KUCOIN_API_SECRET=7d70f6c7-42e9-4261-8a8d-8ca2d5028d4f
-      - 'kucoin_secret: a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+      - "kucoin_secret: a1b2c3d4-e5f6-7890-abcd-ef1234567890"
     validation:
       type: Http
       content:
@@ -69,7 +69,7 @@ rules:
             KC-API-KEY: "{{ KUCOIN_KEY }}"
             KC-API-TIMESTAMP: "{{ REQUEST_UNIX_MILLIS }}"
             KC-API-KEY-VERSION: "2"
-            KC-API-PASSPHRASE: '{%- assign passphrase = KUCOIN_PASSPHRASE | hmac_sha256: TOKEN -%}{{ passphrase }}'
+            KC-API-PASSPHRASE: "{%- assign passphrase = KUCOIN_PASSPHRASE | hmac_sha256: TOKEN -%}{{ passphrase }}"
             KC-API-SIGN: '{%- assign prehash = REQUEST_UNIX_MILLIS | append: "GET" | append: "/api/v1/accounts" -%}{{ prehash | hmac_sha256: TOKEN }}'
           response_matcher:
             - report_response: true
@@ -114,6 +114,6 @@ rules:
     visible: false
     examples:
       - KUCOIN_API_PASSPHRASE=my-strong-passphrase
-      - 'kucoin_passphrase: S3cur3Passphrase123'
+      - "kucoin_passphrase: S3cur3Passphrase123"
     references:
       - https://www.kucoin.com/docs-new/authentication

@@ -21,8 +21,8 @@ rules:
     confidence: medium
     visible: false
     examples:
-      - 'canva client id: OC-AZ2dqZiY_lec'
-      - 'CANVA_CLIENT_ID=OC-FAB12-AbCdEf'
+      - "canva client id: OC-AZ2dqZiY_lec"
+      - "CANVA_CLIENT_ID=OC-FAB12-AbCdEf"
     references:
       - https://www.canva.dev/docs/connect/authentication/
 
@@ -41,7 +41,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'CANVA_CLIENT_SECRET=cnvcav3RRFkl36rsXClN3-Dsygjl_oGT1-xMhXV70oxnGi6s811bfada'
+      - "CANVA_CLIENT_SECRET=cnvcav3RRFkl36rsXClN3-Dsygjl_oGT1-xMhXV70oxnGi6s811bfada"
     depends_on_rule:
       - rule_id: kingfisher.canva.2
         variable: CLIENT_ID

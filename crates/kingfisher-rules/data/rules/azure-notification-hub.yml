@@ -136,7 +136,7 @@ rules:
       content:
         request:
           method: GET
-          url: 'https://{{ NH_HOST }}/{{ NH_HUB }}/registrations/?api-version=2015-01'
+          url: "https://{{ NH_HOST }}/{{ NH_HUB }}/registrations/?api-version=2015-01"
           headers:
             Accept: application/atom+xml
             Authorization: |

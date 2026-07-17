@@ -28,7 +28,7 @@ rules:
             - report_response: true
             - type: StatusMatch
               status: [200]
-            - type: WordMatch     
+            - type: WordMatch
               words: ['"locations":']
     references:
       - https://developer.squareup.com/

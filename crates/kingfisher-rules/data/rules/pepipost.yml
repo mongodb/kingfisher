@@ -19,7 +19,7 @@ rules:
     confidence: medium
     examples:
       - 'pepipost_api_key = "216fdaeeb975729fae923d5a4fd12aab"'
-      - 'Pepipost access key: fe228f219e9cb0eb53f16947ccf25ec8'
+      - "Pepipost access key: fe228f219e9cb0eb53f16947ccf25ec8"
     references:
       - https://developers.pepipost.com/api/getstarted/overview/
     validation:

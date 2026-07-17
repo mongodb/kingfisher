@@ -11,6 +11,6 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'INFISICAL_TOKEN=st.a1b2c3d4e5f6.7890abcdef12.f1e2d3c4b5a69788796a5b4c3d2e1f0'
+      - "INFISICAL_TOKEN=st.a1b2c3d4e5f6.7890abcdef12.f1e2d3c4b5a69788796a5b4c3d2e1f0"
     references:
       - https://infisical.com/docs/internals/service-tokens

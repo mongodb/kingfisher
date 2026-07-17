@@ -25,7 +25,7 @@ rules:
           headers:
             Authorization: Bearer {{ TOKEN }}
           method: GET
-          url: https://api.netlify.com/api/v1/user        
+          url: https://api.netlify.com/api/v1/user
           response_matcher:
             - report_response: true
             - type: StatusMatch
@@ -139,7 +139,7 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - 'NETLIFY_AUTH_TOKEN=nfp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0'
+      - "NETLIFY_AUTH_TOKEN=nfp_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0"
     references:
       - https://docs.netlify.com/api/get-started/#authentication
     validation:

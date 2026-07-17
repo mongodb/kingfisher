@@ -14,7 +14,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'EBAY_CLIENT_ID=MyApp-MyApp-PRD-1a2b3c4d-567890ab'
+      - "EBAY_CLIENT_ID=MyApp-MyApp-PRD-1a2b3c4d-567890ab"
     references:
       - https://developer.ebay.com/api-docs/static/oauth-credentials.html
 
@@ -33,7 +33,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'EBAY_SANDBOX_CLIENT_ID=MyApp-MyApp-SBX-1a2b3c4d-567890ab'
+      - "EBAY_SANDBOX_CLIENT_ID=MyApp-MyApp-SBX-1a2b3c4d-567890ab"
     references:
       - https://developer.ebay.com/api-docs/static/oauth-credentials.html
 
@@ -52,7 +52,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'EBAY_CLIENT_SECRET=PRD-1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b'
-      - 'EBAY_SANDBOX_SECRET=SBX-1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b'
+      - "EBAY_CLIENT_SECRET=PRD-1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b"
+      - "EBAY_SANDBOX_SECRET=SBX-1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b"
     references:
       - https://developer.ebay.com/api-docs/static/oauth-credentials.html

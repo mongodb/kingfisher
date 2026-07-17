@@ -91,7 +91,7 @@ rules:
       content:
         request:
           method: GET
-          url: 'https://{{ ZENDESK_HOST }}/api/v2/users/me.json'
+          url: "https://{{ ZENDESK_HOST }}/api/v2/users/me.json"
           headers:
             Accept: application/json
             Authorization: 'Basic {{ ZENDESK_EMAIL | append: "/token:" | append: TOKEN | b64enc }}'

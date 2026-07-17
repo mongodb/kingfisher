@@ -17,7 +17,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'SILICONFLOW_API_KEY=sk-aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW3xY5zA7b9C1d3E5f'
+      - "SILICONFLOW_API_KEY=sk-aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW3xY5zA7b9C1d3E5f"
       - 'siliconflow api_key="sk-Z9y8X7w6V5u4T3s2R1q0PnMlKjIhGfEdCbA0987654321Z0Y"'
     references:
       - https://docs.siliconflow.com/en/usercases/use-siliconcloud-in-ClaudeCode

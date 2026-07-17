@@ -16,10 +16,10 @@ rules:
     confidence: medium
     examples:
       - 'REDIRECT_PIZZA_TOKEN="rpa_Qj7mN4vK8sL2xP6zT9aBcD3eF5gH1j"'
-      - 'Authorization: Bearer rpa_P7rT2mK9vL4qN8sX6cA3dF5gH1jZ0Q'
+      - "Authorization: Bearer rpa_P7rT2mK9vL4qN8sX6cA3dF5gH1jZ0Q"
     references:
       - https://docs.github.com/en/code-security/reference/secret-security/supported-secret-scanning-patterns
-      - https://redirect.pizza/api/v1/domains
+      - https://redirect.pizza/support/api
     validation:
       type: Http
       content:

@@ -40,4 +40,9 @@ rules:
               words: ['"result"']
             - type: WordMatch
               negative: true
-              words: ["invalid project id", "project id required in the URL", "invalid project id or project secret"]
+              words:
+                [
+                  "invalid project id",
+                  "project id required in the URL",
+                  "invalid project id or project secret",
+                ]

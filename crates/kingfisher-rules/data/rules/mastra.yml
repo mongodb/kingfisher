@@ -16,10 +16,11 @@ rules:
     confidence: medium
     examples:
       - 'MASTRA_API_KEY="msk_7fKp2Rz9Qa4Vn8Lm3Tx6Yc5Bg1Hd0JsW"'
-      - 'Authorization: Bearer msk_P7rT2mK9vL4qN8sX6cA3dF5gH1jZ0QaB'
+      - "Authorization: Bearer msk_P7rT2mK9vL4qN8sX6cA3dF5gH1jZ0QaB"
     references:
       - https://gateway.mastra.ai/docs
       - https://gateway.mastra.ai/docs/models
+      - https://github.com/mastra-ai/mastra/blob/e49867a7872158f12eb758fa33d9b9b1117bec13/docs/src/content/en/reference/mastra-platform/api.mdx
     validation:
       type: Http
       content:

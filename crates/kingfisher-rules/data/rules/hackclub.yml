@@ -11,6 +11,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'HACKCLUB_API_KEY=sk-hc-v1-a1b2c3d4e5f60708a9b0c1d2e3f4a5b6c7d8e9f0a1b2c3d4e5f60708a9b0c1d2'
+      - "HACKCLUB_API_KEY=sk-hc-v1-9f014e0f299f43848b4aa17fa0c69b3f5347bb18ef7f4627b5cea30023ddc1f0"
     references:
       - https://jams.hackclub.com/jam/ai-travel
+      - https://github.com/hackclub/ai/blob/7c1f145fefe5b4a97f5c8e605de730a40a61bfe2/src/routes/api.tsx

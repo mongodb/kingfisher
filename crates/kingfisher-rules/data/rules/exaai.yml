@@ -22,7 +22,7 @@ rules:
     examples:
       - EXA_API_KEY=3f5a9c1e-2b4d-4a6f-8c10-1d2e3f4a5b6c
       - 'exa_api_key: "3f5a9c1e-2b4d-4a6f-8c10-1d2e3f4a5b6c"'
-      - 'x-api-key: 3f5a9c1e-2b4d-4a6f-8c10-1d2e3f4a5b6c'
+      - "x-api-key: 3f5a9c1e-2b4d-4a6f-8c10-1d2e3f4a5b6c"
     references:
       - https://docs.exa.ai/reference/answer
       - https://docs.exa.ai/reference/getting-started

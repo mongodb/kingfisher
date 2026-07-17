@@ -22,7 +22,7 @@ rules:
     min_entropy: 3.5
     confidence: high
     examples:
-      - "SCALR_KEY=\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ1c2VyIiwianRpIjoiYXQtdzFwNWtvN2h2ODh0bGVzcDAifQ.VCPHD8dI5RAO4yexSrfk7mhrBu1KFnGU3Rm2zwApplF\""
+      - 'SCALR_KEY="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ1c2VyIiwianRpIjoiYXQtdzFwNWtvN2h2ODh0bGVzcDAifQ.VCPHD8dI5RAO4yexSrfk7mhrBu1KFnGU3Rm2zwApplF"'
       - "scalr_api_key: eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJ1c2VyIiwianRpIjoiYXQteVo1cW81aHY5OTF1bWZzcTAifQ.WDRIE9eJ6SBP5zfyTugl8nihCu2LGoPV4Sn3AxBrqmN\n"
     references:
       - https://docs.scalr.com/docs/api-tokens

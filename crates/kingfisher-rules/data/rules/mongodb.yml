@@ -52,7 +52,7 @@ rules:
     depends_on_rule:
       - rule_id: "kingfisher.mongodb.2"
         variable: PUBKEY
-    
+
     revocation:
       type: HttpMultiStep
       content:
@@ -75,7 +75,7 @@ rules:
               ORG_ID:
                 type: JsonPath
                 path: "$.results[0].id"
-          
+
           # Step 2: Delete the API key using the organization ID and public key
           - name: delete_api_key
             request:
@@ -108,7 +108,7 @@ rules:
     confidence: medium
     visible: false
     examples:
-      - 'mongodb-public: qj4Zrh8e6A'
+      - "mongodb-public: qj4Zrh8e6A"
     references:
       - https://www.mongodb.com/docs/atlas/api/
   - name: MongoDB URI Connection String

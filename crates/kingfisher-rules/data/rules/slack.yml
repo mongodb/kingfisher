@@ -195,7 +195,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'xoxc-2541715624-2536568458595-2560197464944-23a188852dc1e585a9b594b4facd7d96339fb1d45c592c67a2385fb02f3cd453'
+      - "xoxc-2541715624-2536568458595-2560197464944-23a188852dc1e585a9b594b4facd7d96339fb1d45c592c67a2385fb02f3cd453"
     references:
       - https://api.slack.com/methods/auth.test
       - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/slack.go#L325

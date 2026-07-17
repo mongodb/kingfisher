@@ -14,7 +14,7 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'BLOCK_PROTOCOL_API_KEY=b10ck5.AbCdEfGhIjKlMnOpQrStUvWxYz123456.AbCdEfGhIjKlMnOpQrStUvWxYz1234567890'
+      - "BLOCK_PROTOCOL_API_KEY=b10ck5.AbCdEfGhIjKlMnOpQrStUvWxYz123456.AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"
     references:
       - https://blockprotocol.org/docs/hub/api
     validation:

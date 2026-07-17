@@ -19,7 +19,7 @@ rules:
     examples:
       - "      'SENDGRID_API_KEYSID': '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'"
       - "var sendgrid = require('sendgrid')('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');"
-      - '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'
+      - "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"
     references:
       - https://docs.sendgrid.com/ui/account-and-settings/api-keys
     validation:
@@ -33,12 +33,12 @@ rules:
             Accept: application/json
           response_matcher:
             - report_response: true
-            - type: StatusMatch    
+            - type: StatusMatch
               status: [200]
-            - type: WordMatch      
+            - type: WordMatch
               match_all_words: true
               words: ['"reputation"', '"type"']
-    
+
     revocation:
       type: HttpMultiStep
       content:
@@ -62,7 +62,7 @@ rules:
               API_KEY_ID:
                 type: JsonPath
                 path: "$.result[0].api_key_id"
-          
+
           # Step 2: Delete the API key using its ID
           - name: delete_api_key
             request:

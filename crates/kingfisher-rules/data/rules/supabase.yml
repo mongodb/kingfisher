@@ -66,11 +66,10 @@ rules:
         variable: SBPROJECTURL
   - name: Supabase Project URL
     id: kingfisher.supabase.3
-    pattern: 
-      (?xi)
+    pattern: (?xi)
       \b
       (
-        https:\/\/[a-z0-9]{16,32}\.supabase\.co
+      https:\/\/[a-z0-9]{16,32}\.supabase\.co
       )
       \b
     confidence: medium
@@ -93,6 +92,6 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_a1B2c3D4e5F6g7H8i9J0k1L2'
+      - "NEXT_PUBLIC_SUPABASE_ANON_KEY=sb_publishable_a1B2c3D4e5F6g7H8i9J0k1L2"
     references:
       - https://supabase.com/docs/guides/api

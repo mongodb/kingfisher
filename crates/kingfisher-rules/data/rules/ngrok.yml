@@ -16,7 +16,7 @@ rules:
       \b
     min_entropy: 4
     examples:
-      - 'ngrok authtoken: 2Ot3hdNCKF3JRJDCioqNV2J0PPc_6th2CSUm9KsjfXdtRDvzT'
+      - "ngrok authtoken: 2Ot3hdNCKF3JRJDCioqNV2J0PPc_6th2CSUm9KsjfXdtRDvzT"
     validation:
       type: Http
       content:
@@ -25,12 +25,12 @@ rules:
           headers:
             Authorization: Bearer {{ TOKEN }}
             ngrok-version: 2
-          url: https://api.ngrok.com/endpoints          
+          url: https://api.ngrok.com/endpoints
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status: [200]                         
-            - type: WordMatch                          
+              status: [200]
+            - type: WordMatch
               words:
                 - '"endpoints":'
     references:

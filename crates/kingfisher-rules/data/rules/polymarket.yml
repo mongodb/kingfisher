@@ -23,7 +23,7 @@ rules:
     visible: false
     examples:
       - POLY_BUILDER_SECRET=QmFzZTY0U2VjcmV0VGVzdEtleTEyMzQ1Njc4OTBBQkNERUY=
-      - 'polymarket_builder_secret: Q29tcGxleFNlY3JldE1hdGVyaWFsMTIzNDU2Nzg5MDEyMzQ='
+      - "polymarket_builder_secret: Q29tcGxleFNlY3JldE1hdGVyaWFsMTIzNDU2Nzg5MDEyMzQ="
     references:
       - https://docs.polymarket.com/trading/orders/attribution
 
@@ -54,7 +54,7 @@ rules:
     visible: false
     examples:
       - POLY_BUILDER_PASSPHRASE=BuilderPass_2026
-      - 'polymarket_passphrase: AlphaPass_7788'
+      - "polymarket_passphrase: AlphaPass_7788"
     references:
       - https://docs.polymarket.com/trading/orders/attribution
 
@@ -80,7 +80,7 @@ rules:
     confidence: medium
     examples:
       - POLY_BUILDER_API_KEY=12345678-abcd-1234-efab-1234567890ab
-      - 'polymarket_api_key: a1b2c3d4-e5f6-789a-bcde-f0123456789a'
+      - "polymarket_api_key: a1b2c3d4-e5f6-789a-bcde-f0123456789a"
     references:
       - https://docs.polymarket.com/trading/orders/attribution
 
@@ -106,7 +106,7 @@ rules:
     visible: false
     examples:
       - POLY_BUILDER_ADDRESS=0x1234567890abcdef1234567890abcdef12345678
-      - 'polymarket_address: 0xabcdef1234567890abcdef1234567890abcdef12'
+      - "polymarket_address: 0xabcdef1234567890abcdef1234567890abcdef12"
     references:
       - https://docs.polymarket.com/trading/orders/attribution
       - https://docs.polymarket.com/trading/orders/order-signing
@@ -141,7 +141,7 @@ rules:
     confidence: medium
     examples:
       - POLY_PRIVATE_KEY=0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
-      - 'polymarket_private_key: 0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890'
+      - "polymarket_private_key: 0xabcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
     references:
       - https://docs.polymarket.com/trading/orders/attribution
       - https://docs.polymarket.com/trading/orders/order-signing

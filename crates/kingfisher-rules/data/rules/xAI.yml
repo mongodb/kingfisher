@@ -1,6 +1,6 @@
 rules:
   - name: xAI (Grok) API Key
-    id:   kingfisher.xai.1
+    id: kingfisher.xai.1
     pattern: |
       (?x)
       \b
@@ -32,7 +32,7 @@ rules:
                 - '"Incorrect API key provided'
               negative: true
     references:
-      - https://x.ai/api 
+      - https://x.ai/api
       - https://docs.x.ai/docs/api-reference
       - https://docs.x.ai/docs/overview
       - https://docs.x.ai/docs/management-api

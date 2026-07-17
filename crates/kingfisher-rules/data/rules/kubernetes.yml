@@ -65,10 +65,10 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ KUBE_API_SERVER }}/api/v1/namespaces?limit=1'
+          url: "{{ KUBE_API_SERVER }}/api/v1/namespaces?limit=1"
           headers:
             Accept: application/json
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch
@@ -105,10 +105,10 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ KUBE_API_SERVER }}/api/v1/namespaces?limit=1'
+          url: "{{ KUBE_API_SERVER }}/api/v1/namespaces?limit=1"
           headers:
             Accept: application/json
-            Authorization: 'Bearer {{ TOKEN_ID }}.{{ TOKEN_SECRET }}'
+            Authorization: "Bearer {{ TOKEN_ID }}.{{ TOKEN_SECRET }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

@@ -23,11 +23,11 @@ rules:
         $host = "localhost";
         $database = "NHOHVA";
         $user = "mg1021"; $password = goodspec;
-      - 'Server=host;Port=5432;User Id=username;Password=secret;Database=databasename;'
-      - 'Server=host;Port=5432;SomeOtherKey=SomeOtherValue;User Id=username;Password=secret;Database=databasename;'
-      - 'Data Source=190.190.200.100,1433;Network Library=DBMSSOCN;Initial Catalog=myDataBase;User ID=myUsername;Password=myPassword;'
-      - 'Data Source=190.190.200.100,1433;Network_library=DBMSSOCN;Initial Catalog=myDataBase;User ID=myUsername;Password=myPassword;'
-      - 'Provider=SQLNCLI;Server=myServerName,myPortNumber;Database=myDataBase;Uid=myUsername;Pwd=myPassword;'
+      - "Server=host;Port=5432;User Id=username;Password=secret;Database=databasename;"
+      - "Server=host;Port=5432;SomeOtherKey=SomeOtherValue;User Id=username;Password=secret;Database=databasename;"
+      - "Data Source=190.190.200.100,1433;Network Library=DBMSSOCN;Initial Catalog=myDataBase;User ID=myUsername;Password=myPassword;"
+      - "Data Source=190.190.200.100,1433;Network_library=DBMSSOCN;Initial Catalog=myDataBase;User ID=myUsername;Password=myPassword;"
+      - "Provider=SQLNCLI;Server=myServerName,myPortNumber;Database=myDataBase;Uid=myUsername;Pwd=myPassword;"
       - |
         adoConn.Open("Provider=SQLOLEDB.1;User ID=specialbill_user; " & "Password =specialbill_user;Initial Catalog=SpecialBill_PROD;Data Source=uszdba01;")
       - |

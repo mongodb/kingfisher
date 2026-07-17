@@ -10,7 +10,7 @@ rules:
         :
         [^\s"'<>,(){}\[\]]{10,448}
       )
-    pattern_requirements:              
+    pattern_requirements:
       min_special_chars: 2
       special_chars: ";=/?@&"
       ignore_if_contains:

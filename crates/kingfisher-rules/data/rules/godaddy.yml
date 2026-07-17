@@ -19,11 +19,11 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'Authorization: sso-key Abc123XYZ789Def456GhI789Jkl012MnOpQ:pQ7rS2tUvW5xY8zAaBcDeF'
+      - "Authorization: sso-key Abc123XYZ789Def456GhI789Jkl012MnOpQ:pQ7rS2tUvW5xY8zAaBcDeF"
       - 'headers = {"Authorization": "sso-key Abc123XYZ789Def456GhI789Jkl012MnOpQrs:3bKm9wPqRz2nLhFvJ8yG5x"}'
     negative_examples:
-      - 'sso-key test:test'
-      - 'sso-key a:b'
+      - "sso-key test:test"
+      - "sso-key a:b"
     references:
       - https://developer.godaddy.com/doc/endpoint/domains
       - https://developer.godaddy.com/getstarted
@@ -34,7 +34,7 @@ rules:
           method: GET
           url: https://api.godaddy.com/v1/domains/available?domain=example.com
           headers:
-            Authorization: 'sso-key {{ TOKEN }}'
+            Authorization: "sso-key {{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

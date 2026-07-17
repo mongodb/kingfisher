@@ -5,7 +5,7 @@ rules:
       (?x)
       \b
       (
-        lip_[a-zA-Z0-9_]{16,60}
+        lip_[a-zA-Z0-9_]{17,30}
       )
       \b
     pattern_requirements:
@@ -14,7 +14,8 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'LICHESS_TOKEN=lip_AbCdEfGhIjKlMnOpQr12'
+      - "LICHESS_TOKEN=lip_8UWFEBAszsk2iTyY1eq1"
+      - "LICHESS_TOKEN=lip_AbCdEfGhIjKlMnOpQr12"
     validation:
       type: Http
       content:
@@ -29,3 +30,4 @@ rules:
               status: [200]
     references:
       - https://lichess.org/api
+      - https://github.com/lichess-org/berserk/blob/3d074f9bfccf7e861d2c5896fe891b65c818fd8c/berserk/session.py

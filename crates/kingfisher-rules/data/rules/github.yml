@@ -28,7 +28,7 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ GITHUB_API_BASE_URL }}/user'
+          url: "{{ GITHUB_API_BASE_URL }}/user"
           headers:
             Authorization: token {{ TOKEN }}
             Accept: application/vnd.github+json
@@ -44,7 +44,7 @@ rules:
       content:
         request:
           method: POST
-          url: '{{ GITHUB_API_BASE_URL }}/credentials/revoke'
+          url: "{{ GITHUB_API_BASE_URL }}/credentials/revoke"
           headers:
             Accept: application/vnd.github+json
             X-GitHub-Api-Version: 2026-03-10
@@ -84,7 +84,7 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ GITHUB_API_BASE_URL }}/user'
+          url: "{{ GITHUB_API_BASE_URL }}/user"
           headers:
             Authorization: token {{ TOKEN }}
             Accept: application/vnd.github+json
@@ -100,7 +100,7 @@ rules:
       content:
         request:
           method: POST
-          url: '{{ GITHUB_API_BASE_URL }}/credentials/revoke'
+          url: "{{ GITHUB_API_BASE_URL }}/credentials/revoke"
           headers:
             Accept: application/vnd.github+json
             X-GitHub-Api-Version: 2026-03-10
@@ -129,7 +129,7 @@ rules:
     confidence: medium
     examples:
       - '    "url": "git+https://FelipeMestre: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@github.com/gontarz/PW_2021_Website-FelipeMestre.git"'
-      - '    oauth_token: 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'
+      - "    oauth_token: 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"
     references:
       - https://docs.github.com/en/rest/users?apiVersion=2022-11-28
     validation:
@@ -137,7 +137,7 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ GITHUB_API_BASE_URL }}/user'
+          url: "{{ GITHUB_API_BASE_URL }}/user"
           headers:
             Authorization: token {{ TOKEN }}
             Accept: application/vnd.github+json
@@ -153,7 +153,7 @@ rules:
       content:
         request:
           method: POST
-          url: '{{ GITHUB_API_BASE_URL }}/credentials/revoke'
+          url: "{{ GITHUB_API_BASE_URL }}/credentials/revoke"
           headers:
             Accept: application/vnd.github+json
             X-GitHub-Api-Version: 2026-03-10
@@ -189,7 +189,7 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ GITHUB_API_BASE_URL }}/user'
+          url: "{{ GITHUB_API_BASE_URL }}/user"
           headers:
             Authorization: token {{ TOKEN }}
             Accept: application/vnd.github+json
@@ -205,7 +205,7 @@ rules:
       content:
         request:
           method: POST
-          url: '{{ GITHUB_API_BASE_URL }}/credentials/revoke'
+          url: "{{ GITHUB_API_BASE_URL }}/credentials/revoke"
           headers:
             Accept: application/vnd.github+json
             X-GitHub-Api-Version: 2026-03-10
@@ -234,7 +234,7 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ GITHUB_API_BASE_URL }}/user'
+          url: "{{ GITHUB_API_BASE_URL }}/user"
           headers:
             Authorization: token {{ TOKEN }}
             Accept: application/vnd.github+json
@@ -250,7 +250,7 @@ rules:
       content:
         request:
           method: DELETE
-          url: '{{ GITHUB_API_BASE_URL }}/installation/token'
+          url: "{{ GITHUB_API_BASE_URL }}/installation/token"
           headers:
             Authorization: token {{ TOKEN }}
             Accept: application/vnd.github+json
@@ -281,7 +281,7 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ GITHUB_API_BASE_URL }}/user'
+          url: "{{ GITHUB_API_BASE_URL }}/user"
           headers:
             Authorization: token {{ TOKEN }}
             Accept: application/vnd.github+json
@@ -297,7 +297,7 @@ rules:
       content:
         request:
           method: POST
-          url: '{{ GITHUB_API_BASE_URL }}/credentials/revoke'
+          url: "{{ GITHUB_API_BASE_URL }}/credentials/revoke"
           headers:
             Accept: application/vnd.github+json
             X-GitHub-Api-Version: 2026-03-10
@@ -346,7 +346,7 @@ rules:
       content:
         request:
           method: POST
-          url: '{{ GITHUB_WEB_BASE_URL }}/login/oauth/access_token'
+          url: "{{ GITHUB_WEB_BASE_URL }}/login/oauth/access_token"
           headers:
             Accept: "application/json"
             Content-Type: "application/json"
@@ -373,7 +373,7 @@ rules:
       )
     min_entropy: 3.5
     examples:
-      - 'ghs_12345_eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NDU1NjgwMDAsImV4cCI6MTc0NTU2ODM2MCwiaXNzIjoiMTIzNDUiLCJzdWIiOiJnaXRodWJ8MTIzNDUifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c'
+      - "ghs_12345_eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJpYXQiOjE3NDU1NjgwMDAsImV4cCI6MTc0NTU2ODM2MCwiaXNzIjoiMTIzNDUiLCJzdWIiOiJnaXRodWJ8MTIzNDUifQ.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"
     references:
       - https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/about-authentication-with-a-github-app
       - https://github.com/mongodb/kingfisher/issues/359
@@ -382,7 +382,7 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ GITHUB_API_BASE_URL }}/user'
+          url: "{{ GITHUB_API_BASE_URL }}/user"
           headers:
             Authorization: token {{ TOKEN }}
             Accept: application/vnd.github+json
@@ -398,7 +398,7 @@ rules:
       content:
         request:
           method: DELETE
-          url: '{{ GITHUB_API_BASE_URL }}/installation/token'
+          url: "{{ GITHUB_API_BASE_URL }}/installation/token"
           headers:
             Authorization: token {{ TOKEN }}
             Accept: application/vnd.github+json

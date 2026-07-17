@@ -1,7 +1,7 @@
 rules:
   - name: ElevenLabs API Key
     id: kingfisher.elevenlabs.1
-    pattern: |       
+    pattern: |
       (?x)       
       \b    
       (               
@@ -26,9 +26,9 @@ rules:
       content:
         request:
           method: GET
-          url: https://api.elevenlabs.io/v1/user/subscription  
+          url: https://api.elevenlabs.io/v1/user/subscription
           headers:
-            xi-api-key: '{{ TOKEN }}'
+            xi-api-key: "{{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: WordMatch

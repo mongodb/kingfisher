@@ -14,8 +14,8 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'ONFIDO_API_TOKEN=api_live.AbCdEfGhIjKlMnOpQrStUvWxYz123456'
-      - 'onfido_token: api_sandbox.AbCdEfGhIjKlMnOpQrStUvWxYz123456'
+      - "ONFIDO_API_TOKEN=api_live.AbCdEfGhIjKlMnOpQrStUvWxYz123456"
+      - "onfido_token: api_sandbox.AbCdEfGhIjKlMnOpQrStUvWxYz123456"
     validation:
       type: Http
       content:

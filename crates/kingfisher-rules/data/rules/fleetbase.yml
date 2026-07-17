@@ -15,7 +15,7 @@ rules:
     examples:
       - flb_live_1234567890abcdefGHIJ
       - flb_test_1234567890abcdefGHIJ
-      - 'Authorization: Bearer flb_live_1234567890abcdefGHIJ'
+      - "Authorization: Bearer flb_live_1234567890abcdefGHIJ"
     categories:
       - api
       - secret

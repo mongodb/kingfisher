@@ -18,8 +18,8 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'HETZNER_API_TOKEN=CqM049yakVZO8EndHyyawia3EjIboWMVeoEeMW0UVN0SpTXryKh0zrtnGpeyAjTs'
-      - 'HCLOUD_TOKEN=aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789aBcDeFgHiJkLmNoPqRsTuVwXy012'
+      - "HETZNER_API_TOKEN=CqM049yakVZO8EndHyyawia3EjIboWMVeoEeMW0UVN0SpTXryKh0zrtnGpeyAjTs"
+      - "HCLOUD_TOKEN=aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789aBcDeFgHiJkLmNoPqRsTuVwXy012"
     references:
       - https://docs.hetzner.cloud/
     validation:

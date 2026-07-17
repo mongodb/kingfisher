@@ -30,7 +30,7 @@ rules:
     min_entropy: 3.4
     confidence: medium
     examples:
-      - 'x-api-key: 1aa2bb33c44d55eeeeee6fff:a1b2c3d4e5'
+      - "x-api-key: 1aa2bb33c44d55eeeeee6fff:a1b2c3d4e5"
       - ETSY_API_KEY=1aa2bb33c44d55eeeeee6fff:a1b2c3d4e5
     references:
       - https://developers.etsy.com/documentation/tutorials/quickstart/
@@ -48,4 +48,3 @@ rules:
             - type: StatusMatch
               status: [200]
             - type: JsonValid
-

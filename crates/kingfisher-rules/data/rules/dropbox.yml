@@ -52,7 +52,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'ab3cd5ef7g9AAAAAAAAAAbcdefghij-klmnopqrstuvwxyz01234567890abcdef'
+      - "ab3cd5ef7g9AAAAAAAAAAbcdefghij-klmnopqrstuvwxyz01234567890abcdef"
     validation:
       type: Http
       content:

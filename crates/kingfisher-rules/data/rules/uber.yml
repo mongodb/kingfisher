@@ -19,7 +19,7 @@ rules:
     min_entropy: 3.5
     confidence: high
     examples:
-      - "config.uber.server_token = \"Cyob8XIWekjc6pbbRIJbw-Y2Y38QXzIVBbXpPtW\""
+      - 'config.uber.server_token = "Cyob8XIWekjc6pbbRIJbw-Y2Y38QXzIVBbXpPtW"'
       - "uber, server_token: 'PCLca4a2cQl2OR88-tZ_5X_yYmkzHF4zqoK838X_'"
     references:
       - https://developer.uber.com/docs/riders/guides/authentication/server-token

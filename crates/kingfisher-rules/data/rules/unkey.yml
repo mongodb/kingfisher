@@ -15,8 +15,8 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'UNKEY_ROOT_KEY=unkey_3ZVfA2xpgBS9WJjN4m8ApeJg'
-      - 'Authorization: Bearer unkey_3ZV3tmPyoE5mmf1P6EHFJfG3'
+      - "UNKEY_ROOT_KEY=unkey_3ZVfA2xpgBS9WJjN4m8ApeJg"
+      - "Authorization: Bearer unkey_3ZV3tmPyoE5mmf1P6EHFJfG3"
       - 'unkey_root_key = "unkey_3ZV4z6rNpDCjmyadJH1MttTh"'
     validation:
       type: Http
@@ -33,7 +33,7 @@ rules:
             - type: StatusMatch
               status: [200, 403]
             - type: WordMatch
-              words: 
+              words:
                 - '"Unauthorized"'
               negative: true
               match_all_words: false
@@ -59,9 +59,9 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'UNKEY_API_KEY=key_KH1V87o2X2GW'
-      - 'x-api-key: key_KH1V87o2X2GW'
-      - 'Authorization: Bearer key_KH1V87o2X2GW'
+      - "UNKEY_API_KEY=key_KH1V87o2X2GW"
+      - "x-api-key: key_KH1V87o2X2GW"
+      - "Authorization: Bearer key_KH1V87o2X2GW"
     # Revocation requires a root key with api.*.delete_key permission.
     # Pass via: --var UNKEY_ROOT_KEY=unkey_xxx
     revocation:
@@ -120,6 +120,6 @@ rules:
     confidence: medium
     examples:
       - 'unkey_secret = "3Zem2ZG4U1rsRiMSxy6pBjvZ"'
-      - 'UNKEY_KEY_SECRET: 3Zem2ZG4U1rsRiMSxy6pBjvZ'
+      - "UNKEY_KEY_SECRET: 3Zem2ZG4U1rsRiMSxy6pBjvZ"
     references:
       - https://www.unkey.com/docs/api-reference/v2/keys/create-api-key

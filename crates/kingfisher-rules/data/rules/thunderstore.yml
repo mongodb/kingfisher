@@ -5,7 +5,7 @@ rules:
       (?x)
       \b
       (
-        tss_[a-zA-Z0-9_-]{20,80}
+        tss_[A-Za-z0-9]{36}
       )
       \b
     pattern_requirements:
@@ -14,9 +14,11 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'THUNDERSTORE_TOKEN=tss_AbCdEfGhIjKlMnOpQrStUvWxYz123456'
+      - "THUNDERSTORE_TOKEN=tss_AbCdEfGhIjKlMnOpQrStUvWxYz0123456789"
     references:
       - https://thunderstore.io/api/docs/
+      - https://github.com/thunderstore-io/Thunderstore/blob/3657fa0f9e5ee7f77a2a3e1f60bd799ac09a226a/django/thunderstore/account/tokens.py
+      - https://github.com/thunderstore-io/Thunderstore/blob/3657fa0f9e5ee7f77a2a3e1f60bd799ac09a226a/django/thunderstore/account/tests/test_service_account_api_token.py
     validation:
       type: Http
       content:

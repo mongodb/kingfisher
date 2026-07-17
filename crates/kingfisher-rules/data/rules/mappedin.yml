@@ -5,15 +5,17 @@ rules:
       (?x)
       \b
       (
-        mik_[a-zA-Z0-9]{26}
+        mik_[a-zA-Z0-9]{25}
       )
       \b
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'MAPPEDIN_KEY=mik_a1B2c3D4e5F6g7H8i9J0k1L2m3'
+      - "MAPPEDIN_KEY=mik_yeBk0Vf0nNJtpesfu560e07e6"
     references:
       - https://developer.mappedin.com/docs/mvf/v2/getting-started
+      - https://developer.mappedin.com/docs/mvf/v3/getting-started
+      - https://github.com/MappedIn/qgis-plugin/blob/a9be3f64a02cf42a1f758bcbbc2a972e03a55583/README.md
 
   - name: Mappedin API Secret
     id: kingfisher.mappedin.2
@@ -21,12 +23,14 @@ rules:
       (?x)
       \b
       (
-        mis_[a-zA-Z0-9]{52}
+        mis_[a-zA-Z0-9]{51}
       )
       \b
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'MAPPEDIN_SECRET=mis_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0u1V2w3X4y5Z6'
+      - "MAPPEDIN_SECRET=mis_4sDELo8xqkrXxLMPEUXzDQsf71J3bvI1UhbUVcWm3WW8dfa102f"
     references:
       - https://developer.mappedin.com/docs/mvf/v2/getting-started
+      - https://developer.mappedin.com/docs/mvf/v3/getting-started
+      - https://github.com/MappedIn/qgis-plugin/blob/a9be3f64a02cf42a1f758bcbbc2a972e03a55583/README.md

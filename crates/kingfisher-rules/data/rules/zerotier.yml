@@ -18,8 +18,8 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'ZEROTIER_API_TOKEN=aBcDeFgHiJkLmNoPqRsTuVwXyZ012345'
-      - 'ZT_TOKEN=xY9zW8vU7tS6rQ5pN4mL3kJ2iH1gF0eD'
+      - "ZEROTIER_API_TOKEN=aBcDeFgHiJkLmNoPqRsTuVwXyZ012345"
+      - "ZT_TOKEN=xY9zW8vU7tS6rQ5pN4mL3kJ2iH1gF0eD"
     references:
       - https://docs.zerotier.com/api/tokens/
     validation:

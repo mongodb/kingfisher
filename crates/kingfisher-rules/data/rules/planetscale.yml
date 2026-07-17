@@ -27,7 +27,7 @@ rules:
                 - 200
               type: StatusMatch
             - type: WordMatch
-              words: 
+              words:
                 - '"id":'
                 - '"username":'
           url: https://api.planetscale.com/v1/user
@@ -114,6 +114,6 @@ rules:
     visible: false
     examples:
       - pscale_user = 0dm7fw8prpel
-      - 'planetscale_id: 0dm7fw8prpel'
+      - "planetscale_id: 0dm7fw8prpel"
     references:
       - https://planetscale.com/docs/api

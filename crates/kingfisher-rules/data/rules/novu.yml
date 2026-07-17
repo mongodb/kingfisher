@@ -19,7 +19,7 @@ rules:
     examples:
       # Synthetic, format-valid examples; these are not issued credentials.
       - 'NOVU_SECRET_KEY="4f7ca2b9d3e8f1a6c5b0d7e2f9a4c8b1"'
-      - 'novu secret_key: 9e2d7c4b1a8f5e3d0c6b9a2f7e4d1c8b'
+      - "novu secret_key: 9e2d7c4b1a8f5e3d0c6b9a2f7e4d1c8b"
     references:
       - https://docs.novu.co/platform/developer/api-keys
       - https://docs.novu.co/api-reference/subscribers/search-subscribers

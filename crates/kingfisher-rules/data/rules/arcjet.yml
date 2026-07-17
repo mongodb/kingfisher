@@ -15,7 +15,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'ARCJET_KEY=ajkey_01kpe3gbb3ek3asrwvfsmtjtam'
+      - "ARCJET_KEY=ajkey_01kpe3gbb3ek3asrwvfsmtjtam"
       - 'ARCJET_KEY="ajkey_01kpe3k7r4n6v9s2q1w8x5y7zc"'
     references:
       - https://docs.arcjet.com/environment

@@ -5,7 +5,7 @@ rules:
       (?x)
       \b
       (
-        pts_[a-z0-9]{20,60}
+        pts_[a-z0-9]{30,36}
       )
       \b
     pattern_requirements:
@@ -14,8 +14,8 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'PANGEA_TOKEN=pts_gqmqvvxk4yhirapuhw6bs7nswu'
-      - 'pangea_token: pts_hpbc3klkkq54tigu4osc5eygthxps6vf'
+      - "PANGEA_TOKEN=pts_t6i6nc6dnvcqswtanszugxzqteyiweju"
+      - "pangea_token: pts_z6txtdyt3dsrb7knrd233zhsjaobsrhi"
     validation:
       type: Http
       content:
@@ -37,3 +37,6 @@ rules:
               negative: true
     references:
       - https://pangea.cloud/docs/
+      - https://pangea.cloud/docs/audit/credentials/
+      - https://github.com/pangeacyber/pangea-python/blob/1f411ae567833cd3035126db8960347230542153/packages/pangea-sdk/README.md
+      - https://github.com/pangeacyber/pangea-go/blob/e4847c0695808095dc0988809aafb97425e5e1df/pangea-sdk/README.md

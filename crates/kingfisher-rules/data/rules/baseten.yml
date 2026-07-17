@@ -25,7 +25,7 @@ rules:
       - baseten_key = h2wFkhFC.3WFVwVcxGFr4Qup0gyhvIuONwQxEpL0A
       - baseten_key = XqbIpj04.x73j1zLUOEgGIKROqVbxsmggPdL8JvAY
     references:
-      - https://docs.baseten.co/examples/vllm 
+      - https://docs.baseten.co/examples/vllm
       - https://docs.baseten.co/reference/management-api/api-keys/lists-the-users-api-keys
       - https://docs.baseten.co/reference/training-api/overview#authentication
       - https://docs.baseten.co/reference/management-api/api-keys/creates-an-api-key
@@ -38,11 +38,11 @@ rules:
           headers:
             Authorization: Api-Key {{ TOKEN }}
           response_matcher:
-            - report_response: true    
-            - type: StatusMatch        
+            - report_response: true
+            - type: StatusMatch
               status: [200]
             - type: JsonValid
-            - type: WordMatch           
+            - type: WordMatch
               match_all_words: true
               words:
                 - '"name"'

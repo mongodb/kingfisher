@@ -18,7 +18,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'BITRISE_TOKEN=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890AbCdEfGhIjKlMnOpQrStUvWxYz12'
+      - "BITRISE_TOKEN=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890AbCdEfGhIjKlMnOpQrStUvWxYz12"
     validation:
       type: Http
       content:
@@ -26,7 +26,7 @@ rules:
           method: GET
           url: https://api.bitrise.io/v0.1/me
           headers:
-            Authorization: '{{ TOKEN }}'
+            Authorization: "{{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

@@ -71,7 +71,7 @@ rules:
     visible: false
     examples:
       - 'UPSTASH_REDIS_REST_URL="https://steady-cobra-12345.upstash.io"'
-      - 'upstash_url=https://sharp-raven-67890.upstash.io'
+      - "upstash_url=https://sharp-raven-67890.upstash.io"
     references:
       - https://upstash.com/docs/redis/features/restapi
 

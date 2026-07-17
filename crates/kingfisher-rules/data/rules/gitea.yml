@@ -34,7 +34,7 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ GITEA_API_BASE_URL }}/user'
+          url: "{{ GITEA_API_BASE_URL }}/user"
           headers:
             Authorization: token {{ TOKEN }}
             Accept: application/json
@@ -47,4 +47,4 @@ rules:
             - type: WordMatch
               words:
                 - '"login"'
-                - 'token does not have'
+                - "token does not have"

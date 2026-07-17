@@ -28,7 +28,7 @@ rules:
               words:
                 - '"success"'
     references:
-    - https://www.firecrawl.dev
-    - https://docs.firecrawl.dev/api-reference/introduction#authentication
+      - https://www.firecrawl.dev
+      - https://docs.firecrawl.dev/api-reference/introduction#authentication
     examples:
-    - 'app = FirecrawlApp(api_key="fc-7da8b1ca1d2150c496e91440d777fea8")'
+      - 'app = FirecrawlApp(api_key="fc-7da8b1ca1d2150c496e91440d777fea8")'

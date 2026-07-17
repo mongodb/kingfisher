@@ -13,7 +13,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'TELNYX_API_KEY=KEY017D98C041711C2B8B6F5A2E50702659_hwntpZaC4XD1OEQEaKWydG'
+      - "TELNYX_API_KEY=KEY017D98C041711C2B8B6F5A2E50702659_hwntpZaC4XD1OEQEaKWydG"
     validation:
       type: Http
       content:

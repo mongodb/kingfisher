@@ -14,7 +14,7 @@ rules:
     min_entropy: 3.5
     confidence: high
     examples:
-      - "config.secretApiKey = \"skapi_cert_AeUdFKCJ8mBl5ThCDPCFdEgDJi8k9AaKO7c\""
+      - 'config.secretApiKey = "skapi_cert_AeUdFKCJ8mBl5ThCDPCFdEgDJi8k9AaKO7c"'
       - "HEARTLAND_API_KEY=skapi_cert_ZfVeXwDUBbMlJnQIEsJGLbMkrQOiPtNh8e2"
     references:
       - https://developer.heartlandpaymentsystems.com/

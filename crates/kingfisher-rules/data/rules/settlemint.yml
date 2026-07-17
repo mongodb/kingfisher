@@ -37,7 +37,7 @@ rules:
     confidence: medium
     examples:
       - BLOCKSCOUT_SETTLEMINT_APPLICATION_ACCESS_TOKEN=sm_aat_A1b2C3d4E5f6G7h8
-      - 'x-auth-token: sm_aat_Z9y8X7w6V5u4T3s2'
+      - "x-auth-token: sm_aat_Z9y8X7w6V5u4T3s2"
     references:
       - https://console.settlemint.com/documentation/blockchain-platform/platform-components/security-and-authentication/application-access-tokens
 
@@ -58,6 +58,6 @@ rules:
     confidence: medium
     examples:
       - SETTLEMINT_SERVICE_TOKEN=sm_sat_A1b2C3d4E5f6G7h8
-      - 'Authorization: Bearer sm_sat_Z9y8X7w6V5u4T3s2'
+      - "Authorization: Bearer sm_sat_Z9y8X7w6V5u4T3s2"
     references:
       - https://console.settlemint.com/documentation

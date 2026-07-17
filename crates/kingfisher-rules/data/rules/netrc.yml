@@ -12,10 +12,10 @@ rules:
     confidence: medium
     pattern_requirements:
       ignore_if_contains:
-        - '${'
-        - '$('
+        - "${"
+        - "$("
     examples:
-      - 'machine api.github.com login ziggy^stardust password 012345abcdef'
+      - "machine api.github.com login ziggy^stardust password 012345abcdef"
       - |
         ```
         machine raw.github.com

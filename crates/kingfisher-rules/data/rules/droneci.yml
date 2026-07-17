@@ -1,6 +1,6 @@
 rules:
   - name: DroneCI Access Token
-    id:   kingfisher.drone.1
+    id: kingfisher.drone.1
     pattern: |
       (?xi)
       \b                                    
@@ -36,9 +36,9 @@ rules:
             - type: StatusMatch
               status: [200]
             - type: WordMatch
-              words: ['"email"']         
+              words: ['"email"']
               match_all_words: true
     references:
-      - https://docs.drone.io/api/overview/           
-      - https://0-8-0.docs.drone.io/api-authentication/ 
-      - https://docs.drone.io/server/user/machine/    
+      - https://docs.drone.io/api/overview/
+      - https://0-8-0.docs.drone.io/api-authentication/
+      - https://docs.drone.io/server/user/machine/

@@ -17,7 +17,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'PANDADOC_API_KEY=3039ba033eb1410caa0a2227158d63c9d6502cd8'
+      - "PANDADOC_API_KEY=3039ba033eb1410caa0a2227158d63c9d6502cd8"
     references:
       - https://developers.pandadoc.com/reference/api-key-authentication-process
       - https://developers.pandadoc.com/openapi/pandadoc-public-api.json

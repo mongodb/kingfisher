@@ -18,8 +18,8 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'HCAPTCHA_SECRET=0x0000000000000000000000000000000000000000'
-      - 'hcaptcha_secret: ES_abcdef1234567890abcdef1234567890'
+      - "HCAPTCHA_SECRET=0x0000000000000000000000000000000000000000"
+      - "hcaptcha_secret: ES_abcdef1234567890abcdef1234567890"
     references:
       - https://docs.hcaptcha.com/
       - https://docs.hcaptcha.com/#verify-the-user-response-server-side

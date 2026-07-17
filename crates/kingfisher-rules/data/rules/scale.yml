@@ -19,22 +19,22 @@ rules:
       - live_1b9fc721a4624a478211ce613c674a03
     references:
       - https://scale.com/docs/api-reference/authentication
-      - https://scale.com/docs/api-reference/studio#list-all-teammates 
-      - https://scale.com/docs/api-reference/authentication#test-and-live-modes 
+      - https://scale.com/docs/api-reference/studio#list-all-teammates
+      - https://scale.com/docs/api-reference/authentication#test-and-live-modes
 
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: https://api.scale.com/v1/teams  
+          url: https://api.scale.com/v1/teams
           headers:
             Authorization: 'Basic {{ TOKEN | append: ":" | b64enc }}'
             Accept: application/json
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status: [200] 
+              status: [200]
             - type: JsonValid
             - type: WordMatch
               match_all_words: true

@@ -11,7 +11,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'WC_CONSUMER_SECRET=cs_a1b2c3d4e5f60708a9b0c1d2e3f4a5b6c7d8e9f0'
+      - "WC_CONSUMER_SECRET=cs_a1b2c3d4e5f60708a9b0c1d2e3f4a5b6c7d8e9f0"
       - 'consumer_secret: "cs_deadbeefcafebabe1234567890abcdef01234567"'
     references:
       - https://woocommerce.github.io/woocommerce-rest-api-docs/#authentication
@@ -28,6 +28,6 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'WC_CONSUMER_KEY=ck_a1b2c3d4e5f60708a9b0c1d2e3f4a5b6c7d8e9f0'
+      - "WC_CONSUMER_KEY=ck_a1b2c3d4e5f60708a9b0c1d2e3f4a5b6c7d8e9f0"
     references:
       - https://woocommerce.github.io/woocommerce-rest-api-docs/#authentication

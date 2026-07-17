@@ -35,10 +35,10 @@ rules:
             - report_response: true
             - type: StatusMatch
               status: [200]
-            - type: WordMatch                               
+            - type: WordMatch
               words: ['"username":']
           url: https://registry.npmjs.org/-/whoami
-    
+
     revocation:
       type: HttpMultiStep
       content:
@@ -61,7 +61,7 @@ rules:
               TOKEN_KEY:
                 type: Regex
                 pattern: '"key":"([^"]+)","token":"{{ TOKEN | prefix: 8 }}'
-          
+
           # Step 2: Revoke the token using its key
           - name: revoke_token
             request:
@@ -102,10 +102,10 @@ rules:
             - report_response: true
             - type: StatusMatch
               status: [200]
-            - type: WordMatch                               
+            - type: WordMatch
               words: ['"username":']
           url: https://registry.npmjs.org/-/whoami
-    
+
     revocation:
       type: HttpMultiStep
       content:
@@ -127,7 +127,7 @@ rules:
               TOKEN_KEY:
                 type: Regex
                 pattern: '"key":"([^"]+)","token":"{{ TOKEN | prefix: 8 }}'
-          
+
           # Step 2: Revoke the token using its key
           - name: revoke_token
             request:

@@ -17,7 +17,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'DEVIANTART_ACCESS_TOKEN=aB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uV3wX4yZ5a'
+      - "DEVIANTART_ACCESS_TOKEN=aB3cD4eF5gH6iJ7kL8mN9oP0qR1sT2uV3wX4yZ5a"
       - 'deviantart_token: "kM2nO3pQ4rS5tU6vW7xY8zA9bC0dE1fG2hI3jK4l"'
     references:
       - https://www.deviantart.com/developers/http/v1/20210526

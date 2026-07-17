@@ -61,7 +61,7 @@ rules:
       ["']?
       \b
     pattern_requirements:
-      min_digits: 2             
+      min_digits: 2
     min_entropy: 3.5
     confidence: medium
     examples:

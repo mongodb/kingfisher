@@ -42,9 +42,9 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - 'Endpoint=https://foo-nonprod-appconfig.azconfig.io;Id=ABCD-E6-s0:tl6ABcdefGHi7kLMno/p;Secret=abCD1EF+GHIJxLMnOPqRSa53VWX05zaBCdE/fg9hi4k='
-      - 'https://foo-nonprod-appconfig.azconfig.io;Id=ABCD-E6-s0:tl6ABcdefGHi7kLMno/p;Secret=abCD1EF+GHIJxLMnOA53ST8uVWX05zaBCdE/fg9hi4k='
-      - 'Endpoint=https://appconfig-test01.azconfig.io;Id=09pv-l0-s0:opFCQMC6+9485xJgN5Ws;Secret=GcoEA53t7GLRNJ910M46IrbHO/Vg0tt4HujRdsaCoTY='
+      - "Endpoint=https://foo-nonprod-appconfig.azconfig.io;Id=ABCD-E6-s0:tl6ABcdefGHi7kLMno/p;Secret=abCD1EF+GHIJxLMnOPqRSa53VWX05zaBCdE/fg9hi4k="
+      - "https://foo-nonprod-appconfig.azconfig.io;Id=ABCD-E6-s0:tl6ABcdefGHi7kLMno/p;Secret=abCD1EF+GHIJxLMnOA53ST8uVWX05zaBCdE/fg9hi4k="
+      - "Endpoint=https://appconfig-test01.azconfig.io;Id=09pv-l0-s0:opFCQMC6+9485xJgN5Ws;Secret=GcoEA53t7GLRNJ910M46IrbHO/Vg0tt4HujRdsaCoTY="
       - '        private static string appConfigurationConnectionString = "Endpoint=https://appcs-fg-pwc.azconfig.io;Id=pi5x-l9-s0:SZLlhHA53Nz2MpAl04cU;Secret=CQ+mlfQqkzfZv4XA53gigJ/seeXMKwNsqW/rM3wmtuE=";'
     references:
       - https://docs.microsoft.com/en-us/azure/azure-app-configuration/
@@ -157,7 +157,7 @@ rules:
     confidence: medium
     examples:
       - '"aBc4Q~xY9kLmNpQrStUvWxYz01234567890abcd"'
-      - 'AZURE_CLIENT_SECRET=xY14Q~abcdefghijklmnopqrstuvwxyz01234'
+      - "AZURE_CLIENT_SECRET=xY14Q~abcdefghijklmnopqrstuvwxyz01234"
     validation:
       type: Http
       content:
@@ -225,7 +225,7 @@ rules:
     examples:
       - 'AZURE_TENANT_ID="72f988bf-86f1-41af-91ab-2d7cd011db47"'
       - '"tenant": "11111111-2222-4333-8444-555555555555"'
-      - 'AzureAd: { tenantId: aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee }'
+      - "AzureAd: { tenantId: aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee }"
     references:
       - https://learn.microsoft.com/en-us/entra/fundamentals/how-to-find-tenant
 
@@ -270,7 +270,7 @@ rules:
     examples:
       - 'AZURE_CLIENT_ID="00001111-aaaa-4222-bbbb-3333cccc4444"'
       - '"appId": "12345678-90ab-4cde-8f01-234567890abc"'
-      - 'AzureAd: { clientId: fedcba98-7654-4321-8fed-cba987654321 }'
+      - "AzureAd: { clientId: fedcba98-7654-4321-8fed-cba987654321 }"
     references:
       - https://learn.microsoft.com/en-us/entra/identity-platform/quickstart-register-app
 
@@ -338,7 +338,7 @@ rules:
     confidence: medium
     examples:
       - 'AZURE_CLIENT_SECRET="mZ8Q~V4x2pL7nR5sT9uW3yA6bC1dE0fG"'
-      - 'ENTRA_APP_SECRET: 4Px7_kQ2mN9vR3tY6wA8cD1eF5gH0jLs'
+      - "ENTRA_APP_SECRET: 4Px7_kQ2mN9vR3tY6wA8cD1eF5gH0jLs"
       - |
         {
           "appId": "12345678-90ab-4cde-8f01-234567890abc",
@@ -401,8 +401,8 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'MS_GRAPH_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJodHRwczovL2dyYXBoLm1pY3Jvc29mdC5jb20iLCJ0aWQiOiI3MmY5ODhiZi04NmYxLTQxYWYtOTFhYi0yZDdjZDAxMWRiNDciLCJvaWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpZHR5cCI6ImFwcCIsInJvbGVzIjpbIlVzZXIuUmVhZC5BbGwiXX0.YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXowMTIzNDU2Nzg5'
-      - 'AZURE_ACCESS_TOKEN: eyJhbGciOiJSUzI1NiJ9.eyJhdWQiOiJodHRwczovL21hbmFnZW1lbnQuYXp1cmUuY29tLyIsInRpZCI6ImFhYWFhYWFhLWJiYmItNGNjYy04ZGRkLWVlZWVlZWVlZWVlZSIsIm9pZCI6IjEyMzQ1Njc4LTkwYWItNGNkZS04ZjAxLTIzNDU2Nzg5MGFiYyJ9.c2lnbmF0dXJlX2J5dGVzX2Zvcl9leGFtcGxlX29ubHkxMjM0NTY'
+      - "MS_GRAPH_TOKEN=eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9.eyJhdWQiOiJodHRwczovL2dyYXBoLm1pY3Jvc29mdC5jb20iLCJ0aWQiOiI3MmY5ODhiZi04NmYxLTQxYWYtOTFhYi0yZDdjZDAxMWRiNDciLCJvaWQiOiIxMTExMTExMS0yMjIyLTQzMzMtODQ0NC01NTU1NTU1NTU1NTUiLCJpZHR5cCI6ImFwcCIsInJvbGVzIjpbIlVzZXIuUmVhZC5BbGwiXX0.YWJjZGVmZ2hpamtsbW5vcHFyc3R1dnd4eXowMTIzNDU2Nzg5"
+      - "AZURE_ACCESS_TOKEN: eyJhbGciOiJSUzI1NiJ9.eyJhdWQiOiJodHRwczovL21hbmFnZW1lbnQuYXp1cmUuY29tLyIsInRpZCI6ImFhYWFhYWFhLWJiYmItNGNjYy04ZGRkLWVlZWVlZWVlZWVlZSIsIm9pZCI6IjEyMzQ1Njc4LTkwYWItNGNkZS04ZjAxLTIzNDU2Nzg5MGFiYyJ9.c2lnbmF0dXJlX2J5dGVzX2Zvcl9leGFtcGxlX29ubHkxMjM0NTY"
     validation:
       type: JWT
     references:

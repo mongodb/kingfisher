@@ -41,7 +41,7 @@ rules:
           url: https://cloudapi.cloud.couchbase.com/v4/organizations
           headers:
             Accept: application/json
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

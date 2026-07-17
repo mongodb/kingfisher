@@ -11,7 +11,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'OVSX_PAT=ovsxat_7c1cdc14-260b-4e40-b5e4-38372be59a13'
-      - 'OVSX_PAT=ovsxp_89abcdef-0123-4abc-8def-0123456789ab'
+      - "OVSX_PAT=ovsxat_7c1cdc14-260b-4e40-b5e4-38372be59a13"
+      - "OVSX_PAT=ovsxp_89abcdef-0123-4abc-8def-0123456789ab"
     references:
       - https://github.com/eclipse/openvsx/wiki/Publishing-Extensions

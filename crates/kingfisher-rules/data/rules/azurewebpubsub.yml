@@ -15,6 +15,6 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'Endpoint=https://myservice.webpubsub.azure.com;AccessKey=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGHIJKLMNOPQRS+/==;Version=1.0;'
+      - "Endpoint=https://myservice.webpubsub.azure.com;AccessKey=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGHIJKLMNOPQRS+/==;Version=1.0;"
     references:
       - https://learn.microsoft.com/en-us/azure/azure-web-pubsub/

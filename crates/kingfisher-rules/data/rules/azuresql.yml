@@ -14,7 +14,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'Server=tcp:myserver.database.windows.net,1433;Initial Catalog=mydb;Persist Security Info=False;User ID=admin;Password=MyP@ssw0rd!123;'
+      - "Server=tcp:myserver.database.windows.net,1433;Initial Catalog=mydb;Persist Security Info=False;User ID=admin;Password=MyP@ssw0rd!123;"
     references:
       - https://learn.microsoft.com/en-us/azure/azure-sql/database/connect-query-content-reference-guide
 
@@ -40,7 +40,7 @@ rules:
     confidence: medium
     categories: [password]
     examples:
-      - 'AZURE_SQL_PASSWORD=MyStr0ngP@ssword!'
+      - "AZURE_SQL_PASSWORD=MyStr0ngP@ssword!"
       - 'SQL_ADMIN_PASSWORD="Compl3x!Pass#2024"'
     references:
       - https://learn.microsoft.com/en-us/azure/azure-sql/database/connect-query-content-reference-guide

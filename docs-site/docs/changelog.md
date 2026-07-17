@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file.
 ## [v1.108.0]
 - Fixed Disqus API key and secret detection and validation by using the documented `pages/list` endpoint and requiring a successful response envelope.
 - Fixed Sentry token detection and validation false negatives by supporting documented user and organization token formats and treating authenticated `403` responses without `org:read` as active.
+- Refreshed built-in rule documentation to reflect the current rule and provider counts.
+- Improvements and refinements to detection rules and validation across several providers.
 
 ## [v1.107.0]
 - Fixed Windows self-updates for Deflate-compressed ZIP releases.

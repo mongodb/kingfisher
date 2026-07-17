@@ -1,5 +1,4 @@
 rules:
-
   - name: Flagsmith Organisation API Key
     id: kingfisher.flagsmith.1
     pattern: |
@@ -19,9 +18,9 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'FLAGSMITH_API_KEY=dVoSZFo3.3c5qN55mA1XdLZnTO2moz5Ud1Qwo18Ie'
-      - 'flagsmith api_key=7SoNiIyO.L6eehZzlmE32iuEPZjdkXskw711I3FLz'
-      - 'flagsmith api token: zfR3T3VI.GLEC5p3cggDGTDhOwTdNwuYxxqmSMuoA'
+      - "FLAGSMITH_API_KEY=dVoSZFo3.3c5qN55mA1XdLZnTO2moz5Ud1Qwo18Ie"
+      - "flagsmith api_key=7SoNiIyO.L6eehZzlmE32iuEPZjdkXskw711I3FLz"
+      - "flagsmith api token: zfR3T3VI.GLEC5p3cggDGTDhOwTdNwuYxxqmSMuoA"
     references:
       - https://docs.flagsmith.com/integrating-with-flagsmith/flagsmith-api-overview/admin-api/authentication
       - https://docs.flagsmith.com/third-party-integrations/ci-cd/terraform#terraform-api-key
@@ -56,9 +55,9 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'FLAGSMITH_ENV_KEY=103edeabc2a901041329b22da61d09cf466cf733'
-      - 'flagsmith env key: 65ea217e98f87d37152e4897896108e976bcf053'
-      - 'flagsmith api token=62612be866d95626691158801ea28a10bc2bafab'
+      - "FLAGSMITH_ENV_KEY=103edeabc2a901041329b22da61d09cf466cf733"
+      - "flagsmith env key: 65ea217e98f87d37152e4897896108e976bcf053"
+      - "flagsmith api token=62612be866d95626691158801ea28a10bc2bafab"
     references:
       - https://docs.flagsmith.com/integrating-with-flagsmith/flagsmith-api-overview/flags-api/authentication
       - https://docs.flagsmith.com/clients/server-side

@@ -27,7 +27,7 @@ rules:
             - status:
                 - 200
               type: StatusMatch
-          url: '{{ SONARHOST }}/api/user_tokens/search'
+          url: "{{ SONARHOST }}/api/user_tokens/search"
     depends_on_rule:
       - rule_id: kingfisher.sonarqube.2
         variable: SONARHOST
@@ -52,7 +52,7 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - 'sonar.host.url=https://sonarcloud.io -Dsonar.login=5524bf449ca45fcace54698371466398321f3a82'
+      - "sonar.host.url=https://sonarcloud.io -Dsonar.login=5524bf449ca45fcace54698371466398321f3a82"
       - "sonar.login', '826de5590c75919a8317fdface58206eebe7ebbc"
       - '$sonarLogin = "4924be8f51f3e738c97db2c4ace51db7e938f28b"'
     references:

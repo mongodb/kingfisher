@@ -38,7 +38,7 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - 'Here is my Jira token: VDOheDe1sSCeGkuTARhkFDE2'
+      - "Here is my Jira token: VDOheDe1sSCeGkuTARhkFDE2"
       - public static final String JIRA_PASSWORD = "VDOheDe1sSCeGkuTARhkFDE2";
     validation:
       type: Http
@@ -53,7 +53,7 @@ rules:
             - status:
                 - 200
               type: StatusMatch
-          url: '{{ JIRA_CLOUD_BASE_URL }}/rest/api/3/dashboard'
+          url: "{{ JIRA_CLOUD_BASE_URL }}/rest/api/3/dashboard"
     references:
       - https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/
     depends_on_rule:
@@ -79,7 +79,7 @@ rules:
     confidence: medium
     examples:
       - 'jira_token: "Mjc2NTIyMTkxNTY2OkurZAe0a40+xLE2fJRBcq/P2vsL"'
-      - 'atlassian_PAT=OTI0NTIyOQkzMTk3OgyypbjdwdDzTavLf2R1Ls0XJAPm'
+      - "atlassian_PAT=OTI0NTIyOQkzMTk3OgyypbjdwdDzTavLf2R1Ls0XJAPm"
     references:
       - https://confluence.atlassian.com/enterprise/using-personal-access-tokens-1026032365.html
       - https://developer.atlassian.com/server/jira/platform/personal-access-token/
@@ -97,7 +97,7 @@ rules:
                 - 200
               type: StatusMatch
             - type: JsonValid
-          url: '{{ JIRA_BASE_URL }}/rest/api/latest/myself'
+          url: "{{ JIRA_BASE_URL }}/rest/api/latest/myself"
     revocation:
       type: HttpMultiStep
       content:
@@ -105,7 +105,7 @@ rules:
           - name: lookup_token_id
             request:
               method: GET
-              url: '{{ JIRA_BASE_URL }}/rest/pat/latest/tokens'
+              url: "{{ JIRA_BASE_URL }}/rest/pat/latest/tokens"
               headers:
                 Accept: application/json
                 Authorization: Bearer {{ TOKEN }}
@@ -120,7 +120,7 @@ rules:
           - name: revoke_token
             request:
               method: DELETE
-              url: '{{ JIRA_BASE_URL }}/rest/pat/latest/tokens/{{ JIRA_TOKEN_ID }}'
+              url: "{{ JIRA_BASE_URL }}/rest/pat/latest/tokens/{{ JIRA_TOKEN_ID }}"
               headers:
                 Authorization: Bearer {{ TOKEN }}
               response_matcher:

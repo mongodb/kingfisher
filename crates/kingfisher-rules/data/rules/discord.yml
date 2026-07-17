@@ -30,7 +30,7 @@ rules:
             - status:
                 - 200
               type: StatusMatch
-          url: '{{ TOKEN }}'
+          url: "{{ TOKEN }}"
     references:
       - https://discord.com/developers/docs/resources/webhook
     revocation:
@@ -54,7 +54,7 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - 'apikey: MC0dBvKTjD0rY0cV8i37CjBf.uLHQPq.Nb1Ok1mEhe-3iTdrGOuegj29yQR'
+      - "apikey: MC0dBvKTjD0rY0cV8i37CjBf.uLHQPq.Nb1Ok1mEhe-3iTdrGOuegj29yQR"
     validation:
       type: Http
       content:

@@ -37,4 +37,3 @@ rules:
             - report_response: true
             - type: StatusMatch
               status: [200]
-

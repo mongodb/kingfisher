@@ -12,7 +12,7 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - '# password = pypi-AgEIcHlwaS5vcmcABCD1234efgh5678ijklmnopqrst9098UVWXYZabcd1234EFGHIJKL'
+      - "# password = pypi-AgEIcHlwaS5vcmcABCD1234efgh5678ijklmnopqrst9098UVWXYZabcd1234EFGHIJKL"
     validation:
       type: Http
       content:

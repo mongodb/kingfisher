@@ -84,13 +84,13 @@ rules:
       (
         v1\.0-[a-z0-9._-]{160,}
       )
-      \b      
+      \b
     pattern_requirements:
-      min_digits: 2               
+      min_digits: 2
     min_entropy: 4.0
     confidence: medium
     examples:
-      - 'X-Auth-User-Service-Key = v1.0-e26de050e02ddeaeef6de8d5ee267df5e78f68666ddd0ee76f22d26a0d20756f-eda77de60e8e76077e162727656787de2005d25e2f6e502e2d067657ed65722eade065275001a0f6f6e521e5e1fd76a6e8d7e2d6da8a2ee01e66e061e22570e2-07f2ede0aed78e82e8d2e620aaef8656d81e762266d7d226a205de7e18e2256a'
+      - "X-Auth-User-Service-Key = v1.0-e26de050e02ddeaeef6de8d5ee267df5e78f68666ddd0ee76f22d26a0d20756f-eda77de60e8e76077e162727656787de2005d25e2f6e502e2d067657ed65722eade065275001a0f6f6e521e5e1fd76a6e8d7e2d6da8a2ee01e66e061e22570e2-07f2ede0aed78e82e8d2e620aaef8656d81e762266d7d226a205de7e18e2256a"
       - |
         cloudflare_service_key: "v1.0-e26de050e02ddeaeef6de8d5ee267df5e78f68666ddd0ee76f22d26a0d20756f-eda77de60e8e76077e162727656787de2005d25e2f6e502e2d067657ed65722eade065275001a0f6f6e521e5e1fd76a6e8d7e2d6da8a2ee01e66e061e22570e2-07f2ede0aed78e82e8d2e620aaef8656d81e762266d7d226a205de7e18e2256a"
     references:
@@ -102,7 +102,7 @@ rules:
         request:
           headers:
             Content-Type: application/json
-            X-Auth-User-Service-Key: '{{ TOKEN }}'
+            X-Auth-User-Service-Key: "{{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true
@@ -123,7 +123,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'CF_API_TOKEN=cfut_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9TuV'
+      - "CF_API_TOKEN=cfut_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9TuV"
     references:
       - https://developers.cloudflare.com/fundamentals/api/get-started/token-formats/
     # Cloudflare documents 40 characters plus a checksum, but not the checksum algorithm.

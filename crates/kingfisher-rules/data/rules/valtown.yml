@@ -5,7 +5,7 @@ rules:
       (?x)
       \b
       (
-        vtwn_[a-zA-Z0-9_-]{20,80}
+        vtwn_[a-zA-Z0-9_-]{20,48}
       )
       \b
     pattern_requirements:
@@ -14,9 +14,11 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'VALTOWN_TOKEN=vtwn_AbCdEfGhIjKlMnOpQrStUvWxYz123456'
+      - "VALTOWN_TOKEN=vtwn_AbCdEfGhIjKlMnOpQrStUvWxYz123456"
     references:
-      - https://docs.val.town/api/authentication/
+      - https://docs.val.town/reference/api/authentication
+      - https://github.com/val-town/val-town-docs/blob/0baaebe3208afc046b98d49966431e4710e588f2/src/content/docs/guides/auth.mdx
+      - https://github.com/val-town/vt/blob/1eb64134b29ccec4c0465c8647f03e6edcfd7d22/src/cmd/lib/config.ts
     validation:
       type: Http
       content:

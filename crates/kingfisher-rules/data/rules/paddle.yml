@@ -20,7 +20,7 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'PADDLE_API_KEY=pdl_live_apikey_01kps076233qscw38dxz320d0e_Ab3D5fGb7Jk9LmNpQrStUv_X2z'
+      - "PADDLE_API_KEY=pdl_live_apikey_01kps076233qscw38dxz320d0e_Ab3D5fGb7Jk9LmNpQrStUv_X2z"
     validation:
       type: Http
       content:

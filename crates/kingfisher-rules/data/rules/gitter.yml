@@ -27,7 +27,7 @@ rules:
           method: GET
           url: https://api.gitter.im/v1/user
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true

@@ -18,7 +18,7 @@ rules:
     confidence: high
     examples:
       - "RAILS_MASTER_KEY=9a3f2c1b4e8d7f60a2b5c9d1e3f7a4b8"
-      - "rails_master_key: \"4b8e2f1a9c3d6e70b2a5c8d1e4f7b3c9\""
+      - 'rails_master_key: "4b8e2f1a9c3d6e70b2a5c8d1e4f7b3c9"'
     references:
       - https://guides.rubyonrails.org/security.html#environmental-security
     # No public validation endpoint: Rails master key is used for local
@@ -42,7 +42,7 @@ rules:
     min_entropy: 3.8
     confidence: high
     examples:
-      - "secret_key_base: \"b3d1e9f2a4c7e80b1a3c5d7e9f2a4c6e8b0d2f4a6c8e1b3d5f7a9c2e4b6d8f1a3\""
+      - 'secret_key_base: "b3d1e9f2a4c7e80b1a3c5d7e9f2a4c6e8b0d2f4a6c8e1b3d5f7a9c2e4b6d8f1a3"'
       - "SECRET_KEY_BASE=c2e4b6d8f0a1c3e5b7d9f2a4c6e8b0d2f4a6c8e1b3d5f7a9c2e4b6d8f0a1c3e5"
     references:
       - https://api.rubyonrails.org/classes/Rails/Application.html

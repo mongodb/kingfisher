@@ -18,14 +18,14 @@ rules:
       content:
         request:
           headers:
-            X-Shopify-Access-Token: '{{ TOKEN }}'
+            X-Shopify-Access-Token: "{{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true
             - type: StatusMatch
               status:
                 - 200
-            - type: WordMatch 
+            - type: WordMatch
               match_all_words: true
               words: ['"shop":']
           url: https://{{ DOMAIN }}/admin/api/2024-10/shop.json

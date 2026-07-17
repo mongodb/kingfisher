@@ -18,7 +18,7 @@ rules:
     examples:
       - mattermost_url = "https://community.mattermost.com"
       - mattermost_url='http://localhost:8065'
-      - 'mattermost_url: https://intra.example.com/mattermost'
+      - "mattermost_url: https://intra.example.com/mattermost"
 
   - name: Mattermost Access Token
     id: kingfisher.mattermost.2

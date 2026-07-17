@@ -10,8 +10,8 @@ rules:
       \b
     confidence: medium
     examples:
-      - 'DEEPL_API_KEY=279a2e9d-83b3-c416-7e2d-f721593e42a0:fx'
-      - 'DeepL-Auth-Key 5ef4a0d1-7e1f-47b2-ac0a-1282002aa2a1:fx'
+      - "DEEPL_API_KEY=279a2e9d-83b3-c416-7e2d-f721593e42a0:fx"
+      - "DeepL-Auth-Key 5ef4a0d1-7e1f-47b2-ac0a-1282002aa2a1:fx"
     references:
       - https://developers.deepl.com/docs/getting-started/auth
     validation:
@@ -44,10 +44,10 @@ rules:
       \b
     confidence: medium
     examples:
-      - 'DEEPL_AUTH_KEY=279a2e9d-83b3-c416-7e2d-f721593e42a0'
+      - "DEEPL_AUTH_KEY=279a2e9d-83b3-c416-7e2d-f721593e42a0"
       - 'deepl_api_key: "5ef4a0d1-7e1f-47b2-ac0a-1282002aa2a1"'
     negative_examples:
-      - 'SOME_UUID=279a2e9d-83b3-c416-7e2d-f721593e42a0'
+      - "SOME_UUID=279a2e9d-83b3-c416-7e2d-f721593e42a0"
     references:
       - https://developers.deepl.com/docs/getting-started/auth
     validation:

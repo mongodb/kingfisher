@@ -17,7 +17,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'CENSYS_API_ID=a1b2c3d4-e5f6-7890-abcd-ef1234567890'
+      - "CENSYS_API_ID=a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 
   - name: Censys API Secret
     id: kingfisher.censys.2
@@ -40,7 +40,7 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - 'CENSYS_API_SECRET=aBcDeFgHiJkLmNoPqRsTuVwXyZ012345'
+      - "CENSYS_API_SECRET=aBcDeFgHiJkLmNoPqRsTuVwXyZ012345"
     references:
       - https://search.censys.io/api
     depends_on_rule:

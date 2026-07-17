@@ -2,7 +2,7 @@ rules:
   - name: Exoscale API Key
     id: kingfisher.exoscale.1
     pattern: |
-      (?xi)
+      (?x)
       \b
       (
         EXO

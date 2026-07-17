@@ -16,7 +16,7 @@ rules:
     confidence: high
     examples:
       - "TERRAFORM_TOKEN=aBcDeF.atlasv1.AbCdEfGhIjKlMnOpQrStUvWxYz1234567890abcdefghijklmnopqrstuvwxyz0123"
-      - "token = \"xK9mP2.atlasv1.qRsT4wY6zA1cD3eF5aH7iJ0kLmN8oPqR2sT5uV7wX9yZ1aB3cD6eF8aB9c0d\""
+      - 'token = "xK9mP2.atlasv1.qRsT4wY6zA1cD3eF5aH7iJ0kLmN8oPqR2sT5uV7wX9yZ1aB3cD6eF8aB9c0d"'
     references:
       - https://developer.hashicorp.com/terraform/cloud-docs/users-teams-organizations/api-tokens
     validation:

@@ -18,8 +18,8 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - 'amplitude_api_key=8b6f8d6594749cb659b1be03e6a0a2e7'
-      - 'AMPLITUDE_API_KEY=ef929907c3923e8f3da83c24f0255aa6'
+      - "amplitude_api_key=8b6f8d6594749cb659b1be03e6a0a2e7"
+      - "AMPLITUDE_API_KEY=ef929907c3923e8f3da83c24f0255aa6"
       - "AMPLITUDE_SECRET_KEY=8b6f8d6594749cb659b1be03e6a0a2e7"
     references:
       - https://amplitude.com/docs/apis/authentication

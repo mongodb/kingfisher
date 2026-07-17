@@ -27,7 +27,7 @@ rules:
     confidence: low
     examples:
       - '<input type="password" value="Jasper@Admin2024!" name="jasper_password" />'
-      - "<input name=\"smtp_pass\" type='password' value=\"relay_secret_123\">"
+      - '<input name="smtp_pass" type=''password'' value="relay_secret_123">'
       - '<input type="password" value="AKIA6GTN2FZMZI2WBMDJ" class="form-control">'
       - '<input class="form-control" value="jasper_secret_XYZ!" type="password" name="jasper_password" />'
       - '<INPUT TYPE="PASSWORD" VALUE="Admin@1234" NAME="adminPass">'

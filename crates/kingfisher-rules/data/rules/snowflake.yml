@@ -49,7 +49,7 @@ rules:
     confidence: medium
     categories: [api, key]
     examples:
-      - 'SNOWFLAKE_TOKEN=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890AbCdEfGhIjKlMnOpQrStUvWxYz1234567890AbCdEfGhIjKlMnOpQrStUvWxYz12'
+      - "SNOWFLAKE_TOKEN=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890AbCdEfGhIjKlMnOpQrStUvWxYz1234567890AbCdEfGhIjKlMnOpQrStUvWxYz12"
     validation:
       type: Http
       content:

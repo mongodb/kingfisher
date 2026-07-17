@@ -5,7 +5,7 @@ rules:
       (?x)
       \b
       (
-        prf_(?:(?:cli_)?test_)?[a-zA-Z0-9_-]{20,80}
+        prf_(?:(?:cli_)?test_)?[a-zA-Z0-9_-]{20,50}
       )
       \b
     pattern_requirements:
@@ -14,10 +14,10 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'PROOF_API_KEY=prf_AbCdEfGhIjKlMnOpQrStUvWxYz123456'
-      - 'proof_key: prf_test_AbCdEfGhIjKlMnOpQrStUvWxYz123456'
-      - 'proof_key: prf_cli_AbCdEfGhIjKlMnOpQrStUvWxYz123456'
-      - 'proof_key: prf_cli_test_AbCdEfGhIjKlMnOpQrStUvWxYz123456'
+      - "PROOF_API_KEY=prf_AbCdEfGhIjKlMnOpQrStUvWxYz123456"
+      - "proof_key: prf_test_AbCdEfGhIjKlMnOpQrStUvWxYz123456"
+      - "proof_key: prf_cli_AbCdEfGhIjKlMnOpQrStUvWxYz123456"
+      - "proof_key: prf_cli_test_AbCdEfGhIjKlMnOpQrStUvWxYz123456"
     validation:
       type: Http
       content:
@@ -33,7 +33,7 @@ rules:
             ApiKey: "{{ TOKEN }}"
             Content-Type: application/json
             Accept: application/json
-          body: '{}'
+          body: "{}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

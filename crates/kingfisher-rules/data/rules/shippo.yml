@@ -24,7 +24,7 @@ rules:
           method: GET
           url: https://api.goshippo.com/shipments/
           headers:
-            Authorization: 'ShippoToken {{ TOKEN }}'
+            Authorization: "ShippoToken {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true

@@ -13,8 +13,8 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'E2B_API_KEY=e2b_5f088ea8ea8502827d3d7d79448bdf75e4fe3c37'
-      - 'X-API-Key: e2b_d3b87681ab9d0b856a22de1c64e0dbc07f673a3e'
+      - "E2B_API_KEY=e2b_5f088ea8ea8502827d3d7d79448bdf75e4fe3c37"
+      - "X-API-Key: e2b_d3b87681ab9d0b856a22de1c64e0dbc07f673a3e"
     references:
       - https://e2b.dev/docs/getting-started/api-key
       - https://e2b.dev/docs/api-reference/sandboxes/list-sandboxes

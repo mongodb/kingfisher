@@ -70,7 +70,7 @@ rules:
     visible: false
     examples:
       - 'ANYPOINT_CLIENT_ID="4f2c9d1081ab7c3de56f9081a2bc4d7e"'
-      - 'anypoint connected app id: 9c7a21e45d6f0b8c3a1d4e6f7b2c9a10'
+      - "anypoint connected app id: 9c7a21e45d6f0b8c3a1d4e6f7b2c9a10"
     references:
       - https://docs.mulesoft.com/access-management/connected-apps-developers
       - https://docs.mulesoft.com/access-management/connected-app-bearer-token-example
@@ -103,7 +103,7 @@ rules:
     confidence: medium
     examples:
       - 'ANYPOINT_CLIENT_SECRET="3E7f94b18c2d6a40f1b7e9c24d6a8b0f"'
-      - 'anypoint oauth secret = 6a9c1e2f4b7d8a0c3e5f1b2d4a6c8e0f'
+      - "anypoint oauth secret = 6a9c1e2f4b7d8a0c3e5f1b2d4a6c8e0f"
     depends_on_rule:
       - rule_id: kingfisher.anypoint.2
         variable: CLIENT_ID

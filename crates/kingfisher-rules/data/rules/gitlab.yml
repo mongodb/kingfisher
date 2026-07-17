@@ -27,26 +27,26 @@ rules:
       content:
         request:
           headers:
-            PRIVATE-TOKEN: '{{ TOKEN }}'
+            PRIVATE-TOKEN: "{{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true
             - type: WordMatch
               words:
                 - '"id"'
-          url: '{{ GITLAB_API_BASE_URL }}/personal_access_tokens/self'
+          url: "{{ GITLAB_API_BASE_URL }}/personal_access_tokens/self"
     revocation:
       type: Http
       content:
         request:
           headers:
-            PRIVATE-TOKEN: '{{ TOKEN }}'
+            PRIVATE-TOKEN: "{{ TOKEN }}"
           method: DELETE
           response_matcher:
             - report_response: true
             - type: StatusMatch
               status: [204]
-          url: '{{ GITLAB_API_BASE_URL }}/personal_access_tokens/self'
+          url: "{{ GITLAB_API_BASE_URL }}/personal_access_tokens/self"
 
   - name: GitLab Runner Registration Token
     id: kingfisher.gitlab.2
@@ -92,7 +92,7 @@ rules:
                 - '"token is missing"'
                 - '"403 Forbidden"'
               negative: true
-          url: '{{ GITLAB_API_BASE_URL }}/runners/verify'
+          url: "{{ GITLAB_API_BASE_URL }}/runners/verify"
 
   - name: GitLab Pipeline Trigger Token
     id: kingfisher.gitlab.3
@@ -119,19 +119,19 @@ rules:
       content:
         request:
           headers:
-            PRIVATE-TOKEN: '{{ TOKEN }}'
+            PRIVATE-TOKEN: "{{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status: 
+              status:
                 - 200
             - type: WordMatch
               words:
                 - '"token is missing"'
                 - '"403 Forbidden"'
               negative: true
-          url: '{{ GITLAB_API_BASE_URL }}/ci/pipeline_triggers/{{ TOKEN }}'
+          url: "{{ GITLAB_API_BASE_URL }}/ci/pipeline_triggers/{{ TOKEN }}"
   - name: GitLab Private Token - Routable Format
     id: kingfisher.gitlab.4
     pattern: |
@@ -157,7 +157,7 @@ rules:
         actual:
           template: "{{ crc32 }}"
           requires_capture: crc32
-        expected: "{{ \"glpat-\" | append: base64_payload | append: \".01.\" | append: base36_payload_length | crc32 | base36: 7 }}"
+        expected: '{{ "glpat-" | append: base64_payload | append: ".01." | append: base36_payload_length | crc32 | base36: 7 }}'
         skip_if_missing: true
     min_entropy: 3.5
     confidence: medium
@@ -171,26 +171,26 @@ rules:
       content:
         request:
           headers:
-            PRIVATE-TOKEN: '{{ TOKEN }}'
+            PRIVATE-TOKEN: "{{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true
             - type: WordMatch
               words:
                 - '"id"'
-          url: '{{ GITLAB_API_BASE_URL }}/personal_access_tokens/self'
+          url: "{{ GITLAB_API_BASE_URL }}/personal_access_tokens/self"
     revocation:
       type: Http
       content:
         request:
           headers:
-            PRIVATE-TOKEN: '{{ TOKEN }}'
+            PRIVATE-TOKEN: "{{ TOKEN }}"
           method: DELETE
           response_matcher:
             - report_response: true
             - type: StatusMatch
               status: [204]
-          url: '{{ GITLAB_API_BASE_URL }}/personal_access_tokens/self'
+          url: "{{ GITLAB_API_BASE_URL }}/personal_access_tokens/self"
 
   - name: GitLab CI/CD Job Token
     id: kingfisher.gitlab.5
@@ -210,7 +210,7 @@ rules:
     confidence: medium
     examples:
       - glcbt-ab12_xY9kLmNpQrStUvWxYz01
-      - 'CI_JOB_TOKEN=glcbt-a1b2c_3dEfGhIjKlMnOpQrStUv'
+      - "CI_JOB_TOKEN=glcbt-a1b2c_3dEfGhIjKlMnOpQrStUv"
     references:
       - https://docs.gitlab.com/ci/jobs/ci_job_token/
       - https://docs.gitlab.com/api/jobs/
@@ -219,9 +219,9 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ GITLAB_API_BASE_URL }}/job'
+          url: "{{ GITLAB_API_BASE_URL }}/job"
           headers:
-            JOB-TOKEN: '{{ TOKEN }}'
+            JOB-TOKEN: "{{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch
@@ -251,7 +251,7 @@ rules:
     confidence: medium
     examples:
       - gldt-xY9kLmNpQrStUvWxYz01
-      - 'DEPLOY_TOKEN=gldt-3dEfGhIjK4MnOpQrStUv'
+      - "DEPLOY_TOKEN=gldt-3dEfGhIjK4MnOpQrStUv"
     references:
       - https://docs.gitlab.com/user/project/deploy_tokens/
     # Validation not added: deploy tokens authenticate via HTTP basic auth
@@ -393,7 +393,7 @@ rules:
                 - '"token is missing"'
                 - '"403 Forbidden"'
               negative: true
-          url: '{{ GITLAB_API_BASE_URL }}/runners/verify'
+          url: "{{ GITLAB_API_BASE_URL }}/runners/verify"
 
   - name: GitLab Runner Authentication Token - Routable Format
     id: kingfisher.gitlab.13
@@ -436,7 +436,7 @@ rules:
                 - '"token is missing"'
                 - '"403 Forbidden"'
               negative: true
-          url: '{{ GITLAB_API_BASE_URL }}/runners/verify'
+          url: "{{ GITLAB_API_BASE_URL }}/runners/verify"
 
   - name: GitLab SCIM Token
     id: kingfisher.gitlab.14
@@ -472,8 +472,8 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - '_gitlab_session=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6'
-      - 'Cookie: _gitlab_session=0f1e2d3c4b5a69788796a5b4c3d2e1f0'
+      - "_gitlab_session=a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"
+      - "Cookie: _gitlab_session=0f1e2d3c4b5a69788796a5b4c3d2e1f0"
     references:
       - https://docs.gitlab.com/
     validation:
@@ -481,7 +481,7 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ GITLAB_API_BASE_URL }}/user'
+          url: "{{ GITLAB_API_BASE_URL }}/user"
           headers:
             Cookie: "_gitlab_session={{ TOKEN }}"
           response_matcher:

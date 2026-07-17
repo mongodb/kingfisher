@@ -14,6 +14,6 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'AMAZON_CLIENT_ID=amzn1.application-oa2-client.1a2b3c4d5e6f7890abcdef1234567890'
+      - "AMAZON_CLIENT_ID=amzn1.application-oa2-client.1a2b3c4d5e6f7890abcdef1234567890"
     references:
       - https://developer.amazon.com/docs/login-with-amazon/authorization-code-grant.html

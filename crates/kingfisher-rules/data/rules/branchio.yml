@@ -11,7 +11,7 @@ rules:
     confidence: medium
     min_entropy: 3.0
     examples:
-      - 'BRANCH_KEY=key_live_kaFuWw8WvY7yn1d9yYiP8gokwqjV0Swt'
+      - "BRANCH_KEY=key_live_kaFuWw8WvY7yn1d9yYiP8gokwqjV0Swt"
       - 'branch.init("key_live_hcnegO5R0SbbpAe1M4rjvgckbFMeQB2N");'
     references:
       - https://help.branch.io/developers-hub/docs/deep-linking-api
@@ -41,7 +41,7 @@ rules:
     confidence: medium
     min_entropy: 3.0
     examples:
-      - 'BRANCH_KEY=key_test_jfdwlg5PtY8mDoR3fGpv4hkesztiqEWZ'
+      - "BRANCH_KEY=key_test_jfdwlg5PtY8mDoR3fGpv4hkesztiqEWZ"
       - 'branch.init("key_test_plqYW3Aq9Xija1cobGMieipndBzO5y7J");'
     references:
       - https://help.branch.io/developers-hub/docs/deep-linking-api
@@ -75,5 +75,5 @@ rules:
     confidence: medium
     min_entropy: 3.0
     examples:
-      - 'BRANCH_SECRET=abcdefghijklmnopqrstuvwxyz1234567890ABCD'
+      - "BRANCH_SECRET=abcdefghijklmnopqrstuvwxyz1234567890ABCD"
       - 'branch_secret: "abcd1234efgh5678ijkl9012mnop3456qrst7890"'

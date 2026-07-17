@@ -5,16 +5,19 @@ rules:
       (?x)
       \b
       (
-        tgpak_[a-z0-9]{40,64}
+        tgpak_[a-z0-9]{45,64}
       )
       \b
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'TOLGEE_API_KEY=tgpak_ha3tkxzton2wm4twmrsgkmtgmnsgw4bqgvttemttnrwwoyld'
-      - 'X-API-Key: tgpak_gm2tgnrqgi3tsnrvheytomrvme4dgmrtgntdgntfmu3to'
+      - "TOLGEE_API_KEY=tgpak_grpxa5lfgvzdsnluovswknluonrtc3rxnzzw2nttmjww7"
+      - "X-API-Key: tgpak_geytmnk7onuwy3lmmztgk5tkmezwsz3bg53g4mzrmqzhen3ghb"
     references:
       - https://tolgee.io/platform/account_settings/api_keys_and_pat_tokens
+      - https://github.com/tolgee/documentation/blob/311743e5e668481f951a486531eeba6c9c8f8352/platform/account_settings/api_keys_and_pat_tokens.mdx
+      - https://github.com/tolgee/documentation/blob/311743e5e668481f951a486531eeba6c9c8f8352/api/tolgee-api.info.mdx
+      - https://github.com/tolgee/tolgee-platform/blob/0987795171979736ef39d032b7efd96956654364/backend/data/src/main/kotlin/io/tolgee/security/constants.kt
     validation:
       type: Http
       content:
@@ -36,15 +39,18 @@ rules:
       (?x)
       \b
       (
-        tgpat_[a-z0-9]{40,64}
+        tgpat_[a-z0-9]{48,64}
       )
       \b
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'TOLGEE_PAT=tgpat_c813fppevpm6smlv8gld2fqq7knqqfht5ri1vgo57gj6ivkbhp5'
+      - "TOLGEE_PAT=tgpat_1sv7jfqkcfanhv7fsff49tbedffm2jptusg5ngcp4e98nc7ijhq7"
     references:
       - https://tolgee.io/platform/account_settings/api_keys_and_pat_tokens
+      - https://github.com/tolgee/documentation/blob/311743e5e668481f951a486531eeba6c9c8f8352/platform/account_settings/api_keys_and_pat_tokens.mdx
+      - https://github.com/tolgee/documentation/blob/311743e5e668481f951a486531eeba6c9c8f8352/api/tolgee-api.info.mdx
+      - https://github.com/tolgee/tolgee-platform/blob/0987795171979736ef39d032b7efd96956654364/backend/data/src/main/kotlin/io/tolgee/security/constants.kt
     validation:
       type: Http
       content:

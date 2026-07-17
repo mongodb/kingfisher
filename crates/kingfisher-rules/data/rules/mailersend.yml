@@ -14,7 +14,7 @@ rules:
     confidence: high
     categories: [api, key]
     examples:
-      - 'MAILERSEND_API_TOKEN=mlsn.AbCdEfGhIjKlMnOpQrStUvWxYz1234567890AbCdEfGhIj'
+      - "MAILERSEND_API_TOKEN=mlsn.AbCdEfGhIjKlMnOpQrStUvWxYz1234567890AbCdEfGhIj"
     validation:
       type: Http
       content:

@@ -19,7 +19,7 @@ rules:
     confidence: medium
     visible: false
     examples:
-      - "LACEWORK_API_KEY=\"DEVACCT_B2849286C1644991C28692DF7C5EA973BA0BB848B6DD303D\""
+      - 'LACEWORK_API_KEY="DEVACCT_B2849286C1644991C28692DF7C5EA973BA0BB848B6DD303D"'
       - "LACEWORK_API_KEY=PRODACCT_E1F2A3B4C5D6789012345ABCDEF012345678901234 "
     references:
       - https://docs.lacework.com/api/api-access-keys-and-tokens
@@ -42,7 +42,7 @@ rules:
     min_entropy: 3.0
     confidence: high
     examples:
-      - "LACEWORK_API_SECRET=\"_c7df6ee56c7cf8603854a3b1b2b4a5b\""
+      - 'LACEWORK_API_SECRET="_c7df6ee56c7cf8603854a3b1b2b4a5b"'
       - "LACEWORK_API_SECRET=_a4d3e2f1b7c8e5d294963a2b1b3b4c5 "
     references:
       - https://docs.lacework.com/api/api-access-keys-and-tokens

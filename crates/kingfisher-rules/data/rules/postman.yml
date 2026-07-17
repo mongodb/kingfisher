@@ -25,7 +25,7 @@ rules:
       content:
         request:
           headers:
-            x-api-key: '{{ TOKEN }}'
+            x-api-key: "{{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true

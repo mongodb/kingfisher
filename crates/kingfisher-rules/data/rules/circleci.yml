@@ -26,14 +26,14 @@ rules:
         request:
           headers:
             Accept: application/json
-            Circle-Token: '{{ TOKEN }}'
+            Circle-Token: "{{ TOKEN }}"
           method: GET
           response_matcher:
             - report_response: true
             - status:
                 - 200
               type: StatusMatch
-            - type: WordMatch 
+            - type: WordMatch
               words:
                 - '"id"'
           url: https://circleci.com/api/v2/me
@@ -63,7 +63,7 @@ rules:
       content:
         request:
           headers:
-            Circle-Token: '{{ TOKEN }}'
+            Circle-Token: "{{ TOKEN }}"
             Accept: application/json
           method: GET
           response_matcher:
@@ -71,7 +71,7 @@ rules:
             - status:
                 - 200
               type: StatusMatch
-            - type: WordMatch 
+            - type: WordMatch
               words:
                 - '"vcs_url"'
           url: https://circleci.com/api/v1.1/projects

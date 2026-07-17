@@ -10,7 +10,7 @@ rules:
       - "                //$google_client_id     = '244082345999-o6m8f1pmb1e76tjfj9v7b96j31e53ps5.apps.googleusercontent.com';"
       - "      GOOGLE_OAUTH2_CLIENT_ID = '607830223128-4qgthc7ofdqce232dk690t5jgkm1ce33.apps.googleusercontent.com'"
       - '          $cordovaOauth.google("653512027492-5u9blotr1521fa0lo1172nhv4pmqgttq.apps.googleusercontent.com", ["email"]).then(function(result) {'
-    
+
   - name: Google OAuth Client Secret
     id: kingfisher.google.2
     pattern: |
@@ -219,7 +219,7 @@ rules:
           method: GET
           url: https://generativelanguage.googleapis.com/v1/models
           headers:
-            X-goog-api-key: '{{ TOKEN }}'
+            X-goog-api-key: "{{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch

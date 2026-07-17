@@ -21,7 +21,7 @@ rules:
             Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
           method: GET
-          url: https://www.googleapis.com/oauth2/v3/userinfo 
+          url: https://www.googleapis.com/oauth2/v3/userinfo
           response_matcher:
             - report_response: true
             - status:

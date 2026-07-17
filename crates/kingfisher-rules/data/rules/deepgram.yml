@@ -1,7 +1,7 @@
 rules:
   - name: Deepgram API Key
     id: kingfisher.deepgram.1
-    pattern: |         
+    pattern: |
       (?xi)    
       \b
       deepgram
@@ -17,7 +17,7 @@ rules:
     confidence: medium
     examples:
       - deepgram_key = 948c19ecde2818a1a357fffb14d2fc2a03d3c56e
-      - 'deepgram-api: 6c8ba06cb14a32d508948606d8b5d9c8f70e493b'
+      - "deepgram-api: 6c8ba06cb14a32d508948606d8b5d9c8f70e493b"
       - deepgram = 12e217f37eb173f0c8f1b7309f4207c7dca20186
       - deepgram token 1 == 1f8946087e64b14dffd069b78554e217b3ed34d4
     references:
@@ -38,6 +38,6 @@ rules:
             - type: StatusMatch
               status: [200]
             - type: JsonValid
-            - type: WordMatch                            
+            - type: WordMatch
               match_all_words: true
               words: ['"name"']

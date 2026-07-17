@@ -3,34 +3,61 @@ rules:
     id: kingfisher.pollinations.1
     pattern: |
       (?x)
+      (?i:pollinations)
+      (?:.|[\n\r]){0,48}?
       \b
       (
-        plln_sk_[a-zA-Z0-9]{24,48}
+        sk_[A-Za-z0-9]{32}
       )
       \b
-    pattern_requirements:
-      min_digits: 1
     min_entropy: 3.0
     confidence: medium
+    categories: [api, key]
     examples:
-      - 'POLLINATIONS_KEY=plln_sk_a1B2c3D4e5F6g7H8i9J0k1L2'
+      - "POLLINATIONS_API_KEY=sk_OGhhzmGVPhl6FFdSSHKiyAnHEx48dHlk"
+      - 'pollinations token: "sk_ZyXwVuTsRqPoNmLkJiHgFeDcBa987654"'
     references:
       - https://pollinations.ai/pricing
+      - https://github.com/pollinations/pollinations/blob/44e1ab7788033f2853fa1ea7980a0fe83191c54d/gen.pollinations.ai/src/docs/authentication.md
+      - https://github.com/pollinations/pollinations/blob/44e1ab7788033f2853fa1ea7980a0fe83191c54d/BRING_YOUR_OWN_POLLEN.md
+      - https://github.com/pollinations/pollinations/blob/44e1ab7788033f2853fa1ea7980a0fe83191c54d/shared/auth/api-key.ts
+      - https://github.com/pollinations/pollinations/blob/44e1ab7788033f2853fa1ea7980a0fe83191c54d/enter.pollinations.ai/src/routes/oauth.ts
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://enter.pollinations.ai/api/oauth/userinfo
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: WordMatch
+              words:
+                - '"sub"'
 
   - name: Pollinations Publishable Key
     id: kingfisher.pollinations.2
     pattern: |
       (?x)
+      (?i:pollinations)
+      (?:.|[\n\r]){0,48}?
       \b
       (
-        plln_pk_[a-zA-Z0-9]{24,48}
+        pk_[A-Za-z0-9]{16}
       )
       \b
-    pattern_requirements:
-      min_digits: 1
     min_entropy: 3.0
     confidence: medium
+    categories: [api, key]
     examples:
-      - 'POLLINATIONS_PUBLIC_KEY=plln_pk_a1B2c3D4e5F6g7H8i9J0k1L2'
+      - "POLLINATIONS_PUBLIC_KEY=pk_NgBAArhUeGvSRFbb"
     references:
       - https://pollinations.ai/pricing
+      - https://github.com/pollinations/pollinations/blob/44e1ab7788033f2853fa1ea7980a0fe83191c54d/gen.pollinations.ai/src/docs/authentication.md
+      - https://github.com/pollinations/pollinations/blob/44e1ab7788033f2853fa1ea7980a0fe83191c54d/BRING_YOUR_OWN_POLLEN.md
+      - https://github.com/pollinations/pollinations/blob/44e1ab7788033f2853fa1ea7980a0fe83191c54d/shared/auth/api-key.ts
+      - https://github.com/pollinations/pollinations/blob/44e1ab7788033f2853fa1ea7980a0fe83191c54d/enter.pollinations.ai/src/routes/oauth.ts

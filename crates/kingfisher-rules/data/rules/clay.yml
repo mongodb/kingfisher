@@ -19,7 +19,7 @@ rules:
       - clay_api_key=ce1abceaffe7d7958a41
       - "CLAY_KEY: bdc55270455ca0a892e4"
       - export CLAY_TOKEN=e9b711a5acbb99b8f099
-      - 'clay key: f6fd04ab6b4f7992adc2'
+      - "clay key: f6fd04ab6b4f7992adc2"
       - CLAY_API_KEY=d8dfd14ec83e4e17a7d2
     references:
       - https://university.clay.com/docs/http-api-integration-overview

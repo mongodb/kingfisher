@@ -17,7 +17,7 @@ rules:
     confidence: medium
     examples:
       - OPTIMIZELY_TOKEN=AbCDefGhijKlmnOpqrStuvWxYz01-23:45AbCDefGhijKlmnOpqrSt
-      - 'Optimizely Authorization: Bearer AbCDefGhijKlmnOpqrStuvWxYz01-23:45AbCDefGhijKlmnOpqrSt'
+      - "Optimizely Authorization: Bearer AbCDefGhijKlmnOpqrStuvWxYz01-23:45AbCDefGhijKlmnOpqrSt"
     references:
       - https://docs.developers.optimizely.com/web-experimentation/docs/rest-api-getting-started
       - https://docs.developers.optimizely.com/feature-experimentation/reference/get_me

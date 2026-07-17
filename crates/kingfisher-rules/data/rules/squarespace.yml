@@ -41,7 +41,7 @@ rules:
           method: GET
           url: https://api.squarespace.com/1.0/authorization/website
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             User-Agent: kingfisher
           response_matcher:
             - report_response: true

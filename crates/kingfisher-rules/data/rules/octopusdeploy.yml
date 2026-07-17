@@ -55,9 +55,9 @@ rules:
       content:
         request:
           method: GET
-          url: '{{ OCTOPUS_URL }}/api'
+          url: "{{ OCTOPUS_URL }}/api"
           headers:
-            X-Octopus-ApiKey: '{{ TOKEN }}'
+            X-Octopus-ApiKey: "{{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true

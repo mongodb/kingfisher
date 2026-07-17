@@ -13,8 +13,8 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'CAL_API_KEY=cal_live_f1ec52a0b268e00fe30b63e96115c8df'
-      - 'Authorization: Bearer cal_live_xK8m2LpQr5nW0vYz3cJ7aB4dE6fG8hJk'
+      - "CAL_API_KEY=cal_live_f1ec52a0b268e00fe30b63e96115c8df"
+      - "Authorization: Bearer cal_live_xK8m2LpQr5nW0vYz3cJ7aB4dE6fG8hJk"
     references:
       - https://cal.com/docs/api-reference/v2/introduction
     validation:

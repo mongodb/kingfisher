@@ -33,5 +33,5 @@ rules:
             - type: StatusMatch
               status: [200, 403]
             - type: WordMatch
-              words: ['API token is disabled']
+              words: ["API token is disabled"]
               negative: true

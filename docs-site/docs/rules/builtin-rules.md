@@ -1,12 +1,12 @@
 ---
 title: "Built-in Rules List"
-description: "Complete list of all 1007 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
+description: "Complete list of all 1006 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
 ---
 
 # Built-in Rules
 
-Kingfisher ships with **1007 detection rules** across **601 providers**
-(877 detectors + 130 dependent rules).
+Kingfisher ships with **1006 detection rules** across **600 providers**
+(876 detectors + 130 dependent rules).
 Of these, **512** include live validation and **52** support direct revocation.
 
 !!! tip "Search"
@@ -3636,14 +3636,6 @@ Of these, **512** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
-<td>Highnote</td>
-<td>Highnote API Key</td>
-<td><code>kingfisher.highnote.1</code></td>
-<td>Medium</td>
-<td>Yes</td>
-<td></td>
-</tr>
-<tr>
 <td>Honeycomb</td>
 <td>Honeycomb API Key</td>
 <td><code>kingfisher.honeycomb.1</code></td>
@@ -5712,7 +5704,7 @@ Of these, **512** include live validation and **52** support direct revocation.
 <td>Pollinations Secret Key</td>
 <td><code>kingfisher.pollinations.1</code></td>
 <td>Medium</td>
-<td></td>
+<td>Yes</td>
 <td></td>
 </tr>
 <tr>

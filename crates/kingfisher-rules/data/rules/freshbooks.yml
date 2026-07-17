@@ -26,7 +26,7 @@ rules:
           method: GET
           url: https://api.freshbooks.com/auth/api/v1/users/me
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
           response_matcher:
             - report_response: true

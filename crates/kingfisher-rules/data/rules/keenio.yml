@@ -49,5 +49,5 @@ rules:
     confidence: medium
     min_entropy: 1.0
     examples:
-      - 'KEEN_PROJECT_ID=507f1f77bcf86cd799439011'
+      - "KEEN_PROJECT_ID=507f1f77bcf86cd799439011"
       - 'project_id: "5f47ac10e91b2a0017b4c8d2"'

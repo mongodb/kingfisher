@@ -11,8 +11,8 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'NIGHTFALL_API_KEY=NF-a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6'
-      - 'Authorization: Bearer NF-xK8m2LpQr5nW0vYz3cJ7aB4dE6fG8h0i'
+      - "NIGHTFALL_API_KEY=NF-a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6"
+      - "Authorization: Bearer NF-xK8m2LpQr5nW0vYz3cJ7aB4dE6fG8h0i"
     references:
       - https://help.nightfall.ai/developer-api/key-concepts/setup/api_key
     validation:

@@ -24,7 +24,7 @@ rules:
           method: GET
           url: https://api.duffel.com/airlines
           headers:
-            Authorization: 'Bearer {{ TOKEN }}'
+            Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
             Duffel-Version: v1
           response_matcher:
