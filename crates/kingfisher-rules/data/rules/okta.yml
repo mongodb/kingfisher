@@ -40,6 +40,8 @@ rules:
           url: https://{{ DOMAIN }}/api/v1/users/me
     references:
       - https://developer.okta.com/docs/reference/core-okta-api/#authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/okta.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/okta.go
     depends_on_rule:
       - rule_id: "kingfisher.okta.2"
         variable: DOMAIN

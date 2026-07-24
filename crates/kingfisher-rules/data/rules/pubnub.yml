@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        pub-c-[a-z0-9]{8}(?:-[a-z0-9]{4}){3}-[a-z0-9]{12}
+        pub-c-[[:alnum:]]{8}(?:-[[:alnum:]]{4}){3}-[[:alnum:]]{12}
       )
       \b
     pattern_requirements:
@@ -35,7 +35,7 @@ rules:
       (?xi)
       \b
       (
-        sub-c-[a-z0-9]{8}(?:-[a-z0-9]{4}){3}-[a-z0-9]{12}
+        sub-c-[[:alnum:]]{8}(?:-[[:alnum:]]{4}){3}-[[:alnum:]]{12}
       )
       \b
     pattern_requirements:
@@ -57,3 +57,4 @@ rules:
               type: StatusMatch
     references:
       - https://www.pubnub.com/docs/sdks/rest-api
+      - https://www.pubnub.com/docs/sdks/rest-api # Vendor docs document the same validation endpoint (ps.pndsn.com):

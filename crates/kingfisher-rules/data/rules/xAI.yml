@@ -36,3 +36,4 @@ rules:
       - https://docs.x.ai/docs/api-reference
       - https://docs.x.ai/docs/overview
       - https://docs.x.ai/docs/management-api
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/xai.go

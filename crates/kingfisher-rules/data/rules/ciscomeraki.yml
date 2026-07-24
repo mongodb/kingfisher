@@ -6,7 +6,7 @@ rules:
       meraki
       (?:.|[\n\r]){0,32}?
       (
-        [0-9a-f]{40}
+        [[:xdigit:]]{40}
       )
       \b
     pattern_requirements:
@@ -20,6 +20,7 @@ rules:
         const MERAKI_KEY = "abcdefabcd12abcdefabcdefabcdefabcdefabcd";
     references:
       - https://developer.cisco.com/meraki/api-v1/overview/
+      - https://github.com/meraki/automation-scripts/blob/6685d59142f23bc04e65cb6a3482b325595b22db/secure_connect/Private_Applications_CSV_Import/privateApplicationsImport.py
     validation:
       type: Http
       content:

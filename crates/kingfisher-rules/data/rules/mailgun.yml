@@ -35,6 +35,8 @@ rules:
           url: https://api.mailgun.net/v3/address/validate?address=test@example.com
     references:
       - https://documentation.mailgun.com/docs/mailgun/api-reference/mg-auth
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/mailgun.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/mailgun.go
 
   - name: MailGun Webhook Signing Key
     id: kingfisher.mailgun.3
@@ -86,7 +88,7 @@ rules:
       (?:.|[\n\r]){0,64}?
       \b
       (                      
-        key-(?:[0-9a-f]{8}){4}
+        key-(?:[[:xdigit:]]{8}){4}
       )
       \b
     pattern_requirements:
@@ -111,3 +113,5 @@ rules:
           url: https://api.mailgun.net/v3/address/validate?address=test@example.com
     references:
       - https://documentation.mailgun.com/docs/mailgun/api-reference/mg-auth
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/mailgun.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/mailgun.go

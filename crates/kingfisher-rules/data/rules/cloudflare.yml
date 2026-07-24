@@ -25,6 +25,7 @@ rules:
     references:
       - https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/verify/
       - https://developers.cloudflare.com/api/resources/user/subresources/tokens/methods/delete/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/cloudflare.go
     validation:
       type: Http
       content:
@@ -96,6 +97,7 @@ rules:
     references:
       - https://developers.cloudflare.com/fundamentals/api/get-started/keys/
       - https://developers.cloudflare.com/fundamentals/api/get-started/keys/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/cloudflare.go
     validation:
       type: Http
       content:
@@ -126,7 +128,8 @@ rules:
       - "CF_API_TOKEN=cfut_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9TuV"
     references:
       - https://developers.cloudflare.com/fundamentals/api/get-started/token-formats/
-    # Cloudflare documents 40 characters plus a checksum, but not the checksum algorithm.
+      # Cloudflare documents 40 characters plus a checksum, but not the checksum algorithm.
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/cloudflare.go
     validation:
       type: Http
       content:

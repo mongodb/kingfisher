@@ -7,7 +7,7 @@ rules:
       (?:.|[\n\r]){0,24}?
       \b
       (
-        (?:live|test)_[a-f0-9]{35}
+        (?:live|test)_[[:xdigit:]]{35}
       )
       \b
     pattern_requirements:
@@ -19,6 +19,8 @@ rules:
       - LOB_KEY="test_abcdefabcdefab12efabcdefabcdefabcde"
     references:
       - https://docs.lob.com/#section/Authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/lob.go
+      - https://datatracker.ietf.org/doc/html/rfc7617
     validation:
       type: Http
       content:
@@ -41,7 +43,7 @@ rules:
       (?:.|[\n\r]){0,24}?
       \b
       (
-        (?:test|live)_pub_[a-f0-9]{31}
+        (?:test|live)_pub_[[:xdigit:]]{31}
       )
       \b
     pattern_requirements:
@@ -53,6 +55,7 @@ rules:
       - LOB_PUBLISHABLE="live_pub_1234567890abcdef1234567890abcde"
     references:
       - https://docs.lob.com/#section/Authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/lob.go
     validation:
       type: Http
       content:

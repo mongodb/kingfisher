@@ -9,7 +9,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-zA-Z0-9]{20,40}
+        [[:alnum:]]{20,40}
       )
       \b
     pattern_requirements:
@@ -21,6 +21,7 @@ rules:
       - "delighted_api_key: Rq4s5T6u7V8w9X0yZ1a2B3c4D5e6F7"
     references:
       - https://app.delighted.com/docs/api
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/token-spray/api-delighted.yaml
     validation:
       type: Http
       content:

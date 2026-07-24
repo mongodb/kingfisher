@@ -14,6 +14,7 @@ rules:
       - "MINIMAX_API_KEY=MINIMAX-A1B2C3D4-E5F6G7H8-I9J0K1L2-M3N4O5P6"
     references:
       - https://platform.minimax.io/docs/token-plan/quickstart
+      - https://github.com/lfnovo/open-notebook/blob/206d77cab366d48f057ff5cce3141bc66732851a/open_notebook/ai/model_discovery.py
     validation:
       type: Http
       content:

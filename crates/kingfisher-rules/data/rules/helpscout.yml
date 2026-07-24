@@ -9,7 +9,7 @@ rules:
       (?:client[\s_.-]*id|app[\s_.-]*id|application[\s_.-]*id)
       (?:.|[\n\r]){0,16}?
       (
-        [A-Za-z0-9]{10,40}
+        [[:alnum:]]{10,40}
       )
       \b
     pattern_requirements:
@@ -24,6 +24,7 @@ rules:
       - 'helpscout_app_id: "a1B2c3D4e5F6g7H8i9J0K1L2"'
     references:
       - https://developer.helpscout.com/mailbox-api/
+      - https://github.com/singer-io/tap-helpscout/blob/2bf2be411699403a6071b2f34a972d47a992bb4d/tap_helpscout/client.py
 
   - name: Help Scout OAuth Client Secret
     id: kingfisher.helpscout.2
@@ -41,7 +42,7 @@ rules:
       )
       (?:.|[\n\r]){0,16}?
       (
-        [A-Za-z0-9]{24,64}
+        [[:alnum:]]{24,64}
       )
       \b
     pattern_requirements:
@@ -59,6 +60,7 @@ rules:
       - 'helpscout_client_secret: "E7d2A1f849c3B05d6e81F2a794c3D5b0"'
     references:
       - https://developer.helpscout.com/mailbox-api/
+      - https://github.com/singer-io/tap-helpscout/blob/2bf2be411699403a6071b2f34a972d47a992bb4d/tap_helpscout/client.py
     depends_on_rule:
       - rule_id: kingfisher.helpscout.1
         variable: CLIENT_ID

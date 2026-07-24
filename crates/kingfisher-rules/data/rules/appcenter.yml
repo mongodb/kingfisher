@@ -9,7 +9,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [a-f0-9]{40}
+        [[:xdigit:]]{40}
       )
       \b
     pattern_requirements:
@@ -22,6 +22,8 @@ rules:
       - "export APP_CENTER_KEY=d4e8f2a7b1c39605d2e7f1b94a6c3d8001234567"
     references:
       - https://openapi.appcenter.ms/
+      - https://github.com/microsoft/appcenter-cli/blob/7e0ac3ed45de8727a716d062b8633b55065be013/src/util/apis/authorization-policy.ts
+      - https://github.com/microsoft/appcenter-rest-python/blob/cd1dc55602928ef19c861b4a99deb1dbe3db6393/appcenter/derived_client.py
     validation:
       type: Http
       content:

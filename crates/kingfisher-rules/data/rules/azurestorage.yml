@@ -2,23 +2,27 @@ rules:
   - name: Azure Storage Account Name
     id: kingfisher.azurestorage.1
     pattern: |
-      (?xi)
+      (?x)
       (?:
         # A) Connection string: AccountName=<name>
-        (?i:AccountName)\s*=\s*([a-z0-9]{3,24})(?:\b|[^a-z0-9])
+        (?i:AccountName)\s*=\s*["']?([a-z0-9]{5,24})["']?(?:\b|[^a-z0-9])
       |
         # B) Blob endpoint URL: <name>.blob.core.windows.net
-        ([a-z0-9]{3,24})\.blob\.core\.windows\.net\b
+        ([a-z0-9]{5,24})\.blob\.core\.windows\.net\b
       |
         # C) Explicit KV labels near 'azure storage/account name' with tight separators
-        \bazure(?:[_\s-]*)(?:storage|account)(?:[_\s-]*)(?:name)\b
+        \b(?i:azure)(?:[_\s-]*)(?i:storage|account)(?:[_\s-]*)(?i:name)\b
         [\s:=\"']{0,6}
-        ([a-z0-9]{3,24})(?:\b|[^a-z0-9])
+        ["']?([a-z0-9]{5,24})["']?(?:\b|[^a-z0-9])
       |
-        # D) Explicit KV labels near 'azure storage/account name' with tight separators
-        (?i:Account[_.-]?Name|Storage[_.-]?(?:Name))(?:.|\s){0,32}?\b([A-Z0-9]{3,32})\b|([A-Z0-9]{3,32})(?i:\.blob\.core\.windows\.net)
+        # D) Explicit KV labels with tight separator and Azure-shaped value.
+        # Value is case-sensitive lowercase (real Azure storage names are lowercase
+        # letters + digits only, 3-24 chars; min 5 filters common short words).
+        (?i:Account[_.-]?Name|Storage[_.-]?(?:Name))
+        \s*[:=]\s*
+        ["']?([a-z0-9]{5,24})["']?(?:\b|[^a-z0-9])
       )
-    min_entropy: 2.0
+    min_entropy: 2.5
     visible: false
     confidence: medium
     examples:
@@ -28,6 +32,7 @@ rules:
     references:
       - https://learn.microsoft.com/en-us/azure/storage/common/storage-account-overview
       - https://learn.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key
+      - https://github.com/Azure-Samples/storage-blobs-dotnet-webapp/blob/69d6791eb2910006d188aedaa3d5ead1bac6c901/README.md
   - name: Azure Storage Account Key
     id: kingfisher.azurestorage.2
     pattern: |
@@ -78,6 +83,7 @@ rules:
     references:
       - https://learn.microsoft.com/en-us/rest/api/storageservices/authorize-with-shared-key
       - https://learn.microsoft.com/en-us/rest/api/storageservices/
+      - https://github.com/Azure-Samples/storage-blobs-dotnet-webapp/blob/69d6791eb2910006d188aedaa3d5ead1bac6c901/README.md
     depends_on_rule:
       - rule_id: kingfisher.azurestorage.1
         variable: AZURENAME

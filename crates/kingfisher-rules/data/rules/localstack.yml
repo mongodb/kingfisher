@@ -18,3 +18,4 @@ rules:
       - "aws_access_key=LKIAQAAAAAAVNCBMPN59"
     references:
       - https://docs.localstack.cloud/aws/capabilities/config/credentials/
+      - https://github.com/localstack/localstack-docs/blob/9c6f54e0260e2a54a07b09d402de1c98972db714/src/content/docs/aws/capabilities/config/credentials.md

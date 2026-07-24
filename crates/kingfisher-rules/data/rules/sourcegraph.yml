@@ -33,6 +33,8 @@ rules:
               match_all_words: true
     references:
       - https://docs.sourcegraph.com/admin/api#authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/c914956ce7c1b32dd6c38fd241f3e524cf59c5ae/crates/noseyparker/data/default/builtin/rules/sourcegraph.yml
+      - https://github.com/gitleaks/gitleaks/blob/c6424a6fc3775e77fb75d843bf8cddda9cb19e61/cmd/generate/config/rules/sourcegraph.go
 
   - name: Sourcegraph _Legacy_ API Key
     id: kingfisher.sourcegraph.2
@@ -44,7 +46,7 @@ rules:
       (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,32}?
       (
-        (?:sgp_(?:[a-f0-9]{16}_local_)?[a-f0-9]{40}|[a-f0-9]{40})
+        (?:sgp_(?:[[:xdigit:]]{16}_local_)?[[:xdigit:]]{40}|[[:xdigit:]]{40})
       )
       \b
     pattern_requirements:
@@ -72,6 +74,8 @@ rules:
               words: ['"site":{']
     references:
       - https://docs.sourcegraph.com/admin/api#authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/c914956ce7c1b32dd6c38fd241f3e524cf59c5ae/crates/noseyparker/data/default/builtin/rules/sourcegraph.yml
+      - https://github.com/gitleaks/gitleaks/blob/c6424a6fc3775e77fb75d843bf8cddda9cb19e61/cmd/generate/config/rules/sourcegraph.go
 
   - name: Sourcegraph Cody Gateway Key
     id: kingfisher.sourcegraph.3

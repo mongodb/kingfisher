@@ -663,14 +663,26 @@ pub async fn run_direct_validation(
             }
 
             Validation::AWS => {
-                // AWS needs AKID and TOKEN (secret access key)
+                let is_session_token_rule = rule_id == "kingfisher.aws.4";
                 let akid = get_global_var(&globals, "AKID")
                 .or_else(|| get_global_var(&globals, "ACCESS_KEY_ID"))
                 .ok_or_else(|| anyhow!(
                     "AWS validation requires AKID variable. Use: --var AKID=<access_key_id> <secret_access_key>"
                 ))?;
+                let aws_secret = if is_session_token_rule {
+                    get_global_var(&globals, "AWS_SECRET_ACCESS_KEY").ok_or_else(|| anyhow!(
+                        "AWS session-token validation requires AWS_SECRET_ACCESS_KEY. Use: --var AKID=<access_key_id> --var AWS_SECRET_ACCESS_KEY=<secret_access_key> <session_token>"
+                    ))?
+                } else {
+                    secret.clone()
+                };
+                let session_token = if is_session_token_rule {
+                    Some(secret.clone())
+                } else {
+                    get_global_var(&globals, "AWS_SESSION_TOKEN")
+                };
 
-                match validate_aws_credentials(&akid, &secret).await {
+                match validate_aws_credentials(&akid, &aws_secret, session_token.as_deref()).await {
                     Ok((is_valid, message)) => DirectValidationResult {
                         rule_id: String::new(),
                         rule_name: String::new(),

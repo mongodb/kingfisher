@@ -18,6 +18,7 @@ rules:
     references:
       - https://dub.co/docs/api-reference/tokens
       - https://dub.co/blog/workspace-api-keys
+      - https://github.com/dubinc/dub/blob/b3b6d16327769852a724fec2004f1f7decfae28f/apps/web/guides/rest-api.md
     validation:
       type: Http
       content:

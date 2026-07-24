@@ -32,6 +32,10 @@ rules:
               words: ['"locations":']
     references:
       - https://developer.squareup.com/
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/square.yml
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/square.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/square/square-access.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/square-access-token.yaml
 
   - name: Square Access Token
     id: kingfisher.square.2
@@ -65,6 +69,9 @@ rules:
               words: ['"locations":']
     references:
       - https://developer.squareup.com/
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/square.yml
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/square.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/square-access-token.yaml
 
   - name: Square OAuth Secret
     id: kingfisher.square.3
@@ -98,3 +105,7 @@ rules:
               words: ['"locations":']
     references:
       - https://developer.squareup.com/
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/square.yml
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/square.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/square/square-oauth-secret-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/square-oauth-secret.yaml

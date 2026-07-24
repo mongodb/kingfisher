@@ -29,10 +29,10 @@ rules:
       - 'SHORTCUT_API_TOKEN="62dc7d80-a1b2-4c3d-8e5f-6a7b8c9d0e1f"'
       - |
         clubhouse_token = '0a1b2c3d-4e5f-6789-abcd-ef0123456789'
-    negative_examples:
-      - 'SHORTCUT_URL="https://app.shortcut.com"'
     references:
       - https://developer.shortcut.com/api/rest/v3
+      - https://github.com/gitleaks/gitleaks/blob/4c232b5014f7618360bd992b4c489cb055881c6b/config/gitleaks.toml#L2345
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/heroku.yml#L4
     validation:
       type: Http
       content:

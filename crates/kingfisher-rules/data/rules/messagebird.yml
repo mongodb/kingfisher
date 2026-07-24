@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-z0-9]{25}
+        [[:alnum:]]{25}
       )
       \b
     pattern_requirements:
@@ -20,6 +20,7 @@ rules:
       - "messagebird_token: 'abcde12345fghij67890klmno'"
     references:
       - https://developers.messagebird.com/api/#authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/messagebird.go
     validation:
       type: Http
       content:
@@ -46,11 +47,11 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [0-9a-f]{8}-
-        [0-9a-f]{4}-
-        [0-9a-f]{4}-
-        [0-9a-f]{4}-
-        [0-9a-f]{12}
+        [[:xdigit:]]{8}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{12}
       )
       \b
     pattern_requirements:

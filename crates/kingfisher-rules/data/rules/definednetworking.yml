@@ -19,6 +19,7 @@ rules:
       - https://docs.defined.net/api/defined-networking-api/
       - https://docs.defined.net/api/networks-list/
       - https://docs.defined.net/guides/rotating-api-keys/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/definednetworking.go
     validation:
       type: Http
       content:

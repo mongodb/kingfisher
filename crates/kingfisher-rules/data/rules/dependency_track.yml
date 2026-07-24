@@ -18,16 +18,19 @@ rules:
       - "odt_FHxhQGh77JAHHIYpZ818UQ0aYjXIdMIxxgeR"
     references:
       - https://docs.dependencytrack.org/integrations/rest-api/#authentication
-    # validation:
-    #   type: Http
-    #   content:
-    #     request:
-    #       headers:
-    #         Authorization: "Bearer {{ TOKEN }}"
-    #       method: GET
-    #       response_matcher:
-    #         - report_response: true
-    #         - status:
-    #             - 200
-    #           type: StatusMatch
-    #       url: https://dependencytrack.example.com/api/v1/token/verify
+      # validation:
+      #   type: Http
+      #   content:
+      #     request:
+      #       headers:
+      #         Authorization: "Bearer {{ TOKEN }}"
+      #       method: GET
+      #       response_matcher:
+      #         - report_response: true
+      #         - status:
+      #             - 200
+      #           type: StatusMatch
+      #       url: https://dependencytrack.example.com/api/v1/token/verify
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/dependency_track.yml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/dependency/dependency-track-api.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/dependency/dependency-track.yaml

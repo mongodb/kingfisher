@@ -12,7 +12,7 @@ rules:
       \s*
       \b
       (
-        [a-z0-9]{24}
+        [[:alnum:]]{24}
       )
       \b
     min_entropy: 2.8
@@ -22,7 +22,8 @@ rules:
     references:
       - https://plaid.com/docs/api/institutions/
 
-  # -------------------------
+      # -------------------------
+      - https://github.com/gitleaks/gitleaks/blob/782f3104786efdce0f809bce8a9ff31f2fa1c9ed/cmd/generate/config/rules/plaid.go
   - name: Plaid Secret (Production)
     id: kingfisher.plaid.2
     pattern: |
@@ -34,7 +35,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-z0-9]{30}
+        [[:alnum:]]{30}
       )
       \b
     min_entropy: 3.2
@@ -94,7 +95,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-z0-9]{30}
+        [[:alnum:]]{30}
       )
       \b
     min_entropy: 3.2
@@ -154,11 +155,11 @@ rules:
       \b
       (
         access-production-
-        [0-9a-f]{8}-
-        [0-9a-f]{4}-
-        [0-9a-f]{4}-
-        [0-9a-f]{4}-
-        [0-9a-f]{12}
+        [[:xdigit:]]{8}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{12}
       )
       \b
     min_entropy: 3.4
@@ -212,11 +213,11 @@ rules:
       \b
       (
         access-sandbox-
-        [0-9a-f]{8}-
-        [0-9a-f]{4}-
-        [0-9a-f]{4}-
-        [0-9a-f]{4}-
-        [0-9a-f]{12}
+        [[:xdigit:]]{8}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{12}
       )
       \b
     min_entropy: 3.4

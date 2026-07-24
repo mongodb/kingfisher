@@ -18,6 +18,7 @@ rules:
     references:
       - https://www.mercadopago.com.ar/developers/en
       - https://developers.mercadolibre.com.ar/es_ar/registra-tu-aplicacion/producto-consulta-usuarios
+      - https://github.com/ralvarezdev/mercadolibre-go-sdk/blob/d88a115afeafec6a1ecfe387e885ddb53203bc6d/docs/01-getting-started/realiza-pruebas.md
     validation:
       type: Http
       content:

@@ -26,6 +26,8 @@ rules:
       - "ELASTIC_CLOUD_API_KEY=VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=="
     references:
       - https://www.elastic.co/docs/deploy-manage/api-keys/elastic-cloud-api-keys
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/elastic.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/elastic/elastic-cloud-api-key.yaml
     validation:
       type: Http
       content:
@@ -62,6 +64,7 @@ rules:
       - "Authorization: ApiKey VnVhQ2ZHY0JDZGJrUW0tZTVhT3g6dWkybHAyYXhUTm1zeWFrdzl0dk5udw=="
     references:
       - https://www.elastic.co/guide/en/elasticsearch/reference/current/security-api-create-api-key.html
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/elastic.go
     validation:
       type: Http
       content:

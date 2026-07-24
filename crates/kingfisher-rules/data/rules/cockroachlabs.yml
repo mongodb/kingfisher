@@ -43,3 +43,5 @@ rules:
     references:
       - https://www.cockroachlabs.com/docs/cockroachcloud/service-accounts
       - https://cockroachlabs.cloud/assets/docs/api/latest/openapi.json
+      - https://www.cockroachlabs.com/docs/cockroachcloud/managing-access
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/cockroachlabs.go

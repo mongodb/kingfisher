@@ -18,6 +18,8 @@ rules:
     references:
       - https://e2b.dev/docs/getting-started/api-key
       - https://e2b.dev/docs/api-reference/sandboxes/list-sandboxes
+      - https://e2b.mintlify.app/docs/api-key.md
+      - https://e2b.mintlify.app/docs/api-reference/sandboxes/list-sandboxes.md
     validation:
       type: Http
       content:

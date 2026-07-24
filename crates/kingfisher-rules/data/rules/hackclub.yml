@@ -15,3 +15,4 @@ rules:
     references:
       - https://jams.hackclub.com/jam/ai-travel
       - https://github.com/hackclub/ai/blob/7c1f145fefe5b4a97f5c8e605de730a40a61bfe2/src/routes/api.tsx
+      - https://ai.hackclub.com/

@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        blt[a-f0-9]{10}
+        blt[[:xdigit:]]{10}
       )
       \b
     min_entropy: 3.0
@@ -18,6 +18,8 @@ rules:
     visible: false
     examples:
       - CONTENTSTACK_API_KEY=blt1234567890
+    references:
+      - https://www.contentstack.com/docs/developers/create-tokens/overview-of-tokens
   - name: Contentstack Management Token
     id: kingfisher.contentstack.1
     pattern: |
@@ -29,7 +31,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        cs[a-f0-9]{32}
+        cs[[:xdigit:]]{32}
       )
       \b
     min_entropy: 3.5

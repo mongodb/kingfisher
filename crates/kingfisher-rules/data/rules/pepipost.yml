@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -22,6 +22,8 @@ rules:
       - "Pepipost access key: fe228f219e9cb0eb53f16947ccf25ec8"
     references:
       - https://developers.pepipost.com/api/getstarted/overview/
+      - https://github.com/pepipost/pepipost-sdk-java/blob/7806cb453cc9932c45bfaa7a4e060d1c24f45b46/src/main/java/com/pepipost/api/Configuration.java
+      - https://netcorecloud.com/blog/product-update-introducing-pepipost-api-version-5-pepipost-api-v5-0/
     validation:
       type: Http
       content:

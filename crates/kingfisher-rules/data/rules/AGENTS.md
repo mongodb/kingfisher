@@ -20,7 +20,7 @@ Each rule entry should define:
 - `name`
 - `id`
 - `pattern`
-- `min_entropy` (default to 3.0)
+- `min_entropy` (use 3.0 as an authoring baseline; the schema default is 0.0)
 - `confidence` (default to medium)
 - `examples` (at least one realistic positive example)
 
@@ -52,6 +52,15 @@ Strongly recommended fields:
     - `skip_if_missing: true`
 - Example: GitHub PATs use a CRC32-derived base62 checksum. The rule in `github.yml` captures `body` and `checksum`, then compares `{{ checksum }}` against `{{ body | crc32 | base62: 6 }}`.
 - Prefer checksum validation over extra loose context whenever the token structure itself supports it. If the checksum is only present on some token generations, keep `skip_if_missing: true` so older examples continue to load safely.
+- Use POSIX character classes for token alphabets. Relevant classes (written as `[[:name:]]`):
+  - `[:alnum:]` — letters and digits `[a-zA-Z0-9]` (the default for most tokens)
+  - `[:alpha:]` — letters only `[a-zA-Z]`
+  - `[:digit:]` — digits only `[0-9]` (no letters)
+  - `[:lower:]` — lowercase letters only `[a-z]`; under `(?i)`/`(?xi)` also matches uppercase
+  - `[:upper:]` — uppercase letters only `[A-Z]`; under `(?i)`/`(?xi)` also matches lowercase
+  - `[:xdigit:]` — hex digits `[0-9A-Fa-f]` (case-insensitive regardless of `(?i)`)
+  - `[:space:]`, `[:blank:]`, `[:punct:]`, `[:graph:]`, `[:print:]`, `[:cntrl:]` — structural classes
+  - Classes combine inside one bracket: `[[:alnum:]_=-]` adds `_`, `=`, `-` to alphanumerics.
 - Use `visible: false` for helper/non-secret captures used only by dependent rules.
 - Use `depends_on_rule` for multi-part credential validation (for example ID + secret).
 
@@ -99,6 +108,7 @@ Pair with `StatusMatch: [400]` and `JsonValid`.
 ## Local Verification Checklist
 - Syntax/load checks:
   - `cargo test -p kingfisher-rules`
+  - `kingfisher rules check --rules-path crates/kingfisher-rules/data/rules/<file>.yml --load-builtins=false --no-update-check`
 - Broader regression check:
   - `cargo test --workspace --all-targets`
 - Match-volume check on a realistic large target:

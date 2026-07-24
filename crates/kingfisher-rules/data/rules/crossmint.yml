@@ -19,6 +19,7 @@ rules:
       - "crossmint x-api-key: sk_staging_xK8m2LpQr5nW0vYz3cJ7aB4dE6fG8h"
     references:
       - https://docs.crossmint.com/introduction/platform/api-keys
+      - https://github.com/goat-sdk/goat/blob/f2eedc2f041589322c0db39d59a67757014910a0/python/src/plugins/headless/goat_plugins/crossmint_headless_checkout/service.py
     validation:
       type: Http
       content:
@@ -60,3 +61,4 @@ rules:
       - "ck_staging_xK8m2LpQr5nW0vYz3cJ7aB4dE6fG8h"
     references:
       - https://docs.crossmint.com/introduction/platform/api-keys
+      - https://github.com/goat-sdk/goat/blob/f2eedc2f041589322c0db39d59a67757014910a0/python/src/plugins/headless/goat_plugins/crossmint_headless_checkout/service.py

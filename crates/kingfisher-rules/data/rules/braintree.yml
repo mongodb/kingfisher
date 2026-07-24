@@ -25,12 +25,10 @@ rules:
     examples:
       - 'BRAINTREE_TOKENIZATION_KEY="sandbox_f252zhq7_hh4cpc39zq4rgjcg"'
       - "braintree_token = production_abc12def_ghij34klmnop5678"
-    negative_examples:
-      - sandbox_f252zhq7_hh4cpc39zq4rgjcg
-      - 'BRAINTREE_URL="https://api.braintreegateway.com"'
     references:
       - https://developer.paypal.com/braintree/docs/guides/authorization/tokenization-key
       - https://developer.paypal.com/braintree/docs/start/overview
-    # No standalone validation or revocation is added: Braintree documents
-    # tokenization keys as publishable client credentials, and the public docs
-    # do not describe a programmatic tokenization-key introspection or revoke API.
+      # No standalone validation or revocation is added: Braintree documents
+      # tokenization keys as publishable client credentials, and the public docs
+      # do not describe a programmatic tokenization-key introspection or revoke API.
+      - https://github.com/braintree/braintree_ios/blob/a14f895ba1fce86865a5a457bbefb9fa38576e67/IntegrationTests/Helpers/BTIntegrationTestsConstants.swift

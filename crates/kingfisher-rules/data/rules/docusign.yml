@@ -11,11 +11,11 @@ rules:
       [=:"'\s]
       ['"]*
       (
-        [a-f0-9]{8}-
-        [a-f0-9]{4}-
-        [a-f0-9]{4}-
-        [a-f0-9]{4}-
-        [a-f0-9]{12}
+        [[:xdigit:]]{8}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{12}
       )
       \b
     pattern_requirements:
@@ -34,6 +34,7 @@ rules:
     references:
       - https://developers.docusign.com/platform/auth/
       - https://developers.docusign.com/platform/build-integration/
+      - https://github.com/docusign/code-examples-python/blob/fc700f065caaf6e060a0603e920a00a0890f2224/app/ds_config_sample.py
 
   - name: DocuSign Integration Key
     id: kingfisher.docusign.2
@@ -47,11 +48,11 @@ rules:
       [=:"'\s]
       ['"]*
       (
-        [a-f0-9]{8}-
-        [a-f0-9]{4}-
-        [a-f0-9]{4}-
-        [a-f0-9]{4}-
-        [a-f0-9]{12}
+        [[:xdigit:]]{8}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{12}
       )
       \b
     pattern_requirements:
@@ -64,6 +65,7 @@ rules:
       - 'docusign.integration_key = "3d2f18c9-2075-4e78-834b-64f57f8757d0"'
     references:
       - https://developers.docusign.com/platform/build-integration/
+      - https://github.com/docusign/code-examples-python/blob/fc700f065caaf6e060a0603e920a00a0890f2224/app/ds_config_sample.py
 
   - name: DocuSign Auth Host
     id: kingfisher.docusign.3
@@ -82,6 +84,7 @@ rules:
       - account-d.docusign.com
     references:
       - https://developers.docusign.com/platform/auth/
+      - https://github.com/docusign/code-examples-python/blob/fc700f065caaf6e060a0603e920a00a0890f2224/app/ds_config_sample.py
 
   - name: DocuSign Redirect URI
     id: kingfisher.docusign.4

@@ -1,13 +1,13 @@
 ---
 title: "Built-in Rules List"
-description: "Complete list of all 1006 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
+description: "Complete list of all 1013 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
 ---
 
 # Built-in Rules
 
-Kingfisher ships with **1006 detection rules** across **600 providers**
-(876 detectors + 130 dependent rules).
-Of these, **512** include live validation and **52** support direct revocation.
+Kingfisher ships with **1013 detection rules** across **600 providers**
+(880 detectors + 133 dependent rules).
+Of these, **513** include live validation and **52** support direct revocation.
 
 !!! tip "Search"
     Use the search box below to filter rules by provider name, rule ID, or confidence level.
@@ -616,7 +616,7 @@ Of these, **512** include live validation and **52** support direct revocation.
 <td>AWS Session Token</td>
 <td><code>kingfisher.aws.4</code></td>
 <td>Medium</td>
-<td></td>
+<td>Yes</td>
 <td></td>
 </tr>
 <tr>
@@ -1266,6 +1266,22 @@ Of these, **512** include live validation and **52** support direct revocation.
 <td>Medium</td>
 <td>Yes</td>
 <td>Yes</td>
+</tr>
+<tr>
+<td>Buildkite</td>
+<td>Buildkite Agent Registration Token</td>
+<td><code>kingfisher.buildkite.2</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Buildkite</td>
+<td>Buildkite Cluster Agent Token</td>
+<td><code>kingfisher.buildkite.3</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
 </tr>
 <tr>
 <td>Bunnynet</td>
@@ -3837,7 +3853,7 @@ Of these, **512** include live validation and **52** support direct revocation.
 </tr>
 <tr>
 <td>Intra42</td>
-<td>Intra42 Client Secret (s-s4t2ud/af)</td>
+<td>Intra42 Client Secret</td>
 <td><code>kingfisher.intra42.2</code></td>
 <td>Medium</td>
 <td>Yes</td>
@@ -4239,6 +4255,22 @@ Of these, **512** include live validation and **52** support direct revocation.
 <td>Lark</td>
 <td>LarkSuite App Access Token</td>
 <td><code>kingfisher.lark.3</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Lark</td>
+<td>LarkSuite / Feishu App ID</td>
+<td><code>kingfisher.lark.4</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Lark</td>
+<td>LarkSuite / Feishu App Secret</td>
+<td><code>kingfisher.lark.5</code></td>
 <td>Medium</td>
 <td>Yes</td>
 <td></td>
@@ -5988,6 +6020,14 @@ Of these, **512** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
+<td>Ramp</td>
+<td>Ramp Application Signup Token</td>
+<td><code>kingfisher.ramp.3</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
 <td>Rapidapi</td>
 <td>RapidAPI Key</td>
 <td><code>kingfisher.rapidapi.1</code></td>
@@ -6221,7 +6261,7 @@ Of these, **512** include live validation and **52** support direct revocation.
 </tr>
 <tr>
 <td>Saladcloud</td>
-<td>SaladCloud API Key</td>
+<td>SaladCloud User API Key</td>
 <td><code>kingfisher.saladcloud.1</code></td>
 <td>Medium</td>
 <td>Yes</td>
@@ -8047,6 +8087,22 @@ Of these, **512** include live validation and **52** support direct revocation.
 <td>Zohocrm</td>
 <td>Zoho CRM API Access Token</td>
 <td><code>kingfisher.zohocrm.1</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Zohocrm</td>
+<td>Zoho CRM Client ID</td>
+<td><code>kingfisher.zohocrm.2</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Zohocrm</td>
+<td>Zoho CRM Client Secret</td>
+<td><code>kingfisher.zohocrm.3</code></td>
 <td>Medium</td>
 <td>Yes</td>
 <td></td>

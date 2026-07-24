@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        (?:[A-Za-z0-9]{32}|rnd_[A-Za-z0-9]{33})
+        (?:[[:alnum:]]{32}|rnd_[[:alnum:]]{33})
       )
       \b
     min_entropy: 3.5

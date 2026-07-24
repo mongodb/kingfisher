@@ -44,3 +44,4 @@ rules:
       - https://learn.microsoft.com/en-us/azure/ai-services/computer-vision/
       - https://learn.microsoft.com/en-us/azure/ai-services/content-moderator/
       - https://learn.microsoft.com/en-us/azure/ai-services/luis/
+      - https://github.com/Azure-Samples/cognitive-services-REST-api-samples/blob/4a3c5ca76318feb3f7cfb109e1f79c542eb14d01/python/Vision/ComputerVision2.1.py

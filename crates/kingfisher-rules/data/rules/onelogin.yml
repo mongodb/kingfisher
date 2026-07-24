@@ -19,7 +19,7 @@ rules:
       [=:"'\s_-]*
       (?:idr[_-])?
       (
-        [a-z0-9]{64}
+        [[:alnum:]]{64}
       )
       \b
     pattern_requirements:
@@ -34,6 +34,8 @@ rules:
       - "one-login\nclient_id=rz5dx87tuykcvonk5577picx71wkllmq14tzexx8a8oaeee6yar815drbn3s4umx"
     references:
       - https://developers.onelogin.com/api-docs/1/getting-started/working-with-api-credentials
+      - https://github.com/onelogin/onelogin-go-sdk/blob/305ed219655f4dc9521687a4edb7014b17964c89/pkg/onelogin/authentication/authenticator.go
+      - https://github.com/airbnb/streamalert/blob/19458d7547a6098d5d8ae7e21c6f88bc525e9726/streamalert/apps/_apps/onelogin.py#L239-L244
 
   - name: OneLogin Client Secret
     id: kingfisher.onelogin.2
@@ -55,7 +57,7 @@ rules:
       [=:"'\s_-]*
       (?:secret[_-])?
       (
-        [a-z0-9]{64}
+        [[:alnum:]]{64}
       )
       \b
     pattern_requirements:
@@ -80,18 +82,13 @@ rules:
       content:
         request:
           method: POST
-          # OneLogin's `/auth/oauth2/v2/token` accepts the standard OAuth 2.0
-          # client-credentials flow with HTTP Basic auth (base64 of
-          # `client_id:client_secret`). The earlier comma-separated
-          # `Authorization: client_id:..., client_secret:...` form was never
-          # the documented standard — it appears in OneLogin error messages
-          # only as an example of what *not* to do — so the validator was
-          # always returning a 4xx and never confirming credentials.
+          # OneLogin's Go SDK sends this client-credentials grant as JSON and
+          # authenticates with HTTP Basic (base64 of `client_id:client_secret`).
           url: https://{{ DOMAIN }}/auth/oauth2/v2/token
           headers:
-            Content-Type: application/x-www-form-urlencoded
+            Content-Type: application/json
             Authorization: "Basic {{ CLIENT_ID | append: ':' | append: TOKEN | b64enc }}"
-          body: grant_type=client_credentials
+          body: '{"grant_type":"client_credentials"}'
           response_matcher:
             - report_response: true
             - type: StatusMatch
@@ -101,12 +98,15 @@ rules:
               match_all_words: true
               words:
                 - '"access_token"'
-                - '"token_type"'
     # Revocation not added: OneLogin documents token revocation, but not API
     # credential-pair deletion or disablement through a safe public API.
     references:
       - https://developers.onelogin.com/api-docs/1/getting-started/working-with-api-credentials
       - https://developers.onelogin.com/api-authorization/oneLogin-api-define-custom-access-tokens
+      - https://github.com/onelogin/onelogin-go-sdk/blob/305ed219655f4dc9521687a4edb7014b17964c89/pkg/onelogin/authentication/authenticator.go#L42-L64
+      - https://github.com/onelogin/onelogin-python-sdk/blob/491e13f6472f191e99e53455eaee8c960e155779/onelogin/api/o_auth2_api.py#L153-L188
+      - https://github.com/airbnb/streamalert/blob/19458d7547a6098d5d8ae7e21c6f88bc525e9726/streamalert/apps/_apps/onelogin.py#L89-L97
+      - https://github.com/airbnb/streamalert/blob/19458d7547a6098d5d8ae7e21c6f88bc525e9726/streamalert/apps/_apps/onelogin.py#L233-L244
 
   - name: OneLogin Tenant Domain
     id: kingfisher.onelogin.3
@@ -114,8 +114,8 @@ rules:
       (?xi)
       \b
       (
-        [a-z0-9]
-        (?:[a-z0-9-]{0,61}[a-z0-9])?
+        [[:alnum:]]
+        (?:[a-z0-9-]{0,61}[[:alnum:]])?
         \.onelogin\.com
       )
       \b
@@ -126,8 +126,6 @@ rules:
       - acme-corp.onelogin.com
       - https://tenant-example.onelogin.com/api/2/users
       - ONELOGIN_SUBDOMAIN=sampletenant.onelogin.com
-    categories:
-      - domain
-      - onelogin
     references:
       - https://developers.onelogin.com/api-docs/1/getting-started/dev-overview
+      - https://github.com/onelogin/onelogin-go-sdk/blob/305ed219655f4dc9521687a4edb7014b17964c89/pkg/onelogin/authentication/authenticator.go

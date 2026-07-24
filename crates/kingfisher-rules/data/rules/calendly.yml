@@ -22,6 +22,7 @@ rules:
     references:
       - https://developer.calendly.com/how-to-authenticate-with-personal-access-tokens
       - https://developer.calendly.com/api-docs
+      - https://github.com/PostHog/posthog.com/blob/9445ed30785fa37014695161ff16628aa27a2d97/contents/tutorials/calendly-webhooks.md
     validation:
       type: Http
       content:

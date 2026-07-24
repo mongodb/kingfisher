@@ -7,7 +7,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Z0-9]{16}
+        [[:alnum:]]{16}
       )
       \b
     pattern_requirements:
@@ -20,6 +20,9 @@ rules:
       - kafka_client=WXYZ9876MNOP5432
     references:
       - https://docs.confluent.io/cloud/current/access-management/authenticate/api-keys.html
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/confluent.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/confluent/confluent-accesstoken.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/confluent/confluent-access-token.yaml
   - name: Confluent API Secret
     id: kingfisher.confluent.2
     pattern: |
@@ -40,6 +43,10 @@ rules:
     references:
       - https://docs.confluent.io/cloud/current/api.html#tag/API-Keys-(iamv2)/operation/getIamV2ApiKey
       - https://docs.confluent.io/cloud/current/api.html#tag/API-Keys-(iamv2)/operation/deleteIamV2ApiKey
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/confluent.go
+      - https://datatracker.ietf.org/doc/html/rfc7617
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/confluent/confluent-secretkey.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/confluent/confluent-secret-token.yaml
     validation:
       type: Http
       content:

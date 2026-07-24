@@ -45,7 +45,7 @@ rules:
       circleci
       (?:.|[\n\r]){0,64}?
       (                      
-        [a-f0-9]{40}
+        [[:xdigit:]]{40}
       )
       \b
     pattern_requirements:

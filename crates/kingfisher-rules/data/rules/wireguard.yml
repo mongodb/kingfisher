@@ -16,6 +16,9 @@ rules:
       - https://www.wireguard.com/quickstart/
       - https://manpages.debian.org/testing/wireguard-tools/wg.8.en.html
       - https://gist.github.com/lanceliao/5d2977f417f34dda0e3d63ac7e217fd6
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/wireguard.yml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/wireguard/wireguard-private-key.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/wireguard/wireguard-private.yaml
     categories: [fuzzy, secret]
 
   - name: WireGuard Preshared Key
@@ -34,4 +37,7 @@ rules:
       - https://www.wireguard.com/quickstart/
       - https://manpages.debian.org/testing/wireguard-tools/wg.8.en.html
       - https://gist.github.com/lanceliao/5d2977f417f34dda0e3d63ac7e217fd6
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/wireguard.yml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/wireguard/wireguard-preshared-key.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/wireguard/wireguard-preshared.yaml
     categories: [fuzzy, secret]

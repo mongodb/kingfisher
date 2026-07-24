@@ -18,6 +18,7 @@ rules:
       - "midtrans_client_key = 'SB-Mid-client-py_WqVmIjA462VHz'"
     references:
       - https://docs.midtrans.com
+      - https://github.com/Midtrans/midtrans-nodejs-client/blob/dc13b08d48fcda5389251c03e8e267102e494385/examples/expressApp/views/core_api_credit_card_frontend_sample.ejs
     validation:
       type: Http
       content:
@@ -60,6 +61,7 @@ rules:
       - "midtrans.client_key = 'Mid-client-Xk93PcDP8pMKfhY2'"
     references:
       - https://docs.midtrans.com
+      - https://github.com/Midtrans/midtrans-nodejs-client/blob/dc13b08d48fcda5389251c03e8e267102e494385/examples/expressApp/views/core_api_credit_card_frontend_sample.ejs
     validation:
       type: Http
       content:

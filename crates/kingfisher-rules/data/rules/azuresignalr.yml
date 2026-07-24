@@ -18,3 +18,4 @@ rules:
       - "Endpoint=https://myservice.service.signalr.net;AccessKey=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGHIJKLMNOPQRS+/==;Version=1.0;"
     references:
       - https://learn.microsoft.com/en-us/azure/azure-signalr/
+      - https://github.com/Azure/azure-signalr/blob/dev/test/Microsoft.Azure.SignalR.Management.Tests/AccessTokenHttpMessageHandlerTests.cs

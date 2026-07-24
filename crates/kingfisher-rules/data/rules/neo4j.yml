@@ -23,5 +23,6 @@ rules:
     references:
       - https://neo4j.com/docs/getting-started/current/
       - https://neo4j.com/docs/operations-manual/current/authentication-authorization/
-    # No public validation endpoint: Neo4j is self-hosted; the Bolt
-    # protocol host is instance-specific and not publicly resolvable.
+      # No public validation endpoint: Neo4j is self-hosted; the Bolt
+      # protocol host is instance-specific and not publicly resolvable.
+      - https://github.com/neo4j/docs-getting-started/blob/dev/modules/ROOT/pages/languages-guides/java/java-frameworks.adoc

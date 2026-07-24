@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b                         
       (
-        [a-z0-9]{24}
+        [[:alnum:]]{24}
       )
       \b
     pattern_requirements:
@@ -21,6 +21,8 @@ rules:
       - "ATLASSIAN_API_TOKEN:'abcdef1234567890abcdef12'"
     references:
       - https://developer.atlassian.com/cloud/admin/organization/rest/api-group-orgs/#api-v1-orgs-get
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/atlassian.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/atlassian.go
     validation:
       type: Http
       content:

@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -21,6 +21,7 @@ rules:
     references:
       - https://dev.mailjet.com/sms/reference/overview/authentication/
       - https://www.postman.com/mailjet-api/mailjet-s-public-workspace/request/velnqvd/retrieve-a-count-of-all-sms-messages
+      - https://github.com/mailjet/api-documentation/blob/3a446e6488a7a9dbcfd4f6fd7ba364576f99f284/guides-sms/_sms-stats.md
     validation:
       type: Http
       content:
@@ -47,7 +48,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Z0-9]{87}=
+        [[:alnum:]]{87}=
       )
     pattern_requirements:
       min_digits: 2
@@ -58,6 +59,7 @@ rules:
     references:
       - https://dev.mailjet.com/email/reference/overview/authentication/
       - https://www.postman.com/mailjet-api/mailjet-s-public-workspace/request/5pnoxig/retrieve-all-api-keys
+      - https://github.com/mailjet/mailjet-gem/blob/dd22b912e7a1e1447ea025d8a566a21d8774bb74/spec/cassettes/Mailjet_Apikey/date_format_on_API_request/is_a_kind_of_DateTime.yml
     validation:
       type: Http
       content:

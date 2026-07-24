@@ -11,13 +11,15 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
       \b
     min_entropy: 3.0
     confidence: medium
     examples:
       - "CENSYS_API_ID=a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+    references:
+      - https://search.censys.io/api
 
   - name: Censys API Secret
     id: kingfisher.censys.2
@@ -30,7 +32,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -43,6 +45,8 @@ rules:
       - "CENSYS_API_SECRET=aBcDeFgHiJkLmNoPqRsTuVwXyZ012345"
     references:
       - https://search.censys.io/api
+      - https://docs.censys.com/docs/ls-api
+      - https://github.com/knownsec/pocsuite3/blob/9bed2883b86a8996f8805fc44da4a1911f52a11e/pocsuite3/modules/censys/__init__.py
     depends_on_rule:
       - rule_id: kingfisher.censys.1
         variable: CENSYS_API_ID
@@ -51,7 +55,7 @@ rules:
       content:
         request:
           method: GET
-          url: https://search.censys.io/api/v1/account
+          url: https://search.censys.io/api/v2/hosts/8.8.8.8
           headers:
             Accept: application/json
             Authorization: "Basic {{ CENSYS_API_ID | append: ':' | append: TOKEN | b64enc }}"
@@ -60,3 +64,6 @@ rules:
             - type: StatusMatch
               status: [200]
             - type: JsonValid
+            - type: WordMatch
+              match_all_words: true
+              words: ['"status"', '"result"']

@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-zA-Z0-9]{40}
+        [[:alnum:]]{40}
       )
       \b
     pattern_requirements:
@@ -23,6 +23,7 @@ rules:
     references:
       - https://docs.jumpcloud.com/api/
       - https://jumpcloud.com/support/retrieve-object-ids-from-the-api
+      - https://github.com/TheJumpCloud/support/blob/b4033ca320549b86701bc164aae170cb74f7a3bb/scripts/api/v1/systemusers/getSystemUser.sh
     validation:
       type: Http
       content:

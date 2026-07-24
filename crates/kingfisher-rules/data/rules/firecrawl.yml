@@ -30,5 +30,6 @@ rules:
     references:
       - https://www.firecrawl.dev
       - https://docs.firecrawl.dev/api-reference/introduction#authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/firecrawl.yml
     examples:
       - 'app = FirecrawlApp(api_key="fc-7da8b1ca1d2150c496e91440d777fea8")'

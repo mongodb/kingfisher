@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -23,7 +23,9 @@ rules:
       - "AMPLITUDE_SECRET_KEY=8b6f8d6594749cb659b1be03e6a0a2e7"
     references:
       - https://amplitude.com/docs/apis/authentication
+      - https://amplitude.com/docs/admin/account-management/account-settings
       - https://www.docs.developers.amplitude.com/analytics/apis/export-api/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/amplitude.go
     validation:
       type: Http
       content:

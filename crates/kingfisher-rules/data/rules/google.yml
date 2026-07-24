@@ -10,6 +10,9 @@ rules:
       - "                //$google_client_id     = '244082345999-o6m8f1pmb1e76tjfj9v7b96j31e53ps5.apps.googleusercontent.com';"
       - "      GOOGLE_OAUTH2_CLIENT_ID = '607830223128-4qgthc7ofdqce232dk690t5jgkm1ce33.apps.googleusercontent.com'"
       - '          $cordovaOauth.google("653512027492-5u9blotr1521fa0lo1172nhv4pmqgttq.apps.googleusercontent.com", ["email"]).then(function(result) {'
+    references:
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/google/google-client-id.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/google/google-clientid.yaml
 
   - name: Google OAuth Client Secret
     id: kingfisher.google.2
@@ -60,6 +63,9 @@ rules:
     # not client secrets.
     references:
       - https://developers.google.com/identity/protocols/oauth2/web-server
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/google.yml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/google/google-oauth-prefixed.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/google/google-oauth-clientsecret.yaml
 
   - name: Google OAuth Client Secret
     id: kingfisher.google.3
@@ -110,6 +116,8 @@ rules:
     # not client secrets.
     references:
       - https://developers.google.com/identity/protocols/oauth2/web-server
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/google.yml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/google/oauth-access-key.yaml
 
   - name: Google OAuth Access Token
     id: kingfisher.google.4
@@ -171,6 +179,7 @@ rules:
       - https://developers.google.com/identity/openid-connect/openid-connect
       - https://developers.google.com/data-portability/user-guide/quickstart
       - https://developers.google.com/identity/protocols/oauth2/web-server
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/google.yml
 
   - name: Google OAuth Credentials
     id: kingfisher.google.6
@@ -191,6 +200,9 @@ rules:
           client_secret: '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',
           redirect_uri: `http://localhost:${Config.OAUTH_HTTP_PORT}/oauth2callback`
         };
+    references:
+      - https://developers.google.com/identity/protocols/oauth2/web-server
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/google/google-client-id.yaml
   - name: Google Gemini API Key
     id: kingfisher.google.7
     pattern: |
@@ -212,6 +224,9 @@ rules:
       - AIzaSyA_uW1h2CF4ak3vHr7si_RFD_yWxM4tMAM
     references:
       - https://ai.google.dev/docs/gemini_api_overview
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/google.yml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/google/google-api-key.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/google/google-api.yaml
     validation:
       type: Http
       content:

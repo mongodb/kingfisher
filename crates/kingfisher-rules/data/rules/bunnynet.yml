@@ -9,15 +9,15 @@ rules:
       (?:access[_\s-]*key|accesskey|api[_\s-]*key|token|key)
       (?:.|[\n\r]){0,24}?
       (
-        [a-f0-9]{8}
-        -[a-f0-9]{4}
-        -[a-f0-9]{4}
-        -[a-f0-9]{4}
+        [[:xdigit:]]{8}
+        -[[:xdigit:]]{4}
+        -[[:xdigit:]]{4}
+        -[[:xdigit:]]{4}
         -
         (?:
-          [a-f0-9]{12}
+          [[:xdigit:]]{12}
           |
-          [a-f0-9]{20}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}
+          [[:xdigit:]]{20}(?:-[[:xdigit:]]{4}){3}-[[:xdigit:]]{12}
         )
       )
       \b
@@ -31,6 +31,8 @@ rules:
     references:
       - https://docs.bunny.net/api-reference/core/pull-zone/list-pull-zones
       - https://docs.bunny.net/api-reference/overview
+      - https://docs.bunny.net/api-reference
+      - https://github.com/ecomplus/cloud-commerce/blob/d344baed960fa87b5c23c5c41c61a9eb98c9d208/packages/cli/ci/bunny-setup.sh
     validation:
       type: Http
       content:

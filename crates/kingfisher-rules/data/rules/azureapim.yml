@@ -44,6 +44,7 @@ rules:
         variable: APIM_URL
     references:
       - https://learn.microsoft.com/en-us/azure/api-management/api-management-subscriptions
+      - https://github.com/Azure/azure-sdk-for-js/blob/8ade895c076ea710669f7cace04aea52fe5ae5cb/samples/cors/ts/client/index.ts
 
   - name: Azure API Management Gateway URL
     id: kingfisher.azureapim.2
@@ -62,3 +63,4 @@ rules:
     references:
       - https://learn.microsoft.com/en-us/azure/api-management/api-management-subscriptions
       - https://learn.microsoft.com/en-us/troubleshoot/azure/api-mgmt/availability/unauthorized-errors-invoke-apis
+      - https://github.com/Azure/azure-sdk-for-js/blob/8ade895c076ea710669f7cace04aea52fe5ae5cb/samples/cors/ts/client/index.ts

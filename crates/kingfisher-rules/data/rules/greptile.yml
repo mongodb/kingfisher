@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-zA-Z0-9+/]{48}
+        [A-Z0-9+/]{48}
       )
       \b
     pattern_requirements:
@@ -25,6 +25,8 @@ rules:
       - https://www.greptile.com/docs/mcp-v2/setup
       - https://www.greptile.com/docs/code-review/greptile-cli
       - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/greptile.go#L9
+      - https://docs.greptile.com/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/greptile.go
     validation:
       type: Http
       content:

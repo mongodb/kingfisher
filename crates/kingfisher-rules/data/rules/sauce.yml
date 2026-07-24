@@ -21,6 +21,8 @@ rules:
       - SAUCE_USERNAME="oauth-ci-bot-487ea"
       - '"sauce_username":"build-user"'
       - "saucelabs user oauth-release-bot"
+    references:
+      - https://docs.saucelabs.com/dev/api/
   - name: Sauce Labs API Endpoint
     id: kingfisher.saucelabs.2
     pattern: |
@@ -36,6 +38,8 @@ rules:
       - "api.us-west-1.saucelabs.com"
       - "api.eu-central-1.saucelabs.com"
       - "ondemand.eu-central-1.saucelabs.com"
+    references:
+      - https://docs.saucelabs.com/dev/api/
 
   - name: Sauce Labs Access Key
     id: kingfisher.saucelabs.3
@@ -47,7 +51,7 @@ rules:
       (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,32}?
       (
-        [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
       \b
     pattern_requirements:
@@ -77,5 +81,6 @@ rules:
     references:
       - https://docs.saucelabs.com/dev/api/
       - https://docs.saucelabs.com/dev/api/#authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/sauce.yml
     examples:
       - "SAUCE_ACCESS_KEY=1736468d-b178-39cd-bfde-30fabdc371e4"

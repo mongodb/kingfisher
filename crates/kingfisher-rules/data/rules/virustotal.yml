@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Za-z0-9]{64}
+        [[:alnum:]]{64}
       )
       \b
     min_entropy: 3.6

@@ -36,3 +36,5 @@ rules:
     references:
       - https://docs.together.ai/reference/authentication
       - https://docs.together.ai/reference/models-list
+      - https://docs.together.ai/reference/models
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/togetherai.go

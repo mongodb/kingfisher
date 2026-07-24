@@ -42,3 +42,4 @@ rules:
     tls_mode: lax
     references:
       - https://www.postgresql.org/docs/current/libpq-connect.html#LIBPQ-CONNSTRING
+      - https://github.com/praetorian-inc/noseyparker/blob/83750401318a09c3656a89e559751f913ef8d049/crates/noseyparker/data/default/builtin/rules/postgres.yml

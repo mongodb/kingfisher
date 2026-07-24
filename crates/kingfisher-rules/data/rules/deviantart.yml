@@ -9,7 +9,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-zA-Z0-9]{40,80}
+        [[:alnum:]]{40,80}
       )
       \b
     pattern_requirements:
@@ -21,6 +21,7 @@ rules:
       - 'deviantart_token: "kM2nO3pQ4rS5tU6vW7xY8zA9bC0dE1fG2hI3jK4l"'
     references:
       - https://www.deviantart.com/developers/http/v1/20210526
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/token-spray/api-deviantart.yaml
     validation:
       type: Http
       content:

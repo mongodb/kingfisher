@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        [a-z0-9]{6}_[a-z0-9]{29}_mmk
+        [[:alnum:]]{6}_[[:alnum:]]{29}_mmk
       )
       \b
     pattern_requirements:
@@ -17,6 +17,8 @@ rules:
       - license_key="ZXCVBN_0987654321abcdef1234567890abc_mmk"
     references:
       - https://dev.maxmind.com/geoip/docs/web-services
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/maxmind.go
+      - https://datatracker.ietf.org/doc/html/rfc7617
     depends_on_rule:
       - rule_id: kingfisher.maxmind.2
         variable: ACCOUNT_ID

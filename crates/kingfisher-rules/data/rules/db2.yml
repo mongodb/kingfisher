@@ -24,5 +24,6 @@ rules:
       - "as400.pass=r4ndP@ssw0rd\n"
     references:
       - https://www.ibm.com/products/db2
-    # No public validation endpoint: DB2 is self-hosted;
-    # the host and port are instance-specific.
+      # No public validation endpoint: DB2 is self-hosted;
+      # the host and port are instance-specific.
+      - https://github.com/wildfly/wildfly-datasources-galleon-pack/blob/801fe6788b613f3a8cacf9b01e7db5fc4c6fe019/doc/db2/README.md

@@ -23,6 +23,8 @@ rules:
     references:
       - https://api-reference.checkout.com
       - https://www.checkout.com/docs/payments/accept-payments/accept-a-payment-via-api
+      - https://www.checkout.com/docs/payments/accept-payments/accept-a-payment-using-the-payments-api
+      - https://github.com/checkout/checkout-sdk-node/blob/2d8861fd2ced355d85f9ab05d456e49b4f8ee633/test/webhooks/webhooks.js
     validation:
       type: Http
       content:
@@ -62,6 +64,7 @@ rules:
       - "CKO_SECRET_KEY=sk_test_2a3b4c5d-1234-5678-abcd-ef0123456789"
     references:
       - https://api-reference.checkout.com
+      - https://github.com/checkout/checkout-sdk-node/blob/2d8861fd2ced355d85f9ab05d456e49b4f8ee633/test/webhooks/webhooks.js
     validation:
       type: Http
       content:

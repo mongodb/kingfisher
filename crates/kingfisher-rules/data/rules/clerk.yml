@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        sk_(?:test|live)_[A-Za-z0-9]{32}
+        sk_(?:test|live)_[[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -23,6 +23,7 @@ rules:
     references:
       - https://clerk.com/docs/deployments/clerk-environment-variables
       - https://clerk.com/docs/guides/development/machine-auth/api-keys
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/clerk.go
     validation:
       type: Http
       content:

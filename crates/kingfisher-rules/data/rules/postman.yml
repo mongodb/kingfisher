@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        PMAK-[A-Z0-9]{24}-[A-Z0-9]{34}
+        PMAK-[[:alnum:]]{24}-[[:alnum:]]{34}
       )
       \b
     pattern_requirements:
@@ -20,6 +20,8 @@ rules:
       - https://learning.postman.com/docs/developer/intro-api/
       - https://learning.postman.com/docs/developer/postman-api/authentication/
       - https://learning.postman.com/docs/administration/managing-your-team/managing-api-keys/
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/postman.yml
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/postman.go
     validation:
       type: Http
       content:

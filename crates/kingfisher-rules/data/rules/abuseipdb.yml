@@ -2,15 +2,15 @@ rules:
   - name: AbuseIPDB API Key
     id: kingfisher.abuseipdb.1
     pattern: |
-      (?xi)
+      (?x)
       \b
-      abuseipdb
+      (?i:abuseipdb)
       (?:.|[\n\r]){0,16}?
-      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?i:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Za-z0-9]{80}
+        [[:xdigit:]]{80}
       )
       \b
     min_entropy: 3.5
@@ -18,8 +18,11 @@ rules:
     pattern_requirements:
       min_digits: 2
     examples:
-      - abuseipdb_api_key = "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
-      - ABUSEIPDB_KEY=1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
+      - abuseipdb_api_key = "6f01746e8d63b5ff0c2ad4e9a59e4daa0c8c9b6fc8d3c0d36d1282fab5ce7d1fd2e8f922543b4143"
+      - abuseipdb_api_key = "8cb5858b7eaf2fd2d6ff7d188dd4bf2c5dd4df169263d2f62379d84f1a8d6d1c49ab79c3f430bef9"
+      - abuseipdb_api_key = "35f58e64353880a5a4fba9ff71b6e051e4857715b2096915cf734900b57af816f5c788ad4b019e53"
+      - abuseipdb_api_key = "ba775c114fc954115abb651c0d45e141774ed0998866faee723335c657b3a196a43e07e97c47004e"
+      - abuseipdb_api_key = "10fffb18b4be160dd993068fcd4e93b9d4e5f39870a30a4908b35a7d22b50320c528065dba4d2ebb"
     references:
       - https://docs.abuseipdb.com/#introduction
       - https://www.abuseipdb.com/api
@@ -28,7 +31,7 @@ rules:
       content:
         request:
           method: GET
-          url: https://api.abuseipdb.com/api/v2/check?ipAddress=127.0.0.1
+          url: https://api.abuseipdb.com/api/v2/reports?ipAddress=127.0.0.1&maxAgeInDays=1&perPage=1
           headers:
             Key: "{{ TOKEN }}"
             Accept: application/json
@@ -37,3 +40,6 @@ rules:
             - type: StatusMatch
               status: [200]
             - type: JsonValid
+            - type: WordMatch
+              match_all_words: true
+              words: ['"data"', '"total"', '"results"']

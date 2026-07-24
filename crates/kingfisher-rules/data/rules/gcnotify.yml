@@ -9,9 +9,9 @@ rules:
         \s+
         gcntfy-[a-z0-9_]+
         -
-        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
         -
-        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
       \b
     pattern_requirements:
@@ -25,6 +25,7 @@ rules:
       - https://documentation.notification.canada.ca/en/start.html
       - https://documentation.notification.canada.ca/en/status.html
       - https://documentation.notification.canada.ca/en/keys.html
+      - https://github.com/cds-snc/notification-documentation/blob/b3b26e306628e21f3222254155f2f1bbb510af1a/src/en/send.md
     validation:
       type: Http
       content:

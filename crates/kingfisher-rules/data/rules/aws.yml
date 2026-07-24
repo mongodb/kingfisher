@@ -18,6 +18,13 @@ rules:
     confidence: medium
     examples:
       - ASIAOZW6VBVAZFJHJLQA
+    references:
+      - https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html
+      - https://docs.aws.amazon.com/STS/latest/APIReference/welcome.html
+      - https://github.com/aws/aws-sdk-go-v2/blob/01b9289b1527ce7ad2f291250c55678f8578426b/aws/credentials.go
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/aws.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/aws.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/amazon/aws-api-key.yaml
 
   - name: AWS Secret Access Key
     id: kingfisher.aws.2
@@ -67,19 +74,43 @@ rules:
     depends_on_rule:
       - rule_id: kingfisher.aws.1
         variable: AKID
+    references:
+      - https://docs.aws.amazon.com/IAM/latest/UserGuide/id_credentials_access-keys.html
+      - https://docs.aws.amazon.com/general/latest/gr/signature-version-4.html
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/aws.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/aws.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/amazon/aws-secret-key.yaml
 
   - name: AWS Session Token
     id: kingfisher.aws.4
-    pattern: '(?i)(?:aws.?session|aws.?session.?token|aws.?token)["''`]?\s{0,30}(?::|=>|=)\s{0,30}["''`]?([a-z0-9/+=]{16,200})[^a-z0-9/+=]'
+    pattern: |
+      (?x)
+      \b
+      (?i:AWS[_-]?(?:SESSION|SECURITY)[_-]?TOKEN)
+      \b
+      \s*(?:=|:)\s*["']?
+      (
+        [A-Za-z0-9/+=._-]{16,2048}
+      )
+      (?:["'\s,;}]|$)
     pattern_requirements:
       min_digits: 2
     min_entropy: 3.3
     confidence: medium
     examples:
       - |
-        export AWS_ACCESS_KEY_ID="I08BCX2ACV45ED1DOC9J"
+        export AWS_ACCESS_KEY_ID="ASIA3C7019C2E4B6E76F"
         export AWS_SECRET_ACCESS_KEY="0qk+o7XctJMmG6ydO8537c9+TofLJU1K0PiVBXSg"
         export AWS_SESSION_TOKEN="eyJhbGciOiJIUzUxMi53InR5cCI6IkpXVCJ9.eyJhY2Nlc3NLZXkiOiJJMDhCQ1gySkpWNDVFRDFET0M5SiIsImFjciI6Ij53LCJhdWQiOiJhY2NvdW50IiwiYXV0aF90aW1lIjowLCJhenAiOiJtaW5pbyIsImVtYWlsIjoiYWlkYW4uY29wZUBnbWFpbC5jb20iLCJlbWFpbF92ZXJpZmllZCI6ZmFsc2UsImV4cCI6MTU4MDUwMDIzOCwiZmFtaWx5X25hbWUiOiJDb3BlIiwiZ2l2ZW5fbmFtZSI6IkFpZGFuIENvcGUiLCJpYXQiOjE1ODA0OTk5MzgsImlzcyI6Imh0dHBzOi8vYXV0aHN0Zy5wb3BkYXRhLmJjLmNhL2F1dGgvcmVhbG1zL3NhbXBsZSIsImp0aSI6IjU5ZTM5ODAxLWQxMmUtNDVhYS04NmQzLWVhMmNmZDU0NmE2MiIsIm1pbmlvX3BvbGljeSI6ImRhdGFzZXRfMV9ybyIsIm5hbWUiOiJBaWRhbiBDb3BlIENvcGUiLCJuYmYiOjAsInByZWZlcnJlZF91c2VybmFtZSI6ImFjb3BlLTk5LXQwNSIsInJlYWxtX2FjY2VzcyI6eyJyb2xlcyI6WyJvZmZsaW5lX2FjY2VzcyIsInVtYV9hdXRob3JpemF0aW9uIl19LCJyZXNvdXJjZV9hY2Nlc3MiOnsiYWNjb3VudCI6eyJyb2xlcyI6WyJtYW5hZ2UtYWNjb3VudCIsIm1hbmFnZS1hY2NvdW50LWxpbmtzIiwidmlldy1wcm9maWxlIl19fSwic2NvcGUiOiJwcm9maWxlIGVtYWlsIiwic2Vzc2lvbl9zdGF0ZSI6IjcxYjczZWJjLThlMzMtNGMyMi04NmE2LWI0MzhhNDM4ZmI2MiIsInN1YiI6IjVkOTBlOTgzLTA1NDItNDYyYS1hZWIwLWYxZWVmNjcwYzdlNSIsInR5cCI6IkJlYXJlciJ9.J-a9PORJToz7MUrnPQlOywcqtVMNkXy53Gedp_V4PW-Gbf1_BAMjwuw_X7fKRd6hkNfEn43CKKju7muzi_d1Ig"
+    validation:
+      type: AWS
+    depends_on_rule:
+      - rule_id: kingfisher.aws.1
+        variable: AKID
+      - rule_id: kingfisher.aws.2
+        variable: AWS_SECRET_ACCESS_KEY
+    references:
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/amazon/aws-session-token.yaml
   - name: AWS Bedrock API Key (Long-lived)
     id: kingfisher.aws.bedrock.long_lived
     pattern: |

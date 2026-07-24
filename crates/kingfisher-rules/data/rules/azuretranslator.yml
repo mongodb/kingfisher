@@ -32,6 +32,7 @@ rules:
     references:
       - https://learn.microsoft.com/en-us/azure/ai-services/translator/text-translation/reference/authentication
       - https://learn.microsoft.com/en-us/azure/ai-services/translator/reference/v3-0-reference
+      - https://github.com/Azure-Samples/insideMF/blob/05b305a2dc520041b03cab1b76789df48d533eb4/Samples/Translator-API/Python/translation-nmt.py
 
   - name: Azure Translator API Key
     id: kingfisher.azuretranslator.2
@@ -57,7 +58,7 @@ rules:
       )
       (?:.|[\n\r]){0,16}?
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -71,6 +72,7 @@ rules:
     references:
       - https://learn.microsoft.com/en-us/azure/ai-services/translator/text-translation/reference/authentication
       - https://learn.microsoft.com/en-us/azure/ai-services/translator/reference/v3-0-reference
+      - https://github.com/Azure-Samples/insideMF/blob/05b305a2dc520041b03cab1b76789df48d533eb4/Samples/Translator-API/Python/translation-nmt.py
     depends_on_rule:
       - rule_id: kingfisher.azuretranslator.1
         variable: AZURE_TRANSLATOR_REGION

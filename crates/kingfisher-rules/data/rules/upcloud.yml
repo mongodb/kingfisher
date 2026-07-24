@@ -19,6 +19,7 @@ rules:
     references:
       - https://upcloud.com/docs/guides/managing-api-tokens/
       - https://developers.upcloud.com/1.3/24-api-tokens/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/upcloud.go
     validation:
       type: Http
       content:

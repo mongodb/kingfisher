@@ -16,6 +16,7 @@ rules:
       - https://fra1.blynk.cloud/api/organization/profile
     references:
       - https://docs.blynk.io/en/blynk.cloud/platform-https-api/authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/blynk.yml
 
   - name: Blynk OAuth Client ID
     id: kingfisher.blynk.11
@@ -96,6 +97,7 @@ rules:
     references:
       - https://docs.blynk.io/en/blynk.cloud/platform-https-api/authentication
       - https://docs.blynk.io/en/blynk.cloud/platform-https-api/ogranization-api/get-own-organization-info
+      - https://docs.blynk.io/en/blynk.cloud/platform-https-api/organizations
     depends_on_rule:
       - rule_id: kingfisher.blynk.10
         variable: HOST
@@ -138,6 +140,7 @@ rules:
     references:
       - https://docs.blynk.io/en/blynk.cloud/platform-https-api/authentication
       - https://docs.blynk.io/en/blynk.cloud/platform-https-api/ogranization-api/get-own-organization-info
+      - https://docs.blynk.io/en/blynk.cloud/platform-https-api/organizations
     depends_on_rule:
       - rule_id: kingfisher.blynk.10
         variable: HOST

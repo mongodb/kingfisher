@@ -23,6 +23,7 @@ rules:
       - 'configcat_key: "Aa1Bb2Cc3Dd4Ee5Ff6Gg7H/aA1bB2cC3dD4eE5fF6gG7h"'
     references:
       - https://configcat.com/docs/sdk-reference/overview/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/configcat.go
     validation:
       type: Http
       content:

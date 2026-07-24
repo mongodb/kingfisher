@@ -11,7 +11,7 @@ rules:
       [=:"'\s]
       ['"]*
       (
-        [0-9a-f]{40,52}
+        [[:xdigit:]]{40,52}
       )
       ['"\s]
     pattern_requirements:
@@ -24,6 +24,7 @@ rules:
       - "dwolla\nclient_id = 7e4e5187580c7d329862fdfca8dc1f45c6e3e467a0c376782\n"
     references:
       - https://developers.dwolla.com/
+      - https://github.com/Dwolla/dev-portal/blob/1645fc7f192c2ac5650f14689b5be64154dd767c/pages/docs/balance/auth/client-credentials-flow.mdx
 
   - name: Dwolla Client Secret
     id: kingfisher.dwolla.2
@@ -74,6 +75,7 @@ rules:
     references:
       - https://developers.dwolla.com/docs/api-reference/tokens/create-an-application-access-token
       - https://developers.dwolla.com/docs/balance/auth/application-access-tokens
+      - https://github.com/Dwolla/dev-portal/blob/1645fc7f192c2ac5650f14689b5be64154dd767c/pages/docs/balance/auth/client-credentials-flow.mdx
 
   - name: Dwolla API Base URL
     id: kingfisher.dwolla.3
@@ -92,3 +94,4 @@ rules:
       - DWOLLA_BASE_URL="https://api-sandbox.dwolla.com"
     references:
       - https://developers.dwolla.com/docs/api-reference/tokens/create-an-application-access-token
+      - https://github.com/Dwolla/dev-portal/blob/1645fc7f192c2ac5650f14689b5be64154dd767c/pages/docs/balance/auth/client-credentials-flow.mdx

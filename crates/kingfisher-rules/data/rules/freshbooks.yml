@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-z0-9]{64}
+        [[:alnum:]]{64}
       )
       \b
     pattern_requirements:
@@ -19,6 +19,7 @@ rules:
       - FRESHBOOKS_TOKEN=0f1e2d3c4b5a69788776655443322110ffeeddccbbaa00998877665544332211
     references:
       - https://www.freshbooks.com/api/authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/freshbooks.go
     validation:
       type: Http
       content:

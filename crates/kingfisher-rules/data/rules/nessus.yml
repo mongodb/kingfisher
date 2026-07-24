@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       (?:--key=|NESSUS_KEY=["'\s]*)
       (
-        [a-f0-9]{64}
+        [[:xdigit:]]{64}
       )
       \b
     pattern_requirements:

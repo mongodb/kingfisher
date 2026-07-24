@@ -23,6 +23,10 @@ rules:
       - "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"
     references:
       - https://docs.github.com/en/rest/users?apiVersion=2022-11-28
+      - https://github.blog/security/application-security/behind-githubs-new-authentication-token-formats/
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/github.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/github.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/github/github-personal-token.yaml
     validation:
       type: Http
       content:
@@ -79,6 +83,8 @@ rules:
         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
     references:
       - https://docs.github.com/en/rest/users?apiVersion=2022-11-28
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/github/github-personal-access.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/github/github-personal-token.yaml
     validation:
       type: Http
       content:
@@ -132,6 +138,8 @@ rules:
       - "    oauth_token: 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"
     references:
       - https://docs.github.com/en/rest/users?apiVersion=2022-11-28
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/github/github-oauth-access.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/github/github-oauth-token.yaml
     validation:
       type: Http
       content:
@@ -184,6 +192,8 @@ rules:
         git clone http://ghu_imqBAXUtRirzzcJPwAiqImhkzsvzYZ1eDtPf@github.com/username/repo.git
     references:
       - https://docs.github.com/en/rest/users?apiVersion=2022-11-28
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/github/github-app.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/github/github-app-token.yaml
     validation:
       type: Http
       content:
@@ -229,6 +239,8 @@ rules:
         git clone http://ghs_RguXIkihJjwHAP6eXEYxaPNvywurTr5IOAbg@github.com/username/repo.git
     references:
       - https://docs.github.com/en/rest/users?apiVersion=2022-11-28
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/github/github-app.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/github/github-app-token.yaml
     validation:
       type: Http
       content:
@@ -276,6 +288,8 @@ rules:
       - '    "refresh_token": "ghr_xgrrGzSbbGRL34Wp39JU9nxtN27Pr1v1He8FjE7x7wbExGGs7nfJszJDAmZuoKasxZ0KxJ1HSzgc",'
     references:
       - https://docs.github.com/en/rest/users?apiVersion=2022-11-28
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/github/github-refresh.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/github/github-refresh-token.yaml
     validation:
       type: Http
       content:
@@ -318,7 +332,7 @@ rules:
       .?
       (?: id | identifier | key )
       .{0,2} \s{0,20} .{0,2} \s{0,20} .{0,2}
-      \b ([a-z0-9]{20}) \b
+      \b ([[:alnum:]]{20}) \b
     visible: false
     examples:
       - |
@@ -335,7 +349,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-          [a-z0-9]{40}
+          [[:alnum:]]{40}
       )
       \b
     depends_on_rule:

@@ -70,7 +70,7 @@ rules:
       key
       (?:.|[\n\r]){0,12}?
       (
-        [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
       \b
     pattern_requirements:
@@ -96,7 +96,7 @@ rules:
       address
       (?:.|[\n\r]){0,12}?
       (
-        0x[a-fA-F0-9]{40}
+        0x[[:xdigit:]]{40}
       )
       \b
     pattern_requirements:
@@ -132,7 +132,7 @@ rules:
       key
       (?:.|[\n\r]){0,12}?
       (
-        0x[a-fA-F0-9]{64}
+        0x[[:xdigit:]]{64}
       )
       \b
     pattern_requirements:

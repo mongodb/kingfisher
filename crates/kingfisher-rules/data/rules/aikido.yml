@@ -20,6 +20,7 @@ rules:
     references:
       - https://apidocs.aikido.dev/reference/authorization
       - https://apidocs.aikido.dev/reference/getaccesstoken
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/aikido.go
 
   - name: Aikido Client Secret
     id: kingfisher.aikido.3
@@ -44,6 +45,8 @@ rules:
     references:
       - https://apidocs.aikido.dev/reference/authorization
       - https://apidocs.aikido.dev/reference/getaccesstoken
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/aikido.go
+      - https://datatracker.ietf.org/doc/html/rfc6749#section-4.4
     validation:
       type: Http
       content:

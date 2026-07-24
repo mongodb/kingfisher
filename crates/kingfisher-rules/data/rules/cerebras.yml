@@ -31,6 +31,7 @@ rules:
               match_all_words: true
     references:
       - https://docs.cerebras.net/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/cerebras.go
     examples:
       - "csk-6nptf4w5cx36fw58t3hkx48jvm52wm693pex5tjm29kn55yt"
       - "csk-e2knhj8h3h4erp6crfx6rh52tvecj4xnwmtjf3mtrvtt54et"

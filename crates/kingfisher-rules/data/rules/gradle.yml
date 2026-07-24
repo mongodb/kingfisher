@@ -33,3 +33,4 @@ rules:
       - "credentials {\n  username \"user\"\n  password \"password\"\n}"
     references:
       - https://docs.gradle.org/current/userguide/declaring_repositories.html#sec:handling_credentials
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/gradle.yml

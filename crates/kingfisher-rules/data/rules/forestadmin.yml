@@ -23,5 +23,6 @@ rules:
       - "FOREST_AUTH_SECRET=d9474A33894d755182b8cef87eA80845c06bca625156ad60\n"
     references:
       - https://docs.forestadmin.com/documentation/reference-guide/how-it-works
-    # No public validation endpoint: Forest Admin auth secrets are used
-    # for local JWT signing and cannot be validated via a standalone HTTP request.
+      # No public validation endpoint: Forest Admin auth secrets are used
+      # for local JWT signing and cannot be validated via a standalone HTTP request.
+      - https://github.com/ForestAdmin/agent-nodejs/blob/f81b55ef23f68a054207f7b9c48545963bafbe5e/packages/mcp-server/README.md

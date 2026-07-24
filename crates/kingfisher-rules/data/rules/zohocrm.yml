@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        1000\.[a-f0-9]{32}\.[a-f0-9]{32}
+        1000\.[[:xdigit:]]{32}\.[[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -16,6 +16,9 @@ rules:
       - 1000.a23f12b4c5d6e7f8901234567890abc1.23d4e5f67890abcdef1234567890abcd
       - 1000.123fa4b5c678d90eabcdef1234567890.ab12c3d4e5f6a7890bcd12ef345678ab
     references:
+      # curl "https://www.zohoapis.com/crm/v8/users?type=AllUsers"
+      # -X GET
+      # -H "Authorization: Zoho-oauthtoken 1000.8cb99dxxxxxxxxxxxxx9be93.9b8xxxxxxxxxxxxxxxf"
       - https://www.zoho.com/crm/developer/docs/api/v8/access-refresh.html
       - https://www.zoho.com/crm/developer/docs/api/v8/get-users.html
     validation:
@@ -33,3 +36,76 @@ rules:
               status: [200]
             - type: WordMatch
               words: ['"users"']
+
+  - name: Zoho CRM Client ID
+    id: kingfisher.zohocrm.2
+    visible: false
+    pattern: |
+      (?x)
+      \b
+      (
+        1000\.[[:alnum:]]{30}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 4
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - "1000.9A2N2IKWOJB2F0BZGTJLYAK930GZJG"
+      - "1000.9CBKN50I292Z9B04WKQBCZRG5QRA1X"
+    references:
+      - https://www.zoho.com/crm/developer/docs/api/v8/client-credentials.html
+      - https://www.zoho.com/crm/developer/docs/api/v8/access-refresh.html
+
+  - name: Zoho CRM Client Secret
+    id: kingfisher.zohocrm.3
+    pattern: |
+      (?xi)
+      \b
+      (?:zoho(?:[\s_-]*crm)?[\s_-]*)?
+      (?:client|consumer)[\s_.-]*secret
+      \b
+      \s*(?:=|:)\s*["']?
+      (
+        [a-f0-9]{42}
+      )
+      (?:["'\s,;}]|$)
+    pattern_requirements:
+      min_digits: 4
+      min_lowercase: 2
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "Client Secret = e161aa9d6bc790885a76d955ebdaa6cde157170e90"
+      - "Client Secret = ec8970658937efb63d126f73b57b0aa47bf4f2d7d3"
+    references:
+      - https://www.zoho.com/crm/developer/docs/api/v8/client-credentials.html
+      - https://www.zoho.com/crm/developer/docs/api/v8/access-refresh.html
+      # "https://accounts.zoho.com/oauth/v2/auth?scope=ZohoCRM.users.ALL&client_id={client_id}&response_type=code&access_type={"offline"or"online"}&redirect_uri={redirect_uri}"
+      - https://www.zoho.com/crm/developer/docs/api/v8/auth-request.html
+    depends_on_rule:
+      - rule_id: kingfisher.zohocrm.2
+        variable: ZOHO_CRM_CLIENT_ID
+    # A deliberately invalid authorization code validates the client pair without issuing a token.
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://accounts.zoho.com/oauth/v2/token
+          headers:
+            Accept: application/json
+            Content-Type: application/x-www-form-urlencoded
+          body: "client_id={{ ZOHO_CRM_CLIENT_ID | url_encode }}&client_secret={{ TOKEN | url_encode }}&grant_type=authorization_code&code=kingfisher_invalid_code&redirect_uri=https%3A%2F%2Fexample.com%2Fkingfisher"
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+            - type: WordMatch
+              words:
+                - invalid_code
+            - type: WordMatch
+              negative: true
+              words:
+                - invalid_client

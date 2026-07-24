@@ -36,6 +36,8 @@ rules:
               status: [200]
     references:
       - https://docs.newrelic.com/docs/apis/intro-apis/new-relic-api-keys/
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/newrelic.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/newrelic.go
 
   - name: New Relic User API ID
     id: kingfisher.newrelic.2
@@ -48,7 +50,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-z0-9]{64}
+        [[:alnum:]]{64}
       )
       \b
     pattern_requirements:
@@ -71,7 +73,7 @@ rules:
       \b
       (
         NRJS-
-        [a-f0-9]{19}
+        [[:xdigit:]]{19}
       )
       \b
     pattern_requirements:

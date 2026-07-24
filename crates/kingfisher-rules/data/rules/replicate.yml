@@ -20,6 +20,7 @@ rules:
       - r8_ap8Mo5iTbW01FHJtElPrBUqf7fjz1r40EVrJu
     references:
       - https://replicate.com/docs/reference/http
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/replicate.go
     validation:
       type: Http
       content:

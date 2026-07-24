@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-          [a-f0-9]{40}
+          [[:xdigit:]]{40}
       )
       \b
     pattern_requirements:
@@ -26,9 +26,10 @@ rules:
         token = 8b40bcd90946073dfa9df0f0cb999b21da6a372d
     references:
       - https://docs.gitea.com/development/api-usage
-    # NOTE: Gitea's token management API (/api/v1/user/tokens) requires
-    # Basic Auth (username/password). Self-revocation using only the token
-    # is not supported by the Gitea API.
+      # NOTE: Gitea's token management API (/api/v1/user/tokens) requires
+      # Basic Auth (username/password). Self-revocation using only the token
+      # is not supported by the Gitea API.
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/gitea.go
     validation:
       type: Http
       content:

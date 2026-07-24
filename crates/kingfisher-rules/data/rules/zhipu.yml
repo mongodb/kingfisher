@@ -5,9 +5,9 @@ rules:
       (?xi)
       \b
       (
-        [A-F0-9]{32}
+        [[:xdigit:]]{32}
         \.
-        [A-Z0-9]{16}
+        [[:alnum:]]{16}
       )
       \b
     pattern_requirements:

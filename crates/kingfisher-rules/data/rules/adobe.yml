@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-F0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -20,6 +20,8 @@ rules:
       - adobeKey = 1a2b3c4d5e6f7890abcdef1234567890
     references:
       - https://developer.adobe.com/stock/docs/getting-started/03-api-authentication/
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/adobe.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/adobe.go
     validation:
       type: Http
       content:
@@ -50,13 +52,15 @@ rules:
       (?:.|[\n\r]){0,64}?
       \b
       (
-        [a-z0-9]{12}
+        [[:alnum:]]{12}
       )
       \b
     min_entropy: 2.0
     visible: false
     examples:
       - adobeProduct = lV9ASPsd2P3d
+    references:
+      - https://developer.adobe.com/stock/docs/getting-started/03-api-authentication/
   - name: Adobe OAuth Client Secret
     id: kingfisher.adobe.3
     pattern: |
@@ -101,6 +105,10 @@ rules:
     # tokens, not for the OAuth client secret itself.
     references:
       - https://developer.adobe.com/developer-console/docs/guides/authentication/UserAuthentication/ims
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/adobe.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/adobe/adobe-secret.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/adobe/adobe-oauth-secret.yaml
+      - https://datatracker.ietf.org/doc/html/rfc6749#section-5.2
 
   - name: Adobe OAuth Client ID
     id: kingfisher.adobe.4
@@ -112,7 +120,7 @@ rules:
       client_id
       (?:.|[\n\r]){0,16}?
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     min_entropy: 3.0
@@ -125,3 +133,5 @@ rules:
             "client_secret": "p8e-ibndcvsmAp9ZgPBZ606FSlYIZVlsZ-g5"
           }
         }
+    references:
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/adobe/adobe-client.yaml

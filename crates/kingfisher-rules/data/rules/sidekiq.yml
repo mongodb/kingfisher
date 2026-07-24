@@ -12,7 +12,7 @@ rules:
       \s*[:=]\s*
       ["']?
       (
-        [a-f0-9]{8}:[a-f0-9]{8}
+        [[:xdigit:]]{8}:[[:xdigit:]]{8}
       )
       ["']?
       \b
@@ -24,6 +24,8 @@ rules:
     examples:
       - BUNDLE_ENTERPRISE__CONTRIBSYS__COM=cafe1234:dead5678
       - 'export BUNDLE_GEMS__CONTRIBSYS__COM="ca1eb4b3:d3ad533f"'
+    references:
+      - https://github.com/gitleaks/gitleaks/blob/3f4d91fc224d1bc985d8978ce87aaef08cd15f4c/cmd/generate/config/rules/sidekiq.go
 
   - name: Sidekiq Sensitive URL
     id: kingfisher.sidekiq.2
@@ -31,7 +33,7 @@ rules:
       (?xi)
       (
         https?://
-        [a-f0-9]{8}:[a-f0-9]{8}
+        [[:xdigit:]]{8}:[[:xdigit:]]{8}
         @
         (?:
           gems\.contribsys\.com
@@ -56,3 +58,5 @@ rules:
     examples:
       - https://cafe1234:dead5678@gems.contribsys.com/kingfisher-example-not-found
       - http://ca1eb4b3:d3ad533f@enterprise.contribsys.com:80/kingfisher-example-not-found?param1=true
+    references:
+      - https://github.com/sidekiq/sidekiq/wiki/Commercial-FAQ#how-do-i-debug-a-401-access-denied-error

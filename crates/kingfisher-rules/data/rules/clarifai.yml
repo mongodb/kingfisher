@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (                  
-        [0-9a-f]{32,36}
+        [[:xdigit:]]{32,36}
       )
       \b
     pattern_requirements:
@@ -23,6 +23,7 @@ rules:
     references:
       - https://docs.gitguardian.com/secrets-detection/secrets-detection-engine/detectors/specifics/clarifai_key
       - https://docs.clarifai.com/control/authentication/key/
+      - https://github.com/Clarifai/docs/blob/76eefab5275d027043a09fa1762240d1f2fbcb09/code_snippets/api-guide/authentication/key.sh
     validation:
       type: Http
       content:

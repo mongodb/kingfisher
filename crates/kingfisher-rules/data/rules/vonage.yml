@@ -11,7 +11,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [a-f0-9]{8}
+        [[:xdigit:]]{8}
       )
       \b
     pattern_requirements:
@@ -37,7 +37,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [A-Za-z0-9]{16}
+        [[:alnum:]]{16}
       )
       \b
     pattern_requirements:

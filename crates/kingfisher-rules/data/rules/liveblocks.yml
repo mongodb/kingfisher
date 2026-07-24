@@ -17,6 +17,8 @@ rules:
       - 'LIVEBLOCKS_SECRET_KEY="sk_dev_Z9y8X7w6V5u4T3s2R1qPoNmLkJiHgFeDcBa9876543210_-Z9y8X7w6V5u4T3s2R"'
     references:
       - https://liveblocks.io/docs/api-reference/rest-api-endpoints
+      - https://github.com/liveblocks/liveblocks
+      - https://github.com/liveblocks/liveblocks/blob/ee50c8f03b584b237df158451714eba6f4025277/docs/pages/upgrading/1.2.mdx
     validation:
       type: Http
       content:

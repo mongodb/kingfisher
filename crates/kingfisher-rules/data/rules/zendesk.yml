@@ -5,10 +5,10 @@ rules:
       (?xi)
       \b
       (
-        [a-z0-9]
+        [[:alnum:]]
         (?:
           [a-z0-9-]{0,61}
-          [a-z0-9]
+          [[:alnum:]]
         )?
         \.zendesk\.com
       )
@@ -62,7 +62,7 @@ rules:
       )
       (?:.|[\n\r]){0,16}?
       (
-        [A-Za-z0-9]{40}
+        [[:alnum:]]{40}
       )
       \b
     pattern_requirements:
@@ -81,6 +81,8 @@ rules:
     references:
       - https://developer.zendesk.com/api-reference/introduction/security-and-auth/
       - https://developer.zendesk.com/api-reference/ticketing/account-configuration/current_user/
+      - https://developer.zendesk.com/api-reference/ticketing/users/users/#show-self
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/zendesk.go
     depends_on_rule:
       - rule_id: kingfisher.zendesk.1
         variable: ZENDESK_HOST

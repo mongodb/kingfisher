@@ -18,6 +18,8 @@ rules:
       - na1.api.riotgames.com
       - euw1.api.riotgames.com
       - americas.api.riotgames.com
+    references:
+      - https://developer.riotgames.com/docs/lol
 
   - name: Riot Games API Key
     id: kingfisher.riot.2

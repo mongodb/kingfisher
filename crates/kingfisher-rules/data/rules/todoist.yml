@@ -19,8 +19,6 @@ rules:
       - 'TODOIST_API_TOKEN="9ee0e268956ee8440fd88cf1a54665f01fcfcdf5"'
       - |
         todoist_token = '6c387dbc97170767f2e80334a5e822895adf6d7b'
-    negative_examples:
-      - 'TODOIST_URL="https://api.todoist.com"'
     references:
       - https://developer.todoist.com/api/v1/
       - https://developer.todoist.com/guides/#developing-with-todoist

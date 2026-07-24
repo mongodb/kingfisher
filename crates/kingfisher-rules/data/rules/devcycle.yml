@@ -19,6 +19,7 @@ rules:
     references:
       - https://docs.devcycle.com/cli-guides/environments/
       - https://docs.devcycle.com/bucketing-api/
+      - https://github.com/DevCycleHQ/devcycle-docs/blob/185b38366fcec702dedcf42b01ece9c444e1c00e/docs/best-practices/edgedb-and-edge-flags/edge-db-via-api-simple.md
     validation:
       type: Http
       content:
@@ -58,6 +59,7 @@ rules:
     references:
       - https://docs.devcycle.com/cli-guides/environments/
       - https://docs.devcycle.com/bucketing-api/
+      - https://github.com/DevCycleHQ/devcycle-docs/blob/185b38366fcec702dedcf42b01ece9c444e1c00e/docs/best-practices/edgedb-and-edge-flags/edge-db-via-api-simple.md
     validation:
       type: Http
       content:
@@ -97,6 +99,7 @@ rules:
     references:
       - https://docs.devcycle.com/cli-guides/environments/
       - https://docs.devcycle.com/bucketing-api/
+      - https://github.com/DevCycleHQ/devcycle-docs/blob/185b38366fcec702dedcf42b01ece9c444e1c00e/docs/best-practices/edgedb-and-edge-flags/edge-db-via-api-simple.md
     validation:
       type: Http
       content:

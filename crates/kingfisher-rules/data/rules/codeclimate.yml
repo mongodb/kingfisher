@@ -7,7 +7,7 @@ rules:
       (?:.|[\n\r]){0,64}?
       \b
       (
-        [a-f0-9]{64}
+        [[:xdigit:]]{64}
       )
       \b
     pattern_requirements:
@@ -24,6 +24,7 @@ rules:
       - CODECLIMATE_API_TOKEN="d37a8b9e09642cb73cfcf4e1284815fc3d6a55a7714110187ac59856ae4ab5ad"
     references:
       - https://github.com/codeclimate/codeclimate-services
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/codeclimate.yml
     validation:
       type: Http
       content:

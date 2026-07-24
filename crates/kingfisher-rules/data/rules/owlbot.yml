@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,64}?
       \b
       (
-        [a-f0-9]{40}
+        [[:xdigit:]]{40}
       )
       \b
     pattern_requirements:

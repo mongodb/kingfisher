@@ -11,7 +11,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -24,6 +24,8 @@ rules:
       - 'agora_app_id = "cf80de76d5430a6fbc2605721c0aefbe"'
     references:
       - https://docs.agora.io/en/rtc/restfulapi
+      - https://docs.agora.io/en/api-reference
+      - https://github.com/AgoraIO/docs-source/blob/staging/shared/common/_restful-authentication.mdx
 
   - name: Agora App Certificate
     id: kingfisher.agora.2
@@ -37,7 +39,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -72,3 +74,5 @@ rules:
     references:
       - https://docs.agora.io/en/voice-calling/reference/agora-console-rest-api
       - https://docs.agora.io/en/rtc/restfulapi
+      - https://docs.agora.io/en/api-reference
+      - https://github.com/AgoraIO/docs-source/blob/staging/shared/common/_restful-authentication.mdx

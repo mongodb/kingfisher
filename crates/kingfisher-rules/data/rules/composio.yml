@@ -19,6 +19,8 @@ rules:
     references:
       - https://docs.composio.dev/reference/authentication
       - https://docs.composio.dev/api-reference/projects/post-org-project-by-project-id-api-keys-create
+      - https://docs.composio.dev/reference/authentication/project-api-key-permissions
+      - https://github.com/ComposioHQ/composio/blob/b14810b3a4f440e8df7c0c0b262ac88388b2da41/docs/content/docs/troubleshooting/api.mdx
     validation:
       type: Http
       content:

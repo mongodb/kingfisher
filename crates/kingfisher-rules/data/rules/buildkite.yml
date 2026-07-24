@@ -4,7 +4,7 @@ rules:
     pattern: |
       (?xi)
       (
-        bkua_[a-z0-9]{40}
+        bkua_[[:alnum:]]{40}
       )
       \b
     pattern_requirements:
@@ -42,3 +42,43 @@ rules:
             - report_response: true
             - type: StatusMatch
               status: [204]
+
+  - name: Buildkite Agent Registration Token
+    id: kingfisher.buildkite.2
+    pattern: |
+      (?x)
+      \b
+      (
+        bkar_[[:alnum:]_-]{32,128}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+      min_lowercase: 1
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - bkar_3c7019c2e4b6e76fe2e8bdde7c154e3c1a211743
+    references:
+      - https://buildkite.com/docs/platform/security/tokens
+      - https://buildkite.com/docs/agent/v3/self-hosted/unclustered-tokens
+
+  - name: Buildkite Cluster Agent Token
+    id: kingfisher.buildkite.3
+    pattern: |
+      (?x)
+      \b
+      (
+        bkct_[[:alnum:]_-]{32,128}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+      min_lowercase: 1
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - bkct_3c7019c2e4b6e76fe2e8bdde7c154e3c1a211743
+    references:
+      - https://buildkite.com/docs/platform/security/tokens
+      - https://buildkite.com/docs/apis/agent-api/stacks

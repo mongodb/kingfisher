@@ -31,6 +31,8 @@ rules:
                 - '"status"'
     references:
       - https://docs.friendli.ai/reference/authentication
+      - https://friendli.ai/docs/guides/suite/personal-api-keys
+      - https://github.com/friendliai/play-go-ai/blob/53e84fd5ffd535870a7981045d852567da39a771/README.md
     examples:
       - "flp_eb8CAc1OHdVISFraFZXFYQeH1CYtqM2VdYFvV1duniWw32"
       - "flp_fYvncz2Ahh4YEfSKbNoT09DWlwPq5I7svZG2l1bdbpOg1c"

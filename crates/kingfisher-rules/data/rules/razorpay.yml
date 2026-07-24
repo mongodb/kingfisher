@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        rzp_live_[A-Za-z0-9]{14}
+        rzp_live_[[:alnum:]]{14}
       )
       \b
     confidence: medium
@@ -38,7 +38,7 @@ rules:
       (?xi)
       \b
       (
-        rzp_test_[A-Za-z0-9]{14}
+        rzp_test_[[:alnum:]]{14}
       )
       \b
     confidence: medium
@@ -73,7 +73,7 @@ rules:
       (?:RAZORPAY[_-]?(?:KEY[_-]?)?SECRET|razorpay[_-]?(?:key[_-]?)?secret|key_secret)
       \s* [=:] \s* ["']?
       (
-        [A-Za-z0-9]{20,64}
+        [[:alnum:]]{20,64}
       )
       ["']?
     confidence: medium
@@ -81,3 +81,5 @@ rules:
     examples:
       - "RAZORPAY_KEY_SECRET=abc123def456ghi789jkl012mno345pq"
       - 'razorpay_secret: "Abc123Def456Ghi789Jkl012Mno345Pq"'
+    references:
+      - https://razorpay.com/docs/api/

@@ -19,7 +19,7 @@ rules:
       )
       (?:.|[\n\r]){0,12}?
       (
-        [a-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -38,6 +38,7 @@ rules:
     references:
       - https://docs.private-ai.com/fundamentals/getting-started
       - https://docs.private-ai.com/reference/4.0.0/operation/ner_text_ner_text_post/
+      - https://github.com/gitleaks/gitleaks/blob/00bb82153ec981f5cd84b12f1486ec4cbb4289ed/cmd/generate/config/rules/privateai.go
     validation:
       type: Http
       content:

@@ -34,5 +34,6 @@ rules:
               match_all_words: true
     references:
       - https://api.fly.io/graphql
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/flyio.go
     examples:
       - "FlyV1 fm2_lJPECAAAAAAACcIGxBBr3eFBrCTMuIb8FOeUWTf0wrVodHRwczovL2FwaS5mbHkuaW8vdjGUAJLOABLVch8Lk7lodHRwczovL2FwaS5mbHkuaW8vYWFhL3YxxDymEU+hbM4EZ6KeG6k1EWHesm6buoSgwBS8yBSLRiHumjZXcxZdCJ2gJ3PN//X8DKdsEFfZyS03lbJtPpwETgpeWpRbsMxfQb2ZkR4zYNi/IOOKYxW2h6DYBHahN3DBS7wY54AIgap8IMAtBJ3imo77+vAeAeZ/0aPq3XJoGdg4+WHDWkxectcZoZROe8Qgnq4tV2yiT2Mx5wmoK+Kw1u33egtwLCEBDC5ZakEM7pI=,fm2_lJPETgpeWpRbsMxfQb2ZkR4zYNi/IOOKYxW2h6DYBHahN3DBS7wY54AIgap8IMAtBJ3imo77+vAeAeZ/0aPq3XJoGdg4+WHDWkxectcZoZROe8QQCY7oFTr+3MOM0p5/Cww1AsO5aHR0cHM6Ly9hcGkuZmx5LmlvL2FhYS92MZgEks5ooPjrzwAAAAEkmRcJF84AEhmjCpHOABIZowzEEMLj9PMThJElQN/ARptX7D3EILDtbLx/4cBgt6fX+zb6/FxsLxV2A/y4e4BeU1SunG+O"

@@ -19,8 +19,6 @@ rules:
     confidence: medium
     examples:
       - 'LEMONSQUEEZY_API_KEY="eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiJ9.eyJhdWQiOiJodHRwczovL2FwaS5sZW1vbnNxdWVlenkuY29tIiwiaXNzIjoiaHR0cHM6Ly9sZW1vbnNxdWVlenkuY29tIiwic3ViIjoiMTIzNCIsImlhdCI6MTcwMDAwMDAwMCwiZXhwIjoxNzMwMDAwMDAwLCJzY29wZXMiOltdfQ.abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQR"'
-    negative_examples:
-      - 'LEMONSQUEEZY_URL="https://api.lemonsqueezy.com"'
     references:
       - https://docs.lemonsqueezy.com/api
       - https://developer.samsung.com/iap/isn/jwt/header.html

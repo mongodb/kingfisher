@@ -33,3 +33,4 @@ rules:
               match_all_words: true
     references:
       - https://jina.ai/serve/jina-ai-cloud/
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/jina.yml

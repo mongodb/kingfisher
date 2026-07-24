@@ -21,6 +21,8 @@ rules:
       - 'INSTANTLY_API_KEY="NmNlMCI1MWUtZDBmMC00NTc4LWE0MDItMDM0NGU0ZWI0MzliOmFzWWtCZUxUY3ZPRg=="'
     references:
       - https://developer.instantly.ai/api/v2/analytics/getdailyaccountanalytics
+      - https://developer.instantly.ai/api-reference/account/get-daily-account-analytics
+      - https://github.com/kevinbadi/AgenticOSKevsAcademy/blob/9bef59df8378715212284684e062bd4dea03e83f/implementation/instantly_analytics.py
     validation:
       type: Http
       content:

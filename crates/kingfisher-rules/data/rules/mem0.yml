@@ -19,6 +19,7 @@ rules:
       - https://docs.mem0.ai/api-reference
       - https://github.com/mem0ai/mem0/blob/739534c0a3232e4b5ae6b4349ae4e50fc00df614/docs/api-reference.mdx
       - https://github.com/mem0ai/mem0/blob/739534c0a3232e4b5ae6b4349ae4e50fc00df614/cli/python/README.md
+      - https://github.com/mem0ai/mem0/blob/ca2abca2b884e038d3e525070e79d3057ef2012c/skills/mem0/references/quickstart.md
     validation:
       type: Http
       content:

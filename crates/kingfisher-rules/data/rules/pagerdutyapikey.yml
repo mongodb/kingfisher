@@ -15,7 +15,7 @@ rules:
       (                                                          
         u\+[A-Z0-9_+-]{18}         |  # personal user token (20 chars)
         [A-Z0-9_-]{20}             |  # legacy PAT (20 chars, mixed case)
-        [a-f0-9]{32}                  # integration / routing key (32 hex, lower case)
+        [[:xdigit:]]{32}                  # integration / routing key (32 hex, lower case)
       )
       \b
     pattern_requirements:

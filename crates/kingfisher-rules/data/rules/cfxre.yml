@@ -17,6 +17,7 @@ rules:
       - 'sv_licenseKey "cfxk_AbCdEfGhIjKlMnOpQrStUvWxYz1234567890_abcdef"'
     references:
       - https://docs.fivem.net/docs/server-manual/setting-up-a-server/
-    # No standalone validation or revocation is added: the public FiveM/Cfx.re
-    # docs describe configuring server keys, but do not document a safe API for
-    # verifying or revoking a key using the key itself.
+      # No standalone validation or revocation is added: the public FiveM/Cfx.re
+      # docs describe configuring server keys, but do not document a safe API for
+      # verifying or revoking a key using the key itself.
+      - https://github.com/citizenfx/txAdmin/blob/8a9a41410000fd92a527fe11bae2b8eeeb8b10e0/shared/consts.ts

@@ -7,7 +7,7 @@ rules:
       .{0,10}
       \b
       (
-        [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
       \b
     pattern_requirements:
@@ -32,6 +32,7 @@ rules:
         },
     references:
       - https://postmarkapp.com/developer/api/overview
+      - https://github.com/praetorian-inc/noseyparker/blob/6dd8a6b0730cf2345b92f95f15946059e10dda19/crates/noseyparker/data/default/builtin/rules/postmark.yml
     validation:
       type: Http
       content:

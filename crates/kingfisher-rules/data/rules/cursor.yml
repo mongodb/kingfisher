@@ -17,6 +17,7 @@ rules:
       - key_d9ba91e29d81f1bf2085b55b06f5ac43885749005cff565bee7f406ca2e2f3f9
     references:
       - https://cursor.com/docs/cloud-agent/api/endpoints
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/cursor.go
     validation:
       type: Http
       content:

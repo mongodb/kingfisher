@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [0-9A-Z]{20,24}
+        [[:alnum:]]{20,24}
       )
       \b
     pattern_requirements:
@@ -36,3 +36,4 @@ rules:
           url: https://app.codacy.com/api/v3/user/organizations
     references:
       - https://docs.codacy.com/codacy-api/using-the-codacy-api
+      - https://docs.codacy.com/codacy-api/using-the-codacy-api # Vendor docs (https://docs.codacy.com/codacy-api/using-the-codacy-api) show this curl example:

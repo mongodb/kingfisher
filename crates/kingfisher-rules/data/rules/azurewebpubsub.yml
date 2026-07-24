@@ -18,3 +18,4 @@ rules:
       - "Endpoint=https://myservice.webpubsub.azure.com;AccessKey=AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGHIJKLMNOPQRS+/==;Version=1.0;"
     references:
       - https://learn.microsoft.com/en-us/azure/azure-web-pubsub/
+      - https://github.com/Azure/azure-sdk-for-net/blob/a09880366552e3514a06ccbade2354b211d62f60/sdk/webpubsub/Microsoft.Azure.WebJobs.Extensions.WebPubSub/README.md

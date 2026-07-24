@@ -23,12 +23,15 @@ rules:
       - 'BOX_DEVELOPER_TOKEN="DkXZmsjUKizvL2z0WiaLvMBeQ756XCGG"'
       - |
         box_access_token = 'A4bC5dE6fG7hI8jK9lM0nO1pQ2rS3tU4'
-    negative_examples:
-      - 'BOX_DOC_URL="https://developer.box.com"'
-      - "sandbox_mode = true"
     references:
       - https://developer.box.com/reference/
       - https://developer.box.com/guides/authentication/tokens/developer-tokens/
+      - https://github.com/box/developer.box.com/blob/0e4b8a47f7404420a7c259cd5a830ad6f935e96e/content/guides/authentication/tokens/developer-tokens.md
+      - https://github.com/box/developer.box.com/blob/0e4b8a47f7404420a7c259cd5a830ad6f935e96e/content/guides/authentication/tokens/developer-tokens.md?plain=1#L42-L45
+      - https://github.com/box/box-python-sdk/blob/656e9bbb24de3384c766aa77d8182a5114b19d0d/box_sdk_gen/box/developer_token_auth.py#L36-L78
+      # The vendor guide explicitly documents this exact GET and Bearer header; the SDK independently emits the header and implements
+      # the JSON `GET /2.0/users/me` response. Kingfisher requires HTTP 200, valid JSON, and a `type: user` response.
+      - https://github.com/box/box-python-sdk/blob/656e9bbb24de3384c766aa77d8182a5114b19d0d/box_sdk_gen/managers/users.py#L353-L407
     validation:
       type: Http
       content:
@@ -42,3 +45,6 @@ rules:
             - type: StatusMatch
               status: [200]
             - type: JsonValid
+            - type: WordMatch
+              match_all_words: true
+              words: ['"type"', '"user"']

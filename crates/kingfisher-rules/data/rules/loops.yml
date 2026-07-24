@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [0-9a-f]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -23,6 +23,7 @@ rules:
     references:
       - https://loops.so/docs/api-reference/intro
       - https://loops.so/docs/api-reference/api-key
+      - https://github.com/segmentio/action-destinations/blob/5539716dacde8b1eb15e1b1a2dd72e883fb55b02/packages/destination-actions/src/destinations/loops/index.ts
     validation:
       type: Http
       content:

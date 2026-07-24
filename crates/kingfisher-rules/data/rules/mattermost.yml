@@ -19,6 +19,8 @@ rules:
       - mattermost_url = "https://community.mattermost.com"
       - mattermost_url='http://localhost:8065'
       - "mattermost_url: https://intra.example.com/mattermost"
+    references:
+      - https://developers.mattermost.com/api-documentation/
 
   - name: Mattermost Access Token
     id: kingfisher.mattermost.2
@@ -31,7 +33,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Z0-9]{26}
+        [[:alnum:]]{26}
       )
       \b
     pattern_requirements:
@@ -66,3 +68,4 @@ rules:
     references:
       - https://developers.mattermost.com/api-documentation/
       - https://developers.mattermost.com/integrate/faq/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/mattermost.go

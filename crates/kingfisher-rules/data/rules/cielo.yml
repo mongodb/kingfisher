@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
       \b
     pattern_requirements:
@@ -37,7 +37,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [a-zA-Z0-9]{20,64}
+        [[:alnum:]]{20,64}
       )
       \b
     min_entropy: 3.5

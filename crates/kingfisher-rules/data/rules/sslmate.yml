@@ -2,15 +2,15 @@ rules:
   - name: SslMate API Key
     id: kingfisher.sslmate.1
     pattern: |
-      (?xi)
+      (?x)
       \b
-      sslmate
+      (?i:sslmate)
       (?:.|[\n\r]){0,32}?
-      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?i:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Z0-9]{36}
+        k[0-9]{5}_[a-z0-9]{26}
       )
       \b
     pattern_requirements:
@@ -18,8 +18,11 @@ rules:
     min_entropy: 3.5
     confidence: medium
     examples:
-      - sslmate_key="10000r90kriAAAAAseZJwsawemws03jdlmZY"
-      - SSLMATE_SECRET_KEY=ABCDEFGHIJ1234567890ABCDEFGHIJ123456
+      - sslmate_api_key = "k67546_bhkxvkecd3ox5mjxvvcgzcz5ha"
+      - sslmate_api_key = "k67547_nas4brepf5irnmzianwtqim3ff"
+      - sslmate_api_key = "k67548_3upoqrewdb63nvb6gvagk2lehk"
+      - sslmate_api_key = "k67549_b6u2hqrfdjid22jkdkhfo3ph3y"
+      - sslmate_api_key = "k67550_a6ilqbprayhjjquvbb2dbmvaea"
     references:
       - https://sslmate.com/help/reference/apiv2
     validation:
@@ -27,13 +30,15 @@ rules:
       content:
         request:
           method: GET
-          url: "https://sslmate.com/api/v2/certs/example.com"
+          url: "https://sslmate.com/api/v2/certs"
           headers:
             Authorization: "Basic {{ TOKEN | append: ':' | b64enc }}"
             Accept: application/json
           response_matcher:
             - report_response: true
             - type: StatusMatch
-              status: [200]
-            - type: WordMatch
-              words: ['"cn"', '"exists"']
+              status: [200, 403]
+            - type: StatusMatch
+              status: [401]
+              negative: true
+            - type: JsonValid

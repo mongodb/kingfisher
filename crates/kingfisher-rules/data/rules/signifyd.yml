@@ -11,7 +11,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [A-Za-z0-9]{24,28}
+        [[:alnum:]]{24,28}
       )
       \b
     pattern_requirements:

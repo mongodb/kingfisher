@@ -12,7 +12,7 @@ rules:
       )
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -26,6 +26,7 @@ rules:
       - "X-FullContact-APIKey: OL8dKLzdocJ2isAjIhKt40RlgLKOmxgJ"
     references:
       - https://platform.fullcontact.com/docs/apis/enrich/authorization
+      - https://github.com/auth0/rules/blob/7139c06990e4acafabb445c5a23c50c5127d0303/src/rules/get-fullcontact-profile.js
     validation:
       type: Http
       content:

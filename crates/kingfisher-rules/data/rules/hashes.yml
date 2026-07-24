@@ -7,6 +7,7 @@ rules:
       - https://unix.stackexchange.com/a/511017
       - https://hashcat.net/wiki/doku.php?id=example_hashes
       - https://passwordvillage.org/salted.html#md5crypt
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/hashes.yml
     pattern_requirements:
       min_digits: 2
     min_entropy: 3.3
@@ -22,6 +23,7 @@ rules:
     references:
       - https://en.wikipedia.org/wiki/Bcrypt
       - https://hashcat.net/wiki/doku.php?id=example_hashes
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/hashes.yml
     min_entropy: 3.3
     confidence: medium
     examples:
@@ -46,6 +48,7 @@ rules:
       - https://en.wikipedia.org/wiki/Crypt_(C)#Key_derivation_functions_supported_by_crypt
       - https://hashcat.net/wiki/doku.php?id=example_hashes
       - https://passwordvillage.org/salted.html#sha256crypt
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/hashes.yml
     min_entropy: 3.3
     confidence: medium
     examples:
@@ -68,6 +71,7 @@ rules:
       - https://en.wikipedia.org/wiki/Crypt_(C)#Key_derivation_functions_supported_by_crypt
       - https://hashcat.net/wiki/doku.php?id=example_hashes
       - https://passwordvillage.org/salted.html#sha512crypt
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/hashes.yml
     min_entropy: 3.3
     confidence: medium
     examples:
@@ -87,6 +91,7 @@ rules:
     references:
       - https://en.wikipedia.org/wiki/Crypt_(C)#Key_derivation_functions_supported_by_crypt
       - https://hashcat.net/wiki/doku.php?id=example_hashes
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/hashes.yml
     min_entropy: 3.3
     confidence: medium
     examples:
@@ -108,6 +113,7 @@ rules:
       min_digits: 2
     references:
       - https://hashcat.net/wiki/doku.php?id=example_hashes
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/hashes.yml
     min_entropy: 3.3
     confidence: medium
     examples: # Kerberos 5, etype 23, AS-REP

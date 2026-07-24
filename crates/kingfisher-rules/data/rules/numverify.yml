@@ -2,24 +2,27 @@ rules:
   - name: Numverify API Key
     id: kingfisher.numverify.1
     pattern: |
-      (?xi)
+      (?x)
       \b
-      numverify
+      (?i:numverify)
       (?:.|[\n\r]){0,16}?
-      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?i:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
-    min_entropy: 3.5
+    min_entropy: 3.0
     confidence: medium
     pattern_requirements:
       min_digits: 2
     examples:
-      - NUMVERIFY_ACCESS_KEY=abc123def456ghi789jkl012mno345pq
-      - numverify_access_key = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+      - numverify_access_key = "475830c971d46d16888df62f87f6ff31"
+      - numverify_access_key = "e1ce01162876b7d30d5f87a4e59b5560"
+      - numverify_access_key = "4541d7e8e842dc00e1d516fba3c85137"
+      - numverify_access_key = "d633352a603db1b848735931d33a2b77"
+      - numverify_access_key = "c0bef464a2ea1b39719223ed136dd1d4"
     references:
       - https://numverify.com/documentation
       - https://numverify.com/faq

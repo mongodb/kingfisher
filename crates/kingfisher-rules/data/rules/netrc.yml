@@ -31,3 +31,4 @@ rules:
     references:
       - https://everything.curl.dev/usingcurl/netrc
       - https://devcenter.heroku.com/articles/authentication#api-token-storage
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/netrc.yml

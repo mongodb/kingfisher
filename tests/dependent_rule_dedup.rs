@@ -12,14 +12,18 @@ use kingfisher::{
 };
 use smallvec::smallvec;
 
-fn make_rule(rule_id: &str, depends_on_rule: Vec<Option<DependsOnRule>>) -> Arc<Rule> {
+fn make_rule(
+    rule_id: &str,
+    visible: bool,
+    depends_on_rule: Vec<Option<DependsOnRule>>,
+) -> Arc<Rule> {
     Arc::new(Rule::new(RuleSyntax {
         name: format!("{rule_id} rule"),
         id: rule_id.to_string(),
         pattern: "dummy".to_string(),
         min_entropy: 0.0,
         confidence: Confidence::Low,
-        visible: true,
+        visible,
         examples: vec![],
         negative_examples: vec![],
         references: vec![],
@@ -72,9 +76,10 @@ fn record_match(
 
 #[test]
 fn dedup_preserves_dependency_provider_matches_per_blob() -> Result<()> {
-    let provider_rule = make_rule("RULE.PROVIDER", vec![]);
+    let provider_rule = make_rule("RULE.PROVIDER", false, vec![]);
     let dependent_rule = make_rule(
         "RULE.DEPENDENT",
+        true,
         vec![Some(DependsOnRule {
             rule_id: "RULE.PROVIDER".to_string(),
             variable: "TOKEN".into(),
@@ -116,7 +121,7 @@ fn dedup_preserves_dependency_provider_matches_per_blob() -> Result<()> {
 
 #[test]
 fn dedup_still_merges_non_dependency_rules_across_blobs() -> Result<()> {
-    let rule = make_rule("RULE.SIMPLE", vec![]);
+    let rule = make_rule("RULE.SIMPLE", true, vec![]);
     let mut store = FindingsStore::new(PathBuf::from("/tmp"));
     store.record_rules(std::slice::from_ref(&rule));
 

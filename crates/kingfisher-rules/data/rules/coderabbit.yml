@@ -17,6 +17,7 @@ rules:
     references:
       - https://coderabbit.ai/
       - https://docs.coderabbit.ai/api-reference/
+      - https://github.com/MBailly12/CodeRabbit-Docs/blob/da9081a8b85186bd033db364462544dbba3e148a/docs/guides/ondemand-reports.md
     validation:
       type: Http
       content:

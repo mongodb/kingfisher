@@ -18,6 +18,7 @@ rules:
       - Bearer secret-token:mercury_production_wma_24SCp4G81X3yHL4Wq8FgzuaP9ye3VKf2mgTDctXyRg5HY_yrucrem
     references:
       - https://docs.mercury.com/docs/api-token-security-policies
+      - https://github.com/fuyofulo/research/blob/97e7d98be4d6b446a1fe6802701ecae0d3426a8d/companies/mercury/developer_experience.md
     validation:
       type: Http
       content:
@@ -51,6 +52,7 @@ rules:
       - Bearer secret-token:mercury_sandbox_rma_24pnbcT7NygLbpJPr4xBuSuBDpo6tK89S8u3ERYn3FXVz_yrucrem
     references:
       - https://docs.mercury.com/docs/api-token-security-policies
+      - https://github.com/fuyofulo/research/blob/97e7d98be4d6b446a1fe6802701ecae0d3426a8d/companies/mercury/developer_experience.md
     validation:
       type: Http
       content:

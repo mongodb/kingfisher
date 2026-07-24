@@ -35,3 +35,4 @@ rules:
     references:
       - https://api-docs.deepseek.com/
       - https://api-docs.deepseek.com/api/list-models
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/deepseek.go

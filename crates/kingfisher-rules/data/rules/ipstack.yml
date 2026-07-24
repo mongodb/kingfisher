@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        (?:[0-9a-f]{16}){2}
+        (?:[[:xdigit:]]{16}){2}
       )
       \b
     pattern_requirements:

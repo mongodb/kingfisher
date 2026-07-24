@@ -13,7 +13,7 @@ rules:
       )
       (?:.|[\n\r]){0,12}?
       (
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -51,6 +51,7 @@ rules:
     references:
       - https://developer.atlassian.com/cloud/trello/guides/rest-api/api-introduction/
       - https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/trello.go
 
   - name: Trello API Key
     id: kingfisher.trello.2
@@ -67,7 +68,7 @@ rules:
       )
       (?:.|[\n\r]){0,12}?
       (
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:

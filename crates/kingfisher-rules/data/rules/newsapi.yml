@@ -2,15 +2,15 @@ rules:
   - name: NewsAPI API Key
     id: kingfisher.newsapi.1
     pattern: |
-      (?xi)
+      (?x)
       \b
-      newsapi
+      (?i:newsapi)
       (?:.|[\n\r]){0,16}?
-      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?i:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     min_entropy: 3.5
@@ -18,16 +18,16 @@ rules:
     pattern_requirements:
       min_digits: 2
     examples:
-      - NEWSAPI_API_KEY=abc123def456ghi789jkl012mno345pq
-      - newsapi_key = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+      - newsapi_key = "652c642fb2ca4bcad1adfbd427210402"
     references:
       - https://newsapi.org/docs/authentication
+      - https://newsapi.org/docs/endpoints/sources
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: https://newsapi.org/v2/everything?q=test&apiKey={{ TOKEN }}
+          url: https://newsapi.org/v2/top-headlines/sources?apiKey={{ TOKEN }}
           headers:
             Accept: application/json
           response_matcher:
@@ -38,3 +38,6 @@ rules:
               status: [401]
               negative: true
             - type: JsonValid
+            - type: WordMatch
+              match_all_words: true
+              words: ['"status":"ok"', '"sources"']

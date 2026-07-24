@@ -6,7 +6,7 @@ rules:
       https://api\.particle\.io/v1/[A-Z0-9_\-\s/"\\?]*
       (?:access_token=|Authorization:\s*Bearer\s*)
       (
-        [A-Z0-9]{40}
+        [[:alnum:]]{40}
       )
       \b
     pattern_requirements:
@@ -26,6 +26,7 @@ rules:
       - 'curl "https://api.particle.io/v1/access_tokens/current?access_token=38bb7b318cc6898c80317decb34525844bc9db55"'
     references:
       - https://docs.particle.io/reference/cloud-apis/api/
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/particle.io.yml
     validation:
       type: Http
       content:
@@ -58,7 +59,7 @@ rules:
     pattern: |
       (?xi)
       (?:access_token=|Authorization:\s*Bearer\s*)
-      ([A-Z0-9]{40})
+      ([[:alnum:]]{40})
       \b
       [\s"\\]*https://api\.particle\.io/v1
     min_entropy: 3.3
@@ -74,6 +75,7 @@ rules:
       - "curl -d access_token=38bb7b318cc6898c80317decb34525844bc9db55 https://api.particle.io/v1/devices"
     references:
       - https://docs.particle.io/reference/cloud-apis/api/
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/particle.io.yml
     validation:
       type: Http
       content:

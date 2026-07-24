@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-zA-Z0-9]{64}
+        [A-Z0-9]{64}
       )
       \b
     pattern_requirements:
@@ -24,6 +24,8 @@ rules:
       - https://disqus.com/api/docs/requests/
       - https://disqus.com/api/docs/auth/
       - https://disqus.com/api/docs/pages/list/
+      - https://disqus.com/api/docs/threads/list/
+      - https://github.com/disqus/DISQUS-API-Recipes/blob/6ff1ae5372eb65cdd7bb066fd359634bae158120/snippets/php/open-threads-since-date.php
     validation:
       type: Http
       content:
@@ -51,7 +53,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-zA-Z0-9]{64}
+        [[:alnum:]]{64}
       )
       \b
     pattern_requirements:

@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [0-9a-zA-Z]{64}
+        [[:alnum:]]{64}
       )
       \b
     pattern_requirements:
@@ -21,6 +21,7 @@ rules:
       - "MORALIS_API_KEY=aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789aBcDeFgHiJkLmNoPqRsTuVwXy012"
     references:
       - https://docs.moralis.io/web3-data-api/evm/reference
+      - https://github.com/viperrcrypto/PocketWatch/blob/a4854186724af76a1ca6cc634b2118c14d0759fc/src/lib/portfolio/service-key-verifier.ts
     validation:
       type: Http
       content:

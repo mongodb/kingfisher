@@ -17,6 +17,7 @@ rules:
       - 'Authorization: "Bearer duffel_live_abcd1234efgh5678ijkl9012mnop3456qrstuvwxyza"'
     references:
       - https://duffel.com/docs/api
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/duffel.go
     validation:
       type: Http
       content:

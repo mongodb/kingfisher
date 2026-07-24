@@ -9,7 +9,7 @@ rules:
       (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,32}?
       (
-        [a-f0-9]{40}
+        [[:xdigit:]]{40}
       )
       \b
     pattern_requirements:
@@ -34,5 +34,6 @@ rules:
                 - '"login":'
     references:
       - https://dev.bitly.com/api-reference#Authentication
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/bitly.go
     examples:
       - "bitly_token = 20e9817b9c5ddde1b0cec7622bfc557dbc823791"

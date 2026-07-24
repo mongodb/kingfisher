@@ -21,6 +21,7 @@ rules:
       - secret
     references:
       - https://docs.fleetbase.io/developers/api/
+      - https://github.com/fleetbase/fleetbase.io/blob/9f8124f1bda23f35c34d82f1b236741fd362ac00/content/docs/api/index.mdx
     validation:
       type: Http
       content:

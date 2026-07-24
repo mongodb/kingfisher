@@ -20,6 +20,7 @@ rules:
     references:
       - https://docs.browser-use.com/cloud/quickstart
       - https://docs.browser-use.com/llms-full.txt
+      - https://github.com/browser-use/browser-use/blob/2be09b6c5eb702a9287684b42b27e7042a1aba29/skills/cloud/references/api-v2.md
     validation:
       type: Http
       content:

@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     min_entropy: 3.5
@@ -21,13 +21,15 @@ rules:
       - AVIATIONSTACK_ACCESS_KEY=abc123def456ghi789jkl012mno345pq
       - aviationstack_access_key = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
     references:
+      - https://docs.apilayer.com/aviationstack/docs/api-documentation
       - https://aviationstack.com/documentation
+      - https://www.postman.com/apilayer/apilayer/request/aaf9jis/airplanes
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: https://api.aviationstack.com/v1/flights?access_key={{ TOKEN }}
+          url: https://api.aviationstack.com/v1/airplanes?access_key={{ TOKEN }}
           headers:
             Accept: application/json
           response_matcher:
@@ -38,3 +40,5 @@ rules:
               status: [401]
               negative: true
             - type: JsonValid
+            - type: WordMatch
+              words: ['"data"']

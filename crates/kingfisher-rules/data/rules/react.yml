@@ -21,6 +21,7 @@ rules:
     references:
       - https://create-react-app.dev/docs/adding-custom-environment-variables/
       - https://stackoverflow.com/questions/48699820/how-do-i-hide-an-api-key-in-create-react-app
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/react.yml
 
   - name: React App Password
     id: kingfisher.reactapp.2
@@ -44,3 +45,4 @@ rules:
     references:
       - https://create-react-app.dev/docs/adding-custom-environment-variables/
       - https://stackoverflow.com/questions/48699820/how-do-i-hide-an-api-key-in-create-react-app
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/react.yml

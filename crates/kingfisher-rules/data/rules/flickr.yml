@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -34,6 +34,7 @@ rules:
     references:
       - https://www.flickr.com/services/api/
       - https://www.flickr.com/services/api/flickr.test.login.html
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/flickr.go
     examples:
       - "flickr_api_key: d1953fb62a9798593bfdb4287ed2423e"
   - name: Flickr OAuth Token
@@ -46,7 +47,7 @@ rules:
       (?:OAUTH|ACCESS|TOKEN)?
       (?:.|[\n\r]){0,32}?
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
     pattern_requirements:
       min_digits: 2
@@ -70,5 +71,6 @@ rules:
     references:
       - https://www.flickr.com/services/api/
       - https://www.flickr.com/services/api/flickr.auth.oauth.checkToken.html
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/flickr.go
     examples:
       - "flickr_oauth_token: a8c1b9f1d9d34aa5a1edbd43234bcdef"

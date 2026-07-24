@@ -28,6 +28,8 @@ rules:
       - "DocumentDbAuthKey=B/1EVX2Ui47X09tqU3GI/j+Nko9r5COPm0Hea9tfzitF9MQX9lZZiNO3tYQckWnt+rtlGIWS+sCx+AStkq8ZLg=="
     references:
       - https://learn.microsoft.com/en-us/azure/cosmos-db/how-to-obtain-account-keys
+      - https://learn.microsoft.com/en-us/azure/cosmos-db/secure-access-to-data?tabs=using-primary-key
+      - https://github.com/Azure/azure-cosmos-dotnet-v3/blob/860af8d44f3e585099a8d3da8dc1350964754e74/Microsoft.Azure.Cosmos/src/CosmosClient.cs
 
   - name: Azure CosmosDB Connection String
     id: kingfisher.azurecosmosdb.2
@@ -75,3 +77,5 @@ rules:
     references:
       - https://learn.microsoft.com/en-us/azure/cosmos-db/how-to-obtain-account-keys
       - https://learn.microsoft.com/en-us/rest/api/cosmos-db/access-control-on-cosmosdb-resources
+      - https://learn.microsoft.com/en-us/azure/cosmos-db/secure-access-to-data?tabs=using-primary-key
+      - https://github.com/Azure/azure-cosmos-dotnet-v3/blob/860af8d44f3e585099a8d3da8dc1350964754e74/Microsoft.Azure.Cosmos/src/CosmosClient.cs

@@ -11,7 +11,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [a-f0-9]{20}
+        [[:xdigit:]]{20}
       )
       \b
     pattern_requirements:
@@ -37,7 +37,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [a-f0-9]{20}
+        [[:xdigit:]]{20}
       )
       \b
     pattern_requirements:

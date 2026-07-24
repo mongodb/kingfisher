@@ -22,6 +22,7 @@ rules:
     references:
       - https://cloud.ibm.com/docs/account?topic=account-userapikey
       - https://cloud.ibm.com/apidocs/iam-identity-token-api
+      - https://github.com/IBM/ibm-garage-tekton-tasks/blob/166fe5183294f1a17e2c3fdf80cea1f7240f3c6d/tasks/11-ibm-scc-scan.yaml
 
     validation:
       type: Http

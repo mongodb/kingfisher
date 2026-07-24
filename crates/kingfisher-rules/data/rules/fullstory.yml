@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        (?:na1|eu1)\.[A-Za-z0-9]{20,}
+        (?:na1|eu1)\.[[:alnum:]]{20,}
       )
       \b
     pattern_requirements:

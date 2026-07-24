@@ -20,6 +20,8 @@ rules:
     references:
       - https://docs.deno.com/
       - https://api.deno.com/v1
+      - https://docs.deno.com/subhosting/api/authentication/
+      - https://docs.deno.com/subhosting/api/
     validation:
       type: Http
       content:

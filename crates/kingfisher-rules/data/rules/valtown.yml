@@ -19,6 +19,7 @@ rules:
       - https://docs.val.town/reference/api/authentication
       - https://github.com/val-town/val-town-docs/blob/0baaebe3208afc046b98d49966431e4710e588f2/src/content/docs/guides/auth.mdx
       - https://github.com/val-town/vt/blob/1eb64134b29ccec4c0465c8647f03e6edcfd7d22/src/cmd/lib/config.ts
+      - https://docs.val.town/api/authentication/
     validation:
       type: Http
       content:

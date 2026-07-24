@@ -11,7 +11,7 @@ rules:
       [=:"'\s]
       ['"]*
       (
-        [a-f0-9]{8}
+        [[:xdigit:]]{8}
       )
       ['"\s]
     pattern_requirements:
@@ -24,6 +24,7 @@ rules:
       - "KAIROS_APP_ID=b39d2dfe"
     references:
       - https://kairos.com/docs/
+      - https://www.kairos.com/docs/api/
 
   - name: Kairos API Key
     id: kingfisher.kairos.2
@@ -37,7 +38,7 @@ rules:
       [=:"'\s]
       ['"]*
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       ['"\s]
     pattern_requirements:
@@ -49,4 +50,5 @@ rules:
       - "kairos\napi_key=5adb2be88fc12a3afed9076b9b34762f "
     references:
       - https://kairos.com/docs/
-    # No public validation endpoint documented.
+      # No public validation endpoint documented.
+      - https://www.kairos.com/docs/api/

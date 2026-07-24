@@ -18,6 +18,7 @@ rules:
       - https://blog.rust-lang.org/2023/09/22/crates-io-usage-policy-rfc
       - https://github.com/rust-lang/crates.io/tree/main/src
       - https://doc.rust-lang.org/cargo/reference/registry-web-api.html
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/crates.io.yml
     validation:
       type: Http
       content:

@@ -15,6 +15,8 @@ rules:
     examples:
       - https://api.us.nylas.com
       - https://api.eu.nylas.com
+    references:
+      - https://developer.nylas.com/docs/v3/auth/hosted-oauth-apikey/
 
   - name: Nylas API Key
     id: kingfisher.nylas.1
@@ -27,9 +29,9 @@ rules:
       (?:.|[\n\r]){0,64}?
       \b
       (
-        nyk_[A-Z0-9]{67}   # common v3 API key format (71 chars total)
+        nyk_[[:alnum:]]{67}   # common v3 API key format (71 chars total)
         |
-        [0-9A-Z]{30}       # legacy/older patterns seen in repos
+        [[:alnum:]]{30}       # legacy/older patterns seen in repos
       )
       \b
     pattern_requirements:
@@ -42,6 +44,8 @@ rules:
     references:
       - https://developer.nylas.com/docs/v3/auth/hosted-oauth-apikey/
       - https://developer.nylas.com/docs/v3/notifications/
+      - https://github.com/nylas/cli/blob/b564e79c2a7cde9aa0b1aae76030a7c52463af19/docs/security/practices.md
+      - https://github.com/jackwh/nylas-v3-api-php/blob/6b1eeab7f2636e5e01afd41a139e9b749c09c78c/api_specs/yaml/administration.yaml
     depends_on_rule:
       - rule_id: kingfisher.nylas.api_uri.1
         variable: NYLAS_API_URI

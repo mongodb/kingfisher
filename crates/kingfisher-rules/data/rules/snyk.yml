@@ -9,7 +9,7 @@ rules:
       (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,32}?
       (
-        [A-Z0-9]{8}-(?:[A-Z0-9]{4}-){3}[A-Z0-9]{12}
+        [[:alnum:]]{8}-(?:[[:alnum:]]{4}-){3}[[:alnum:]]{12}
       )
       \b
     pattern_requirements:
@@ -36,3 +36,4 @@ rules:
               match_all_words: true
     references:
       - https://docs.snyk.io/snyk-api/authentication-for-api
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/snyk.go

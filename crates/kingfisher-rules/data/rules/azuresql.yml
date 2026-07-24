@@ -17,6 +17,7 @@ rules:
       - "Server=tcp:myserver.database.windows.net,1433;Initial Catalog=mydb;Persist Security Info=False;User ID=admin;Password=MyP@ssw0rd!123;"
     references:
       - https://learn.microsoft.com/en-us/azure/azure-sql/database/connect-query-content-reference-guide
+      - https://github.com/Azure-Samples/serverless-full-stack-apps-azure-sql/blob/2e90835786e033b9801ee07c97259c0d4a6f601c/azure-function/node/local.settings.json.template
 
   - name: Azure SQL Password Assignment
     id: kingfisher.azuresql.2
@@ -44,3 +45,4 @@ rules:
       - 'SQL_ADMIN_PASSWORD="Compl3x!Pass#2024"'
     references:
       - https://learn.microsoft.com/en-us/azure/azure-sql/database/connect-query-content-reference-guide
+      - https://github.com/Azure-Samples/serverless-full-stack-apps-azure-sql/blob/2e90835786e033b9801ee07c97259c0d4a6f601c/azure-function/node/local.settings.json.template

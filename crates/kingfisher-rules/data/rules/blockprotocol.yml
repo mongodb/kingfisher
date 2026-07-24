@@ -17,6 +17,7 @@ rules:
       - "BLOCK_PROTOCOL_API_KEY=b10ck5.AbCdEfGhIjKlMnOpQrStUvWxYz123456.AbCdEfGhIjKlMnOpQrStUvWxYz1234567890"
     references:
       - https://blockprotocol.org/docs/hub/api
+      - https://github.com/blockprotocol/blockprotocol/blob/06bcdcad0b0b36c39243337f701c8a927ad75977/apps/site/src/_pages/docs/0.3/4_hub/1_api.mdx
     validation:
       type: Http
       content:

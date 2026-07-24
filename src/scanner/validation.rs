@@ -40,12 +40,21 @@ pub struct AccessMapCollector {
 }
 
 impl AccessMapCollector {
-    pub fn record_aws(&self, access_key: &str, secret_key: &str, fingerprint: String) {
-        let key = xxhash_rust::xxh3::xxh3_64(format!("aws|{access_key}|{secret_key}").as_bytes());
+    pub fn record_aws(
+        &self,
+        access_key: &str,
+        secret_key: &str,
+        session_token: Option<&str>,
+        fingerprint: String,
+    ) {
+        let key = xxhash_rust::xxh3::xxh3_64(
+            format!("aws|{access_key}|{secret_key}|{}", session_token.unwrap_or_default())
+                .as_bytes(),
+        );
         self.inner.entry(key).or_insert_with(|| AccessMapRequest::Aws {
             access_key: access_key.to_string(),
             secret_key: secret_key.to_string(),
-            session_token: None,
+            session_token: session_token.map(str::to_owned),
             fingerprint,
         });
     }
@@ -1104,22 +1113,29 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
 
     match om.rule.syntax().validation {
         Some(Validation::AWS) => {
-            let secret = captures
+            let token = captures
                 .iter()
                 .find(|(name, ..)| name == "TOKEN")
                 .map(|(_, value, ..)| value.clone())
                 .unwrap_or_default();
+            let is_session_token_rule = om.rule.id() == "kingfisher.aws.4";
+            let secret = if is_session_token_rule {
+                om.dependent_captures.get("AWS_SECRET_ACCESS_KEY").cloned().unwrap_or_default()
+            } else {
+                token.clone()
+            };
+            let session_token = is_session_token_rule.then_some(token.as_str());
 
-            let mut akid =
-                utils::find_closest_variable(&captures, secret.as_str(), "TOKEN", "AKID")
-                    .unwrap_or_default();
+            let mut akid = utils::find_closest_variable(&captures, token.as_str(), "TOKEN", "AKID")
+                .or_else(|| om.dependent_captures.get("AKID").cloned())
+                .unwrap_or_default();
 
             if akid.is_empty() {
                 akid = extract_akid_from_body(&om.validation_response_body).unwrap_or_default();
             }
 
             if !akid.is_empty() && !secret.is_empty() {
-                collector.record_aws(&akid, &secret, fp.clone());
+                collector.record_aws(&akid, &secret, session_token, fp.clone());
             }
         }
         Some(Validation::GCP) => {
@@ -1766,6 +1782,28 @@ mod tests {
                 assert_eq!(access_key, "LTAIexample");
                 assert_eq!(secret_key, "secret-value");
                 assert!(session_token.is_none());
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn access_map_collector_keeps_aws_session_tokens() {
+        let collector = AccessMapCollector::default();
+        collector.record_aws(
+            "ASIAIOSFODNN7EXAMPLE",
+            "secret-value",
+            Some("session-token"),
+            "fp-1".to_string(),
+        );
+
+        let requests = collector.into_requests();
+        assert_eq!(requests.len(), 1);
+        match &requests[0] {
+            AccessMapRequest::Aws { access_key, secret_key, session_token, .. } => {
+                assert_eq!(access_key, "ASIAIOSFODNN7EXAMPLE");
+                assert_eq!(secret_key, "secret-value");
+                assert_eq!(session_token.as_deref(), Some("session-token"));
             }
             other => panic!("unexpected request: {other:?}"),
         }

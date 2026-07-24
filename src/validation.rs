@@ -1427,11 +1427,23 @@ async fn validate_aws_rule(
     dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
     cache: &Cache,
 ) {
-    let secret = captured_values
+    let token = captured_values
         .iter()
         .find(|(n, ..)| n == "TOKEN")
         .map(|(_, v, ..)| v.clone())
         .unwrap_or_default();
+
+    let is_session_token_rule = m.rule.id() == "kingfisher.aws.4";
+    let session_token = is_session_token_rule.then_some(token.clone());
+    let secret = if is_session_token_rule {
+        closest_dependent_value(
+            dependent_variables.get("AWS_SECRET_ACCESS_KEY"),
+            m.matching_input_offset_span,
+        )
+        .unwrap_or_default()
+    } else {
+        token
+    };
 
     if secret.is_empty() {
         m.validation_success = false;
@@ -1460,7 +1472,7 @@ async fn validate_aws_rule(
     let mut last_status = StatusCode::UNAUTHORIZED;
 
     for akid in akid_candidates {
-        let cache_key = aws::generate_aws_cache_key(&akid, &secret);
+        let cache_key = aws::generate_aws_cache_key(&akid, &secret, session_token.as_deref());
         if let Some(cached) = cache.get(&cache_key) {
             let c = cached.value();
             if c.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
@@ -1512,7 +1524,7 @@ async fn validate_aws_rule(
             continue;
         }
 
-        match aws::validate_aws_credentials(&akid, &secret).await {
+        match aws::validate_aws_credentials(&akid, &secret, session_token.as_deref()).await {
             Ok((ok, msg)) => {
                 if ok {
                     m.validation_success = true;
@@ -1565,6 +1577,16 @@ async fn validate_aws_rule(
         validation_body::from_string("AWS validation failed for all nearby access-key IDs.")
     });
     m.validation_response_status = last_status;
+}
+
+fn closest_dependent_value(
+    values: Option<&Vec<(String, OffsetSpan)>>,
+    target_span: OffsetSpan,
+) -> Option<String> {
+    values?
+        .iter()
+        .min_by_key(|(_, span)| dependency_distance(*span, target_span))
+        .map(|(value, _)| value.clone())
 }
 
 fn aws_akid_candidates(

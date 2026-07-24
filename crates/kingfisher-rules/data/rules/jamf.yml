@@ -22,7 +22,7 @@ rules:
       (?xi)
       jamf_client_id\s*[:=]\s*["']?
       (
-        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
     min_entropy: 2.0
     confidence: medium
@@ -44,7 +44,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Za-z0-9][A-Za-z0-9_\-]{28,}[A-Za-z0-9]
+        [[:alnum:]][A-Za-z0-9_\-]{28,}[[:alnum:]]
       )
       \b
     pattern_requirements:

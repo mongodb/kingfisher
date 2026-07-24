@@ -18,6 +18,7 @@ rules:
       - "typeform_api_key: 'tfp_qwerty1234567890asdfgh0987654321zxcvbnmPOIU_0987654321lkjhi'"
     references:
       - https://developer.typeform.com/get-started/personal-access-token/
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/typeform.go
     validation:
       type: Http
       content:

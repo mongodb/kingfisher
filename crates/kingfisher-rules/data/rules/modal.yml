@@ -23,6 +23,7 @@ rules:
       - https://modal.com/docs/reference/cli/token
       - https://modal.com/docs/reference/modal.Client
       - https://modal.com/docs/reference/modal.App
+      - https://github.com/modal-labs/modal-client
     validation:
       type: Grpc
       content:

@@ -28,6 +28,7 @@ rules:
     references:
       - https://posthog.com/docs/api
       - https://github.com/PostHog/posthog/blob/e408aac5debe02b39a6a67cfd028f16a2ca7bc90/posthog/models/utils.py#L260-L290
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/posthog.go
 
   - name: PostHog Feature Flags Secure API Key
     id: kingfisher.posthog.3

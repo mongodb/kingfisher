@@ -19,7 +19,7 @@ rules:
         (?:
           \[[0-9a-f:.]+\]
         |
-          [a-z0-9]
+          [[:alnum:]]
           [a-z0-9.-]{1,253}
         )
         (?::\d{2,5})?
@@ -59,6 +59,7 @@ rules:
     references:
       - https://docs.redhat.com/en/documentation/openshift_container_platform/4.17/html/oauth_apis/oauthaccesstoken-oauth-openshift-io-v1
       - https://docs.redhat.com/en/documentation/openshift_container_platform/4.9/html-single/authentication_and_authorization/index
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/openshift.go
     depends_on_rule:
       - rule_id: kingfisher.openshift.1
         variable: OPENSHIFT_API_SERVER

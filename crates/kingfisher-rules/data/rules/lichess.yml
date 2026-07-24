@@ -31,3 +31,4 @@ rules:
     references:
       - https://lichess.org/api
       - https://github.com/lichess-org/berserk/blob/3d074f9bfccf7e861d2c5896fe891b65c818fd8c/berserk/session.py
+      - https://github.com/lichess-org/api/blob/3033570771c5583c9cfc077ba68231b9b5172182/example/oauth-backend/index.js

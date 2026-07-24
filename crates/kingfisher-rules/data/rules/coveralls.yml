@@ -35,6 +35,8 @@ rules:
       - https://coveralls.io/github/lemurheavy/coveralls-public
       - https://coveralls.io/gitlab/group/project
       - https://coveralls.io/api/v1/repos/github/octocat/hello-world
+    references:
+      - https://docs.coveralls.io/api-repos-endpoint
 
   - name: Coveralls Personal API Token
     id: kingfisher.coveralls.2

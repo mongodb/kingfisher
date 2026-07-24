@@ -12,12 +12,14 @@ rules:
         \bclient_id=
       )
       (
-        [0-9A-Z]{48}
+        [[:alnum:]]{48}
       )
       \b
     examples:
       - client_id=0F12A345BB67C8D901EFG23H45IJKL67MNO89PQ12RST34UV
       - 'client_id: "0F12A345BB67C8D901EFG23H45IJKL67MNO89PQ12RST34UV"'
+    references:
+      - https://docs.foursquare.com/developer/reference/v2-authentication
 
   - name: Foursquare Client Secret
     id: kingfisher.foursquare.2
@@ -30,7 +32,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [0-9A-Z]{48}
+        [[:alnum:]]{48}
       )
       \b
     pattern_requirements:
@@ -43,6 +45,7 @@ rules:
     references:
       - https://docs.foursquare.com/developer/reference/v2-authentication
       - https://docs.foursquare.com/developer/reference/upcoming-changes
+      - https://github.com/foursquare/FSNetworking/blob/c55651c86293f8415a57aa9e0e720c2311e820b7/FSNDemo-mac/src/main.m
     depends_on_rule:
       - rule_id: kingfisher.foursquare.1
         variable: FOURSQUARE_CLIENT_ID

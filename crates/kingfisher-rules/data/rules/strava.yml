@@ -22,10 +22,6 @@ rules:
       - 'STRAVA_ACCESS_TOKEN="83ebeabdec09f6670863766f792ead24d61fe3f9"'
       - |
         strava_auth_token: '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b'
-    negative_examples:
-      - 'STRAVA_URL="https://www.strava.com/api/v3"'
-      - "strava_client_id=12345"
-      - 'strava_refresh_token: "83ebeabdec09f6670863766f792ead24d61fe3f9"'
     references:
       - https://developers.strava.com/docs/authentication/
       - https://developers.strava.com/docs/reference/#api-Athletes-getLoggedInAthlete

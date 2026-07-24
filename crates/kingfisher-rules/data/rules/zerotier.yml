@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -22,6 +22,8 @@ rules:
       - "ZT_TOKEN=xY9zW8vU7tS6rQ5pN4mL3kJ2iH1gF0eD"
     references:
       - https://docs.zerotier.com/api/tokens/
+      - https://docs.zerotier.com/tokens/
+      - https://docs.zerotier.com/api/central/legacy/
     validation:
       type: Http
       content:

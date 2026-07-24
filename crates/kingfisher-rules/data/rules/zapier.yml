@@ -18,3 +18,6 @@ rules:
       - webhook_url="https://hooks.zapier.com/hooks/catch/99999998/notlive/"
     references:
       - https://help.zapier.com/hc/en-us/articles/8496288690317-Trigger-Zaps-from-webhooks
+      - https://help.zapier.com/hc/en-us/articles/8496288690317-Trigger-Zap-workflows-from-webhooks
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/zapier/zapier-webhook-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/zapier-webhook.yaml

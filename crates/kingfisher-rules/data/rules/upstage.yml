@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Za-z0-9]{40,50}
+        [[:alnum:]]{40,50}
       )
       \b
     pattern_requirements:
@@ -22,6 +22,8 @@ rules:
       - upstage_token = "AbCdEf1234567890GhIjKlMnOpQrStUvWxYz0123"
     references:
       - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/upstage.go#L9
+      - https://developers.upstage.ai/docs/apis
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/upstage.go
     validation:
       type: Http
       content:

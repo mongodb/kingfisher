@@ -33,5 +33,6 @@ rules:
     references:
       - https://developers.gamma.app/readme
       - https://developers.gamma.app/docs/workspace/list-themes
+      - https://github.com/simstudioai/sim/blob/3ca1b652a885f8b7373bed0f24ecd5bed2604515/apps/sim/tools/gamma/list_themes.ts
     examples:
       - 'GAMMA_API_KEY="sk-gamma-a1b2c3d4E5f6g7h8I9j0k1l2M3n4o5p6"'

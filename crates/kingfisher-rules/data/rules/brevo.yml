@@ -18,6 +18,7 @@ rules:
     references:
       - https://developers.brevo.com/docs/api-key-authentication
       - https://developers.brevo.com/docs/how-it-works
+      - https://github.com/getbrevo/brevo-node/blob/5661ef0360a0786b01995ab20275cc47addeddca/README.md
     validation:
       type: Http
       content:

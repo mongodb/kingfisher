@@ -4,13 +4,13 @@ rules:
     pattern: |
       (?x)
       \b
-      (?i:wiz)
-      (?:.|[\n\r]){0,32}?
+      (?i:WIZ[_-]?CLIENT[_-]?ID)
       \b
+      \s*(?:=|:)\s*["']?
       (
-        [a-zA-Z0-9]{53}
+        [[:alnum:]]{56}
       )
-      \b
+      (?:["'\s,;}]|$)
     pattern_requirements:
       min_digits: 3
       min_uppercase: 3
@@ -19,24 +19,22 @@ rules:
     confidence: medium
     visible: false
     examples:
-      - 'WIZ_CLIENT_ID="aB1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uV1wX2yZ3aA4bB5cC6dD7eF"'
-    negative_examples:
-      - 'WIZ_URL="https://app.wiz.io"'
+      - 'WIZ_CLIENT_ID="aB1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uV1wX2yZ3aA4bB5cC6dD7eF8gH"'
     references:
-      - https://docs.wiz.io/wiz-docs/docs/using-the-wiz-api
+      - https://docs.wiz.io/docs/using-the-wiz-api
 
   - name: Wiz Client Secret
     id: kingfisher.wiz.2
     pattern: |
       (?x)
       \b
-      (?i:wiz)
-      (?:.|[\n\r]){0,32}?
+      (?i:WIZ[_-]?CLIENT[_-]?SECRET)
       \b
+      \s*(?:=|:)\s*["']?
       (
-        [a-zA-Z0-9]{64}
+        [[:alnum:]]{64}
       )
-      \b
+      (?:["'\s,;}]|$)
     pattern_requirements:
       min_digits: 4
       min_uppercase: 4
@@ -49,7 +47,15 @@ rules:
     examples:
       - 'WIZ_CLIENT_SECRET="aB1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uV1wX2yZ3aA4bB5cC6dD7eE8fF9gG0hH1i"'
     references:
-      - https://docs.wiz.io/wiz-docs/docs/using-the-wiz-api
+      # From https://docs.wiz.io/docs/using-the-wiz-api:
+      # curl --request POST \
+      # --url 'TOKEN_URL' \
+      # --header 'content-type: application/x-www-form-urlencoded' \
+      # --data grant_type=client_credentials \
+      # --data client_id=WIZ_SA_CLIENT_ID \
+      # --data client_secret=WIZ_SA_CLIENT_SECRET \
+      # --data audience=wiz-api
+      - https://docs.wiz.io/docs/using-the-wiz-api
     validation:
       type: Http
       content:

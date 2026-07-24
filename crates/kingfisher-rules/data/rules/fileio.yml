@@ -10,8 +10,8 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Z0-9]{20}
-        \.[A-Z0-9]{20}
+        [[:alnum:]]{20}
+        \.[[:alnum:]]{20}
       )
       \b
     pattern_requirements:

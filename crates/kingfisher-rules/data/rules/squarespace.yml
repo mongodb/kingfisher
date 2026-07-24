@@ -29,11 +29,10 @@ rules:
       - 'SQUARESPACE_API_KEY="a1b2c3d4-e5f6-7890-abcd-ef1234567890"'
       - |
         squarespace_token: '62dc7d80-9a1b-4c3d-8e5f-6a7b8c9d0e1f'
-    negative_examples:
-      - 'SQUARESPACE_URL="https://www.squarespace.com"'
     references:
       - https://developers.squarespace.com/commerce-apis/overview
       - https://developers.squarespace.com/commerce-apis/authentication-and-permissions
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/squarespace.go
     validation:
       type: Http
       content:

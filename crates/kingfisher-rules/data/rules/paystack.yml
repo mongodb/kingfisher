@@ -8,7 +8,7 @@ rules:
         sk_
         [a-z]{1,}
         _
-        [A-Z0-9]{40}
+        [[:alnum:]]{40}
       )
       \b
     pattern_requirements:

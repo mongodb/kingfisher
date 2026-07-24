@@ -17,6 +17,8 @@ rules:
     references:
       - https://docs.datastax.com/en/astra-db-serverless/administration/manage-application-tokens.html
       - https://docs.datastax.com/en/astra-db-classic/api-reference/devops-api.html
+      - https://docs.datastax.com/en/astra-db-serverless/api-reference/typescript-client.html
+      - https://github.com/datastax/astra-db-java/blob/b5fb8d730ba8628d9fada41879656b9efe0db8ef/README.MD
     validation:
       type: Http
       content:

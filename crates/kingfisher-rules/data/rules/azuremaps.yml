@@ -40,3 +40,4 @@ rules:
     references:
       - https://learn.microsoft.com/en-us/azure/azure-maps/how-to-manage-authentication
       - https://learn.microsoft.com/en-us/rest/api/maps/search/get-geocoding
+      - https://github.com/Azure-Samples/azure-sql-functions-geocode/blob/6c9f515e8e0485be291404efefacb494d2d20ec6/functions/WorkorderEnteredOrchestration.cs

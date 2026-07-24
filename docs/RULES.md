@@ -20,10 +20,10 @@ rules:
     id:             # (string) Unique identifier (e.g. kingfisher.aws.1)
 
     pattern: |      # (multi-line regex) Detection pattern
-      (?x)(?i)
+      (?xi)
       aws
       (?:.|[\n\r]){0,32}?
-      \b([A-Za-z0-9/+=]{40})\b
+      \b([[:alnum:]/+=]{40})\b
 
     min_entropy: 3.5                # (float) Minimum Shannon entropy
     confidence:  medium             # (enum: low | medium | high)
@@ -81,8 +81,8 @@ rules:
             content-type: application/grpc
             te: trailers
             Authorization: "Bearer {{ TOKEN }}"
-          # Raw bytes are allowed (YAML \\u0000 escapes become NUL bytes).
-          body: "\\u0000\\u0000\\u0000\\u0000\\u0000"
+          # Raw bytes are allowed (YAML \u0000 escapes become NUL bytes).
+          body: "\u0000\u0000\u0000\u0000\u0000"
           response_matcher:
             - report_response: true
             - type: HeaderMatch
@@ -189,7 +189,7 @@ validation:
 
 Use `Raw` only when the provider check cannot be expressed reliably with `Http` or `Grpc` and does not justify a new reusable validator family. Raw validator implementations live in `crates/kingfisher-scanner/src/validation/raw.rs`.
 
-Typed validators are safer and more reusable because the validator kind is part of the schema. `Raw` validators are string-dispatched and fail at runtime if the `content` name is unknown. If you need a Rust-backed exception path for one provider, prefer `Raw`; reserve new typed validators for stable validation families that can be reused across rules.
+Typed validators are safer and more reusable because the validator kind is part of the schema. `Raw` validators are string-dispatched; an unknown `content` name is reported as an unimplemented, unverified validation result. If you need a Rust-backed exception path for one provider, prefer `Raw`; reserve new typed validators for stable validation families that can be reused across rules.
 
 ## gRPC Validation (Grpc)
 
@@ -632,6 +632,63 @@ For example, a rule might match a username, an email address, an AWS Access Key 
 
 `visible: false` helps keep the scan output focused on actual secrets while still capturing important contextual data needed for comprehensive validation.
 
+## Regex Authoring
+
+Kingfisher uses Hyperscan/Vectorscan-compatible regular expressions. Write patterns for the
+credential format documented by the provider, then add only enough surrounding context to avoid
+generic matches.
+
+- Start multi-line patterns with `(?x)` for free-spacing mode. Use `(?xi)` only when the entire
+  expression is intentionally case-insensitive; otherwise scope it to contextual text, for example
+  `(?i:api[_-]?key)`, and keep the token format case-sensitive.
+- Prefer POSIX character classes for token alphabets: use `[[:alnum:]]` for letters and digits, and
+  `[[:xdigit:]]` for hexadecimal values. Add only documented extra characters, such as
+  `[[:alnum:]_=-]`; do not use an alphanumeric class when the provider specifies a narrower format.
+- With `(?i)` or `(?xi)`, character ranges are already case-insensitive. Do not write redundant
+  ranges such as `[a-zA-Z]` or `[a-fA-F]`; use a semantic POSIX class where applicable, or a single
+  range such as `[A-Z]` when the token format genuinely requires letters only.
+- Put the secret in one unnamed capture, which becomes `{{ TOKEN }}`. Use `(?:...)` for structural
+  groups, and add named captures only when validation or a checksum needs their values.
+- Hyperscan/Vectorscan does not support lookaround. Use bounded context, `min_entropy`, and
+  `pattern_requirements` to reduce false positives instead of lookahead or lookbehind.
+- Bound flexible separators and cross-line context (for example, `(?:.|[\n\r]){0,32}?`) so a rule
+  cannot consume an unbounded region of a file. Prefer a provider prefix, field name, or assignment
+  delimiter over a broad keyword alone.
+- Include positive examples for every rule. When a nearby format is easy to confuse with a real
+  credential, test it against a fixture or a targeted scan. Check an individual file with
+  `kingfisher rules check` before running the rule-crate tests.
+
+### POSIX Character Classes
+
+Hyperscan/Vectorscan supports POSIX character classes inside bracket expressions, written as
+`[[:name:]]`. These are the classes relevant to rule authoring:
+
+| Class        | Matches                         | ASCII equivalent          |
+| ------------ | ------------------------------- | ------------------------- |
+| `[:alnum:]`  | Letters and digits              | `[a-zA-Z0-9]`             |
+| `[:alpha:]`  | Letters only                     | `[a-zA-Z]`                |
+| `[:digit:]`  | Digits                          | `[0-9]`                   |
+| `[:lower:]`  | Lowercase letters only          | `[a-z]`                   |
+| `[:upper:]`  | Uppercase letters only          | `[A-Z]`                   |
+| `[:xdigit:]` | Hexadecimal digits              | `[0-9A-Fa-f]`             |
+| `[:blank:]`  | Space and tab                   | `[ \t]`                   |
+| `[:space:]`  | Whitespace                      | `[ \t\r\n\v\f]`           |
+| `[:punct:]`  | Punctuation characters          | `[\x21-\x2F\x3A-\x40\x5B-\x60\x7B-\x7E]` |
+| `[:graph:]`  | Visible characters (no space)    | `[\x21-\x7E]`             |
+| `[:print:]`  | Printable characters            | `[\x20-\x7E]`             |
+| `[:cntrl:]`  | Control characters              | `[\x00-\x1F\x7F]`         |
+
+Notes:
+
+- `[:alnum:]` is the workhorse for token alphabets; it covers both letter cases **and** digits.
+- `[:lower:]` and `[:upper:]` match a single case by default. Under `(?i)` / `(?xi)` they become
+  case-insensitive, so `[:lower:]` will also match uppercase letters and vice versa.
+- `[:digit:]` matches only `0-9`; it does **not** include letters. For letters **and** digits use
+  `[:alnum:]`; for lowercase letters **and** digits combine them as `[[:lower:][:digit:]]`.
+- `[:xdigit:]` matches `0-9`, `a-f`, and `A-F` regardless of the `(?i)` flag.
+- Classes can be combined inside one bracket expression, for example `[[:alnum:]_=-]` adds
+  underscore, equals, and hyphen to the alphanumeric set.
+
 ## Character Requirements
 
 The `pattern_requirements` field allows you to specify data type requirements for matched secrets. This is particularly useful when:
@@ -694,7 +751,7 @@ rules:
       api[_-]?key
       (?:.|[\n\r]){0,32}?
       \b
-      ([A-Za-z0-9!@#$%^&*]{20,})
+      ([[:alnum:]!@#$%^&*]{20,})
       \b
     min_entropy: 4.0
     confidence: high
@@ -711,7 +768,7 @@ rules:
 ```
 
 In this example:
-- The regex pattern is permissive: `[A-Za-z0-9!@#$%^&*]{20,}` matches any combination of those characters
+- The regex pattern is permissive: `[[:alnum:]!@#$%^&*]{20,}` matches any combination of those characters
 - The `pattern_requirements` filters out matches that don't have at least one of each required type
 - A match like `"abcdefghijklmnopqrst"` would be rejected (no uppercase, no digit, no special)
 - A match like `"Abc123!SecureToken"` would be accepted (has all required types)
@@ -724,7 +781,7 @@ rules:
   - name: Token without placeholders
     id: custom.token.2
     pattern: |-
-      (?i)token[:=]\s*([A-Za-z0-9]{12,})
+      (?i)token[:=]\s*([[:alnum:]]{12,})
     pattern_requirements:
       ignore_if_contains:
         - placeholder
@@ -743,7 +800,7 @@ rules:
       (?xi)
       token
       (?:.|[\n\r]){0,16}?
-      \b([A-Za-z0-9$%^]{16,})\b
+      \b([[:alnum:]$%^]{16,})\b
     min_entropy: 3.5
     confidence: medium
     pattern_requirements:
@@ -771,7 +828,7 @@ When writing custom rules, consider the following best practices:
 2. **Optimize for Performance:** Structure your regex to minimize backtracking. Use non-capturing groups where possible and keep the pattern as concise as possible.
 3. **Validation Integration:** Define a `validation` section if you want to verify the detected secret. Prefer `Http` or `Grpc`; use an existing typed validator when the rule matches a supported validator family; use `Raw` only for rare provider-specific exception paths. You can use Liquid templating to insert dynamic values where supported. Use the unnamed capture as `TOKEN` and any named captures in uppercase.
 4. **Revocation Integration:** Define a `revocation` section if you want to revoke a detected secret. It uses the same HTTP request format and template variables as `validation`.
-5. **Test with Examples:** Always include examples that should match and, optionally, negative examples to ensure your rule behaves as expected.
+5. **Test with Examples:** Always include examples that should match, and run `kingfisher rules check` for the changed rule file.
 
 ## Examples
 
@@ -798,9 +855,6 @@ rules:
     confidence: medium
     examples:
       - sk-ant-api668-Clm512odot9WDD7itfUU9R880nefA1EtYZDbpE-C9b0XQEWpqFKf9DQUo03vOfXl16oSmyar1CLF1SzV3YzpZJ6bahcpLAA
-    categories:
-      - api
-      - secret
     references:
       - https://docs.anthropic.com/claude/reference/authentication
     validation:
@@ -825,10 +879,10 @@ rules:
             - status:
                 - 200
               type: StatusMatch
-            - report_response: true
             - type: WordMatch
               words:
-                - '"type":"invalid_request_error"'
+                - '"type":"message"'
+                - "credit balance is too low"
           url: https://api.anthropic.com/v1/messages
 ```
 

@@ -47,8 +47,6 @@ rules:
     confidence: medium
     examples:
       - 'RINGCENTRAL_CLIENT_SECRET="xY9zW8vU7tS6rQ5pO4nM3l"'
-    negative_examples:
-      - 'RINGCENTRAL_URL="https://platform.ringcentral.com"'
     validation:
       type: Http
       content:

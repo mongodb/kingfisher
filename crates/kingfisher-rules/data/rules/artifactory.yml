@@ -36,6 +36,8 @@ rules:
     references:
       - https://jfrog.com/help/r/jfrog-platform-administration-documentation/access-tokens
       - https://jfrog.com/help/r/jfrog-rest-apis/authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/artifactory.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/artifactory.go
     depends_on_rule:
       - rule_id: "kingfisher.artifactory.2"
         variable: JFROGURL
@@ -46,10 +48,10 @@ rules:
       (?xi)
       \b
       (
-        [a-z0-9]
+        [[:alnum:]]
         (?:
           [a-z0-9\-]{0,61}
-          [a-z0-9]
+          [[:alnum:]]
         )?
         \.jfrog\.io
       )

@@ -12,7 +12,7 @@ rules:
         base64:
         [A-Za-z0-9+/]{43}=
         |
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       ['"\s]
     pattern_requirements:
@@ -25,5 +25,6 @@ rules:
       - "'key' => env('APP_KEY', 'base64:xK9mP2qR8sT4wY6zA1cD3eF5gH7iJ0kLmNpQrStuVwx=')"
     references:
       - https://laravel.com/docs/encryption
-    # No public validation endpoint: APP_KEY is used for local payload
-    # encryption and has no standalone API to validate against.
+      # No public validation endpoint: APP_KEY is used for local payload
+      # encryption and has no standalone API to validate against.
+      - https://github.com/laravel/framework/blob/12.x/tests/Integration/Console/EnvironmentDecryptCommandTest.php

@@ -11,11 +11,11 @@ rules:
       [=:"'\s]
       ['"]*
       (
-        [0-9a-fA-F]{8}
-        -[0-9a-fA-F]{4}
-        -[0-9a-fA-F]{4}
-        -[0-9a-fA-F]{4}
-        -[0-9a-fA-F]{12}
+        [[:xdigit:]]{8}
+        -[[:xdigit:]]{4}
+        -[[:xdigit:]]{4}
+        -[[:xdigit:]]{4}
+        -[[:xdigit:]]{12}
       )
       ['"\s]
     pattern_requirements:
@@ -28,6 +28,7 @@ rules:
       - "pingone\nclient_id=8af0ba17-8a51-df9e-7fca-66bbaf5e0ca5 "
     references:
       - https://docs.pingidentity.com/r/en-us/pingone/p1_c_environments
+      - https://docs.pingidentity.com/pingone/introduction_to_pingone/p1_introduction.html#p1-environments-intro
 
   - name: PingOne Client Secret
     id: kingfisher.pingidentity.2
@@ -54,5 +55,6 @@ rules:
       - "pingone\nclient_secret=6eHxE7AyPRk.~YE0Qe93J.r80AB9sTo0ttdhIR. "
     references:
       - https://docs.pingidentity.com/r/en-us/pingone/p1_c_environments
-    # No simple validation: PingOne OAuth2 requires both client_id and
-    # client_secret together for the token endpoint.
+      # No simple validation: PingOne OAuth2 requires both client_id and
+      # client_secret together for the token endpoint.
+      - https://docs.pingidentity.com/pingone/introduction_to_pingone/p1_introduction.html#p1-environments-intro

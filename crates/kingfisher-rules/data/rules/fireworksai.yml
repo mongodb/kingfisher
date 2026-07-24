@@ -31,6 +31,7 @@ rules:
               match_all_words: true
     references:
       - https://readme.fireworks.ai/reference/getting-started-with-the-api
+      - https://github.com/oumi-ai/oumi/blob/83844833810f8a7d8c49877a2abaaf056507482a/src/oumi/inference/fireworks_inference_engine.py
     examples:
       - "fw_3ZL5ji26Tp7baYrW5S2pA5xi"
       - "fw_3ZaW5fSpx5GTnHpRGb8CPu2V"

@@ -32,7 +32,7 @@ rules:
       [=:"'\s]
       ['"]*
       (
-        [0-9a-f]{40}
+        [[:xdigit:]]{40}
       )
       ['"\s]
     pattern_requirements:

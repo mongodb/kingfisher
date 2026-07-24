@@ -33,3 +33,4 @@ rules:
               status: [200]
     references:
       - https://devcenter.bitrise.io/en/api/authenticating-with-the-bitrise-api.html
+      - https://github.com/bitrise-io/bitrise-add-new-project/blob/aad7f5aa272f9126814ea80a4e303f62526c4ee9/phases/account.go

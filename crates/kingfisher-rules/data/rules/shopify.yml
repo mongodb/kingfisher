@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        (?:shpat|shpca|shppa|shpss)_[a-f0-9]{32}
+        (?:shpat|shpca|shppa|shpss)_[[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -31,6 +31,17 @@ rules:
           url: https://{{ DOMAIN }}/admin/api/2024-10/shop.json
     references:
       - https://shopify.dev/docs/api/admin-rest#authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/shopify.yml
+      - https://github.com/gitleaks/gitleaks/blob/3f4d91fc224d1bc985d8978ce87aaef08cd15f4c/cmd/generate/config/rules/shopify.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/shopify/shopify-private-app-access-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/shopify/shopify-customapp-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/shopify/shopify-shared-secret-exposure.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/shopify/shopify-app-secret.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/shopify-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/shopify-private-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/shopify-shared-secret-key.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/shopify-custom-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/global-matchers/secrets-patterns-rules.yaml
     depends_on_rule:
       - rule_id: "kingfisher.shopify.2"
         variable: DOMAIN
