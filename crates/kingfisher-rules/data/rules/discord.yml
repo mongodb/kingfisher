@@ -33,6 +33,8 @@ rules:
           url: "{{ TOKEN }}"
     references:
       - https://discord.com/developers/docs/resources/webhook
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/discord.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/discord/discord-webhook.yaml
     revocation:
       type: Http
       content:
@@ -70,6 +72,8 @@ rules:
           url: https://discord.com/api/v8/users/@me
     references:
       - https://discord.com/developers/docs/reference#authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/discord.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/discord/discord-api-token.yaml
     depends_on_rule:
       - rule_id: "kingfisher.discord.3"
         variable: BOTID
@@ -90,3 +94,4 @@ rules:
       - 'bot_id: "123456789012345678"'
     references:
       - https://discord.com/developers/docs/topics/oauth2#bots
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/discord/discord-clientid.yaml

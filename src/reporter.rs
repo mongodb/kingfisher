@@ -349,7 +349,10 @@ fn build_validate_command(
 ) -> Option<String> {
     use crate::rules::Validation;
 
-    let required_vars = required_vars_for_validation(validation);
+    let mut required_vars = required_vars_for_validation(validation);
+    if matches!(validation, Validation::AWS) && rule_id == "kingfisher.aws.4" {
+        required_vars.insert("AWS_SECRET_ACCESS_KEY".to_string());
+    }
 
     let var_args = build_var_args(
         dependent_captures,
@@ -363,6 +366,11 @@ fn build_validate_command(
             // AWS needs the access key ID (AKID) in addition to the secret
             let akid = akid_from_captures.or(akid_from_validation_body)?;
             if akid.is_empty() {
+                return None;
+            }
+            if rule_id == "kingfisher.aws.4"
+                && !dependent_captures.contains_key("AWS_SECRET_ACCESS_KEY")
+            {
                 return None;
             }
             Some(format!(
@@ -1719,6 +1727,28 @@ mod tests {
             cmd
         );
         assert!(cmd.contains("kingfisher validate --rule kingfisher.vercel.1"));
+    }
+
+    #[test]
+    fn build_validate_command_includes_static_secret_for_aws_session_token() {
+        let dependent = BTreeMap::from([(
+            "AWS_SECRET_ACCESS_KEY".to_string(),
+            "aws-static-secret".to_string(),
+        )]);
+
+        let cmd = build_validate_command(
+            "kingfisher.aws.4",
+            &crate::rules::Validation::AWS,
+            "session-token",
+            &dependent,
+            Some("ASIAIOSFODNN7EXAMPLE"),
+            None,
+        )
+        .expect("validate command should be generated");
+
+        assert!(cmd.contains("--var AKID='ASIAIOSFODNN7EXAMPLE'"), "{cmd}");
+        assert!(cmd.contains("--var AWS_SECRET_ACCESS_KEY='aws-static-secret'"), "{cmd}");
+        assert!(cmd.ends_with("'session-token'"), "{cmd}");
     }
 
     #[test]

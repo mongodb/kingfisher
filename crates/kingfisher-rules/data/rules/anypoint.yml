@@ -9,15 +9,15 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b                       
       (                        
-        [0-9a-z]{8}
+        [[:alnum:]]{8}
         -
-        [0-9a-z]{4}
+        [[:alnum:]]{4}
         -
-        [0-9a-z]{4}
+        [[:alnum:]]{4}
         -
-        [0-9a-z]{4}
+        [[:alnum:]]{4}
         -
-        [0-9a-z]{12}
+        [[:alnum:]]{12}
       )
       \b
     pattern_requirements:
@@ -59,7 +59,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [0-9a-f]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -94,7 +94,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [0-9A-Fa-f]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:

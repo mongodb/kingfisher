@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-z0-9]{30}
+        [[:alnum:]]{30}
       )
       \b
     pattern_requirements:
@@ -23,6 +23,7 @@ rules:
     references:
       - https://dev.twitch.tv/docs/authentication/validate-tokens/
       - https://dev.twitch.tv/docs/authentication/revoke-tokens/
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/twitch.go
     validation:
       type: Http
       content:

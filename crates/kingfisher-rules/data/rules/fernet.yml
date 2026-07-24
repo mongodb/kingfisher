@@ -23,5 +23,6 @@ rules:
     references:
       - https://cryptography.io/en/latest/fernet/
       - https://airflow.apache.org/docs/apache-airflow/stable/security/secrets/fernet.html
-    # No public validation endpoint: Fernet keys are symmetric encryption
-    # keys used locally; there is no API to validate them against.
+      # No public validation endpoint: Fernet keys are symmetric encryption
+      # keys used locally; there is no API to validate them against.
+      - https://github.com/apache/airflow/blob/79f2c3c6208b75f54f1d6ab3ea9a06e8f4e08fe4/airflow-core/docs/security/secrets/fernet.rst

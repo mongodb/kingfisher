@@ -22,6 +22,8 @@ rules:
     examples:
       - "PINATA_API_KEY=017bb392dcfe1fcfe009"
       - "API Key: 017bb392dcfe1fcfe009"
+    references:
+      - https://docs.pinata.cloud/api-reference/introduction
 
   - name: Pinata API Secret
     id: kingfisher.pinata.2

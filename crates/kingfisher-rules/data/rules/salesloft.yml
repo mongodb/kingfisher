@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        ak_[a-fA-F0-9]{64}
+        ak_[[:xdigit:]]{64}
       )
       \b
     pattern_requirements:

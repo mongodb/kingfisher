@@ -11,7 +11,7 @@ rules:
       [=:"'\s]
       \b
       (
-        MA[a-z0-9]{18}
+        MA[[:alnum:]]{18}
       )
       \b
     pattern_requirements:
@@ -52,6 +52,7 @@ rules:
     references:
       - https://www.plivo.com/docs/
       - https://support.plivo.com/hc/en-us/articles/360041731231
+      - https://support.plivo.com/hc/en-us/articles/360041731231-How-can-I-change-my-Auth-ID-or-Auth-Token-
     validation:
       type: Http
       content:

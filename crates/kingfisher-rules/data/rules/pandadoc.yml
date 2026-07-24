@@ -22,6 +22,8 @@ rules:
       - https://developers.pandadoc.com/reference/api-key-authentication-process
       - https://developers.pandadoc.com/openapi/pandadoc-public-api.json
       - https://developers.pandadoc.com/reference/current-member-details
+      - https://github.com/gitleaks/gitleaks/blob/4c232b5014f7618360bd992b4c489cb055881c6b/config/gitleaks.toml#L325
+      - https://github.com/betterleaks/betterleaks/blob/06e89aa9d3745546f9d201cab86225270f78ff04/config/betterleaks.toml#L1327
     validation:
       type: Http
       content:

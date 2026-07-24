@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b  
       (              
-        [0-9a-z]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -22,6 +22,7 @@ rules:
     references:
       - https://www.assemblyai.com/docs/api-reference/overview
       - https://www.assemblyai.com/docs/api-reference/transcripts/list
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/assemblyai.go
 
     validation:
       type: Http

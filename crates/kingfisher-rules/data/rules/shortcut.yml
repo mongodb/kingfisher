@@ -4,21 +4,13 @@ rules:
     pattern: |
       (?x)
       \b
-      (?i:shortcut|clubhouse)
-      (?:.|[\n\r]){0,32}?
-      (?i:TOKEN|API)
-      (?:.|[\n\r]){0,32}?
-      \b
       (
-        [0-9a-f]{8}
-        -
-        [0-9a-f]{4}
-        -
-        [0-9a-f]{4}
-        -
-        [0-9a-f]{4}
-        -
-        [0-9a-f]{12}
+        sct_
+        (?:r(?:s|wa)?|w)
+        _
+        [a-z0-9]+(?:-[a-z0-9]+)*
+        _
+        [A-Za-z0-9_-]{142}
       )
       \b
     pattern_requirements:
@@ -26,13 +18,16 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'SHORTCUT_API_TOKEN="62dc7d80-a1b2-4c3d-8e5f-6a7b8c9d0e1f"'
-      - |
-        clubhouse_token = '0a1b2c3d-4e5f-6789-abcd-ef0123456789'
-    negative_examples:
-      - 'SHORTCUT_URL="https://app.shortcut.com"'
+      - sct_r_kingfisher_NmE2MmJmNzEtZWMyMy00MTAyLWFhYmUtNjI4NDBmNGE3MGJmOjZhNjJiZjcxLTQ2NzQtNGQ0Mi04YWNlLTVkODE5YWI5ZTNjZTo5MDRjZDY2OWYzZTk5NGViMGViODFhYmU3NjdiZjBjOA
+      - sct_rs_kingfisher_NmE2MmJmNzEtZWMyMy00MTAyLWFhYmUtNjI4NDBmNGE3MGJmOjZhNjJiZjcxLTQ2NzQtNGQ0Mi04YWNlLTVkODE5YWI5ZTNjZTo3NzhkMDA5YzlkODQwMDEyYjQzZDgwNDU5MzBkNDRlNA
+      - sct_rwa_kingfisher_NmE2MmJmNzEtZWMyMy00MTAyLWFhYmUtNjI4NDBmNGE3MGJmOjZhNjJiZjcxLTQ2NzQtNGQ0Mi04YWNlLTVkODE5YWI5ZTNjZTozNjVkOGFiZTAwNTUzY2YyNjgxYzlkMTk2ZDE5MjczMQ
+      - sct_rwa_kingfisher_NmE2MmJmNzEtZWMyMy00MTAyLWFhYmUtNjI4NDBmNGE3MGJmOjZhNjJiZjcxLTQ2NzQtNGQ0Mi04YWNlLTVkODE5YWI5ZTNjZTpmN2VkZDhlM2Y5M2ZhNTc0ZDA4MWFkYmU1ZjYzMzMwZA
+      - sct_w_kingfisher_NmE2MmJmNzEtZWMyMy00MTAyLWFhYmUtNjI4NDBmNGE3MGJmOjZhNjJiZjcxLTQ2NzQtNGQ0Mi04YWNlLTVkODE5YWI5ZTNjZTpjMzllZWIwYTYzMjM5ODU2ZjhhZDA5YTc5MGNhY2RhNQ
     references:
       - https://developer.shortcut.com/api/rest/v3
+      - https://developer.shortcut.com/api/rest/v3/shortcut.openapi.json
+      - https://github.com/useshortcut/exporter/blob/c591a5eb55b750f1ddaf4f16723f63993325cc8b/exporter.sh#L3-L10
+      - https://github.com/useshortcut/shortcut-client-js/blob/b220117055bea7cc1a6514073f0947e5bf4ec117/examples/getCurrentMemberInfo.ts#L1-L6
     validation:
       type: Http
       content:

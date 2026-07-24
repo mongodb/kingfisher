@@ -9,7 +9,7 @@ rules:
       (?:api[_\s-]*key|token|authorization|key)
       (?:.|[\n\r]){0,16}?
       (
-        [a-f0-9]{36}
+        [[:xdigit:]]{36}
       )
       \b
     pattern_requirements:

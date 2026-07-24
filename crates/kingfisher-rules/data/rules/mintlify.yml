@@ -17,3 +17,5 @@ rules:
       - 'MINTLIFY_KEY="mint_dsc_xK8m2LpQr5nW0vYz3cJ7aB4d"'
     references:
       - https://mintlify.com/docs/api/introduction
+      - https://github.com/mintlify/docs/blob/4daf91ff69d927d17f3b2772b098d75da6a9aafb/api/introduction.mdx
+      - https://github.com/mintlify/docs/blob/4daf91ff69d927d17f3b2772b098d75da6a9aafb/guides/assistant-embed.mdx

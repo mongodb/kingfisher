@@ -19,6 +19,7 @@ rules:
       - '"new-york-times": "zyxw9876vuts5432rqpo1098nmlk7654"'
     references:
       - https://developer.nytimes.com/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/nytimes.go
     validation:
       type: Http
       content:

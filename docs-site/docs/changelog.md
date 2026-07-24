@@ -7,6 +7,13 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v1.109.0]
+- Added Buildkite agent-registration and cluster-token detection, and LarkSuite / Feishu App ID and App Secret detection with validation. [#434](https://github.com/mongodb/kingfisher/issues/434)
+- Added AWS session-token validation using the associated access key ID and secret access key.
+- Fixed Windows release ZIP archives to use portable entry paths, avoiding `unzip` warnings and non-zero extraction exits. [#436](https://github.com/mongodb/kingfisher/issues/436)
+- Fixed Voyage AI validation with a reliable embeddings API check.
+- Standardized case-insensitive detection-rule capture classes and refreshed built-in coverage documentation.
+
 ## [v1.108.0]
 - Fixed Disqus API key and secret detection and validation by using the documented `pages/list` endpoint and requiring a successful response envelope.
 - Fixed Sentry token detection and validation false negatives by supporting documented user and organization token formats and treating authenticated `403` responses without `org:read` as active.

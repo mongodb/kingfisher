@@ -21,11 +21,13 @@ rules:
       - https://community.exoscale.com/documentation/api/auth/
       - https://github.com/exoscale/egoscale/blob/1eaf385e1112565a62e1c3942cb977979e521249/client.go
       - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/exoscale.go#L9
-    # No validation: Exoscale API requests use HMAC-SHA256 request signing with
-    # the API key and secret. The signing process (described in the Exoscale
-    # API auth docs) cannot be expressed as a simple HTTP validation in YAML.
-    # See the egoscale client for the signing implementation:
-    # https://github.com/exoscale/egoscale/blob/1eaf385e1112565a62e1c3942cb977979e521249/client.go
+      # No validation: Exoscale API requests use HMAC-SHA256 request signing with
+      # the API key and secret. The signing process (described in the Exoscale
+      # API auth docs) cannot be expressed as a simple HTTP validation in YAML.
+      # See the egoscale client for the signing implementation:
+      # https://github.com/exoscale/egoscale/blob/1eaf385e1112565a62e1c3942cb977979e521249/client.go
+      - https://community.exoscale.com/product/iam/how-to/key-mgmt/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/exoscale.go
     depends_on_rule:
       - rule_id: kingfisher.exoscale.2
         variable: SECRET
@@ -56,3 +58,6 @@ rules:
       - https://community.exoscale.com/documentation/api/auth/
       - https://github.com/exoscale/egoscale/blob/1eaf385e1112565a62e1c3942cb977979e521249/client.go
       - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/exoscale.go#L47
+      - https://openapi-v2.exoscale.com/
+      - https://community.exoscale.com/product/iam/how-to/key-mgmt/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/exoscale.go

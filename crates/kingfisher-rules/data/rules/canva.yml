@@ -25,6 +25,7 @@ rules:
       - "CANVA_CLIENT_ID=OC-FAB12-AbCdEf"
     references:
       - https://www.canva.dev/docs/connect/authentication/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/canva.go
 
   - name: Canva Connect API Client Secret
     id: kingfisher.canva.1
@@ -49,6 +50,8 @@ rules:
       - https://www.canva.dev/docs/connect/authentication/
       - https://www.canva.dev/docs/connect/api-reference/authentication/generate-access-token/
       - https://www.canva.dev/docs/connect/guidelines/security/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/canva.go
+      - https://datatracker.ietf.org/doc/html/rfc6749#section-5.2
     validation:
       type: Http
       content:

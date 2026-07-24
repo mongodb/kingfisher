@@ -18,14 +18,19 @@ rules:
       type: Http
       content:
         request:
-          method: GET
-          url: https://api.voyageai.com/v1/files
+          method: POST
+          url: https://api.voyageai.com/v1/embeddings
           headers:
             Authorization: "Bearer {{ TOKEN }}"
+            Content-Type: application/json
+          body: '{"input":"hi","model":"nonexistent-model-xyz-12345"}'
           response_matcher:
-            # 200 = key has /v1/files permission, 403 = valid key without that permission
-            # (e.g. an inference-only key). 401 with "Provided API key is invalid." is the
-            # only response Voyage AI returns for a bad key, so any non-401 status is live.
+            # /v1/files is NOT a reliable oracle: it returns 200 for revoked/deleted keys
+            # (confirmed against a key revoked via the Voyage dashboard). /v1/embeddings
+            # enforces auth before model resolution, so a nonexistent model triggers a
+            # free 400 "Model ... is not supported" for a live key (no inference, no
+            # billing) while an invalid/revoked key gets 401 "Provided API key is
+            # invalid." 403 = live key without embeddings permission.
             - type: StatusMatch
               status: [401]
               negative: true
@@ -57,13 +62,19 @@ rules:
       type: Http
       content:
         request:
-          method: GET
-          url: https://api.voyageai.com/v1/files
+          method: POST
+          url: https://api.voyageai.com/v1/embeddings
           headers:
             Authorization: "Bearer {{ TOKEN }}"
+            Content-Type: application/json
+          body: '{"input":"hi","model":"nonexistent-model-xyz-12345"}'
           response_matcher:
-            # 200 = key has /v1/files permission, 403 = valid key without that permission.
-            # 401 with "Provided API key is invalid." is the only invalid-key response.
+            # /v1/files is NOT a reliable oracle: it returns 200 for revoked/deleted keys
+            # (confirmed against a key revoked via the Voyage dashboard). /v1/embeddings
+            # enforces auth before model resolution, so a nonexistent model triggers a
+            # free 400 "Model ... is not supported" for a live key (no inference, no
+            # billing) while an invalid/revoked key gets 401 "Provided API key is
+            # invalid." 403 = live key without embeddings permission.
             - type: StatusMatch
               status: [401]
               negative: true

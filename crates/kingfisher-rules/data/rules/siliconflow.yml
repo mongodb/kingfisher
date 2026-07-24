@@ -25,6 +25,7 @@ rules:
       - https://github.com/siliconflow/langchain-siliconflow/blob/730b2eb64d4227475179c953be6c79fff5a5881f/langchain_siliconflow/utils.py#L10-L22
       - https://github.com/siliconflow/OpenAPI
       - https://github.com/groq/openbench/blob/3f190a835f7fee34ccd96e17242a36a29e0620a6/README.md
+      - https://github.com/betterleaks/betterleaks/blob/06e89aa9d3745546f9d201cab86225270f78ff04/config/betterleaks.toml#L6548
       - https://github.com/BenedictKing/ccx/blob/7835222674d5d1ebd475ff996856c8acdd2ba65e/frontend/src/utils/quickInputParser.ts#L72-L86
       - https://huggingface.co/spaces/inclusionAI/ling-mini-2.0/commit/742582eef26ab4d45385c5cd26a1f6a492597376#d2h-170465
     validation:

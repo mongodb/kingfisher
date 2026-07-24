@@ -31,6 +31,8 @@ rules:
     references:
       - https://docs.qingque.cn/d/home/eZQDkhg4h2Qg8SEVSUTBdzYeY
       - https://community.n8n.io/t/authorization-kling-api/112647
+      - https://kling.ai/document-api/apiReference/commonInfo
+      - https://kling.ai/document-api/apiReference/model/videoEffects
     validation:
       type: Http
       content:

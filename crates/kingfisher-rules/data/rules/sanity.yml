@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        (?:sk[A-Za-z0-9]{52}|sk[A-Za-z0-9]{78})
+        (?:sk[[:alnum:]]{52}|sk[[:alnum:]]{78})
       )
       \b
     min_entropy: 3.5

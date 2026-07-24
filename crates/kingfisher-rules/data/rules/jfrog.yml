@@ -5,10 +5,10 @@ rules:
       (?xi)
       \b
       (
-        [a-z0-9]
+        [[:alnum:]]
         (?:
           [a-z0-9\-]{0,61}
-          [a-z0-9]
+          [[:alnum:]]
         )?
         \.jfrog\.io
       )
@@ -42,7 +42,7 @@ rules:
       )
       (?:.|[\n\r]){0,12}?
       (
-        [A-Za-z0-9]{73}
+        [[:alnum:]]{73}
       )
       \b
     pattern_requirements:
@@ -57,6 +57,7 @@ rules:
     references:
       - https://jfrog.com/help/api/khub/documents/xrOb4ANk_fqUw5nctnsIww/content
       - https://jfrog.com/article/access-service/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/jfrog.go
     depends_on_rule:
       - rule_id: kingfisher.jfrog.1
         variable: JFROG_HOST
@@ -95,7 +96,7 @@ rules:
       )
       (?:.|[\n\r]){0,12}?
       (
-        [A-Za-z0-9]{64}
+        [[:alnum:]]{64}
       )
       \b
     pattern_requirements:

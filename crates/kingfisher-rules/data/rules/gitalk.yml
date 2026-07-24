@@ -14,6 +14,7 @@ rules:
     references:
       - https://gitalk.github.io
       - https://github.com/gitalk/gitalk
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/gitalk.yml
     examples:
       - |
         new Gitalk({

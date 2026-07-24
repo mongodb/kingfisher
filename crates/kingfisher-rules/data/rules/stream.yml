@@ -11,7 +11,7 @@ rules:
       [=:"'(\s]
       \b
       (
-        [a-z0-9]{8,14}
+        [[:alnum:]]{8,14}
       )
       \b
     pattern_requirements:
@@ -37,7 +37,7 @@ rules:
       [=:"'(\s,]
       \b
       (
-        [a-z0-9]{64}
+        [[:alnum:]]{64}
       )
       \b
     pattern_requirements:

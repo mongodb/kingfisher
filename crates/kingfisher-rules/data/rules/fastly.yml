@@ -21,6 +21,7 @@ rules:
       - "Fastly token: fgsb3ef237afd6c1b9d91f81cdba64f3"
     references:
       - https://developer.fastly.com/reference/api/#authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/fastly.go
     validation:
       type: Http
       content:

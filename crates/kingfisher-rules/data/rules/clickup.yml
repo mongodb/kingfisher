@@ -21,6 +21,7 @@ rules:
       - 'clickup_token: "pk_204249739_GSJCPRLQEX43KH4WN8093RZ9DW3CJGM4"'
     references:
       - https://clickup.com/api/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/clickup.go
     validation:
       type: Http
       content:

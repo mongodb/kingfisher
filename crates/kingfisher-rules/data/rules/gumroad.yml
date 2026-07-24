@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,48}?
       \b
       (
-        [a-f0-9]{64}
+        [[:xdigit:]]{64}
         |
         [A-Z0-9-]{43}
       )
@@ -26,6 +26,7 @@ rules:
     references:
       - https://gumroad.com/api
       - https://gumroad.com/help/article/280-create-application-api
+      - https://github.com/antiwork/gumroad/blob/357826bc6f7b815d1cef114faf2f6580d04dc0a7/app/javascript/components/ApiDocumentation/Endpoints/User.tsx
     validation:
       type: Http
       content:

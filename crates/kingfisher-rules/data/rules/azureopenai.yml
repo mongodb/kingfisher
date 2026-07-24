@@ -11,7 +11,7 @@ rules:
       (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,8}?
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -24,6 +24,7 @@ rules:
       - azure_openai_secret=abcdef0123456789abcdef0123456789
     references:
       - https://learn.microsoft.com/en-us/rest/api/azureopenai/models/list?view=rest-azureopenai-2024-10-21&tabs=HTTP
+      - https://github.com/Azure-Samples/Legacy-Modernization-Agents/blob/b260b5ad01e52d9c2e928edf7c53f05e8ae52eac/doctor.sh
     validation:
       type: Http
       content:
@@ -47,15 +48,21 @@ rules:
     id: kingfisher.azureopenai.host.1
     pattern: |
       (?xi)
-      \b
+      \b(?:endpoint|base_?url|uri|url|host|azure[_-]?endpoint|azure[_-]?openai[_-]?(?:endpoint|uri|host|base_?url)|openai[_-]?api[_-]?base)\b
+      ["']?\s*[:=]\s*
+      ["']?
+      (?:https?://)?
       (
         [a-z0-9-]{3,32}
         \.openai\.azure\.com
       )
       \b
-    min_entropy: 2.0
+    min_entropy: 2.5
     visible: false
     confidence: medium
     examples:
-      - my-instance.openai.azure.com
-      - mycompany-east-us.openai.azure.com
+      - AZURE_OPENAI_ENDPOINT=https://my-instance.openai.azure.com
+      - '  "endpoint": "https://mycompany-east-us.openai.azure.com"'
+      - endpoint=https://test.openai.azure.com
+    references:
+      - https://learn.microsoft.com/en-us/rest/api/azureopenai/models/list?view=rest-azureopenai-2024-10-21&tabs=HTTP

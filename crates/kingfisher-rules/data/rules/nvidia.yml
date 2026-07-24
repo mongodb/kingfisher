@@ -31,3 +31,4 @@ rules:
               words: ["id", "versionId"]
     references:
       - https://docs.nvidia.com/cloud-functions/index.html
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/nvidia.go

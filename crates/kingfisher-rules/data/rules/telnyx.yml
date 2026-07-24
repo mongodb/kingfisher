@@ -5,7 +5,7 @@ rules:
       (?x)
       \b
       (
-        KEY[0-9A-Za-z_-]{55}
+        KEY[[:alnum:]_-]{55}
       )
       \b
     pattern_requirements:

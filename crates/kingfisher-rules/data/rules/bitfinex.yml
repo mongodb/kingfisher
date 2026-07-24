@@ -11,7 +11,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [a-zA-Z0-9]{43}
+        [[:alnum:]]{43}
       )
       \b
     pattern_requirements:
@@ -37,7 +37,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [a-zA-Z0-9]{43}
+        [[:alnum:]]{43}
       )
       \b
     pattern_requirements:

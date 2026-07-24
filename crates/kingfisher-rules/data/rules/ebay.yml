@@ -17,6 +17,7 @@ rules:
       - "EBAY_CLIENT_ID=MyApp-MyApp-PRD-1a2b3c4d-567890ab"
     references:
       - https://developer.ebay.com/api-docs/static/oauth-credentials.html
+      - https://github.com/jlevers/selling-partner-api/blob/7cecd56b191cbb0710ec55479c77009d92e166a6/README.md
 
   - name: eBay Sandbox Client ID
     id: kingfisher.ebay.2
@@ -36,6 +37,7 @@ rules:
       - "EBAY_SANDBOX_CLIENT_ID=MyApp-MyApp-SBX-1a2b3c4d-567890ab"
     references:
       - https://developer.ebay.com/api-docs/static/oauth-credentials.html
+      - https://github.com/jlevers/selling-partner-api/blob/7cecd56b191cbb0710ec55479c77009d92e166a6/README.md
 
   - name: eBay Client Secret
     id: kingfisher.ebay.3
@@ -56,3 +58,4 @@ rules:
       - "EBAY_SANDBOX_SECRET=SBX-1a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b"
     references:
       - https://developer.ebay.com/api-docs/static/oauth-credentials.html
+      - https://github.com/jlevers/selling-partner-api/blob/7cecd56b191cbb0710ec55479c77009d92e166a6/README.md

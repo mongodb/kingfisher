@@ -1,22 +1,16 @@
 rules:
-  # Helper: extract the Datadog site domain from common config/env/URLs.
+  # Helper: extract the Datadog site domain from env/config assignments.
   # We capture the "site parameter" (domain), then validation uses https://api.<site>.
   - name: Datadog Site Domain
     id: kingfisher.datadog.1
     visible: false
     confidence: medium
-    min_entropy: 2.0
+    min_entropy: 2.5
     pattern: |
       (?xi)
-      (?:
-        # env/config patterns
-        \b(?:DD_SITE|DATADOG_SITE|DATADOG_HOST)\b\s*[:=]\s*["']?
-        (?:https?://)?
-        (?:api\.|app\.)?
-        |
-        # raw URLs in code/docs
-        \bhttps?://(?:api\.|app\.)?
-      )?
+      \b(?:DD_SITE|DD_API_URL|DATADOG_SITE|DATADOG_HOST|DATADOG_API_URL)\b\s*[:=]\s*["']?
+      (?:https?://)?
+      (?:api\.|app\.)?
       (
         datadoghq\.com
         | us3\.datadoghq\.com
@@ -30,8 +24,8 @@ rules:
     examples:
       - DD_SITE=datadoghq.eu
       - DATADOG_HOST=https://api.us3.datadoghq.com
-      - https://app.datadoghq.com
-      - https://api.ddog-gov.com
+      - DD_SITE=datadoghq.com
+      - DATADOG_HOST=https://api.ddog-gov.com
 
   - name: Datadog API Key
     id: kingfisher.datadog.2
@@ -43,7 +37,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -54,6 +48,8 @@ rules:
       - DD_API_KEY=0024a29224affe29d173c0bf99e5a89d
     references:
       - https://docs.datadoghq.com/account_management/api-app-keys/
+      - https://github.com/projectdiscovery/nuclei-templates/blob/3c29bfc0cbceae06014a38c2baa2936b981f0038/http/global-matchers/secrets-patterns-rules.yaml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/datadog.go
     validation:
       type: Http
       content:
@@ -95,6 +91,7 @@ rules:
     references:
       - https://docs.datadoghq.com/account_management/api-app-keys/
       - https://docs.datadoghq.com/getting_started/site/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/datadog.go
     depends_on_rule:
       - rule_id: kingfisher.datadog.2
         variable: DD_API_KEY

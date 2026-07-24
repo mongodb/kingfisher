@@ -13,15 +13,15 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (                        
-        [a-fA-F0-9]{8}
+        [[:xdigit:]]{8}
         -
-        [a-fA-F0-9]{4}
+        [[:xdigit:]]{4}
         -
-        [a-fA-F0-9]{4}
+        [[:xdigit:]]{4}
         -
-        [a-fA-F0-9]{4}
+        [[:xdigit:]]{4}
         -
-        [a-fA-F0-9]{12}
+        [[:xdigit:]]{12}
       )
       \b
     pattern_requirements:
@@ -49,6 +49,8 @@ rules:
           url: https://cloud.mongodb.com/api/atlas/v2/groups
     references:
       - https://www.mongodb.com/docs/atlas/api/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/mongodb.go
+      - https://datatracker.ietf.org/doc/html/rfc7616
     depends_on_rule:
       - rule_id: "kingfisher.mongodb.2"
         variable: PUBKEY
@@ -164,7 +166,7 @@ rules:
       (?xi)                    
       \b                      
       (
-        mdb_sa_sk_[0-9A-Z_-]{6}[0-9A-Z]{34}
+        mdb_sa_sk_[0-9A-Z_-]{6}[[:alnum:]]{34}
       )
     min_entropy: 3.5
     examples:

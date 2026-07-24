@@ -21,6 +21,7 @@ rules:
     references:
       - https://docs.dryrun.security/
       - https://simple-api.dryrun.security/api-docs/index.html
+      - https://github.com/wickett/dryrun-docs/blob/8cfd2b400e5a8dbdb6f10a7050d8c6ece233e2f5/webflow-export/pages/api-access-keys.html
     validation:
       type: Http
       content:

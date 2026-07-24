@@ -9,7 +9,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        pa_[A-Za-z0-9]{32,48}
+        pa_[[:alnum:]]{32,48}
       )
       \b
     pattern_requirements:
@@ -23,3 +23,4 @@ rules:
       - https://docs.pirsch.io/api-sdks/api-guide
       - https://docs.pirsch.io/api-sdks/api-guide-v1
       - https://github.com/pirsch-analytics/pirsch-js-sdk/blob/aca0001a8e7a294f0598ebfd1905d18b8bf7a336/src/core.ts
+      - https://docs.pirsch.io/api-sdks/api

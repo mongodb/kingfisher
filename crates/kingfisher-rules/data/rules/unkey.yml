@@ -42,6 +42,9 @@ rules:
       - https://www.unkey.com/docs/security/root-keys
       - https://www.unkey.com/docs/api-reference/v2/auth
       - https://www.unkey.com/docs/api-reference/v2/keys/verify-api-key
+      - https://www.unkey.com/docs/platform/root-keys/overview
+      - https://www.unkey.com/docs/api-reference/auth
+      - https://www.unkey.com/docs/api-reference/keys/verify-api-key
 
   - name: Unkey API Key (key_ prefix)
     id: kingfisher.unkey.2
@@ -100,6 +103,9 @@ rules:
       - https://www.unkey.com/docs/api-reference/v2/keys/create-api-key
       - https://www.unkey.com/docs/api-reference/v2/keys/verify-api-key
       - https://www.unkey.com/docs/api-reference/v2/keys/delete-api-keys
+      - https://www.unkey.com/docs/api-reference/keys/create-api-key
+      - https://www.unkey.com/docs/api-reference/keys/verify-api-key
+      - https://www.unkey.com/docs/api-reference/keys/delete-api-keys
 
   - name: Unkey API Key Secret (creation-only plaintext)
     id: kingfisher.unkey.3
@@ -123,3 +129,4 @@ rules:
       - "UNKEY_KEY_SECRET: 3Zem2ZG4U1rsRiMSxy6pBjvZ"
     references:
       - https://www.unkey.com/docs/api-reference/v2/keys/create-api-key
+      - https://www.unkey.com/docs/api-reference/keys/create-api-key

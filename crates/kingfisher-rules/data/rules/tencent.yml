@@ -12,7 +12,7 @@ rules:
       \b
       (
         AKID
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -38,7 +38,7 @@ rules:
       [=:"'\s>]
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:

@@ -23,6 +23,7 @@ rules:
       - AUTH0_CLIENT_ID='abcdef1234567890abcdef1234567890abcdef12'
     references:
       - https://auth0.com/docs/get-started/applications/application-settings
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/auth0.yml
   - name: Auth0 Client Secret
     id: kingfisher.auth0.2
     pattern: |
@@ -64,13 +65,17 @@ rules:
         variable: CLIENTID
       - rule_id: "kingfisher.auth0.3"
         variable: DOMAIN
+    references:
+      - https://auth0.com/docs/api/authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/auth0.yml
+      - https://datatracker.ietf.org/doc/html/rfc6749#section-5.2
   - name: Auth0 Domain
     id: kingfisher.auth0.3
     pattern: |
       (?xi)                       
       \b                         
       (                          
-        [a-z0-9]
+        [[:alnum:]]
         [a-z0-9._-]*
         auth0\.com
       )                          
@@ -85,3 +90,5 @@ rules:
     categories:
       - domain
       - auth0
+    references:
+      - https://auth0.com/docs/get-started/applications/application-settings

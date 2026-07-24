@@ -325,7 +325,7 @@ windows-x64: require-windows-host prepare-release-notices
 	    mingw-w64-x86_64-pcre2 \
 	    mingw-w64-x86_64-zlib \
 	    mingw-w64-x86_64-python \
-	    git make; \
+	    git make zip; \
 	  repo_root="$$(pwd)"; \
 	  vectorscan_src="$$repo_root/vendor/vectorscan-rs/vectorscan-rs-sys/vectorscan"; \
 	  build_dir=/tmp/vectorscan-build; \
@@ -422,7 +422,7 @@ windows-x64: require-windows-host prepare-release-notices
 	  cd target/release; \
 	  sha256sum $(PROJECT_NAME).exe > CHECKSUM-windows-x64.txt; \
 	  rm -f $(PROJECT_NAME)-windows-x64.zip; \
-	  powershell.exe -NoProfile -Command "Compress-Archive -Path '\''$(PROJECT_NAME).exe'\'','\''CHECKSUM-windows-x64.txt'\'','\''notices'\'' -DestinationPath '\''$(PROJECT_NAME)-windows-x64.zip'\'' -Force"; \
+	  zip -q -r $(PROJECT_NAME)-windows-x64.zip $(PROJECT_NAME).exe CHECKSUM-windows-x64.txt notices; \
 	  sha256sum $(PROJECT_NAME)-windows-x64.zip >> CHECKSUM-windows-x64.txt; \
 	  echo "Built binary: target/release/$(PROJECT_NAME).exe"; \
 	  echo "Built archive: target/release/$(PROJECT_NAME)-windows-x64.zip"; \
@@ -456,7 +456,7 @@ windows-arm64: require-windows-host prepare-release-notices
 	    mingw-w64-clang-aarch64-pcre2 \
 	    mingw-w64-clang-aarch64-zlib \
 	    mingw-w64-clang-aarch64-python \
-	    git make; \
+	    git make zip; \
 	  repo_root="$$(pwd)"; \
 	  vectorscan_src="$$repo_root/vendor/vectorscan-rs/vectorscan-rs-sys/vectorscan"; \
 	  build_dir=/tmp/vectorscan-arm64-build; \
@@ -546,7 +546,7 @@ windows-arm64: require-windows-host prepare-release-notices
 	  cd target/release; \
 	  sha256sum $(PROJECT_NAME).exe > CHECKSUM-windows-arm64.txt; \
 	  rm -f $(PROJECT_NAME)-windows-arm64.zip; \
-	  powershell.exe -NoProfile -Command "Compress-Archive -Path '\''$(PROJECT_NAME).exe'\'','\''CHECKSUM-windows-arm64.txt'\'','\''notices'\'' -DestinationPath '\''$(PROJECT_NAME)-windows-arm64.zip'\'' -Force"; \
+	  zip -q -r $(PROJECT_NAME)-windows-arm64.zip $(PROJECT_NAME).exe CHECKSUM-windows-arm64.txt notices; \
 	  sha256sum $(PROJECT_NAME)-windows-arm64.zip >> CHECKSUM-windows-arm64.txt; \
 	  echo "Built binary: target/release/$(PROJECT_NAME).exe"; \
 	  echo "Built archive: target/release/$(PROJECT_NAME)-windows-arm64.zip"; \

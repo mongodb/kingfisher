@@ -15,6 +15,8 @@ rules:
     min_entropy: 3.0
     references:
       - https://docs.tavily.com/api-reference
+      - https://docs.tavily.com/documentation/api-reference/introduction
+      - https://github.com/praetorian-inc/noseyparker/blob/17e2b1380cd3fc36968a86295aa4490fd1baab03/crates/noseyparker/data/default/builtin/rules/tavily.yml
     examples:
       - "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"
       - "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"

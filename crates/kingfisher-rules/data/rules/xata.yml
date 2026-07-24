@@ -17,6 +17,7 @@ rules:
       - "Authorization: Bearer xau_Z9y8X7w6V5u4T3s2R1qPoNmLkJiHgFeDc"
     references:
       - https://xata.io/docs/concepts/api-keys
+      - https://xata.io/docs/platform/api-key
     validation:
       type: Http
       content:

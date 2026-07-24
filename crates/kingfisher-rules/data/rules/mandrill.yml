@@ -41,3 +41,4 @@ rules:
               words: ['"PONG!"']
     references:
       - https://mandrillapp.com/api/docs/
+      - https://github.com/HyreAS/mandrill-api-python/blob/60d655934ff1a2e55bcfa0724e4389f28b785495/scripts/mandrill

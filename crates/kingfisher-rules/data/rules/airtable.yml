@@ -24,6 +24,7 @@ rules:
       - secret
     references:
       - https://airtable.com/developers/web/api/authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/airtable.go
     validation:
       type: Http
       content:
@@ -49,7 +50,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-z0-9]{17}
+        [[:alnum:]]{17}
       )
       \b
     pattern_requirements:
@@ -81,7 +82,7 @@ rules:
     pattern: |
       (?xi)
       (
-        [A-Z0-9]+\.v1\.[A-Z0-9_-]+\.[a-f0-9]+
+        [[:alnum:]]+\.v1\.[A-Z0-9_-]+\.[[:xdigit:]]+
       )
       \b
     min_entropy: 3.5
@@ -90,6 +91,8 @@ rules:
       - example.v1.XYZ123_ABC.abcdef123456
     references:
       - https://airtable.com/developers/web/api/oauth-reference
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/airtable.go
+      - https://datatracker.ietf.org/doc/html/rfc6749
     validation:
       type: Http
       content:

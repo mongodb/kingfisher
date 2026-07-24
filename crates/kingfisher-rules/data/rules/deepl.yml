@@ -14,6 +14,7 @@ rules:
       - "DeepL-Auth-Key 5ef4a0d1-7e1f-47b2-ac0a-1282002aa2a1:fx"
     references:
       - https://developers.deepl.com/docs/getting-started/auth
+      - https://github.com/DeepLcom/deepl-api-prompts/blob/3927209af29cff781d9401f059d9cabb9a81a5b7/examples/usage/get-usage/curl.sh
     validation:
       type: Http
       content:
@@ -39,17 +40,16 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
       \b
     confidence: medium
     examples:
       - "DEEPL_AUTH_KEY=279a2e9d-83b3-c416-7e2d-f721593e42a0"
       - 'deepl_api_key: "5ef4a0d1-7e1f-47b2-ac0a-1282002aa2a1"'
-    negative_examples:
-      - "SOME_UUID=279a2e9d-83b3-c416-7e2d-f721593e42a0"
     references:
       - https://developers.deepl.com/docs/getting-started/auth
+      - https://github.com/DeepLcom/deepl-api-prompts/blob/3927209af29cff781d9401f059d9cabb9a81a5b7/examples/usage/get-usage/curl.sh
     validation:
       type: Http
       content:

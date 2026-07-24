@@ -6,7 +6,7 @@ rules:
       secret
       .{0,20}
       (
-        [0-9a-z]{32,64}
+        [[:alnum:]]{32,64}
       )
       \b
     pattern_requirements:
@@ -15,6 +15,9 @@ rules:
     confidence: low
     examples:
       - '    private static String CLIENT_SECRET = "6fb1cff7690db9ac066cadbbde8e3c078efdabcf";'
+    references:
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/generic.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/generic.go
   - name: Generic API Key
     id: kingfisher.generic.2
     pattern: |
@@ -22,7 +25,7 @@ rules:
       (?: api_key | apikey | access_key | accesskey )
       (?:.|[\n\r]){0,8}?
       (
-        [0-9a-z][0-9a-z\-._/+]{30,62}[0-9a-z]
+        [[:alnum:]][0-9a-z\-._/+]{30,62}[[:alnum:]]
       )
       \b
     pattern_requirements:
@@ -32,6 +35,9 @@ rules:
     examples:
       - 'API_KEY = "951bc382db9abad29c68634761dd6e19"'
       - "buildConfigField 'String' , 'API_KEY' , '\"951bc382db9cfee29c68634761dd6e19\"'\tAPI_KEY\t"
+    references:
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/generic.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/generic.go
   - name: Generic Username and Password
     id: kingfisher.generic.3
     pattern: |
@@ -66,6 +72,9 @@ rules:
       - |
         user = 'Aladdin'
         password = 'open sesame'
+    references:
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/generic.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/generic.go
   - name: Generic Username and Password
     id: kingfisher.generic.4
     pattern: |
@@ -88,6 +97,9 @@ rules:
         // some other comment
         password = open_sesame
       - ":authn_dbd_params => 'host=db_host port=3306 user=apache password=###### dbname=apache_auth',"
+    references:
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/generic.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/generic.go
   - name: Generic Password
     id: kingfisher.generic.5
     pattern: |
@@ -129,6 +141,9 @@ rules:
                     'vm_password': "Pass123!@#",
                     'policy_path': os.path.join(TEST_DIR, 'policy.json')
                 })
+    references:
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/generic.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/generic.go
   - name: Weak Password Pattern
     id: kingfisher.generic.6
     pattern: |
@@ -154,6 +169,8 @@ rules:
       - letmein42
       - p@ssw0rd99
       - qwerty456
+    references:
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/generic.yml
   - name: Generic Username and Password
     id: kingfisher.generic.8
     pattern: |
@@ -193,6 +210,9 @@ rules:
       - |
         user = 'Aladdin'
         password = 'open sesame'
+    references:
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/generic.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/generic.go
   - name: Docker Robot Credentials (plaintext pair)
     id: kingfisher.generic.9
     pattern: |
@@ -200,7 +220,7 @@ rules:
       (                                  
         (?P<USER> [a-z0-9._-]+ \+ [a-z0-9._-]+ )  
         :
-        (?P<PASS> [A-Z0-9]{32,80} )
+        (?P<PASS> [[:alnum:]]{32,80} )
       )
       \b
     min_entropy: 2.0

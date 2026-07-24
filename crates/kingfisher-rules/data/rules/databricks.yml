@@ -23,6 +23,10 @@ rules:
     references:
       - https://docs.databricks.com/dev-tools/api/latest/authentication.html
       - https://docs.databricks.com/en/dev-tools/auth/pat.html
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/databricks.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/databricks.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/databricks/databricks-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/databricks-api-token.yaml
     validation:
       type: Http
       content:
@@ -49,7 +53,7 @@ rules:
       (?xi)
       \b
       (
-        dapi[0-9a-f]{32}
+        dapi[[:xdigit:]]{32}
       )
       (-\d)?
       \b
@@ -73,6 +77,8 @@ rules:
     depends_on_rule:
       - rule_id: "kingfisher.databricks.3"
         variable: DOMAIN
+    references:
+      - https://docs.databricks.com/dev-tools/api/latest/authentication.html
 
   - name: Databricks Domain
     id: kingfisher.databricks.3

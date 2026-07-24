@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        lsv2_(?:pt)_[0-9a-f]{32}_[0-9a-f]{10}
+        lsv2_(?:pt)_[[:xdigit:]]{32}_[[:xdigit:]]{10}
       )
       \b
     pattern_requirements:
@@ -35,7 +35,7 @@ rules:
       (?xi)
       \b
       (
-        lsv2_sk_[0-9a-f]{32}_[0-9a-f]{10}
+        lsv2_sk_[[:xdigit:]]{32}_[[:xdigit:]]{10}
       )
       \b
     pattern_requirements:

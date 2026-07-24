@@ -41,7 +41,7 @@ rules:
       (?xi)
       https://
       (
-        [A-Za-z0-9]{16,24}
+        [[:alnum:]]{16,24}
       )
       :@
       (?:pypi|npm|gem|nuget)\.fury\.io/

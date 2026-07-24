@@ -23,6 +23,7 @@ rules:
     references:
       - https://stackoverflow.com/questions/65610274/here-geocoding-api-not-working-inside-my-react-app
       - https://github.com/spara/geocoding_tutorial
+      - https://docs.here.com/geocoding-and-search/docs/code-geocode-mpa
     validation:
       type: Http
       content:

@@ -19,6 +19,7 @@ rules:
       - settlemint connect --pat=sm_pat_Z9y8X7w6V5u4T3s2
     references:
       - https://console.settlemint.com/documentation/blockchain-platform/platform-components/security-and-authentication/personal-access-tokens
+      - https://github.com/gitleaks/gitleaks/blob/f6966057f5e0e26356ed260ba0734eb6f4f7e192/cmd/generate/config/rules/settlemint.go
 
   - name: SettleMint Application Access Token
     id: kingfisher.settlemint.2
@@ -40,6 +41,7 @@ rules:
       - "x-auth-token: sm_aat_Z9y8X7w6V5u4T3s2"
     references:
       - https://console.settlemint.com/documentation/blockchain-platform/platform-components/security-and-authentication/application-access-tokens
+      - https://github.com/gitleaks/gitleaks/blob/f6966057f5e0e26356ed260ba0734eb6f4f7e192/cmd/generate/config/rules/settlemint.go
 
   - name: SettleMint Service Access Token
     id: kingfisher.settlemint.3
@@ -61,3 +63,4 @@ rules:
       - "Authorization: Bearer sm_sat_Z9y8X7w6V5u4T3s2"
     references:
       - https://console.settlemint.com/documentation
+      - https://github.com/gitleaks/gitleaks/blob/f6966057f5e0e26356ed260ba0734eb6f4f7e192/cmd/generate/config/rules/settlemint.go

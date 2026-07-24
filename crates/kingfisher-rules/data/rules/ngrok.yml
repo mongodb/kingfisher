@@ -9,9 +9,9 @@ rules:
       (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,32}?
       (
-        (?:[a-z0-9]{25,30}_\d[a-z0-9]{20}
+        (?:[[:alnum:]]{25,30}_\d[[:alnum:]]{20}
         |
-        (?:cr_|ak_)[a-z0-9]{25,30})
+        (?:cr_|ak_)[[:alnum:]]{25,30})
       )
       \b
     min_entropy: 4
@@ -35,3 +35,5 @@ rules:
                 - '"endpoints":'
     references:
       - https://ngrok.com/docs/api#authentication
+      - https://github.com/ngrok/ngrok-api-go
+      - https://github.com/ngrok/ngrok-api-go/blob/d128dafc7146c37094936c850d060d641c0bf4bf/README.md

@@ -10,9 +10,9 @@ rules:
       (
         xapp-
         [0-9]{1,3}-
-        [0-9a-z]{10,15}-
-        [0-9a-z]{10,15}-
-        [0-9a-z]{10,66}
+        [[:alnum:]]{10,15}-
+        [[:alnum:]]{10,15}-
+        [[:alnum:]]{10,66}
       )
       \b
     pattern_requirements:
@@ -51,6 +51,9 @@ rules:
                 - '"ok":true'
                 - '"revoked":true'
           url: https://slack.com/api/auth.revoke
+    references:
+      - https://api.slack.com/authentication/token-types
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/slack/slack-app-token.yaml
 
   - name: Slack Token
     id: kingfisher.slack.2
@@ -60,20 +63,20 @@ rules:
       (
         xox[pbarose]
         [-0-9]{0,3}-
-        [0-9a-z]{6,15}-
-        [0-9a-z]{6,15}-
+        [[:alnum:]]{6,15}-
+        [[:alnum:]]{6,15}-
         [-0-9a-z]{6,66}
       )\b
       |
       (
         xoxe\.xox[bparose]-
         \d-
-        [A-Z0-9]{155,170}
+        [[:alnum:]]{155,170}
       )\b
       |
       (
         xoxe-\d-
-        [A-Z0-9]{140,150}
+        [[:alnum:]]{140,150}
       )
       \b
     pattern_requirements:
@@ -85,6 +88,20 @@ rules:
       - xoxe-1-My0xLTIxNTE3NzA2MDYtNzE5MDc2ODQ3OTg3Ny03MjE2NDY0MzYxNDcyLTliOWNhYzZhODU3ODc3NjAxZGM4ODg2ZWRkMmE2MTc3ZDA3ODY4ZmUzZDg2NzEyZTU0Zjk2ZTYzMWMxZTVmOTA
     references:
       - https://api.slack.com/methods/auth.test
+      - https://api.slack.com/methods/auth.revoke
+      - https://api.slack.com/authentication/token-types
+      - https://github.com/praetorian-inc/noseyparker/blob/1b57a9fe4a451e751c4d219f5a9c64fb8d0e8c11/crates/noseyparker/data/default/builtin/rules/slack.yml
+      - https://github.com/gitleaks/gitleaks/blob/9708e65c25e531c26718b97394cd44bf4432f0e5/cmd/generate/config/rules/slack.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/slack/slack-app-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/slack-api.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/slack/slack-bot-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/slack/slack-user-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/slack/slack-legacy-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/slack/slack-legacy-bot-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/slack/slack-legacy-workspace-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/slack/slack-config-access-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/slack/slack-config-refresh-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/global-matchers/secrets-patterns-rules.yaml
     validation:
       type: Http
       content:
@@ -151,6 +168,10 @@ rules:
                 - "invalid_token"
               negative: true
           url: "{{ TOKEN }}"
+    references:
+      - https://api.slack.com/messaging/webhooks
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/slack/slack-webhook-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/slack-webhook.yaml
 
   - name: Slack Session Cookie
     id: kingfisher.slack.5
@@ -187,7 +208,7 @@ rules:
         \d{9,15}-
         \d{9,15}-
         \d{9,15}-
-        [a-f0-9]{64}
+        [[:xdigit:]]{64}
       )
       \b
     pattern_requirements:
@@ -222,7 +243,7 @@ rules:
       (
         xoxb-
         [0-9]{8,14}-
-        [a-zA-Z0-9]{18,26}
+        [[:alnum:]]{18,26}
       )
       \b
     pattern_requirements:
@@ -279,8 +300,8 @@ rules:
       (
         xox[ar]-
         (?:\d-)?
-        [0-9a-zA-Z]{8,48}
-        (?:-[0-9a-zA-Z]{8,64}){0,6}
+        [[:alnum:]]{8,48}
+        (?:-[[:alnum:]]{8,64}){0,6}
       )
       \b
     min_entropy: 2.0

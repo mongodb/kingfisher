@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        shippo_(?:live|test)_[a-f0-9]{40}
+        shippo_(?:live|test)_[[:xdigit:]]{40}
       )
       \b
     pattern_requirements:
@@ -17,6 +17,7 @@ rules:
       - 'Authorization: "ShippoToken shippo_live_abc12fabcdefabcdefabcdefabcdefabcdefabcd"'
     references:
       - https://goshippo.com/docs/reference
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/shippo.go
     validation:
       type: Http
       content:

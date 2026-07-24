@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
       \b
     min_entropy: 3.0
@@ -18,6 +18,8 @@ rules:
     visible: false
     examples:
       - MUX_TOKEN_ID=44c819de-4add-4c9f-b2e9-384a0a71bede
+    references:
+      - https://docs.mux.com/core/make-api-requests
   - name: Mux Access Token Secret
     id: kingfisher.mux.1
     pattern: |
@@ -40,6 +42,9 @@ rules:
     references:
       - https://docs.mux.com/core/make-api-requests
       - https://docs.mux.com/api-reference/video/video/v1/assets
+      - https://www.mux.com/docs/api-reference/video/assets
+      - https://github.com/muxinc/examples/blob/60f10f25478e0e7b0859effe40c53eda5ddf648d/contentful-uploader/src/index.tsx
+      - https://github.com/muxinc/skills/blob/43bd2324fd61ebe993b81f987192bcad89c1a3d4/skills/mux/reference/api-authentication.md
     validation:
       type: Http
       content:

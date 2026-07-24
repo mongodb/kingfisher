@@ -9,7 +9,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-zA-Z0-9]{20}
+        [[:alnum:]]{20}
       )
       \b
     confidence: medium
@@ -19,6 +19,8 @@ rules:
       - 'browserstack.access_key = "rN7oP8qR9sT0uV1wX2yZ"'
     references:
       - https://www.browserstack.com/docs/automate/api-reference/selenium/introduction
+      - https://www.browserstack.com/docs/automate/api-reference/selenium/plan
+      - https://www.browserstack.com/docs/automate/api-reference/selenium/key
     depends_on_rule:
       - rule_id: kingfisher.browserstack.2
         variable: BROWSERSTACK_USERNAME
@@ -63,7 +65,7 @@ rules:
       (?:BROWSERSTACK_USERNAME|BROWSERSTACK_USER|browserstack[._-]?user(?:name)?)
       \s* [=:] \s* ["']?
       (
-        [a-zA-Z0-9_-]+
+        [A-Z0-9_-]+
       )
       ["']?
     confidence: medium
@@ -71,3 +73,5 @@ rules:
     examples:
       - "BROWSERSTACK_USERNAME=build-user"
       - 'browserstack_user: "ci_bot_01"'
+    references:
+      - https://www.browserstack.com/docs/automate/api-reference/selenium/introduction

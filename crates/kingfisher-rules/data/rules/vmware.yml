@@ -18,3 +18,4 @@ rules:
 
     references:
       - https://developer.broadcom.com/powercli/latest/vmware.vimautomation.core/commands/connect-viserver
+      - https://github.com/praetorian-inc/noseyparker/blob/3d82f8f64422069548cf1fe87ccead927d0f4004/crates/noseyparker/data/default/builtin/rules/vmware.yml

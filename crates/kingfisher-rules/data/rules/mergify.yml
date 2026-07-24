@@ -17,6 +17,7 @@ rules:
     references:
       - https://docs.mergify.com/api/
       - https://docs.mergify.com/api-usage/
+      - https://github.com/Mergifyio/docs/blob/5df342624450a6e36440d213155821e6ad61a37c/src/content/docs/api/usage.mdx
     validation:
       type: Http
       content:

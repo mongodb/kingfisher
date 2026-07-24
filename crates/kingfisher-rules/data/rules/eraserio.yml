@@ -10,7 +10,7 @@ rules:
       (?:[^A-Za-z0-9]{0,16})?
       \b
       (
-        [A-Za-z0-9]{20}
+        [[:alnum:]]{20}
       )
       \b
     min_entropy: 3.5

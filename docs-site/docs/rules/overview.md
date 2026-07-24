@@ -23,10 +23,10 @@ rules:
     id:             # (string) Unique identifier (e.g. kingfisher.aws.1)
 
     pattern: |      # (multi-line regex) Detection pattern
-      (?x)(?i)
+      (?xi)
       aws
       (?:.|[\n\r]){0,32}?
-      \b([A-Za-z0-9/+=]{40})\b
+      \b([[:alnum:]/+=]{40})\b
 
     min_entropy: 3.5                # (float) Minimum Shannon entropy
     confidence:  medium             # (enum: low | medium | high)
@@ -637,6 +637,32 @@ For example, a rule might match a username, an email address, an AWS Access Key 
 
 `visible: false` helps keep the scan output focused on actual secrets while still capturing important contextual data needed for comprehensive validation.
 
+## Regex Authoring
+
+Kingfisher uses Hyperscan/Vectorscan-compatible regular expressions. Write patterns for the
+credential format documented by the provider, then add only enough surrounding context to avoid
+generic matches.
+
+- Start multi-line patterns with `(?x)` for free-spacing mode. Use `(?xi)` only when the entire
+  expression is intentionally case-insensitive; otherwise scope it to contextual text, for example
+  `(?i:api[_-]?key)`, and keep the token format case-sensitive.
+- Prefer POSIX character classes for token alphabets: use `[[:alnum:]]` for letters and digits, and
+  `[[:xdigit:]]` for hexadecimal values. Add only documented extra characters, such as
+  `[[:alnum:]_=-]`; do not use an alphanumeric class when the provider specifies a narrower format.
+- With `(?i)` or `(?xi)`, character ranges are already case-insensitive. Do not write redundant
+  ranges such as `[a-zA-Z]` or `[a-fA-F]`; use a semantic POSIX class where applicable, or a single
+  range such as `[A-Z]` when the token format genuinely requires letters only.
+- Put the secret in one unnamed capture, which becomes `{{ TOKEN }}`. Use `(?:...)` for structural
+  groups, and add named captures only when validation or a checksum needs their values.
+- Hyperscan/Vectorscan does not support lookaround. Use bounded context, `min_entropy`, and
+  `pattern_requirements` to reduce false positives instead of lookahead or lookbehind.
+- Bound flexible separators and cross-line context (for example, `(?:.|[\n\r]){0,32}?`) so a rule
+  cannot consume an unbounded region of a file. Prefer a provider prefix, field name, or assignment
+  delimiter over a broad keyword alone.
+- Include positive examples for every rule. When a nearby format is easy to confuse with a real
+  credential, test it against a fixture or a targeted scan. Check an individual file with
+  `kingfisher rules check` before running the rule-crate tests.
+
 ## Character Requirements
 
 The `pattern_requirements` field allows you to specify data type requirements for matched secrets. This is particularly useful when:
@@ -699,7 +725,7 @@ rules:
       api[_-]?key
       (?:.|[\n\r]){0,32}?
       \b
-      ([A-Za-z0-9!@#$%^&*]{20,})
+      ([[:alnum:]!@#$%^&*]{20,})
       \b
     min_entropy: 4.0
     confidence: high
@@ -716,7 +742,7 @@ rules:
 ```
 
 In this example:
-- The regex pattern is permissive: `[A-Za-z0-9!@#$%^&*]{20,}` matches any combination of those characters
+- The regex pattern is permissive: `[[:alnum:]!@#$%^&*]{20,}` matches any combination of those characters
 - The `pattern_requirements` filters out matches that don't have at least one of each required type
 - A match like `"abcdefghijklmnopqrst"` would be rejected (no uppercase, no digit, no special)
 - A match like `"Abc123!SecureToken"` would be accepted (has all required types)
@@ -729,7 +755,7 @@ rules:
   - name: Token without placeholders
     id: custom.token.2
     pattern: |-
-      (?i)token[:=]\s*([A-Za-z0-9]{12,})
+      (?i)token[:=]\s*([[:alnum:]]{12,})
     pattern_requirements:
       ignore_if_contains:
         - placeholder
@@ -748,7 +774,7 @@ rules:
       (?xi)
       token
       (?:.|[\n\r]){0,16}?
-      \b([A-Za-z0-9$%^]{16,})\b
+      \b([[:alnum:]$%^]{16,})\b
     min_entropy: 3.5
     confidence: medium
     pattern_requirements:

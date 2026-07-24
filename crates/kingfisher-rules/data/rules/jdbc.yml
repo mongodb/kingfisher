@@ -30,3 +30,4 @@ rules:
     references:
       - https://docs.oracle.com/javase/8/docs/api/java/sql/DriverManager.html
       - https://jdbc.postgresql.org/documentation/use/
+      - https://github.com/pgjdbc/pgjdbc/blob/3a699d57d957ca0c2b86e619d001a8763a130027/docs/content/documentation/use.md

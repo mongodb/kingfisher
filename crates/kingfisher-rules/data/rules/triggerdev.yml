@@ -85,7 +85,7 @@ rules:
       (?:TRIGGER_PROJECT_REF|projectRef|trigger(?:\.config)?|trigger\.dev)
       (?:.|[\n\r]){0,48}?
       (
-        proj_[a-z0-9]{12,32}
+        proj_[[:alnum:]]{12,32}
       )
       \b
     min_entropy: 3.0

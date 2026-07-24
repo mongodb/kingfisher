@@ -13,7 +13,7 @@ rules:
       \s* [=:] \s* ["']?
       \b
       (
-        [A-Za-z0-9]{24,64}
+        [[:alnum:]]{24,64}
       )
       \b
     confidence: medium
@@ -47,7 +47,7 @@ rules:
       (?:WPE_ACCOUNT_NAME|WPENGINE_ACCOUNT|wpengine_account_name|wpengine_account|account_name)
       \s* [=:] \s* ["']?
       (
-        [a-z0-9][a-z0-9-]+
+        [[:alnum:]][a-z0-9-]+
       )
       ["']?
     confidence: medium
@@ -55,3 +55,5 @@ rules:
     examples:
       - "WPE_ACCOUNT_NAME=prod-account"
       - 'account_name: "team-site-1"'
+    references:
+      - https://wpengineapi.com/

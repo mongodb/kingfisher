@@ -17,6 +17,7 @@ rules:
       - '"infracost": "ico-1234567890abcdef1234567890abcdef"'
     references:
       - https://www.infracost.io/docs/integrations/infracost_api/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/infracost.go
     validation:
       type: Http
       content:

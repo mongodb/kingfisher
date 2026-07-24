@@ -2,25 +2,28 @@ rules:
   - name: Currencylayer API Key
     id: kingfisher.currencylayer.1
     pattern: |
-      (?xi)
+      (?x)
       \b
-      currencylayer
+      (?i:currencylayer)
       (?:.|[\n\r]){0,16}?
-      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
+      (?i:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
-    min_entropy: 3.5
+    min_entropy: 3.0
     confidence: medium
     pattern_requirements:
       min_digits: 2
     examples:
-      - CURRENCYLAYER_ACCESS_KEY=abc123def456ghi789jkl012mno345pq
-      - currencylayer_access_key = "a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6"
+      - currencylayer_access_key = "e99cb2c48c92a9f191b38107e2216719"
+      - currencylayer_access_key = "9d98ea4f2736f75a15ca33dd9f811bbd"
+      - currencylayer_access_key = "7ed1d04e69de75b40e16672d1b7f0c52"
+      - currencylayer_access_key = "ae9f1ec891fe603c8ca0bcc20a09c165"
     references:
+      - https://docs.apilayer.com/currencylayer/docs/getting-started
       - https://currencylayer.com/documentation
       - https://currencylayer.com/api-access
     validation:
@@ -28,7 +31,7 @@ rules:
       content:
         request:
           method: GET
-          url: https://api.currencylayer.com/live?access_key={{ TOKEN }}
+          url: https://api.currencylayer.com/list?access_key={{ TOKEN }}
           headers:
             Accept: application/json
           response_matcher:
@@ -39,3 +42,5 @@ rules:
               status: [401]
               negative: true
             - type: JsonValid
+            - type: WordMatch
+              words: ['"success":true']

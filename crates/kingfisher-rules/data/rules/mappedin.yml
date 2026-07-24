@@ -16,6 +16,7 @@ rules:
       - https://developer.mappedin.com/docs/mvf/v2/getting-started
       - https://developer.mappedin.com/docs/mvf/v3/getting-started
       - https://github.com/MappedIn/qgis-plugin/blob/a9be3f64a02cf42a1f758bcbbc2a972e03a55583/README.md
+      - https://github.com/MappedIn/android/blob/27617e84af68fb4e5591d8b101276636b50fea0f/SDKv6_Examples/PlaygroundSamples/app/src/main/java/com/mappedin/demo/MultiFloorViewDemoActivity.kt
 
   - name: Mappedin API Secret
     id: kingfisher.mappedin.2
@@ -34,3 +35,4 @@ rules:
       - https://developer.mappedin.com/docs/mvf/v2/getting-started
       - https://developer.mappedin.com/docs/mvf/v3/getting-started
       - https://github.com/MappedIn/qgis-plugin/blob/a9be3f64a02cf42a1f758bcbbc2a972e03a55583/README.md
+      - https://github.com/MappedIn/android/blob/27617e84af68fb4e5591d8b101276636b50fea0f/SDKv6_Examples/PlaygroundSamples/app/src/main/java/com/mappedin/demo/MultiFloorViewDemoActivity.kt

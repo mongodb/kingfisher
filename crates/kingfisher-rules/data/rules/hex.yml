@@ -6,8 +6,8 @@ rules:
       \b
       (
         hxt[wp]_
-        [a-f0-9]{16}
-        (?:[a-f0-9]{16}){5}
+        [[:xdigit:]]{16}
+        (?:[[:xdigit:]]{16}){5}
       )
       \b
     pattern_requirements:
@@ -35,6 +35,7 @@ rules:
     references:
       - https://learn.hex.tech/docs/api-integrations/api/overview
       - https://learn.hex.tech/docs/api-integrations/api/reference
+      - https://github.com/NangoHQ/nango/blob/b8e46397f7a20d8aba63bfaf8a7ddca743af6b98/docs/api-integrations/hex/connect.mdx
     examples:
       - "HEX_API_TOKEN=hxtp_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
       - "HEX_WORKSPACE_TOKEN=hxtw_fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210"

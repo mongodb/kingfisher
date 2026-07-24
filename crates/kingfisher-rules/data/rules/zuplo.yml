@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        zpka_(?P<body>[a-z0-9]{32})_(?P<checksum>[0-9a-f]{8})
+        zpka_(?P<body>[[:alnum:]]{32})_(?P<checksum>[[:xdigit:]]{8})
       )
     pattern_requirements:
       checksum:

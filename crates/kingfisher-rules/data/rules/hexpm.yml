@@ -15,7 +15,7 @@ rules:
       )
       (?:.|[\n\r]){0,64}?
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -28,5 +28,7 @@ rules:
       - "HEX_ORGANIZATION_KEY=126d49fb3014bd26457471ebae97c625"
     references:
       - https://hex.pm/docs/private
-    # Hex.pm docs only expose these keys as repository authentication hashes.
-    # A same-key validation or revocation endpoint is not publicly documented.
+      # Hex.pm docs only expose these keys as repository authentication hashes.
+      # A same-key validation or revocation endpoint is not publicly documented.
+      - https://github.com/hexpm/hexpm/blob/044b809e09b1adf7aeb0b8b02d296b266d2ab619/lib/hexpm_web/templates/docs/private.html.md
+      - https://github.com/hexpm/hex/blob/0eb1763fa232e8d274c70e99ec3110b55eadd16b/lib/mix/tasks/hex.organization.ex

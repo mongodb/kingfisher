@@ -32,3 +32,5 @@ rules:
           url: https://api.easypost.com/v2/shipments?page_size=5
     references:
       - https://docs.easypost.com/docs/authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/easypost.go
+      - https://datatracker.ietf.org/doc/html/rfc7617

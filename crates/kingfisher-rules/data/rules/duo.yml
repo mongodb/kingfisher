@@ -11,7 +11,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [A-Z0-9]{20}
+        [[:alnum:]]{20}
       )
       \b
     pattern_requirements:
@@ -25,6 +25,7 @@ rules:
       - "duo\nikey = 'BNUSGLLCQXI4RNHMWX2Z'"
     references:
       - https://duo.com/docs/authapi
+      - https://github.com/duosecurity/duo_client_python
 
   - name: Duo Security Secret Key
     id: kingfisher.duo.2
@@ -38,7 +39,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [A-Za-z0-9]{40}
+        [[:alnum:]]{40}
       )
       \b
     pattern_requirements:
@@ -53,6 +54,7 @@ rules:
     references:
       - https://duo.com/docs/authapi
       - https://duo.com/docs/adminapi
-    # No simple validation: Duo uses HMAC-SHA1 request signing.
-    # Authentication requires computing a signature over request parameters
-    # using the integration_key and secret_key together.
+      # No simple validation: Duo uses HMAC-SHA1 request signing.
+      # Authentication requires computing a signature over request parameters
+      # using the integration_key and secret_key together.
+      - https://github.com/duosecurity/duo_client_python

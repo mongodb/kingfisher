@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        (?:SK|AC)[A-F0-9]{32}
+        (?:SK|AC)[[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -23,6 +23,8 @@ rules:
         'API_KEY'          => env('TWILIO_API_KEY', 'wbTs1SUt6Aace5eKeNCxuYvJa6PhaRd0')
     references:
       - https://www.twilio.com/docs/iam/api
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/twilio.yml
+      - https://github.com/gitleaks/gitleaks/blob/3f4d91fc224d1bc985d8978ce87aaef08cd15f4c/cmd/generate/config/rules/twilio.go
   - name: Twilio API Key
     id: kingfisher.twilio.2
     pattern: |
@@ -34,7 +36,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b                  
       (
-        [a-z0-9]{32}
+        [[:alnum:]]{32}
       )
     pattern_requirements:
       min_digits: 2
@@ -62,6 +64,9 @@ rules:
           url: https://api.twilio.com/2010-04-01/Accounts.json
     references:
       - https://www.twilio.com/docs/usage/api#authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/twilio.yml
+      - https://github.com/gitleaks/gitleaks/blob/3f4d91fc224d1bc985d8978ce87aaef08cd15f4c/cmd/generate/config/rules/twilio.go
+      - https://datatracker.ietf.org/doc/html/rfc7617
     depends_on_rule:
       - rule_id: "kingfisher.twilio.1"
         variable: TWILIOID

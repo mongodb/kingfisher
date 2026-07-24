@@ -47,6 +47,7 @@ rules:
     references:
       - https://octopus.com/docs/octopus-rest-api/getting-started
       - https://octopus.com/docs/octopus-rest-api/how-to-create-an-api-key
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/octopusdeploy.go
     depends_on_rule:
       - rule_id: kingfisher.octopusdeploy.1
         variable: OCTOPUS_URL

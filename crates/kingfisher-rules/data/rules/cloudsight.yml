@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b                     
       (                      
-        [a-z0-9]{20,24}
+        [[:alnum:]]{20,24}
       )
       \b
     pattern_requirements:
@@ -25,6 +25,7 @@ rules:
     references:
       - https://cloudsight.docs.apiary.io/#introduction/authentication
       - https://cloudsight.ai/api
+      - https://github.com/cloudsight/cloudsight-objc/blob/0303bd8b11c3aeebacf7cc1e1d89dc6ac2c0d5df/CloudSight/CloudSightImageRequest.m
     validation:
       type: Http
       content:

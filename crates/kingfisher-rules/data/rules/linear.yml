@@ -6,7 +6,7 @@ rules:
       \b                     
       (                      
         lin_api_
-        (?:[0-9A-Z]{8}){5}
+        (?:[[:alnum:]]{8}){5}
       )
       \b
     pattern_requirements:
@@ -18,6 +18,7 @@ rules:
       - lin_api_token:"lin_api_9A6bCDeF0Gh1Ij2Klm3No4PQr5St6Uv7Wx8YZaBc"
     references:
       - https://linear.app/developers/graphql
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/linear.go
     validation:
       type: Http
       content:
@@ -49,7 +50,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:

@@ -9,7 +9,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [a-z0-9]{40}
+        [[:alnum:]]{40}
       )
       \b
     pattern_requirements:
@@ -20,6 +20,8 @@ rules:
       - "BUTTERCMS_API_TOKEN=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0"
     references:
       - https://buttercms.com/docs/api/
+      - https://buttercms.com/docs/api/blog-metadata/listallauthors
+      - https://github.com/ButterCMS/buttercms-csharp/blob/66b4c1a5638c4dbf587d05550824ca78db15344f/ButterCMS.Tests/Mocks/AuthorsMocks.cs
     validation:
       type: Http
       content:

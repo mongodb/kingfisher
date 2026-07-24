@@ -44,3 +44,5 @@ rules:
           url: https://api.gocardless.com/customers?limit=1
     references:
       - https://developer.gocardless.com/api-reference/#authentication
+      - https://developer.gocardless.com/api-reference/#making-requests-authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/gocardless.go

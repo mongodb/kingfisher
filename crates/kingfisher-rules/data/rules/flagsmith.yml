@@ -8,7 +8,7 @@ rules:
       [^\n\r]{0,16}?
       \b
       (
-        [A-Za-z0-9]{8}\.[A-Za-z0-9]{16}[A-Za-z0-9]{16}
+        [[:alnum:]]{8}\.[[:alnum:]]{16}[[:alnum:]]{16}
       )
       \b
     pattern_requirements:
@@ -24,6 +24,7 @@ rules:
     references:
       - https://docs.flagsmith.com/integrating-with-flagsmith/flagsmith-api-overview/admin-api/authentication
       - https://docs.flagsmith.com/third-party-integrations/ci-cd/terraform#terraform-api-key
+      - https://github.com/Flagsmith/flagsmith/blob/77c41d4eabc9b669d2aac04eb22bfa412c481214/mcp/tests/unit/test_auth.py
     validation:
       type: Http
       content:
@@ -47,7 +48,7 @@ rules:
       [^\n\r]{0,16}?
       \b
       (
-        [a-f0-9]{20}[a-f0-9]{20}
+        [[:xdigit:]]{20}[[:xdigit:]]{20}
       )
       \b
     pattern_requirements:
@@ -61,8 +62,9 @@ rules:
     references:
       - https://docs.flagsmith.com/integrating-with-flagsmith/flagsmith-api-overview/flags-api/authentication
       - https://docs.flagsmith.com/clients/server-side
-    # Flagsmith documents public client-side Environment Keys for the Flags API
-    # and separate `ser.` server-side keys for the Environment Document flow.
-    # The 40-hex keys matched here do not have a reliable documented token-only
-    # validation endpoint, so validation is intentionally omitted to avoid false
-    # "inactive credential" results.
+      # Flagsmith documents public client-side Environment Keys for the Flags API
+      # and separate `ser.` server-side keys for the Environment Document flow.
+      # The 40-hex keys matched here do not have a reliable documented token-only
+      # validation endpoint, so validation is intentionally omitted to avoid false
+      # "inactive credential" results.
+      - https://github.com/Flagsmith/ci/blob/a6af20b4038e1b0b5861d53278953c8bc5efeb91/tests/unit/code_references/test_fetch_features.py

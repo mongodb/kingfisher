@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,64}?
       \b
       (
-        [a-f0-9]{20}
+        [[:xdigit:]]{20}
       )
       \b
     pattern_requirements:

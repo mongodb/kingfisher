@@ -18,6 +18,8 @@ rules:
     visible: false
     examples:
       - CLOUDINARY_CLOUD_NAME=demo
+    references:
+      - https://cloudinary.com/documentation/developer_onboarding_faq_find_credentials
   - name: Cloudinary API Key
     id: kingfisher.cloudinary.2
     pattern: |
@@ -37,6 +39,8 @@ rules:
     visible: false
     examples:
       - CLOUDINARY_API_KEY=123456789012345
+    references:
+      - https://cloudinary.com/documentation/developer_onboarding_faq_find_credentials
   - name: Cloudinary API Secret
     id: kingfisher.cloudinary.1
     pattern: |
@@ -48,7 +52,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     min_entropy: 3.5
@@ -61,6 +65,10 @@ rules:
     references:
       - https://cloudinary.com/documentation/developer_onboarding_faq_find_credentials
       - https://cloudinary.com/documentation/image_upload_api_reference
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/cloudinary.go
+      - https://datatracker.ietf.org/doc/html/rfc7617
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/cloudinary/cloudinary-credentials.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/cloudinary.yaml
     validation:
       type: Http
       content:

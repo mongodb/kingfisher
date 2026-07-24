@@ -12,7 +12,7 @@ rules:
       )
       (?:.|[\n\r]){0,12}?
       (
-        [a-f0-9]{24}
+        [[:xdigit:]]{24}
       )
       \b
     pattern_requirements:
@@ -29,6 +29,7 @@ rules:
     references:
       - https://www.kucoin.com/docs-new/authentication
       - https://www.kucoin.com/docs-new/api-3470125
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/kucoin.go
 
   - name: KuCoin API Secret
     id: kingfisher.kucoin.2
@@ -43,7 +44,7 @@ rules:
       )
       (?:.|[\n\r]){0,12}?
       (
-        [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
       \b
     pattern_requirements:
@@ -88,6 +89,7 @@ rules:
         variable: KUCOIN_PASSPHRASE
     references:
       - https://www.kucoin.com/docs-new/authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/kucoin.go
 
   - name: KuCoin API Passphrase
     id: kingfisher.kucoin.3

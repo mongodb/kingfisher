@@ -20,6 +20,7 @@ rules:
     references:
       - https://thingsboard.io/docs/paas/reference/http-api/
       - https://thingsboard.io/docs/paas/reference/coap-api/
+      - https://github.com/praetorian-inc/noseyparker/blob/9782bd66c2ebb503167b7b31da7709c664c202e7/crates/noseyparker/data/default/builtin/rules/thingsboard.yml
     validation:
       type: Http
       content:
@@ -50,6 +51,7 @@ rules:
     references:
       - https://thingsboard.io/docs/paas/reference/http-api/
       - https://thingsboard.io/docs/paas/user-guide/device-provisioning/
+      - https://github.com/praetorian-inc/noseyparker/blob/9782bd66c2ebb503167b7b31da7709c664c202e7/crates/noseyparker/data/default/builtin/rules/thingsboard.yml
   - name: ThingsBoard Provision Device Secret
     id: kingfisher.thingsboard.3
     pattern: |
@@ -66,3 +68,4 @@ rules:
     references:
       - https://thingsboard.io/docs/paas/reference/http-api/
       - https://thingsboard.io/docs/paas/user-guide/device-provisioning/
+      - https://github.com/praetorian-inc/noseyparker/blob/9782bd66c2ebb503167b7b31da7709c664c202e7/crates/noseyparker/data/default/builtin/rules/thingsboard.yml

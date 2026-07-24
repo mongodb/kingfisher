@@ -30,6 +30,7 @@ rules:
     references:
       - https://segment.com/docs/api/public-api/
       - https://segment.com/blog/how-segment-proactively-protects-customer-api-tokens/
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/segment.yml
 
   - name: Segment API Key
     id: kingfisher.segment.2
@@ -62,3 +63,5 @@ rules:
                 - 200
               type: StatusMatch
           url: https://api.segmentapis.com/
+    references:
+      - https://segment.com/docs/api/public-api/

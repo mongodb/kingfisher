@@ -17,6 +17,8 @@ rules:
       - ENDOR_API_CREDENTIALS_KEY=endr+foo1234567890abc
     pattern_requirements:
       min_digits: 2
+    references:
+      - https://docs.endorlabs.com/rest-api/authentication/
 
   - name: Endor Labs API Secret
     id: kingfisher.endorlabs.2
@@ -37,6 +39,7 @@ rules:
       - ENDOR_API_CREDENTIALS_SECRET=endr+bar1234567890abc
     references:
       - https://docs.endorlabs.com/rest-api/authentication/
+      - https://github.com/betterleaks/betterleaks/blob/5b64a83deda0c9489d55c4d04974009fb60b1661/cmd/generate/config/rules/endorlabs.go
     depends_on_rule:
       - rule_id: kingfisher.endorlabs.1
         variable: ENDOR_API_KEY

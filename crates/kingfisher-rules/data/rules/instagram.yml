@@ -17,6 +17,8 @@ rules:
       - 'instagram_token: "IGQVJXZAGtIR0hKVERjNXB5bnM0Y1BmUmFKa0RFZAnBXdVFKVUNNUjZAtVW5lZAXRhNGdLZA2V3OVlGS3dFZATVyYnlIVXlwcHdvdkxiS01wS1BNLVlsaGtJYUV3dg"'
     references:
       - https://developers.facebook.com/docs/instagram-basic-display-api/
+      - https://developers.facebook.com/docs/instagram-platform/reference/access_token/
+      - https://github.com/SocialiteProviders/Instagram/blob/223f7eb116b8dd6974b28f0a792a314c7deffcbb/Provider.php
     validation:
       type: Http
       content:

@@ -10,10 +10,10 @@ rules:
       (?:.|[\n\r]){0,48}?
       \b
       (
-        [0-9a-f]{64}
+        [[:xdigit:]]{64}
         |
         # Legacy UUID-ish keys (seen in older configs)
-        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
       \b
     pattern_requirements:

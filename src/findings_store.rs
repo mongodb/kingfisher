@@ -101,7 +101,7 @@ pub struct FindingsStore {
     blobs: FxHashSet<BlobId>,
     clone_dir: PathBuf,
     dedup_filter: DedupBloomSet,
-    dependent_rule_ids: FxHashSet<String>,
+    blob_scoped_dependency_rule_ids: FxHashSet<String>,
     blob_meta: FxHashMap<BlobId, Arc<BlobMetadata>>,
     origin_meta: FxHashMap<u64, Arc<OriginSet>>,
     docker_images: FxHashMap<PathBuf, String>,
@@ -125,7 +125,7 @@ impl FindingsStore {
             origin_meta: FxHashMap::default(),
             clone_dir,
             dedup_filter: DedupBloomSet::new(),
-            dependent_rule_ids: FxHashSet::default(),
+            blob_scoped_dependency_rule_ids: FxHashSet::default(),
             docker_images: FxHashMap::default(),
             slack_links: FxHashMap::default(),
             teams_links: FxHashMap::default(),
@@ -193,10 +193,22 @@ impl FindingsStore {
         // Clear existing data and extend in place
         self.rules.clear();
         self.rules.extend_from_slice(rules);
-        self.dependent_rule_ids.clear();
+        self.blob_scoped_dependency_rule_ids.clear();
         for rule in rules {
             for dependency in rule.syntax().depends_on_rule.iter().flatten() {
-                self.dependent_rule_ids.insert(dependency.rule_id.to_uppercase());
+                let Some(dependency_rule) =
+                    rules.iter().find(|candidate| candidate.id() == dependency.rule_id)
+                else {
+                    continue;
+                };
+
+                // Helper rules must remain available for each blob so a nearby credential can
+                // use them during validation. Visible findings, however, retain the normal
+                // global content deduplication; making them blob-scoped turns one historical
+                // secret into a finding for every revision that contains it.
+                if !dependency_rule.syntax().visible {
+                    self.blob_scoped_dependency_rule_ids.insert(dependency.rule_id.to_uppercase());
+                }
             }
         }
     }
@@ -236,7 +248,7 @@ impl FindingsStore {
                 let origin_kind = dedup_origin_kind(&origin);
 
                 let rule_id = m.rule.id().to_uppercase();
-                let key_string = if self.dependent_rule_ids.contains(&rule_id) {
+                let key_string = if self.blob_scoped_dependency_rule_ids.contains(&rule_id) {
                     format!("{}|{}|{}|{}", rule_id, origin_kind, snippet, blob_md.id.hex())
                 } else {
                     format!("{}|{}|{}", rule_id, origin_kind, snippet)
@@ -521,7 +533,55 @@ impl FindingsStore {
 
 #[cfg(test)]
 mod tests {
-    use super::DedupBloomSet;
+    use std::sync::Arc;
+
+    use super::{DedupBloomSet, FindingsStore};
+    use crate::rules::rule::{DependsOnRule, Rule, RuleSyntax};
+
+    fn rule(id: &str, visible: bool, depends_on_rule: Vec<Option<DependsOnRule>>) -> Arc<Rule> {
+        Arc::new(Rule::new(RuleSyntax {
+            name: id.to_owned(),
+            id: id.to_owned(),
+            pattern: String::new(),
+            min_entropy: 0.0,
+            confidence: Default::default(),
+            visible,
+            examples: Vec::new(),
+            negative_examples: Vec::new(),
+            references: Vec::new(),
+            validation: None,
+            revocation: None,
+            depends_on_rule,
+            pattern_requirements: None,
+            tls_mode: None,
+        }))
+    }
+
+    #[test]
+    fn visible_dependency_rules_keep_global_content_deduplication() {
+        let helper = rule("kingfisher.test.helper", false, Vec::new());
+        let visible_secret = rule("kingfisher.test.secret", true, Vec::new());
+        let consumer = rule(
+            "kingfisher.test.consumer",
+            true,
+            vec![
+                Some(DependsOnRule {
+                    rule_id: helper.id().to_owned(),
+                    variable: "HELPER".to_owned(),
+                }),
+                Some(DependsOnRule {
+                    rule_id: visible_secret.id().to_owned(),
+                    variable: "SECRET".to_owned(),
+                }),
+            ],
+        );
+
+        let mut store = FindingsStore::new(std::env::temp_dir());
+        store.record_rules(&[helper, visible_secret, consumer]);
+
+        assert!(store.blob_scoped_dependency_rule_ids.contains("KINGFISHER.TEST.HELPER"));
+        assert!(!store.blob_scoped_dependency_rule_ids.contains("KINGFISHER.TEST.SECRET"));
+    }
 
     #[test]
     fn dedup_filter_remains_monotonic_across_growth() {

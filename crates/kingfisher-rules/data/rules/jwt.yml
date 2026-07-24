@@ -24,6 +24,8 @@ rules:
       - https://en.wikipedia.org/wiki/Base64#URL_applications
       - https://datatracker.ietf.org/doc/html/rfc4648
       - https://developer.okta.com/blog/2018/06/20/what-happens-if-your-jwt-is-stolen
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/jwt.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/jwt.go
     validation:
       type: JWT
     tls_mode: lax
@@ -36,7 +38,7 @@ rules:
       (
         ZXlK
         (?:aGJHY2lPaU|aGNIVWlPaU|aGNIWWlPaU|aGRXUWlPaU|aU5qUWlP|amNtbDBJanBi|amRIa2lPaU|bGNHc2lPbn|bGJtTWlPaU|cWEzVWlPaU|cWQyc2lPb|cGMzTWlPaU|cGRpSTZJ|cmFXUWlP|clpYbGZiM0J6SWpwY|cmRIa2lPaUp|dWIyNWpaU0k2|d01tTWlP|d01uTWlPaU|d2NIUWlPaU|emRXSWlPaU|emRuUWlP|MFlXY2lPaU|MGVYQWlPaUp|MWNtd2l|MWMyVWlPaUp|MlpYSWlPaU|MlpYSnphVzl1SWpv|NElqb2|NE5XTWlP|NE5YUWlPaU|NE5YUWpVekkxTmlJNkl|NE5YVWlPaU|NmFYQWlPaU)
-        [a-zA-Z0-9/\\_+\-]{40,}
+        [A-Z0-9/\\_+\-]{40,}
         ={0,2}
       )
     pattern_requirements:

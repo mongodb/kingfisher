@@ -16,6 +16,7 @@ rules:
       - '"Authorization": "Bearer fio-u-b1c2d3e4f5g6h7i8j9k0l1m2n3o4p5q6r7s8t9u0v1w2x3y4z5a6b7c8d9e0f123"'
     references:
       - https://developer.frame.io/docs/getting-started/authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/frameio.go
     validation:
       type: Http
       content:

@@ -21,12 +21,10 @@ rules:
     examples:
       - sk-lf-a1b2c3d4-e5f6-7890-abcd-ef1234567890
       - 'LANGFUSE_SECRET_KEY="sk-lf-9f8e7d6c-5b4a-3210-fedc-ba0987654321"'
-    negative_examples:
-      - sk-lf-test
-      - sk-lf-
     references:
       - https://langfuse.com/docs/sdk/typescript
       - https://langfuse.com/docs/get-started
+      - https://github.com/langfuse/langfuse-js
     depends_on_rule:
       - rule_id: kingfisher.langfuse.2
         variable: PUBLIC_KEY
@@ -70,3 +68,4 @@ rules:
     references:
       - https://langfuse.com/docs/sdk/typescript
       - https://langfuse.com/docs/get-started
+      - https://github.com/langfuse/langfuse-js

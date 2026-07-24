@@ -9,7 +9,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [a-f0-9]{40}
+        [[:xdigit:]]{40}
       )
       \b
     pattern_requirements:
@@ -22,6 +22,8 @@ rules:
       - "export LOKALISE_API_KEY=d4e8f2a7b1c39605d2e7f1b94a6c3d8001234567"
     references:
       - https://developers.lokalise.com/reference/api-authentication
+      - https://github.com/home-assistant/core/blob/d80c0e2cc5cbd3cd87cb0507cffa3819c401ca12/script/translations/lokalise.py
+      - https://github.com/SpectralOps/keyscope/blob/98ce24ac731c636a9c80a1b0c2d126dd1a81dd9c/keyscope/src/config.yaml
     validation:
       type: Http
       content:

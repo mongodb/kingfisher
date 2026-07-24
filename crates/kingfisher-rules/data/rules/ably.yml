@@ -23,6 +23,7 @@ rules:
     references:
       - https://ably.com/docs/auth/basic
       - https://ably.com/docs/api/rest-api
+      - https://github.com/ably/ably-js/blob/9619f3dbd2bdf704e885a14835178f37fbcfb70b/src/common/lib/util/defaults.ts
     validation:
       type: Http
       content:

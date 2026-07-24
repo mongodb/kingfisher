@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [0-9a-z]{32}
+        [[:alnum:]]{32}
       )
     pattern_requirements:
       min_digits: 2
@@ -20,6 +20,7 @@ rules:
     references:
       - https://docs.infura.io/
       - https://docs.metamask.io/services/reference/ethereum/json-rpc-methods/
+      - https://github.com/MetaMask/metamask-docs/blob/e2828605788f1cd6217e5d17ffaf62d381a25fa4/services/reference/_partials/_eth_chainid-request.mdx
     validation:
       type: Http
       content:

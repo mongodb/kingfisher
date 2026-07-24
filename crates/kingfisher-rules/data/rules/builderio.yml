@@ -20,4 +20,5 @@ rules:
     references:
       - https://www.builder.io/c/docs/using-your-api-key
       - https://www.builder.io/c/docs/write-api
-    # No validation: documented Private API Key endpoints are mutating Write API calls.
+      # No validation: documented Private API Key endpoints are mutating Write API calls.
+      - https://www.builder.io/c/docs/admin-api

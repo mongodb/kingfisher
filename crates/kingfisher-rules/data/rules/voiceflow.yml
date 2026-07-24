@@ -6,9 +6,9 @@ rules:
       \b
       (
         VF\.DM\.
-        [0-9a-f]{24}
+        [[:xdigit:]]{24}
         \.
-        [0-9a-zA-Z]{16}
+        [[:alnum:]]{16}
       )
       \b
     pattern_requirements:
@@ -54,7 +54,7 @@ rules:
       (?:VOICEFLOW_PROJECT_ID|projectID|project_id|voiceflow \s+ project \s+ id)
       (?:.|[\n\r]){0,48}?
       (
-        [0-9a-f]{24}
+        [[:xdigit:]]{24}
       )
       \b
     min_entropy: 3.0

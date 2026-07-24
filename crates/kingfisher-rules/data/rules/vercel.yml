@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Z0-9]{24}
+        [[:alnum:]]{24}
       )
       \b
     pattern_requirements:
@@ -50,6 +50,7 @@ rules:
       - https://vercel.com/kb/guide/how-do-i-use-a-vercel-api-access-token
       - https://docs.vercel.com/docs/rest-api/reference/welcome#authentication
       - https://vercel.com/docs/rest-api/reference/endpoints/authentication/delete-an-authentication-token
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/vercel.go
     examples:
       - "vercel-key = DdZV6ZDZW6Vpl7n7JqtrCE5i"
       - "vercel_token = zyMBA1qVEMAf4UNNZtCAbg6u"
@@ -111,6 +112,7 @@ rules:
       - https://docs.vercel.com/docs/rest-api/reference/welcome#authentication
       - https://vercel.com/changelog/new-token-formats-and-secret-scanning
       - https://vercel.com/docs/rest-api/reference/endpoints/authentication/delete-an-authentication-token
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/vercel.go
     examples:
       - "vcp_35UYJwYZDigYATKhxJUAhPqRhit2Xe3dtiG60LsUTHeklEXDQ94Jafpu"
       - "vercel_access_token=vcp_4mcjwVDwqtVCVGWCcxRjdzGpkGZ3NkwXZv8ktcoQ0EG0dnjpMP1Rzi71"

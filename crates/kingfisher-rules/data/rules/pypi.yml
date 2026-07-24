@@ -66,3 +66,9 @@ rules:
     references:
       - https://pypi.org/help/#apitoken
       - https://warehouse.pypa.io/api-reference/
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/pypi.yml
+      - https://github.com/gitleaks/gitleaks/blob/3f4d91fc224d1bc985d8978ce87aaef08cd15f4c/cmd/generate/config/rules/pypi.go
+      - https://datatracker.ietf.org/doc/html/rfc7617
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/pypi/pypi-upload-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/pypi-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/global-matchers/secrets-patterns-rules.yaml

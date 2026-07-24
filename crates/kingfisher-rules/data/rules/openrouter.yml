@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        sk-or-v1-[0-9a-f]{64}
+        sk-or-v1-[[:xdigit:]]{64}
       )
       \b
     pattern_requirements:
@@ -18,6 +18,7 @@ rules:
     references:
       - https://openrouter.ai/docs/api/reference/authentication
       - https://openrouter.ai/docs/api/api-reference/credits/get-credits
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/openrouter.go
     validation:
       type: Http
       content:

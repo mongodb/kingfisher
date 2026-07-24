@@ -135,21 +135,27 @@ rules:
     id: kingfisher.jira.4
     pattern: |
       (?xi)
-      (?:https?://)?
+      https://
       \b
       (
-        (?:[a-z0-9-]+\.){0,16}
-        jira[a-z0-9-]*
-        \.[a-z0-9.-]{2,64}
+        (?:[a-z0-9-]+\.){0,4}
+        jira(?:-[a-z0-9]{1,16})?
+        (?:\.[a-z0-9-]{1,63}){1,4}
         (?::\d{2,5})?
       )
       \b
-    min_entropy: 2.5
+    min_entropy: 3.0
+    pattern_requirements:
+      ignore_if_contains:
+        - atlassian.com
+        - atlassian.net
+        - localhost
     visible: false
     confidence: medium
     examples:
-      - jira.example.com
-      - jira-staging.corp.mongodb.com
+      - https://jira.example.com
+      - https://jira-staging.corp.example.com
       - https://jira.corp.internal:8443
     references:
       - https://confluence.atlassian.com/adminjiraserver/jira-applications-base-url-938846869.html
+      - https://confluence.atlassian.com/adminjiraserver/configuring-the-base-url-938847830.html

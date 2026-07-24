@@ -21,6 +21,7 @@ rules:
       - 'COURIER_AUTH_TOKEN="dk_test_xK8m2LpQr5nW0vYz3cJ7aB4d"'
     references:
       - https://www.courier.com/docs/platform/workspaces/environments-api-keys
+      - https://github.com/trycourier/courier-samples/blob/d96806ef9cf344f230135b0bf68a8d14638cd682/server/curl/get-user-profile.sh
     validation:
       type: Http
       content:

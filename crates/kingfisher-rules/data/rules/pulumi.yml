@@ -15,6 +15,7 @@ rules:
       - pul-18e13e3eebebeb94eac318d421ca8ecc5ca78d5f
     references:
       - https://www.pulumi.com/docs/pulumi-cloud/reference/api-basics/
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/pulumi.go
     validation:
       type: Http
       content:

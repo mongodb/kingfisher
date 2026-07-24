@@ -21,8 +21,8 @@ rules:
       - https://docs.arcjet.com/environment
       - https://docs.arcjet.com/reference/nodejs
       - https://docs.arcjet.com/troubleshooting/
-      - https://github.com/arcjet/arcjet-js/blob/main/protocol/client.ts
-      - https://github.com/arcjet/arcjet-js/blob/main/protocol/proto/decide/v1alpha1/decide_pb.d.ts
+      - https://github.com/arcjet/arcjet-js/blob/14a3a1f201774dd9083eed26334121bfb893715a/protocol/client.ts
+      - https://github.com/arcjet/arcjet-js/blob/71346b3ad22d0fb734dedd74f327fb6e40e9d52c/protocol/proto/decide/v1alpha1/decide_pb.d.ts
     # No standalone validation is added: Arcjet's public DecideService endpoint
     # accepts multiple mutated ajkey_ values and returns CONCLUSION_ALLOW, so it
     # is not reliable for distinguishing valid from invalid site keys.

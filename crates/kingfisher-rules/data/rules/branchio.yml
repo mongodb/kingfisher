@@ -15,6 +15,9 @@ rules:
       - 'branch.init("key_live_hcnegO5R0SbbpAe1M4rjvgckbFMeQB2N");'
     references:
       - https://help.branch.io/developers-hub/docs/deep-linking-api
+      - https://help.branch.io/apidocs/app-api
+      - https://github.com/SpectralOps/keyscope/blob/98ce24ac731c636a9c80a1b0c2d126dd1a81dd9c/keyscope/src/config.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/branch-key.yaml
     depends_on_rule:
       - rule_id: kingfisher.branchio.3
         variable: BRANCH_SECRET
@@ -46,6 +49,7 @@ rules:
     references:
       - https://help.branch.io/developers-hub/docs/deep-linking-api
       - https://help.branch.io/apidocs/app-api
+      - https://github.com/SpectralOps/keyscope/blob/98ce24ac731c636a9c80a1b0c2d126dd1a81dd9c/keyscope/src/config.yaml
     depends_on_rule:
       - rule_id: kingfisher.branchio.3
         variable: BRANCH_SECRET
@@ -69,7 +73,7 @@ rules:
       (?:BRANCH_SECRET|branch_secret|BRANCH_KEY_SECRET)
       \s* [=:] \s* ["']?
       (
-        [A-Za-z0-9]{40,64}
+        [[:alnum:]]{40,64}
       )
       ["']?
     confidence: medium
@@ -77,3 +81,5 @@ rules:
     examples:
       - "BRANCH_SECRET=abcdefghijklmnopqrstuvwxyz1234567890ABCD"
       - 'branch_secret: "abcd1234efgh5678ijkl9012mnop3456qrst7890"'
+    references:
+      - https://help.branch.io/developers-hub/docs/deep-linking-api

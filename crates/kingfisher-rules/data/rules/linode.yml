@@ -19,7 +19,7 @@ rules:
       \s*
       ["']?
       (
-        [a-f0-9]{64}
+        [[:xdigit:]]{64}
       )
       \b
     pattern_requirements:
@@ -32,6 +32,7 @@ rules:
     references:
       - https://techdocs.akamai.com/linode-api/reference/get-profile
       - https://techdocs.akamai.com/linode-api/reference/delete-personal-access-token
+      - https://github.com/SocialiteProviders/Providers/blob/cd7a9cba4477e57ba6957ba5c8a5925f7c58fcd3/src/Linode/Provider.php
     validation:
       type: Http
       content:

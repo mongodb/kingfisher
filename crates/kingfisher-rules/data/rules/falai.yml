@@ -15,11 +15,11 @@ rules:
       \b
       (
         (?P<key_id>
-          [a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}
+          [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
         )
         :
         (?P<key_secret>
-          [a-f0-9]{16}[a-f0-9]{16}
+          [[:xdigit:]]{16}[[:xdigit:]]{16}
         )
       )
       \b
@@ -35,6 +35,7 @@ rules:
     references:
       - https://docs.fal.ai/platform-apis/v1/keys/create
       - https://docs.fal.ai/platform-apis/v1/models/pricing
+      - https://github.com/nodetool-ai/nodetool/blob/f09e3a028cdfa4afddb7227e8d95e86a3ce8934f/packages/websocket/src/routes/fal-pricing.ts
     validation:
       type: Http
       content:

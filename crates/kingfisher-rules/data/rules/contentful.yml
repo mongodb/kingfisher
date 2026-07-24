@@ -38,6 +38,7 @@ rules:
               match_all_words: true
     references:
       - https://www.contentful.com/developers/docs/references/content-delivery-api/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/contentful.go
     examples:
       - "contentful_delivery_token = wJz-g_tqZ-8n_abcdefghijklmnopqrstuvwxyz12345"
 
@@ -71,6 +72,7 @@ rules:
               match_all_words: true
     references:
       - https://www.contentful.com/developers/docs/references/content-management-api/#/reference/users/user
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/contentful.go
     examples:
       - "CFPAT-Cq3AarsJCDvdG9PYAJ3Y00crCG5nEPAAfVZ2LAldCsQ"
       - "CFPAT-WFWEK_dWYIW0-uamOjhUBAJJ9NqQisr1x_ylb4z1vcQ"

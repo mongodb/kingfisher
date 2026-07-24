@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     min_entropy: 3.5
@@ -23,6 +23,7 @@ rules:
     references:
       - https://fixer.io/documentation
       - https://fixer.io/api-key
+      - https://github.com/fixerAPI/fixer/blob/f090c3803015c523238ef6e633acd2bee474db04/README.md
     validation:
       type: Http
       content:

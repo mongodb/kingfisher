@@ -29,6 +29,7 @@ rules:
       - azure_speech_region="westus2"
     references:
       - https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-text-to-speech
+      - https://github.com/Azure-Samples/cognitive-services-speech-sdk/blob/10cb305d84c79d7ba2a196e4a20bc18f1cd73715/samples/js/browser/token.php
 
   - name: Azure Speech API Key
     id: kingfisher.azurespeech.2
@@ -52,7 +53,7 @@ rules:
       )
       (?:.|[\n\r]){0,16}?
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -65,6 +66,7 @@ rules:
       - speech_subscription_key="abcdef0123456789abcdef0123456789"
     references:
       - https://learn.microsoft.com/en-us/azure/ai-services/speech-service/rest-text-to-speech
+      - https://github.com/Azure-Samples/cognitive-services-speech-sdk/blob/10cb305d84c79d7ba2a196e4a20bc18f1cd73715/samples/js/browser/token.php
     depends_on_rule:
       - rule_id: kingfisher.azurespeech.1
         variable: AZURE_SPEECH_REGION

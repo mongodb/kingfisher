@@ -21,6 +21,8 @@ rules:
     references:
       - https://imagekit.io/docs/api-keys
       - https://imagekit.io/docs/api-reference/account-management-api/url-endpoints/list-url-endpoints
+      - https://github.com/imagekit-developer/imagekit-ruby/blob/d3b164e19866ce437c044db5da91f4ccaaea49e1/lib/imagekitio/client.rb
+      - https://github.com/imagekit-developer/imagekit-dotnet/blob/5ed8e5ee39c064dbe8c44d3bd8f5ab55df646e28/src/Imagekit.Tests/Models/Accounts/UrlEndpoints/UrlEndpointCreateParamsTest.cs
     validation:
       type: Http
       content:

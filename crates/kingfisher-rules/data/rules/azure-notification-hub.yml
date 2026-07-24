@@ -14,7 +14,7 @@ rules:
         https://
       )
       (
-        [a-z0-9]
+        [[:alnum:]]
         [a-z0-9-]{1,62}
         \.servicebus\.windows\.net
       )
@@ -44,7 +44,7 @@ rules:
       \s*[:=]\s*
       ["']?
       (
-        [A-Za-z0-9]
+        [[:alnum:]]
         [A-Za-z0-9._-]{6,63}
       )
       ["']?

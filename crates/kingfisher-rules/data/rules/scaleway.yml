@@ -11,11 +11,11 @@ rules:
       [=:"'\s]
       \b
       (
-        [a-f0-9]{8}-
-        [a-f0-9]{4}-
-        [a-f0-9]{4}-
-        [a-f0-9]{4}-
-        [a-f0-9]{12}
+        [[:xdigit:]]{8}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{4}-
+        [[:xdigit:]]{12}
       )
       \b
     pattern_requirements:
@@ -28,6 +28,7 @@ rules:
     references:
       - https://developers.scaleway.com/en/
       - https://www.scaleway.com/en/developers/api/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/scaleway.go
     validation:
       type: Http
       content:

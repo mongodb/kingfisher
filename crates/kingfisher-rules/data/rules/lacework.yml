@@ -34,7 +34,7 @@ rules:
       [=:"'\s]
       ['"]*
       (
-        _[a-z0-9]{31}
+        _[[:alnum:]]{31}
       )
       ['"\s]
     pattern_requirements:

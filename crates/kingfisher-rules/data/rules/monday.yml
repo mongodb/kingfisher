@@ -37,3 +37,4 @@ rules:
               match_all_words: true
     references:
       - https://developer.monday.com/api-reference/docs/authentication
+      - https://github.com/PostHog/posthog/blob/aa71cd56cacdbb8d6eb208def807814b8fcb5389/posthog/temporal/data_imports/sources/monday/monday.py

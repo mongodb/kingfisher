@@ -35,6 +35,7 @@ rules:
               status: [200]
     references:
       - https://developer.travis-ci.com/authentication
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/travisci.go
   - name: Travis CI Encrypted Variable
     id: kingfisher.travisci.2
     pattern: |
@@ -55,3 +56,4 @@ rules:
             - secure: "VJh0l9gOb+6AVNDk6cziZSs1AqVM8CqtZU6ot9ZQeJ+KfL1pxnGQ4qQF8Cz9\M1q85c3l1N1+qkQ0uV12QG6O6ylq6Qq1l3VjAJM3h2pY3jdmrA8kX2ZIxRjC/\8+Xj1wVtKQ0R+owM/6i5Y6cyx4hRb3VvSeYlC0lD1iTzQ2vgMyE="
     references:
       - https://docs.travis-ci.com/user/encryption-keys/
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/travisci.go

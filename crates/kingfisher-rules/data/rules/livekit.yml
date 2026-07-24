@@ -21,6 +21,7 @@ rules:
       - 'livekit_key: "APIQw2Er3Ty4Ui5"'
     references:
       - https://docs.livekit.io/home/get-started/authentication/
+      - https://github.com/livekit/server-sdk-kotlin/blob/7656fedcaa4a71dcb2d056761246e91b827ea10a/src/main/kotlin/io/livekit/server/RoomService.kt
 
   - name: LiveKit API Secret
     id: kingfisher.livekit.2
@@ -40,7 +41,7 @@ rules:
       \s*[:=]\s*
       ['"]?
       (
-        [A-Za-z0-9]{43,44}
+        [[:alnum:]]{43,44}
       )
       ['"]?
       \b
@@ -56,6 +57,7 @@ rules:
       - https://docs.livekit.io/home/get-started/authentication/
       - https://docs.livekit.io/reference/other/roomservice-api.md
       - https://docs.livekit.io/frontends/reference/tokens-grants.md
+      - https://github.com/livekit/server-sdk-kotlin/blob/7656fedcaa4a71dcb2d056761246e91b827ea10a/src/main/kotlin/io/livekit/server/RoomService.kt
     depends_on_rule:
       - rule_id: kingfisher.livekit.1
         variable: API_KEY
@@ -106,3 +108,4 @@ rules:
       - "livekit_host=https://acme-voice.livekit.cloud"
     references:
       - https://docs.livekit.io/home/get-started/authentication/
+      - https://github.com/livekit/server-sdk-kotlin/blob/7656fedcaa4a71dcb2d056761246e91b827ea10a/src/main/kotlin/io/livekit/server/RoomService.kt

@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     min_entropy: 3.5
@@ -23,6 +23,8 @@ rules:
     references:
       - https://documentation.onesignal.com/reference/rest-api-overview
       - https://documentation.onesignal.com/docs/keys-and-ids
+      - https://github.com/fastlane/fastlane/blob/d5347690d47de21d0e6fe78bd5ce77e35a714350/fastlane/lib/fastlane/actions/onesignal.rb
+      - https://github.com/OneSignal/react-native-onesignal/blob/8a346af27a5db83dd21af343153eeec5dc0496cd/examples/demo/src/services/OneSignalApiService.ts
     validation:
       type: Http
       content:

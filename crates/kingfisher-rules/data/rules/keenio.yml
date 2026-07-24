@@ -9,7 +9,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Fa-f0-9]{64}
+        [[:xdigit:]]{64}
       )
       \b
     confidence: medium
@@ -43,7 +43,7 @@ rules:
       (?:KEEN_PROJECT_ID|keen_project_id|PROJECT_ID|project_id)
       \s* [=:] \s* ["']?
       (
-        [a-f0-9]{24}
+        [[:xdigit:]]{24}
       )
       ["']?
     confidence: medium
@@ -51,3 +51,5 @@ rules:
     examples:
       - "KEEN_PROJECT_ID=507f1f77bcf86cd799439011"
       - 'project_id: "5f47ac10e91b2a0017b4c8d2"'
+    references:
+      - https://keen.io/docs/api/

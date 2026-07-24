@@ -32,7 +32,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -45,6 +45,7 @@ rules:
     references:
       - https://open.weixin.qq.com/?lang=en
       - https://developers.weixin.qq.com/doc/offiaccount/Basic_Information/Get_access_token.html
-    # No standalone validation: WeChat token endpoint requires both
-    # appid and appsecret together, which cannot be combined in a
-    # single-credential HTTP validation request.
+      # No standalone validation: WeChat token endpoint requires both
+      # appid and appsecret together, which cannot be combined in a
+      # single-credential HTTP validation request.
+      - https://github.com/projectdiscovery/nuclei-templates/blob/3c29bfc0cbceae06014a38c2baa2936b981f0038/http/exposures/tokens/wechat/wechat-secret-key.yaml

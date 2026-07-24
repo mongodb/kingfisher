@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:

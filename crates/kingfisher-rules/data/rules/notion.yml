@@ -7,7 +7,7 @@ rules:
       (?:.|[\\n\r]){0,32}?
       \b
       (
-        secret_[A-Z0-9]{43}
+        secret_[[:alnum:]]{43}
       )
       \b
     pattern_requirements:
@@ -34,18 +34,22 @@ rules:
                 - '"type":"bot"'
               match_all_words: true
           url: https://api.notion.com/v1/users/me
+    references:
+      - https://developers.notion.com/docs/authorization
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/notion.go
   - name: Notion Token
     id: kingfisher.notion.2
     pattern: |
       (?xi)
       \b
       (
-        ntn_[0-9]{11}[A-Za-z0-9]{35}
+        ntn_[0-9]{11}[[:alnum:]]{35}
       )
     min_entropy: 4.0
     confidence: medium
     references:
       - https://developers.notion.com/page/changelog#september-11-2024
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/notion.go
     examples:
       - "notion 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"
     validation:
@@ -80,3 +84,5 @@ rules:
     confidence: medium
     examples:
       - "notion refresh token = nrt_4Y29zY29vbF9leGFtcGxlX3JlZnJlc2hfdG9rZW4xMjM0NQ"
+    references:
+      - https://developers.notion.com/docs/authorization

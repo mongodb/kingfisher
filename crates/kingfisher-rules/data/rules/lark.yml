@@ -9,7 +9,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        t-[A-Z0-9_.]{14,50}
+        t-[[:alnum:]_.]{14,50}
       )
       \b
     min_entropy: 3.2
@@ -55,7 +55,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        u-[A-Z0-9_.]{14,50}
+        u-[[:alnum:]_.]{14,50}
       )
       \b
     min_entropy: 3.2
@@ -99,7 +99,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        a-[A-Z0-9_.]{30,35}
+        a-[[:alnum:]_.]{30,35}
       )
       \b
     min_entropy: 3.2
@@ -140,3 +140,75 @@ rules:
                 - '"code": 20014'
                 - '"code":99991664'
                 - '"code": 99991664'
+
+  - name: LarkSuite / Feishu App ID
+    id: kingfisher.lark.4
+    pattern: |
+      (?x)
+      (?:\b(?:app|client)[_-]?id\b\s*(?:=|:)\s*["']?)?
+      (cli_(?:[a-z0-9]{2}){8})
+      \b
+    min_entropy: 3.0
+    confidence: medium
+    visible: false
+    examples:
+      - APP_ID=cli_a5ca35a685b0x26e
+    references:
+      - https://open.larksuite.com/document/server-docs/getting-started/api-access-token/auth-v3/tenant_access_token_internal
+      - https://open.larksuite.com/document/uAjLw4CM/ukTMukTMukTM/authentication-management/access-token/get-user-access-token
+
+  - name: LarkSuite / Feishu App Secret
+    id: kingfisher.lark.5
+    pattern: |
+      (?xi)
+      (?:
+        \bcli_[a-z0-9]{16}\b
+        (?:.|[\n\r]){0,192}?
+        (?:\b|_)(?:app|client)[_-]?secret\b
+        |
+        \b(?:lark|larksuite|feishu)
+        (?:.|[\n\r]){0,64}?
+        (?:\b|_)(?:app|client)[_-]?secret\b
+      )
+      \s*(?:=|:|\()\s*["']?
+      (
+        [[:alnum:]]{32}
+      )
+      (?:["'\s,;}]|$)
+    pattern_requirements:
+      min_digits: 2
+      min_uppercase: 1
+      min_lowercase: 1
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - |
+        APP_ID=cli_a5ca35a685b0x26e
+        APP_SECRET=baBqE5um9LbFGDy3X7LcfxQX1sqpXlwy
+      - 'lark_app_secret="baBqE5um9LbFGDy3X7LcfxQX1sqpXlwy"'
+    references:
+      - https://open.larksuite.com/document/server-docs/getting-started/api-access-token/auth-v3/tenant_access_token_internal
+      - https://open.feishu.cn/document/server-side-sdk/python--sdk/invoke-server-api
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://open.larksuite.com/open-apis/auth/v3/tenant_access_token/internal
+          headers:
+            Content-Type: application/json; charset=utf-8
+            Accept: application/json
+          body: '{"app_id":"{{ APP_ID }}","app_secret":"{{ TOKEN }}"}'
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+            - type: WordMatch
+              match_all_words: false
+              words:
+                - '"code":0'
+                - '"code": 0'
+    depends_on_rule:
+      - rule_id: kingfisher.lark.4
+        variable: APP_ID

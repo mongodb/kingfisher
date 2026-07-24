@@ -181,12 +181,20 @@ impl Intercept for UaInterceptor {
 }
 
 /// Generate a standardized cache key for AWS validation attempts.
-pub fn generate_aws_cache_key(aws_access_key_id: &str, aws_secret_access_key: &str) -> String {
+pub fn generate_aws_cache_key(
+    aws_access_key_id: &str,
+    aws_secret_access_key: &str,
+    session_token: Option<&str>,
+) -> String {
     use sha1::{Digest, Sha1};
     let mut hasher = Sha1::new();
     hasher.update(aws_access_key_id.as_bytes());
     hasher.update(b"\0");
     hasher.update(aws_secret_access_key.as_bytes());
+    if let Some(session_token) = session_token {
+        hasher.update(b"\0");
+        hasher.update(session_token.as_bytes());
+    }
     format!("AWS:{}", hex::encode(hasher.finalize()))
 }
 
@@ -316,6 +324,7 @@ pub async fn revoke_aws_access_key(
 pub async fn validate_aws_credentials(
     aws_access_key_id: &str,
     aws_secret_access_key: &str,
+    session_token: Option<&str>,
 ) -> Result<(bool, String)> {
     let _permit = aws_validation_semaphore().acquire().await.expect("semaphore closed");
 
@@ -323,7 +332,7 @@ pub async fn validate_aws_credentials(
     let credentials = Credentials::new(
         aws_access_key_id,
         aws_secret_access_key,
-        None,     // session token
+        session_token.map(str::to_owned),
         None,     // expiry
         "static", // provider name
     );
@@ -444,5 +453,21 @@ mod tests {
         );
         assert!(validate_aws_credentials_input("short", "secret").is_err());
         assert!(validate_aws_credentials_input("AKIAIOSFODNN7EXAMPLE", "short").is_err());
+    }
+
+    #[test]
+    fn aws_session_credentials_use_a_distinct_cache_key() {
+        let static_key = generate_aws_cache_key(
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            None,
+        );
+        let session_key = generate_aws_cache_key(
+            "AKIAIOSFODNN7EXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            Some("session-token"),
+        );
+
+        assert_ne!(static_key, session_key);
     }
 }

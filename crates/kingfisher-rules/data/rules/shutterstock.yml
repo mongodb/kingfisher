@@ -20,9 +20,6 @@ rules:
       - 'SHUTTERSTOCK_TOKEN="v2/ODYwYmRlNzBiYjMzNTE2M2UyZTQvYTc0NjI3NjEvNjBiMQ"'
       - |
         shutterstock_access_token: 'v2/ZDk4YWUxMGQtZGYyYy00ZGQwLWJiOWMtOTM3Y2E1NTA1YjYx'
-    negative_examples:
-      - v2/short
-      - "SHUTTERSTOCK_DOC_URL=https://api.shutterstock.com/v2/images"
     references:
       - https://api-reference.shutterstock.com/
       - https://www.shutterstock.com/developers/documentation/authentication

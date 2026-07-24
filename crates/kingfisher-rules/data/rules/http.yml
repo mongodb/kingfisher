@@ -15,6 +15,7 @@ rules:
     references:
       - https://datatracker.ietf.org/doc/html/rfc7617
       - https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/http.yml
 
   - name: HTTP Bearer Token
     id: kingfisher.http.2
@@ -34,3 +35,4 @@ rules:
     references:
       - https://datatracker.ietf.org/doc/html/rfc6750
       - https://developer.mozilla.org/en-US/docs/Web/HTTP/Authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/http.yml

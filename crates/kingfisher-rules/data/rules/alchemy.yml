@@ -27,6 +27,7 @@ rules:
     references:
       - https://www.alchemy.com/rpc/ethereum
       - https://www.alchemy.com/docs/reference/nft-api-endpoints/nft-api-endpoints/nft-ownership-endpoints/get-nf-ts-for-owner-v-3
+      - https://github.com/alchemyplatform/docs/blob/40f44d8d7caa08a94923d55ad0657110087384c7/content/api-reference/data/nft-api/nft-ownership-endpoints/getnftsforowner-v3.mdx
     validation:
       type: Http
       content:

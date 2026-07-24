@@ -13,6 +13,7 @@ rules:
     min_entropy: 3.0
     references:
       - https://help.kagi.com/kagi/api/search.html
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/kagi.yml
     examples:
       - "KAGI_API_KEY='AQAAUPJ-iQc.yLFDzC5RRHzPNDThhulREdoG0Bn3PiZMwJ6yqC6uJLE'"
       - "https://kagi.com/search?token=uwHBLWXZpgY.STzubkAbVXqpfV39Q6TOfzp43KulJeYWK6-963uz1-o"

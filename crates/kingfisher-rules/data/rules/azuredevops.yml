@@ -6,7 +6,7 @@ rules:
       \b
       dev\.azure\.com/
       (
-        [a-z0-9][a-z0-9-]{0,61}[a-z0-9]
+        [[:alnum:]][a-z0-9-]{0,61}[[:alnum:]]
       )
     confidence: medium
     min_entropy: 2.5
@@ -14,6 +14,8 @@ rules:
     examples:
       - https://dev.azure.com/contoso
       - dev.azure.com/somebody123
+    references:
+      - https://learn.microsoft.com/en-us/rest/api/azure/devops/profile/profiles/get?view=azure-devops-rest-7.1&tabs=HTTP
 
   - name: Azure DevOps Personal Access Token
     id: kingfisher.azure.devops.2
@@ -21,7 +23,7 @@ rules:
       (?xi)
       \b
       (
-        [a-z0-9]{76}AZDO[a-z0-9]{4,5}
+        [[:alnum:]]{76}AZDO[[:alnum:]]{4,5}
       )
       \b
     pattern_requirements:

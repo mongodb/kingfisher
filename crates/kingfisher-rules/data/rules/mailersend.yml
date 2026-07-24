@@ -30,3 +30,4 @@ rules:
     references:
       - https://www.mailersend.com/help/managing-api-tokens
       - https://developers.mailersend.com/
+      - https://github.com/mailersend/mailersend-ruby/blob/4f448a264b264216b418f56bad63d2c6968909d4/fixtures/api_quota/api_quota_get.yml

@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b                         
       (
-        [0-9a-z]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -18,6 +18,8 @@ rules:
       - diffbot_key = a7424adbafc4624e61482d0f60e43016
     references:
       - https://docs.diffbot.com/reference/account
+      - https://github.com/diffbot/docs/blob/0f26e058ea2e30ac221336527aef701cfdcca703/docs/api-account.md?plain=1#L7-L37
+      - https://github.com/diffbot/diffbot-python/blob/b64f6a16ac85e5db3783a9ea582b24f9e1874e54/src/diffbot/_auth.py#L1-L41
     validation:
       type: Http
       content:
@@ -29,8 +31,6 @@ rules:
             - report_response: true
             - type: StatusMatch
               status: [200]
+            - type: JsonValid
             - type: WordMatch
-              words:
-                - '"name"'
-                - '"email"'
-                - '"planCredits"'
+              words: ['"usage"']

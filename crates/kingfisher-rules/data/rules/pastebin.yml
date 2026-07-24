@@ -39,3 +39,4 @@ rules:
               negative: true
     references:
       - https://pastebin.com/doc_api
+      - https://pastebin.com/doc_api # Vendor docs document the same validation endpoint (pastebin.com):

@@ -11,7 +11,7 @@ rules:
       )
       \b
       (
-        app-[a-f0-9]{24}
+        app-[[:xdigit:]]{24}
       )
       \b
     pattern_requirements:
@@ -24,6 +24,7 @@ rules:
     references:
       - https://docs.dify.ai/en/introduction
       - https://docs.dify.ai/en/guides/application-publishing/developing-with-apis
+      - https://docs.dify.ai/en/use-dify/publish/developing-with-apis
     validation:
       type: Http
       content:

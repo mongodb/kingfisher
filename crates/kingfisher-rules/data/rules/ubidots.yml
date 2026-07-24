@@ -38,3 +38,4 @@ rules:
     references:
       - https://docs.ubidots.com/reference/authentication
       - https://docs.ubidots.com/reference/get-devices
+      - https://docs.ubidots.com/reference/get-all-devices

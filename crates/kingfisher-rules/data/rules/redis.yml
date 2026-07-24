@@ -43,7 +43,7 @@ rules:
     references:
       - https://redis.io/docs/latest/develop/clients/redis-py/connect/
       - https://redis.io/docs/latest/commands/auth/
-      - https://github.com/redis/redis-py/blob/master/redis/client.py
+      - https://github.com/redis/redis-py/blob/88d16d0db10c852d1d292628b2c832f1ed117056/redis/client.py
     validation:
       type: Raw
       content: redis

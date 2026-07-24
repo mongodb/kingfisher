@@ -41,6 +41,7 @@ rules:
     references:
       - https://cloud.google.com/iam/docs/service-accounts
       - https://cloud.google.com/iam/docs/creating-managing-service-account-keys
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/gcp.go
   - name: GCP Private Key ID
     id: kingfisher.gcp.3
     pattern: |
@@ -56,7 +57,7 @@ rules:
       \s{0,8}
       ["']?
       (
-        [0-9a-z]{35,40}
+        [[:alnum:]]{35,40}
       )
       ["']?
       \b

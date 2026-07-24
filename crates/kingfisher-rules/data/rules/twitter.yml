@@ -40,6 +40,7 @@ rules:
               match_all_words: true
     references:
       - https://developer.x.com/en/docs/x-api/v1/developer-utilities/rate-limit-status/api-reference/get-application-rate_limit_status
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/twitter.go
   - name: Twitter Consumer Key
     id: kingfisher.twitter.2
     pattern: |
@@ -50,12 +51,16 @@ rules:
       (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,32}?
       (
-        [A-Z0-9]{25}
+        [[:alnum:]]{25}
       )
     min_entropy: 3.5
     visible: false
     examples:
       - "TWITTER_KEY=4RTBCyG2TbvL407A1lWxQFKCC"
+    references:
+      - https://developer.x.com/en/docs/authentication/oauth-2-0/application-only
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/twitter.yml
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/twitter.go
   - name: X / Twitter Consumer Secret
     id: kingfisher.twitter.3
     pattern: |
@@ -66,13 +71,15 @@ rules:
       (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,32}?
       (
-        [A-Z0-9]{50}
+        [[:alnum:]]{50}
       )
     min_entropy: 4.0
     examples:
       - "TWITTER_SECRET=ZGwXeK2DNCqv49Z9ofwYdqlBgeoHDyh8uoAgHju6OeYC7wTQJq"
     references:
       - https://developer.x.com/en/docs/authentication/oauth-2-0/application-only
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/twitter.yml
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/twitter.go
     validation:
       type: Http
       content:
@@ -107,7 +114,7 @@ rules:
       \b
       (
         [0-9]{15,25}-
-        [a-zA-Z0-9]{20,40}
+        [[:alnum:]]{20,40}
       )
       \b
     pattern_requirements:
@@ -139,7 +146,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-zA-Z0-9]{45}
+        [[:alnum:]]{45}
       )
       \b
     pattern_requirements:

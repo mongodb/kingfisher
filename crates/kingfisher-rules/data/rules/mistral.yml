@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [A-Z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -26,6 +26,9 @@ rules:
       - https://docs.mistral.ai/api/ :contentReference[oaicite:2]{index=2}
       - https://medium.com/@stephane.giron/explore-mistral-ai-api-with-google-apps-script-d41b851c55e3 :contentReference[oaicite:3]{index=3}
       - https://docs.mistral.ai/api/ :contentReference[oaicite:4]{index=4}
+      - https://docs.mistral.ai/getting-started/quickstart
+      - https://docs.mistral.ai/api/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/mistral.go
     validation:
       type: Http
       content:

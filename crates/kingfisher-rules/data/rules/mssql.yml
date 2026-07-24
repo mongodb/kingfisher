@@ -22,5 +22,6 @@ rules:
       - "mssql_password=Tr0ub4dor&3\n"
     references:
       - https://docs.microsoft.com/en-us/sql/
-    # No public validation endpoint: MSSQL is self-hosted;
-    # the host and port are instance-specific.
+      # No public validation endpoint: MSSQL is self-hosted;
+      # the host and port are instance-specific.
+      - https://github.com/jwcraig/sql-server-cli/blob/96683b11d155975a9121bea667c051338b5c171d/README.md

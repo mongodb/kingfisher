@@ -18,6 +18,8 @@ rules:
       - "llama_api_key = 'llx-M0nQ3rS9tU5xZ7aB2dE4fG6hI1jK8lN0oPqRsT4wXyZa'"
     references:
       - https://docs.llmapi.com/quickstart
+      - https://github.com/run-llama/llama_index/blob/7359b1acc74563f715d4463ace39fb4dc73d79af/docs/src/content/docs/framework/understanding/rag/loading/llamacloud.md
+      - https://github.com/run-llama/n8n-llamacloud/blob/ba6281c53afe26f904117e7c717c1c9f569170c5/credentials/LlamaCloudApi.credentials.ts
     validation:
       type: Http
       content:

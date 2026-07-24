@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-f0-9]{32}\.[a-zA-Z0-9_-]{24}
+        [[:xdigit:]]{32}\.[A-Z0-9_-]{24}
       )
     pattern_requirements:
       min_digits: 2
@@ -41,6 +41,8 @@ rules:
                 - '"done":true'
     references:
       - https://ollama.com/blog
+      - https://github.com/ollama/ollama-js
+      - https://github.com/ollama/ollama/blob/efb7e3c55ef18e8560ad4a29884e061e54f332ae/docs/api/authentication.mdx
     examples:
       - "ollama key = 8bcdd9b4e28e4e1b8bf14a2eb8701220.QH5p5TU2BDwzHu5_RCtvJXsj"
       - "ollama key = e56714bd7c1146e4b4801244bc2bc67a.3GAswjZGZ5YY6Qdgt0xg56vM"

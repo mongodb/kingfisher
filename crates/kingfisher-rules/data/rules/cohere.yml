@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Z0-9]{40}
+        [[:alnum:]]{40}
       )
       \b
     pattern_requirements:
@@ -21,6 +21,7 @@ rules:
       - "cohere_token: x7PX0fac8a2GW2fgnNqdtqIwMQvFbrL6E7lKrKOv"
     references:
       - https://docs.cohere.com/reference/list-connectors
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/cohere.go
     validation:
       type: Http
       content:

@@ -9,7 +9,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [A-Za-z0-9]{32,64}
+        [[:alnum:]]{32,64}
       )
       \b
     pattern_requirements:
@@ -22,6 +22,7 @@ rules:
       - "export ITERABLE_KEY=9f4B2d7E1a3c8056d2E7f1b94A6c3d80"
     references:
       - https://api.iterable.com/api/docs
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/token-spray/api-iterable.yaml
     validation:
       type: Http
       content:

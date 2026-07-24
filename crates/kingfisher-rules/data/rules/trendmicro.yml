@@ -8,9 +8,9 @@ rules:
       [=:"'\s]
       \b
       (
-        [A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
         :
-        [A-Fa-f0-9]{8}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{4}-[A-Fa-f0-9]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
         :
         [A-Za-z0-9+/]{40,60}={0,2}
       )
@@ -24,6 +24,7 @@ rules:
     references:
       - https://automation.deepsecurity.trendmicro.com/article/20_0/api-reference/
       - https://cloudone.trendmicro.com/docs/account-and-user-management/c1-api-key/
+      - https://docs.trendmicro.com/en-us/documentation/article/trend-micro-cloud-one-identity-account-management-c1-api-key
     validation:
       type: Http
       content:
@@ -62,6 +63,7 @@ rules:
       - "TMC_API_KEY=tmc1AbCdEfGhIjKlMnOpQrStUvWxYz12:ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789AB"
     references:
       - https://cloudone.trendmicro.com/docs/account-and-user-management/c1-api-key/
+      - https://docs.trendmicro.com/en-us/documentation/article/trend-micro-cloud-one-identity-account-management-c1-api-key
     validation:
       type: Http
       content:

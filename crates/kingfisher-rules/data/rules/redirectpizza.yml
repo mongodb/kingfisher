@@ -20,6 +20,7 @@ rules:
     references:
       - https://docs.github.com/en/code-security/reference/secret-security/supported-secret-scanning-patterns
       - https://redirect.pizza/support/api
+      - https://redirect.pizza/api/v1/domains
     validation:
       type: Http
       content:

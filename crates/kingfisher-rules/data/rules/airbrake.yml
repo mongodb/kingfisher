@@ -21,6 +21,7 @@ rules:
       - "airbrakeToken: 'a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6q7R8s9T0'"
     references:
       - https://docs.airbrake.io/docs/devops-tools/api/#list-projects-v4
+      - https://github.com/airbrake/airbrake/blob/73af58d32eb2372931e4b892920606f131aee379/README.md
     validation:
       type: Http
       content:

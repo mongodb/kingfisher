@@ -17,6 +17,7 @@ rules:
       - https://www.inngest.com/docs/platform/signing-keys
       - https://github.com/inngest/website/blob/609106a0812afc7660b0f471e6fdd4219116bc8a/pages/docs/platform/signing-keys.mdx
       - https://github.com/inngest/inngest/blob/bf307f517950fae9440d9823079990a680c20396/pkg/authn/signing_key_strategy.go
+      - https://github.com/inngest/inngest/blob/c466d566693a2dbea59565e3d3a5c1ac86dd46f7/docs/SDK_SPEC.md
     validation:
       type: Http
       content:
@@ -62,8 +63,9 @@ rules:
     references:
       - https://www.inngest.com/docs/events/creating-an-event-key
       - https://github.com/inngest/website/blob/609106a0812afc7660b0f471e6fdd4219116bc8a/pages/docs/platform/signing-keys.mdx
-    # Validation sends an inert event (no function subscribes to this name).
-    # The event key is only accepted at the event ingestion endpoint.
+      # Validation sends an inert event (no function subscribes to this name).
+      # The event key is only accepted at the event ingestion endpoint.
+      - https://github.com/inngest/inngest/blob/c466d566693a2dbea59565e3d3a5c1ac86dd46f7/docs/SDK_SPEC.md
     validation:
       type: Http
       content:

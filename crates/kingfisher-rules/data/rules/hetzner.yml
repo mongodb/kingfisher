@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,48}?
       \b
       (
-        [A-Z0-9]{64}
+        [[:alnum:]]{64}
       )
       \b
     pattern_requirements:
@@ -22,6 +22,7 @@ rules:
       - "HCLOUD_TOKEN=aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789aBcDeFgHiJkLmNoPqRsTuVwXy012"
     references:
       - https://docs.hetzner.cloud/
+      - https://github.com/hetznercloud/apps/blob/1441bb18c9a50dd45f8f531808210103d74b54ee/apps/hetzner/lamp/README.md
     validation:
       type: Http
       content:

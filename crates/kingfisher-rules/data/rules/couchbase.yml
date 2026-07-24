@@ -33,6 +33,7 @@ rules:
         capella_api_secret = 'aB1cD2eF3gH4iJ5kL6mN7oP8qR9sT0uV1wX2yZ3aA4bB5cC6dD7eE8fF9gG0hH1iJ2kL3m=='
     references:
       - https://docs.couchbase.com/cloud/management-api-reference/index.html
+      - https://github.com/couchbaselabs/agent-skills/blob/073a7dcce4465f185aec22252d3875cd0ae8ed99/skills/capella/SKILL.md
     validation:
       type: Http
       content:

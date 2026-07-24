@@ -21,7 +21,10 @@ rules:
       - dt0s02.UZCK6ENL.2YQ2A3DZUEISRJSUU5544J3SC3TMPXSEEMNA5HK7RW54SJ6XKLYGMWJNKL7B2DNH
     references:
       - https://docs.dynatrace.com/docs/dynatrace-api/basics/dynatrace-api-authentication
-    # token is tenant-scoped; validate against the nearest tenant host (helper rule below)
+      # token is tenant-scoped; validate against the nearest tenant host (helper rule below)
+      - https://docs.dynatrace.com/docs/discover-dynatrace/references/dynatrace-api/basics/dynatrace-api-authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/dynatrace.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/dynatrace.go
     depends_on_rule:
       - rule_id: "kingfisher.dynatrace.2"
         variable: DT_TENANT

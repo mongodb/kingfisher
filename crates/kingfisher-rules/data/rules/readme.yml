@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        rdme_(?P<RDMVAL>[a-z0-9]{70})
+        rdme_(?P<RDMVAL>[[:alnum:]]{70})
       )
       \b
     pattern_requirements:
@@ -17,6 +17,7 @@ rules:
       - rdme_xn8s9he60fb31e9d290403d2707cce88fa820042d425fc6eb2baed4191dd88a5405987
     references:
       - https://docs.readme.com/main/reference/getproject-1
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/readme.go
     validation:
       type: Http
       content:

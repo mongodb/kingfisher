@@ -42,6 +42,7 @@ rules:
         -----END RSA PRIVATE KEY-----
     references:
       - https://www.rfc-editor.org/rfc/rfc7468
+      - https://www.rfc-editor.org/rfc/rfc7468.html
 
   - name: Contains Private Key
     id: kingfisher.privkey.2
@@ -108,3 +109,4 @@ rules:
         -----END ENCRYPTED PRIVATE KEY BLOCK-----
     references:
       - https://www.rfc-editor.org/rfc/rfc7468
+      - https://www.rfc-editor.org/rfc/rfc7468.html

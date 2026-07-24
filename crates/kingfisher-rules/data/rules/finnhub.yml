@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,24}?
       \b
       (
-        [a-z0-9]{20}
+        [[:alnum:]]{20}
       )
       \b
     pattern_requirements:
@@ -20,6 +20,7 @@ rules:
       - '"finnhubToken": "9b8a7c6d5e4f3a2b1c0d"'
     references:
       - https://finnhub.io/docs/api
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/finnhub.go
     validation:
       type: Http
       content:

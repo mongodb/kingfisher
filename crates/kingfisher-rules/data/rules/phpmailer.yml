@@ -43,3 +43,4 @@ rules:
 
     references:
       - https://github.com/PHPMailer/PHPMailer
+      - https://github.com/praetorian-inc/noseyparker/blob/259838562bd552a76b592e980d8547ed00699497/crates/noseyparker/data/default/builtin/rules/phpmailer.yml

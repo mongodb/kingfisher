@@ -49,7 +49,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [A-Za-z0-9]{28,32}
+        [[:alnum:]]{28,32}
       )
       \b
     pattern_requirements:

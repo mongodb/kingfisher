@@ -19,6 +19,11 @@ rules:
       - https://docs.doppler.com/reference/auth-token-formats
       - https://docs.doppler.com/reference/auth-me
       - https://docs.doppler.com/reference/auth-revoke
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/doppler.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/doppler.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/doppler/doppler-cli-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/doppler/doppler-cli.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/global-matchers/secrets-patterns-rules.yaml
     validation:
       type: Http
       content:
@@ -51,7 +56,7 @@ rules:
     pattern: |
       (?xi)
       \b
-      (dp\.pt\.[A-Z0-9]{40,44})
+      (dp\.pt\.[[:alnum:]]{40,44})
       \b
     min_entropy: 3.3
     confidence: medium
@@ -62,6 +67,8 @@ rules:
       - https://docs.doppler.com/reference/auth-token-formats
       - https://docs.doppler.com/reference/auth-me
       - https://docs.doppler.com/reference/auth-revoke
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/doppler/doppler-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/doppler-api-token.yaml
     validation:
       type: Http
       content:
@@ -95,7 +102,7 @@ rules:
     pattern: |
       (?xi)
       \b
-      (dp\.st\.(?:[a-z0-9\-_]{2,35}\.)?[A-Z0-9]{40,44})
+      (dp\.st\.(?:[a-z0-9\-_]{2,35}\.)?[[:alnum:]]{40,44})
       \b
     min_entropy: 3.3
     confidence: medium
@@ -106,6 +113,8 @@ rules:
       - https://docs.doppler.com/reference/auth-token-formats
       - https://docs.doppler.com/reference/auth-me
       - https://docs.doppler.com/reference/auth-revoke
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/doppler/doppler-service-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/doppler/doppler-service.yaml
     validation:
       type: Http
       content:
@@ -139,7 +148,7 @@ rules:
     pattern: |
       (?xi)
       \b
-      (dp\.sa\.[A-Z0-9]{40,44})
+      (dp\.sa\.[[:alnum:]]{40,44})
       \b
     min_entropy: 3.3
     confidence: medium
@@ -150,6 +159,8 @@ rules:
       - https://docs.doppler.com/reference/auth-token-formats
       - https://docs.doppler.com/reference/auth-me
       - https://docs.doppler.com/reference/auth-revoke
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/doppler/doppler-service-account-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/doppler/doppler-service-account.yaml
     validation:
       type: Http
       content:
@@ -183,7 +194,7 @@ rules:
     pattern: |
       (?xi)
       \b
-      (dp\.scim\.[A-Z0-9]{40,44})
+      (dp\.scim\.[[:alnum:]]{40,44})
       \b
     min_entropy: 3.3
     confidence: medium
@@ -194,6 +205,8 @@ rules:
       - https://docs.doppler.com/reference/auth-token-formats
       - https://docs.doppler.com/reference/auth-me
       - https://docs.doppler.com/reference/auth-revoke
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/doppler/doppler-scim-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/doppler/doppler-scim.yaml
     validation:
       type: Http
       content:
@@ -227,7 +240,7 @@ rules:
     pattern: |
       (?xi)
       \b
-      (dp\.audit\.[A-Z0-9]{40,44})
+      (dp\.audit\.[[:alnum:]]{40,44})
       \b
     min_entropy: 3.3
     confidence: medium
@@ -238,6 +251,8 @@ rules:
       - https://docs.doppler.com/reference/auth-token-formats
       - https://docs.doppler.com/reference/auth-me
       - https://docs.doppler.com/reference/auth-revoke
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/doppler/doppler-audit-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/doppler/doppler-audit.yaml
     validation:
       type: Http
       content:

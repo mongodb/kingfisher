@@ -9,11 +9,13 @@ rules:
       .?
       (?: id | identifier | key )
       .{0,2} \s{0,20} .{0,2} \s{0,20} .{0,2}
-      \b ([a-z0-9]{12,14}) \b
+      \b ([[:alnum:]]{12,14}) \b
     pattern_requirements:
       min_digits: 2
     references:
       - https://docs.microsoft.com/en-us/linkedin/shared/api-guide/best-practices/secure-applications
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/linkedin.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/linkedin.go
     min_entropy: 2.5
     confidence: medium
     examples:
@@ -44,11 +46,13 @@ rules:
       .?
       (?: key | oauth | sec | secret )?
       .{0,2} \s{0,20} .{0,2} \s{0,20} .{0,2}
-      \b ([a-z0-9]{16}) \b
+      \b ([[:alnum:]]{16}) \b
     pattern_requirements:
       min_digits: 2
     references:
       - https://docs.microsoft.com/en-us/linkedin/shared/api-guide/best-practices/secure-applications
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/linkedin.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/linkedin.go
     min_entropy: 3.3
     confidence: medium
     examples:

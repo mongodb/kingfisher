@@ -38,3 +38,4 @@ rules:
       - https://docs.microsoft.com/en-us/azure/mariadb/howto-connection-string
       - https://docs.microsoft.com/en-us/azure/mysql/single-server/how-to-connection-string
       - https://www.connectionstrings.com/
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/odbc.yml

@@ -33,6 +33,7 @@ rules:
           url: https://api.planetscale.com/v1/user
     references:
       - https://planetscale.com/docs/api
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/planetscale.go
     depends_on_rule:
       - rule_id: kingfisher.planetscale.2
         variable: USERNAME
@@ -106,7 +107,7 @@ rules:
       (?:USER|ID|NAME)
       (?:.|[\n\r]){0,16}?
       (
-        [a-z0-9]{12}
+        [[:alnum:]]{12}
       )
     pattern_requirements:
       min_digits: 2

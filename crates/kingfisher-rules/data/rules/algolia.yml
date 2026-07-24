@@ -6,7 +6,7 @@ rules:
       algolia
       (?:.|[\n\r]){0,32}?
       (
-        [a-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -32,6 +32,8 @@ rules:
           url: https://{{ APPID }}-dsn.algolia.net/1/keys/{{ TOKEN }}
     references:
       - https://www.algolia.com/doc/rest-api/overview/#authentication
+      - https://www.algolia.com/doc/rest-api/search/#authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/algolia.go
     depends_on_rule:
       - rule_id: "kingfisher.algolia.2"
         variable: APPID
@@ -43,7 +45,7 @@ rules:
       algolia
       (?:.|[\n\r]){0,16}?
       (
-        [A-Z0-9]{10}
+        [[:alnum:]]{10}
       )
       \b
     pattern_requirements:
@@ -55,3 +57,5 @@ rules:
       - algolia_app_id = "WRB8YLFW7Y"
     references:
       - https://www.algolia.com/doc/rest-api/overview/#authentication
+      - https://www.algolia.com/doc/rest-api/search/#authentication
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/algolia.go

@@ -19,6 +19,8 @@ rules:
       - sk-nwvJypEMFNASJLiPBgNnzJj1xsDwlHChbFRMNwVkzy3e4UJg
     references:
       - https://platform.stability.ai/docs/api-reference#v1-user-account
+      - https://github.com/betterleaks/betterleaks/blob/06e89aa9d3745546f9d201cab86225270f78ff04/config/betterleaks.toml#L6548
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/stabilityai.go
     validation:
       type: Http
       content:

@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [0-9A-Z]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -21,6 +21,7 @@ rules:
       - jotform apikey=abcde12345abcde67890abcde12345fg
     references:
       - https://api.jotform.com/docs/
+      - https://github.com/jotform/api-use-cases/blob/e7718f51cbe1d06c0a1560bb7163f16ab8b0cb43/submaster/js/app.js
     validation:
       type: Http
       content:

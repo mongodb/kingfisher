@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b                       
       (                        
-        [a-f0-9]{32}
+        [[:xdigit:]]{32}
       )
       \b
     pattern_requirements:
@@ -35,6 +35,7 @@ rules:
                 - '"transactions":'
     references:
       - https://docs.finicity.com/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/finicity.go
 
   - name: Finicity client secret
     id: kingfisher.finicity.2
@@ -45,7 +46,7 @@ rules:
       (?:.|[\n\r]){0,64}?
       \b                       
       (                        
-        [a-z0-9]{20}
+        [[:alnum:]]{20}
       )                        
       \b
     min_entropy: 3.5
@@ -68,3 +69,4 @@ rules:
                 - 200
     references:
       - https://docs.finicity.com/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/finicity.go

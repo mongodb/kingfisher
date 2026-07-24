@@ -4,7 +4,7 @@ rules:
     pattern: |
       (?xi)
       (
-        (?:sc|ext|scauth|authress)_[a-z0-9]{5,30}\.[a-z0-9]{4,6}\.acc[_-][a-z0-9-]{10,32}\.[a-z0-9+/_=-]{30,120}
+        (?:sc|ext|scauth|authress)_[[:alnum:]]{5,30}\.[[:alnum:]]{4,6}\.acc[_-][a-z0-9-]{10,32}\.[a-z0-9+/_=-]{30,120}
       )
       \b
     pattern_requirements:
@@ -30,5 +30,6 @@ rules:
     references:
       - https://authress.io/knowledge-base/docs/authorization/service-clients/access-keys/
       - https://authress.io/knowledge-base/docs/usage-guides/api-keys-as-a-service-setup/
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/authress.go
     examples:
       - "sc_a6DTktFwMEvh87xstYV1BXl.ihwj.acc-0xd1a47h1rr0f.MC4CAQAwBQYDKAVwBCIEIB1wYB62EK24FKxEPHbW0ishcstwp2qs30uLXdWgu4V0"

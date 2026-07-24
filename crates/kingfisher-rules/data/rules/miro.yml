@@ -28,6 +28,9 @@ rules:
     references:
       - https://developers.miro.com/docs/rest-api-authorization
       - https://developers.miro.com/reference/get-token-info
+      - https://developers.miro.com/docs/getting-started-with-oauth
+      - https://developers.miro.com/reference/use-access-token-for-rest-api-requests
+      - https://github.com/miroapp/app-examples/blob/bff830e2941cc1562274c4ba4dd0fbd41dffd719/examples/python-flask-starter-with-oauth/README.md
     validation:
       type: Http
       content:
@@ -54,7 +57,7 @@ rules:
       (?:.|[\n\r]){0,20}?
       \b
       (
-        [A-Za-z0-9]{32}
+        [[:alnum:]]{32}
       )
       \b
     pattern_requirements:
@@ -67,6 +70,7 @@ rules:
       - "MIRO_CLIENT_SECRET=5VEWim0jDbaytgKXN7ReM7MkfpQ8Rm3d" # nosemgrep
     references:
       - https://developers.miro.com/docs/getting-started-with-oauth
+      - https://github.com/miroapp/app-examples/blob/bff830e2941cc1562274c4ba4dd0fbd41dffd719/examples/node-oauth/index.js
     depends_on_rule:
       - rule_id: kingfisher.miro.3
         variable: CLIENT_ID
@@ -107,3 +111,4 @@ rules:
       - "MIRO_CLIENT_ID=3458764668142796369"
     references:
       - https://developers.miro.com/docs/getting-started-with-oauth
+      - https://github.com/miroapp/app-examples/blob/bff830e2941cc1562274c4ba4dd0fbd41dffd719/examples/node-oauth/index.js

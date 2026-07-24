@@ -4860,7 +4860,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher"
-version = "1.108.0"
+version = "1.109.0"
 dependencies = [
  "anyhow",
  "asar",

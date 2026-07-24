@@ -23,6 +23,7 @@ rules:
       - https://docs.salad.com/container-engine/how-to-guides/platform-integrations/installation-helm-chart
       - https://github.com/SaladTechnologies/salad-cloud-docs/blob/cdd6fbc2be82574d1db1639d10f15a9d371ce018/ai-gateway/tutorials/getting-started.mdx
       - https://github.com/SaladTechnologies/salad-cloud-docs/blob/cdd6fbc2be82574d1db1639d10f15a9d371ce018/container-engine/reference/recipes/gromacs-kelpie.mdx
+      - https://docs.salad.com/reference/api-reference
     validation:
       type: Http
       content:

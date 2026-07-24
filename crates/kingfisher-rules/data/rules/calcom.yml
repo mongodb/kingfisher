@@ -17,6 +17,8 @@ rules:
       - "Authorization: Bearer cal_live_xK8m2LpQr5nW0vYz3cJ7aB4dE6fG8hJk"
     references:
       - https://cal.com/docs/api-reference/v2/introduction
+      - https://github.com/calcom/docs/blob/ae458a30e65a70a52208d70933f13f2f33ad23ca/pages/enterprise-features/api/authentication.mdoc
+      - https://github.com/calcom/cal.diy/blob/3894f37e14eae5082770f35ff1fde72110c0e6b6/agents/skills/calcom-api/references/authentication.md
     validation:
       type: Http
       content:

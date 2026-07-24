@@ -2,27 +2,27 @@ rules:
   - name: Storyblok API Token
     id: kingfisher.storyblok.1
     pattern: |
-      (?xi)
-      \b
-      storyblok
-      (?:.|[\n\r]){0,32}?
-      (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN|API)
-      (?:.|[\n\r]){0,32}?
+      (?x)
       \b
       (
-        [A-Za-z0-9]{22}tt
+        [[:alnum:]]{22}tt
       )
       \b
     min_entropy: 3.5
     confidence: medium
     pattern_requirements:
-      min_digits: 2
+      min_digits: 1
+      min_uppercase: 1
+      min_lowercase: 1
     examples:
-      - STORYBLOK_ACCESS_TOKEN=ExampleBogusTokenXYZ12tt
-      - storyblok_token = "FakeExampleTok45AB67CDtt"
+      - storyblok_theme_token = "J8a0kIiQV4SBvnv7q0ddUwtt"
+      - storyblok_preview_token = "KODXRlrsHSirnbZ4OQFPrQtt"
+      - storyblok_public_token = "rxzkt2RmiMrCNyYHjlvLLQtt"
+      - storyblok_token = "qqeNjdtdYztgaidoo5SHaAtt"
     references:
       - https://www.storyblok.com/docs/api/content-delivery/v2/getting-started/authentication
       - https://www.storyblok.com/docs/concepts/access-tokens
+      - https://www.storyblok.com/docs/api/content-delivery/v2#authentication
     validation:
       type: Http
       content:

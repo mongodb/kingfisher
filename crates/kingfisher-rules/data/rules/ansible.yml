@@ -7,7 +7,7 @@ rules:
       \d+\.\d+;
       [a-z0-9]+
       (?:;[^\s]*)?
-      ((?:\s+[0-9a-f]{16,})+)
+      ((?:\s+[[:xdigit:]]{16,})+)
     min_entropy: 2.0
     confidence: medium
     examples:

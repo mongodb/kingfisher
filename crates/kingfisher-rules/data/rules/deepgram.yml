@@ -8,7 +8,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [0-9a-f]{40}    
+        [[:xdigit:]]{40}
       )
       \b
     pattern_requirements:
@@ -24,6 +24,7 @@ rules:
       - https://developers.deepgram.com/docs/authenticating
       - https://developers.deepgram.com/reference/manage/models/list
       - https://developers.deepgram.com/reference/list-keys
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/deepgram.go
 
     validation:
       type: Http

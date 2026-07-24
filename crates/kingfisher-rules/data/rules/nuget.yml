@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        oy2[a-z0-9]{43}
+        oy2[[:alnum:]]{43}
       )
       \b
     pattern_requirements:
@@ -33,6 +33,8 @@ rules:
               words: ['"Key":']
     references:
       - https://learn.microsoft.com/en-us/nuget/api/overview#authentication
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/nuget.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/nuget.go
 
   - name: NuGet API Key
     id: kingfisher.nuget.2
@@ -44,7 +46,7 @@ rules:
       (?:SECRET|PRIVATE|ACCESS|KEY|TOKEN)
       (?:.|[\n\r]){0,32}?
       (
-        [a-z0-9]{46}
+        [[:alnum:]]{46}
       )
     min_entropy: 3.5
     confidence: medium
@@ -69,3 +71,4 @@ rules:
               words: ['"Key":']
     references:
       - https://learn.microsoft.com/en-us/nuget/api/overview#authentication
+      - https://learn.microsoft.com/en-us/nuget/api/overview#authentication # Vendor docs document the same validation endpoint (www.nuget.org):

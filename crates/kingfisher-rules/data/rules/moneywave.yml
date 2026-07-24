@@ -19,4 +19,5 @@ rules:
       - "MONEYWAVE_KEY=ts_AC1DFKWPE7MY6JIKVNS7D8BHWZ1C"
     references:
       - https://flutterwave.com/us/developers
-    # No public validation endpoint available.
+      # No public validation endpoint available.
+      - https://developer.flutterwave.com/docs/getting-started

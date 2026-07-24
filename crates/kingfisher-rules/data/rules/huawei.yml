@@ -24,6 +24,7 @@ rules:
       - "HUAWEI_APP_ID=100023456"
     references:
       - https://developer.huawei.com/consumer/en/doc/development/HMS-Guides/38054564
+      - https://github.com/cianru/huawei-appgallery-publish-gradle-plugin/blob/890e8809161af11b3846cf60acd6a649f0eecd36/plugin/src/main/kotlin/ru/cian/huawei/publish/HuaweiPublishTask.kt
 
   - name: Huawei Open Platform Client Secret
     id: kingfisher.huawei.2
@@ -37,7 +38,7 @@ rules:
       [=:"'\s]
       \b
       (
-        [a-f0-9]{64}
+        [[:xdigit:]]{64}
       )
       \b
     pattern_requirements:
@@ -49,6 +50,7 @@ rules:
       - "huawei\nclient_secret=1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b"
     references:
       - https://developer.huawei.com/consumer/en/doc/development/HMS-Guides/38054564
-    # No standalone validation: Huawei OAuth2 requires both client_id and
-    # client_secret together for the token endpoint. Cannot combine two
-    # captured groups in a single HTTP validation request.
+      # No standalone validation: Huawei OAuth2 requires both client_id and
+      # client_secret together for the token endpoint. Cannot combine two
+      # captured groups in a single HTTP validation request.
+      - https://github.com/cianru/huawei-appgallery-publish-gradle-plugin/blob/890e8809161af11b3846cf60acd6a649f0eecd36/plugin/src/main/kotlin/ru/cian/huawei/publish/HuaweiPublishTask.kt

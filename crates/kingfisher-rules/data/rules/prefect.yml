@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        pnu_[a-z0-9]{36}
+        pnu_[[:alnum:]]{36}
       )
       \b
     pattern_requirements:
@@ -17,6 +17,7 @@ rules:
       - '"prefectToken": "pnu_abcdefabcdef12cdefabcdefabcdefabcdef"'
     references:
       - https://docs.prefect.io/latest/concepts/api_keys/
+      - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/prefect.go
     validation:
       type: Http
       content:

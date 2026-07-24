@@ -10,7 +10,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-f0-9]{40}
+        [[:xdigit:]]{40}
       )
       \b
     pattern_requirements:
@@ -23,6 +23,8 @@ rules:
     references:
       - https://www.clockworksms.com/doc/
       - https://www.clockworksms.com/doc/reference/faqs/security/
+      - https://www.textanywhere.com/developer-zone/
+      - https://www.textanywhere.com/developer-zone/reference/faqs/security/
     validation:
       type: Http
       content:

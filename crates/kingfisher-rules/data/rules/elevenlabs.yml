@@ -20,6 +20,7 @@ rules:
     references:
       - https://elevenlabs.io/docs/api-reference/authentication
       - https://elevenlabs.io/docs/api-reference/user/subscription/get
+      - https://github.com/elevenlabs/elevenlabs-js
 
     validation:
       type: Http

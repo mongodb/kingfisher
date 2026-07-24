@@ -31,5 +31,6 @@ rules:
     references:
       - https://console.groq.com/keys
       - https://console.groq.com/docs/api-reference#models
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/groq.yml
     examples:
       - "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"

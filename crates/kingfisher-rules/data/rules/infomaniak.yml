@@ -21,6 +21,8 @@ rules:
       - infomaniak_api_token = "AYF5lSh3c7XyRm4n1aK2bBcCdDeEfFgGhHiIjJkKlLmMnNoOpPqQrRsStTuUvVwWxXyYzZ0123456789ABCD"
     references:
       - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/infomaniak.go#L9
+      - https://developer.infomaniak.com/docs/api
+      - https://github.com/rana-gmbh/FileFluss/blob/ddd2cc9493b63545c10332e3d564e1afd0442e74/Packages/FileFlussCore/Sources/FileFlussCore/Providers/KDriveProvider.swift
     validation:
       type: Http
       content:

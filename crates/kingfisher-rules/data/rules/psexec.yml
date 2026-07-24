@@ -24,3 +24,4 @@ rules:
       - 'system("psexec \\\\192.168.3.77 -u Administrator -p braksha shutdown -r -f -t 0");'
     references:
       - https://learn.microsoft.com/en-us/sysinternals/downloads/psexec
+      - https://github.com/praetorian-inc/noseyparker/blob/3d82f8f64422069548cf1fe87ccead927d0f4004/crates/noseyparker/data/default/builtin/rules/psexec.yml

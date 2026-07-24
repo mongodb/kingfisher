@@ -18,6 +18,8 @@ rules:
       - "HEARTLAND_API_KEY=skapi_cert_ZfVeXwDUBbMlJnQIEsJGLbMkrQOiPtNh8e2"
     references:
       - https://developer.heartlandpaymentsystems.com/
+      - https://github.com/globalpayments/node-sdk/blob/9f1da1f423865d1339b6723b661cda082cf1ca81/test/Unit/Builders/AuthorizationBuilder/Validation.test.ts
+      - https://github.com/hps/heartland-ios/blob/4d5469c6db39ce148a57cf9195976f01ae0bc0df/Heartland-iOS-SDK/Classes/Services/HpsGatewayService.m
     validation:
       type: Http
       content:

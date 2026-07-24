@@ -16,7 +16,7 @@ rules:
         (?:
           \[[0-9a-f:.]+\]
         |
-          [a-z0-9]
+          [[:alnum:]]
           [a-z0-9.-]{1,253}
         )
         (?::\d{2,5})?
@@ -30,6 +30,8 @@ rules:
       - KUBE_API_SERVER=https://api.cluster.example.com:6443
     references:
       - https://kubernetes.io/docs/reference/access-authn-authz/authentication/
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/kubernetes.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/kubernetes.go
 
   - name: Kubernetes Bootstrap Token
     id: kingfisher.kubernetes.2
@@ -43,9 +45,9 @@ rules:
       )
       (?:.|[\n\r]){0,12}?
       (
-        [a-z0-9]{6}
+        [[:alnum:]]{6}
         \.
-        [a-z0-9]{16}
+        [[:alnum:]]{16}
       )
       \b
     pattern_requirements:
@@ -57,6 +59,7 @@ rules:
       - --tls-bootstrap-token abcdef.1234567890abcdef
     references:
       - https://kubernetes.io/docs/reference/access-authn-authz/bootstrap-tokens/
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/kubernetes.yml
     depends_on_rule:
       - rule_id: kingfisher.kubernetes.1
         variable: KUBE_API_SERVER

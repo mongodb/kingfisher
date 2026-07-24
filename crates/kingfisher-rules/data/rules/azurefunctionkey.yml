@@ -29,6 +29,7 @@ rules:
               negative: true
     references:
       - https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-http-webhook-trigger
+      - https://github.com/Azure-Samples/azure-search-power-skills/blob/f5104b59145b9a5b3ded65020131a728af9aec87/Text/CustomNER/README.md
 
   - name: Azure Function Master/Host Key
     id: kingfisher.azurefunctionkey.2
@@ -54,3 +55,4 @@ rules:
       - "x-functions-key: AbCdEfGhIjKlMnOpQrStUvWxYz1234567890ABCDEFGH"
     references:
       - https://learn.microsoft.com/en-us/azure/azure-functions/functions-bindings-http-webhook-trigger
+      - https://github.com/Azure-Samples/azure-search-power-skills/blob/f5104b59145b9a5b3ded65020131a728af9aec87/Text/CustomNER/README.md

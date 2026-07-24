@@ -8,12 +8,14 @@ rules:
       (?xi)
       \b
       (
-        [0-9a-z-]{1,63}\.freshdesk\.com
+        [0-9a-z-]{6,63}\.freshdesk\.com
       )
       \b
     examples:
       - acme-support.freshdesk.com
       - mycompany-helpdesk.freshdesk.com
+    references:
+      - https://developers.freshdesk.com/api/#authentication
 
   - name: Freshdesk API Key
     id: kingfisher.freshdesk.2
@@ -26,7 +28,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [0-9A-Z]{20}
+        [A-Za-z0-9]{18,22}
       )
       \b
     pattern_requirements:
@@ -39,6 +41,7 @@ rules:
     references:
       - https://developers.freshdesk.com/api/#authentication
       - https://developers.freshworks.com/docs/app-sdk/v3.0/support_agent/rest-apis/
+      - https://github.com/arjunkomath/node-freshdesk-api/blob/b7b5b7f6c4b42d35d7f9692fd326e9f4fbf7a99b/lib/client.js
     depends_on_rule:
       - rule_id: kingfisher.freshdesk.1
         variable: FRESHDESK_DOMAIN

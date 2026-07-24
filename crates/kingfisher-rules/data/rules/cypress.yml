@@ -7,7 +7,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}
+        [[:xdigit:]]{8}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{4}-[[:xdigit:]]{12}
       )
       \b
     pattern_requirements:
@@ -50,7 +50,7 @@ rules:
       (?:CYPRESS_PROJECT_ID)
       \s* [=:] \s* ["']?
       (
-        [a-z0-9]{6,8}
+        [[:alnum:]]{6,8}
       )
       ["']?
     confidence: medium
@@ -58,3 +58,5 @@ rules:
     examples:
       - "CYPRESS_PROJECT_ID=a7bq2k"
       - 'CYPRESS_PROJECT_ID: "abc123"'
+    references:
+      - https://docs.cypress.io/guides/guides/command-line#cypress-run

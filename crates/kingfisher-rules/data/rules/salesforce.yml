@@ -6,7 +6,7 @@ rules:
       \b
       (
         00
-        [A-Z0-9]{13}
+        [[:alnum:]]{13}
         !
         [A-Z0-9._-]{80,260}
       )
@@ -48,6 +48,7 @@ rules:
       - https://developer.salesforce.com/docs/atlas.en-us.api_rest.meta/api_rest/dome_query.htm
       - https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_userpermissionaccess.htm
       - https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_permissionsetassignment.htm
+      - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/salesforce.yml
     depends_on_rule:
       - rule_id: "kingfisher.salesforce.2"
         variable: INSTANCE
@@ -60,8 +61,8 @@ rules:
       (?:https?://)?
       (
         (?:
-          [0-9A-Z](?:[0-9A-Z-]{0,61}[0-9A-Z])?
-          (?:\.[0-9A-Z](?:[0-9A-Z-]{0,61}[0-9A-Z])?){0,4}
+          [[:alnum:]](?:[0-9A-Z-]{0,61}[[:alnum:]])?
+          (?:\.[[:alnum:]](?:[0-9A-Z-]{0,61}[[:alnum:]])?){0,4}
           \.my\.salesforce\.com
           |
           [A-Z]{2,8}[0-9]{1,4}\.salesforce\.com

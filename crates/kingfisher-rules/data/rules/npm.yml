@@ -5,7 +5,7 @@ rules:
       (?xi)
       \b
       (
-        npm_(?P<body>[A-Za-z0-9]{30})(?P<checksum>[A-Za-z0-9]{6})
+        npm_(?P<body>[[:alnum:]]{30})(?P<checksum>[[:alnum:]]{6})
       )
       \b
     pattern_requirements:
@@ -20,6 +20,10 @@ rules:
       - https://docs.npmjs.com/about-access-tokens
       - https://github.com/github/roadmap/issues/557
       - https://github.blog/changelog/2022-12-06-limit-scope-of-npm-tokens-with-the-new-granular-access-tokens/
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/npm.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/npm.go
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/npm/npm-access-token.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/npm-accesstoken.yaml
     min_entropy: 3.3
     confidence: medium
     examples:
@@ -81,9 +85,9 @@ rules:
       (?:_authToken|NPM_TOKEN)
       (?:.|[\n\r]){0,16}?
         (                                  
-          [0-9A-F]{8}                    
-          (?:-[0-9A-F]{4}){3}       
-          -[0-9A-F]{12}                     
+          [[:xdigit:]]{8}
+          (?:-[[:xdigit:]]{4}){3}
+          -[[:xdigit:]]{12}
         )  
       \b
     min_entropy: 3.5
@@ -139,3 +143,5 @@ rules:
                 - report_response: true
                 - type: StatusMatch
                   status: [200, 204]
+    references:
+      - https://docs.npmjs.com/about-access-tokens

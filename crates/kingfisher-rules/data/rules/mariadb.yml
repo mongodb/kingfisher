@@ -24,5 +24,6 @@ rules:
       - "db.url=jdbc:mariadb://db.example.com mariadb.password=r8tqvmx1kp!\n"
     references:
       - https://mariadb.org/documentation/
-    # No public validation endpoint: MariaDB is self-hosted;
-    # the host and port are instance-specific.
+      # No public validation endpoint: MariaDB is self-hosted;
+      # the host and port are instance-specific.
+      - https://github.com/GoogleCloudPlatform/cloud-sql-jdbc-socket-factory/blob/386bd2df965de4887de70d9b2556f17df18456cb/docs/jdbc.md

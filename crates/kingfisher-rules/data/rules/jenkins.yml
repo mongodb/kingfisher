@@ -21,3 +21,4 @@ rules:
     references:
       - https://www.jenkins.io/blog/2018/07/02/new-api-token-system/
       - https://www.jenkins.io/doc/book/security/csrf-protection/
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/jenkins.yml

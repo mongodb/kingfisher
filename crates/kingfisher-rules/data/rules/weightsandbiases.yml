@@ -7,7 +7,7 @@ rules:
       (?:.|[\n\r]){0,16}?
       \b
       (
-        [a-f0-9]{40}
+        [[:xdigit:]]{40}
       )
       \b
     pattern_requirements:
@@ -38,6 +38,11 @@ rules:
     references:
       - https://docs.wandb.ai/ref/cli/wandb-login
       - https://docs.wandb.ai/support/rotate_revoke_access
+      - https://docs.wandb.ai/support/models/articles/how-can-i-rotate-or-revoke-access
+      - https://github.com/wandb/wandb/blob/5f0c9d652f49826d27dfef14936a3c490c65be10/wandb/sdk/lib/wbauth/auth.py#L92-L101
+      - https://github.com/wandb/weave/blob/984197453df024bdcc0273f084287b24cfae2228/sdks/node/src/wandb/wandbServerApi.ts#L20-L36
+      - https://github.com/betterleaks/betterleaks/blob/e2ae8d541f505d0de045db55b5bc198b0418810e/cmd/generate/config/rules/weightsandbiases.go
+      - https://datatracker.ietf.org/doc/html/rfc7617
 
   - name: Weights and Biases API Key (v1)
     id: kingfisher.wandb.2
@@ -75,3 +80,7 @@ rules:
     references:
       - https://docs.wandb.ai/ref/cli/wandb-login
       - https://docs.wandb.ai/support/rotate_revoke_access
+      - https://docs.wandb.ai/support/models/articles/how-can-i-rotate-or-revoke-access
+      - https://github.com/wandb/wandb/blob/5f0c9d652f49826d27dfef14936a3c490c65be10/wandb/sdk/lib/wbauth/auth.py#L92-L101
+      - https://github.com/wandb/weave/blob/984197453df024bdcc0273f084287b24cfae2228/sdks/node/src/wandb/wandbServerApi.ts#L20
+      - https://datatracker.ietf.org/doc/html/rfc7617

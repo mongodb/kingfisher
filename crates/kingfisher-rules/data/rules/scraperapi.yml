@@ -7,7 +7,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       (?:key|token|api[_-]?key)
       (?:.|[\n\r]){0,16}?
-      ([a-z0-9]{32})
+      ([[:alnum:]]{32})
       \b
     pattern_requirements:
       min_digits: 2
@@ -19,12 +19,13 @@ rules:
       - 'scraper_api_token: "9f8e7d6c5b4a3029182736455463728a"'
     references:
       - https://www.scraperapi.com/documentation/
+      - https://docs.scraperapi.com/monitor-your-scraperapi-account-information-in-curl
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: "https://api.scraperapi.com?api_key={{ TOKEN }}&url=http://httpbin.org/ip"
+          url: "https://api.scraperapi.com/account?api_key={{ TOKEN }}"
           response_matcher:
             - report_response: true
             - type: StatusMatch
@@ -32,4 +33,7 @@ rules:
             - type: JsonValid
             - type: WordMatch
               words:
-                - '"origin"'
+                - '"concurrentRequests"'
+                - '"requestCount"'
+                - '"failedRequestCount"'
+              match_all_words: true

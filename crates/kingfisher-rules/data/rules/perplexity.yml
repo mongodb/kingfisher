@@ -25,6 +25,8 @@ rules:
       - https://developers.cloudflare.com/ai-gateway/providers/perplexity/
       - https://docs.perplexity.ai/api-reference/chat-completions-post
       - https://docs.perplexity.ai/docs/sdk/error-handling
+      - https://docs.perplexity.ai/api-reference/sonar-post
+      - https://github.com/gitleaks/gitleaks/blob/7fb21a4e61d1b49f35587fbd2e2826b487fcbb5d/cmd/generate/config/rules/perplexity.go
     validation:
       type: Http
       content:

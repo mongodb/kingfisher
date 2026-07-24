@@ -14,6 +14,8 @@ rules:
       - https://docs.mapbox.com/api/accounts/tokens/#token-format
       - https://docs.mapbox.com/help/getting-started/access-tokens/
       - https://docs.mapbox.com/help/troubleshooting/how-to-use-mapbox-securely
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/mapbox.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/mapbox.go
     validation:
       type: Http
       content:
@@ -48,6 +50,8 @@ rules:
       - https://docs.mapbox.com/api/accounts/tokens/#delete-a-token
       - https://docs.mapbox.com/help/getting-started/access-tokens/
       - https://docs.mapbox.com/help/troubleshooting/how-to-use-mapbox-securely
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/mapbox.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/mapbox.go
     validation:
       type: Http
       content:

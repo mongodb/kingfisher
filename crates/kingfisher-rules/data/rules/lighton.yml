@@ -22,6 +22,8 @@ rules:
       - lighton_api_key = "AbCdEf1234567890GhIjKlMnOpQrStUvWxYz0123456789"
     references:
       - https://github.com/betterleaks/betterleaks/blob/bc21eb24796aa546f999a5dab0f6efe2f7d8e2fa/cmd/generate/config/rules/lighton.go#L9
+      - https://docs.lighton.ai/
+      - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/lighton.go
     validation:
       type: Http
       content:

@@ -18,6 +18,8 @@ rules:
     references:
       - https://databento.com/docs/api-reference-historical
       - https://databento.com/docs/portal/api-keys
+      - https://github.com/databento/databento-python/blob/182e2583e6b05c4ee8e58e7d61c8ce5c850ece5f/README.md
+      - https://github.com/databento/databento-rs/blob/d82257878470e1731b3ccaddae387606319caf82/src/historical/client.rs
     validation:
       type: Http
       content:

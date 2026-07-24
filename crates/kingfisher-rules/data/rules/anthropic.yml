@@ -21,6 +21,9 @@ rules:
       - sk-ant-api03-gOe0gMC1pt-tUe3PC6bqj3YqGhkHvyvJgtwIjGhmQIScHCRbIinUwsgFuqyQnnaTDXrHCaTmX2GkSU117pxITQ-XhkxPAAA
     references:
       - https://docs.anthropic.com/claude/reference/authentication
+      - https://docs.anthropic.com/en/api/getting-started
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/anthropic.yml
+      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/anthropic.go
     validation:
       type: Http
       content:
@@ -70,6 +73,8 @@ rules:
     references:
       - https://docs.anthropic.com/en/api/administration-api
       - https://docs.anthropic.com/en/api/admin-api/organization/get-me
+      - https://docs.anthropic.com/en/api/getting-started
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/anthropic.yml
     validation:
       type: Http
       content:
