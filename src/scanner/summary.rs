@@ -76,15 +76,21 @@ pub fn compute_scan_totals(
     let total_findings = if args.no_dedup {
         all_matches.iter().fold(0, |count, msg| {
             let (origin_set, _, match_item) = &**msg;
+            if !args.include_hidden_findings && !match_item.visible {
+                return count;
+            }
             if match_item.validation_success { count + origin_set.len() } else { count + 1 }
         })
     } else {
-        ds.get_num_matches()
+        if args.include_hidden_findings { all_matches.len() } else { ds.get_num_matches() }
     };
 
     let (successful_validations, failed_validations, skipped_validations) =
         all_matches.iter().fold((0, 0, 0), |(success, fail, skipped), msg| {
             let (origin_set, _, match_item) = &**msg;
+            if !args.include_hidden_findings && !match_item.visible {
+                return (success, fail, skipped);
+            }
             if match_item.validation_success {
                 if match_item.validation_response_status != StatusCode::CONTINUE.as_u16() {
                     if args.no_dedup {
@@ -176,7 +182,7 @@ pub fn print_scan_summary(
     } else {
         let ds = datastore.lock().unwrap();
         let num_rules = rules_db.num_rules();
-        let findings_by_rule = ds.get_summary();
+        let findings_by_rule = ds.get_summary(args.include_hidden_findings);
         let mut sorted: Vec<_> = findings_by_rule.into_iter().collect();
         sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
         (num_rules, sorted)

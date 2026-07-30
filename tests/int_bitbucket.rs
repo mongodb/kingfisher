@@ -157,6 +157,7 @@ fn test_bitbucket_remote_scan() -> Result<()> {
         access_map: false,
         rule_stats: false,
         only_valid: false,
+        include_hidden_findings: false,
         min_entropy: None,
         redact: false,
         git_repo_timeout: 1800,

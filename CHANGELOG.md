@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.110.0]
+- Fixed hidden helper findings being omitted from reports while retained in summaries; `--include-hidden-findings` exposes them for diagnostics. [#448](https://github.com/mongodb/kingfisher/issues/448) [#449](https://github.com/mongodb/kingfisher/issues/449)
+- Updated dependencies, including `quinn-proto` 0.11.16 to resolve GHSA-4w2j-m93h-cj5j.
+
 ## [v1.109.0]
 - Added Buildkite agent-registration and cluster-token detection, and LarkSuite / Feishu App ID and App Secret detection with validation. [#434](https://github.com/mongodb/kingfisher/issues/434)
 - Added AWS session-token validation using the associated access key ID and secret access key.

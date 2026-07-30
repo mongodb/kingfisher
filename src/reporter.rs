@@ -828,8 +828,8 @@ impl DetailsReporter {
             .collect())
     }
 
-    pub fn get_filtered_matches(&self) -> Result<Vec<ReportMatch>> {
-        self.process_matches(self.only_valid, true)
+    pub fn get_filtered_matches(&self, include_hidden_findings: bool) -> Result<Vec<ReportMatch>> {
+        self.process_matches(self.only_valid, !include_hidden_findings)
     }
 
     pub fn get_unfiltered_matches(&self, only_valid: Option<bool>) -> Result<Vec<ReportMatch>> {
@@ -863,7 +863,7 @@ impl DetailsReporter {
     }
 
     fn matches_for_output(&self, args: &cli::commands::scan::ScanArgs) -> Result<Vec<ReportMatch>> {
-        let mut matches = self.get_filtered_matches()?;
+        let mut matches = self.get_filtered_matches(args.include_hidden_findings)?;
         if !args.no_dedup {
             matches = self.deduplicate_matches(matches, args.no_dedup);
         }
@@ -1898,6 +1898,7 @@ mod tests {
             no_validate: false,
             access_map: false,
             only_valid: false,
+            include_hidden_findings: false,
             min_entropy: None,
             rule_stats: false,
             no_dedup: false,

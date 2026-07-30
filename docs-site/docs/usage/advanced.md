@@ -422,6 +422,7 @@ kingfisher scan /path/to/repo --rule-stats
 ## Notable Scan Options
 
 - `--no-dedup`: Report every occurrence of a finding (disable the default de-duplicate behavior)
+- `--include-hidden-findings`: Include hidden helper-rule matches in reports and scan summary counts (diagnostic use)
 - `--no-base64`: By default, Kingfisher finds and decodes base64 blobs and scans them for secrets. This adds a slight performance overhead; use this flag to disable
 - `--confidence <LEVEL>`: (low|medium|high)
 - `--min-entropy <VAL>`: Override default threshold

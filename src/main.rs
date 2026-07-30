@@ -1754,6 +1754,7 @@ fn create_default_scan_args() -> cli::commands::scan::ScanArgs {
         access_map: false,
         rule_stats: false,
         only_valid: false,
+        include_hidden_findings: false,
         min_entropy: None,
         redact: false,
         git_repo_timeout: 1800,
