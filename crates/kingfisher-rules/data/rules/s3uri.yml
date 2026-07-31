@@ -2,7 +2,7 @@ rules:
   - name: S3 Bucket URI
     id: kingfisher.s3uri.1
     pattern: |
-      (?x)(s3a?://[a-zA-Z0-9][-a-zA-Z0-9.]{1,62}(?:/[^\s"'<>)}\]]*)?)
+      (?x)(s3a?://[[:alnum:]][-[:alnum:].]{1,62}(?:/[^\s"'<>)}\]]*)?)
     visible: false
     confidence: medium
     examples:

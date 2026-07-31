@@ -2,7 +2,7 @@ rules:
   - name: ASP.NET MachineKey Validation Key
     id: kingfisher.viewstate.1
     pattern: |
-      (?xi)validationKey\s*=\s*["']([a-f0-9]{40,256})["']
+      (?xi)validationKey\s*=\s*["']([[:xdigit:]]{40,256})["']
     confidence: medium
     examples:
       - 'validationKey="C50B3C89CB21F4F1422FF158A5B42D0E8DB8CB5CDA1742572A487D9401E3400267682B202B746511891C1BAF47F8D25C07F6C39A104696DB51F17C529AD3CABE"'
@@ -13,7 +13,7 @@ rules:
   - name: ASP.NET MachineKey Decryption Key
     id: kingfisher.viewstate.2
     pattern: |
-      (?xi)decryptionKey\s*=\s*["']([a-f0-9]{32,128})["']
+      (?xi)decryptionKey\s*=\s*["']([[:xdigit:]]{32,128})["']
     confidence: medium
     examples:
       - 'decryptionKey="8A9BE8FD67AF6979E7D20198CFEA50DD3D987AAAAD7FA14C"'

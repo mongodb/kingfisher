@@ -9,7 +9,7 @@ rules:
       (
         https?:\/\/[a-z0-9.-]+
         (?::\d{2,5})?
-        (?:\/[A-Za-z0-9._~\-\/]*)?
+        (?:\/[[:alnum:]._~\-\/]*)?
       )
       \b
     confidence: medium
@@ -99,7 +99,10 @@ rules:
   - name: Mattermost Personal Access Token
     id: kingfisher.mattermost.4
     pattern: |
-      (?xi)(?:mattermost|mm).?(?:access|api|auth|bot|personal|private|secret)?.?(?:key|pat|secret|token).{0,2}\s{0,20}.{0,2}\s{0,20}.{0,2}\b([a-km-uw-z13-9]{26})\b
+      (?x)
+      (?i:(?:mattermost|mm).?(?:access|api|auth|bot|personal|private|secret)?.?(?:key|pat|secret|token))
+      (?:.|[\n\r]){0,32}?
+      \b([a-km-uw-z13-9]{26})\b
     confidence: medium
     min_entropy: 3.5
     examples:

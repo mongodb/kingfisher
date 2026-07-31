@@ -76,7 +76,7 @@ rules:
   - name: C# Database Connection Object with Password
     id: kingfisher.dbconn.csharp.1
     pattern: |
-      (?xi)(?:SqlConnection|MySqlConnection|NpgsqlConnection|OracleConnection|SqlCeConnection)\s*\(\s*["'][^"']*(?:Password|Pwd)\s*=\s*([^;"']{4,128})[^"']*["']\s*\)
+      (?x)(?:SqlConnection|MySqlConnection|NpgsqlConnection|OracleConnection|SqlCeConnection)\s*\(\s*["'][^"']*(?i:Password|Pwd)\s*=\s*([^;"']{4,128})[^"']*["']\s*\)
     confidence: medium
     pattern_requirements:
       ignore_if_contains: ["****", "xxxx", "PLACEHOLDER", "${DB_", "%PASSWORD"]

@@ -2,7 +2,7 @@ rules:
   - name: Group Policy Preferences cpassword
     id: kingfisher.gpp.1
     pattern: |
-      (?xi)cpassword\s*=\s*["']?([A-Za-z0-9+/=]{16,512})["']?
+      (?xi)cpassword\s*=\s*["']?([[:alnum:]+/=]{16,512})["']?
     min_entropy: 3.0
     confidence: medium
     pattern_requirements:

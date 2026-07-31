@@ -66,7 +66,7 @@ rules:
   - name: DeviantArt OAuth Client Secret
     id: kingfisher.deviantart.3
     pattern: |
-      (?xi)(?:deviantart|deviant_art|da_)(?:.|[\n\r]){0,64}?(?:client[_-]?secret|oauth[_-]?secret)(?:.|[\n\r]){0,32}?\b([0-9a-f]{32})\b
+      (?xi)(?:deviantart|deviant_art|da_)(?:.|[\n\r]){0,64}?(?:client[_-]?secret|oauth[_-]?secret)(?:.|[\n\r]){0,32}?\b([[:xdigit:]]{32})\b
     min_entropy: 3.0
     confidence: medium
     examples:

@@ -7,7 +7,7 @@ rules:
       (?:.|[\n\r]){0,32}?
       \b
       (
-        [a-z0-9_\-=]{40}
+        [[:alnum:]_=-]{40}
       )
     pattern_requirements:
       min_digits: 2
@@ -65,7 +65,7 @@ rules:
   - name: LaunchDarkly Client-side ID
     id: kingfisher.launchdarkly.2
     pattern: |
-      (?xi)["']?(?:LD|LAUNCHDARKLY)[_-]?CLIENT[_-]?(?:SIDE[_-]?)?ID["']?\s*[":=]\s*["']?([a-f0-9]{24})\b
+      (?xi)["']?(?:LD|LAUNCHDARKLY)[_-]?CLIENT[_-]?(?:SIDE[_-]?)?ID["']?\s*[":=]\s*["']?([[:xdigit:]]{24})\b
     min_entropy: 3.0
     visible: false
     confidence: medium

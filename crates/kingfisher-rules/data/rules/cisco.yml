@@ -2,7 +2,7 @@ rules:
   - name: Cisco Enable Password
     id: kingfisher.cisco.1
     pattern: |
-      (?xm)
+      (?xim)
       ^\s*enable\s+(?:password|secret)\s+
       (?:level\s+\d+\s+)?(?:\d\s+)?
       (\S{4,128})
@@ -34,7 +34,7 @@ rules:
   - name: Cisco PAC Key
     id: kingfisher.cisco.3
     pattern: |
-      (?xm)
+      (?xim)
       ^\s*pac\s+key\s+([0-7]\s+\S{4,128})
     confidence: medium
     examples:
@@ -46,7 +46,7 @@ rules:
   - name: Network Config NVRAM Indicator
     id: kingfisher.cisco.4
     pattern: |
-      (?x)(NVRAM\s+config\s+last\s+updated)
+      (?xi)(NVRAM\s+config\s+last\s+updated)
     visible: false
     confidence: medium
     examples:

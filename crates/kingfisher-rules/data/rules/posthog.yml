@@ -2,7 +2,7 @@ rules:
   - name: PostHog Project API Key
     id: kingfisher.posthog.1
     pattern: |
-      (?x)(phc_[a-zA-Z0-9_-]{43})
+      (?x)(phc_[[:alnum:]_-]{43})
     min_entropy: 3.0
     confidence: high
     examples:
@@ -31,7 +31,7 @@ rules:
     pattern: |
       (?x)
       (
-        phx_[A-Za-z0-9]{44,48}
+        phx_[[:alnum:]]{44,48}
       )
     min_entropy: 3.5
     confidence: medium
@@ -62,7 +62,7 @@ rules:
     pattern: |
       (?x)
       (
-        phs_[A-Za-z0-9]{44,48}
+        phs_[[:alnum:]]{44,48}
       )
     min_entropy: 3.5
     confidence: medium
@@ -92,7 +92,7 @@ rules:
     pattern: |
       (?x)
       (
-        pha_[A-Za-z0-9]{40,43}
+        pha_[[:alnum:]]{40,43}
       )
     min_entropy: 3.5
     confidence: medium
@@ -124,7 +124,7 @@ rules:
     pattern: |
       (?x)
       (
-        phr_[A-Za-z0-9]{40,43}
+        phr_[[:alnum:]]{40,43}
       )
     min_entropy: 3.5
     confidence: medium

@@ -24,7 +24,6 @@ rules:
       - azure_openai_secret=abcdef0123456789abcdef0123456789
     references:
       - https://learn.microsoft.com/en-us/rest/api/azureopenai/models/list?view=rest-azureopenai-2024-10-21&tabs=HTTP
-      - https://github.com/Azure-Samples/Legacy-Modernization-Agents/blob/b260b5ad01e52d9c2e928edf7c53f05e8ae52eac/doctor.sh
     validation:
       type: Http
       content:
@@ -70,11 +69,11 @@ rules:
   - name: Azure OpenAI API Key (Extended Format)
     id: kingfisher.azureopenai.2
     pattern: |
-      (?xi)
-      (?:azure[_-]?openai[_-]?(?:api[_-]?)?key|openai[_-]?(?:api[_-]?)?key)
+      (?x)
+      (?i:azure[_-]?openai[_-]?(?:api[_-]?)?key|openai[_-]?(?:api[_-]?)?key)
       \s*[:=]\s*[`"']?
       (
-        [A-Za-z0-9+/]{60,100}(?:JQQJ|AAAB|ACOGk)[A-Za-z0-9+/=]{0,30}
+        [[:alnum:]+/]{60,100}(?:JQQJ|AAAB|ACOGk)[[:alnum:]+/=]{0,30}
       )
       [`"']?
     min_entropy: 4.0

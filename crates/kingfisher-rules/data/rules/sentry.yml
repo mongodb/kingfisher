@@ -45,7 +45,7 @@ rules:
   - name: Sentry DSN
     id: kingfisher.sentry.4
     pattern: |
-      (?xi)(?:\bSENTRY[_-]?DSN\b\s*[:=]\s*["']?)?(https://[a-f0-9]{32}@(?:(?:o\d+\.)?sentry\.io|[a-z0-9][a-z0-9.-]*\.[a-z]{2,})/\d+)
+      (?xi)(?:\bSENTRY[_-]?DSN\b\s*[:=]\s*["']?)?(https://[[:xdigit:]]{32}@(?:(?:o\d+\.)?sentry\.io|[a-z0-9][a-z0-9.-]*\.[a-z]{2,})/\d+)
     min_entropy: 3.0
     confidence: medium
     examples:
@@ -61,12 +61,12 @@ rules:
       \b
       (
         sntrys_
-        [a-zA-Z0-9+/]{16,512}
+        [[:alnum:]+/]{16,512}
         ={0,2}
         _
-        [a-zA-Z0-9+/]{43}
+        [[:alnum:]+/]{43}
       )
-      (?:$|[^A-Za-z0-9+/])
+      (?:$|[^[:alnum:]+/])
     pattern_requirements:
       min_digits: 2
     min_entropy: 4.5
@@ -102,7 +102,7 @@ rules:
   - name: Sentry User Token
     id: kingfisher.sentry.3
     pattern: |
-      (?xi)
+      (?x)
       \b
       (
         sntryu_
