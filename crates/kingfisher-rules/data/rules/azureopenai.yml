@@ -24,7 +24,6 @@ rules:
       - azure_openai_secret=abcdef0123456789abcdef0123456789
     references:
       - https://learn.microsoft.com/en-us/rest/api/azureopenai/models/list?view=rest-azureopenai-2024-10-21&tabs=HTTP
-      - https://github.com/Azure-Samples/Legacy-Modernization-Agents/blob/b260b5ad01e52d9c2e928edf7c53f05e8ae52eac/doctor.sh
     validation:
       type: Http
       content:
@@ -66,3 +65,38 @@ rules:
       - endpoint=https://test.openai.azure.com
     references:
       - https://learn.microsoft.com/en-us/rest/api/azureopenai/models/list?view=rest-azureopenai-2024-10-21&tabs=HTTP
+
+  - name: Azure OpenAI API Key (Extended Format)
+    id: kingfisher.azureopenai.2
+    pattern: |
+      (?x)
+      (?i:azure[_-]?openai[_-]?(?:api[_-]?)?key|openai[_-]?(?:api[_-]?)?key)
+      \s*[:=]\s*[`"']?
+      (
+        [[:alnum:]+/]{60,100}(?:JQQJ|AAAB|ACOGk)[[:alnum:]+/=]{0,30}
+      )
+      [`"']?
+    min_entropy: 4.0
+    confidence: high
+    examples:
+      - azure_openai_api_key=AbcDeFgHiJ0KLmnOpQrStUvWxYz12JlQEd9AcTG4pEWdjbSmPysw2JQQJ99BDACfhMk5XJ3w3AAABACOGkDUM
+    depends_on_rule:
+      - rule_id: kingfisher.azureopenai.host.1
+        variable: AZUREHOST
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://{{ AZUREHOST }}/openai/models?api-version=2024-10-21"
+          headers:
+            Api-Key: "{{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: WordMatch
+              words: ['"object":']
+    references:
+      - https://learn.microsoft.com/en-us/azure/ai-services/openai/reference
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/azureopenai.yml

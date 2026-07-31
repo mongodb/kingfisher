@@ -7,28 +7,25 @@ impl DetailsReporter {
         args: &cli::commands::scan::ScanArgs,
     ) -> Result<()> {
         let envelope = self.build_report_envelope(args)?;
-        if !envelope.findings.is_empty() || envelope.access_map.is_some() {
-            // Compact one-envelope-per-line so streaming emits (parallel
-            // scan path: one envelope per repo) concatenate into valid
-            // JSONL that `kingfisher view` can parse. Pipe through `jq .`
-            // for human-readable pretty output.
-            //
-            // Serialize into a single buffer and emit via a single
-            // `write_all` so callers that need cross-thread atomicity
-            // (e.g. the parallel scan path emitting one envelope per repo
-            // to stdout) can synchronize at the call site by holding
-            // `std::io::stdout().lock()` around this call. We intentionally
-            // do NOT acquire the stdout lock here because this method is
-            // generic over any `Write` and is also called with file
-            // writers and `Cursor<Vec<u8>>` in tests. Flushing is the
-            // caller's responsibility — flushing here would defeat
-            // upstream `BufWriter` buffering and turn an otherwise-benign
-            // BrokenPipe into a hard error.
-            let mut buf = Vec::with_capacity(8 * 1024);
-            serde_json::to_writer(&mut buf, &envelope)?;
-            buf.push(b'\n');
-            writer.write_all(&buf)?;
-        }
+        // Compact one-envelope-per-line so streaming emits (parallel scan
+        // path: one envelope per repo) concatenate into valid JSONL that
+        // `kingfisher view` can parse. Pipe through `jq .` for
+        // human-readable pretty output. Emit the envelope even when it has
+        // no findings so `--output` never creates an empty JSON file.
+        //
+        // Serialize into a single buffer and emit via a single `write_all`
+        // so callers that need cross-thread atomicity (e.g. the parallel
+        // scan path emitting one envelope per repo to stdout) can synchronize
+        // at the call site by holding `std::io::stdout().lock()` around this
+        // call. We intentionally do NOT acquire the stdout lock here because
+        // this method is generic over any `Write` and is also called with file
+        // writers and `Cursor<Vec<u8>>` in tests. Flushing is the caller's
+        // responsibility — flushing here would defeat upstream `BufWriter`
+        // buffering and turn an otherwise-benign BrokenPipe into a hard error.
+        let mut buf = Vec::with_capacity(8 * 1024);
+        serde_json::to_writer(&mut buf, &envelope)?;
+        buf.push(b'\n');
+        writer.write_all(&buf)?;
         Ok(())
     }
 
@@ -216,6 +213,7 @@ mod tests {
             access_map: false,
             rule_stats: false,
             only_valid: false,
+            include_hidden_findings: false,
             min_entropy: None,
             redact: false,
             git_repo_timeout: 1800, // 30 minutes
@@ -358,6 +356,47 @@ mod tests {
         let first = &findings[0];
         assert_eq!(first["rule"]["name"], "MockRule");
         assert_eq!(first["finding"]["language"], "Rust");
+        Ok(())
+    }
+
+    #[test]
+    fn hidden_findings_are_opt_in_but_empty_json_reports_are_emitted() -> Result<()> {
+        let mut hidden_match = create_mock_match("HiddenHelper", "hidden_helper", false);
+        hidden_match.visible = false;
+        let reporter = setup_mock_reporter(vec![ReportMatch {
+            origin: OriginSet::new(Origin::from_file(PathBuf::from("/mock/path/file.rs")), vec![]),
+            blob_metadata: BlobMetadata {
+                id: BlobId::new(b"mock_blob"),
+                num_bytes: 1024,
+                mime_essence: Some("text/plain".to_string()),
+                language: Some("Rust".to_string()),
+            },
+            m: hidden_match,
+            comment: None,
+            match_confidence: Confidence::Medium,
+            visible: false,
+            validation_response_body: validation_body::from_string("validation response"),
+            validation_response_status: 200,
+            validation_success: false,
+        }]);
+
+        let datastore = reporter.datastore.lock().unwrap();
+        assert!(datastore.get_summary(false).is_empty());
+        assert_eq!(datastore.get_summary(true).get("HiddenHelper"), Some(&1));
+        drop(datastore);
+
+        let mut output = Cursor::new(Vec::new());
+        reporter.json_format(&mut output, &create_default_args())?;
+        let json_output: serde_json::Value = serde_json::from_slice(&output.into_inner())?;
+        assert_eq!(json_output["findings"].as_array().unwrap().len(), 0);
+
+        let mut args = create_default_args();
+        args.include_hidden_findings = true;
+        let mut output = Cursor::new(Vec::new());
+        reporter.json_format(&mut output, &args)?;
+        let json_output: serde_json::Value = serde_json::from_slice(&output.into_inner())?;
+        assert_eq!(json_output["findings"].as_array().unwrap().len(), 1);
+
         Ok(())
     }
 

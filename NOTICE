@@ -64,6 +64,25 @@ Certain detection rules:
  * crates/kingfisher-rules/data/rules/ansible.yml
  * crates/kingfisher-rules/data/rules/html.yml
  * crates/kingfisher-rules/data/rules/jamf.yml
+ * crates/kingfisher-rules/data/rules/azureopenai.yml
+ * crates/kingfisher-rules/data/rules/cisco.yml
+ * crates/kingfisher-rules/data/rules/datadog.yml
+ * crates/kingfisher-rules/data/rules/dbconn.yml
+ * crates/kingfisher-rules/data/rules/dotnet-connstring.yml
+ * crates/kingfisher-rules/data/rules/gpp.yml
+ * crates/kingfisher-rules/data/rules/intra42.yml
+ * crates/kingfisher-rules/data/rules/launchdarkly.yml
+ * crates/kingfisher-rules/data/rules/mattermost.yml
+ * crates/kingfisher-rules/data/rules/maven.yml
+ * crates/kingfisher-rules/data/rules/posthog.yml
+ * crates/kingfisher-rules/data/rules/powershell.yml
+ * crates/kingfisher-rules/data/rules/rdp.yml
+ * crates/kingfisher-rules/data/rules/s3uri.yml
+ * crates/kingfisher-rules/data/rules/sentry.yml
+ * crates/kingfisher-rules/data/rules/sqlddl.yml
+ * crates/kingfisher-rules/data/rules/unattend.yml
+ * crates/kingfisher-rules/data/rules/viewstate.yml
+ * crates/kingfisher-rules/data/rules/wincmd.yml
 
 are derived in part from Titus (https://github.com/praetorian-inc/titus),
 which is licensed under the Apache License, Version 2.0.

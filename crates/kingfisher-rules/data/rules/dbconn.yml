@@ -1,0 +1,88 @@
+rules:
+  - name: PHP Database Connection with Credentials
+    id: kingfisher.dbconn.php.1
+    pattern: |
+      (?x)
+      (?:mysql_connect|mysql_pconnect|mysqli_connect)\s*\(\s*["'][^"']+["']\s*,\s*["'][^"']+["']\s*,\s*["']([^"']{4,128})["']
+    min_entropy: 2.5
+    confidence: medium
+    examples:
+      - 'mysql_connect("localhost", "root", "password123")'
+      - "mysqli_connect('db.internal', 'admin', 'P@ssw0rd', 'mydb')"
+    references:
+      - https://www.php.net/manual/en/function.mysqli-connect.php
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/dbconn.yml
+
+  - name: PHP PostgreSQL Connection with Credentials
+    id: kingfisher.dbconn.php.2
+    pattern: |
+      (?x)(?:pg_connect|pg_pconnect)\s*\(\s*["'][^"']*\bpassword=([^"'\s$]{4,128})[^"']*["']
+    confidence: medium
+    pattern_requirements:
+      ignore_if_contains: ["$pg", "$db", "$DB", "${PG", "${DB"]
+    examples:
+      - 'pg_connect("host=dbserver user=admin password=s3cret dbname=mydb")'
+    references:
+      - https://www.php.net/manual/en/function.pg-connect.php
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/dbconn.yml
+
+  - name: Python Database Connection with Credentials
+    id: kingfisher.dbconn.python.1
+    pattern: |
+      (?x)(?:psycopg2|mysql\.connector|pymysql|cx_Oracle|sqlite3)\.connect\([^)]{0,500}?\b(?:password|passwd|pwd)\s*=\s*["']([^"']{4,128})["']
+    min_entropy: 2.5
+    confidence: medium
+    examples:
+      - 'conn = psycopg2.connect(host="prod", dbname="app", user="admin", password="secret")'
+      - "conn = pymysql.connect(host='db', user='admin', passwd='s3cret')"
+    references:
+      - https://www.psycopg.org/docs/module.html
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/dbconn.yml
+
+  - name: Python Database Connection with DSN String
+    id: kingfisher.dbconn.python.2
+    pattern: |
+      (?x)(?:psycopg2|mysql\.connector|pymysql)\.connect\(\s*["'][^"']*?\bpassword=([^"'\s]{4,128})[^"']*["']
+    min_entropy: 2.5
+    confidence: medium
+    examples:
+      - 'psycopg2.connect("host=prod dbname=app user=admin password=secret")'
+    references:
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/dbconn.yml
+
+  - name: Perl DBI Connection with Credentials
+    id: kingfisher.dbconn.perl.1
+    pattern: |
+      (?x)DBI->connect\(\s*["'][^"']+["']\s*,\s*["'][^"']+["']\s*,\s*["']([^"']{4,128})["']
+    min_entropy: 2.5
+    confidence: medium
+    examples:
+      - 'my $dbh = DBI->connect("dbi:mysql:database=test", "root", "secret");'
+    references:
+      - https://metacpan.org/pod/DBI
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/dbconn.yml
+
+  - name: Ruby DBI Connection with Credentials
+    id: kingfisher.dbconn.ruby.1
+    pattern: |
+      (?x)DBI\.connect\(\s*["'][^"']+["']\s*,\s*["'][^"']+["']\s*,\s*["']([^"']{4,128})["']
+    min_entropy: 2.5
+    confidence: medium
+    examples:
+      - 'dbh = DBI.connect("DBI:Mysql:mydb:localhost", "root", "password")'
+    references:
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/dbconn.yml
+
+  - name: C# Database Connection Object with Password
+    id: kingfisher.dbconn.csharp.1
+    pattern: |
+      (?x)(?:SqlConnection|MySqlConnection|NpgsqlConnection|OracleConnection|SqlCeConnection)\s*\(\s*["'][^"']*(?i:Password|Pwd)\s*=\s*([^;"']{4,128})[^"']*["']\s*\)
+    confidence: medium
+    pattern_requirements:
+      ignore_if_contains: ["****", "xxxx", "PLACEHOLDER", "${DB_", "%PASSWORD"]
+    examples:
+      - 'new SqlConnection("Server=prod;Database=app;User Id=sa;Password=s3cret!")'
+      - "new MySqlConnection('Server=db;Uid=root;Pwd=P@ssw0rd;Database=mydb')"
+    references:
+      - https://learn.microsoft.com/en-us/dotnet/api/system.data.sqlclient.sqlconnection
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/dbconn.yml

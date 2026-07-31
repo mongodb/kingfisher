@@ -51,3 +51,48 @@ rules:
                 - '"success"'
                 - "true"
               match_all_words: true
+
+  - name: DeviantArt OAuth Client ID
+    id: kingfisher.deviantart.2
+    pattern: |
+      (?xi)(?:deviantart|deviant_art|da_)(?:.|[\n\r]){0,64}?client[_-]?id(?:.|[\n\r]){0,32}?\b([0-9]{1,12})\b
+    visible: false
+    confidence: medium
+    examples:
+      - 'deviantart_client_id = "12345"'
+    references:
+      - https://deviantart.readme.io/docs/authentication
+
+  - name: DeviantArt OAuth Client Secret
+    id: kingfisher.deviantart.3
+    pattern: |
+      (?xi)(?:deviantart|deviant_art|da_)(?:.|[\n\r]){0,64}?(?:client[_-]?secret|oauth[_-]?secret)(?:.|[\n\r]){0,32}?\b([[:xdigit:]]{32})\b
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - 'deviantart_client_secret = "76b08c69cfb27f26d6161f9ab6d061a1"'
+    depends_on_rule:
+      - rule_id: kingfisher.deviantart.2
+        variable: DEVIANTART_CLIENT_ID
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://www.deviantart.com/oauth2/token
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+            Accept: application/json
+          body: >
+            grant_type=client_credentials&client_id={{ DEVIANTART_CLIENT_ID | url_encode }}&client_secret={{ TOKEN | url_encode }}
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+            - type: WordMatch
+              words: ['"access_token"']
+    references:
+      - https://www.deviantart.com/developers/authentication
+      - https://deviantart.readme.io/docs/authentication
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/deviantart.yml

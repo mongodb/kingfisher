@@ -47,7 +47,7 @@ http = "1.4"
 
 [package]
 name = "kingfisher"
-version = "1.109.0"
+version = "1.110.0"
 description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -173,7 +173,7 @@ tokio-postgres = { version = "0.7", default-features = false, features = ["runti
 # Temporary Git pin: keeps MongoDB SRV validation enabled while using the upstream
 # Hickory 0.26 DNS-resolver fix before it is available in a crates.io release.
 # TODO: switch back to a crates.io mongodb release once it includes that fix.
-mongodb = { git = "https://github.com/mongodb/mongo-rust-driver", rev = "bdddefc50c4794d51d10b944320d42c6eb216b04", default-features = false, features = ["rustls-tls-aws-lc", "aws-auth", "compat-3-0-0", "dns-resolver"] }
+mongodb = { git = "https://github.com/mongodb/mongo-rust-driver", rev = "0f628f2a4b3102c4bff854a0da6938c691bd5871", default-features = false, features = ["rustls-tls-aws-lc", "aws-auth", "compat-3-0-0", "dns-resolver"] }
 mysql_async = { version = "0.37.0", default-features = false, features = ["default-rustls"] }
 aws-config = { version = "1.8.18", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso"] }
 aws-credential-types = "1.2.14"

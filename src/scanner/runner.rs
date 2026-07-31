@@ -1318,7 +1318,12 @@ async fn run_parallel_scan(
 
     let aggregate_summary = if ran_repo_scan.load(Ordering::Relaxed) {
         let totals = compute_scan_totals(datastore, args, matcher_stats.as_ref());
-        let mut sorted: Vec<_> = datastore.lock().unwrap().get_summary().into_iter().collect();
+        let mut sorted: Vec<_> = datastore
+            .lock()
+            .unwrap()
+            .get_summary(args.include_hidden_findings)
+            .into_iter()
+            .collect();
         sorted.sort_by_key(|b| std::cmp::Reverse(b.1));
         Some((totals, sorted))
     } else {

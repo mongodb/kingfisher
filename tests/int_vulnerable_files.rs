@@ -163,6 +163,7 @@ impl TestContext {
             access_map: false,
             rule_stats: false,
             only_valid: false,
+            include_hidden_findings: false,
             min_entropy: Some(0.0),
             redact: false,
             git_repo_timeout: 1800, // 30 minutes
@@ -332,6 +333,7 @@ impl TestContext {
             access_map: false,
             rule_stats: false,
             only_valid: false,
+            include_hidden_findings: false,
             min_entropy: Some(0.0),
             redact: false,
             git_repo_timeout: 1800, // 30 minutes

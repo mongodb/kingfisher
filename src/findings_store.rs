@@ -359,12 +359,18 @@ impl FindingsStore {
             .count()
     }
 
-    pub fn get_summary(&self) -> FxHashMap<&'static str, usize> {
-        self.matches.iter().fold(FxHashMap::default(), |mut acc, msg| {
-            let (_, _, m) = &**msg;
-            *acc.entry(intern(m.rule.name())).or_insert(0) += 1;
-            acc
-        })
+    pub fn get_summary(&self, include_hidden_findings: bool) -> FxHashMap<&'static str, usize> {
+        self.matches
+            .iter()
+            .filter(|msg| {
+                let (_, _, match_item) = &***msg;
+                include_hidden_findings || match_item.visible
+            })
+            .fold(FxHashMap::default(), |mut acc, msg| {
+                let (_, _, m) = &**msg;
+                *acc.entry(intern(m.rule.name())).or_insert(0) += 1;
+                acc
+            })
     }
 
     pub fn clone_destination(&self, repo_url: &GitUrl) -> PathBuf {

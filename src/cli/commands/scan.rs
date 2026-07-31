@@ -146,6 +146,10 @@ pub struct ScanArgs {
     #[arg(global = true, long, default_value_t = false)]
     pub only_valid: bool,
 
+    /// Include hidden helper-rule findings in reports and scan summaries
+    #[arg(global = true, long, default_value_t = false)]
+    pub include_hidden_findings: bool,
+
     /// Override the default minimum entropy threshold
     #[arg(global = true, long, short = 'e')]
     pub min_entropy: Option<f32>,

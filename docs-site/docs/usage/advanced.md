@@ -366,7 +366,7 @@ The cache key includes the resolved rule order, rule patterns, platform, cache f
 
 ## Custom Rules
 
-Kingfisher currently ships with 1,013 built-in rules, but you may want to add your own custom rules or modify existing detection to better suit your needs.
+Kingfisher currently ships with 1,051 built-in rules, but you may want to add your own custom rules or modify existing detection to better suit your needs.
 
 First, review [RULES.md](../rules/overview.md) to learn how to create custom Kingfisher rules.
 
@@ -422,6 +422,7 @@ kingfisher scan /path/to/repo --rule-stats
 ## Notable Scan Options
 
 - `--no-dedup`: Report every occurrence of a finding (disable the default de-duplicate behavior)
+- `--include-hidden-findings`: Include hidden helper-rule matches in reports and scan summary counts (diagnostic use)
 - `--no-base64`: By default, Kingfisher finds and decodes base64 blobs and scans them for secrets. This adds a slight performance overhead; use this flag to disable
 - `--confidence <LEVEL>`: (low|medium|high)
 - `--min-entropy <VAL>`: Override default threshold

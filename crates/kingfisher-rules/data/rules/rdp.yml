@@ -1,0 +1,11 @@
+rules:
+  - name: RDP File Saved Password
+    id: kingfisher.rdp.1
+    pattern: |
+      (?xi)password\s+51:b:([[:xdigit:]]{16,1024})
+    confidence: medium
+    examples:
+      - 'password 51:b:01000000D08C9DDF0115D1118C7A00C04FC297EB01000000'
+    references:
+      - https://learn.microsoft.com/en-us/windows-server/remote/remote-desktop-services/clients/rdp-files
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/rdpfile.yml
