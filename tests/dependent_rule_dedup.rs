@@ -35,7 +35,7 @@ fn make_rule(
     }))
 }
 
-fn make_match(rule: Arc<Rule>, blob_id: BlobId, value: &str) -> Match {
+fn make_match(rule: Arc<Rule>, blob_id: BlobId, value: &str, visible: bool) -> Match {
     Match {
         location: Location::with_source_span(
             OffsetSpan { start: 0, end: value.len() },
@@ -60,7 +60,7 @@ fn make_match(rule: Arc<Rule>, blob_id: BlobId, value: &str) -> Match {
         validation_response_status: 0,
         validation_success: false,
         calculated_entropy: 0.0,
-        visible: true,
+        visible,
         is_base64: false,
         dependent_captures: std::collections::BTreeMap::new(),
     }
@@ -107,9 +107,9 @@ fn dedup_preserves_dependency_provider_matches_per_blob() -> Result<()> {
         record_match(
             &origin,
             &blob_a,
-            make_match(provider_rule.clone(), blob_a.id, "shared_token"),
+            make_match(provider_rule.clone(), blob_a.id, "shared_token", false),
         ),
-        record_match(&origin, &blob_b, make_match(provider_rule, blob_b.id, "shared_token")),
+        record_match(&origin, &blob_b, make_match(provider_rule, blob_b.id, "shared_token", false)),
     ];
 
     store.record(matches, true);
@@ -140,13 +140,71 @@ fn dedup_still_merges_non_dependency_rules_across_blobs() -> Result<()> {
     });
 
     let matches = vec![
-        record_match(&origin, &blob_a, make_match(rule.clone(), blob_a.id, "shared_token")),
-        record_match(&origin, &blob_b, make_match(rule, blob_b.id, "shared_token")),
+        record_match(&origin, &blob_a, make_match(rule.clone(), blob_a.id, "shared_token", true)),
+        record_match(&origin, &blob_b, make_match(rule, blob_b.id, "shared_token", true)),
     ];
 
     store.record(matches, true);
 
     assert_eq!(store.get_matches().len(), 1);
+
+    Ok(())
+}
+
+#[test]
+fn summary_only_counts_visible_matches() -> Result<()> {
+    let visible_rule = make_rule("RULE.VISIBLE", true, vec![]);
+    let hidden_rule = make_rule("RULE.HIDDEN", false, vec![]);
+    let mut store = FindingsStore::new(PathBuf::from("/tmp"));
+
+    let origin = Arc::new(OriginSet::single(Origin::from_file(PathBuf::from("summary.txt"))));
+    let visible_blob = Arc::new(BlobMetadata {
+        id: BlobId::new(b"visible"),
+        num_bytes: 10,
+        mime_essence: None,
+        language: None,
+    });
+    let suppressed_blob = Arc::new(BlobMetadata {
+        id: BlobId::new(b"suppressed"),
+        num_bytes: 10,
+        mime_essence: None,
+        language: None,
+    });
+    let hidden_blob = Arc::new(BlobMetadata {
+        id: BlobId::new(b"hidden"),
+        num_bytes: 10,
+        mime_essence: None,
+        language: None,
+    });
+
+    store.record(
+        vec![
+            record_match(
+                &origin,
+                &visible_blob,
+                make_match(visible_rule.clone(), visible_blob.id, "visible", true),
+            ),
+            record_match(
+                &origin,
+                &suppressed_blob,
+                make_match(visible_rule, suppressed_blob.id, "suppressed", false),
+            ),
+            record_match(
+                &origin,
+                &hidden_blob,
+                make_match(hidden_rule, hidden_blob.id, "hidden", false),
+            ),
+        ],
+        false,
+    );
+
+    assert_eq!(store.get_matches().len(), 3, "hidden matches must remain in the store");
+    assert_eq!(store.get_num_matches(), 1);
+
+    let summary = store.get_summary();
+    assert_eq!(summary.len(), 1);
+    assert_eq!(summary.get("RULE.VISIBLE rule"), Some(&1));
+    assert!(!summary.contains_key("RULE.HIDDEN rule"));
 
     Ok(())
 }
