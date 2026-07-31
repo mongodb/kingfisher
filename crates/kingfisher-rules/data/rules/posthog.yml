@@ -1,4 +1,31 @@
 rules:
+  - name: PostHog Project API Key
+    id: kingfisher.posthog.1
+    pattern: |
+      (?x)(phc_[a-zA-Z0-9_-]{43})
+    min_entropy: 3.0
+    confidence: high
+    examples:
+      - "phc_E123456789012345678901234567890123456789012"
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://app.posthog.com/decide/?v=3
+          headers:
+            Content-Type: application/json
+          body: '{"token": "{{ TOKEN }}", "distinct_id": "validation_check"}'
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+            - type: WordMatch
+              words: ['"isAuthenticated":false']
+              negative: true
+    references:
+      - https://posthog.com/docs/libraries
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/posthog.yml
+
   - name: PostHog Personal API Key
     id: kingfisher.posthog.2
     pattern: |

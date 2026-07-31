@@ -1,0 +1,14 @@
+rules:
+  - name: Group Policy Preferences cpassword
+    id: kingfisher.gpp.1
+    pattern: |
+      (?xi)cpassword\s*=\s*["']?([A-Za-z0-9+/=]{16,512})["']?
+    min_entropy: 3.0
+    confidence: medium
+    pattern_requirements:
+      ignore_if_contains: ["YOURGPP", "PLACEHOLDER", "EXAMPLE", "CHANGEME", "YOUR_"]
+    examples:
+      - 'cpassword="edBSHOwhZLTjt/QS9FeIcJ83mjWA98gw9guKOhJOdcqh+ZGMeXOsQbCpZ3xUjTLfCuNH8pG5aSVYdYw/NglVmQ"'
+    references:
+      - https://learn.microsoft.com/en-us/security-updates/securitybulletins/2014/ms14-025
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/gpp.yml

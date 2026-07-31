@@ -61,3 +61,34 @@ rules:
                 - report_response: true
                 - type: StatusMatch
                   status: [204]
+
+  - name: LaunchDarkly Client-side ID
+    id: kingfisher.launchdarkly.2
+    pattern: |
+      (?xi)["']?(?:LD|LAUNCHDARKLY)[_-]?CLIENT[_-]?(?:SIDE[_-]?)?ID["']?\s*[":=]\s*["']?([a-f0-9]{24})\b
+    min_entropy: 3.0
+    visible: false
+    confidence: medium
+    pattern_requirements:
+      min_digits: 6
+    examples:
+      - LD_CLIENT_SIDE_ID=0123456789abcdef01234567
+    references:
+      - https://docs.launchdarkly.com/sdk/client-side/javascript
+      - https://launchdarkly.com/docs/eu-docs/sdk/concepts/contributors-guide
+      - https://github.com/launchdarkly/js-core/blob/main/packages/shared/sdk-client/src/datasource/Endpoints.ts
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/launchdarkly.yml
+    validation:
+      type: Http
+      content:
+        request:
+          # LaunchDarkly's client-side SDK uses this read-only polling endpoint.
+          method: GET
+          url: https://clientsdk.launchdarkly.com/sdk/evalx/{{ TOKEN }}/contexts/eyJraW5kIjoidXNlciIsImtleSI6ImtpbmdmaXNoZXItdmFsaWRhdGlvbiJ9
+          headers:
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid

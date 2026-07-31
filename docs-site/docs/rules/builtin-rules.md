@@ -1,13 +1,13 @@
 ---
 title: "Built-in Rules List"
-description: "Complete list of all 1013 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
+description: "Complete list of all 1051 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
 ---
 
 # Built-in Rules
 
-Kingfisher ships with **1013 detection rules** across **600 providers**
-(880 detectors + 133 dependent rules).
-Of these, **513** include live validation and **52** support direct revocation.
+Kingfisher ships with **1051 detection rules** across **612 providers**
+(914 detectors + 137 dependent rules).
+Of these, **516** include live validation and **52** support direct revocation.
 
 !!! tip "Search"
     Use the search box below to filter rules by provider name, rule ID, or confidence level.
@@ -901,6 +901,14 @@ Of these, **513** include live validation and **52** support direct revocation.
 </tr>
 <tr>
 <td>Azureopenai</td>
+<td>Azure OpenAI API Key (Extended Format)</td>
+<td><code>kingfisher.azureopenai.2</code></td>
+<td>High</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Azureopenai</td>
 <td>Azure OpenAI Host</td>
 <td><code>kingfisher.azureopenai.host.1</code></td>
 <td>Medium</td>
@@ -1433,6 +1441,38 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td><code>kingfisher.circleci.2</code></td>
 <td>Medium</td>
 <td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Cisco</td>
+<td>Cisco Enable Password</td>
+<td><code>kingfisher.cisco.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Cisco</td>
+<td>SNMP Read-Write Community String</td>
+<td><code>kingfisher.cisco.2</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Cisco</td>
+<td>Cisco PAC Key</td>
+<td><code>kingfisher.cisco.3</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Cisco</td>
+<td>Network Config NVRAM Indicator</td>
+<td><code>kingfisher.cisco.4</code></td>
+<td>Medium</td>
+<td></td>
 <td></td>
 </tr>
 <tr>
@@ -2012,6 +2052,14 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
+<td>Datadog</td>
+<td>Datadog RUM Client Token</td>
+<td><code>kingfisher.datadog.4</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
 <td>Datagov</td>
 <td>Data.gov API Key</td>
 <td><code>kingfisher.datagov.1</code></td>
@@ -2031,6 +2079,62 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td>Db2</td>
 <td>IBM DB2 / AS400 Credentials</td>
 <td><code>kingfisher.db2.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Dbconn</td>
+<td>C# Database Connection Object with Password</td>
+<td><code>kingfisher.dbconn.csharp.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Dbconn</td>
+<td>Perl DBI Connection with Credentials</td>
+<td><code>kingfisher.dbconn.perl.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Dbconn</td>
+<td>PHP Database Connection with Credentials</td>
+<td><code>kingfisher.dbconn.php.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Dbconn</td>
+<td>PHP PostgreSQL Connection with Credentials</td>
+<td><code>kingfisher.dbconn.php.2</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Dbconn</td>
+<td>Python Database Connection with Credentials</td>
+<td><code>kingfisher.dbconn.python.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Dbconn</td>
+<td>Python Database Connection with DSN String</td>
+<td><code>kingfisher.dbconn.python.2</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Dbconn</td>
+<td>Ruby DBI Connection with Credentials</td>
+<td><code>kingfisher.dbconn.ruby.1</code></td>
 <td>Medium</td>
 <td></td>
 <td></td>
@@ -2138,6 +2242,22 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td>Medium</td>
 <td>Yes</td>
 <td>Yes</td>
+</tr>
+<tr>
+<td>Deviantart</td>
+<td>DeviantArt OAuth Client ID</td>
+<td><code>kingfisher.deviantart.2</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Deviantart</td>
+<td>DeviantArt OAuth Client Secret</td>
+<td><code>kingfisher.deviantart.3</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
 </tr>
 <tr>
 <td>Devin</td>
@@ -2370,6 +2490,22 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td>Medium</td>
 <td>Yes</td>
 <td>Yes</td>
+</tr>
+<tr>
+<td>Dotnet Connstring</td>
+<td>.NET Connection String with Password</td>
+<td><code>kingfisher.dotnet.connstring.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Dotnet Connstring</td>
+<td>.NET Connection String with Integrated Security</td>
+<td><code>kingfisher.dotnet.connstring.2</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
 </tr>
 <tr>
 <td>Droneci</td>
@@ -3372,6 +3508,14 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td>Yes</td>
 </tr>
 <tr>
+<td>Gpp</td>
+<td>Group Policy Preferences cpassword</td>
+<td><code>kingfisher.gpp.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
 <td>Gradle</td>
 <td>Hardcoded Gradle Credentials</td>
 <td><code>kingfisher.gradle.1</code></td>
@@ -3860,6 +4004,22 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
+<td>Intra42</td>
+<td>Intra42 Prefixed Client ID</td>
+<td><code>kingfisher.intra42.3</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Intra42</td>
+<td>Intra42 Prefixed Client Secret</td>
+<td><code>kingfisher.intra42.4</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
 <td>Ionic</td>
 <td>Ionic API token</td>
 <td><code>kingfisher.ionic.1</code></td>
@@ -4284,6 +4444,14 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td>Yes</td>
 </tr>
 <tr>
+<td>Launchdarkly</td>
+<td>LaunchDarkly Client-side ID</td>
+<td><code>kingfisher.launchdarkly.2</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
 <td>Ldap</td>
 <td>LDAP Credentials</td>
 <td><code>kingfisher.ldap.1</code></td>
@@ -4609,6 +4777,30 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td><code>kingfisher.mattermost.2</code></td>
 <td>Medium</td>
 <td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Mattermost</td>
+<td>Mattermost Incoming Webhook URL</td>
+<td><code>kingfisher.mattermost.3</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Mattermost</td>
+<td>Mattermost Personal Access Token</td>
+<td><code>kingfisher.mattermost.4</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Maven</td>
+<td>Maven Settings XML Credentials</td>
+<td><code>kingfisher.maven.1</code></td>
+<td>Medium</td>
+<td></td>
 <td></td>
 </tr>
 <tr>
@@ -5813,6 +6005,14 @@ Of these, **513** include live validation and **52** support direct revocation.
 </tr>
 <tr>
 <td>Posthog</td>
+<td>PostHog Project API Key</td>
+<td><code>kingfisher.posthog.1</code></td>
+<td>High</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Posthog</td>
 <td>PostHog Personal API Key</td>
 <td><code>kingfisher.posthog.2</code></td>
 <td>Medium</td>
@@ -5857,6 +6057,22 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td><code>kingfisher.postmark.1</code></td>
 <td>Medium</td>
 <td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Powershell</td>
+<td>PowerShell SecureString Conversion</td>
+<td><code>kingfisher.powershell.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Powershell</td>
+<td>PowerShell PSCredential Constructor</td>
+<td><code>kingfisher.powershell.2</code></td>
+<td>Medium</td>
+<td></td>
 <td></td>
 </tr>
 <tr>
@@ -6060,6 +6276,14 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
+<td>Rdp</td>
+<td>RDP File Saved Password</td>
+<td><code>kingfisher.rdp.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
 <td>React</td>
 <td>React App Username</td>
 <td><code>kingfisher.reactapp.1</code></td>
@@ -6257,6 +6481,14 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td><code>kingfisher.runway.1</code></td>
 <td>Medium</td>
 <td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>S3Uri</td>
+<td>S3 Bucket URI</td>
+<td><code>kingfisher.s3uri.1</code></td>
+<td>Medium</td>
+<td></td>
 <td></td>
 </tr>
 <tr>
@@ -6505,6 +6737,14 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td><code>kingfisher.sentry.3</code></td>
 <td>Medium</td>
 <td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Sentry</td>
+<td>Sentry DSN</td>
+<td><code>kingfisher.sentry.4</code></td>
+<td>Medium</td>
+<td></td>
 <td></td>
 </tr>
 <tr>
@@ -6809,6 +7049,14 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td><code>kingfisher.spotify.1</code></td>
 <td>Medium</td>
 <td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Sqlddl</td>
+<td>SQL Account Creation with Password</td>
+<td><code>kingfisher.sqlddl.1</code></td>
+<td>Medium</td>
+<td></td>
 <td></td>
 </tr>
 <tr>
@@ -7460,6 +7708,22 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
+<td>Unattend</td>
+<td>Windows Unattend.xml Administrator Password</td>
+<td><code>kingfisher.unattend.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Unattend</td>
+<td>Windows Unattend.xml AutoLogon Password</td>
+<td><code>kingfisher.unattend.2</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
 <td>Unkey</td>
 <td>Unkey Root Key</td>
 <td><code>kingfisher.unkey.1</code></td>
@@ -7649,6 +7913,22 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td><code>kingfisher.vercel.6</code></td>
 <td>Medium</td>
 <td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Viewstate</td>
+<td>ASP.NET MachineKey Validation Key</td>
+<td><code>kingfisher.viewstate.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Viewstate</td>
+<td>ASP.NET MachineKey Decryption Key</td>
+<td><code>kingfisher.viewstate.2</code></td>
+<td>Medium</td>
+<td></td>
 <td></td>
 </tr>
 <tr>
@@ -7849,6 +8129,30 @@ Of these, **513** include live validation and **52** support direct revocation.
 <td><code>kingfisher.wepay.1</code></td>
 <td>High</td>
 <td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Wincmd</td>
+<td>Windows Scheduled Task with Credentials</td>
+<td><code>kingfisher.wincmd.1</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Wincmd</td>
+<td>Windows Net Use with Credentials</td>
+<td><code>kingfisher.wincmd.2</code></td>
+<td>Medium</td>
+<td></td>
+<td></td>
+</tr>
+<tr>
+<td>Wincmd</td>
+<td>Windows Credential Manager Command</td>
+<td><code>kingfisher.wincmd.3</code></td>
+<td>Medium</td>
+<td></td>
 <td></td>
 </tr>
 <tr>

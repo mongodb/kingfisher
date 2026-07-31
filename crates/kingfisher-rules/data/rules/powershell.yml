@@ -1,0 +1,24 @@
+rules:
+  - name: PowerShell SecureString Conversion
+    id: kingfisher.powershell.1
+    pattern: |
+      (?xi)ConvertTo-SecureString\s+["']([^"']{4,200})["']\s+-AsPlainText
+    confidence: medium
+    examples:
+      - '$secpasswd = ConvertTo-SecureString "P@ssw0rd123" -AsPlainText -Force'
+      - "ConvertTo-SecureString 'MyS3cret!' -AsPlainText -Force"
+    references:
+      - https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.security/convertto-securestring
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/powershell.yml
+
+  - name: PowerShell PSCredential Constructor
+    id: kingfisher.powershell.2
+    pattern: |
+      (?xi)\[(?:System\.)?Net\.NetworkCredential\]::new\(\s*["'][^"']{1,100}["']\s*,\s*["']([^"']{1,100})["']
+    confidence: medium
+    examples:
+      - '[Net.NetworkCredential]::new("admin", "P@ssw0rd!")'
+      - '[System.Net.NetworkCredential]::new("svc_account", "s3cretP@ss")'
+    references:
+      - https://learn.microsoft.com/en-us/dotnet/api/system.net.networkcredential
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/powershell.yml

@@ -1,0 +1,21 @@
+rules:
+  - name: Maven Settings XML Credentials
+    id: kingfisher.maven.1
+    pattern: |
+      (?xi)
+      <(?:server|proxy)>[\s\S]{0,500}?<username>\s*[^<]{1,100}\s*</username>
+      \s{1,200}<password>\s*([^<]{4,100})\s*</password>
+    min_entropy: 3.0
+    confidence: medium
+    pattern_requirements:
+      ignore_if_contains: ["****", "xxxx", "YOUR_PASSWORD", "${", "{{", "changeit", "changeme", "example", "test", "dummy"]
+    examples:
+      - |
+        <server>
+          <id>releases</id>
+          <username>deployment_user</username>
+          <password>Pr0d_D3pl0y!</password>
+        </server>
+    references:
+      - https://maven.apache.org/settings.html#servers
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/maven.yml

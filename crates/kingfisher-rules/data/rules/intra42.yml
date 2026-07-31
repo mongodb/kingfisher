@@ -70,3 +70,55 @@ rules:
               match_all_words: false
               words:
                 - '"access_token"'
+
+  - name: Intra42 Prefixed Client ID
+    id: kingfisher.intra42.3
+    pattern: |
+      (?xi)\b(u-s4t2(?:ud|af)-[a-f0-9]{64})\b
+    min_entropy: 3.0
+    visible: false
+    confidence: medium
+    examples:
+      - 'INTRA42_CLIENT_ID="u-s4t2ud-33ad3d923534cae0bf765b20ac23831a4e35937298f21062a72db03e99de65b7"'
+    references:
+      - https://api.intra.42.fr/apidoc/guides/getting_started
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/intra42.yml
+
+  - name: Intra42 Prefixed Client Secret
+    id: kingfisher.intra42.4
+    pattern: |
+      (?xi)\b(s-s4t2(?:ud|af)-[a-f0-9]{64})\b
+    min_entropy: 3.6
+    confidence: medium
+    pattern_requirements:
+      min_digits: 3
+      min_lowercase: 2
+    examples:
+      - 'INTRA42_CLIENT_SECRET="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"'
+    depends_on_rule:
+      - rule_id: kingfisher.intra42.3
+        variable: CLIENT_ID
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://api.intra.42.fr/oauth/token
+          headers:
+            Accept: application/json
+            Content-Type: application/x-www-form-urlencoded
+          body: >
+            grant_type=client_credentials&client_id={{ CLIENT_ID | url_encode }}&client_secret={{ TOKEN | url_encode }}
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+            - type: WordMatch
+              match_all_words: false
+              words:
+                - '"access_token"'
+    references:
+      - https://api.intra.42.fr/apidoc/guides/getting_started
+      - https://api.intra.42.fr/apidoc/guides/web_application_flow
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/intra42.yml

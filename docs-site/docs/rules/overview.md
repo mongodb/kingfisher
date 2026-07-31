@@ -13,6 +13,8 @@ A _rule_ in Kingfisher is a YAML document that describes how to detect and (opti
 
 This document explains how to write custom rules for Kingfisher using a YAML-based rule system. The rules define regular expressions to detect secrets in source code and other textual data, and they can include validation or revocation steps to confirm or invalidate the secret. By using a rules-based system, Kingfisher is highly extensible—new rules can be added or existing ones modified without changing the core code.
 
+Kingfisher currently bundles 1,051 rules: 914 standalone detectors and 137 dependent rules. Of the standalone detectors, 516 support live validation.
+
 ## 1. Rule Schema
 
 Each rule file defines one or more entries under a top‑level `rules:` list. Every entry supports the following fields:

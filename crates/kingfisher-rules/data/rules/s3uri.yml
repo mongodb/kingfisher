@@ -1,0 +1,13 @@
+rules:
+  - name: S3 Bucket URI
+    id: kingfisher.s3uri.1
+    pattern: |
+      (?x)(s3a?://[a-zA-Z0-9][-a-zA-Z0-9.]{1,62}(?:/[^\s"'<>)}\]]*)?)
+    visible: false
+    confidence: medium
+    examples:
+      - 's3://my-company-backups/database-dump.sql'
+      - 's3a://data-lake/raw/2024/customers.parquet'
+    references:
+      - https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/s3uri.yml

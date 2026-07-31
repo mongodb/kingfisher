@@ -1,0 +1,26 @@
+rules:
+  - name: Windows Unattend.xml Administrator Password
+    id: kingfisher.unattend.1
+    pattern: |
+      (?xi)<AdministratorPassword>[^<]{0,100}?<Value>\s*([^<\s%$]{4,512})\s*</Value>
+    confidence: medium
+    pattern_requirements:
+      ignore_if_contains: ["PLACEHOLDER", "CHANGEME", "EXAMPLE", "YOUR_", "ADMIN_PASSWORD", "*SENSITIVE*DATA*DELETED*"]
+    examples:
+      - '<AdministratorPassword><Value>MyPlainTextPassword</Value><PlainText>true</PlainText></AdministratorPassword>'
+    references:
+      - https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/unattend.yml
+
+  - name: Windows Unattend.xml AutoLogon Password
+    id: kingfisher.unattend.2
+    pattern: |
+      (?xi)<AutoLogon>[^<]{0,200}?<Password>[^<]{0,50}?<Value>\s*([^<\s%$]{4,512})\s*</Value>
+    confidence: medium
+    pattern_requirements:
+      ignore_if_contains: ["PLACEHOLDER", "CHANGEME", "EXAMPLE", "*SENSITIVE*DATA*DELETED*"]
+    examples:
+      - '<AutoLogon><Password><Value>UABAAHMAcwB3ADAAcgBkAA==</Value></Password></AutoLogon>'
+    references:
+      - https://learn.microsoft.com/en-us/windows-hardware/customize/desktop/unattend/
+      - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/unattend.yml
