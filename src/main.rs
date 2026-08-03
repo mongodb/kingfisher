@@ -51,6 +51,7 @@ static GLOBAL: System = System;
 
 use std::{
     io::{IsTerminal, Read, Write},
+    path::PathBuf,
     sync::{Arc, Mutex},
     time::Instant,
 };
@@ -1200,6 +1201,40 @@ fn describe_scan_target(args: &InputSpecifierArgs) -> Option<String> {
     None
 }
 
+/// Return whether stdin should be staged as a scan input.
+///
+/// `-` is the only way to ask for a stdin scan: `ScanCommandArgs::into_operation`
+/// rejects an invocation that names no input at all, so an empty `path_inputs`
+/// means some *other* source (a Git URL, an org, a bucket, ...) was selected and
+/// must not be silently replaced by whatever happens to be on a redirected stdin.
+fn should_stage_stdin(input_args: &InputSpecifierArgs, stdin_is_terminal: bool) -> bool {
+    !stdin_is_terminal && input_args.path_inputs.iter().any(is_stdin_placeholder)
+}
+
+fn is_stdin_placeholder(path: impl AsRef<std::path::Path>) -> bool {
+    path.as_ref().as_os_str() == "-"
+}
+
+/// Swap the `-` placeholders in `path_inputs` for the staged stdin file.
+///
+/// Repeated `-` arguments collapse onto the single staged file, and any sibling
+/// paths (`kingfisher scan - ./src`) keep their position instead of being
+/// dropped.
+fn replace_stdin_placeholders(path_inputs: &mut Vec<PathBuf>, stdin_file: PathBuf) {
+    let mut staged = false;
+    let mut resolved = Vec::with_capacity(path_inputs.len());
+    for path in path_inputs.drain(..) {
+        if is_stdin_placeholder(&path) {
+            if !std::mem::replace(&mut staged, true) {
+                resolved.push(stdin_file.clone());
+            }
+        } else {
+            resolved.push(path);
+        }
+    }
+    *path_inputs = resolved;
+}
+
 /// Build the resolved list of alert sinks from CLI flags + config overrides.
 /// `scan_args.config_webhook_overrides` aligns with the trailing entries of
 /// `scan_args.alert_webhook` (those that came from `kingfisher.yaml`); CLI URLs
@@ -1391,14 +1426,18 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                             "Launching with {} concurrent scan jobs. Use --num-jobs to override.",
                             &scan_args.num_jobs
                         );
-                        let paths = &scan_args.input_specifier_args.path_inputs;
-                        let is_dash = paths.iter().any(|p| p.as_os_str() == "-");
-                        if (paths.is_empty() || is_dash) && !std::io::stdin().is_terminal() {
+                        if should_stage_stdin(
+                            &scan_args.input_specifier_args,
+                            std::io::stdin().is_terminal(),
+                        ) {
                             let mut buf = Vec::new();
                             std::io::stdin().read_to_end(&mut buf)?;
                             let stdin_file = temp_dir_path.join("stdin_input");
                             std::fs::write(&stdin_file, buf)?;
-                            scan_args.input_specifier_args.path_inputs = vec![stdin_file];
+                            replace_stdin_placeholders(
+                                &mut scan_args.input_specifier_args.path_inputs,
+                                stdin_file,
+                            );
                         }
 
                         let rules_db = Arc::new(load_and_record_rules(
@@ -2105,6 +2144,8 @@ mod apply_config_tests {
     //! The test parses a real `ArgMatches` via clap so the same code path
     //! `value_source` reads from is exercised.
 
+    use std::path::PathBuf;
+
     use clap::{ArgMatches, CommandFactory, FromArgMatches};
     use kingfisher::cli::CommandLineArgs;
     use kingfisher::cli::commands::output::ReportOutputFormat;
@@ -2128,6 +2169,48 @@ mod apply_config_tests {
             ScanOperation::Scan(s) => s,
             ScanOperation::ListRepositories(_) => panic!("expected scan op"),
         }
+    }
+
+    #[test]
+    fn non_interactive_git_url_does_not_stage_stdin() {
+        let (args, _) = parse(&["kingfisher", "scan", "github.com/octocat/Hello-World"]);
+        let scan_args = into_scan(args);
+
+        assert!(scan_args.input_specifier_args.path_inputs.is_empty());
+        assert!(!scan_args.input_specifier_args.git_url.is_empty());
+        assert!(!super::should_stage_stdin(&scan_args.input_specifier_args, false));
+    }
+
+    #[test]
+    fn non_interactive_path_target_does_not_stage_stdin() {
+        let (args, _) = parse(&["kingfisher", "scan", "."]);
+        let scan_args = into_scan(args);
+
+        assert!(!super::should_stage_stdin(&scan_args.input_specifier_args, false));
+    }
+
+    #[test]
+    fn dash_stages_stdin_only_when_stdin_is_redirected() {
+        let (args, _) = parse(&["kingfisher", "scan", "-"]);
+        let scan_args = into_scan(args);
+
+        assert!(super::should_stage_stdin(&scan_args.input_specifier_args, false));
+        assert!(!super::should_stage_stdin(&scan_args.input_specifier_args, true));
+    }
+
+    #[test]
+    fn staging_stdin_keeps_sibling_paths_and_collapses_repeats() {
+        let stdin_file = PathBuf::from("/tmp/kf/stdin_input");
+        let mut path_inputs = vec![
+            PathBuf::from("-"),
+            PathBuf::from("./src"),
+            PathBuf::from("-"),
+            PathBuf::from("./tests"),
+        ];
+
+        super::replace_stdin_placeholders(&mut path_inputs, stdin_file.clone());
+
+        assert_eq!(path_inputs, vec![stdin_file, PathBuf::from("./src"), PathBuf::from("./tests")]);
     }
 
     #[test]
