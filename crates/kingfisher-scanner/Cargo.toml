@@ -184,7 +184,7 @@ percent-encoding = { workspace = true, optional = true }
 aws-lc-rs = { version = "1.17", optional = true }
 
 jsonwebtoken = { version = "10.4.0", default-features = false, features = ["rust_crypto"], optional = true }
-p256 = { version = "0.13.2", optional = true }
+p256 = { version = "0.14.0", optional = true }
 ed25519-dalek = { version = "2.2", features = ["pkcs8"], optional = true }
 hex = { workspace = true, optional = true }
 url = { version = "2.5.8", optional = true }
