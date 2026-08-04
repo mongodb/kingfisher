@@ -183,7 +183,7 @@ pem = { version = "3.0.6", optional = true }
 percent-encoding = { workspace = true, optional = true }
 aws-lc-rs = { version = "1.17", optional = true }
 
-jsonwebtoken = { version = "10.4.0", default-features = false, features = ["rust_crypto"], optional = true }
+jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto"], optional = true }
 p256 = { version = "0.13.2", optional = true }
 ed25519-dalek = { version = "2.2", features = ["pkcs8"], optional = true }
 hex = { workspace = true, optional = true }

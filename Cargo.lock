@@ -2921,7 +2921,7 @@ dependencies = [
  "base64",
  "gcloud-metadata",
  "home",
- "jsonwebtoken",
+ "jsonwebtoken 10.4.0",
  "reqwest 0.13.4",
  "serde",
  "serde_json",
@@ -4905,20 +4905,35 @@ checksum = "eba32bfb4ffdeaca3e34431072faf01745c9b26d25504aa7a6cf5684334fc4fc"
 dependencies = [
  "aws-lc-rs",
  "base64",
+ "getrandom 0.2.17",
+ "js-sys",
+ "pem",
+ "serde",
+ "serde_json",
+ "signature",
+ "simple_asn1",
+ "zeroize",
+]
+
+[[package]]
+name = "jsonwebtoken"
+version = "11.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "881733cbc631fc9e472e24447ce32a64bedf2da498d6d8570b08edc87de71f65"
+dependencies = [
+ "base64",
  "ed25519-dalek",
  "getrandom 0.2.17",
  "hmac 0.12.1",
  "js-sys",
  "p256",
  "p384",
- "pem",
  "rand 0.8.7",
  "rsa",
  "serde",
  "serde_json",
  "sha2 0.10.9",
  "signature",
- "simple_asn1",
  "zeroize",
 ]
 
@@ -4991,7 +5006,7 @@ dependencies = [
  "indenter",
  "indicatif",
  "ipnet",
- "jsonwebtoken",
+ "jsonwebtoken 11.0.0",
  "kingfisher-core",
  "kingfisher-rules",
  "kingfisher-scanner",
@@ -5150,7 +5165,7 @@ dependencies = [
  "hex",
  "hmac 0.13.0",
  "http 1.5.0",
- "jsonwebtoken",
+ "jsonwebtoken 11.0.0",
  "kingfisher-core",
  "kingfisher-rules",
  "ldap3",
@@ -6079,7 +6094,7 @@ dependencies = [
  "hex",
  "http 1.5.0",
  "http-auth",
- "jsonwebtoken",
+ "jsonwebtoken 10.4.0",
  "lazy_static",
  "oci-spec",
  "olpc-cjson",
