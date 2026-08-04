@@ -46,16 +46,10 @@ struct ConfluenceResultLinks {
     next: Option<String>,
 }
 
-/// Adds Confluence Cloud's `/wiki` context path when it is missing.
-///
-/// Cloud serves the REST API under `<site>.atlassian.net/wiki/rest/api/...`,
-/// while Server/Data Center serves it at the site root or a custom context
-/// path. Passing the bare Cloud site URL otherwise fails with a 404 whose body
-/// reads `No endpoint GET /rest/api/content/search`, which gives no hint that a
-/// path segment is missing.
-///
-/// Only a root path is rewritten: an explicit path is left alone rather than
-/// second-guessed, so a deliberate context path still works.
+/// Adds Confluence Cloud's `/wiki` context path, which Server/Data Center does
+/// not use. Without it Cloud answers `404 No endpoint GET
+/// /rest/api/content/search`. Only a root path is rewritten, so a deliberate
+/// context path is left alone.
 fn normalize_confluence_base(confluence_url: &Url) -> Url {
     let is_cloud = confluence_url.host_str().is_some_and(|host| host.ends_with(".atlassian.net"));
     let path_is_root = matches!(confluence_url.path(), "" | "/");
@@ -68,14 +62,9 @@ fn normalize_confluence_base(confluence_url: &Url) -> Url {
     url
 }
 
-/// Builds the request URL for the next page from a server-issued `_links.next`.
-///
-/// Confluence Cloud returns `next` as a root-relative path that omits the
-/// `/wiki` context path (e.g. `/rest/api/content/search?…&cursor=…`), so
-/// resolving it against the configured site URL would silently drop `/wiki`.
-/// Only the query string is taken from `next` — it carries the pagination
-/// state, `cursor` on Cloud and `start` on Server/Data Center — and it is
-/// re-anchored onto the API URL already known to be correct.
+/// Re-anchors the pagination state from `_links.next` onto our own API URL.
+/// Cloud returns `next` without the `/wiki` prefix, so resolving it against the
+/// site URL would drop that segment.
 fn next_page_url(api_url: &Url, next: &str, cql: &str, limit: usize) -> Option<Url> {
     let query = next.split_once('?').map(|(_, query)| query)?;
 
@@ -84,15 +73,13 @@ fn next_page_url(api_url: &Url, next: &str, cql: &str, limit: usize) -> Option<U
 
     let present: HashSet<String> = url.query_pairs().map(|(key, _)| key.into_owned()).collect();
 
-    // Only follow links that actually advance the cursor; a `next` without
-    // pagination state would re-request the first page forever.
+    // A `next` without pagination state would re-request the first page forever.
     if !present.contains("cursor") && !present.contains("start") {
         return None;
     }
 
-    // Confluence does not always echo every request parameter back in `next`.
-    // Dropping `expand=body.storage` would leave page bodies empty and
-    // silently hide secrets on every page after the first.
+    // `next` does not always echo every parameter back; dropping
+    // `expand=body.storage` would blank page bodies and hide secrets.
     {
         let mut pairs = url.query_pairs_mut();
         if !present.contains("cql") {
@@ -137,9 +124,8 @@ pub async fn search_pages(
 
     let mut pages = Vec::new();
 
-    // Confluence Cloud removed offset-based `start` pagination for this
-    // endpoint in 2020 in favor of a server-issued cursor; Server/Data Center
-    // still returns a `_links.next` URL too, so following it works for both.
+    // Cloud dropped offset pagination here in 2020; following `_links.next`
+    // works for both deployments.
     let mut next_url = if max_results == 0 {
         None
     } else {
@@ -191,10 +177,8 @@ pub async fn search_pages(
             }
         }
 
-        // Stopping on an empty page keeps the loop bounded: every remaining
-        // iteration adds at least one page and therefore makes progress toward
-        // `max_results`. Confluence Cloud can hand back an empty result set
-        // alongside a `next` link, which would otherwise spin forever.
+        // Cloud can return an empty page alongside a `next` link; stopping here
+        // is what keeps the loop bounded.
         if pages.len() >= max_results || received == 0 {
             break;
         }
@@ -215,8 +199,7 @@ pub async fn download_pages_to_dir(
     std::fs::create_dir_all(output_dir)?;
     let pages = search_pages(confluence_url.clone(), cql, max_results, ignore_certs).await?;
     let mut paths = Vec::new();
-    // `webui` links are relative to the same context path the API lives under,
-    // so they need the identical normalization.
+    // `webui` is relative to the same context path as the API.
     let site_url = normalize_confluence_base(&confluence_url);
     let web_base = site_url.as_str().trim_end_matches('/').to_string();
     for page in pages {
@@ -238,8 +221,6 @@ mod tests {
         matchers::{method, path, query_param, query_param_is_missing},
     };
 
-    /// Runs `future` with Confluence bearer-token credentials in the
-    /// environment, so the test does not depend on the developer's own shell.
     async fn with_confluence_token<T>(future: impl std::future::Future<Output = T>) -> T {
         temp_env::async_with_vars(
             [("KF_CONFLUENCE_TOKEN", Some("test-token")), ("KF_CONFLUENCE_USER", None)],
@@ -254,8 +235,6 @@ mod tests {
 
     #[test]
     fn normalize_confluence_base_adds_the_cloud_wiki_context_path() {
-        // The reported failure: a bare Cloud site URL 404s with
-        // "No endpoint GET /rest/api/content/search".
         let normalized =
             normalize_confluence_base(&Url::parse("https://example.atlassian.net").unwrap());
         assert_eq!(normalized.as_str(), "https://example.atlassian.net/wiki");
@@ -274,17 +253,14 @@ mod tests {
 
     #[test]
     fn normalize_confluence_base_leaves_self_hosted_and_explicit_paths_alone() {
-        // Server/Data Center serves the API at the site root...
         let server =
             normalize_confluence_base(&Url::parse("https://confluence.example.com").unwrap());
         assert_eq!(server.as_str(), "https://confluence.example.com/");
 
-        // ...or under a custom context path, which must not be rewritten.
         let context =
             normalize_confluence_base(&Url::parse("https://example.com/confluence").unwrap());
         assert_eq!(context.as_str(), "https://example.com/confluence");
 
-        // An explicit path on a Cloud host is deliberate; leave it be.
         let explicit =
             normalize_confluence_base(&Url::parse("https://example.atlassian.net/other").unwrap());
         assert_eq!(explicit.as_str(), "https://example.atlassian.net/other");
@@ -292,8 +268,6 @@ mod tests {
 
     #[test]
     fn next_page_url_keeps_the_wiki_context_path() {
-        // Confluence Cloud returns `next` without the `/wiki` prefix even
-        // though the request must carry it.
         let next = next_page_url(
             &api_url(),
             "/rest/api/content/search?cql=label+%3D+secret&cursor=abc123&limit=25&expand=body.storage",
@@ -309,8 +283,7 @@ mod tests {
 
     #[test]
     fn next_page_url_restores_parameters_the_server_dropped() {
-        // Atlassian's own documented `next` example omits `expand`; losing it
-        // would leave page bodies empty and hide secrets after page one.
+        // Atlassian's own documented `next` example omits `expand`.
         let next = next_page_url(
             &api_url(),
             "/rest/api/content/search?limit=25&cursor=abc123",
@@ -324,7 +297,6 @@ mod tests {
         assert!(pairs.contains(&("expand".to_string(), "body.storage".to_string())));
         assert!(pairs.contains(&("cql".to_string(), "label = secret".to_string())));
         assert!(pairs.contains(&("cursor".to_string(), "abc123".to_string())));
-        // Whatever the server already supplied is left untouched.
         assert_eq!(pairs.iter().filter(|(k, _)| k == "limit").count(), 1);
     }
 
@@ -343,8 +315,6 @@ mod tests {
 
     #[test]
     fn next_page_url_rejects_links_without_pagination_state() {
-        // A `next` that carries neither `cursor` nor `start` would re-request
-        // the first page forever.
         assert!(
             next_page_url(&api_url(), "/rest/api/content/search?cql=x", "x", 25).is_none(),
             "links without pagination state must not be followed"
@@ -362,8 +332,6 @@ mod tests {
         }
         let server = MockServer::start().await;
 
-        // Confluence Cloud paginates this endpoint via a cursor embedded in
-        // `_links.next`, not via a repeated/incrementing `start` parameter.
         Mock::given(method("GET"))
             .and(path("/rest/api/content/search"))
             .and(query_param("cql", "label = secret"))
@@ -409,9 +377,7 @@ mod tests {
         }
         let server = MockServer::start().await;
 
-        // Real Confluence Cloud responses return `_links.next` as root-relative
-        // and *without* the `/wiki` context path Cloud sites require, even
-        // though the request went to `/wiki/rest/api/content/search`.
+        // Cloud returns `next` without the `/wiki` the request needs.
         Mock::given(method("GET"))
             .and(path("/wiki/rest/api/content/search"))
             .and(query_param_is_missing("cursor"))
@@ -468,9 +434,7 @@ mod tests {
             .mount(&server)
             .await;
 
-        // Confluence Cloud can return an empty result set together with a
-        // `next` link; following it forever would hang the scan. The cursor
-        // never changes, so the mock is only allowed to be hit once.
+        // The cursor never changes, so the mock may only be hit once.
         Mock::given(method("GET"))
             .and(path("/rest/api/content/search"))
             .and(query_param("cursor", "abc123"))

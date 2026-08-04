@@ -9,20 +9,12 @@ pub use gouqi::Issue as JiraIssue;
 
 const JIRA_COMMENTS_PAGE_SIZE: u32 = 1000;
 
-/// Field selector sent with every JQL search.
-///
-/// Jira Cloud's `/rest/api/3/search/jql` returns only `id`, `key`, `summary`,
-/// and `status` unless `fields` is set explicitly, which would drop issue
-/// descriptions — the most likely place for a leaked secret — from every
-/// scanned issue. Requesting `*all` also picks up custom text fields, a common
-/// hiding place for credentials, and keeps Cloud and Server/Data Center
-/// scanning the same content.
+/// Field selector sent with every JQL search. Left unset, Jira Cloud returns
+/// only `id`, `key`, `summary`, and `status`, silently dropping issue
+/// descriptions from the scan.
 const JIRA_SEARCH_FIELDS: &str = "*all";
 
-/// Issues requested per JQL search request.
-///
-/// `--max-results` is a total, not a page size, so searches page until that
-/// many issues have been collected.
+/// Issues per search request; `--max-results` is a total, not a page size.
 const JIRA_ISSUES_PAGE_SIZE: usize = 100;
 
 #[derive(Clone, Copy, Debug, Default)]
@@ -274,15 +266,10 @@ fn build_http_client(ignore_certs: bool) -> Result<Client> {
         .context("Failed to build HTTP client")
 }
 
-/// Jira authentication resolved from the environment.
-///
-/// Jira Cloud (`*.atlassian.net`) API tokens must be sent as Basic auth with the
-/// account email as the username; Bearer is reserved for OAuth 2.0 access
-/// tokens. Jira Server/Data Center Personal Access Tokens keep working as
-/// Bearer when `KF_JIRA_USER` is unset.
-///
-/// The JQL search goes through `gouqi` while comments are fetched directly, so
-/// both paths resolve auth here to keep them from drifting apart.
+/// Jira authentication resolved from the environment. Cloud API tokens need
+/// Basic auth with the account email; Bearer is for OAuth 2.0 tokens and
+/// Server/Data Center PATs. Search and comment fetching both resolve auth here
+/// so the two cannot drift apart.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum JiraAuth {
     Basic { user: String, token: String },
@@ -386,8 +373,8 @@ pub async fn fetch_issues(
     let jira = build_jira_client(jira_url, ignore_certs)?;
 
     let mut issues: Vec<JiraIssue> = Vec::new();
-    // Jira Cloud paginates with an opaque cursor, Server/Data Center by
-    // offset. Both report `is_last_page`, so only the way forward differs.
+    // Cloud paginates by cursor, Server/Data Center by offset; both report
+    // `is_last_page`.
     let mut start_at: u64 = 0;
     let mut next_page_token: Option<String> = None;
 
@@ -395,8 +382,6 @@ pub async fn fetch_issues(
         let page_size = std::cmp::min(JIRA_ISSUES_PAGE_SIZE, max_results - issues.len());
 
         let mut options = SearchOptions::builder();
-        // `fields` must be set explicitly: leaving it unset makes the client
-        // substitute a minimal field set on Jira Cloud. See JIRA_SEARCH_FIELDS.
         options.max_results(page_size as u64).fields(vec![JIRA_SEARCH_FIELDS]);
         if let Some(token) = &next_page_token {
             options.next_page_token(token);
@@ -404,14 +389,15 @@ pub async fn fetch_issues(
             options.start_at(start_at);
         }
 
-        // Errors propagate rather than truncating the scan: a rate limit or
-        // expired token partway through must not look like "no more issues".
+        // Errors propagate: a rate limit partway through must not look like
+        // "no more issues". This is why `stream()` is unused — it maps a failed
+        // page to end-of-stream.
         let results = jira.search().list(jql, &options.build()).await?;
         let received = results.issues.len();
         issues.extend(results.issues);
 
-        // An empty page means there is no progress left to make, which keeps
-        // the loop bounded even if the server keeps advertising more pages.
+        // An empty page keeps the loop bounded if the server keeps advertising
+        // more.
         if received == 0 || results.is_last_page == Some(true) {
             break;
         }
@@ -542,9 +528,6 @@ mod tests {
         matchers::{method, path, query_param, query_param_is_missing},
     };
 
-    /// Runs `future` with Jira credentials cleared, so the test does not depend
-    /// on the developer's own shell (a stray `KF_JIRA_USER` would now be a
-    /// hard error rather than a silent fallback to anonymous).
     async fn without_jira_credentials<T>(future: impl std::future::Future<Output = T>) -> T {
         temp_env::async_with_vars([("KF_JIRA_USER", None::<&str>), ("KF_JIRA_TOKEN", None)], future)
             .await
@@ -993,7 +976,6 @@ mod tests {
         assert_eq!(comments[0].pointer("/body"), Some(&json!("first")));
     }
 
-    /// Builds `count` minimally valid issues starting at `first_id`.
     fn issue_page(first_id: usize, count: usize) -> Vec<serde_json::Value> {
         (first_id..first_id + count)
             .map(|n| {
@@ -1014,8 +996,6 @@ mod tests {
         }
         let server = MockServer::start().await;
 
-        // `--max-results` is a total, not a page size, so more issues than one
-        // request returns must still come back.
         Mock::given(method("GET"))
             .and(path("/rest/api/latest/search"))
             .and(query_param_is_missing("startAt"))
@@ -1060,8 +1040,7 @@ mod tests {
         }
         let server = MockServer::start().await;
 
-        // `--all` passes usize::MAX, so the result limit can never stop the
-        // loop; only the server saying "last page" may.
+        // `--all` passes usize::MAX: only "last page" may stop the loop.
         Mock::given(method("GET"))
             .and(path("/rest/api/latest/search"))
             .and(query_param_is_missing("startAt"))
@@ -1105,8 +1084,6 @@ mod tests {
         }
         let server = MockServer::start().await;
 
-        // Only one request is allowed: 40 issues are requested, so the second
-        // page must never be asked for.
         Mock::given(method("GET"))
             .and(path("/rest/api/latest/search"))
             .and(query_param("maxResults", "40"))
@@ -1147,9 +1124,8 @@ mod tests {
             .mount(&server)
             .await;
 
-        // A failure partway through pagination must surface. Returning the
-        // first page as if it were the whole result set would under-report
-        // findings without any signal to the user.
+        // Returning the first page as the whole result set would under-report
+        // findings with no signal to the user.
         Mock::given(method("GET"))
             .and(path("/rest/api/latest/search"))
             .and(query_param("startAt", "100"))
@@ -1171,10 +1147,7 @@ mod tests {
         }
         let server = MockServer::start().await;
 
-        // Leaving `fields` unset makes the client substitute a minimal field
-        // set on Jira Cloud (`id`, `key`, `summary`, `status`), which drops
-        // issue descriptions from every result. Sending it explicitly is what
-        // keeps descriptions in the payload, so assert it is on the wire.
+        // Unset, Cloud substitutes a minimal field set and drops descriptions.
         Mock::given(method("GET"))
             .and(path("/rest/api/latest/search"))
             .and(query_param("fields", "*all"))
@@ -1202,8 +1175,7 @@ mod tests {
             .expect("issues should be fetched");
 
         assert_eq!(issues.len(), 1);
-        // The description must survive into the artifact that actually gets
-        // scanned, not just into the HTTP response.
+        // Must survive into the scanned artifact, not just the HTTP response.
         let issue_value = super::normalize_issue(&issues[0]).expect("issue should normalize");
         assert_eq!(
             issue_value.pointer("/fields/description").and_then(|v| v.as_str()),
