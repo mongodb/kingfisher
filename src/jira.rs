@@ -1054,6 +1054,51 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn fetch_issues_unbounded_stops_on_the_last_page() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        // `--all` passes usize::MAX, so the result limit can never stop the
+        // loop; only the server saying "last page" may.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param_is_missing("startAt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 130,
+                "maxResults": 100,
+                "startAt": 0,
+                "issues": issue_page(1, 100)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("startAt", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 130,
+                "maxResults": 100,
+                "startAt": 100,
+                "issues": issue_page(101, 30)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let issues =
+            without_jira_credentials(fetch_issues(&jira_url, "project = TEST", usize::MAX, false))
+                .await
+                .expect("issues should be fetched");
+
+        assert_eq!(issues.len(), 130);
+        assert_eq!(issues[129].key, "TEST-130");
+    }
+
+    #[tokio::test]
     async fn fetch_issues_stops_at_max_results() {
         if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
             return;

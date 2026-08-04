@@ -1317,6 +1317,8 @@ Searches request `fields=*all`, so issue descriptions and custom text fields are
 
 `--max-results` is a total, not a page size: searches page through results 100 issues at a time until that many issues have been collected, following Jira Cloud's cursor or Server/Data Center's offset as appropriate.
 
+Pass `--all` instead of `--max-results` to keep paging for as long as Jira returns issues, stopping only on the last page. `kingfisher scan confluence --all` does the same for CQL queries. The two flags are mutually exclusive.
+
 ---
 
 ## Confluence

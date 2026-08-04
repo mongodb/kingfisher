@@ -782,6 +782,19 @@ which would silently exclude descriptions from the scan.
 100 issues at a time until that many issues have been collected, following
 Jira Cloud's cursor or Server/Data Center's offset as appropriate.
 
+Pass `--all` instead of `--max-results` to keep paging for as long as Jira
+returns issues, stopping only on the last page:
+
+```bash
+KF_JIRA_USER="user@example.com" KF_JIRA_TOKEN="token" \
+  kingfisher scan jira --url https://example.atlassian.net \
+    --jql "project = TEST" \
+    --all
+```
+
+`kingfisher scan confluence --all` does the same for CQL queries. The two
+flags are mutually exclusive.
+
 ## Confluence
 
 ### Scan Confluence pages matching a CQL query
