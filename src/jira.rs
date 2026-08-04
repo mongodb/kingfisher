@@ -1,6 +1,6 @@
 use anyhow::{Context, Result, bail};
 use gouqi::{Credentials, SearchOptions, r#async::Jira};
-use reqwest_0_12::Client;
+use reqwest_0_12::{Client, RequestBuilder};
 use std::path::{Path, PathBuf};
 use url::Url;
 
@@ -258,37 +258,60 @@ fn build_http_client(ignore_certs: bool) -> Result<Client> {
         .context("Failed to build HTTP client")
 }
 
-// Jira Cloud (*.atlassian.net) API tokens must be sent as Basic auth with the
-// account email as the username; Bearer is reserved for OAuth 2.0 access
-// tokens. Jira Server/Data Center Personal Access Tokens keep working as
-// Bearer when KF_JIRA_USER is unset.
-fn jira_credentials_env() -> Result<(Option<String>, Option<String>)> {
-    let user = std::env::var("KF_JIRA_USER").ok();
-    if let Some(ref u) = user
-        && !u.contains('@')
-    {
-        bail!("KF_JIRA_USER must be an email address");
-    }
-    let token = std::env::var("KF_JIRA_TOKEN").ok();
-    if user.is_some() && token.is_none() {
-        bail!("KF_JIRA_USER is set but KF_JIRA_TOKEN is not; Jira Cloud Basic auth requires both");
-    }
-    Ok((user, token))
+/// Jira authentication resolved from the environment.
+///
+/// Jira Cloud (*.atlassian.net) API tokens must be sent as Basic auth with the
+/// account email as the username; Bearer is reserved for OAuth 2.0 access
+/// tokens. Jira Server/Data Center Personal Access Tokens keep working as
+/// Bearer when `KF_JIRA_USER` is unset.
+///
+/// The JQL search goes through `gouqi` while comments are fetched directly, so
+/// both paths resolve auth here to keep them from drifting apart.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum JiraAuth {
+    Basic { user: String, token: String },
+    Bearer(String),
+    Anonymous,
 }
 
-fn jira_credentials() -> Result<Credentials> {
-    let (user, token) = jira_credentials_env()?;
-    Ok(match (user, token) {
-        (Some(user), Some(token)) => Credentials::Basic(user, token),
-        (None, Some(token)) => Credentials::Bearer(token),
-        _ => Credentials::Anonymous,
-    })
+impl JiraAuth {
+    fn from_env() -> Result<Self> {
+        match (std::env::var("KF_JIRA_USER").ok(), std::env::var("KF_JIRA_TOKEN").ok()) {
+            (Some(user), Some(token)) => {
+                if !user.contains('@') {
+                    bail!("KF_JIRA_USER must be an email address");
+                }
+                Ok(Self::Basic { user, token })
+            }
+            (Some(_), None) => bail!(
+                "KF_JIRA_USER is set but KF_JIRA_TOKEN is not; Jira Cloud Basic auth requires both"
+            ),
+            (None, Some(token)) => Ok(Self::Bearer(token)),
+            (None, None) => Ok(Self::Anonymous),
+        }
+    }
+
+    fn credentials(self) -> Credentials {
+        match self {
+            Self::Basic { user, token } => Credentials::Basic(user, token),
+            Self::Bearer(token) => Credentials::Bearer(token),
+            Self::Anonymous => Credentials::Anonymous,
+        }
+    }
+
+    fn apply(&self, request: RequestBuilder) -> RequestBuilder {
+        match self {
+            Self::Basic { user, token } => request.basic_auth(user, Some(token)),
+            Self::Bearer(token) => request.bearer_auth(token),
+            Self::Anonymous => request,
+        }
+    }
 }
 
 fn build_jira_client(jira_url: &Url, ignore_certs: bool) -> Result<Jira> {
     let base = jira_url.as_str().trim_end_matches('/');
     let client = build_http_client(ignore_certs)?;
-    let credentials = jira_credentials()?;
+    let credentials = JiraAuth::from_env()?.credentials();
     Ok(Jira::from_client(base.to_string(), credentials, client)?)
 }
 
@@ -362,7 +385,7 @@ pub async fn fetch_comments(
     }
 
     let client = build_http_client(ignore_certs)?;
-    let (user, token) = jira_credentials_env()?;
+    let auth = JiraAuth::from_env()?;
     let mut start_at = 0;
     let mut all_comments = Vec::new();
     let base_url = jira_relative_base_url(jira_url);
@@ -374,12 +397,7 @@ pub async fn fetch_comments(
             ))
             .context("Failed to construct Jira comments URL")?;
 
-        let request = client.get(url);
-        let request = match (&user, &token) {
-            (Some(user), Some(token)) => request.basic_auth(user, Some(token)),
-            (None, Some(token)) => request.bearer_auth(token),
-            _ => request,
-        };
+        let request = auth.apply(client.get(url));
 
         let response = request.send().await.context("Failed to fetch Jira comments")?;
         let status = response.status();
@@ -463,67 +481,83 @@ pub async fn download_issues_to_dir(
 #[cfg(test)]
 mod tests {
     use super::{
-        JIRA_COMMENTS_PAGE_SIZE, extract_adf_text, extract_embedded_comments, fetch_comments,
-        flatten_adf_fields, flatten_comment_bodies, is_adf, jira_credentials_env,
+        JIRA_COMMENTS_PAGE_SIZE, JiraAuth, extract_adf_text, extract_embedded_comments,
+        fetch_comments, flatten_adf_fields, flatten_comment_bodies, is_adf,
     };
     use serde_json::json;
-    use std::ffi::OsString;
-    use std::sync::Mutex;
     use url::Url;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path, query_param},
     };
 
-    static JIRA_ENV: Mutex<()> = Mutex::new(());
-
-    struct EnvVarGuard {
-        key: &'static str,
-        previous: Option<OsString>,
-    }
-
-    impl EnvVarGuard {
-        fn set(key: &'static str, value: &str) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe { std::env::set_var(key, value) };
-            Self { key, previous }
-        }
-
-        fn unset(key: &'static str) -> Self {
-            let previous = std::env::var_os(key);
-            unsafe { std::env::remove_var(key) };
-            Self { key, previous }
-        }
-    }
-
-    impl Drop for EnvVarGuard {
-        fn drop(&mut self) {
-            match self.previous.take() {
-                Some(value) => unsafe { std::env::set_var(self.key, value) },
-                None => unsafe { std::env::remove_var(self.key) },
-            }
-        }
+    /// Runs `future` with Jira credentials cleared, so the test does not depend
+    /// on the developer's own shell (a stray `KF_JIRA_USER` would now be a
+    /// hard error rather than a silent fallback to anonymous).
+    async fn without_jira_credentials<T>(future: impl std::future::Future<Output = T>) -> T {
+        temp_env::async_with_vars([("KF_JIRA_USER", None::<&str>), ("KF_JIRA_TOKEN", None)], future)
+            .await
     }
 
     #[test]
-    fn jira_credentials_env_rejects_user_without_token() {
-        let _lock = JIRA_ENV.lock().unwrap();
-        let _user = EnvVarGuard::set("KF_JIRA_USER", "user@example.com");
-        let _token = EnvVarGuard::unset("KF_JIRA_TOKEN");
-
-        let err = jira_credentials_env().expect_err("should reject user without token");
-        assert!(err.to_string().contains("KF_JIRA_TOKEN"));
+    fn jira_auth_uses_basic_for_cloud_email_and_token() {
+        temp_env::with_vars(
+            [("KF_JIRA_USER", Some("user@example.com")), ("KF_JIRA_TOKEN", Some("test-token"))],
+            || {
+                assert_eq!(
+                    JiraAuth::from_env().expect("should accept email and token"),
+                    JiraAuth::Basic {
+                        user: "user@example.com".to_string(),
+                        token: "test-token".to_string(),
+                    }
+                );
+            },
+        );
     }
 
     #[test]
-    fn jira_credentials_env_accepts_user_and_token() {
-        let _lock = JIRA_ENV.lock().unwrap();
-        let _user = EnvVarGuard::set("KF_JIRA_USER", "user@example.com");
-        let _token = EnvVarGuard::set("KF_JIRA_TOKEN", "test-token");
+    fn jira_auth_uses_bearer_when_user_is_unset() {
+        temp_env::with_vars(
+            [("KF_JIRA_USER", None), ("KF_JIRA_TOKEN", Some("test-token"))],
+            || {
+                assert_eq!(
+                    JiraAuth::from_env().expect("should accept a bare token"),
+                    JiraAuth::Bearer("test-token".to_string())
+                );
+            },
+        );
+    }
 
-        let (user, token) = jira_credentials_env().expect("should accept user and token");
-        assert_eq!(user.as_deref(), Some("user@example.com"));
-        assert_eq!(token.as_deref(), Some("test-token"));
+    #[test]
+    fn jira_auth_rejects_user_without_token() {
+        temp_env::with_vars(
+            [("KF_JIRA_USER", Some("user@example.com")), ("KF_JIRA_TOKEN", None)],
+            || {
+                let err = JiraAuth::from_env().expect_err("should reject user without token");
+                assert!(err.to_string().contains("KF_JIRA_TOKEN"));
+            },
+        );
+    }
+
+    #[test]
+    fn jira_auth_rejects_user_that_is_not_an_email() {
+        temp_env::with_vars(
+            [("KF_JIRA_USER", Some("not-an-email")), ("KF_JIRA_TOKEN", Some("test-token"))],
+            || {
+                let err = JiraAuth::from_env().expect_err("should reject non-email user");
+                assert!(err.to_string().contains("email address"));
+            },
+        );
+    }
+
+    #[test]
+    fn jira_auth_is_anonymous_without_credentials() {
+        temp_env::with_vars([("KF_JIRA_USER", None::<&str>), ("KF_JIRA_TOKEN", None)], || {
+            assert_eq!(
+                JiraAuth::from_env().expect("should allow anonymous access"),
+                JiraAuth::Anonymous
+            );
+        });
     }
 
     #[test]
@@ -864,10 +898,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let comments =
-            fetch_comments(&Url::parse(&server.uri()).expect("server URL"), "TEST-1", false)
-                .await
-                .expect("comments should be fetched");
+        let comments = without_jira_credentials(fetch_comments(
+            &Url::parse(&server.uri()).expect("server URL"),
+            "TEST-1",
+            false,
+        ))
+        .await
+        .expect("comments should be fetched");
 
         assert_eq!(comments.len(), 3);
         assert_eq!(comments[0].pointer("/body"), Some(&json!("first")));
@@ -897,8 +934,9 @@ mod tests {
             .await;
 
         let jira_url = Url::parse(&format!("{}/jira", server.uri())).expect("server URL");
-        let comments =
-            fetch_comments(&jira_url, "TEST-1", false).await.expect("comments should be fetched");
+        let comments = without_jira_credentials(fetch_comments(&jira_url, "TEST-1", false))
+            .await
+            .expect("comments should be fetched");
 
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].pointer("/body"), Some(&json!("first")));
