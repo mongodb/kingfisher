@@ -19,6 +19,12 @@ const JIRA_COMMENTS_PAGE_SIZE: u32 = 1000;
 /// scanning the same content.
 const JIRA_SEARCH_FIELDS: &str = "*all";
 
+/// Issues requested per JQL search request.
+///
+/// `--max-results` is a total, not a page size, so searches page until that
+/// many issues have been collected.
+const JIRA_ISSUES_PAGE_SIZE: usize = 100;
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DownloadIssueArtifactsOptions {
     pub include_comments: bool,
@@ -379,15 +385,45 @@ pub async fn fetch_issues(
 ) -> Result<Vec<JiraIssue>> {
     let jira = build_jira_client(jira_url, ignore_certs)?;
 
-    // `fields` must be set explicitly: leaving it unset makes the client
-    // substitute a minimal field set on Jira Cloud. See JIRA_SEARCH_FIELDS.
-    let search_options = SearchOptions::builder()
-        .max_results(max_results as u64)
-        .fields(vec![JIRA_SEARCH_FIELDS])
-        .build();
+    let mut issues: Vec<JiraIssue> = Vec::new();
+    // Jira Cloud paginates with an opaque cursor, Server/Data Center by
+    // offset. Both report `is_last_page`, so only the way forward differs.
+    let mut start_at: u64 = 0;
+    let mut next_page_token: Option<String> = None;
 
-    let results = jira.search().list(jql, &search_options).await?;
-    Ok(results.issues)
+    while issues.len() < max_results {
+        let page_size = std::cmp::min(JIRA_ISSUES_PAGE_SIZE, max_results - issues.len());
+
+        let mut options = SearchOptions::builder();
+        // `fields` must be set explicitly: leaving it unset makes the client
+        // substitute a minimal field set on Jira Cloud. See JIRA_SEARCH_FIELDS.
+        options.max_results(page_size as u64).fields(vec![JIRA_SEARCH_FIELDS]);
+        if let Some(token) = &next_page_token {
+            options.next_page_token(token);
+        } else if start_at > 0 {
+            options.start_at(start_at);
+        }
+
+        // Errors propagate rather than truncating the scan: a rate limit or
+        // expired token partway through must not look like "no more issues".
+        let results = jira.search().list(jql, &options.build()).await?;
+        let received = results.issues.len();
+        issues.extend(results.issues);
+
+        // An empty page means there is no progress left to make, which keeps
+        // the loop bounded even if the server keeps advertising more pages.
+        if received == 0 || results.is_last_page == Some(true) {
+            break;
+        }
+
+        match results.next_page_token {
+            Some(token) => next_page_token = Some(token),
+            None => start_at += received as u64,
+        }
+    }
+
+    issues.truncate(max_results);
+    Ok(issues)
 }
 
 pub async fn fetch_comments(
@@ -503,7 +539,7 @@ mod tests {
     use url::Url;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{method, path, query_param},
+        matchers::{method, path, query_param, query_param_is_missing},
     };
 
     /// Runs `future` with Jira credentials cleared, so the test does not depend
@@ -955,6 +991,132 @@ mod tests {
 
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].pointer("/body"), Some(&json!("first")));
+    }
+
+    /// Builds `count` minimally valid issues starting at `first_id`.
+    fn issue_page(first_id: usize, count: usize) -> Vec<serde_json::Value> {
+        (first_id..first_id + count)
+            .map(|n| {
+                json!({
+                    "self": format!("https://jira.example.com/rest/api/latest/issue/TEST-{n}"),
+                    "key": format!("TEST-{n}"),
+                    "id": n.to_string(),
+                    "fields": {"summary": format!("issue {n}")}
+                })
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn fetch_issues_pages_beyond_a_single_request() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        // `--max-results` is a total, not a page size, so more issues than one
+        // request returns must still come back.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param_is_missing("startAt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 150,
+                "maxResults": 100,
+                "startAt": 0,
+                "issues": issue_page(1, 100)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("startAt", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 150,
+                "maxResults": 50,
+                "startAt": 100,
+                "issues": issue_page(101, 50)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let issues =
+            without_jira_credentials(fetch_issues(&jira_url, "project = TEST", 150, false))
+                .await
+                .expect("issues should be fetched");
+
+        assert_eq!(issues.len(), 150);
+        assert_eq!(issues[0].key, "TEST-1");
+        assert_eq!(issues[149].key, "TEST-150");
+    }
+
+    #[tokio::test]
+    async fn fetch_issues_stops_at_max_results() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        // Only one request is allowed: 40 issues are requested, so the second
+        // page must never be asked for.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("maxResults", "40"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 500,
+                "maxResults": 40,
+                "startAt": 0,
+                "issues": issue_page(1, 40)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let issues = without_jira_credentials(fetch_issues(&jira_url, "project = TEST", 40, false))
+            .await
+            .expect("issues should be fetched");
+
+        assert_eq!(issues.len(), 40);
+    }
+
+    #[tokio::test]
+    async fn fetch_issues_propagates_errors_instead_of_truncating() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param_is_missing("startAt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 150,
+                "maxResults": 100,
+                "startAt": 0,
+                "issues": issue_page(1, 100)
+            })))
+            .mount(&server)
+            .await;
+
+        // A failure partway through pagination must surface. Returning the
+        // first page as if it were the whole result set would under-report
+        // findings without any signal to the user.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("startAt", "100"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let result =
+            without_jira_credentials(fetch_issues(&jira_url, "project = TEST", 150, false)).await;
+
+        assert!(result.is_err(), "a mid-pagination failure must not be reported as success");
     }
 
     #[tokio::test]

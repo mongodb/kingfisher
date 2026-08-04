@@ -1315,6 +1315,8 @@ Generate the API token from [id.atlassian.com](https://id.atlassian.com/manage-p
 
 Searches request `fields=*all`, so issue descriptions and custom text fields are scanned on both Cloud and Server/Data Center. Jira Cloud's search endpoint returns only `id`, `key`, `summary`, and `status` when `fields` is left unset, which would silently exclude descriptions from the scan.
 
+`--max-results` is a total, not a page size: searches page through results 100 issues at a time until that many issues have been collected, following Jira Cloud's cursor or Server/Data Center's offset as appropriate.
+
 ---
 
 ## Confluence
