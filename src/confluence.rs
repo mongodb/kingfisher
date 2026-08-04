@@ -125,7 +125,17 @@ pub async fn search_pages(
         if pages.len() >= max_results {
             break;
         }
-        next_url = body.links.next.as_deref().and_then(|next| confluence_url.join(next).ok());
+        // Confluence Cloud's `_links.next` is root-relative and omits the
+        // `/wiki` context path (e.g. `/rest/api/content/search?...&cursor=…`),
+        // so resolving it against `confluence_url` would silently drop
+        // `/wiki`. Keep our own known-correct API base and just swap in the
+        // cursor query string the server gave us.
+        next_url = body.links.next.as_deref().and_then(|next| {
+            let query = next.split_once('?').map(|(_, query)| query)?;
+            let mut url = Url::parse(&api_base).ok()?;
+            url.set_query(Some(query));
+            Some(url)
+        });
     }
     Ok(pages)
 }
@@ -213,6 +223,58 @@ mod tests {
             .await;
 
         let confluence_url = Url::parse(&server.uri()).expect("server URL");
+        let pages = search_pages(confluence_url, "label = secret", 10, false)
+            .await
+            .expect("pages should be fetched");
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].id, "1");
+        assert_eq!(pages[1].id, "2");
+    }
+
+    #[tokio::test]
+    async fn search_pages_preserves_wiki_context_path_on_cloud() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let _lock = CONFLUENCE_ENV.lock().await;
+        let _token = EnvVarGuard::set("KF_CONFLUENCE_TOKEN", "test-token");
+        let _user = EnvVarGuard::unset("KF_CONFLUENCE_USER");
+
+        let server = MockServer::start().await;
+
+        // Real Confluence Cloud responses return `_links.next` as root-relative
+        // and *without* the `/wiki` context path Cloud sites require, e.g.
+        // `/rest/api/content/search?...&cursor=...` even though the request
+        // was made against `/wiki/rest/api/content/search`. Kingfisher must
+        // not lose the `/wiki` segment when following it.
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/content/search"))
+            .and(query_param_is_missing("cursor"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [
+                    {"id": "1", "title": "first", "_links": {"webui": "/pages/1"}}
+                ],
+                "_links": {
+                    "next": "/rest/api/content/search?cql=label+%3D+secret&cursor=abc123&limit=1&expand=body.storage"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/wiki/rest/api/content/search"))
+            .and(query_param("cursor", "abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [
+                    {"id": "2", "title": "second", "_links": {"webui": "/pages/2"}}
+                ],
+                "_links": {}
+            })))
+            .mount(&server)
+            .await;
+
+        let confluence_url = Url::parse(&format!("{}/wiki", server.uri())).expect("server URL");
         let pages = search_pages(confluence_url, "label = secret", 10, false)
             .await
             .expect("pages should be fetched");

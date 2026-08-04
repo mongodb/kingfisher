@@ -270,6 +270,9 @@ fn jira_credentials_env() -> Result<(Option<String>, Option<String>)> {
         bail!("KF_JIRA_USER must be an email address");
     }
     let token = std::env::var("KF_JIRA_TOKEN").ok();
+    if user.is_some() && token.is_none() {
+        bail!("KF_JIRA_USER is set but KF_JIRA_TOKEN is not; Jira Cloud Basic auth requires both");
+    }
     Ok((user, token))
 }
 
@@ -461,14 +464,67 @@ pub async fn download_issues_to_dir(
 mod tests {
     use super::{
         JIRA_COMMENTS_PAGE_SIZE, extract_adf_text, extract_embedded_comments, fetch_comments,
-        flatten_adf_fields, flatten_comment_bodies, is_adf,
+        flatten_adf_fields, flatten_comment_bodies, is_adf, jira_credentials_env,
     };
     use serde_json::json;
+    use std::ffi::OsString;
+    use std::sync::Mutex;
     use url::Url;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path, query_param},
     };
+
+    static JIRA_ENV: Mutex<()> = Mutex::new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe { std::env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    #[test]
+    fn jira_credentials_env_rejects_user_without_token() {
+        let _lock = JIRA_ENV.lock().unwrap();
+        let _user = EnvVarGuard::set("KF_JIRA_USER", "user@example.com");
+        let _token = EnvVarGuard::unset("KF_JIRA_TOKEN");
+
+        let err = jira_credentials_env().expect_err("should reject user without token");
+        assert!(err.to_string().contains("KF_JIRA_TOKEN"));
+    }
+
+    #[test]
+    fn jira_credentials_env_accepts_user_and_token() {
+        let _lock = JIRA_ENV.lock().unwrap();
+        let _user = EnvVarGuard::set("KF_JIRA_USER", "user@example.com");
+        let _token = EnvVarGuard::set("KF_JIRA_TOKEN", "test-token");
+
+        let (user, token) = jira_credentials_env().expect("should accept user and token");
+        assert_eq!(user.as_deref(), Some("user@example.com"));
+        assert_eq!(token.as_deref(), Some("test-token"));
+    }
 
     #[test]
     fn is_adf_detects_doc_root() {
