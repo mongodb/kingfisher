@@ -276,7 +276,7 @@ fn build_http_client(ignore_certs: bool) -> Result<Client> {
 
 /// Jira authentication resolved from the environment.
 ///
-/// Jira Cloud (*.atlassian.net) API tokens must be sent as Basic auth with the
+/// Jira Cloud (`*.atlassian.net`) API tokens must be sent as Basic auth with the
 /// account email as the username; Bearer is reserved for OAuth 2.0 access
 /// tokens. Jira Server/Data Center Personal Access Tokens keep working as
 /// Bearer when `KF_JIRA_USER` is unset.
