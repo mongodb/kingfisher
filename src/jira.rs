@@ -9,6 +9,16 @@ pub use gouqi::Issue as JiraIssue;
 
 const JIRA_COMMENTS_PAGE_SIZE: u32 = 1000;
 
+/// Field selector sent with every JQL search.
+///
+/// Jira Cloud's `/rest/api/3/search/jql` returns only `id`, `key`, `summary`,
+/// and `status` unless `fields` is set explicitly, which would drop issue
+/// descriptions — the most likely place for a leaked secret — from every
+/// scanned issue. Requesting `*all` also picks up custom text fields, a common
+/// hiding place for credentials, and keeps Cloud and Server/Data Center
+/// scanning the same content.
+const JIRA_SEARCH_FIELDS: &str = "*all";
+
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DownloadIssueArtifactsOptions {
     pub include_comments: bool,
@@ -369,7 +379,12 @@ pub async fn fetch_issues(
 ) -> Result<Vec<JiraIssue>> {
     let jira = build_jira_client(jira_url, ignore_certs)?;
 
-    let search_options = SearchOptions::builder().max_results(max_results as u64).build();
+    // `fields` must be set explicitly: leaving it unset makes the client
+    // substitute a minimal field set on Jira Cloud. See JIRA_SEARCH_FIELDS.
+    let search_options = SearchOptions::builder()
+        .max_results(max_results as u64)
+        .fields(vec![JIRA_SEARCH_FIELDS])
+        .build();
 
     let results = jira.search().list(jql, &search_options).await?;
     Ok(results.issues)
@@ -482,7 +497,7 @@ pub async fn download_issues_to_dir(
 mod tests {
     use super::{
         JIRA_COMMENTS_PAGE_SIZE, JiraAuth, extract_adf_text, extract_embedded_comments,
-        fetch_comments, flatten_adf_fields, flatten_comment_bodies, is_adf,
+        fetch_comments, fetch_issues, flatten_adf_fields, flatten_comment_bodies, is_adf,
     };
     use serde_json::json;
     use url::Url;
@@ -940,5 +955,52 @@ mod tests {
 
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].pointer("/body"), Some(&json!("first")));
+    }
+
+    #[tokio::test]
+    async fn fetch_issues_requests_all_fields() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        // Leaving `fields` unset makes the client substitute a minimal field
+        // set on Jira Cloud (`id`, `key`, `summary`, `status`), which drops
+        // issue descriptions from every result. Sending it explicitly is what
+        // keeps descriptions in the payload, so assert it is on the wire.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("fields", "*all"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 1,
+                "maxResults": 50,
+                "startAt": 0,
+                "issues": [{
+                    "self": "https://jira.example.com/rest/api/latest/issue/TEST-1",
+                    "key": "TEST-1",
+                    "id": "10000",
+                    "fields": {
+                        "summary": "example",
+                        "description": "AKIAIOSFODNN7EXAMPLE"
+                    }
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let issues = without_jira_credentials(fetch_issues(&jira_url, "project = TEST", 50, false))
+            .await
+            .expect("issues should be fetched");
+
+        assert_eq!(issues.len(), 1);
+        // The description must survive into the artifact that actually gets
+        // scanned, not just into the HTTP response.
+        let issue_value = super::normalize_issue(&issues[0]).expect("issue should normalize");
+        assert_eq!(
+            issue_value.pointer("/fields/description").and_then(|v| v.as_str()),
+            Some("AKIAIOSFODNN7EXAMPLE")
+        );
     }
 }

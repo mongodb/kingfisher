@@ -1318,6 +1318,8 @@ KF_JIRA_USER="user@example.com" KF_JIRA_TOKEN="token" \
 
 Generate the API token from [id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens). Jira Server/Data Center Personal Access Tokens keep working as a bearer token when `KF_JIRA_USER` is unset.
 
+Searches request `fields=*all`, so issue descriptions and custom text fields are scanned on both Cloud and Server/Data Center. Jira Cloud's search endpoint returns only `id`, `key`, `summary`, and `status` when `fields` is left unset, which would silently exclude descriptions from the scan.
+
 ---
 
 ## Confluence
