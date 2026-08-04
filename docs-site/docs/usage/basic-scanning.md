@@ -1343,7 +1343,7 @@ KF_CONFLUENCE_USER="user@example.com" KF_CONFLUENCE_TOKEN="token" \
     --max-results 500
 ```
 
-Use the base URL of your Confluence site for `--url`. Kingfisher automatically adds `/rest/api` to the end, so `https://example.com/wiki` and `https://example.com` both work depending on your server configuration. For Confluence Cloud, include the `/wiki` path segment Atlassian adds to Cloud sites, e.g. `--url https://example.atlassian.net/wiki`, and set `KF_CONFLUENCE_USER` to your Cloud account email — Confluence Cloud API tokens require Basic auth, not a bearer token. Kingfisher paginates results by following the server-issued `next` link rather than an offset, since Confluence Cloud removed offset-based (`start`) pagination for this endpoint.
+Use the base URL of your Confluence site for `--url`. Kingfisher automatically adds `/rest/api` to the end, so `https://example.com/wiki` and `https://example.com` both work depending on your server configuration. For Confluence Cloud, pass the site URL as-is (`--url https://example.atlassian.net`): Cloud serves its API under a `/wiki` context path, and Kingfisher adds that segment for `*.atlassian.net` hosts, so both that form and the explicit `https://example.atlassian.net/wiki` work. Also set `KF_CONFLUENCE_USER` to your Cloud account email — Confluence Cloud API tokens require Basic auth, not a bearer token. Kingfisher paginates results by following the server-issued `next` link rather than an offset, since Confluence Cloud removed offset-based (`start`) pagination for this endpoint.
 
 Generate a personal access token and set it in the `KF_CONFLUENCE_TOKEN` environment variable. By default, Kingfisher sends the token as a bearer token in the `Authorization` header.
 

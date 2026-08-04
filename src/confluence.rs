@@ -46,6 +46,28 @@ struct ConfluenceResultLinks {
     next: Option<String>,
 }
 
+/// Adds Confluence Cloud's `/wiki` context path when it is missing.
+///
+/// Cloud serves the REST API under `<site>.atlassian.net/wiki/rest/api/...`,
+/// while Server/Data Center serves it at the site root or a custom context
+/// path. Passing the bare Cloud site URL otherwise fails with a 404 whose body
+/// reads `No endpoint GET /rest/api/content/search`, which gives no hint that a
+/// path segment is missing.
+///
+/// Only a root path is rewritten: an explicit path is left alone rather than
+/// second-guessed, so a deliberate context path still works.
+fn normalize_confluence_base(confluence_url: &Url) -> Url {
+    let is_cloud = confluence_url.host_str().is_some_and(|host| host.ends_with(".atlassian.net"));
+    let path_is_root = matches!(confluence_url.path(), "" | "/");
+    if !is_cloud || !path_is_root {
+        return confluence_url.clone();
+    }
+
+    let mut url = confluence_url.clone();
+    url.set_path("/wiki");
+    url
+}
+
 /// Builds the request URL for the next page from a server-issued `_links.next`.
 ///
 /// Confluence Cloud returns `next` as a root-relative path that omits the
@@ -108,7 +130,8 @@ pub async fn search_pages(
         .build()
         .context("Failed to build HTTP client")?;
 
-    let base = confluence_url.as_str().trim_end_matches('/');
+    let site_url = normalize_confluence_base(&confluence_url);
+    let base = site_url.as_str().trim_end_matches('/');
     let api_url = Url::parse(&format!("{}/rest/api/content/search", base))?;
     let limit = std::cmp::min(CONFLUENCE_PAGE_SIZE, max_results);
 
@@ -192,8 +215,10 @@ pub async fn download_pages_to_dir(
     std::fs::create_dir_all(output_dir)?;
     let pages = search_pages(confluence_url.clone(), cql, max_results, ignore_certs).await?;
     let mut paths = Vec::new();
-    let base = confluence_url.as_str().trim_end_matches('/');
-    let web_base = base.to_string();
+    // `webui` links are relative to the same context path the API lives under,
+    // so they need the identical normalization.
+    let site_url = normalize_confluence_base(&confluence_url);
+    let web_base = site_url.as_str().trim_end_matches('/').to_string();
     for page in pages {
         let file = output_dir.join(format!("{}.json", page.id));
         std::fs::write(&file, serde_json::to_vec(&page)?)?;
@@ -205,7 +230,7 @@ pub async fn download_pages_to_dir(
 
 #[cfg(test)]
 mod tests {
-    use super::{next_page_url, search_pages};
+    use super::{next_page_url, normalize_confluence_base, search_pages};
     use serde_json::json;
     use url::Url;
     use wiremock::{
@@ -225,6 +250,44 @@ mod tests {
 
     fn api_url() -> Url {
         Url::parse("https://example.atlassian.net/wiki/rest/api/content/search").expect("API URL")
+    }
+
+    #[test]
+    fn normalize_confluence_base_adds_the_cloud_wiki_context_path() {
+        // The reported failure: a bare Cloud site URL 404s with
+        // "No endpoint GET /rest/api/content/search".
+        let normalized =
+            normalize_confluence_base(&Url::parse("https://example.atlassian.net").unwrap());
+        assert_eq!(normalized.as_str(), "https://example.atlassian.net/wiki");
+
+        let with_slash =
+            normalize_confluence_base(&Url::parse("https://example.atlassian.net/").unwrap());
+        assert_eq!(with_slash.as_str(), "https://example.atlassian.net/wiki");
+    }
+
+    #[test]
+    fn normalize_confluence_base_does_not_double_the_wiki_segment() {
+        let normalized =
+            normalize_confluence_base(&Url::parse("https://example.atlassian.net/wiki").unwrap());
+        assert_eq!(normalized.as_str(), "https://example.atlassian.net/wiki");
+    }
+
+    #[test]
+    fn normalize_confluence_base_leaves_self_hosted_and_explicit_paths_alone() {
+        // Server/Data Center serves the API at the site root...
+        let server =
+            normalize_confluence_base(&Url::parse("https://confluence.example.com").unwrap());
+        assert_eq!(server.as_str(), "https://confluence.example.com/");
+
+        // ...or under a custom context path, which must not be rewritten.
+        let context =
+            normalize_confluence_base(&Url::parse("https://example.com/confluence").unwrap());
+        assert_eq!(context.as_str(), "https://example.com/confluence");
+
+        // An explicit path on a Cloud host is deliberate; leave it be.
+        let explicit =
+            normalize_confluence_base(&Url::parse("https://example.atlassian.net/other").unwrap());
+        assert_eq!(explicit.as_str(), "https://example.atlassian.net/other");
     }
 
     #[test]
