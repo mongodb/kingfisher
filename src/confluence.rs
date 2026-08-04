@@ -67,19 +67,25 @@ pub async fn search_pages(
     let base = confluence_url.as_str().trim_end_matches('/');
     let api_base = format!("{}/rest/api/content/search", base);
 
-    let api_url = Url::parse(&api_base)?;
     let mut pages = Vec::new();
-    let mut start = 0usize;
 
-    while pages.len() < max_results {
-        let limit = std::cmp::min(100, max_results - pages.len());
-        let url = api_url.clone();
-        let req = client.get(url).query(&[
-            ("cql", cql),
-            ("limit", &limit.to_string()),
-            ("start", &start.to_string()),
-            ("expand", "body.storage"),
-        ]);
+    // Confluence Cloud removed offset-based `start` pagination for this
+    // endpoint in 2020 in favor of a server-issued cursor; Server/Data Center
+    // still returns a `_links.next` URL too, so following it works for both.
+    let mut next_url = if max_results == 0 {
+        None
+    } else {
+        let mut url = Url::parse(&api_base)?;
+        let limit = std::cmp::min(100, max_results);
+        url.query_pairs_mut()
+            .append_pair("cql", cql)
+            .append_pair("limit", &limit.to_string())
+            .append_pair("expand", "body.storage");
+        Some(url)
+    };
+
+    while let Some(url) = next_url.take() {
+        let req = client.get(url);
         let req = if let Some(user) = &user {
             req.basic_auth(user, Some(&token))
         } else {
@@ -116,12 +122,140 @@ pub async fn search_pages(
                 break;
             }
         }
-        if pages.len() >= max_results || body.links.next.is_none() {
+        if pages.len() >= max_results {
             break;
         }
-        start += limit;
+        next_url = body.links.next.as_deref().and_then(|next| confluence_url.join(next).ok());
     }
     Ok(pages)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::search_pages;
+    use serde_json::json;
+    use std::ffi::OsString;
+    use tokio::sync::Mutex;
+    use url::Url;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path, query_param, query_param_is_missing},
+    };
+
+    static CONFLUENCE_ENV: Mutex<()> = Mutex::const_new(());
+
+    struct EnvVarGuard {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl EnvVarGuard {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe { std::env::set_var(key, value) };
+            Self { key, previous }
+        }
+
+        fn unset(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            unsafe { std::env::remove_var(key) };
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match self.previous.take() {
+                Some(value) => unsafe { std::env::set_var(self.key, value) },
+                None => unsafe { std::env::remove_var(self.key) },
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn search_pages_follows_cursor_based_next_link() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let _lock = CONFLUENCE_ENV.lock().await;
+        let _token = EnvVarGuard::set("KF_CONFLUENCE_TOKEN", "test-token");
+        let _user = EnvVarGuard::unset("KF_CONFLUENCE_USER");
+
+        let server = MockServer::start().await;
+
+        // Confluence Cloud paginates this endpoint via a cursor embedded in
+        // `_links.next`, not via a repeated/incrementing `start` parameter.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/content/search"))
+            .and(query_param("cql", "label = secret"))
+            .and(query_param_is_missing("cursor"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [
+                    {"id": "1", "title": "first", "_links": {"webui": "/pages/1"}}
+                ],
+                "_links": {
+                    "next": "/rest/api/content/search?cql=label+%3D+secret&cursor=abc123&limit=1&expand=body.storage"
+                }
+            })))
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/content/search"))
+            .and(query_param("cursor", "abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [
+                    {"id": "2", "title": "second", "_links": {"webui": "/pages/2"}}
+                ],
+                "_links": {}
+            })))
+            .mount(&server)
+            .await;
+
+        let confluence_url = Url::parse(&server.uri()).expect("server URL");
+        let pages = search_pages(confluence_url, "label = secret", 10, false)
+            .await
+            .expect("pages should be fetched");
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[0].id, "1");
+        assert_eq!(pages[1].id, "2");
+    }
+
+    #[tokio::test]
+    async fn search_pages_stops_once_max_results_reached_without_following_next() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let _lock = CONFLUENCE_ENV.lock().await;
+        let _token = EnvVarGuard::set("KF_CONFLUENCE_TOKEN", "test-token");
+        let _user = EnvVarGuard::unset("KF_CONFLUENCE_USER");
+
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/content/search"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [
+                    {"id": "1", "title": "first", "_links": {"webui": "/pages/1"}},
+                    {"id": "2", "title": "second", "_links": {"webui": "/pages/2"}}
+                ],
+                "_links": {
+                    "next": "/rest/api/content/search?cursor=should-not-be-fetched"
+                }
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let confluence_url = Url::parse(&server.uri()).expect("server URL");
+        let pages = search_pages(confluence_url, "label = secret", 1, false)
+            .await
+            .expect("pages should be fetched");
+
+        assert_eq!(pages.len(), 1);
+        assert_eq!(pages[0].id, "1");
+    }
 }
 
 pub async fn download_pages_to_dir(

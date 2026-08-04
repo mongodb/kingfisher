@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use gouqi::{Credentials, SearchOptions, r#async::Jira};
 use reqwest_0_12::Client;
 use std::path::{Path, PathBuf};
@@ -258,18 +258,35 @@ fn build_http_client(ignore_certs: bool) -> Result<Client> {
         .context("Failed to build HTTP client")
 }
 
+// Jira Cloud (*.atlassian.net) API tokens must be sent as Basic auth with the
+// account email as the username; Bearer is reserved for OAuth 2.0 access
+// tokens. Jira Server/Data Center Personal Access Tokens keep working as
+// Bearer when KF_JIRA_USER is unset.
+fn jira_credentials_env() -> Result<(Option<String>, Option<String>)> {
+    let user = std::env::var("KF_JIRA_USER").ok();
+    if let Some(ref u) = user
+        && !u.contains('@')
+    {
+        bail!("KF_JIRA_USER must be an email address");
+    }
+    let token = std::env::var("KF_JIRA_TOKEN").ok();
+    Ok((user, token))
+}
+
+fn jira_credentials() -> Result<Credentials> {
+    let (user, token) = jira_credentials_env()?;
+    Ok(match (user, token) {
+        (Some(user), Some(token)) => Credentials::Basic(user, token),
+        (None, Some(token)) => Credentials::Bearer(token),
+        _ => Credentials::Anonymous,
+    })
+}
+
 fn build_jira_client(jira_url: &Url, ignore_certs: bool) -> Result<Jira> {
     let base = jira_url.as_str().trim_end_matches('/');
     let client = build_http_client(ignore_certs)?;
-    let credentials = match std::env::var("KF_JIRA_TOKEN") {
-        Ok(token) => Credentials::Bearer(token),
-        Err(_) => Credentials::Anonymous,
-    };
+    let credentials = jira_credentials()?;
     Ok(Jira::from_client(base.to_string(), credentials, client)?)
-}
-
-fn jira_auth_header() -> Option<String> {
-    std::env::var("KF_JIRA_TOKEN").ok().map(|token| format!("Bearer {}", token))
 }
 
 fn jira_relative_base_url(jira_url: &Url) -> Url {
@@ -342,6 +359,7 @@ pub async fn fetch_comments(
     }
 
     let client = build_http_client(ignore_certs)?;
+    let (user, token) = jira_credentials_env()?;
     let mut start_at = 0;
     let mut all_comments = Vec::new();
     let base_url = jira_relative_base_url(jira_url);
@@ -353,10 +371,12 @@ pub async fn fetch_comments(
             ))
             .context("Failed to construct Jira comments URL")?;
 
-        let mut request = client.get(url);
-        if let Some(auth) = jira_auth_header() {
-            request = request.header("Authorization", auth);
-        }
+        let request = client.get(url);
+        let request = match (&user, &token) {
+            (Some(user), Some(token)) => request.basic_auth(user, Some(token)),
+            (None, Some(token)) => request.bearer_auth(token),
+            _ => request,
+        };
 
         let response = request.send().await.context("Failed to fetch Jira comments")?;
         let status = response.status();
