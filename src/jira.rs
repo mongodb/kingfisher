@@ -270,11 +270,26 @@ fn build_http_client(ignore_certs: bool) -> Result<Client> {
 /// Basic auth with the account email; Bearer is for OAuth 2.0 tokens and
 /// Server/Data Center PATs. Search and comment fetching both resolve auth here
 /// so the two cannot drift apart.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 enum JiraAuth {
     Basic { user: String, token: String },
     Bearer(String),
     Anonymous,
+}
+
+// Hand-written so a token cannot reach logs or a failed assertion's output.
+// The account email is kept: it is not a credential and is the useful part
+// when diagnosing which identity was picked up.
+impl std::fmt::Debug for JiraAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Basic { user, .. } => {
+                f.debug_struct("Basic").field("user", user).field("token", &"<redacted>").finish()
+            }
+            Self::Bearer(_) => f.debug_tuple("Bearer").field(&"<redacted>").finish(),
+            Self::Anonymous => f.write_str("Anonymous"),
+        }
+    }
 }
 
 impl JiraAuth {
@@ -547,6 +562,21 @@ mod tests {
                 );
             },
         );
+    }
+
+    #[test]
+    fn jira_auth_debug_never_reveals_the_token() {
+        // `assert_eq!` prints the value on failure, so a derived Debug would
+        // put credentials in test output and in any log that formats them.
+        let basic = JiraAuth::Basic {
+            user: "user@example.com".to_string(),
+            token: "super-secret-token".to_string(),
+        };
+        let rendered = format!("{:?} {:?}", basic, JiraAuth::Bearer("super-secret-token".into()));
+
+        assert!(!rendered.contains("super-secret-token"), "token leaked into Debug: {rendered}");
+        assert!(rendered.contains("<redacted>"));
+        assert!(rendered.contains("user@example.com"));
     }
 
     #[test]
