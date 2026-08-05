@@ -140,6 +140,7 @@ async fn test_redact_hashes_finding_values() -> Result<()> {
         access_map: false,
         rule_stats: false,
         only_valid: false,
+        validation_filter: None,
         include_hidden_findings: false,
         min_entropy: Some(0.0),
         redact: true,

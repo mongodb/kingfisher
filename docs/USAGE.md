@@ -61,6 +61,27 @@ kingfisher scan ~/src/myrepo --no-validate
 kingfisher scan /path/to/repo --only-valid
 ```
 
+`--only-valid` is a compatibility alias for `--validation-filter active`. To retain active
+credentials plus high-signal findings that require manual review, configured validators that were
+not run, and validation attempts blocked by temporary infrastructure failures, use:
+
+```bash
+kingfisher scan /path/to/repo --validation-filter actionable
+```
+
+The available filters are:
+
+| Filter | Included outcomes |
+|---|---|
+| `all` | Every finding (default) |
+| `active` | `verified_active` only |
+| `actionable` | `verified_active`, `structurally_valid`, `assumed`, `unavailable`, and `not_attempted` |
+
+Each JSON, JSONL, BSON, TOON, and SARIF finding exposes a machine-readable validation outcome.
+Human-readable reports distinguish active, inactive, unavailable, skipped, unconfigured,
+not-attempted, structurally valid, and manual-review findings. An `assumed` outcome is not proof
+that a credential is active; it means the rule is sufficiently high-signal to require triage.
+
 ### Output JSON and capture to a file
 
 ```bash

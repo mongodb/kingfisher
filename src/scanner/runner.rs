@@ -639,11 +639,11 @@ fn deduplicate_new_matches(
     let reporter = crate::reporter::DetailsReporter {
         datastore: Arc::clone(store),
         styles: Styles::new(global_args.use_color(std::io::stdout())),
-        only_valid: args.only_valid,
+        validation_filter: args.effective_validation_filter(),
         audit_context: None,
     };
 
-    let all_matches = reporter.get_unfiltered_matches(Some(false))?;
+    let all_matches = reporter.get_unfiltered_matches(Some(scan::ValidationFilter::All))?;
     if start_index >= all_matches.len() {
         return Ok(());
     }
@@ -684,6 +684,7 @@ fn build_scan_audit_context(
         successful_validations: Some(totals.successful_validations),
         failed_validations: Some(totals.failed_validations),
         skipped_validations: Some(totals.skipped_validations),
+        unavailable_validations: Some(totals.unavailable_validations),
         blobs_scanned: Some(totals.blobs_scanned),
         bytes_scanned: Some(totals.bytes_scanned),
         running_version: Some(update_status.running_version.clone()),
@@ -1433,7 +1434,7 @@ fn maybe_hint_access_map(datastore: &Arc<Mutex<FindingsStore>>, args: &scan::Sca
         let ds = datastore.lock().unwrap();
         ds.get_matches().iter().any(|entry| {
             let rule = &entry.2.rule;
-            entry.2.validation_success
+            entry.2.validation_outcome.is_verified_active()
                 && (matches!(rule.syntax().validation, Some(Validation::AWS | Validation::GCP))
                     || rule.id().starts_with("kingfisher.github.")
                     || rule.id().starts_with("kingfisher.gitlab."))

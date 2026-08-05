@@ -415,8 +415,15 @@ fn apply_config(
     }
     if let Some(v) = cfg.scan.only_valid
         && config_wins(scan_matches, "only_valid")
+        && config_wins(scan_matches, "validation_filter")
     {
         scan_args.only_valid = v;
+    }
+    if let Some(v) = cfg.scan.validation_filter
+        && config_wins(scan_matches, "validation_filter")
+        && config_wins(scan_matches, "only_valid")
+    {
+        scan_args.validation_filter = Some(v);
     }
     if let Some(v) = cfg.scan.redact
         && config_wins(scan_matches, "redact")
@@ -789,6 +796,9 @@ fn build_config_yaml(
     }
     if user_set(sub_matches, "only_valid") {
         scan.only_valid = Some(scan_args.only_valid);
+    }
+    if user_set(sub_matches, "validation_filter") {
+        scan.validation_filter = scan_args.validation_filter;
     }
     if user_set(sub_matches, "redact") {
         scan.redact = Some(scan_args.redact);
@@ -1301,7 +1311,7 @@ pub fn determine_exit_code(datastore: &Arc<Mutex<findings_store::FindingsStore>>
             .iter()
             .filter(|msg| {
                 let (_, _, match_item) = &****msg;
-                match_item.validation_success
+                match_item.validation_outcome.is_verified_active()
             })
             .count();
         if validated_matches > 0 {
@@ -1466,7 +1476,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                             let alert_reporter = DetailsReporter {
                                 datastore: Arc::clone(&datastore),
                                 styles: Styles::new(global_args.use_color(std::io::stdout())),
-                                only_valid: scan_args.only_valid,
+                                validation_filter: scan_args.effective_validation_filter(),
                                 audit_context: None,
                             };
                             match alert_reporter.build_finding_records(&scan_args) {
@@ -1503,6 +1513,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                                 successful_validations: None,
                                 failed_validations: None,
                                 skipped_validations: None,
+                                unavailable_validations: None,
                                 blobs_scanned: None,
                                 bytes_scanned: None,
                                 running_version: Some(update_status.running_version.clone()),
@@ -1514,7 +1525,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                             let reporter = DetailsReporter {
                                 datastore: Arc::clone(&datastore),
                                 styles: Styles::new(global_args.use_color(std::io::stdout())),
-                                only_valid: scan_args.only_valid,
+                                validation_filter: scan_args.effective_validation_filter(),
                                 audit_context: Some(audit_context),
                             };
                             let envelope = reporter.build_report_envelope(&scan_args)?;
@@ -1793,6 +1804,7 @@ fn create_default_scan_args() -> cli::commands::scan::ScanArgs {
         access_map: false,
         rule_stats: false,
         only_valid: false,
+        validation_filter: None,
         include_hidden_findings: false,
         min_entropy: None,
         redact: false,

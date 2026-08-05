@@ -213,6 +213,7 @@ mod tests {
             access_map: false,
             rule_stats: false,
             only_valid: false,
+            validation_filter: None,
             include_hidden_findings: false,
             min_entropy: None,
             redact: false,
@@ -288,6 +289,11 @@ mod tests {
             validation_response_body: validation_body::from_string("validation response"),
             validation_response_status: 200,
             validation_success,
+            validation_outcome: if validation_success {
+                kingfisher_core::ValidationOutcome::VerifiedActive
+            } else {
+                kingfisher_core::ValidationOutcome::VerifiedInactive
+            },
             calculated_entropy: 4.5,
             visible: true,
             is_base64: false,
@@ -322,7 +328,7 @@ mod tests {
         DetailsReporter {
             datastore: Arc::new(Mutex::new(datastore)),
             styles: Styles::new(false),
-            only_valid: false,
+            validation_filter: cli::commands::scan::ValidationFilter::All,
             audit_context: None,
         }
     }
@@ -345,6 +351,7 @@ mod tests {
             validation_response_body: validation_body::from_string("validation response"),
             validation_response_status: 200,
             validation_success: true,
+            validation_outcome: kingfisher_core::ValidationOutcome::VerifiedActive,
         }];
         let reporter = setup_mock_reporter(matches);
         let mut output = Cursor::new(Vec::new());
@@ -378,6 +385,7 @@ mod tests {
             validation_response_body: validation_body::from_string("validation response"),
             validation_response_status: 200,
             validation_success: false,
+            validation_outcome: kingfisher_core::ValidationOutcome::VerifiedInactive,
         }]);
 
         let datastore = reporter.datastore.lock().unwrap();
@@ -423,6 +431,11 @@ mod tests {
                 validation_response_body: validation_body::from_string("validation response"),
                 validation_response_status: 200,
                 validation_success,
+                validation_outcome: if validation_success {
+                    kingfisher_core::ValidationOutcome::VerifiedActive
+                } else {
+                    kingfisher_core::ValidationOutcome::VerifiedInactive
+                },
             }];
             let reporter = setup_mock_reporter(matches);
             let mut output = Cursor::new(Vec::new());
@@ -434,6 +447,9 @@ mod tests {
             let first = &findings[0];
             let validation_status = first["finding"]["validation"]["status"].as_str().unwrap();
             assert_eq!(validation_status, expected_status);
+            let expected_outcome =
+                if validation_success { "verified_active" } else { "verified_inactive" };
+            assert_eq!(first["finding"]["validation"]["outcome"].as_str(), Some(expected_outcome));
         }
         Ok(())
     }

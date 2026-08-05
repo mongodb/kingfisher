@@ -2592,6 +2592,8 @@
                     <option value="all" selected>All validation states</option>
                     <option value="active">Active Credential</option>
                     <option value="inactive">Inactive Credential</option>
+                    <option value="review">Manual Review</option>
+                    <option value="unavailable">Validation Unavailable</option>
                     <option value="not_attempted">Not Attempted</option>
                     <option value="canary">Canary Token (Skipped)</option>
                   </select>
@@ -4585,6 +4587,7 @@
           successfulValidations: Number(reportSummary.successful_validations || 0),
           failedValidations: Number(reportSummary.failed_validations || 0),
           skippedValidations: Number(reportSummary.skipped_validations || 0),
+          unavailableValidations: Number(reportSummary.unavailable_validations || 0),
           blobsScanned: Number(reportSummary.blobs_scanned || 0),
           bytesScanned: Number(reportSummary.bytes_scanned || 0),
           scanDurationSeconds: Number(reportSummary.scan_duration_seconds || 0),
@@ -4786,6 +4789,10 @@
           return normalizedStatus === "active";
         } else if (validation === "inactive") {
           return normalizedStatus === "inactive";
+        } else if (validation === "review") {
+          return normalizedStatus === "review";
+        } else if (validation === "unavailable") {
+          return normalizedStatus === "unavailable";
         } else if (validation === "not_attempted") {
           return normalizedStatus === "not_attempted";
         } else if (validation === "canary") {
@@ -4882,7 +4889,25 @@
         return "inactive";
       }
 
-      if (normalized === "not attempted" || normalized === "not_attempted") {
+      if (
+        normalized === "manual review required" ||
+        normalized === "structurally valid secret" ||
+        normalized === "assumed"
+      ) {
+        return "review";
+      }
+
+      if (normalized === "validation unavailable" || normalized === "unavailable") {
+        return "unavailable";
+      }
+
+      if (
+        normalized === "not attempted" ||
+        normalized === "not_attempted" ||
+        normalized === "validation not configured" ||
+        normalized === "not_configured" ||
+        normalized === "validation skipped"
+      ) {
         return "not_attempted";
       }
 
@@ -4894,7 +4919,15 @@
     }
 
     function calculateValidationCounts(list = findings) {
-      const counts = { active: 0, inactive: 0, not_attempted: 0, canary: 0, unknown: 0 };
+      const counts = {
+        active: 0,
+        inactive: 0,
+        review: 0,
+        unavailable: 0,
+        not_attempted: 0,
+        canary: 0,
+        unknown: 0,
+      };
       (list || []).forEach((f) => {
         const status =
           f.finding && f.finding.validation && f.finding.validation.status
@@ -5189,6 +5222,8 @@
       const palette = {
         active: "#22c55e",
         inactive: "#f97316",
+        review: "#eab308",
+        unavailable: "#ef4444",
         not_attempted: "#38bdf8",
         canary: "#a855f7",
         unknown: "#9ca3af",
@@ -5196,6 +5231,8 @@
       const dataPoints = [
         { key: "active", label: "Active", color: palette.active },
         { key: "inactive", label: "Inactive", color: palette.inactive },
+        { key: "review", label: "Manual Review", color: palette.review },
+        { key: "unavailable", label: "Unavailable", color: palette.unavailable },
         { key: "not_attempted", label: "Not Attempted", color: palette.not_attempted },
         { key: "canary", label: "Canary Token", color: palette.canary },
         { key: "unknown", label: "Unknown", color: palette.unknown },
@@ -5485,7 +5522,7 @@
         return;
       }
 
-      const statusOrder = { active: 0, inactive: 1, canary: 2, not_attempted: 3, unknown: 4 };
+      const statusOrder = { active: 0, review: 1, unavailable: 2, inactive: 3, canary: 4, not_attempted: 5, unknown: 6 };
       let baseFindings =
         scope === "filtered" ? getFilteredSortedFindings().slice() : (Array.isArray(findings) ? findings.slice() : []);
       if (activeOnly) {
@@ -5504,8 +5541,8 @@
         const fb = b.finding || {};
         const keyA = normalizeValidationStatus(fa.validation && fa.validation.status ? fa.validation.status : "");
         const keyB = normalizeValidationStatus(fb.validation && fb.validation.status ? fb.validation.status : "");
-        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 4;
-        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 4;
+        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 6;
+        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 6;
         if (sa !== sb) return sa - sb;
 
         const ra = (a.rule && (a.rule.name || a.rule.id)) || "";
@@ -5596,6 +5633,9 @@
       if (scanMetadata.summary && scanMetadata.summary.skippedValidations) {
         metaLines.push(`<strong>Skipped Validations:</strong> ${scanMetadata.summary.skippedValidations}`);
       }
+      if (scanMetadata.summary && scanMetadata.summary.unavailableValidations) {
+        metaLines.push(`<strong>Unavailable Validations:</strong> ${scanMetadata.summary.unavailableValidations}`);
+      }
       if (scanMetadata.summary && scanMetadata.summary.blobsScanned) {
         metaLines.push(`<strong>Blobs Scanned:</strong> ${scanMetadata.summary.blobsScanned}`);
       }
@@ -5625,6 +5665,8 @@
         execSummary = `<div style="padding:12px 16px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:13px;color:#92400e;line-height:1.6;margin-bottom:16px;">
           <strong>Review Recommended:</strong> This scan found <strong>${baseFindings.length} finding${baseFindings.length !== 1 ? "s" : ""}</strong>.
           ${counts.inactive > 0 ? `${counts.inactive} credential${counts.inactive !== 1 ? "s were" : " was"} inactive at scan time.` : ""}
+          ${counts.review > 0 ? `${counts.review} ${counts.review !== 1 ? "require" : "requires"} manual review.` : ""}
+          ${counts.unavailable > 0 ? `${counts.unavailable} could not be validated because validation was unavailable.` : ""}
           ${counts.not_attempted > 0 ? `${counts.not_attempted} ${counts.not_attempted !== 1 ? "were" : "was"} not validated.` : ""}
           ${counts.canary > 0 ? `${counts.canary} ${counts.canary !== 1 ? "were" : "was"} canary token${counts.canary !== 1 ? "s" : ""} (skipped).` : ""}
           ${scanMetadata.imported ? `Imported reports do not include Kingfisher access-map data or command workflows.` : ""}
@@ -5679,6 +5721,8 @@
       <div class="stat"><div class="label">High Confidence</div><div class="value">${highConfidence}</div></div>
       <div class="stat"><div class="label">Active</div><div class="value" style="color:#dc2626;">${counts.active || 0}</div></div>
       <div class="stat"><div class="label">Inactive</div><div class="value" style="color:#f97316;">${counts.inactive || 0}</div></div>
+      <div class="stat"><div class="label">Manual Review</div><div class="value" style="color:#eab308;">${counts.review || 0}</div></div>
+      <div class="stat"><div class="label">Unavailable</div><div class="value" style="color:#ef4444;">${counts.unavailable || 0}</div></div>
       <div class="stat"><div class="label">Not Validated</div><div class="value">${counts.not_attempted || 0}</div></div>
       <div class="stat"><div class="label">Identities</div><div class="value">${(accessMap || []).length}</div></div>
     </div>
@@ -5687,6 +5731,8 @@
       <div class="legend">
         <span><span class="dot" style="background:#22c55e"></span> Active: ${counts.active || 0}</span>
         <span><span class="dot" style="background:#f97316"></span> Inactive: ${counts.inactive || 0}</span>
+        <span><span class="dot" style="background:#eab308"></span> Manual Review: ${counts.review || 0}</span>
+        <span><span class="dot" style="background:#ef4444"></span> Unavailable: ${counts.unavailable || 0}</span>
         <span><span class="dot" style="background:#38bdf8"></span> Not Attempted: ${counts.not_attempted || 0}</span>
         <span><span class="dot" style="background:#a855f7"></span> Canary Token: ${counts.canary || 0}</span>
         <span><span class="dot" style="background:#9ca3af"></span> Unknown: ${counts.unknown || 0}</span>
@@ -6700,14 +6746,14 @@
       }
 
       // Sort: active first, then by rule name
-      const statusOrder = { active: 0, inactive: 1, canary: 2, not_attempted: 3, unknown: 4 };
+      const statusOrder = { active: 0, review: 1, unavailable: 2, inactive: 3, canary: 4, not_attempted: 5, unknown: 6 };
       const sorted = pool.sort((a, b) => {
         const fa = a.finding || {};
         const fb = b.finding || {};
         const keyA = normalizeValidationStatus(fa.validation && fa.validation.status ? fa.validation.status : "");
         const keyB = normalizeValidationStatus(fb.validation && fb.validation.status ? fb.validation.status : "");
-        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 4;
-        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 4;
+        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 6;
+        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 6;
         if (sa !== sb) return sa - sb;
         const ra = (a.rule && (a.rule.name || a.rule.id)) || "";
         const rb = (b.rule && (b.rule.name || b.rule.id)) || "";

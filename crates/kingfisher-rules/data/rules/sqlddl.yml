@@ -7,7 +7,16 @@ rules:
       \s*=?\s*['"]?([^'";\s$%]{4,128})
     confidence: medium
     pattern_requirements:
-      ignore_if_contains: ["CHANGEME", "CHANGE_ME", "PLACEHOLDER", "EXAMPLE", "YOUR_", "strongpassword", "yourpassword"]
+      ignore_if_contains:
+        [
+          "CHANGEME",
+          "CHANGE_ME",
+          "PLACEHOLDER",
+          "EXAMPLE",
+          "YOUR_",
+          "strongpassword",
+          "yourpassword",
+        ]
     examples:
       - "CREATE LOGIN sa WITH PASSWORD = 'MyStr0ngP@ss!'"
       - "CREATE USER 'admin'@'%' IDENTIFIED BY 'secret123'"

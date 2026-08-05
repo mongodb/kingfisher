@@ -31,6 +31,10 @@ impl DetailsReporter {
 
         let mut props = BTreeMap::new();
         props.insert("validation_status".to_string(), serde_json::json!(finding.validation.status));
+        props.insert(
+            "validation_outcome".to_string(),
+            serde_json::json!(finding.validation.outcome),
+        );
         props.insert("entropy".to_string(), serde_json::json!(finding.entropy));
         if let Some(git) = &finding.git_metadata {
             props.insert("git_metadata".to_string(), git.clone());
@@ -153,7 +157,7 @@ mod tests {
         DetailsReporter {
             datastore: Arc::new(Mutex::new(store)),
             styles: Styles::new(false),
-            only_valid: false,
+            validation_filter: cli::commands::scan::ValidationFilter::All,
             audit_context: None,
         }
     }
@@ -167,6 +171,7 @@ mod tests {
                 confidence: confidence.to_string(),
                 entropy: "0.0".to_string(),
                 validation: ValidationInfo {
+                    outcome: kingfisher_core::ValidationOutcome::NotConfigured,
                     status: "unknown".to_string(),
                     response: "n/a".to_string(),
                 },

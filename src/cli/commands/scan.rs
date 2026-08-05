@@ -1,5 +1,6 @@
 use anyhow::{Context, bail};
 use clap::{Args, Subcommand, ValueEnum, ValueHint};
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     net::IpAddr,
@@ -150,6 +151,12 @@ pub struct ScanArgs {
     /// Display only validated findings
     #[arg(global = true, long, default_value_t = false)]
     pub only_valid: bool,
+
+    /// Filter findings by validation outcome. `active` is equivalent to
+    /// `--only-valid`; `actionable` also includes explicit manual-review and
+    /// temporarily unverifiable findings.
+    #[arg(global = true, long, value_enum, conflicts_with = "only_valid")]
+    pub validation_filter: Option<ValidationFilter>,
 
     /// Include hidden helper-rule findings in reports and scan summaries
     #[arg(global = true, long, default_value_t = false)]
@@ -315,6 +322,32 @@ pub enum ConfidenceLevel {
     Low,
     Medium,
     High,
+}
+
+/// Controls which validation outcomes are included in scan reports.
+#[derive(
+    Copy, Clone, Debug, Display, PartialEq, Eq, PartialOrd, Ord, ValueEnum, Serialize, Deserialize,
+)]
+#[strum(serialize_all = "kebab-case")]
+#[serde(rename_all = "kebab-case")]
+pub enum ValidationFilter {
+    /// Include every finding, regardless of validation outcome.
+    All,
+    /// Include only credentials proven active by a validator.
+    Active,
+    /// Include verified-active findings plus outcomes requiring manual review.
+    Actionable,
+}
+
+impl ScanArgs {
+    /// Resolve the compatibility `--only-valid` flag and the richer filter.
+    pub fn effective_validation_filter(&self) -> ValidationFilter {
+        if self.only_valid {
+            ValidationFilter::Active
+        } else {
+            self.validation_filter.unwrap_or(ValidationFilter::All)
+        }
+    }
 }
 
 impl From<ConfidenceLevel> for Confidence {

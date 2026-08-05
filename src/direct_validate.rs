@@ -131,6 +131,7 @@ fn extract_validation_vars(validation: &Validation) -> BTreeSet<String> {
     let mut vars = BTreeSet::new();
 
     match validation {
+        Validation::Assumed => {}
         Validation::Http(http) => {
             // Extract from URL
             vars.extend(extract_template_vars(&http.request.url));
@@ -608,6 +609,14 @@ pub async fn run_direct_validation(
         // contain `{{ TOKEN }}` substituted to the secret (and any
         // `--var` / `--arg` values).
         let mut result = match validation {
+            Validation::Assumed => DirectValidationResult {
+                rule_id: String::new(),
+                rule_name: String::new(),
+                is_valid: false,
+                status_code: None,
+                message: "Rule requires manual review; no live validation is configured"
+                    .to_string(),
+            },
             Validation::Http(http_validation) => {
                 match execute_http_validation(
                     http_validation,
@@ -1081,6 +1090,7 @@ pub(crate) fn create_minimal_scan_args() -> crate::cli::commands::scan::ScanArgs
         access_map: false,
         rule_stats: false,
         only_valid: false,
+        validation_filter: None,
         include_hidden_findings: false,
         min_entropy: None,
         redact: false,

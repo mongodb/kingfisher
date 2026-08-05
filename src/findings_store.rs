@@ -150,6 +150,7 @@ impl FindingsStore {
                 let (_, _, existing) = Arc::make_mut(arc_in_store);
                 existing.validation_success = updated.validation_success;
                 existing.validation_response_status = updated.validation_response_status;
+                existing.validation_outcome = updated.validation_outcome;
                 existing.validation_response_body = updated.validation_response_body.clone();
             }
         }
@@ -522,6 +523,7 @@ impl FindingsStore {
                     validation_response_body: match_item.validation_response_body.clone(),
                     validation_response_status: match_item.validation_response_status,
                     validation_success: match_item.validation_success,
+                    validation_outcome: match_item.validation_outcome,
                 })
             })
             .collect()

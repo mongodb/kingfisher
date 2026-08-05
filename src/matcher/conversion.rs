@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use http::StatusCode;
+use kingfisher_core::ValidationOutcome;
 use schemars::JsonSchema;
 use serde::Serialize;
 use xxhash_rust::xxh3::xxh3_64;
@@ -31,6 +32,7 @@ pub struct OwnedBlobMatch {
     pub validation_response_body: ValidationResponseBody,
     pub validation_response_status: StatusCode,
     pub validation_success: bool,
+    pub validation_outcome: ValidationOutcome,
     pub calculated_entropy: f32,
     pub is_base64: bool,
     /// Variables captured from dependent rules (from depends_on_rule).
@@ -39,6 +41,17 @@ pub struct OwnedBlobMatch {
 }
 
 impl OwnedBlobMatch {
+    /// Refresh the semantic outcome after legacy validation fields change.
+    pub fn refresh_validation_outcome(&mut self) {
+        let validation = self.rule.syntax().validation.as_ref();
+        self.validation_outcome = ValidationOutcome::from_legacy(
+            validation.is_some(),
+            matches!(validation, Some(crate::rules::rule::Validation::Assumed)),
+            self.validation_success,
+            self.validation_response_status.as_u16(),
+        );
+    }
+
     pub fn convert_match_to_owned_blobmatch(m: &Match, rule: Arc<Rule>) -> OwnedBlobMatch {
         OwnedBlobMatch {
             rule,
@@ -51,6 +64,7 @@ impl OwnedBlobMatch {
             validation_response_status: StatusCode::from_u16(m.validation_response_status)
                 .unwrap_or(StatusCode::CONTINUE),
             validation_success: m.validation_success,
+            validation_outcome: m.validation_outcome,
             calculated_entropy: m.calculated_entropy,
             is_base64: m.is_base64,
             dependent_captures: m.dependent_captures.clone(),
@@ -83,6 +97,7 @@ impl OwnedBlobMatch {
             validation_response_body: blob_match.validation_response_body,
             validation_response_status: blob_match.validation_response_status,
             validation_success: blob_match.validation_success,
+            validation_outcome: blob_match.validation_outcome,
             calculated_entropy: blob_match.calculated_entropy,
             finding_fingerprint: 0, //default
             is_base64: blob_match.is_base64,
@@ -143,6 +158,10 @@ pub struct Match {
     /// Validation Success
     pub validation_success: bool,
 
+    /// Semantic validation outcome. This is authoritative for filtering and reporting.
+    #[serde(default)]
+    pub validation_outcome: ValidationOutcome,
+
     /// Validation Success
     pub calculated_entropy: f32,
 
@@ -157,6 +176,17 @@ pub struct Match {
 }
 
 impl Match {
+    /// Refresh the semantic outcome after applying a cached validation result.
+    pub fn refresh_validation_outcome(&mut self) {
+        let validation = self.rule.syntax().validation.as_ref();
+        self.validation_outcome = ValidationOutcome::from_legacy(
+            validation.is_some(),
+            matches!(validation, Some(crate::rules::rule::Validation::Assumed)),
+            self.validation_success,
+            self.validation_response_status,
+        );
+    }
+
     #[inline]
     pub fn convert_owned_blobmatch_to_match<'a>(
         loc_mapping: Option<&'a LocationMapping<'a>>,
@@ -204,6 +234,7 @@ impl Match {
             validation_response_body: owned_blob_match.validation_response_body.clone(),
             validation_response_status: owned_blob_match.validation_response_status.as_u16(),
             validation_success: owned_blob_match.validation_success,
+            validation_outcome: owned_blob_match.validation_outcome,
             calculated_entropy: owned_blob_match.calculated_entropy,
             is_base64: owned_blob_match.is_base64,
             dependent_captures: owned_blob_match.dependent_captures.clone(),

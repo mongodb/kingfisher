@@ -170,7 +170,7 @@ revocation:
 | visible                 | false to hide non‑secret captures (e.g. IDs)                         |
 | depends_on_rule         | Chain rules: use captures from one rule in another's validation      |
 | pattern_requirements  | Require character types and/or exclude placeholder words from matches |
-| validation              | Configure `Http`, `Grpc`, typed validators (`AWS`, `GCP`, etc.), or `Raw` exception-path checks to verify live validity |
+| validation              | Configure `Http`, `Grpc`, typed validators, `Raw` exception-path checks, or `Assumed` manual-review classification |
 | revocation              | Configure HTTP, AWS, or multi-step revocation for a detected secret  |
 
 ## Validation Types
@@ -179,7 +179,20 @@ Kingfisher supports three validation buckets:
 
 1. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
 2. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`.
-3. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
+3. `Assumed`: no network request is made; a high-signal match is marked for manual review and is included by `--validation-filter actionable`.
+4. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
+
+Use `Assumed` only when the secret cannot be deterministically live-validated and the pattern is
+specific enough that every match warrants triage. It does **not** mean the credential was proven
+active, and it does not pass `--only-valid` or `--validation-filter active`.
+
+```yaml
+validation:
+  type: Assumed
+```
+
+For example, the built-in private-key rules use `Assumed`: their PEM/OpenSSH/PGP material can be
+high confidence without a provider endpoint that can establish whether the key is currently in use.
 
 Raw validation looks like this:
 

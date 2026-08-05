@@ -174,6 +174,16 @@ For a shareable, upload-based experience, the docs site also hosts the same view
 kingfisher scan /path/to/code --only-valid
 ```
 
+Use the actionable filter when high-signal findings that cannot be live-validated—such as
+private keys—or temporarily unavailable validators should also be retained for manual review:
+
+```bash
+kingfisher scan /path/to/code --validation-filter actionable
+```
+
+`--only-valid` is equivalent to `--validation-filter active` and remains restricted to
+credentials proven active. The two options cannot be combined.
+
 ### 5: Revoke a discovered secret
 
 ```bash
@@ -504,6 +514,9 @@ kingfisher scan ~/src/myrepo --turbo
 # Display only secrets confirmed active by third‑party APIs
 kingfisher scan /path/to/repo --only-valid
 
+# Include active credentials and high-signal findings requiring manual review
+kingfisher scan /path/to/repo --validation-filter actionable
+
 # Output JSON and capture to a file
 kingfisher scan . --format json | tee kingfisher.json
 
@@ -541,7 +554,7 @@ kingfisher view report1.json report2.jsonl report3.sarif
 kingfisher view ./reports/
 ```
 
-The viewer can import SARIF, Gitleaks JSON, and TruffleHog JSON/JSONL in addition to native Kingfisher reports. Imported findings are normalized for browsing, filtering, and export. Kingfisher-produced SARIF can preserve compatible validation status, command, fingerprint, and `access_map` properties when present; generic imported reports remain display-oriented and full blast-radius linking still requires a Kingfisher scan.
+The viewer can import SARIF, Gitleaks JSON, and TruffleHog JSON/JSONL in addition to native Kingfisher reports. Imported findings are normalized for browsing, filtering, and export. Kingfisher-produced SARIF can preserve compatible validation outcome/status, command, fingerprint, and `access_map` properties when present; generic imported reports remain display-oriented and full blast-radius linking still requires a Kingfisher scan.
 
 > **Use the access map functionality only when you are authorized to inspect the target account, as Kingfisher will issue additional network requests to determine what access the secret grants**
 

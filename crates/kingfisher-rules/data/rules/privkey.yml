@@ -24,6 +24,8 @@ rules:
       -----
     min_entropy: 4.5
     confidence: high
+    validation:
+      type: Assumed
     examples:
       - |
         -----BEGIN RSA PRIVATE KEY-----
@@ -83,6 +85,8 @@ rules:
       min_lowercase: 1
     min_entropy: 4.5
     confidence: high
+    validation:
+      type: Assumed
     examples:
       - |
         -----BEGIN PRIVATE KEY-----

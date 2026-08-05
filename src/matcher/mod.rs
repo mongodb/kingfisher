@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use http::StatusCode;
+use kingfisher_core::ValidationOutcome;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
@@ -93,6 +94,7 @@ pub struct BlobMatch<'a> {
     pub validation_response_status: StatusCode,
 
     pub validation_success: bool,
+    pub validation_outcome: ValidationOutcome,
     pub calculated_entropy: f32,
     pub is_base64: bool,
 }

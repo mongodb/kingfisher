@@ -69,6 +69,13 @@ Filter to only secrets confirmed active by provider APIs:
 kingfisher scan /path/to/code --only-valid
 ```
 
+To include live credentials plus high-signal findings such as private keys that require manual
+review, use:
+
+```bash
+kingfisher scan /path/to/code --validation-filter actionable
+```
+
 ## 5. Map the Blast Radius
 
 See exactly what resources a leaked credential can access:

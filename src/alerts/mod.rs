@@ -154,9 +154,9 @@ impl AlertSummary {
             std::collections::HashMap::new();
         for f in findings {
             *by_rule_map.entry(f.rule.id.clone()).or_default() += 1;
-            match f.finding.validation.status.as_str() {
-                "Active Credential" => active += 1,
-                "Inactive Credential" => inactive += 1,
+            match f.finding.validation.outcome {
+                kingfisher_core::ValidationOutcome::VerifiedActive => active += 1,
+                kingfisher_core::ValidationOutcome::VerifiedInactive => inactive += 1,
                 _ => unknown += 1,
             }
         }
@@ -412,6 +412,7 @@ pub(crate) fn make_test_record(
             confidence: "Medium".to_string(),
             entropy: "4.5".to_string(),
             validation: ValidationInfo {
+                outcome: kingfisher_core::ValidationOutcome::VerifiedActive,
                 status: "Active Credential".to_string(),
                 response: String::new(),
             },

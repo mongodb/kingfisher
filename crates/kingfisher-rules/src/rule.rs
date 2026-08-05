@@ -65,6 +65,9 @@ pub enum TlsMode {
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 #[serde(tag = "type", content = "content")]
 pub enum Validation {
+    /// Treat a high-signal pattern match as requiring manual review without
+    /// performing network validation.
+    Assumed,
     AWS,
     AzureStorage,
     Coinbase,

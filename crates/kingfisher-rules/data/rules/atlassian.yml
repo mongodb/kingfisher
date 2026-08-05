@@ -24,49 +24,23 @@ rules:
       - Atlassian_key = "DjayBeny2rtpvydF4zAphcqc"
       - "ATLASSIAN_API_TOKEN:'abcdef1234567890abcdef12'"
     references:
-      - https://developer.atlassian.com/cloud/admin/organization/rest/api-group-orgs/#api-v1-orgs-get
-      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/atlassian.yml
-      - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/atlassian.go
+      - https://developer.atlassian.com/cloud/admin/organization/rest/api-group-orgs/
+      - https://developer.atlassian.com/cloud/admin/user-management/delete-managed-account/
     validation:
       type: Http
       content:
         request:
-          url: https://api.atlassian.com/me
-          headers:
-            Authorization: "Bearer {{ TOKEN }}"
-            Accept: "application/json"
           method: GET
+          url: https://api.atlassian.com/admin/v1/orgs
+          headers:
+            Accept: application/json
+            Authorization: "Bearer {{ TOKEN }}"
           response_matcher:
             - report_response: true
-            - status:
-                - 200
-              type: StatusMatch
-            - type: WordMatch
-              words:
-                - "Unauthorized"
-              negative: true
-  # - name: Atlassian Organization ID
-  #   id: kingfisher.atlassian.2
-  #   pattern: |
-  #     (?xi)
-  #     admin\.atlassian\.com
-  #     /o/
-  #     (
-  #       [0-9a-f]{8}
-  #       -
-  #       [0-9a-f]{4}
-  #       -
-  #       [0-9a-f]{4}
-  #       -
-  #       [0-9a-f]{4}
-  #       -
-  #       [0-9a-f]{12}
-  #     )
-  #   min_entropy: 2.0
-  #   confidence: medium
-  #   visible: false
-  #   examples:
-  #     - https://admin.atlassian.com/o/12345678-9abc-def0-1234-56789abcdef0/api-keys
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+
   - name: Atlassian Admin API Key
     id: kingfisher.atlassian.3
     pattern: |
@@ -88,6 +62,7 @@ rules:
           'https://api.atlassian.com/admin/v1/orgs' \
           --header 'Authorization: Bearer ATEXAMPLE1234567890abcdefghijklmnopqrstuvwxyz_-ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789foobarAA11BB22'
     references:
+      - https://community.atlassian.com/forums/Questions/Unauthorised-response-in-Get-Organizations-API/qaa-p/1216883#M4324
       - https://developer.atlassian.com/cloud/admin/organization/rest/
       - https://developer.atlassian.com/cloud/admin/api-access/rest/
       - https://support.atlassian.com/organization-administration/docs/manage-an-organization-with-the-admin-apis/

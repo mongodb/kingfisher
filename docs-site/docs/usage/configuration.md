@@ -168,6 +168,7 @@ scan:
   min_entropy: 3.5              # float                          (--min-entropy)
   no_validate: false            # bool                           (--no-validate)
   only_valid: false             # bool                           (--only-valid)
+  validation_filter: actionable # all | active | actionable      (--validation-filter)
   redact: false                 # bool                           (--redact)
   no_dedup: false               # bool                           (--no-dedup)
   turbo: false                  # bool                           (--turbo)
@@ -257,6 +258,10 @@ git:
   github_api_url: null          # URL  GHE / self-hosted GH       (--github-api-url)
   gitlab_api_url: null          # URL  self-hosted GitLab         (--gitlab-api-url)
 ```
+
+`scan.only_valid: true` and `scan.validation_filter` are mutually exclusive. Use
+`validation_filter: active` for the explicit equivalent of `only_valid`, or `actionable` to include
+manual-review and temporarily unverifiable outcomes.
 
 Unknown fields are rejected (typo protection). Empty sections and a missing
 top-level file are both fine.

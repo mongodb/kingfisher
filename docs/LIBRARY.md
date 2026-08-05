@@ -8,7 +8,7 @@ Kingfisher's functionality is available as a set of Rust library crates that can
 
 | Crate | Description |
 | ----- | ----------- |
-| `kingfisher-core` | Core types: `Blob`, `BlobId`, `Location`, `Origin`, entropy calculation |
+| `kingfisher-core` | Core types: `Blob`, `BlobId`, `Location`, `Origin`, `ValidationOutcome`, entropy calculation |
 | `kingfisher-rules` | Rule definitions, YAML parsing, compiled rule database, builtin rules |
 | `kingfisher-scanner` | High-level scanning API with `Scanner` and `Finding` types |
 
@@ -740,6 +740,11 @@ kingfisher-scanner = { git = "https://github.com/mongodb/kingfisher", features =
 | `validation-all` | Enable all validation features |
 
 `validation: type: Raw` is the ad-hoc validator path for provider-specific or protocol-specific checks that are not generic enough to become schema-level validator families. Typed validators such as `AWS`, `GCP`, `MongoDB`, and `JWT` remain separate validator kinds in the rule schema.
+
+`kingfisher_core::ValidationOutcome` provides the transport-independent result model used by
+Kingfisher reports: `VerifiedActive`, `VerifiedInactive`, `StructurallyValid`, `Unavailable`,
+`Skipped`, `NotConfigured`, `NotAttempted`, and `Assumed`. Consumers should use this outcome rather
+than inferring credential state from an HTTP status code or the legacy validation-success boolean.
 
 ### HTTP Validation Example
 

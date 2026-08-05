@@ -164,6 +164,7 @@ fn test_github_remote_scan() -> Result<()> {
         access_map: false,
         rule_stats: false,
         only_valid: false,
+        validation_filter: None,
         include_hidden_findings: false,
         min_entropy: None,
         redact: false,

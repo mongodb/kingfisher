@@ -77,7 +77,7 @@ rules:
     min_entropy: 3.0
     confidence: medium
     examples:
-      - 'WEBHOOK_URL=https://mattermost.example.com/hooks/9xuqwrwgstrb3mzrxb83nb357a'
+      - "WEBHOOK_URL=https://mattermost.example.com/hooks/9xuqwrwgstrb3mzrxb83nb357a"
     validation:
       type: Http
       content:
@@ -106,8 +106,8 @@ rules:
     confidence: medium
     min_entropy: 3.5
     examples:
-      - 'MM_TOKEN=9xuqwrwgstrb3mzrxb83nb357a'
-      - 'mattermost_access_token: zmigewsanbbsdf59xnmduzypjc'
+      - "MM_TOKEN=9xuqwrwgstrb3mzrxb83nb357a"
+      - "mattermost_access_token: zmigewsanbbsdf59xnmduzypjc"
     depends_on_rule:
       - rule_id: "kingfisher.mattermost.1"
         variable: MATTERMOST_URL

@@ -127,6 +127,29 @@ mod test {
     }
 
     #[test]
+    fn atlassian_api_token_uses_documented_bearer_validation() -> Result<()> {
+        let rules = get_builtin_rules(Some(Confidence::Low))?;
+        let rule = rules
+            .rules
+            .get("kingfisher.atlassian.1")
+            .expect("Atlassian API token rule should exist");
+
+        let Some(crate::rule::Validation::Http(validation)) = rule.validation.as_ref() else {
+            panic!("Atlassian API tokens should use HTTP validation");
+        };
+        assert_eq!(validation.request.url, "https://api.atlassian.com/admin/v1/orgs");
+        assert_eq!(
+            validation.request.headers.get("Authorization"),
+            Some(&"Bearer {{ TOKEN }}".to_owned())
+        );
+        assert!(
+            rule.depends_on_rule.iter().flatten().next().is_none(),
+            "Atlassian API token validation must not require auxiliary captures"
+        );
+        Ok(())
+    }
+
+    #[test]
     fn builtin_rules_capture_full_secrets() -> Result<()> {
         let rules = get_builtin_rules(Some(Confidence::Low))?;
         for (rule_id, input, expected_secret) in [

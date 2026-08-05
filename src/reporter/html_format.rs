@@ -35,6 +35,9 @@ fn render_metadata(metadata: &ScanReportMetadata) -> String {
     if let Some(skipped) = metadata.summary.skipped_validations {
         lines.push(summary_line(" |__Skipped Validations", &skipped.to_string()));
     }
+    if let Some(unavailable) = metadata.summary.unavailable_validations {
+        lines.push(summary_line(" |__Unavailable Validations", &unavailable.to_string()));
+    }
     if let Some(rules_applied) = metadata.summary.rules_applied {
         lines.push(summary_line("Rules Applied", &rules_applied.to_string()));
     }
@@ -96,14 +99,20 @@ fn render_metadata(metadata: &ScanReportMetadata) -> String {
 fn validation_rank(status: &str) -> usize {
     if status.eq_ignore_ascii_case("Active Credential") {
         0
-    } else if status.eq_ignore_ascii_case("Inactive Credential") {
+    } else if status.eq_ignore_ascii_case("Manual Review Required")
+        || status.eq_ignore_ascii_case("Structurally Valid Secret")
+    {
         1
-    } else if status.eq_ignore_ascii_case("Canary Token (Skipped)") {
+    } else if status.eq_ignore_ascii_case("Validation Unavailable") {
         2
-    } else if status.eq_ignore_ascii_case("Not Attempted") {
+    } else if status.eq_ignore_ascii_case("Inactive Credential") {
         3
-    } else {
+    } else if status.eq_ignore_ascii_case("Canary Token (Skipped)") {
         4
+    } else if status.eq_ignore_ascii_case("Not Attempted") {
+        5
+    } else {
+        6
     }
 }
 
@@ -140,6 +149,16 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
             "status-inactive"
         } else if record.finding.validation.status == "Canary Token (Skipped)" {
             "status-canary"
+        } else if matches!(
+            record.finding.validation.outcome,
+            kingfisher_core::ValidationOutcome::Assumed
+                | kingfisher_core::ValidationOutcome::StructurallyValid
+        ) {
+            "status-review"
+        } else if record.finding.validation.outcome
+            == kingfisher_core::ValidationOutcome::Unavailable
+        {
+            "status-unavailable"
         } else {
             "status-unknown"
         };
@@ -254,6 +273,8 @@ fn build_html(envelope: &ReportEnvelope) -> String {
     .status-active {{ background: #14532d; color: #86efac; }}
     .status-inactive {{ background: #7f1d1d; color: #fecaca; }}
     .status-canary {{ background: #581c87; color: #e9d5ff; }}
+    .status-review {{ background: #713f12; color: #fef08a; }}
+    .status-unavailable {{ background: #7f1d1d; color: #fecaca; }}
     .status-unknown {{ background: #78350f; color: #fde68a; }}
   </style>
 </head>
@@ -318,6 +339,7 @@ mod tests {
                     successful_validations: Some(0),
                     failed_validations: Some(0),
                     skipped_validations: Some(0),
+                    unavailable_validations: Some(0),
                     blobs_scanned: Some(1),
                     bytes_scanned: Some(10),
                     scan_duration_seconds: Some(0.1),

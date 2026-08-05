@@ -47,7 +47,11 @@ def load_rules():
                 name = rule.get("name", "Unknown")
                 rule_id = rule.get("id", "")
                 confidence = rule.get("confidence") or "medium"
-                has_validation = "validation" in rule
+                validation = rule.get("validation")
+                has_validation = bool(validation) and not (
+                    isinstance(validation, dict)
+                    and validation.get("type") == "Assumed"
+                )
                 has_revocation = "revocation" in rule
                 is_dependent = bool(rule.get("depends_on_rule"))
 

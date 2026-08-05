@@ -61,7 +61,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::alerts::{AlertDetail, AlertFormat, AlertOn};
 use crate::cli::commands::output::ReportOutputFormat;
-use crate::cli::commands::scan::ConfidenceLevel;
+use crate::cli::commands::scan::{ConfidenceLevel, ValidationFilter};
 use crate::cli::global::TlsMode;
 
 /// Conventional file name when users save a project-local config. The path
@@ -102,6 +102,7 @@ pub struct ScanConfig {
     pub min_entropy: Option<f32>,
     pub no_validate: Option<bool>,
     pub only_valid: Option<bool>,
+    pub validation_filter: Option<ValidationFilter>,
     pub redact: Option<bool>,
     pub no_dedup: Option<bool>,
     pub turbo: Option<bool>,
@@ -396,6 +397,10 @@ pub fn parse_str(yaml: &str) -> Result<KingfisherConfig> {
 }
 
 fn validate(cfg: &KingfisherConfig) -> Result<()> {
+    if cfg.scan.only_valid == Some(true) && cfg.scan.validation_filter.is_some() {
+        bail!("scan.only_valid and scan.validation_filter cannot both be set");
+    }
+
     // alerts.webhooks
     for (idx, w) in cfg.alerts.webhooks.iter().enumerate() {
         crate::alerts::validate_webhook_url(&w.url)
@@ -614,6 +619,16 @@ git:
         assert!(cfg.rules.enabled.is_empty());
         assert!(cfg.rules.disabled.is_empty());
         assert!(cfg.global.endpoints.is_empty());
+    }
+
+    #[test]
+    fn validation_filter_parses_and_conflicts_with_only_valid() {
+        let cfg = parse_str("scan:\n  validation_filter: actionable\n").unwrap();
+        assert_eq!(cfg.scan.validation_filter, Some(ValidationFilter::Actionable));
+
+        let err =
+            parse_str("scan:\n  only_valid: true\n  validation_filter: actionable\n").unwrap_err();
+        assert!(format!("{err:#}").contains("cannot both be set"));
     }
 
     #[test]

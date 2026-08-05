@@ -76,5 +76,7 @@ pub use scanner::{Scanner, ScannerConfig};
 pub use scanner_pool::ScannerPool;
 
 // Re-export commonly needed types from dependencies
-pub use kingfisher_core::{Blob, BlobId, Location, OffsetSpan, SourcePoint, SourceSpan};
+pub use kingfisher_core::{
+    Blob, BlobId, Location, OffsetSpan, SourcePoint, SourceSpan, ValidationOutcome,
+};
 pub use kingfisher_rules::{Confidence, Rule, RulesDatabase};
