@@ -1,6 +1,6 @@
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use gouqi::{Credentials, SearchOptions, r#async::Jira};
-use reqwest_0_12::Client;
+use reqwest_0_12::{Client, RequestBuilder};
 use std::path::{Path, PathBuf};
 use url::Url;
 
@@ -8,6 +8,14 @@ use url::Url;
 pub use gouqi::Issue as JiraIssue;
 
 const JIRA_COMMENTS_PAGE_SIZE: u32 = 1000;
+
+/// Field selector sent with every JQL search. Left unset, Jira Cloud returns
+/// only `id`, `key`, `summary`, and `status`, silently dropping issue
+/// descriptions from the scan.
+const JIRA_SEARCH_FIELDS: &str = "*all";
+
+/// Issues per search request; `--max-results` is a total, not a page size.
+const JIRA_ISSUES_PAGE_SIZE: usize = 100;
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct DownloadIssueArtifactsOptions {
@@ -258,18 +266,71 @@ fn build_http_client(ignore_certs: bool) -> Result<Client> {
         .context("Failed to build HTTP client")
 }
 
+/// Jira authentication resolved from the environment. Cloud API tokens need
+/// Basic auth with the account email; Bearer is for OAuth 2.0 tokens and
+/// Server/Data Center PATs. Search and comment fetching both resolve auth here
+/// so the two cannot drift apart.
+#[derive(Clone, PartialEq, Eq)]
+enum JiraAuth {
+    Basic { user: String, token: String },
+    Bearer(String),
+    Anonymous,
+}
+
+// Hand-written so a token cannot reach logs or a failed assertion's output.
+// The account email is kept: it is not a credential and is the useful part
+// when diagnosing which identity was picked up.
+impl std::fmt::Debug for JiraAuth {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Basic { user, .. } => {
+                f.debug_struct("Basic").field("user", user).field("token", &"<redacted>").finish()
+            }
+            Self::Bearer(_) => f.debug_tuple("Bearer").field(&"<redacted>").finish(),
+            Self::Anonymous => f.write_str("Anonymous"),
+        }
+    }
+}
+
+impl JiraAuth {
+    fn from_env() -> Result<Self> {
+        match (std::env::var("KF_JIRA_USER").ok(), std::env::var("KF_JIRA_TOKEN").ok()) {
+            (Some(user), Some(token)) => {
+                if !user.contains('@') {
+                    bail!("KF_JIRA_USER must be an email address");
+                }
+                Ok(Self::Basic { user, token })
+            }
+            (Some(_), None) => bail!(
+                "KF_JIRA_USER is set but KF_JIRA_TOKEN is not; Jira Cloud Basic auth requires both"
+            ),
+            (None, Some(token)) => Ok(Self::Bearer(token)),
+            (None, None) => Ok(Self::Anonymous),
+        }
+    }
+
+    fn credentials(self) -> Credentials {
+        match self {
+            Self::Basic { user, token } => Credentials::Basic(user, token),
+            Self::Bearer(token) => Credentials::Bearer(token),
+            Self::Anonymous => Credentials::Anonymous,
+        }
+    }
+
+    fn apply(&self, request: RequestBuilder) -> RequestBuilder {
+        match self {
+            Self::Basic { user, token } => request.basic_auth(user, Some(token)),
+            Self::Bearer(token) => request.bearer_auth(token),
+            Self::Anonymous => request,
+        }
+    }
+}
+
 fn build_jira_client(jira_url: &Url, ignore_certs: bool) -> Result<Jira> {
     let base = jira_url.as_str().trim_end_matches('/');
     let client = build_http_client(ignore_certs)?;
-    let credentials = match std::env::var("KF_JIRA_TOKEN") {
-        Ok(token) => Credentials::Bearer(token),
-        Err(_) => Credentials::Anonymous,
-    };
+    let credentials = JiraAuth::from_env()?.credentials();
     Ok(Jira::from_client(base.to_string(), credentials, client)?)
-}
-
-fn jira_auth_header() -> Option<String> {
-    std::env::var("KF_JIRA_TOKEN").ok().map(|token| format!("Bearer {}", token))
 }
 
 fn jira_relative_base_url(jira_url: &Url) -> Url {
@@ -326,10 +387,48 @@ pub async fn fetch_issues(
 ) -> Result<Vec<JiraIssue>> {
     let jira = build_jira_client(jira_url, ignore_certs)?;
 
-    let search_options = SearchOptions::builder().max_results(max_results as u64).build();
+    let mut issues: Vec<JiraIssue> = Vec::new();
+    // Cloud paginates by cursor, Server/Data Center by offset; both report
+    // `is_last_page`.
+    let mut start_at: u64 = 0;
+    let mut next_page_token: Option<String> = None;
 
-    let results = jira.search().list(jql, &search_options).await?;
-    Ok(results.issues)
+    while issues.len() < max_results {
+        let page_size = std::cmp::min(JIRA_ISSUES_PAGE_SIZE, max_results - issues.len());
+
+        let mut options = SearchOptions::builder();
+        options.max_results(page_size as u64).fields(vec![JIRA_SEARCH_FIELDS]);
+        let used_cursor = next_page_token.is_some();
+        if let Some(token) = &next_page_token {
+            options.next_page_token(token);
+        } else if start_at > 0 {
+            options.start_at(start_at);
+        }
+
+        // Errors propagate: a rate limit partway through must not look like
+        // "no more issues". This is why `stream()` is unused — it maps a failed
+        // page to end-of-stream.
+        let results = jira.search().list(jql, &options.build()).await?;
+        let received = results.issues.len();
+        issues.extend(results.issues);
+
+        // An empty page keeps the loop bounded if the server keeps advertising
+        // more.
+        if received == 0 || results.is_last_page == Some(true) {
+            break;
+        }
+
+        match results.next_page_token {
+            Some(token) => next_page_token = Some(token),
+            // Reusing a spent cursor re-requests the same page forever, and an
+            // offset means nothing to a cursor API.
+            None if used_cursor => break,
+            None => start_at += received as u64,
+        }
+    }
+
+    issues.truncate(max_results);
+    Ok(issues)
 }
 
 pub async fn fetch_comments(
@@ -342,6 +441,7 @@ pub async fn fetch_comments(
     }
 
     let client = build_http_client(ignore_certs)?;
+    let auth = JiraAuth::from_env()?;
     let mut start_at = 0;
     let mut all_comments = Vec::new();
     let base_url = jira_relative_base_url(jira_url);
@@ -353,10 +453,7 @@ pub async fn fetch_comments(
             ))
             .context("Failed to construct Jira comments URL")?;
 
-        let mut request = client.get(url);
-        if let Some(auth) = jira_auth_header() {
-            request = request.header("Authorization", auth);
-        }
+        let request = auth.apply(client.get(url));
 
         let response = request.send().await.context("Failed to fetch Jira comments")?;
         let status = response.status();
@@ -440,15 +537,96 @@ pub async fn download_issues_to_dir(
 #[cfg(test)]
 mod tests {
     use super::{
-        JIRA_COMMENTS_PAGE_SIZE, extract_adf_text, extract_embedded_comments, fetch_comments,
-        flatten_adf_fields, flatten_comment_bodies, is_adf,
+        JIRA_COMMENTS_PAGE_SIZE, JiraAuth, extract_adf_text, extract_embedded_comments,
+        fetch_comments, fetch_issues, flatten_adf_fields, flatten_comment_bodies, is_adf,
     };
     use serde_json::json;
     use url::Url;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
-        matchers::{method, path, query_param},
+        matchers::{method, path, query_param, query_param_is_missing},
     };
+
+    async fn without_jira_credentials<T>(future: impl std::future::Future<Output = T>) -> T {
+        temp_env::async_with_vars([("KF_JIRA_USER", None::<&str>), ("KF_JIRA_TOKEN", None)], future)
+            .await
+    }
+
+    #[test]
+    fn jira_auth_uses_basic_for_cloud_email_and_token() {
+        temp_env::with_vars(
+            [("KF_JIRA_USER", Some("user@example.com")), ("KF_JIRA_TOKEN", Some("test-token"))],
+            || {
+                assert_eq!(
+                    JiraAuth::from_env().expect("should accept email and token"),
+                    JiraAuth::Basic {
+                        user: "user@example.com".to_string(),
+                        token: "test-token".to_string(),
+                    }
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn jira_auth_debug_never_reveals_the_token() {
+        // `assert_eq!` prints the value on failure, so a derived Debug would
+        // put credentials in test output and in any log that formats them.
+        let basic = JiraAuth::Basic {
+            user: "user@example.com".to_string(),
+            token: "super-secret-token".to_string(),
+        };
+        let rendered = format!("{:?} {:?}", basic, JiraAuth::Bearer("super-secret-token".into()));
+
+        assert!(!rendered.contains("super-secret-token"), "token leaked into Debug: {rendered}");
+        assert!(rendered.contains("<redacted>"));
+        assert!(rendered.contains("user@example.com"));
+    }
+
+    #[test]
+    fn jira_auth_uses_bearer_when_user_is_unset() {
+        temp_env::with_vars(
+            [("KF_JIRA_USER", None), ("KF_JIRA_TOKEN", Some("test-token"))],
+            || {
+                assert_eq!(
+                    JiraAuth::from_env().expect("should accept a bare token"),
+                    JiraAuth::Bearer("test-token".to_string())
+                );
+            },
+        );
+    }
+
+    #[test]
+    fn jira_auth_rejects_user_without_token() {
+        temp_env::with_vars(
+            [("KF_JIRA_USER", Some("user@example.com")), ("KF_JIRA_TOKEN", None)],
+            || {
+                let err = JiraAuth::from_env().expect_err("should reject user without token");
+                assert!(err.to_string().contains("KF_JIRA_TOKEN"));
+            },
+        );
+    }
+
+    #[test]
+    fn jira_auth_rejects_user_that_is_not_an_email() {
+        temp_env::with_vars(
+            [("KF_JIRA_USER", Some("not-an-email")), ("KF_JIRA_TOKEN", Some("test-token"))],
+            || {
+                let err = JiraAuth::from_env().expect_err("should reject non-email user");
+                assert!(err.to_string().contains("email address"));
+            },
+        );
+    }
+
+    #[test]
+    fn jira_auth_is_anonymous_without_credentials() {
+        temp_env::with_vars([("KF_JIRA_USER", None::<&str>), ("KF_JIRA_TOKEN", None)], || {
+            assert_eq!(
+                JiraAuth::from_env().expect("should allow anonymous access"),
+                JiraAuth::Anonymous
+            );
+        });
+    }
 
     #[test]
     fn is_adf_detects_doc_root() {
@@ -788,10 +966,13 @@ mod tests {
             .mount(&server)
             .await;
 
-        let comments =
-            fetch_comments(&Url::parse(&server.uri()).expect("server URL"), "TEST-1", false)
-                .await
-                .expect("comments should be fetched");
+        let comments = without_jira_credentials(fetch_comments(
+            &Url::parse(&server.uri()).expect("server URL"),
+            "TEST-1",
+            false,
+        ))
+        .await
+        .expect("comments should be fetched");
 
         assert_eq!(comments.len(), 3);
         assert_eq!(comments[0].pointer("/body"), Some(&json!("first")));
@@ -821,10 +1002,263 @@ mod tests {
             .await;
 
         let jira_url = Url::parse(&format!("{}/jira", server.uri())).expect("server URL");
-        let comments =
-            fetch_comments(&jira_url, "TEST-1", false).await.expect("comments should be fetched");
+        let comments = without_jira_credentials(fetch_comments(&jira_url, "TEST-1", false))
+            .await
+            .expect("comments should be fetched");
 
         assert_eq!(comments.len(), 1);
         assert_eq!(comments[0].pointer("/body"), Some(&json!("first")));
+    }
+
+    fn issue_page(first_id: usize, count: usize) -> Vec<serde_json::Value> {
+        (first_id..first_id + count)
+            .map(|n| {
+                json!({
+                    "self": format!("https://jira.example.com/rest/api/latest/issue/TEST-{n}"),
+                    "key": format!("TEST-{n}"),
+                    "id": n.to_string(),
+                    "fields": {"summary": format!("issue {n}")}
+                })
+            })
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn fetch_issues_pages_beyond_a_single_request() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param_is_missing("startAt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 150,
+                "maxResults": 100,
+                "startAt": 0,
+                "issues": issue_page(1, 100)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("startAt", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 150,
+                "maxResults": 50,
+                "startAt": 100,
+                "issues": issue_page(101, 50)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let issues =
+            without_jira_credentials(fetch_issues(&jira_url, "project = TEST", 150, false))
+                .await
+                .expect("issues should be fetched");
+
+        assert_eq!(issues.len(), 150);
+        assert_eq!(issues[0].key, "TEST-1");
+        assert_eq!(issues[149].key, "TEST-150");
+    }
+
+    #[tokio::test]
+    async fn fetch_issues_stops_when_the_cursor_dries_up() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param_is_missing("nextPageToken"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 10_000,
+                "maxResults": 100,
+                "startAt": 0,
+                "issues": issue_page(1, 100),
+                "next_page_token": "abc123"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // The cursor dries up without a "last page" flag, so the mock may only
+        // be hit once: reusing the spent token would loop here forever.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("nextPageToken", "abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 10_000,
+                "maxResults": 100,
+                "startAt": 0,
+                "issues": issue_page(101, 50)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let issues =
+            without_jira_credentials(fetch_issues(&jira_url, "project = TEST", usize::MAX, false))
+                .await
+                .expect("issues should be fetched");
+
+        assert_eq!(issues.len(), 150);
+    }
+
+    #[tokio::test]
+    async fn fetch_issues_unbounded_stops_on_the_last_page() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        // `--all` passes usize::MAX: only "last page" may stop the loop.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param_is_missing("startAt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 130,
+                "maxResults": 100,
+                "startAt": 0,
+                "issues": issue_page(1, 100)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("startAt", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 130,
+                "maxResults": 100,
+                "startAt": 100,
+                "issues": issue_page(101, 30)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let issues =
+            without_jira_credentials(fetch_issues(&jira_url, "project = TEST", usize::MAX, false))
+                .await
+                .expect("issues should be fetched");
+
+        assert_eq!(issues.len(), 130);
+        assert_eq!(issues[129].key, "TEST-130");
+    }
+
+    #[tokio::test]
+    async fn fetch_issues_stops_at_max_results() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("maxResults", "40"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 500,
+                "maxResults": 40,
+                "startAt": 0,
+                "issues": issue_page(1, 40)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let issues = without_jira_credentials(fetch_issues(&jira_url, "project = TEST", 40, false))
+            .await
+            .expect("issues should be fetched");
+
+        assert_eq!(issues.len(), 40);
+    }
+
+    #[tokio::test]
+    async fn fetch_issues_propagates_errors_instead_of_truncating() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param_is_missing("startAt"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 150,
+                "maxResults": 100,
+                "startAt": 0,
+                "issues": issue_page(1, 100)
+            })))
+            .mount(&server)
+            .await;
+
+        // Returning the first page as the whole result set would under-report
+        // findings with no signal to the user.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("startAt", "100"))
+            .respond_with(ResponseTemplate::new(429))
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let result =
+            without_jira_credentials(fetch_issues(&jira_url, "project = TEST", 150, false)).await;
+
+        assert!(result.is_err(), "a mid-pagination failure must not be reported as success");
+    }
+
+    #[tokio::test]
+    async fn fetch_issues_requests_all_fields() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        // Unset, Cloud substitutes a minimal field set and drops descriptions.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("fields", "*all"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 1,
+                "maxResults": 50,
+                "startAt": 0,
+                "issues": [{
+                    "self": "https://jira.example.com/rest/api/latest/issue/TEST-1",
+                    "key": "TEST-1",
+                    "id": "10000",
+                    "fields": {
+                        "summary": "example",
+                        "description": "AKIAIOSFODNN7EXAMPLE"
+                    }
+                }]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let issues = without_jira_credentials(fetch_issues(&jira_url, "project = TEST", 50, false))
+            .await
+            .expect("issues should be fetched");
+
+        assert_eq!(issues.len(), 1);
+        // Must survive into the scanned artifact, not just the HTTP response.
+        let issue_value = super::normalize_issue(&issues[0]).expect("issue should normalize");
+        assert_eq!(
+            issue_value.pointer("/fields/description").and_then(|v| v.as_str()),
+            Some("AKIAIOSFODNN7EXAMPLE")
+        );
     }
 }

@@ -30,6 +30,11 @@ use crate::{
     rules::rule::Confidence,
 };
 
+/// Sentinel `max_results` meaning "keep paging while the provider returns
+/// results", set by the `--all` flag. Provider fetch loops stop on the last
+/// page or an empty page rather than on this bound.
+pub const UNLIMITED_RESULTS: usize = usize::MAX;
+
 /// Determine the default number of parallel scan jobs.
 ///
 /// * Target = `available_parallelism * 2`.
@@ -657,7 +662,8 @@ impl ScanCommandArgs {
                 ScanInputCommand::Jira(args) => {
                     scan_args.input_specifier_args.jira_url = Some(args.url);
                     scan_args.input_specifier_args.jql = Some(args.jql);
-                    scan_args.input_specifier_args.max_results = args.max_results;
+                    scan_args.input_specifier_args.max_results =
+                        if args.all { UNLIMITED_RESULTS } else { args.max_results };
                     scan_args.input_specifier_args.jira_include_comments = args.include_comments;
                     scan_args.input_specifier_args.jira_include_changelog = args.include_changelog;
                     None
@@ -665,7 +671,8 @@ impl ScanCommandArgs {
                 ScanInputCommand::Confluence(args) => {
                     scan_args.input_specifier_args.confluence_url = Some(args.url);
                     scan_args.input_specifier_args.cql = Some(args.cql);
-                    scan_args.input_specifier_args.max_results = args.max_results;
+                    scan_args.input_specifier_args.max_results =
+                        if args.all { UNLIMITED_RESULTS } else { args.max_results };
                     None
                 }
                 ScanInputCommand::Postman(args) => {
@@ -1043,6 +1050,10 @@ pub struct JiraScanArgs {
     #[arg(long = "max-results", default_value_t = 100)]
     pub max_results: usize,
 
+    /// Fetch every issue matching the JQL query, ignoring `--max-results`
+    #[arg(long = "all", conflicts_with = "max_results")]
+    pub all: bool,
+
     /// Include Jira issue comments in the scan
     #[arg(long = "include-comments", default_value_t = false)]
     pub include_comments: bool,
@@ -1065,6 +1076,10 @@ pub struct ConfluenceScanArgs {
     /// Maximum number of results to fetch
     #[arg(long = "max-results", default_value_t = 100)]
     pub max_results: usize,
+
+    /// Fetch every page matching the CQL query, ignoring `--max-results`
+    #[arg(long = "all", conflicts_with = "max_results")]
+    pub all: bool,
 }
 
 #[derive(Args, Debug, Clone)]
