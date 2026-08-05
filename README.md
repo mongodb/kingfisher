@@ -761,7 +761,9 @@ KF_POSTMAN_TOKEN="PMAK-..." kingfisher scan postman --all
 | `KF_HUGGINGFACE_TOKEN` | Hugging Face access token for API enumeration and git cloning |
 | `KF_HUGGINGFACE_USERNAME` | Optional username for Hugging Face git operations (defaults to `hf_user`) |
 | `KF_JIRA_TOKEN`   | Jira API token               |
+| `KF_JIRA_USER`    | Jira account email; when set, sends `KF_JIRA_TOKEN` as Basic auth (required for Jira Cloud API tokens) |
 | `KF_CONFLUENCE_TOKEN` | Confluence API token      |
+| `KF_CONFLUENCE_USER` | Confluence account email; when set, sends `KF_CONFLUENCE_TOKEN` as Basic auth (required for Confluence Cloud API tokens) |
 | `KF_SLACK_TOKEN`  | Slack API token              |
 | `KF_TEAMS_TOKEN`  | Microsoft Graph API token for Teams message search |
 | `KF_POSTMAN_TOKEN` / `POSTMAN_API_KEY` | Postman API key for workspace, collection, and environment scanning |

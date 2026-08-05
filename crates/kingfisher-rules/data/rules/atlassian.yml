@@ -5,6 +5,10 @@ rules:
       (?xi)                       
       \b                         
       atlassian
+      (?:.|[\n\r]){0,20}?
+      [^[:alnum:]]
+      (?:api[_-]?token|api[_-]?key|token|key|secret|password)
+      \b
       (?:.|[\n\r]){0,32}?
       \b                         
       (

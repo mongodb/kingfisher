@@ -753,6 +753,51 @@ KF_JIRA_TOKEN="token" kingfisher scan jira --url https://jira.mongodb.org \
   --max-results 1000
 ```
 
+### Jira Cloud
+
+Use the full `*.atlassian.net` site URL for `--url`. Kingfisher detects Jira
+Cloud from the hostname and automatically issues JQL searches against the
+enhanced `/rest/api/3/search/jql` endpoint instead of the legacy
+`/rest/api/2/search` endpoint, which Atlassian has removed for Cloud sites.
+
+Jira Cloud API tokens authenticate with HTTP Basic auth (account email +
+token), not a bearer token. Set `KF_JIRA_USER` to your Jira Cloud account
+email alongside `KF_JIRA_TOKEN` to switch Kingfisher to Basic auth:
+
+```bash
+KF_JIRA_USER="user@example.com" KF_JIRA_TOKEN="token" \
+  kingfisher scan jira --url https://example.atlassian.net \
+    --jql "project = TEST AND status = Open" \
+    --max-results 500
+```
+
+Generate the API token from
+[id.atlassian.com](https://id.atlassian.com/manage-profile/security/api-tokens).
+Jira Server/Data Center Personal Access Tokens keep working as a bearer
+token when `KF_JIRA_USER` is unset.
+
+Searches request `fields=*all`, so issue descriptions and custom text fields
+are scanned on both Cloud and Server/Data Center. Jira Cloud's search endpoint
+returns only `id`, `key`, `summary`, and `status` when `fields` is left unset,
+which would silently exclude descriptions from the scan.
+
+`--max-results` is a total, not a page size: searches page through results
+100 issues at a time until that many issues have been collected, following
+Jira Cloud's cursor or Server/Data Center's offset as appropriate.
+
+Pass `--all` instead of `--max-results` to keep paging for as long as Jira
+returns issues, stopping only on the last page:
+
+```bash
+KF_JIRA_USER="user@example.com" KF_JIRA_TOKEN="token" \
+  kingfisher scan jira --url https://example.atlassian.net \
+    --jql "project = TEST" \
+    --all
+```
+
+`kingfisher scan confluence --all` does the same for CQL queries. The two
+flags are mutually exclusive.
+
 ## Confluence
 
 ### Scan Confluence pages matching a CQL query
@@ -772,7 +817,15 @@ KF_CONFLUENCE_USER="user@example.com" KF_CONFLUENCE_TOKEN="token" \
 
 Use the base URL of your Confluence site for `--url`. Kingfisher
 automatically adds `/rest/api` to the end, so `https://example.com/wiki` and
-`https://example.com` both work depending on your server configuration.
+`https://example.com` both work depending on your server configuration. For
+Confluence Cloud, pass the site URL as-is (`--url https://example.atlassian.net`):
+Cloud serves its API under a `/wiki` context path, and Kingfisher adds that
+segment for `*.atlassian.net` hosts, so both that form and the explicit
+`https://example.atlassian.net/wiki` work. Also set `KF_CONFLUENCE_USER` to your
+Cloud account email — Confluence Cloud API tokens require Basic auth, not a
+bearer token. Kingfisher paginates results
+by following the server-issued `next` link rather than an offset, since
+Confluence Cloud removed offset-based (`start`) pagination for this endpoint.
 
 Generate a personal access token and set it in the `KF_CONFLUENCE_TOKEN` environment variable. By default, Kingfisher sends the token as a bearer token in the `Authorization` header.
 
@@ -894,7 +947,9 @@ The token is sent as the `X-Api-Key` header. Either `KF_POSTMAN_TOKEN` or `POSTM
 | `KF_HUGGINGFACE_TOKEN` | Hugging Face access token for API enumeration and git cloning |
 | `KF_HUGGINGFACE_USERNAME` | Optional username for Hugging Face git operations (defaults to `hf_user`) |
 | `KF_JIRA_TOKEN`   | Jira API token               |
+| `KF_JIRA_USER`    | Jira account email; when set, sends `KF_JIRA_TOKEN` as Basic auth (required for Jira Cloud API tokens) |
 | `KF_CONFLUENCE_TOKEN` | Confluence API token      |
+| `KF_CONFLUENCE_USER` | Confluence account email; when set, sends `KF_CONFLUENCE_TOKEN` as Basic auth (required for Confluence Cloud API tokens) |
 | `KF_SLACK_TOKEN`  | Slack API token              |
 | `KF_TEAMS_TOKEN`  | Microsoft Graph API token for Teams message search |
 | `KF_POSTMAN_TOKEN` / `POSTMAN_API_KEY` | Postman API key (sent as `X-Api-Key`) for workspace, collection, and environment scanning |
@@ -916,6 +971,8 @@ export KF_GITLAB_TOKEN="glpat-…"
 To authenticate Jira requests:
 ```bash
 export KF_JIRA_TOKEN="token"
+# Jira Cloud API tokens additionally require the account email:
+export KF_JIRA_USER="user@example.com"
 ```
 
 To authenticate Confluence requests:

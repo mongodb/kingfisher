@@ -269,7 +269,7 @@ system-alloc = [] # Darwin-only: force the system allocator
 
 [dev-dependencies]
 pretty_assertions = "1.4"
-temp-env = "0.3.6"
+temp-env = { version = "0.3.6", features = ["async_closure"] }
 wiremock = "0.6.5"
 git2 = { version = "0.21.0", default-features = false }
 rand_chacha = "0.10.0"
