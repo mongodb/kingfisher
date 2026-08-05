@@ -398,6 +398,7 @@ pub async fn fetch_issues(
 
         let mut options = SearchOptions::builder();
         options.max_results(page_size as u64).fields(vec![JIRA_SEARCH_FIELDS]);
+        let used_cursor = next_page_token.is_some();
         if let Some(token) = &next_page_token {
             options.next_page_token(token);
         } else if start_at > 0 {
@@ -419,6 +420,9 @@ pub async fn fetch_issues(
 
         match results.next_page_token {
             Some(token) => next_page_token = Some(token),
+            // Reusing a spent cursor re-requests the same page forever, and an
+            // offset means nothing to a cursor API.
+            None if used_cursor => break,
             None => start_at += received as u64,
         }
     }
@@ -1061,6 +1065,51 @@ mod tests {
         assert_eq!(issues.len(), 150);
         assert_eq!(issues[0].key, "TEST-1");
         assert_eq!(issues[149].key, "TEST-150");
+    }
+
+    #[tokio::test]
+    async fn fetch_issues_stops_when_the_cursor_dries_up() {
+        if std::net::TcpListener::bind(("127.0.0.1", 0)).is_err() {
+            return;
+        }
+        let server = MockServer::start().await;
+
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param_is_missing("nextPageToken"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 10_000,
+                "maxResults": 100,
+                "startAt": 0,
+                "issues": issue_page(1, 100),
+                "next_page_token": "abc123"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        // The cursor dries up without a "last page" flag, so the mock may only
+        // be hit once: reusing the spent token would loop here forever.
+        Mock::given(method("GET"))
+            .and(path("/rest/api/latest/search"))
+            .and(query_param("nextPageToken", "abc123"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "total": 10_000,
+                "maxResults": 100,
+                "startAt": 0,
+                "issues": issue_page(101, 50)
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let jira_url = Url::parse(&server.uri()).expect("server URL");
+        let issues =
+            without_jira_credentials(fetch_issues(&jira_url, "project = TEST", usize::MAX, false))
+                .await
+                .expect("issues should be fetched");
+
+        assert_eq!(issues.len(), 150);
     }
 
     #[tokio::test]
