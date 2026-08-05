@@ -59,7 +59,7 @@ DOC_MAP = {
     ),
     "ACCESS_MAP.md": (
         "features/access-map.md",
-        "Access Map (Blast Radius)",
+        "Blast Radius (aka Access Map)",
         "Map the blast radius of leaked credentials by authenticating and enumerating accessible resources and permissions.",
     ),
     "REVOCATION_PROVIDERS.md": (
@@ -85,7 +85,7 @@ DOC_MAP = {
     "ARCHITECTURE.md": (
         "reference/architecture.md",
         "Architecture",
-        "High-level architecture of Kingfisher: CLI, scanner pipeline, rule engine, validation, access mapping, and output formats.",
+        "High-level architecture of Kingfisher: CLI, scanner pipeline, rule engine, validation, blast-radius mapping, and output formats.",
     ),
     "LIBRARY.md": (
         "reference/library.md",

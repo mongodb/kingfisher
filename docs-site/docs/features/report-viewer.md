@@ -27,7 +27,7 @@ Gitleaks and TruffleHog are great at emitting candidate matches; Kingfisher goes
 - **Cross-tool triage in one place** — import a Gitleaks scan, a TruffleHog scan, and a Kingfisher scan of the same codebase and look at them side-by-side with deduplication, rather than reconciling three different schemas by hand.
 - **Rotate real secrets first** — validated Kingfisher findings and TruffleHog-verified findings are surfaced as active credentials; unverified/static matches are marked as not attempted.
 - **Dedup automatically** — the same secret appearing across multiple reports, directories, or scan runs collapses to one entry by fingerprint / secret identity.
-- **See blast radius** — when a Kingfisher report was generated with `--access-map`, the viewer opens an interactive access-map graph with a side inspector and details view, so you can trace the identity, resources, and permissions without digging through nested JSON.
+- **See blast radius** — when a Kingfisher report was generated with `--access-map`, the viewer opens an interactive blast-radius graph with a side inspector and details view, so you can trace the identity, resources, and permissions without digging through nested JSON.
 - **Share and archive** — export filtered subsets for tickets, rotation runbooks, or audit reviewers.
 
 Tools like Gitleaks and TruffleHog surface candidates. Kingfisher's viewer helps you decide which ones matter — and it works with their output, not just its own.

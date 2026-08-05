@@ -110,32 +110,32 @@ kingfisher scan /path/to/repo --format html --output kingfisher-audit.html
 
 The HTML audit report is standalone and includes scan metadata designed for evidence workflows, including scan timestamp, sanitized CLI arguments, version, and finding summary counts.
 
-### Access map outputs and viewer
+### Blast Radius (aka Access Map) outputs and viewer
 
 **Stop Guessing, Start Mapping: Understand Your True Blast Radius**
 
 Finding a leaked credential is only the first step. The critical question isn't just "Is this a secret?"—it's "What can an attacker do with it?"
 
-Kingfisher's `--access-map` feature transforms secret detection from a simple alert into a comprehensive threat assessment. Instead of leaving you with a cryptic API key, Kingfisher actively authenticates against your cloud provider (AWS, GCP, Azure Storage, Microsoft Entra ID and Graph, Azure RBAC, Azure DevOps, GitHub, GitLab, Slack, or Microsoft Teams) to map the full extent of the credential's power.
+Kingfisher's blast-radius feature transforms secret detection from a simple alert into a comprehensive threat assessment. Instead of leaving you with a cryptic API key, Kingfisher actively authenticates against your cloud provider (AWS, GCP, Azure Storage, Microsoft Entra ID and Graph, Azure RBAC, Azure DevOps, GitHub, GitLab, Slack, or Microsoft Teams) to map the full extent of the credential's power.
 
 * Instant Identity Resolution: Immediately identify who the key belongs to—whether it's a specific IAM user, an assumed role, or a service account.
 * Visualize the Blast Radius: See exactly which resources (S3 buckets, EC2 instances, projects, storage containers) are exposed and at risk.
  
 
-Add `--access-map` to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with an `access_map` containing the resources and the permissions that the key can access - for each resource (grouped when identical).
-- If you validated cloud credentials without `--access-map`, Kingfisher will remind you on stderr to rerun with the flag so the access map appears in the output.
+Add `--access-map` to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with blast-radius data in the `access_map` field, including the resources and permissions the key can access (grouped when identical).
+- If you validated cloud credentials without `--access-map`, Kingfisher will remind you on stderr to rerun with the flag so blast-radius results appear in the output.
 - Run `kingfisher view ./kingfisher.json` to explore a report locally in a local web UI (opens your browser automatically when a report is provided).
 - Or use `kingfisher scan --view-report ...` to generate a JSON report, start the viewer at `http://127.0.0.1:7890`, and open it in your browser.
 
-> **Use the access map functionality only when you are authorized to inspect the target account, as Kingfisher will issue additional network requests to determine what access the secret grants**
+> **Use blast-radius mapping only when you are authorized to inspect the target account, as Kingfisher will issue additional network requests to determine what access the secret grants**
 
-### View access-map reports locally
+### View blast-radius reports locally
 
 ```bash
 kingfisher view kingfisher.json
 ```
 
-The `view` subcommand starts a server (default port `7890`, bind address `127.0.0.1`) that bundles the HTML, CSS, and JavaScript for the access-map viewer directly into the Kingfisher binary. Provide a JSON, JSONL, or SARIF report to load it automatically and Kingfisher will open your browser, or open the page and upload a report in the browser. If port 7890 is already in use, re-run with `--port <PORT>`. To allow access from Docker or other hosts, use `--address 0.0.0.0`.
+The `view` subcommand starts a server (default port `7890`, bind address `127.0.0.1`) that bundles the HTML, CSS, and JavaScript for the blast-radius viewer directly into the Kingfisher binary. Provide a JSON, JSONL, or SARIF report to load it automatically and Kingfisher will open your browser, or open the page and upload a report in the browser. If port 7890 is already in use, re-run with `--port <PORT>`. To allow access from Docker or other hosts, use `--address 0.0.0.0`.
 
 You can pass multiple files or a directory to combine reports. Findings are deduplicated by fingerprint. Non-matching files in a directory are silently skipped (no recursion).
 
@@ -189,7 +189,7 @@ Raw JSON and SARIF output from Kingfisher, Gitleaks, and TruffleHog are excellen
 - **Cross-tool triage in one UI** — import a Gitleaks scan, a TruffleHog scan, and a Kingfisher scan of the same codebase into the same session and look at them side-by-side with deduplication, instead of reconciling three different schemas.
 - **Clear "this is live" signals** — validated Kingfisher findings and TruffleHog-verified findings are surfaced as active credentials so you rotate real keys first; unverified/static matches are marked as not attempted rather than active or inactive.
 - **Fingerprint-aware deduplication** — the same secret appearing across multiple reports, directories, or scan runs collapses to one entry.
-- **Blast-radius context** — when a Kingfisher report was produced with `--access-map`, the viewer opens an interactive access-map graph and inspector so you can trace the identity, reachable resources, and permission mix without digging through nested JSON.
+- **Blast-radius context** — when a Kingfisher report was produced with `--access-map`, the viewer opens an interactive blast-radius graph and inspector so you can trace the identity, reachable resources, and permission mix without digging through nested JSON.
 - **A shareable, offline-friendly workbench** — runs locally via `kingfisher view` or via the hosted static page; nothing about the report is exfiltrated.
 
 Gitleaks and TruffleHog are great at surfacing candidate matches. Kingfisher's viewer turns their candidates (and its own) into a triageable workflow without changing the scanner you already use.

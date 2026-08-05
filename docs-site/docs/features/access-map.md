@@ -1,32 +1,32 @@
 ---
-title: "Access Map (Blast Radius)"
+title: "Blast Radius (aka Access Map)"
 description: "Map the blast radius of leaked credentials by authenticating and enumerating accessible resources and permissions."
 ---
 
-# Access Map: supported tokens & credential formats
+# Blast Radius (aka Access Map): supported tokens & credential formats
 
-Kingfisher’s **access map** determines the *effective identity* and *blast radius* of a credential by authenticating to the target provider and enumerating accessible resources and permissions.
+Kingfisher’s **blast-radius mapping** (aka the access map) determines the *effective identity* and *blast radius* of a credential by authenticating to the target provider and enumerating accessible resources and permissions.
 
-There are two ways to produce access maps:
+There are two ways to produce blast-radius results:
 
 - **During scanning**: `kingfisher scan ... --access-map`  
-  Kingfisher validates detected secrets and automatically generates access-map entries for supported credential types.
+  Kingfisher validates detected secrets and automatically generates blast-radius entries for supported credential types.
 - **Standalone**: `kingfisher access-map <provider> [credential_file]`  
   This reads a credential artifact from disk and maps it directly.
-  Standalone access-map defaults to JSON output. The examples below use
+  The standalone command defaults to JSON output. The examples below use
   `--format json` explicitly so the output type stays unambiguous when
   redirecting to a file. Use `--format html` for a standalone HTML report,
   and `--output <PATH>` if you prefer writing directly instead of using shell
   redirection.
 
-The HTML access-map viewer is built for triage: it starts in a topology view,
+The HTML blast-radius viewer is built for triage: it starts in a topology view,
 groups identities by provider, lets you click through to individual resources,
 and keeps the detailed permissions in a side inspector. That makes it easier
 to compare two credentials at a glance without reading nested JSON by hand.
 
-> Access mapping runs additional network requests. Only use it when you are authorized to inspect the target account/workspace.
+> Blast-radius mapping runs additional network requests. Only use it when you are authorized to inspect the target account/workspace.
 
-## How Access Map Works
+## How Blast Radius Works
 
 ### Standalone Flow
 
@@ -57,7 +57,7 @@ flowchart LR
 
 ```mermaid
 flowchart TD
-    Request[Access map request] --> Kind{Credential kind}
+    Request[Blast-radius request] --> Kind{Credential kind}
 
     Kind --> Token[Single token providers]
     Kind --> Complex[Structured credential providers]
@@ -74,7 +74,7 @@ flowchart TD
 
 ## What “supported tokens” means
 
-Access map only runs for credential types Kingfisher knows how to authenticate with and enumerate. In the codebase, these map to `AccessMapRequest` variants recorded from validated findings (see `src/scanner/validation.rs`).
+Blast-radius mapping only runs for credential types Kingfisher knows how to authenticate with and enumerate. In the codebase, these map to `AccessMapRequest` variants recorded from validated findings (see `src/scanner/validation.rs`).
 
 ## Providers and supported credential formats
 
@@ -96,7 +96,7 @@ kingfisher access-map github ./github.token --format json > github.access-map.js
 
 #### Notes (GitHub)
 
-- Access map currently uses `https://api.github.com` as the API base.
+- Blast-radius mapping currently uses `https://api.github.com` as the API base.
 
 ### GitLab (`gitlab`)
 
@@ -113,7 +113,7 @@ kingfisher access-map gitlab ./gitlab.token --format json > gitlab.access-map.js
 
 #### Notes (GitLab)
 
-- Access map currently uses `https://gitlab.com/api/v4/` as the API base.
+- Blast-radius mapping currently uses `https://gitlab.com/api/v4/` as the API base.
 
 ### Slack (`slack`)
 
@@ -313,7 +313,7 @@ client IDs, plus Azure-context OAuth2 JWTs, can automatically feed
 
 ### Azure DevOps (scan `--access-map` only)
 
-Azure DevOps access mapping is supported when a **validated Azure DevOps PAT** is discovered during scanning (the access-map record includes both the PAT and the organization). At the moment, there is **no standalone** `kingfisher access-map azure-devops ...` provider flag.
+Azure DevOps blast-radius mapping is supported when a **validated Azure DevOps PAT** is discovered during scanning (the `access_map` record includes both the PAT and the organization). At the moment, there is **no standalone** `kingfisher access-map azure-devops ...` provider flag.
 
 ### PostgreSQL (`postgres`)
 
@@ -360,7 +360,7 @@ kingfisher access-map huggingface ./huggingface.token --format json > huggingfac
 
 #### Notes (Hugging Face)
 
-- Access map uses `https://huggingface.co/api` as the API base.
+- Blast-radius mapping uses `https://huggingface.co/api` as the API base.
 - Token role (`read`, `write`, or `fineGrained`) is derived from the `auth`
   section of the whoami response when available.
 - Fine-grained tokens are not treated as administrator tokens. Their exact
@@ -386,7 +386,7 @@ kingfisher access-map gitea ./gitea.token --format json > gitea.access-map.json
 
 #### Notes (Gitea)
 
-- Access map currently uses `https://gitea.com/api/v1/` as the default API base.
+- Blast-radius mapping currently uses `https://gitea.com/api/v1/` as the default API base.
 - If the token belongs to a site administrator, severity is classified as Critical.
 
 ### Bitbucket (`bitbucket`)
@@ -405,7 +405,7 @@ kingfisher access-map bitbucket ./bitbucket.token --format json > bitbucket.acce
 
 #### Notes (Bitbucket)
 
-- Access map uses `https://api.bitbucket.org/2.0` as the API base.
+- Blast-radius mapping uses `https://api.bitbucket.org/2.0` as the API base.
 - Workspace owners are classified as High severity.
 
 ### Buildkite (`buildkite`)
@@ -424,7 +424,7 @@ kingfisher access-map buildkite ./buildkite.token --format json > buildkite.acce
 
 #### Notes (Buildkite)
 
-- Access map uses `https://api.buildkite.com/v2` as the API base.
+- Blast-radius mapping uses `https://api.buildkite.com/v2` as the API base.
 - Tokens with `write_organizations` or `write_teams` scopes are classified as High severity.
 
 ### Harness (`harness`)
@@ -437,7 +437,7 @@ Kingfisher performs best-effort, read-only enumeration:
 - Queries the API key aggregate endpoint for basic token metadata (when available).
 - Enumerates organizations via `GET https://app.harness.io/v1/orgs` and projects via `GET https://app.harness.io/v1/orgs/{org}/projects` when the key has permission.
 
-If organizations/projects are not enumerable (scope-limited keys), Kingfisher still produces an access-map record with a conservative severity and a note explaining the limitation.
+If organizations/projects are not enumerable (scope-limited keys), Kingfisher still produces a blast-radius record with a conservative severity and a note explaining the limitation.
 
 #### Standalone example (Harness)
 
@@ -448,7 +448,7 @@ kingfisher access-map harness ./harness.token --format json > harness.access-map
 
 #### Notes (Harness)
 
-- Access map uses `https://app.harness.io` as the API base.
+- Blast-radius mapping uses `https://app.harness.io` as the API base.
 
 ### OpenAI (`openai`)
 
@@ -473,7 +473,7 @@ kingfisher access-map openai ./openai.token --format json > openai.access-map.js
 
 #### Notes (OpenAI)
 
-- Access map uses `https://api.openai.com/v1` as the API base.
+- Blast-radius mapping uses `https://api.openai.com/v1` as the API base.
 
 ### Anthropic (`anthropic`)
 
@@ -495,7 +495,7 @@ kingfisher access-map anthropic ./anthropic.token --format json > anthropic.acce
 
 #### Notes (Anthropic)
 
-- Access map uses `https://api.anthropic.com/v1` as the API base.
+- Blast-radius mapping uses `https://api.anthropic.com/v1` as the API base.
 - Keys that can enumerate organization API keys are treated as having broader administrative visibility.
 
 ### Salesforce (`salesforce`)
@@ -534,7 +534,7 @@ kingfisher access-map salesforce ./salesforce.json --format json > salesforce.ac
 
 #### Notes (Salesforce)
 
-- Access map accepts production My Domain, sandbox My Domain, and legacy Salesforce instance hosts. Authentication hosts such as `login.salesforce.com` and non-Salesforce hosts are rejected.
+- Blast-radius mapping accepts production My Domain, sandbox My Domain, and legacy Salesforce instance hosts. Authentication hosts such as `login.salesforce.com` and non-Salesforce hosts are rejected.
 - The mapper is read-only and does not issue record-count, export, or data-retrieval queries.
 
 ### Weights & Biases (`weightsandbiases` / `wandb`)
@@ -557,7 +557,7 @@ kingfisher access-map weightsandbiases ./wandb.token --format json > wandb.acces
 
 #### Notes (Weights & Biases)
 
-- Access map uses `https://api.wandb.ai/graphql` as the API endpoint.
+- Blast-radius mapping uses `https://api.wandb.ai/graphql` as the API endpoint.
 - W&B key introspection does not currently expose fine-grained scopes in this workflow, so risk is reported conservatively.
 
 ### Microsoft Teams (`microsoftteams` / `msteams`)
@@ -579,7 +579,7 @@ kingfisher access-map microsoftteams ./teams.webhook --format json > teams.acces
 #### Notes (Microsoft Teams)
 
 - The webhook URL is the credential — it contains the tenant ID and grants write access to a single Teams channel.
-- Access map severity is Medium for active webhooks (write-only to one channel) and Low for inactive/removed webhooks.
+- Blast-radius severity is Medium for active webhooks (write-only to one channel) and Low for inactive/removed webhooks.
 - The probe request does not post any visible message; Teams responds with HTTP 400 "Text is required" for valid endpoints.
 
 ### monday.com (`monday`)
@@ -604,7 +604,7 @@ kingfisher access-map monday ./monday.token --format json > monday.access-map.js
 
 #### Notes (monday.com)
 
-- Access map currently uses `https://api.monday.com/v2` (GraphQL v2) as the API base.
+- Blast-radius mapping currently uses `https://api.monday.com/v2` (GraphQL v2) as the API base.
 - monday.com API tokens do not carry granular scopes; permissions follow the underlying user's role (admin/member/viewer/guest).
 - `provider_metadata.version` carries the monday.com plan tier when exposed by the account.
 - Recorded during `scan --access-map` for validated `kingfisher.monday.1` findings.
@@ -665,8 +665,8 @@ The `kingfisher blast-radius` and `kingfisher blast_radius` aliases also work fo
 - Indexes with `deletion_protection: enabled` are flagged in the resource record but still accessible for read/write.
 - Recorded during `scan --access-map` (or the `--blast-radius` alias) for validated `kingfisher.pinecone.1` findings.
 
-## Notes on access-map generation during `scan --access-map`
+## Notes on blast-radius generation during `scan --access-map`
 
-- Access-map entries are only recorded for **validated** findings.
+- Blast-radius entries are only recorded for **validated** findings.
 - Some providers require extra context that Kingfisher infers from the finding context or validation response (for example, Azure DevOps organization name).
 - Validated Hugging Face, Gitea, Bitbucket, Buildkite, Harness, OpenAI, Anthropic, Salesforce, Weights & Biases, Microsoft Teams, monday.com, Asana, and Pinecone credentials discovered during scans with `--access-map` (or the `--blast-radius` alias) are automatically collected and mapped, matching the existing behavior for other platforms.

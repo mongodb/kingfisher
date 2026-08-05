@@ -418,6 +418,7 @@ kingfisher scan /path/to/repo --rule-stats
 
 ## Notable Scan Options
 
+- `--jobs <N>`: Set the number of parallel scanner workers. The default uses available logical CPUs (capped by RAM); lower values reduce peak memory for large Git scans.
 - `--no-dedup`: Report every occurrence of a finding (disable the default de-duplicate behavior)
 - `--include-hidden-findings`: Include hidden helper-rule matches in reports and scan summary counts (diagnostic use)
 - `--no-base64`: By default, Kingfisher finds and decodes base64 blobs and scans them for secrets. This adds a slight performance overhead; use this flag to disable

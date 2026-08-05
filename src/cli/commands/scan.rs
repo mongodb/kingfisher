@@ -38,7 +38,7 @@ pub const UNLIMITED_RESULTS: usize = usize::MAX;
 
 /// Determine the default number of parallel scan jobs.
 ///
-/// * Target = `available_parallelism * 2`.
+/// * Target = `available_parallelism`.
 /// * Cap by RAM at ≈ 1 GiB per job (so 16 GiB ⇒ max 16 jobs).
 /// * Always ≥ 1.
 /// * When `-v/--verbose` is passed, the computed value is logged at DEBUG.
@@ -46,8 +46,9 @@ fn default_scan_jobs() -> usize {
     // How many logical CPUs do we see? (Falls back to 1 on error.)
     let cpu_count = std::thread::available_parallelism().map(usize::from).unwrap_or(1);
 
-    // Desired parallelism is CPU * 2.
-    let desired = cpu_count * 2;
+    // One scan worker per logical CPU keeps the CPU-bound matcher saturated without
+    // oversubscribing the Rayon and Tokio pools.
+    let desired = cpu_count;
 
     match *RAM_GB {
         // If we know how much RAM we have, cap by a 1 GiB-per-job heuristic.
@@ -139,7 +140,7 @@ pub struct ScanArgs {
     )]
     pub max_validation_response_length: usize,
 
-    /// Map validated cloud credentials to their effective identities; use only when
+    /// Map validated cloud credentials to their effective identities and blast radius; use only when
     /// authorized for the target account because this triggers additional network
     /// requests to determine granted access
     #[arg(global = true, long, alias = "blast-radius", default_value_t = false)]

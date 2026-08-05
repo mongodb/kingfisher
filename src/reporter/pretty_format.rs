@@ -58,7 +58,7 @@ impl DetailsReporter {
             return Ok(());
         }
 
-        writeln!(writer, " |{}", self.style_heading("ACCESS MAP"))?;
+        writeln!(writer, " |{}", self.style_heading("BLAST RADIUS"))?;
         for entry in entries {
             for group in &entry.groups {
                 writeln!(writer, " |_service.......: {}", entry.provider.to_uppercase())?;

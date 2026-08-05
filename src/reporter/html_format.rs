@@ -77,7 +77,7 @@ fn render_metadata(metadata: &ScanReportMetadata) -> String {
         ),
     ));
     lines.push(summary_line(
-        "Access Map Identities",
+        "Blast Radius Identities",
         &metadata.summary.access_map_identities.to_string(),
     ));
 
@@ -231,7 +231,7 @@ fn render_access_map(access_map: Option<&Vec<AccessMapEntry>>) -> String {
     }
     format!(
         "<section class=\"panel\">
-            <h2>Access Map Summary</h2>
+            <h2>Blast Radius Summary</h2>
             <ul>{items}</ul>
         </section>"
     )

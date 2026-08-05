@@ -99,7 +99,7 @@ pub async fn run_async_scan(
 
     trace!("Args:\n{global_args:#?}\n{args:#?}");
     let progress_enabled = global_args.use_progress();
-    initialize_environment(progress_enabled)?;
+    initialize_environment(progress_enabled, args.num_jobs)?;
 
     set_redaction_enabled(args.redact);
 
@@ -1443,16 +1443,16 @@ fn maybe_hint_access_map(datastore: &Arc<Mutex<FindingsStore>>, args: &scan::Sca
 
     if has_mappable_identities {
         info!(
-            "Access map not requested. Rerun with --access-map to include resource-level permissions, if authorized."
+            "Blast radius mapping not requested. Rerun with --access-map to include resource-level permissions, if authorized."
         );
     }
 }
 
-fn initialize_environment(use_progress: bool) -> Result<()> {
+fn initialize_environment(use_progress: bool, num_jobs: usize) -> Result<()> {
     let init_progress =
         if use_progress { ProgressBar::new_spinner() } else { ProgressBar::hidden() };
     init_progress.set_message("Initializing thread pool...");
-    let num_threads = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let num_threads = num_jobs.max(1);
     // Attempt to initialize the global thread pool only if it hasn't been
     // initialized yet.
     let result = rayon::ThreadPoolBuilder::new()

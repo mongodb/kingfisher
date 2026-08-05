@@ -102,7 +102,7 @@ impl<'a> BundleCursor<'a> {
 /// Default bind address for the report viewer (localhost only for security).
 pub const DEFAULT_ADDRESS: &str = "127.0.0.1";
 
-/// View a Kingfisher access-map report locally.
+/// View a Kingfisher blast-radius report locally.
 #[derive(clap::Args, Debug)]
 pub struct ViewArgs {
     /// Paths to JSON/JSONL/SARIF reports or directories containing them.
@@ -301,15 +301,15 @@ pub async fn run(args: ViewArgs) -> Result<()> {
 
     let url = format!("http://{}:{}", address.ip(), address.port());
 
-    info!(%address, "Starting access-map viewer");
-    eprintln!("Serving access-map viewer at {} (Ctrl+C to stop)", url);
+    info!(%address, "Starting blast-radius viewer");
+    eprintln!("Serving blast-radius viewer at {} (Ctrl+C to stop)", url);
 
     let open_browser = args.open_browser || !args.reports.is_empty() || args.report_bytes.is_some();
     if open_browser {
         let url = url.clone();
         tokio::task::spawn_blocking(move || {
             if let Err(err) = webbrowser::open(&url) {
-                warn!(%err, "Failed to open browser for access-map viewer");
+                warn!(%err, "Failed to open browser for blast-radius viewer");
             }
         });
     }

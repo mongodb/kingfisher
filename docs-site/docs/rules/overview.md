@@ -678,6 +678,37 @@ generic matches.
   credential, test it against a fixture or a targeted scan. Check an individual file with
   `kingfisher rules check` before running the rule-crate tests.
 
+### POSIX Character Classes
+
+Hyperscan/Vectorscan supports POSIX character classes inside bracket expressions, written as
+`[[:name:]]`. These are the classes relevant to rule authoring:
+
+| Class        | Matches                         | ASCII equivalent          |
+| ------------ | ------------------------------- | ------------------------- |
+| `[:alnum:]`  | Letters and digits              | `[a-zA-Z0-9]`             |
+| `[:alpha:]`  | Letters only                     | `[a-zA-Z]`                |
+| `[:digit:]`  | Digits                          | `[0-9]`                   |
+| `[:lower:]`  | Lowercase letters only          | `[a-z]`                   |
+| `[:upper:]`  | Uppercase letters only          | `[A-Z]`                   |
+| `[:xdigit:]` | Hexadecimal digits              | `[0-9A-Fa-f]`             |
+| `[:blank:]`  | Space and tab                   | `[ \t]`                   |
+| `[:space:]`  | Whitespace                      | `[ \t\r\n\v\f]`           |
+| `[:punct:]`  | Punctuation characters          | `[\x21-\x2F\x3A-\x40\x5B-\x60\x7B-\x7E]` |
+| `[:graph:]`  | Visible characters (no space)    | `[\x21-\x7E]`             |
+| `[:print:]`  | Printable characters            | `[\x20-\x7E]`             |
+| `[:cntrl:]`  | Control characters              | `[\x00-\x1F\x7F]`         |
+
+Notes:
+
+- `[:alnum:]` is the workhorse for token alphabets; it covers both letter cases **and** digits.
+- `[:lower:]` and `[:upper:]` match a single case by default. Under `(?i)` / `(?xi)` they become
+  case-insensitive, so `[:lower:]` will also match uppercase letters and vice versa.
+- `[:digit:]` matches only `0-9`; it does **not** include letters. For letters **and** digits use
+  `[:alnum:]`; for lowercase letters **and** digits combine them as `[[:lower:][:digit:]]`.
+- `[:xdigit:]` matches `0-9`, `a-f`, and `A-F` regardless of the `(?i)` flag.
+- Classes can be combined inside one bracket expression, for example `[[:alnum:]_=-]` adds
+  underscore, equals, and hyphen to the alphanumeric set.
+
 ## Character Requirements
 
 The `pattern_requirements` field allows you to specify data type requirements for matched secrets. This is particularly useful when:

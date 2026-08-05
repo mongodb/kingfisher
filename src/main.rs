@@ -1433,7 +1433,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
 
                         let datastore = Arc::new(Mutex::new(FindingsStore::new(clone_dir)));
                         info!(
-                            "Launching with {} concurrent scan jobs. Use --num-jobs to override.",
+                            "Launching with {} concurrent scan jobs. Use --jobs to override.",
                             &scan_args.num_jobs
                         );
                         if should_stage_stdin(
