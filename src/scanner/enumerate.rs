@@ -36,7 +36,7 @@ use crate::{
         extract_zip_archive_in_memory, looks_like_zip,
     },
     findings_store,
-    git_commit_metadata::CommitMetadata,
+    git_commit_metadata::{CommitMetadata, intern_git_identity},
     git_repo_enumerator::{GitBlobMetadata, GitBlobSource, MIN_SCANNABLE_BLOB_SIZE},
     matcher::{Matcher, MatcherStats},
     open_git_repo_with_options,
@@ -1331,15 +1331,15 @@ fn enumerate_git_diff_repo(
             let timestamp = committer.time().unwrap_or_else(|_| gix::date::Time::new(0, 0));
             Arc::new(CommitMetadata {
                 commit_id: head_commit.id,
-                committer_name: committer.name.to_str_lossy().into_owned(),
-                committer_email: committer.email.to_str_lossy().into_owned(),
+                committer_name: intern_git_identity(committer.name.to_str_lossy().as_ref()),
+                committer_email: intern_git_identity(committer.email.to_str_lossy().as_ref()),
                 committer_timestamp: timestamp,
             })
         } else {
             Arc::new(CommitMetadata {
                 commit_id: head_commit.id,
-                committer_name: String::new(),
-                committer_email: String::new(),
+                committer_name: intern_git_identity(""),
+                committer_email: intern_git_identity(""),
                 committer_timestamp: gix::date::Time::new(0, 0),
             })
         };

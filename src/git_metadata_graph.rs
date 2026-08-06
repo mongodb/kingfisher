@@ -531,6 +531,57 @@ mod tests {
     use crate::git_repo_enumerator::{GitBlobSource, GitRepoWithMetadataEnumerator};
 
     #[test]
+    fn commit_identities_are_interned_across_commits() -> Result<()> {
+        let temp = tempdir()?;
+        let repo_path = temp.path().join("repo");
+        let repo = Git2Repository::init(&repo_path)?;
+        let signature = Signature::now("shared committer", "shared@example.com")?;
+
+        fs::write(repo_path.join("first.txt"), b"first secret-like value long enough")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("first.txt"))?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        let first_commit =
+            repo.commit(Some("HEAD"), &signature, &signature, "first", &tree, &[])?;
+        let first_commit = repo.find_commit(first_commit)?;
+
+        fs::write(repo_path.join("second.txt"), b"second secret-like value long enough")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("second.txt"))?;
+        let tree_id = index.write_tree()?;
+        let tree = repo.find_tree(tree_id)?;
+        repo.commit(Some("HEAD"), &signature, &signature, "second", &tree, &[&first_commit])?;
+
+        let git_dir = repo_path.join(".git");
+        let gix_repo = open_opts(&git_dir, Options::isolated().open_path_as_is(true))?;
+        let result = GitRepoWithMetadataEnumerator::new(&repo_path, gix_repo, None).run()?;
+        let blobs = match result.blobs {
+            GitBlobSource::Precomputed(blobs) => blobs,
+            GitBlobSource::StreamFromOdb => {
+                bail!("expected precomputed metadata blobs from metadata enumerator")
+            }
+        };
+
+        let metadata_for = |path: &str| {
+            blobs
+                .iter()
+                .flat_map(|blob| &blob.first_seen)
+                .find(|appearance| appearance.path.to_str_lossy() == path)
+                .map(|appearance| Arc::clone(&appearance.commit_metadata))
+                .unwrap_or_else(|| panic!("missing appearance for {path}"))
+        };
+        let first = metadata_for("first.txt");
+        let second = metadata_for("second.txt");
+
+        assert_ne!(first.commit_id, second.commit_id);
+        assert!(Arc::ptr_eq(&first.committer_name, &second.committer_name));
+        assert!(Arc::ptr_eq(&first.committer_email, &second.committer_email));
+
+        Ok(())
+    }
+
+    #[test]
     fn excluded_blob_path_does_not_hide_later_included_blob() -> Result<()> {
         let temp = tempdir()?;
         let repo_path = temp.path().join("repo");

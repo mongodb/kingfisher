@@ -8,6 +8,7 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 All notable changes to this project will be documented in this file.
 
 ## [v1.111.0]
+- Reduced Git scan metadata memory usage by interning repeated committer names and email addresses.
 - Reduced peak memory during large scans by bounding Git delta caches per worker and streaming matcher chunks; `--jobs` now controls the scanner worker pool.
 - Added first-class validation outcomes and `--validation-filter actionable`, allowing high-signal secrets such as private keys and temporarily unavailable validation checks to remain visible for manual triage without labeling them active. `--only-valid` remains strict verified-active filtering. Thanks @wing-cheng. [#440](https://github.com/mongodb/kingfisher/issues/440)
 - Fixed alert webhooks reporting a temporary stdin file instead of an explicitly requested non-path scan target in non-interactive runs. [#452](https://github.com/mongodb/kingfisher/issues/452)
