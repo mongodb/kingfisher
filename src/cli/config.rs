@@ -398,7 +398,9 @@ pub fn parse_str(yaml: &str) -> Result<KingfisherConfig> {
 
 fn validate(cfg: &KingfisherConfig) -> Result<()> {
     if cfg.scan.only_valid == Some(true) && cfg.scan.validation_filter.is_some() {
-        bail!("scan.only_valid and scan.validation_filter cannot both be set");
+        bail!(
+            "scan.only_valid and scan.validation_filter cannot both be set; use validation_filter: active instead"
+        );
     }
 
     // alerts.webhooks

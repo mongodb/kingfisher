@@ -27,21 +27,18 @@ use serde::{Deserialize, Serialize};
 pub enum ValidationOutcome {
     /// A live or cryptographic validator proved the credential is usable.
     VerifiedActive,
+    /// The rule author marked the credential as valid without live validation.
+    Assumed,
     /// A live or cryptographic validator authoritatively rejected the credential.
     VerifiedInactive,
-    /// The secret material is structurally valid, but its live use is unknown.
-    StructurallyValid,
     /// Validation was attempted but infrastructure or the remote service was unavailable.
     Unavailable,
     /// Validation was intentionally skipped, for example because a dependency was missing.
     Skipped,
-    /// The rule has no validation strategy.
+    /// No validation result was produced, either because the rule has no validator
+    /// or because configured validation was not run.
     #[default]
-    NotConfigured,
-    /// The rule has validation, but it was not run.
     NotAttempted,
-    /// Rule authors explicitly marked this high-signal finding for manual review.
-    Assumed,
 }
 
 impl ValidationOutcome {
@@ -52,27 +49,18 @@ impl ValidationOutcome {
 
     /// Whether this outcome should pass the actionable validation filter.
     pub const fn is_actionable(self) -> bool {
-        matches!(
-            self,
-            Self::VerifiedActive
-                | Self::StructurallyValid
-                | Self::Unavailable
-                | Self::NotAttempted
-                | Self::Assumed
-        )
+        matches!(self, Self::VerifiedActive | Self::Assumed)
     }
 
     /// Stable human-readable label used by reports.
     pub const fn display_name(self) -> &'static str {
         match self {
             Self::VerifiedActive => "Active Credential",
+            Self::Assumed => "Assumed Valid (Not Live-Validated)",
             Self::VerifiedInactive => "Inactive Credential",
-            Self::StructurallyValid => "Structurally Valid Secret",
-            Self::Unavailable => "Validation Unavailable",
+            Self::Unavailable => "Inconclusive Validation",
             Self::Skipped => "Validation Skipped",
-            Self::NotConfigured => "Validation Not Configured",
             Self::NotAttempted => "Not Attempted",
-            Self::Assumed => "Manual Review Required",
         }
     }
 
@@ -80,12 +68,7 @@ impl ValidationOutcome {
     ///
     /// Status values are HTTP-compatible because existing scanner state uses
     /// them for both real responses and internal sentinels.
-    pub const fn from_legacy(
-        validation_configured: bool,
-        assumed: bool,
-        success: bool,
-        status: u16,
-    ) -> Self {
+    pub const fn from_legacy(assumed: bool, success: bool, status: u16) -> Self {
         if assumed {
             return Self::Assumed;
         }
@@ -94,9 +77,6 @@ impl ValidationOutcome {
         }
         if matches!(status, 408 | 429 | 500..=599) {
             return Self::Unavailable;
-        }
-        if !validation_configured {
-            return Self::NotConfigured;
         }
         match status {
             0 | 100 => Self::NotAttempted,
@@ -113,44 +93,54 @@ mod tests {
     #[test]
     fn actionable_outcomes_are_explicit() {
         assert!(ValidationOutcome::VerifiedActive.is_actionable());
-        assert!(ValidationOutcome::StructurallyValid.is_actionable());
-        assert!(ValidationOutcome::Unavailable.is_actionable());
-        assert!(ValidationOutcome::NotAttempted.is_actionable());
         assert!(ValidationOutcome::Assumed.is_actionable());
         assert!(!ValidationOutcome::VerifiedInactive.is_actionable());
+        assert!(!ValidationOutcome::Unavailable.is_actionable());
         assert!(!ValidationOutcome::Skipped.is_actionable());
-        assert!(!ValidationOutcome::NotConfigured.is_actionable());
+        assert!(!ValidationOutcome::NotAttempted.is_actionable());
     }
 
     #[test]
     fn legacy_classification_distinguishes_failure_modes() {
         assert_eq!(
-            ValidationOutcome::from_legacy(true, false, true, 200),
+            ValidationOutcome::from_legacy(false, true, 200),
             ValidationOutcome::VerifiedActive
         );
+        assert_eq!(ValidationOutcome::from_legacy(true, false, 100), ValidationOutcome::Assumed);
         assert_eq!(
-            ValidationOutcome::from_legacy(true, false, false, 401),
+            ValidationOutcome::from_legacy(false, false, 401),
             ValidationOutcome::VerifiedInactive
         );
         assert_eq!(
-            ValidationOutcome::from_legacy(true, false, false, 502),
+            ValidationOutcome::from_legacy(false, false, 502),
             ValidationOutcome::Unavailable
         );
         assert_eq!(
-            ValidationOutcome::from_legacy(false, false, false, 100),
-            ValidationOutcome::NotConfigured
-        );
-        assert_eq!(
-            ValidationOutcome::from_legacy(true, true, false, 100),
-            ValidationOutcome::Assumed
+            ValidationOutcome::from_legacy(false, false, 100),
+            ValidationOutcome::NotAttempted
         );
     }
 
     #[test]
     fn outcome_serialization_is_stable_snake_case() {
         assert_eq!(
-            serde_json::to_string(&ValidationOutcome::StructurallyValid).unwrap(),
-            "\"structurally_valid\""
+            serde_json::to_string(&ValidationOutcome::NotAttempted).unwrap(),
+            "\"not_attempted\""
         );
+    }
+
+    #[test]
+    fn unavailable_outcome_has_inconclusive_display_name() {
+        assert_eq!(ValidationOutcome::Unavailable.display_name(), "Inconclusive Validation");
+    }
+
+    #[test]
+    fn assumed_outcome_has_high_confidence_display_name() {
+        assert_eq!(ValidationOutcome::Assumed.display_name(), "Assumed Valid (Not Live-Validated)");
+    }
+
+    #[test]
+    fn active_outcome_preserves_compatible_display_name() {
+        assert_eq!(ValidationOutcome::VerifiedActive.display_name(), "Active Credential");
     }
 }

@@ -174,15 +174,22 @@ For a shareable, upload-based experience, the docs site also hosts the same view
 kingfisher scan /path/to/code --only-valid
 ```
 
-Use the actionable filter when high-signal findings that cannot be live-validated—such as
-private keys—or temporarily unavailable validators should also be retained for manual review:
+Use the actionable filter for findings that warrant immediate response: active credentials and
+high-confidence secrets marked assumed valid:
 
 ```bash
 kingfisher scan /path/to/code --validation-filter actionable
 ```
 
-`--only-valid` is equivalent to `--validation-filter active` and remains restricted to
-credentials proven active. The two options cannot be combined.
+`--only-valid` is a compatibility alias for `--validation-filter active` and remains restricted to
+credentials proven active. It cannot be combined with `--validation-filter`; use `actionable`
+when both active and assumed-valid findings should be retained. Use `all` to also retain
+inconclusive, skipped, inactive, and not-attempted findings.
+
+Pretty output preserves the established `Active Credential` label (`🔓`). Assumed rules use the
+same bright color with a locked icon and the label
+`Assumed Valid (Not Live-Validated)`. They count as skipped validations by default, or as
+successful validations with `--validation-filter actionable`.
 
 ### 5: Revoke a discovered secret
 
@@ -514,7 +521,7 @@ kingfisher scan ~/src/myrepo --turbo
 # Display only secrets confirmed active by third‑party APIs
 kingfisher scan /path/to/repo --only-valid
 
-# Include active credentials and high-signal findings requiring manual review
+# Include active credentials and high-confidence assumed-valid secrets
 kingfisher scan /path/to/repo --validation-filter actionable
 
 # Output JSON and capture to a file

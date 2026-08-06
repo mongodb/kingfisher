@@ -62,8 +62,7 @@ kingfisher scan /path/to/repo --only-valid
 ```
 
 `--only-valid` is a compatibility alias for `--validation-filter active`. To retain active
-credentials plus high-signal findings that require manual review, configured validators that were
-not run, and validation attempts blocked by temporary infrastructure failures, use:
+credentials and high-confidence secrets marked assumed valid, use:
 
 ```bash
 kingfisher scan /path/to/repo --validation-filter actionable
@@ -75,12 +74,15 @@ The available filters are:
 |---|---|
 | `all` | Every finding (default) |
 | `active` | `verified_active` only |
-| `actionable` | `verified_active`, `structurally_valid`, `assumed`, `unavailable`, and `not_attempted` |
+| `actionable` | `verified_active` and `assumed` |
+
+`--only-valid` is a compatibility alias for `--validation-filter active`. The two options are
+mutually exclusive; select `actionable` when both active and assumed-valid findings are required.
+Use `all` to retain inconclusive, skipped, inactive, and not-attempted findings.
 
 Each JSON, JSONL, BSON, TOON, and SARIF finding exposes a machine-readable validation outcome.
-Human-readable reports distinguish active, inactive, unavailable, skipped, unconfigured,
-not-attempted, structurally valid, and manual-review findings. An `assumed` outcome is not proof
-that a credential is active; it means the rule is sufficiently high-signal to require triage.
+Human-readable reports distinguish verified-active credentials, high-confidence static secrets,
+inactive credentials, inconclusive validation, skipped validation, and findings not live-validated.
 
 ### Output JSON and capture to a file
 
@@ -187,7 +189,7 @@ Raw JSON and SARIF output from Kingfisher, Gitleaks, and TruffleHog are excellen
 
 - **A skimmable overview** — findings are grouped by detector, rule, file, and repository, with counts and validation state, instead of one JSON object per line.
 - **Cross-tool triage in one UI** — import a Gitleaks scan, a TruffleHog scan, and a Kingfisher scan of the same codebase into the same session and look at them side-by-side with deduplication, instead of reconciling three different schemas.
-- **Clear "this is live" signals** — validated Kingfisher findings and TruffleHog-verified findings are surfaced as active credentials so you rotate real keys first; unverified/static matches are marked as not attempted rather than active or inactive.
+- **Clear "this is live" signals** — validated Kingfisher findings and TruffleHog-verified findings are surfaced as `Active Credential` so you rotate proven-live keys first; high-confidence static findings are explicitly marked `Assumed Valid (Not Live-Validated)`, while other findings without a live result are marked `Not Attempted`.
 - **Fingerprint-aware deduplication** — the same secret appearing across multiple reports, directories, or scan runs collapses to one entry.
 - **Blast-radius context** — when a Kingfisher report was produced with `--access-map`, the viewer opens an interactive blast-radius graph and inspector so you can trace the identity, reachable resources, and permission mix without digging through nested JSON.
 - **A shareable, offline-friendly workbench** — runs locally via `kingfisher view` or via the hosted static page; nothing about the report is exfiltrated.
@@ -196,7 +198,7 @@ Gitleaks and TruffleHog are great at surfacing candidate matches. Kingfisher's v
 
 #### Caveats for imported reports
 
-Imported Gitleaks, TruffleHog, and generic SARIF reports are display-oriented. Kingfisher-produced SARIF can restore compatible validation status, command, fingerprint, and `access_map` properties when present, but generic SARIF does not carry Kingfisher-native `access_map` data and cannot be driven by `kingfisher validate` / `revoke`. Imported fingerprints use the report's native fingerprint when available, otherwise the viewer synthesizes one from rule, location, and snippet data. TruffleHog findings marked as verified are shown as active credentials; all other imported findings are treated as not attempted rather than inactive. For full validation context and blast-radius mapping, re-scan with Kingfisher and add `--access-map` when appropriate.
+Imported Gitleaks, TruffleHog, and generic SARIF reports are display-oriented. Kingfisher-produced SARIF can restore compatible validation status, command, fingerprint, and `access_map` properties when present, but generic SARIF does not carry Kingfisher-native `access_map` data and cannot be driven by `kingfisher validate` / `revoke`. Imported fingerprints use the report's native fingerprint when available, otherwise the viewer synthesizes one from rule, location, and snippet data. TruffleHog findings marked as verified are shown as verified-active credentials; all other imported findings are treated as not attempted rather than inactive. For full validation context and blast-radius mapping, re-scan with Kingfisher and add `--access-map` when appropriate.
 
 ### Pipe any text directly into Kingfisher by passing `-`
 
@@ -1502,7 +1504,7 @@ Scan Summary:
  |Findings....................: 15
  |__Successful Validations....: 3
  |__Failed Validations........: 5
- |__Skipped Validations.......: 2
+ |__Skipped Validations.......: 6
  |Rules Applied...............: 120
  |__Blobs Scanned.............: 1,234
  |Bytes Scanned...............: 45.2 MB
@@ -1514,9 +1516,40 @@ Scan Summary:
 
 | Counter | Description |
 | ------- | ----------- |
-| **Successful Validations** | Credentials confirmed as active by the provider (e.g., API returned valid response) |
-| **Failed Validations** | Validations that were attempted but failed (HTTP errors, connection timeouts, invalid credentials) |
-| **Skipped Validations** | Validations that could not be attempted due to missing preconditions (e.g., missing dependent rules) |
+| **Successful Validations** | Findings classified as `Active Credential`. With `--validation-filter actionable`, assumed-valid findings are also counted here so the total matches the actionable set. |
+| **Failed Validations** | Findings classified as `Inactive Credential`: the provider authoritatively rejected the credential. |
+| **Skipped Validations** | Findings classified as `Validation Skipped` or `Canary Token (Skipped)`, plus assumed-valid findings unless `--validation-filter actionable` is used. |
+
+These summary counters do not cover every validation status. In particular,
+`Inconclusive Validation` and `Not Attempted` remain visible on individual findings but do not
+have separate summary counters.
+
+### Finding Validation Statuses
+
+The ` |Validation....: ` line on a finding describes the semantic validation result:
+
+| Finding status | Machine-readable outcome | Meaning |
+| -------------- | ------------------------ | ------- |
+| **Active Credential** | `verified_active` | A live or cryptographic validator proved that the credential is usable. |
+| **Assumed Valid (Not Live-Validated)** | `assumed` | The rule identified secret material with high confidence without proving that the credential is currently usable. It is included by `actionable`, but not by `active`/`--only-valid`. |
+| **Inactive Credential** | `verified_inactive` | A live validator authoritatively rejected the credential. This is different from a network or provider outage. |
+| **Inconclusive Validation** | `unavailable` | Validation was attempted, but a timeout, rate limit, server error, validator panic, or similar condition prevented a conclusion. It is neither proof of activity nor proof of inactivity. |
+| **Validation Skipped** | `skipped` | Validation was intentionally not attempted because a dependency or other precondition was missing. |
+| **Canary Token (Skipped)** | `skipped` | A canary/honey-token match was recognized from the skip list and was deliberately not sent to the provider. |
+| **Not Attempted** | `not_attempted` | No validation result was produced—for example, the rule has no validator or `--no-validate` was used. |
+
+`--validation-filter active` (and its `--only-valid` compatibility alias) includes only
+`Active Credential` findings. The `actionable` filter additionally includes
+`Assumed Valid (Not Live-Validated)` and excludes every other outcome.
+Use `all` to retain inconclusive, skipped, inactive, and not-attempted findings. `--only-valid` and
+`--validation-filter` cannot be combined.
+
+In colorized stdout, active credentials use `🔓`. High-confidence assumed-valid secrets use the
+same bright color with `🔒`; the icon and explicit status make their lack of live validation clear.
+
+Assumed-valid findings are counted as **Skipped Validations** by default because no live validation
+was attempted. With `--validation-filter actionable`, they instead count as **Successful
+Validations**, aligning the counter with the actionable output.
 
 ### Why Validations Are Skipped
 
@@ -1528,11 +1561,13 @@ Validations are marked as "skipped" when:
 When a validation is skipped, the finding will show:
 
 ```
- |Validation....: Inactive Credential
+ |Validation....: Validation Skipped
  |__Response....: Validation skipped - missing dependent rules: helper-rule-id
 ```
 
-This distinction helps you understand validation coverage: **Failed Validations** represent actual validation attempts, while **Skipped Validations** indicate opportunities to improve rule coverage or provide additional context.
+This distinction helps you understand validation coverage: **Failed Validations** represent
+authoritative provider rejections, while **Skipped Validations** indicate that validation could
+not be attempted and may need additional context.
 
 ---
 

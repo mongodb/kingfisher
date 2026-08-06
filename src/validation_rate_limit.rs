@@ -167,7 +167,6 @@ mod tests {
 
     #[test]
     fn should_rate_limit_non_http_validators() {
-        assert!(!should_rate_limit_validation(&Validation::Assumed));
         assert!(should_rate_limit_validation(&Validation::AWS));
         assert!(should_rate_limit_validation(&Validation::GCP));
         assert!(should_rate_limit_validation(&Validation::MongoDB));

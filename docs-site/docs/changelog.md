@@ -10,10 +10,11 @@ All notable changes to this project will be documented in this file.
 ## [v1.111.0]
 - Reduced Git scan metadata memory usage by interning repeated committer names and email addresses.
 - Reduced peak memory during large scans by bounding Git delta caches per worker and streaming matcher chunks; `--jobs` now controls the scanner worker pool.
-- Added first-class validation outcomes and `--validation-filter actionable`, allowing high-signal secrets such as private keys and temporarily unavailable validation checks to remain visible for manual triage without labeling them active. `--only-valid` remains strict verified-active filtering. Thanks @wing-cheng. [#440](https://github.com/mongodb/kingfisher/issues/440)
+- Added first-class validation outcomes and `--validation-filter actionable`, allowing active credentials and high-confidence assumed-valid secrets such as private keys to remain visible together without labeling assumed findings active. `--only-valid` remains strict active filtering. Thanks @wing-cheng. [#440](https://github.com/mongodb/kingfisher/issues/440)
 - Fixed alert webhooks reporting a temporary stdin file instead of an explicitly requested non-path scan target in non-interactive runs. [#452](https://github.com/mongodb/kingfisher/issues/452)
 - Fixed `kingfisher scan - <path>` discarding the sibling paths when staging stdin; stdin now replaces only the `-` placeholder.
 - Fixed direct validation for Atlassian API keys using the documented Organizations API. [#461](https://github.com/mongodb/kingfisher/issues/461)
+- Fixed self-hosted Bitbucket scans to recognize `http`-labeled HTTPS clone links instead of falling back to SSH. [#462](https://github.com/mongodb/kingfisher/issues/462)
 - Added Jira Cloud and Confluence Cloud scanning improvements, including complete pagination, full issue descriptions, and `--all` support. Thanks @Safenein. [#460](https://github.com/mongodb/kingfisher/pull/460)
 - Renamed "Access Map" to "Blast Radius" throughout the CLI, HTML and pretty reporters, the standalone and report viewers, and documentation; the `--access-map` flag, `--blast-radius` alias, and `access_map` JSON field names remain unchanged for backwards compatibility.
 

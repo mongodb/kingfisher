@@ -67,7 +67,8 @@ pub struct DirectValidationResult {
     pub rule_id: String,
     /// The rule name.
     pub rule_name: String,
-    /// Whether the secret was validated as valid.
+    /// Whether the validator accepted the secret. For an assumed rule this is true even though no
+    /// live validation request was performed; inspect `message` for the explicit classification.
     pub is_valid: bool,
     /// HTTP status code from the validation request (if applicable).
     pub status_code: Option<u16>,
@@ -612,10 +613,9 @@ pub async fn run_direct_validation(
             Validation::Assumed => DirectValidationResult {
                 rule_id: String::new(),
                 rule_name: String::new(),
-                is_valid: false,
+                is_valid: true,
                 status_code: None,
-                message: "Rule requires manual review; no live validation is configured"
-                    .to_string(),
+                message: kingfisher_core::ValidationOutcome::Assumed.display_name().to_string(),
             },
             Validation::Http(http_validation) => {
                 match execute_http_validation(
@@ -1151,7 +1151,15 @@ pub fn print_results(results: &[DirectValidationResult], format: &str, use_color
                     println!(); // Separator between results
                 }
 
-                let valid_str = if result.is_valid {
+                let is_high_confidence =
+                    result.message == kingfisher_core::ValidationOutcome::Assumed.display_name();
+                let valid_str = if is_high_confidence {
+                    if use_color {
+                        "\x1b[94m🔒 Assumed Valid (Not Live-Validated)\x1b[0m"
+                    } else {
+                        "Assumed Valid (Not Live-Validated)"
+                    }
+                } else if result.is_valid {
                     if use_color { "\x1b[32m✓ VALID\x1b[0m" } else { "VALID" }
                 } else if use_color {
                     "\x1b[31m✗ INVALID\x1b[0m"

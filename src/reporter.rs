@@ -584,7 +584,6 @@ pub struct ScanAuditContext {
     pub successful_validations: Option<usize>,
     pub failed_validations: Option<usize>,
     pub skipped_validations: Option<usize>,
-    pub unavailable_validations: Option<usize>,
     pub blobs_scanned: Option<u64>,
     pub bytes_scanned: Option<u64>,
     pub running_version: Option<String>,
@@ -1233,10 +1232,6 @@ impl DetailsReporter {
                     .audit_context
                     .as_ref()
                     .and_then(|ctx| ctx.skipped_validations),
-                unavailable_validations: self
-                    .audit_context
-                    .as_ref()
-                    .and_then(|ctx| ctx.unavailable_validations),
                 blobs_scanned: self.audit_context.as_ref().and_then(|ctx| ctx.blobs_scanned),
                 bytes_scanned: self.audit_context.as_ref().and_then(|ctx| ctx.bytes_scanned),
                 scan_duration_seconds: self
@@ -1613,8 +1608,6 @@ pub struct ScanReportSummary {
     pub failed_validations: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub skipped_validations: Option<usize>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub unavailable_validations: Option<usize>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub blobs_scanned: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2071,13 +2064,11 @@ mod tests {
 
         let outcomes = [
             ValidationOutcome::VerifiedActive,
+            ValidationOutcome::Assumed,
             ValidationOutcome::VerifiedInactive,
-            ValidationOutcome::StructurallyValid,
             ValidationOutcome::Unavailable,
             ValidationOutcome::Skipped,
-            ValidationOutcome::NotConfigured,
             ValidationOutcome::NotAttempted,
-            ValidationOutcome::Assumed,
         ];
         let temp = tempdir().unwrap();
         let mut store = findings_store::FindingsStore::new(temp.path().to_path_buf());
@@ -2100,14 +2091,14 @@ mod tests {
             validation_filter: cli::commands::scan::ValidationFilter::All,
             audit_context: None,
         };
-        assert_eq!(reporter.get_filtered_matches(false).unwrap().len(), 8);
+        assert_eq!(reporter.get_filtered_matches(false).unwrap().len(), 6);
 
         reporter.validation_filter = cli::commands::scan::ValidationFilter::Active;
         assert_eq!(reporter.get_filtered_matches(false).unwrap().len(), 1);
 
         reporter.validation_filter = cli::commands::scan::ValidationFilter::Actionable;
         let actionable = reporter.get_filtered_matches(false).unwrap();
-        assert_eq!(actionable.len(), 5);
+        assert_eq!(actionable.len(), 2);
         assert!(actionable.iter().all(|finding| finding.validation_outcome.is_actionable()));
     }
 
@@ -2166,6 +2157,29 @@ mod tests {
             record.finding.validation.response,
             "(skip list entry) AWS validation not attempted for account 111122223333."
         );
+    }
+
+    #[test]
+    fn unavailable_validation_surfaces_as_inconclusive_validation() {
+        let temp = tempdir().unwrap();
+        let datastore =
+            Arc::new(Mutex::new(findings_store::FindingsStore::new(temp.path().to_path_buf())));
+        let reporter = DetailsReporter {
+            datastore,
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+
+        let (mut report_match, _) = sample_report_match(
+            "validator unavailable",
+            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            false,
+        );
+        report_match.validation_outcome = kingfisher_core::ValidationOutcome::Unavailable;
+
+        let record = reporter.build_finding_record(&report_match, &sample_scan_args());
+        assert_eq!(record.finding.validation.status, "Inconclusive Validation");
     }
 
     #[test]

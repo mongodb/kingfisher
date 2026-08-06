@@ -170,29 +170,31 @@ revocation:
 | visible                 | false to hide non‑secret captures (e.g. IDs)                         |
 | depends_on_rule         | Chain rules: use captures from one rule in another's validation      |
 | pattern_requirements  | Require character types and/or exclude placeholder words from matches |
-| validation              | Configure `Http`, `Grpc`, typed validators, `Raw` exception-path checks, or `Assumed` manual-review classification |
+| validation              | Configure `Assumed`, `Http`, `Grpc`, typed validators, or `Raw` exception-path checks |
 | revocation              | Configure HTTP, AWS, or multi-step revocation for a detected secret  |
 
 ## Validation Types
 
-Kingfisher supports three validation buckets:
+Kingfisher supports these validation types:
 
-1. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
-2. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`.
-3. `Assumed`: no network request is made; a high-signal match is marked for manual review and is included by `--validation-filter actionable`.
+1. `Assumed`: a rule-level marker for secret material accepted with high confidence without live validation. It produces the `Assumed Valid (Not Live-Validated)` finding status and is included by the `actionable` filter, but not by the strict `active` filter. In colorized pretty output it uses the same bright color as an active credential but with a locked icon. It counts as skipped validation by default and as successful validation with the `actionable` filter.
+2. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
+3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`.
 4. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
 
-Use `Assumed` only when the secret cannot be deterministically live-validated and the pattern is
-specific enough that every match warrants triage. It does **not** mean the credential was proven
-active, and it does not pass `--only-valid` or `--validation-filter active`.
+Rules without a `validation` block produce `Not Attempted` findings. They are not treated as
+active, inactive, or skipped because no validation result was produced.
+
+An assumed validation is configured as:
 
 ```yaml
 validation:
   type: Assumed
 ```
 
-For example, the built-in private-key rules use `Assumed`: their PEM/OpenSSH/PGP material can be
-high confidence without a provider endpoint that can establish whether the key is currently in use.
+The bundled private-key rules use this marker because their high-signal formats can be accepted
+without a provider request; their findings are reported as
+`Assumed Valid (Not Live-Validated)`.
 
 Raw validation looks like this:
 

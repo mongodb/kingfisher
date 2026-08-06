@@ -684,7 +684,6 @@ fn build_scan_audit_context(
         successful_validations: Some(totals.successful_validations),
         failed_validations: Some(totals.failed_validations),
         skipped_validations: Some(totals.skipped_validations),
-        unavailable_validations: Some(totals.unavailable_validations),
         blobs_scanned: Some(totals.blobs_scanned),
         bytes_scanned: Some(totals.bytes_scanned),
         running_version: Some(update_status.running_version.clone()),

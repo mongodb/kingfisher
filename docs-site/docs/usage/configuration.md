@@ -259,9 +259,14 @@ git:
   gitlab_api_url: null          # URL  self-hosted GitLab         (--gitlab-api-url)
 ```
 
-`scan.only_valid: true` and `scan.validation_filter` are mutually exclusive. Use
-`validation_filter: active` for the explicit equivalent of `only_valid`, or `actionable` to include
-manual-review and temporarily unverifiable outcomes.
+`scan.only_valid: true` is a compatibility alias for `validation_filter: active`. They are mutually
+exclusive; configure one or the other. Use `validation_filter: actionable` to retain active
+credentials and high-confidence static secrets marked assumed valid. Use `validation_filter: all`
+to also retain inconclusive, skipped, inactive, and not-attempted findings.
+
+High-confidence assumed-valid secrets count as skipped validations by default. With
+`validation_filter: actionable`, they count as successful validations so the summary matches the
+actionable output.
 
 Unknown fields are rejected (typo protection). Empty sections and a missing
 top-level file are both fine.

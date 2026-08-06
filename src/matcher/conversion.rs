@@ -43,10 +43,12 @@ pub struct OwnedBlobMatch {
 impl OwnedBlobMatch {
     /// Refresh the semantic outcome after legacy validation fields change.
     pub fn refresh_validation_outcome(&mut self) {
-        let validation = self.rule.syntax().validation.as_ref();
+        let assumed = matches!(
+            self.rule.syntax().validation.as_ref(),
+            Some(crate::rules::rule::Validation::Assumed)
+        );
         self.validation_outcome = ValidationOutcome::from_legacy(
-            validation.is_some(),
-            matches!(validation, Some(crate::rules::rule::Validation::Assumed)),
+            assumed,
             self.validation_success,
             self.validation_response_status.as_u16(),
         );
@@ -178,10 +180,12 @@ pub struct Match {
 impl Match {
     /// Refresh the semantic outcome after applying a cached validation result.
     pub fn refresh_validation_outcome(&mut self) {
-        let validation = self.rule.syntax().validation.as_ref();
+        let assumed = matches!(
+            self.rule.syntax().validation.as_ref(),
+            Some(crate::rules::rule::Validation::Assumed)
+        );
         self.validation_outcome = ValidationOutcome::from_legacy(
-            validation.is_some(),
-            matches!(validation, Some(crate::rules::rule::Validation::Assumed)),
+            assumed,
             self.validation_success,
             self.validation_response_status,
         );

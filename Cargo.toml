@@ -35,7 +35,7 @@ sha1 = "0.11"
 sha2 = "0.11"
 hmac = "0.13"
 base32 = "0.5.1"
-base64 = "0.22"
+base64 = "0.23"
 percent-encoding = "2.3"
 time = "0.3"
 uuid = "1.23"
@@ -100,7 +100,7 @@ clap = { version = "4.6", default-features = false, features = [
 anyhow = "1.0"
 bstr = { version = "1.12", features = ["serde"] }
 fixedbitset = "0.5"
-gix = { version = "0.85", features = ["max-performance-safe", "serde", "blocking-network-client"] }
+gix = { version = "0.86", features = ["max-performance-safe", "serde", "blocking-network-client"] }
 ignore = "0.4"
 petgraph = "0.8"
 roaring = "0.11.4"
@@ -157,7 +157,7 @@ tokio = { version = "1.52.3", features = [
     "sync",
     "time",
 ] }
-base64 = "0.22.1"
+base64 = "0.23.0"
 crossbeam-channel = "0.5.15"
 indenter = "0.3.4"
 serde-sarif = "0.8"
@@ -208,8 +208,8 @@ hmac = { workspace = true }
 sha1 = { workspace = true }
 sha2 = { workspace = true }
 humantime = "2.3.0"
-path-dedot = "3.1.1"
-quick-xml = { version = "0.40.1", features = ["serde", "serialize"] }
+path-dedot = "4.0.1"
+quick-xml = { version = "0.41.0", features = ["serde", "serialize"] }
 rustls = "0.23.40"
 tokio-postgres-rustls = "0.14.0"
 rustls-native-certs = "0.8.4"
@@ -277,7 +277,7 @@ testcontainers = "0.27.3"
 predicates = "3.1.4"
 assert_cmd = "2.2.2"
 proptest = "1.11.0"
-jsonwebtoken = { version = "10.4.0", default-features = false, features = ["rust_crypto"] }
+jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto", "use_pem"] }
 # Test-only: generate an ephemeral RSA keypair for the RS256 JWT regression test.
 # `getrandom` enables `rsa::rand_core::OsRng`; `pem` is on by default for PEM export.
 rsa = { version = "0.9.10", features = ["getrandom"] }

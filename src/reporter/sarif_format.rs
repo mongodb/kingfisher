@@ -171,7 +171,7 @@ mod tests {
                 confidence: confidence.to_string(),
                 entropy: "0.0".to_string(),
                 validation: ValidationInfo {
-                    outcome: kingfisher_core::ValidationOutcome::NotConfigured,
+                    outcome: kingfisher_core::ValidationOutcome::NotAttempted,
                     status: "unknown".to_string(),
                     response: "n/a".to_string(),
                 },

@@ -150,12 +150,12 @@ pub struct ScanArgs {
     // #[arg(long, value_name = "PATH")]
     // pub access_map_html: Option<PathBuf>,
     /// Display only validated findings
-    #[arg(global = true, long, default_value_t = false)]
+    #[arg(global = true, long, default_value_t = false, conflicts_with = "validation_filter")]
     pub only_valid: bool,
 
     /// Filter findings by validation outcome. `active` is equivalent to
-    /// `--only-valid`; `actionable` also includes explicit manual-review and
-    /// temporarily unverifiable findings.
+    /// `--only-valid`; `actionable` includes active credentials and high-confidence
+    /// assumed-valid secrets. This conflicts with the `--only-valid` compatibility alias.
     #[arg(global = true, long, value_enum, conflicts_with = "only_valid")]
     pub validation_filter: Option<ValidationFilter>,
 
@@ -336,7 +336,7 @@ pub enum ValidationFilter {
     All,
     /// Include only credentials proven active by a validator.
     Active,
-    /// Include verified-active findings plus outcomes requiring manual review.
+    /// Include active credentials and high-confidence assumed-valid secrets.
     Actionable,
 }
 

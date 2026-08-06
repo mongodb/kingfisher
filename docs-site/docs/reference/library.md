@@ -745,9 +745,13 @@ kingfisher-scanner = { git = "https://github.com/mongodb/kingfisher", features =
 `validation: type: Raw` is the ad-hoc validator path for provider-specific or protocol-specific checks that are not generic enough to become schema-level validator families. Typed validators such as `AWS`, `GCP`, `MongoDB`, and `JWT` remain separate validator kinds in the rule schema.
 
 `kingfisher_core::ValidationOutcome` provides the transport-independent result model used by
-Kingfisher reports: `VerifiedActive`, `VerifiedInactive`, `StructurallyValid`, `Unavailable`,
-`Skipped`, `NotConfigured`, `NotAttempted`, and `Assumed`. Consumers should use this outcome rather
-than inferring credential state from an HTTP status code or the legacy validation-success boolean.
+Kingfisher reports: `VerifiedActive`, `Assumed`, `VerifiedInactive`, `Unavailable`, `Skipped`, and
+`NotAttempted`. The human-readable statuses for `VerifiedActive`, `Assumed`, and `Unavailable` are
+**Active Credential**, **Assumed Valid (Not Live-Validated)**, and
+**Inconclusive Validation**, respectively. The assumed outcome is high-confidence static detection,
+not proof that a credential is currently usable.
+Consumers should use this outcome rather than inferring credential state from an HTTP status code
+or the legacy validation-success boolean.
 
 ### HTTP Validation Example
 

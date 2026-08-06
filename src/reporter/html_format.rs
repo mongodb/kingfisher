@@ -35,9 +35,6 @@ fn render_metadata(metadata: &ScanReportMetadata) -> String {
     if let Some(skipped) = metadata.summary.skipped_validations {
         lines.push(summary_line(" |__Skipped Validations", &skipped.to_string()));
     }
-    if let Some(unavailable) = metadata.summary.unavailable_validations {
-        lines.push(summary_line(" |__Unavailable Validations", &unavailable.to_string()));
-    }
     if let Some(rules_applied) = metadata.summary.rules_applied {
         lines.push(summary_line("Rules Applied", &rules_applied.to_string()));
     }
@@ -99,11 +96,9 @@ fn render_metadata(metadata: &ScanReportMetadata) -> String {
 fn validation_rank(status: &str) -> usize {
     if status.eq_ignore_ascii_case("Active Credential") {
         0
-    } else if status.eq_ignore_ascii_case("Manual Review Required")
-        || status.eq_ignore_ascii_case("Structurally Valid Secret")
-    {
+    } else if status.eq_ignore_ascii_case("Assumed Valid (Not Live-Validated)") {
         1
-    } else if status.eq_ignore_ascii_case("Validation Unavailable") {
+    } else if status.eq_ignore_ascii_case("Inconclusive Validation") {
         2
     } else if status.eq_ignore_ascii_case("Inactive Credential") {
         3
@@ -143,24 +138,17 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
 
     let mut rows = String::new();
     for record in &sorted {
-        let status_class = if record.finding.validation.status == "Active Credential" {
-            "status-active"
-        } else if record.finding.validation.status == "Inactive Credential" {
-            "status-inactive"
-        } else if record.finding.validation.status == "Canary Token (Skipped)" {
-            "status-canary"
-        } else if matches!(
-            record.finding.validation.outcome,
-            kingfisher_core::ValidationOutcome::Assumed
-                | kingfisher_core::ValidationOutcome::StructurallyValid
-        ) {
-            "status-review"
-        } else if record.finding.validation.outcome
-            == kingfisher_core::ValidationOutcome::Unavailable
-        {
-            "status-unavailable"
-        } else {
-            "status-unknown"
+        let status_class = match record.finding.validation.outcome {
+            kingfisher_core::ValidationOutcome::VerifiedActive => "status-active",
+            kingfisher_core::ValidationOutcome::Assumed => "status-assumed",
+            kingfisher_core::ValidationOutcome::VerifiedInactive => "status-inactive",
+            kingfisher_core::ValidationOutcome::Unavailable => "status-unavailable",
+            kingfisher_core::ValidationOutcome::Skipped
+                if record.finding.validation.status == "Canary Token (Skipped)" =>
+            {
+                "status-canary"
+            }
+            _ => "status-unknown",
         };
         let git_url_html = finding_git_url(record)
             .map(|url| {
@@ -271,9 +259,9 @@ fn build_html(envelope: &ReportEnvelope) -> String {
     th {{ background: #e2e8f0; color: #0f172a; }}
     .status {{ padding: 2px 8px; border-radius: 999px; font-weight: 700; }}
     .status-active {{ background: #14532d; color: #86efac; }}
+    .status-assumed {{ background: #1e3a8a; color: #bfdbfe; }}
     .status-inactive {{ background: #7f1d1d; color: #fecaca; }}
     .status-canary {{ background: #581c87; color: #e9d5ff; }}
-    .status-review {{ background: #713f12; color: #fef08a; }}
     .status-unavailable {{ background: #7f1d1d; color: #fecaca; }}
     .status-unknown {{ background: #78350f; color: #fde68a; }}
   </style>
@@ -339,7 +327,6 @@ mod tests {
                     successful_validations: Some(0),
                     failed_validations: Some(0),
                     skipped_validations: Some(0),
-                    unavailable_validations: Some(0),
                     blobs_scanned: Some(1),
                     bytes_scanned: Some(10),
                     scan_duration_seconds: Some(0.1),

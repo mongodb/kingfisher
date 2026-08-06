@@ -32,8 +32,16 @@ impl DetailsReporter {
         _finding_num: usize,
         _num_findings: usize,
     ) -> Result<()> {
-        let is_active = record.finding.validation.status == "Active Credential";
-        let lock_icon = if is_active { "🔓 " } else { "" };
+        let validation_outcome = record.finding.validation.outcome;
+        let is_active = validation_outcome.is_verified_active();
+        let is_high_confidence = validation_outcome == kingfisher_core::ValidationOutcome::Assumed;
+        let lock_icon = if is_active {
+            "🔓 "
+        } else if is_high_confidence {
+            "🔒 "
+        } else {
+            ""
+        };
         let formatted_heading = format!(
             "{}{} => [{}]",
             lock_icon,
@@ -41,6 +49,8 @@ impl DetailsReporter {
             record.rule.id.to_uppercase()
         );
         if is_active {
+            writeln!(writer, "{}", self.style_finding_active_heading(formatted_heading))?;
+        } else if is_high_confidence {
             writeln!(writer, "{}", self.style_finding_active_heading(formatted_heading))?;
         } else {
             writeln!(writer, "{}", self.style_finding_heading(formatted_heading))?;
@@ -128,8 +138,12 @@ impl<'a> Display for PrettyFindingRecord<'a> {
     fn fmt(&self, f: &mut Formatter<'_>) -> FmtResult {
         let reporter = self.0;
         let record = self.1;
-        let is_active = record.finding.validation.status == "Active Credential";
+        let validation_outcome = record.finding.validation.outcome;
+        let is_active = validation_outcome.is_verified_active();
+        let is_high_confidence = validation_outcome == kingfisher_core::ValidationOutcome::Assumed;
         let style_fn: Box<dyn Fn(&str) -> String> = if is_active {
+            Box::new(|s| reporter.style_active_creds(s).to_string())
+        } else if is_high_confidence {
             Box::new(|s| reporter.style_active_creds(s).to_string())
         } else {
             Box::new(|s| reporter.style_match(s).to_string())
@@ -143,6 +157,12 @@ impl<'a> Display for PrettyFindingRecord<'a> {
         writeln!(f, " |Confidence....: {}", finding.confidence)?;
         writeln!(f, " |Entropy.......: {}", finding.entropy)?;
         if is_active {
+            writeln!(
+                f,
+                " |Validation....: {}",
+                reporter.style_finding_active_heading(&finding.validation.status)
+            )?;
+        } else if is_high_confidence {
             writeln!(
                 f,
                 " |Validation....: {}",
@@ -167,5 +187,66 @@ impl<'a> Display for PrettyFindingRecord<'a> {
             reporter.write_git_metadata_value(f, git)?;
         }
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use super::*;
+
+    #[test]
+    fn high_confidence_findings_use_active_color_with_locked_icon() {
+        let reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
+                std::path::PathBuf::new(),
+            ))),
+            styles: Styles::new(true),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+        let record = FindingReporterRecord {
+            rule: RuleMetadata {
+                name: "PEM-encoded private key".to_string(),
+                id: "kingfisher.pem.1".to_string(),
+            },
+            finding: FindingRecordData {
+                snippet: "secret".to_string(),
+                fingerprint: "123".to_string(),
+                confidence: "high".to_string(),
+                entropy: "6.00".to_string(),
+                validation: ValidationInfo {
+                    outcome: kingfisher_core::ValidationOutcome::Assumed,
+                    status: "Assumed Valid (Not Live-Validated)".to_string(),
+                    response: String::new(),
+                },
+                language: "Unknown".to_string(),
+                line: 2,
+                column_start: 1,
+                column_end: 7,
+                path: "/tmp/private.pem".to_string(),
+                encoding: None,
+                git_metadata: None,
+                validate_command: None,
+                revoke_command: None,
+            },
+        };
+        let expected_heading = reporter
+            .style_finding_active_heading(
+                "🔒 PEM-ENCODED PRIVATE KEY => [KINGFISHER.PEM.1]".to_string(),
+            )
+            .to_string();
+        let expected_snippet = reporter.style_active_creds("secret").to_string();
+        let expected_status =
+            reporter.style_finding_active_heading("Assumed Valid (Not Live-Validated)").to_string();
+
+        let mut output = Vec::new();
+        reporter.write_finding_record(&mut output, &record, 1, 1).unwrap();
+        let output = String::from_utf8(output).unwrap();
+
+        assert!(output.contains(&expected_heading));
+        assert!(output.contains(&format!(" |Finding.......: {expected_snippet}")));
+        assert!(output.contains(&format!(" |Validation....: {expected_status}")));
     }
 }

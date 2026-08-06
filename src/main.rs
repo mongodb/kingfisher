@@ -1513,7 +1513,6 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                                 successful_validations: None,
                                 failed_validations: None,
                                 skipped_validations: None,
-                                unavailable_validations: None,
                                 blobs_scanned: None,
                                 bytes_scanned: None,
                                 running_version: Some(update_status.running_version.clone()),

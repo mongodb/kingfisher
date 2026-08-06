@@ -138,7 +138,6 @@ impl DetailsReporter {
                         successful_validations: None,
                         failed_validations: None,
                         skipped_validations: None,
-                        unavailable_validations: None,
                         blobs_scanned: None,
                         bytes_scanned: None,
                         scan_duration_seconds: None,

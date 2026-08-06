@@ -191,7 +191,12 @@ fn should_exclude_repo(clone_url: &str, excludes: &git_host::ExcludeMatcher) -> 
 fn repo_clone_url_from_links(links: &[CloneLink]) -> Option<String> {
     links
         .iter()
-        .find(|link| link.name.as_deref().map(|n| n.eq_ignore_ascii_case("https")).unwrap_or(false))
+        .find(|link| {
+            link.name
+                .as_deref()
+                .map(|name| name.eq_ignore_ascii_case("http") || name.eq_ignore_ascii_case("https"))
+                .unwrap_or(false)
+        })
         .or_else(|| links.first())
         .map(|link| link.href.clone())
 }
@@ -653,6 +658,44 @@ pub async fn fetch_repo_items(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repo_clone_url_prefers_bitbucket_server_http_link_over_ssh() {
+        let links = [
+            CloneLink {
+                href: "ssh://git@bitbucket.example.com:7999/project/repo.git".to_owned(),
+                name: Some("ssh".to_owned()),
+            },
+            CloneLink {
+                href: "https://bitbucket.example.com/scm/project/repo.git".to_owned(),
+                name: Some("http".to_owned()),
+            },
+        ];
+
+        assert_eq!(
+            repo_clone_url_from_links(&links).as_deref(),
+            Some("https://bitbucket.example.com/scm/project/repo.git")
+        );
+    }
+
+    #[test]
+    fn repo_clone_url_accepts_case_insensitive_https_link_name() {
+        let links = [
+            CloneLink {
+                href: "ssh://git@bitbucket.example.com/project/repo.git".to_owned(),
+                name: Some("ssh".to_owned()),
+            },
+            CloneLink {
+                href: "https://bitbucket.example.com/project/repo.git".to_owned(),
+                name: Some("HTTPS".to_owned()),
+            },
+        ];
+
+        assert_eq!(
+            repo_clone_url_from_links(&links).as_deref(),
+            Some("https://bitbucket.example.com/project/repo.git")
+        );
+    }
 
     #[test]
     fn parse_excluded_repo_variants() {

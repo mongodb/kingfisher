@@ -37,14 +37,20 @@ fn scan_private_key(rule: &str, filter_args: &[&str]) -> Result<Value> {
 }
 
 #[test]
-fn actionable_filter_includes_assumed_private_keys_without_live_validation() -> Result<()> {
+fn actionable_filter_includes_assumed_private_keys() -> Result<()> {
     let report = scan_private_key("kingfisher.privkey.2", &["--validation-filter", "actionable"])?;
     let findings = report["findings"].as_array().unwrap();
 
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0]["rule"]["id"], "kingfisher.privkey.2");
     assert_eq!(findings[0]["finding"]["validation"]["outcome"], "assumed");
-    assert_eq!(findings[0]["finding"]["validation"]["status"], "Manual Review Required");
+    assert_eq!(
+        findings[0]["finding"]["validation"]["status"],
+        "Assumed Valid (Not Live-Validated)"
+    );
+    assert_eq!(report["metadata"]["summary"]["successful_validations"], 1);
+    assert_eq!(report["metadata"]["summary"]["skipped_validations"], 0);
+    assert!(report["metadata"]["summary"].get("high_confidence_secrets").is_none());
     Ok(())
 }
 
@@ -52,18 +58,27 @@ fn actionable_filter_includes_assumed_private_keys_without_live_validation() -> 
 fn only_valid_remains_strictly_verified_active() -> Result<()> {
     let report = scan_private_key("kingfisher.privkey.2", &["--only-valid"])?;
     assert!(report["findings"].as_array().unwrap().is_empty());
+    assert_eq!(report["metadata"]["summary"]["successful_validations"], 0);
+    assert_eq!(report["metadata"]["summary"]["skipped_validations"], 1);
+    assert!(report["metadata"]["summary"].get("high_confidence_secrets").is_none());
     Ok(())
 }
 
 #[test]
-fn actionable_filter_includes_pem_private_keys_without_live_validation() -> Result<()> {
+fn actionable_filter_includes_assumed_pem_keys() -> Result<()> {
     let report = scan_private_key("kingfisher.pem.1", &["--validation-filter", "actionable"])?;
     let findings = report["findings"].as_array().unwrap();
 
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0]["rule"]["id"], "kingfisher.pem.1");
     assert_eq!(findings[0]["finding"]["validation"]["outcome"], "assumed");
-    assert_eq!(findings[0]["finding"]["validation"]["status"], "Manual Review Required");
+    assert_eq!(
+        findings[0]["finding"]["validation"]["status"],
+        "Assumed Valid (Not Live-Validated)"
+    );
+    assert_eq!(report["metadata"]["summary"]["successful_validations"], 1);
+    assert_eq!(report["metadata"]["summary"]["skipped_validations"], 0);
+    assert!(report["metadata"]["summary"].get("high_confidence_secrets").is_none());
     Ok(())
 }
 
@@ -80,4 +95,15 @@ fn only_valid_conflicts_with_explicit_validation_filter() {
         ])
         .assert()
         .failure();
+}
+
+#[test]
+fn assumed_findings_count_as_skipped_without_actionable_filter() -> Result<()> {
+    let report = scan_private_key("kingfisher.privkey.2", &[])?;
+
+    assert_eq!(report["findings"].as_array().unwrap().len(), 1);
+    assert_eq!(report["metadata"]["summary"]["successful_validations"], 0);
+    assert_eq!(report["metadata"]["summary"]["skipped_validations"], 1);
+    assert!(report["metadata"]["summary"].get("high_confidence_secrets").is_none());
+    Ok(())
 }

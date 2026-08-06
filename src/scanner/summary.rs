@@ -28,7 +28,6 @@ pub struct ScanSummaryTotals {
     pub successful_validations: usize,
     pub failed_validations: usize,
     pub skipped_validations: usize,
-    pub unavailable_validations: usize,
     pub blobs_scanned: u64,
     pub bytes_scanned: u64,
 }
@@ -44,9 +43,6 @@ impl ScanSummaryTotals {
             skipped_validations: self
                 .skipped_validations
                 .saturating_sub(baseline.skipped_validations),
-            unavailable_validations: self
-                .unavailable_validations
-                .saturating_sub(baseline.unavailable_validations),
             blobs_scanned: self.blobs_scanned.saturating_sub(baseline.blobs_scanned),
             bytes_scanned: self.bytes_scanned.saturating_sub(baseline.bytes_scanned),
         }
@@ -92,28 +88,31 @@ pub fn compute_scan_totals(
         if args.include_hidden_findings { all_matches.len() } else { ds.get_num_matches() }
     };
 
-    let (successful_validations, failed_validations, skipped_validations, unavailable_validations) =
-        all_matches.iter().fold((0, 0, 0, 0), |(success, fail, skipped, unavailable), msg| {
+    let actionable_filter =
+        args.effective_validation_filter() == scan::ValidationFilter::Actionable;
+    let (successful_validations, failed_validations, skipped_validations) =
+        all_matches.iter().fold((0, 0, 0), |(success, fail, skipped), msg| {
             let (origin_set, _, match_item) = &**msg;
             if !args.include_hidden_findings && !match_item.visible {
-                return (success, fail, skipped, unavailable);
+                return (success, fail, skipped);
             }
             let increment = if args.no_dedup { origin_set.len() } else { 1 };
             match match_item.validation_outcome {
-                kingfisher_core::ValidationOutcome::VerifiedActive
-                | kingfisher_core::ValidationOutcome::StructurallyValid => {
-                    (success + increment, fail, skipped, unavailable)
+                kingfisher_core::ValidationOutcome::VerifiedActive => {
+                    (success + increment, fail, skipped)
+                }
+                kingfisher_core::ValidationOutcome::Assumed => {
+                    if actionable_filter {
+                        (success + increment, fail, skipped)
+                    } else {
+                        (success, fail, skipped + increment)
+                    }
                 }
                 kingfisher_core::ValidationOutcome::VerifiedInactive => {
-                    (success, fail + increment, skipped, unavailable)
+                    (success, fail + increment, skipped)
                 }
-                kingfisher_core::ValidationOutcome::Skipped => {
-                    (success, fail, skipped + increment, unavailable)
-                }
-                kingfisher_core::ValidationOutcome::Unavailable => {
-                    (success, fail, skipped, unavailable + increment)
-                }
-                _ => (success, fail, skipped, unavailable),
+                kingfisher_core::ValidationOutcome::Skipped => (success, fail, skipped + increment),
+                _ => (success, fail, skipped),
             }
         });
 
@@ -124,7 +123,6 @@ pub fn compute_scan_totals(
         successful_validations,
         failed_validations,
         skipped_validations,
-        unavailable_validations,
         blobs_scanned: matcher_stats.blobs_scanned,
         bytes_scanned: matcher_stats.bytes_scanned,
     }
@@ -212,7 +210,6 @@ pub fn print_scan_summary(
                 "successful_validations": totals.successful_validations,
                 "failed_validations": totals.failed_validations,
                 "skipped_validations": totals.skipped_validations,
-                "unavailable_validations": totals.unavailable_validations,
                 "rules_applied": num_rules,
                 "blobs_scanned": totals.blobs_scanned,
                 "bytes_scanned": totals.bytes_scanned,
@@ -262,10 +259,6 @@ pub fn print_scan_summary(
                 delta.skipped_validations.separate_with_commas()
             );
             safe_println!(
-                " |__Unavailable Validations...: {}",
-                delta.unavailable_validations.separate_with_commas()
-            );
-            safe_println!(
                 " |Blobs Scanned (delta)......: {}",
                 delta.blobs_scanned.separate_with_commas()
             );
@@ -295,10 +288,6 @@ pub fn print_scan_summary(
             safe_println!(
                 " |__Skipped Validations.......: {}",
                 totals.skipped_validations.separate_with_commas()
-            );
-            safe_println!(
-                " |__Unavailable Validations...: {}",
-                totals.unavailable_validations.separate_with_commas()
             );
             safe_println!(" |Rules Applied...............: {}", num_rules.separate_with_commas());
             safe_println!(

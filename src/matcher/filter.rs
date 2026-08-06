@@ -273,9 +273,8 @@ pub(crate) fn filter_match<'b>(
             validation_response_status: StatusCode::from_u16(0).unwrap_or(StatusCode::CONTINUE),
             validation_success: false,
             validation_outcome: match rule.syntax().validation.as_ref() {
-                None => kingfisher_core::ValidationOutcome::NotConfigured,
                 Some(Validation::Assumed) => kingfisher_core::ValidationOutcome::Assumed,
-                Some(_) => kingfisher_core::ValidationOutcome::NotAttempted,
+                _ => kingfisher_core::ValidationOutcome::NotAttempted,
             },
             calculated_entropy,
             is_base64,

@@ -128,8 +128,8 @@ rules:
         assert_eq!(decoded["schema"], "kingfisher.toon.v1");
         assert_eq!(decoded["scan"]["summary"]["findings"], 1);
         assert_eq!(decoded["findings"][0]["rule_id"], "kingfisher.demo.1");
-        assert_eq!(decoded["findings"][0]["validation_status"], "Validation Not Configured");
-        assert_eq!(decoded["findings"][0]["validation_outcome"], "not_configured");
+        assert_eq!(decoded["findings"][0]["validation_status"], "Not Attempted");
+        assert_eq!(decoded["findings"][0]["validation_outcome"], "not_attempted");
     }
 
     #[test]

@@ -880,7 +880,9 @@ async fn validate_single(
         om.validation_response_body = cached.body.clone();
         om.validation_response_status = cached.status;
         om.refresh_validation_outcome();
-        if om.validation_outcome.is_verified_active() {
+        if om.validation_outcome.is_verified_active()
+            || om.validation_outcome == kingfisher_core::ValidationOutcome::Assumed
+        {
             success_count.fetch_add(1, Ordering::Relaxed);
         } else if om.validation_outcome == kingfisher_core::ValidationOutcome::VerifiedInactive {
             fail_count.fetch_add(1, Ordering::Relaxed);
@@ -902,7 +904,9 @@ async fn validate_single(
             om.validation_response_body = cached.body.clone();
             om.validation_response_status = cached.status;
             om.refresh_validation_outcome();
-            if om.validation_outcome.is_verified_active() {
+            if om.validation_outcome.is_verified_active()
+                || om.validation_outcome == kingfisher_core::ValidationOutcome::Assumed
+            {
                 success_count.fetch_add(1, Ordering::Relaxed);
             } else if om.validation_outcome == kingfisher_core::ValidationOutcome::VerifiedInactive
             {
@@ -978,7 +982,9 @@ fn apply_validation_outcome(
     match outcome {
         ValidationRunOutcome::Completed => {
             om.refresh_validation_outcome();
-            if om.validation_outcome.is_verified_active() {
+            if om.validation_outcome.is_verified_active()
+                || om.validation_outcome == kingfisher_core::ValidationOutcome::Assumed
+            {
                 success_count.fetch_add(1, Ordering::Relaxed);
             } else if om.validation_outcome == kingfisher_core::ValidationOutcome::VerifiedInactive
             {
@@ -1739,7 +1745,7 @@ mod tests {
             validation_response_body: None,
             validation_response_status: StatusCode::CONTINUE,
             validation_success: false,
-            validation_outcome: kingfisher_core::ValidationOutcome::NotConfigured,
+            validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
             calculated_entropy: 0.0,
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),

@@ -61,7 +61,7 @@ fn make_match(fp: u64, rule_id: &str) -> Match {
         validation_response_body: None,
         validation_response_status: 0,
         validation_success: false,
-        validation_outcome: kingfisher_core::ValidationOutcome::NotConfigured,
+        validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
         calculated_entropy: 0.0,
         visible: true,
         is_base64: false,
@@ -134,7 +134,7 @@ fn reporter_deduplicates_across_git_commits() -> Result<()> {
             validation_response_body: None,
             validation_response_status: 0,
             validation_success: false,
-            validation_outcome: kingfisher_core::ValidationOutcome::NotConfigured,
+            validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
         },
         ReportMatch {
             origin: origin_b,
@@ -151,7 +151,7 @@ fn reporter_deduplicates_across_git_commits() -> Result<()> {
             validation_response_body: None,
             validation_response_status: 0,
             validation_success: false,
-            validation_outcome: kingfisher_core::ValidationOutcome::NotConfigured,
+            validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
         },
     ];
 
@@ -195,7 +195,7 @@ fn dedup_preserves_distinct_rules_with_same_fingerprint() -> Result<()> {
             validation_response_body: None,
             validation_response_status: 0,
             validation_success: false,
-            validation_outcome: kingfisher_core::ValidationOutcome::NotConfigured,
+            validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
         },
         ReportMatch {
             origin,
@@ -212,7 +212,7 @@ fn dedup_preserves_distinct_rules_with_same_fingerprint() -> Result<()> {
             validation_response_body: None,
             validation_response_status: 0,
             validation_success: false,
-            validation_outcome: kingfisher_core::ValidationOutcome::NotConfigured,
+            validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
         },
     ];
 

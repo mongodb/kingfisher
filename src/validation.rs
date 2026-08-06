@@ -678,8 +678,7 @@ async fn timed_validate_single_match(
 
     match &validation {
         Some(Validation::Assumed) => {
-            // The matcher initializes this outcome before validation so it is
-            // preserved even when the scan uses --no-validate.
+            // Assumed validation intentionally produces no live validation result.
         }
         Some(Validation::Http(http_validation)) => {
             validate_http(
