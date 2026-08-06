@@ -28,7 +28,15 @@ pub fn build_payload(
     include_secret: bool,
 ) -> Value {
     let header = if summary.total == 0 {
-        "Kingfisher: scan complete — no findings".to_string()
+        if summary.unfiltered_total > 0 {
+            format!(
+                "Kingfisher: scan complete — 0 of {} finding{} matched this alert's filters",
+                summary.unfiltered_total,
+                plural(summary.unfiltered_total)
+            )
+        } else {
+            "Kingfisher: scan complete — no findings".to_string()
+        }
     } else if summary.impacted_resources > 0 {
         format!(
             "Kingfisher: {} finding{} ({} active, {} inactive, {} unknown, {} impacted resource{})",
@@ -193,6 +201,7 @@ mod tests {
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
             impacted_resources: 0,
+            unfiltered_total: 0,
         }
     }
 
@@ -219,6 +228,16 @@ mod tests {
         let p = build_payload(&summary(0, 0), &[], false);
         let text = p["text"].as_str().unwrap();
         assert!(text.contains("no findings"));
+    }
+
+    #[test]
+    fn header_distinguishes_clean_scan_from_filtered_to_empty() {
+        let mut s = summary(0, 0);
+        s.unfiltered_total = 5;
+        let p = build_payload(&s, &[], false);
+        let text = p["text"].as_str().unwrap();
+        assert!(!text.contains("no findings"), "got: {text}");
+        assert!(text.contains("matched this alert's filters"), "got: {text}");
     }
 
     #[test]

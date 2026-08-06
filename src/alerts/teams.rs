@@ -18,7 +18,15 @@ pub fn build_payload(
     include_secret: bool,
 ) -> Value {
     let title = if summary.total == 0 {
-        "Kingfisher: scan complete — no findings".to_string()
+        if summary.unfiltered_total > 0 {
+            format!(
+                "Kingfisher: scan complete — 0 of {} finding{} matched this alert's filters",
+                summary.unfiltered_total,
+                plural(summary.unfiltered_total)
+            )
+        } else {
+            "Kingfisher: scan complete — no findings".to_string()
+        }
     } else {
         format!("Kingfisher: {} finding{}", summary.total, plural(summary.total))
     };
@@ -155,6 +163,7 @@ mod tests {
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
             impacted_resources: 0,
+            unfiltered_total: 0,
         }
     }
 
@@ -174,6 +183,19 @@ mod tests {
     fn theme_color_amber_when_findings_no_active() {
         let p = build_payload(&summary(2, 0), &[], false);
         assert_eq!(p["themeColor"], "F39C12");
+    }
+
+    #[test]
+    fn title_distinguishes_clean_scan_from_filtered_to_empty() {
+        let p = build_payload(&summary(0, 0), &[], false);
+        assert_eq!(p["title"], "Kingfisher: scan complete — no findings");
+
+        let mut s = summary(0, 0);
+        s.unfiltered_total = 5;
+        let p2 = build_payload(&s, &[], false);
+        let title = p2["title"].as_str().unwrap();
+        assert!(!title.contains("no findings"), "got: {title}");
+        assert!(title.contains("matched this alert's filters"), "got: {title}");
     }
 
     #[test]

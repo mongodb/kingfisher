@@ -13,7 +13,15 @@ pub fn build_payload(
     include_secret: bool,
 ) -> Value {
     let header_text = if summary.total == 0 {
-        "Kingfisher: scan complete — no findings".to_string()
+        if summary.unfiltered_total > 0 {
+            format!(
+                "Kingfisher: scan complete — 0 of {} finding{} matched this alert's filters",
+                summary.unfiltered_total,
+                if summary.unfiltered_total == 1 { "" } else { "s" }
+            )
+        } else {
+            "Kingfisher: scan complete — no findings".to_string()
+        }
     } else if summary.impacted_resources > 0 {
         format!(
             "Kingfisher: {} finding{} ({} active, {} inactive, {} unknown, {} impacted resource{})",
@@ -174,6 +182,7 @@ mod tests {
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
             impacted_resources: 0,
+            unfiltered_total: 0,
         }
     }
 
@@ -183,6 +192,22 @@ mod tests {
         let blocks = p["blocks"].as_array().unwrap();
         let header = &blocks[0]["text"]["text"].as_str().unwrap();
         assert!(header.contains("no findings"));
+    }
+
+    #[test]
+    fn header_distinguishes_clean_scan_from_filtered_to_empty() {
+        // True clean scan: unfiltered_total == 0 too.
+        let p = build_payload(&empty_summary(), &[], false);
+        let header = p["blocks"][0]["text"]["text"].as_str().unwrap();
+        assert!(header.contains("no findings"));
+
+        // Scan found things, but this sink's filters excluded all of them.
+        let mut s = empty_summary();
+        s.unfiltered_total = 5;
+        let p2 = build_payload(&s, &[], false);
+        let header2 = p2["blocks"][0]["text"]["text"].as_str().unwrap();
+        assert!(!header2.contains("no findings"), "got: {header2}");
+        assert!(header2.contains("matched this alert's filters"), "got: {header2}");
     }
 
     #[test]
@@ -198,6 +223,7 @@ mod tests {
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
             impacted_resources: 0,
+            unfiltered_total: 0,
         };
         let p = build_payload(&summary, &[], false);
         let header = p["blocks"][0]["text"]["text"].as_str().unwrap();

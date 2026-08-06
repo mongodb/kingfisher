@@ -152,12 +152,15 @@ pub struct AlertSink {
 ///
 /// Built per-sink in `dispatch` from that sink's own filtered finding list, so
 /// every count here (including `total`) always matches what's actually
-/// rendered in the payload below it — never the whole-scan numbers.
+/// rendered in the payload below it — never the whole-scan numbers — with one
+/// deliberate exception: `unfiltered_total`, which exists precisely so a
+/// payload can tell a genuinely clean scan apart from a sink whose filters
+/// excluded everything.
 ///
-/// Per-sink fields (`report_url`, `detail`) are overlaid by `dispatch`
-/// immediately after construction. They are intentionally not parameters of
-/// `from_findings` because they are sink-specific but don't derive from the
-/// finding list itself.
+/// Per-sink fields (`report_url`, `detail`, `unfiltered_total`) are overlaid
+/// by `dispatch` immediately after construction. They are intentionally not
+/// parameters of `from_findings` because they don't derive from the (already
+/// filtered) finding list passed to it.
 #[derive(Clone, Debug, Serialize)]
 pub struct AlertSummary {
     pub total: usize,
@@ -177,6 +180,13 @@ pub struct AlertSummary {
     /// in this summary. `0` when access-map wasn't run or none of this sink's
     /// findings have a matching access-map result.
     pub impacted_resources: usize,
+    /// Whole-scan finding count, before this sink's `min_confidence` /
+    /// `finding_filter` were applied. Used only to distinguish "the scan
+    /// found nothing" (`unfiltered_total == 0`) from "this sink's filters
+    /// excluded everything the scan found" (`unfiltered_total > 0 && total
+    /// == 0`) — payload builders must not otherwise use this in place of
+    /// `total`.
+    pub unfiltered_total: usize,
 }
 
 impl AlertSummary {
@@ -220,6 +230,9 @@ impl AlertSummary {
             // value (`Summary` or `Detail`) before calling `build_payload`.
             detail: AlertDetail::Detail,
             impacted_resources,
+            // Placeholder; `dispatch` overwrites this immediately with the
+            // whole-scan finding count.
+            unfiltered_total: 0,
         }
     }
 }
@@ -406,6 +419,7 @@ pub async fn dispatch(
             AlertSummary::from_findings(&filtered, target.clone(), &access_map_impact);
         summary.report_url = sink.report_url.clone();
         summary.detail = resolved_detail;
+        summary.unfiltered_total = unfiltered_total;
 
         let payload = match sink.format {
             AlertFormat::Slack => slack::build_payload(&summary, &filtered, sink.include_secret),
@@ -465,7 +479,9 @@ fn matches_finding_filter(
         AlertFindingFilter::All => true,
         AlertFindingFilter::ExcludeInactive => status != "Inactive Credential",
         AlertFindingFilter::OnlyActive => status == "Active Credential",
-        AlertFindingFilter::AccessMapOnly => access_map_impact.contains_key(fingerprint),
+        AlertFindingFilter::AccessMapOnly => {
+            status == "Active Credential" && access_map_impact.contains_key(fingerprint)
+        }
     }
 }
 
@@ -719,6 +735,23 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn finding_filter_access_map_only_still_requires_active_status() {
+        // Regression: an access-map entry can exist for a fingerprint whose
+        // finding did NOT validate as active (e.g. a GitLab-rule finding
+        // recorded on a bare 2xx response per maybe_record_access_map in
+        // scanner/validation.rs). AccessMapOnly must not let that through —
+        // its doc comment promises it's a subset of OnlyActive.
+        let mut map = HashMap::new();
+        map.insert("fp-gitlab".to_string(), 1usize);
+        assert!(!matches_finding_filter(
+            "Inactive Credential",
+            "fp-gitlab",
+            AlertFindingFilter::AccessMapOnly,
+            &map
+        ));
+    }
+
     /// Like `make_test_record`, but with a configurable confidence/status so
     /// dispatch-level tests can exercise `min_confidence` / `finding_filter`.
     fn record_with(
@@ -805,7 +838,14 @@ mod tests {
                 vec![record_with("kingfisher.aws.1", "fp1", "Medium", "Active Credential")];
             dispatch(&[sink], &findings, &[], None, false).await;
 
-            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            // The scan wasn't clean — one finding existed, it just didn't
+            // pass this sink's min_confidence — so the posted summary must
+            // say so via unfiltered_total, not just report total == 0.
+            let body: serde_json::Value = requests[0].body_json().unwrap();
+            assert_eq!(body["summary"]["total"], 0);
+            assert_eq!(body["summary"]["unfiltered_total"], 1);
         }
 
         #[tokio::test]
@@ -866,6 +906,46 @@ mod tests {
             assert_eq!(body["findings"].as_array().unwrap().len(), 1);
             assert_eq!(body["findings"][0]["finding"]["fingerprint"], "fp-mapped");
             assert_eq!(body["summary"]["impacted_resources"], 2);
+        }
+
+        #[tokio::test]
+        async fn access_map_only_excludes_finding_with_access_map_entry_but_inactive_status() {
+            use crate::reporter::AccessMapResourceGroup;
+
+            // Regression: an access-map entry can be recorded for a finding
+            // that never validated as active (e.g. a GitLab-rule finding
+            // recorded on a bare 2xx response). AccessMapOnly must still
+            // exclude it, since it's documented as a subset of OnlyActive.
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.finding_filter = AlertFindingFilter::AccessMapOnly;
+            sink.min_confidence = ConfidenceLevel::Low;
+            sink.prevent_empty = true;
+
+            let inactive_but_mapped =
+                record_with("kingfisher.gitlab.1", "fp-gitlab", "High", "Inactive Credential");
+            let access_map = vec![AccessMapEntry {
+                provider: "gitlab".to_string(),
+                account: None,
+                groups: vec![AccessMapResourceGroup {
+                    resources: vec!["group/project".to_string()],
+                    permissions: vec![],
+                }],
+                token_details: None,
+                provider_metadata: None,
+                fingerprint: Some("fp-gitlab".to_string()),
+                permissions_by_severity: None,
+                context: None,
+            }];
+
+            dispatch(&[sink], &[inactive_but_mapped], &access_map, None, false).await;
+
+            assert_eq!(server.received_requests().await.unwrap().len(), 0);
         }
 
         #[tokio::test]

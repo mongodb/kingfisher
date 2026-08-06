@@ -45,6 +45,7 @@ pub fn build_payload(
         "inactive": summary.inactive,
         "unknown": summary.unknown,
         "impacted_resources": summary.impacted_resources,
+        "unfiltered_total": summary.unfiltered_total,
         "by_rule": summary.by_rule.iter().map(|(r, c)| json!({"rule_id": r, "count": c})).collect::<Vec<_>>(),
         "target": summary.target,
     });
@@ -77,6 +78,7 @@ mod tests {
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
             impacted_resources: 0,
+            unfiltered_total: 0,
         }
     }
 
@@ -127,5 +129,13 @@ mod tests {
         s.impacted_resources = 7;
         let p = build_payload(&s, &[], false);
         assert_eq!(p["summary"]["impacted_resources"], 7);
+    }
+
+    #[test]
+    fn unfiltered_total_present_in_summary_block() {
+        let mut s = empty_summary();
+        s.unfiltered_total = 12;
+        let p = build_payload(&s, &[], false);
+        assert_eq!(p["summary"]["unfiltered_total"], 12);
     }
 }
