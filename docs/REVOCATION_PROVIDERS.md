@@ -3,8 +3,8 @@
 Kingfisher supports direct secret revocation through rule-level `revocation:` blocks.
 
 Current coverage in built-in rules:
-- `37` provider families
-- `61` revocation-enabled rules
+- `36` provider families
+- `60` revocation-enabled rules
 
 Use `kingfisher revoke --rule <rule-id> <secret>` to invoke these flows. See [USAGE.md](USAGE.md#direct-secret-revocation-with-kingfisher-revoke) for command details.
 
@@ -27,7 +27,6 @@ Use `kingfisher revoke --rule <rule-id> <secret>` to invoke these flows. See [US
 | `github` | 7 | `kingfisher.github.1`, `kingfisher.github.2`, `kingfisher.github.3`, `kingfisher.github.4`, `kingfisher.github.5`, `kingfisher.github.6`, `kingfisher.github.9` |
 | `gitlab` | 2 | `kingfisher.gitlab.1`, `kingfisher.gitlab.4` |
 | `google` | 1 | `kingfisher.google.4` |
-| `googleoauth2` | 1 | `kingfisher.google.oauth2.1` |
 | `harness` | 1 | `kingfisher.harness.pat.1` |
 | `heroku` | 2 | `kingfisher.heroku.1`, `kingfisher.heroku.2` |
 | `jira` | 1 | `kingfisher.jira.3` |

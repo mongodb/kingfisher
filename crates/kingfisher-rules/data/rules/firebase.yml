@@ -59,3 +59,48 @@ rules:
     references:
       - https://firebase.google.com/docs/cloud-messaging/manage-tokens
     # Registration tokens can’t be safely live-validated using only the token value.
+
+  - name: Firebase Web API Key
+    id: kingfisher.firebase.3
+    # Same AIza... format as google.7; labelled Firebase only when the word
+    # appears nearby (e.g. firebaseConfig.apiKey blocks).
+    pattern: |
+      (?xi)
+      \b
+      firebase
+      (?:.|[\n\r]){0,80}?
+      \b
+      (
+        AIza[A-Za-z0-9_\-\\]{35}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+      min_uppercase: 1
+      min_lowercase: 1
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'const firebaseConfig = { apiKey: "AIzaSyByz6BGQf8QtcQLml8spbyy8x5_327PTow", authDomain: "app.firebaseapp.com" };'
+    references:
+      - https://firebase.google.com/docs/projects/api-keys
+      - https://docs.cloud.google.com/identity-platform/docs/use-rest-api
+      - https://cloud.google.com/docs/authentication/api-keys
+    validation:
+      # accounts:signUp checks the key before the body, so an empty body against
+      # a live key fails on missing email/password, not API_KEY_INVALID.
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://identitytoolkit.googleapis.com/v1/accounts:signUp?key={{ TOKEN | url_encode }}
+          headers:
+            Content-Type: application/json
+          body: "{}"
+          response_matcher:
+            - report_response: true
+            - type: JsonValid
+            - type: WordMatch
+              words:
+                - API_KEY_INVALID
+              negative: true

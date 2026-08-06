@@ -1,0 +1,47 @@
+rules:
+  - name: Google Chat Incoming Webhook
+    id: kingfisher.googlechat.1
+    pattern: |
+      (?xi)
+      \b
+      (
+        https://chat\.googleapis\.com/v1/spaces/[A-Za-z0-9_-]+/messages
+        \?key=[A-Za-z0-9_\-\\]+
+        &token=[A-Za-z0-9_%=\-]+
+      )
+      \b
+    pattern_requirements:
+      min_digits: 4
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "https://chat.googleapis.com/v1/spaces/AAAAexample/messages?key=AIzaSyByz6BGQf8QtcQLml8spbyy8x5_327PTow&token=abcDEF123-_examplewebhooktoken"
+    validation:
+      # An empty body makes a live webhook reject on content, not on auth.
+      # NOTE: the live-webhook path is unconfirmed - only the invalid-key path
+      # is verified. Widen the StatusMatch if a real webhook answers non-400.
+      type: Http
+      content:
+        request:
+          method: POST
+          url: "{{ TOKEN }}"
+          body: "{}"
+          headers:
+            Content-Type: application/json
+          response_matcher:
+            - report_response: true
+            # 400 = request rejected; the words below separate a content
+            # rejection (live webhook) from an auth rejection (dead URL)
+            - type: StatusMatch
+              status: [400]
+            - type: JsonValid
+            - type: WordMatch
+              words:
+                - API_KEY_INVALID
+                - PERMISSION_DENIED
+                - UNAUTHENTICATED
+              match_all_words: false
+              negative: true
+    references:
+      - https://developers.google.com/workspace/chat/quickstart/webhooks
+      - https://developers.google.com/workspace/chat/api/reference/rest

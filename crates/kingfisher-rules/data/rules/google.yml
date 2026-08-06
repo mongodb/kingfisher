@@ -203,15 +203,19 @@ rules:
     references:
       - https://developers.google.com/identity/protocols/oauth2/web-server
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/google/google-client-id.yaml
-  - name: Google Gemini API Key
+  - name: Google API Key
     id: kingfisher.google.7
+    # The AIza... format is shared by every Google product using key-based auth;
+    # scope is a server-side API restriction, not derivable from the key string.
+    # Generic catch-all - see google.8 / youtube.1 / firebase.3 for the
+    # context-gated product rules.
     pattern: |
-      (?xi)           
+      (?xi)
       \b
-      (               
-        AIzaSy
-        [A-Za-z0-9_-]{33}
+      (
+        AIza[A-Za-z0-9_\-\\]{35}
       )
+      \b
     pattern_requirements:
       min_digits: 2
       min_uppercase: 1
@@ -223,7 +227,59 @@ rules:
       - AIzaSyDhISgbccTi6mfp2GOSmTtqdU__IdevJes
       - AIzaSyA_uW1h2CF4ak3vHr7si_RFD_yWxM4tMAM
     references:
+      - https://cloud.google.com/docs/authentication/api-keys
+      - https://learn.microsoft.com/en-us/purview/sit-defn-google-api-key
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/google.yml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/google/google-api-key.yaml
+      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/google/google-api.yaml
+    validation:
+      # Generative Language API used only as a free liveness probe, not as a
+      # claim the key is Gemini-scoped.
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://generativelanguage.googleapis.com/v1/models
+          headers:
+            X-goog-api-key: "{{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: JsonValid
+            # API_KEY_INVALID = dead key; SERVICE_DISABLED / PERMISSION_DENIED
+            # = live key not enabled for this API, so still a real credential
+            - type: WordMatch
+              words:
+                - API_KEY_INVALID
+              negative: true
+
+  - name: Google Gemini API Key
+    id: kingfisher.google.8
+    # Same AIza... format as google.7, reported under the Gemini label only when
+    # nearby context says so. Validation stays lenient: application restrictions
+    # (HTTP referrer / IP) can block this probe for an otherwise live key.
+    pattern: |
+      (?xi)
+      \b
+      (?:gemini|generativelanguage|genai)
+      (?:.|[\n\r]){0,32}?
+      \b
+      (
+        AIza[A-Za-z0-9_\-\\]{35}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+      min_uppercase: 1
+      min_lowercase: 1
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'GEMINI_API_KEY=AIzaSyByz6BGQf8QtcQLml8spbyy8x5_327PTow'
+      - 'genai.configure(api_key="AIzaSyDhISgbccTi6mfp2GOSmTtqdU__IdevJes")'
+      - 'generativelanguage.googleapis.com?key=AIzaSyA_uW1h2CF4ak3vHr7si_RFD_yWxM4tMAM'
+    references:
       - https://ai.google.dev/docs/gemini_api_overview
+      - https://cloud.google.com/docs/authentication/api-keys
       - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/google.yml
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/google/google-api-key.yaml
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/google/google-api.yaml
@@ -237,10 +293,9 @@ rules:
             X-goog-api-key: "{{ TOKEN }}"
           response_matcher:
             - report_response: true
-            - type: StatusMatch
-              status: [200]
+            - type: JsonValid
+            # API_KEY_INVALID = dead key; a 403 for a non-enabled API is not
             - type: WordMatch
-              match_all_words: true
               words:
-                - '"models"'
-                - '"name"'
+                - API_KEY_INVALID
+              negative: true

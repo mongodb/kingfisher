@@ -23,16 +23,15 @@ rules:
           url: https://www.googleapis.com/youtube/v3/videos?part=id&id=dummy&key={{ TOKEN }}
           response_matcher:
             - report_response: true
-            - type: StatusMatch
-              status: [200]
+            - type: JsonValid
+            # only a dead key counts as invalid; a 403 for a key not enabled
+            # for the YouTube API is still a real credential
             - type: WordMatch
               words:
                 - "API key not valid"
                 - "keyInvalid"
                 - "API_KEY_INVALID"
-                - "forbidden"
               match_all_words: false
               negative: true
-            - type: JsonValid
     references:
       - https://developers.google.com/youtube/v3/getting-started#before-you-start

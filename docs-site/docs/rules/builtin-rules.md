@@ -1,13 +1,13 @@
 ---
 title: "Built-in Rules List"
-description: "Complete list of all 1051 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
+description: "Complete list of all 1053 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
 ---
 
 # Built-in Rules
 
-Kingfisher ships with **1051 detection rules** across **612 providers**
-(914 detectors + 137 dependent rules).
-Of these, **516** include live validation and **52** support direct revocation.
+Kingfisher ships with **1053 detection rules** across **612 providers**
+(916 detectors + 137 dependent rules).
+Of these, **518** include live validation and **51** support direct revocation.
 
 !!! tip "Search"
     Use the search box below to filter rules by provider name, rule ID, or confidence level.
@@ -2892,6 +2892,14 @@ Of these, **516** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
+<td>Firebase</td>
+<td>Firebase Web API Key</td>
+<td><code>kingfisher.firebase.3</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
 <td>Firecrawl</td>
 <td>Firecrawl API Key</td>
 <td><code>kingfisher.firecrawl.1</code></td>
@@ -3493,19 +3501,27 @@ Of these, **516** include live validation and **52** support direct revocation.
 </tr>
 <tr>
 <td>Google</td>
-<td>Google Gemini API Key</td>
+<td>Google API Key</td>
 <td><code>kingfisher.google.7</code></td>
 <td>Medium</td>
 <td>Yes</td>
 <td></td>
 </tr>
 <tr>
-<td>Googleoauth2</td>
-<td>Google OAuth2 Access Token</td>
-<td><code>kingfisher.google.oauth2.1</code></td>
+<td>Google</td>
+<td>Google Gemini API Key</td>
+<td><code>kingfisher.google.8</code></td>
 <td>Medium</td>
 <td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Googlechat</td>
+<td>Google Chat Incoming Webhook</td>
+<td><code>kingfisher.googlechat.1</code></td>
+<td>Medium</td>
 <td>Yes</td>
+<td></td>
 </tr>
 <tr>
 <td>Gpp</td>
