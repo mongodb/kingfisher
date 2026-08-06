@@ -753,6 +753,19 @@ not proof that a credential is currently usable.
 Consumers should use this outcome rather than inferring credential state from an HTTP status code
 or the legacy validation-success boolean.
 
+Use the built-in predicates when selecting findings:
+
+```rust
+use kingfisher_core::ValidationOutcome;
+
+let outcome = ValidationOutcome::Assumed;
+assert!(outcome.is_actionable());       // active or assumed-valid
+assert!(!outcome.is_verified_active()); // live validation was not performed
+```
+
+Serde serializes the variants as stable snake-case values (`verified_active`, `assumed`,
+`verified_inactive`, `unavailable`, `skipped`, and `not_attempted`).
+
 ### HTTP Validation Example
 
 ```rust

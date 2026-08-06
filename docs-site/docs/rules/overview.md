@@ -86,8 +86,8 @@ rules:
             content-type: application/grpc
             te: trailers
             Authorization: "Bearer {{ TOKEN }}"
-          # Raw bytes are allowed (YAML \\u0000 escapes become NUL bytes).
-          body: "\\u0000\\u0000\\u0000\\u0000\\u0000"
+          # Raw bytes are allowed (YAML \u0000 escapes become NUL bytes).
+          body: "\u0000\u0000\u0000\u0000\u0000"
           response_matcher:
             - report_response: true
             - type: HeaderMatch
@@ -209,7 +209,7 @@ validation:
 
 Use `Raw` only when the provider check cannot be expressed reliably with `Http` or `Grpc` and does not justify a new reusable validator family. Raw validator implementations live in `crates/kingfisher-scanner/src/validation/raw.rs`.
 
-Typed validators are safer and more reusable because the validator kind is part of the schema. `Raw` validators are string-dispatched and fail at runtime if the `content` name is unknown. If you need a Rust-backed exception path for one provider, prefer `Raw`; reserve new typed validators for stable validation families that can be reused across rules.
+Typed validators are safer and more reusable because the validator kind is part of the schema. `Raw` validators are string-dispatched; an unknown `content` name is reported as an unimplemented, unverified validation result. If you need a Rust-backed exception path for one provider, prefer `Raw`; reserve new typed validators for stable validation families that can be reused across rules.
 
 ## gRPC Validation (Grpc)
 
@@ -850,7 +850,7 @@ When writing custom rules, consider the following best practices:
 2. **Optimize for Performance:** Structure your regex to minimize backtracking. Use non-capturing groups where possible and keep the pattern as concise as possible.
 3. **Validation Integration:** Define a `validation` section if you want to verify the detected secret. Prefer `Http` or `Grpc`; use an existing typed validator when the rule matches a supported validator family; use `Raw` only for rare provider-specific exception paths. You can use Liquid templating to insert dynamic values where supported. Use the unnamed capture as `TOKEN` and any named captures in uppercase.
 4. **Revocation Integration:** Define a `revocation` section if you want to revoke a detected secret. It uses the same HTTP request format and template variables as `validation`.
-5. **Test with Examples:** Always include examples that should match and, optionally, negative examples to ensure your rule behaves as expected.
+5. **Test with Examples:** Always include examples that should match, and run `kingfisher rules check` for the changed rule file.
 
 ## Examples
 
@@ -877,9 +877,6 @@ rules:
     confidence: medium
     examples:
       - sk-ant-api668-Clm512odot9WDD7itfUU9R880nefA1EtYZDbpE-C9b0XQEWpqFKf9DQUo03vOfXl16oSmyar1CLF1SzV3YzpZJ6bahcpLAA
-    categories:
-      - api
-      - secret
     references:
       - https://docs.anthropic.com/claude/reference/authentication
     validation:
@@ -904,10 +901,10 @@ rules:
             - status:
                 - 200
               type: StatusMatch
-            - report_response: true
             - type: WordMatch
               words:
-                - '"type":"invalid_request_error"'
+                - '"type":"message"'
+                - "credit balance is too low"
           url: https://api.anthropic.com/v1/messages
 ```
 

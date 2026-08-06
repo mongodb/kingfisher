@@ -84,6 +84,25 @@ Each JSON, JSONL, BSON, TOON, and SARIF finding exposes a machine-readable valid
 Human-readable reports distinguish verified-active credentials, high-confidence static secrets,
 inactive credentials, inconclusive validation, skipped validation, and findings not live-validated.
 
+In JSON and JSONL, use `finding.validation.outcome` for automation instead of parsing the display
+label or inferring state from an HTTP response:
+
+```json
+{
+  "finding": {
+    "validation": {
+      "outcome": "assumed",
+      "status": "Assumed Valid (Not Live-Validated)",
+      "response": ""
+    }
+  }
+}
+```
+
+TOON emits the same value as `validation_outcome`; SARIF stores it in each result location's
+`properties.validation_outcome`. The stable values are the six outcomes listed under
+[Finding Validation Statuses](#finding-validation-statuses).
+
 ### Output JSON and capture to a file
 
 ```bash
@@ -204,7 +223,14 @@ Imported Gitleaks, TruffleHog, and generic SARIF reports are display-oriented. K
 
 ```bash
 cat /path/to/file.py | kingfisher scan -
+
+# Scan stdin and named paths in the same invocation
+cat generated.env | kingfisher scan - ./src ./tests
 ```
+
+Only the `-` placeholder consumes stdin. Redirected stdin does not replace an explicitly named
+path, Git URL, organization, bucket, image, or other scan target. If `-` appears more than once,
+Kingfisher stages and scans the stdin content once while preserving every other path.
 
 ### Direct secret validation with `kingfisher validate`
 
@@ -242,6 +268,9 @@ kingfisher validate --rule github "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
 ```bash
 # Validate an OpsGenie API key (using rule prefix matching)
 kingfisher validate --rule opsgenie "12345678-9abc-def0-1234-56789abcdef0"
+
+# Validate an Atlassian Admin API key against the Organizations API
+kingfisher validate --rule kingfisher.atlassian.3 "AT..."
 
 # Validate from stdin
 echo "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" | kingfisher validate --rule github -
@@ -1228,6 +1257,16 @@ Bitbucket no longer supports App Tokens as of September 9, 2025: https://support
 
 Use `--api-url` to point Kingfisher at your server's REST endpoint, for example `https://bitbucket.example.com/rest/api/1.0/`. Provide credentials with `KF_BITBUCKET_USERNAME` plus either `KF_BITBUCKET_TOKEN` or `KF_BITBUCKET_PASSWORD`, and pass `--tls-mode=off` (or the legacy `--ignore-certs`) when connecting to HTTP or otherwise insecure instances.
 
+```bash
+KF_BITBUCKET_USERNAME="scanner" KF_BITBUCKET_TOKEN="$BITBUCKET_TOKEN" \
+  kingfisher scan bitbucket --project SEC \
+  --api-url https://bitbucket.example.com/rest/api/1.0/
+```
+
+Kingfisher prefers the HTTP/HTTPS clone link returned by the Server API, including links labeled
+`http` whose URL uses HTTPS. This allows token- or password-authenticated HTTPS cloning without
+requiring an SSH key when the API also returns an SSH clone link.
+
 ---
 
 ## Hugging Face
@@ -1588,7 +1627,9 @@ not be attempted and may need additional context.
 | `KF_HUGGINGFACE_TOKEN` | Hugging Face access token for API enumeration and git cloning |
 | `KF_HUGGINGFACE_USERNAME` | Optional username for Hugging Face git operations (defaults to `hf_user`) |
 | `KF_JIRA_TOKEN`   | Jira API token               |
+| `KF_JIRA_USER`    | Jira account email; required with `KF_JIRA_TOKEN` for Jira Cloud API tokens |
 | `KF_CONFLUENCE_TOKEN` | Confluence API token      |
+| `KF_CONFLUENCE_USER` | Confluence account email; required with `KF_CONFLUENCE_TOKEN` for Confluence Cloud API tokens |
 | `KF_SLACK_TOKEN`  | Slack API token              |
 | `KF_TEAMS_TOKEN`  | Microsoft Graph API token for Teams message search |
 | `KF_DOCKER_TOKEN` | Docker registry token (`user:pass` or bearer token). If unset, credentials from the Docker keychain are used |
@@ -1610,12 +1651,16 @@ To authenticate Jira requests:
 
 ```bash
 export KF_JIRA_TOKEN="token"
+# Jira Cloud API tokens also require the account email.
+export KF_JIRA_USER="user@example.com"
 ```
 
 To authenticate Confluence requests:
 
 ```bash
 export KF_CONFLUENCE_TOKEN="token"
+# Confluence Cloud API tokens also require the account email.
+export KF_CONFLUENCE_USER="user@example.com"
 ```
 
 _If no token is provided Kingfisher still works for public repositories._

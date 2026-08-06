@@ -598,6 +598,9 @@ The viewer can import SARIF, Gitleaks JSON, and TruffleHog JSON/JSONL in additio
 # Validate a known secret without scanning
 kingfisher validate --rule opsgenie "12345678-9abc-def0-1234-56789abcdef0"
 
+# Validate an Atlassian Admin API key against the Organizations API
+kingfisher validate --rule kingfisher.atlassian.3 "AT..."
+
 # Validate from stdin
 echo "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" | kingfisher validate --rule github -
 
@@ -639,6 +642,12 @@ kingfisher scan /path/to/code --format html --output kingfisher-audit.html
 ```bash
 # Pipe any text directly into Kingfisher
 cat /path/to/file.py | kingfisher scan -
+
+# Scan stdin together with files or directories; `-` marks the stdin input
+cat generated.env | kingfisher scan - ./src ./tests
+
+# Limit scanner workers on a memory-constrained runner
+kingfisher scan /path/to/large-repo --jobs 4
 
 # Limit maximum file size scanned (default: 256 MB)
 kingfisher scan /some/file --max-file-size 500

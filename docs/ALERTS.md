@@ -130,6 +130,10 @@ red if any active. Facts list active/inactive/unknown counts and the top rules.
 Findings are the same shape as `kingfisher scan --format json` produces, so
 existing JSON consumers work unchanged.
 
+`summary.target` describes the scan target requested on the command line. It supports local paths,
+Git URLs, repository hosts, cloud buckets, container images, and collaboration-platform scans; a
+non-path scan running with redirected stdin is not mislabeled as an internal temporary file.
+
 ### Discord (Embed)
 
 A single embed with a color-coded sidebar — red on any verified-active credential,

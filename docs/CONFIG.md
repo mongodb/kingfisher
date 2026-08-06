@@ -132,9 +132,9 @@ into permitting `http://` for a remote host.
 - **`scan.jobs` and the Tokio runtime.** The Tokio runtime is sized from the
   CLI value of `--jobs` *before* `kingfisher.yaml` is loaded, so config-only
   `scan.jobs` will resize the scanner's job pool but not the underlying async
-  worker pool. If you want both to match, pass `--jobs N` on the CLI (or set
-  the same value in both places). This only affects parallelism, never
-  correctness.
+  worker pool. To size both pools explicitly, pass `--jobs N` on the CLI;
+  a CLI value takes precedence over `scan.jobs`. This only affects
+  parallelism, never correctness.
 - **Subcommand scope.** Project config only applies to `kingfisher scan`.
   `validate`, `revoke`, `access-map`, `view`, and `rules` commands ignore
   `kingfisher.yaml`; pass their flags on the CLI directly.

@@ -659,7 +659,18 @@ https://support.atlassian.com/bitbucket-cloud/docs/api-tokens/
 Use `--api-url` to point Kingfisher at your server's REST endpoint, for example
 `https://bitbucket.example.com/rest/api/1.0/`. Provide credentials with
 `KF_BITBUCKET_USERNAME` plus either `KF_BITBUCKET_TOKEN` or `KF_BITBUCKET_PASSWORD`,
-and pass `--ignore-certs` when connecting to HTTP or otherwise insecure instances.
+and pass `--tls-mode=off` when connecting to HTTP or an instance whose certificate cannot be
+verified (`--ignore-certs` remains a deprecated alias).
+
+```bash
+KF_BITBUCKET_USERNAME="scanner" KF_BITBUCKET_TOKEN="$BITBUCKET_TOKEN" \
+  kingfisher scan bitbucket --project SEC \
+  --api-url https://bitbucket.example.com/rest/api/1.0/
+```
+
+Kingfisher prefers the HTTP/HTTPS clone link returned by the Server API, including links labeled
+`http` whose URL uses HTTPS. This allows token- or password-authenticated HTTPS cloning without
+requiring an SSH key when the API also returns an SSH clone link.
 
 ## Hugging Face
 
