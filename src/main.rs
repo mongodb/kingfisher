@@ -623,6 +623,16 @@ fn apply_config(
     {
         scan_args.alert_detail = d;
     }
+    if let Some(f) = cfg.alerts.defaults.finding_filter
+        && config_wins(scan_matches, "alert_finding_filter")
+    {
+        scan_args.alert_finding_filter = f;
+    }
+    if let Some(v) = cfg.alerts.defaults.prevent_empty
+        && config_wins(scan_matches, "alert_prevent_empty")
+    {
+        scan_args.alert_prevent_empty = v;
+    }
 
     // ---------- alerts.webhooks: append URLs (existing v1 behavior) --------
     for w in &cfg.alerts.webhooks {
@@ -635,6 +645,8 @@ fn apply_config(
                 include_secret: w.include_secret,
                 report_url: w.report_url.clone(),
                 detail: w.detail,
+                finding_filter: w.finding_filter,
+                prevent_empty: w.prevent_empty,
             },
         );
     }
@@ -972,6 +984,12 @@ fn build_config_yaml(
     if user_set(sub_matches, "alert_detail") {
         defaults.detail = Some(scan_args.alert_detail);
     }
+    if user_set(sub_matches, "alert_finding_filter") {
+        defaults.finding_filter = Some(scan_args.alert_finding_filter);
+    }
+    if user_set(sub_matches, "alert_prevent_empty") {
+        defaults.prevent_empty = Some(scan_args.alert_prevent_empty);
+    }
     alerts.defaults = defaults;
     // Each --alert-webhook URL becomes a webhook entry. Per-webhook overrides
     // (slack vs teams, on=always, etc.) cannot be expressed as positional CLI
@@ -986,6 +1004,8 @@ fn build_config_yaml(
             include_secret: None,
             report_url: None,
             detail: None,
+            finding_filter: None,
+            prevent_empty: None,
         });
     }
     cfg.alerts = alerts;
@@ -1268,6 +1288,16 @@ fn build_alert_sinks(
                 .format
                 .or(scan_args.alert_format)
                 .unwrap_or_else(|| kingfisher::alerts::AlertFormat::infer_from_url(url));
+            let finding_filter = override_.finding_filter.unwrap_or(scan_args.alert_finding_filter);
+            if finding_filter == kingfisher::alerts::AlertFindingFilter::AccessMapOnly
+                && !scan_args.access_map
+            {
+                warn!(
+                    "alert sink {} uses access-map-only filtering but --access-map was not \
+                     enabled; this sink will never report findings",
+                    kingfisher::alerts::redact_webhook(url)
+                );
+            }
             kingfisher::alerts::AlertSink {
                 url: url.clone(),
                 format,
@@ -1279,6 +1309,8 @@ fn build_alert_sinks(
                     .clone()
                     .or_else(|| scan_args.alert_report_url.clone()),
                 detail: override_.detail.unwrap_or(scan_args.alert_detail),
+                finding_filter,
+                prevent_empty: override_.prevent_empty.unwrap_or(scan_args.alert_prevent_empty),
             }
         })
         .collect()
@@ -1483,6 +1515,8 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                                 Ok(records) => {
                                     let target =
                                         describe_scan_target(&scan_args.input_specifier_args);
+                                    let access_map =
+                                        alert_reporter.build_access_map_records(&scan_args);
                                     let sinks: Vec<_> = build_alert_sinks(&scan_args)
                                         .into_iter()
                                         .filter(|sink| {
@@ -1497,7 +1531,14 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                                             }
                                         })
                                         .collect();
-                                    kingfisher::alerts::dispatch(&sinks, &records, target).await;
+                                    kingfisher::alerts::dispatch(
+                                        &sinks,
+                                        &records,
+                                        access_map.as_deref().unwrap_or(&[]),
+                                        target,
+                                        scan_args.alert_dry_run,
+                                    )
+                                    .await;
                                 }
                                 Err(e) => warn!("alert dispatch: failed to build findings: {}", e),
                             }
@@ -1836,6 +1877,9 @@ fn create_default_scan_args() -> cli::commands::scan::ScanArgs {
         alert_include_secret: false,
         alert_report_url: None,
         alert_detail: kingfisher::alerts::AlertDetail::Auto,
+        alert_finding_filter: kingfisher::alerts::AlertFindingFilter::All,
+        alert_prevent_empty: false,
+        alert_dry_run: false,
         config_webhook_overrides: Vec::new(),
     }
 }

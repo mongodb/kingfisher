@@ -44,6 +44,7 @@ pub fn build_payload(
         "active": summary.active,
         "inactive": summary.inactive,
         "unknown": summary.unknown,
+        "impacted_resources": summary.impacted_resources,
         "by_rule": summary.by_rule.iter().map(|(r, c)| json!({"rule_id": r, "count": c})).collect::<Vec<_>>(),
         "target": summary.target,
     });
@@ -75,7 +76,7 @@ mod tests {
             target: None,
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
-            filtered_total: 0,
+            impacted_resources: 0,
         }
     }
 
@@ -104,7 +105,6 @@ mod tests {
     fn summary_mode_drops_findings_array() {
         let mut s = empty_summary();
         s.detail = crate::alerts::AlertDetail::Summary;
-        s.filtered_total = 3;
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-abc");
         let p = build_payload(&s, &[&rec, &rec, &rec], false);
         // In summary mode the findings array is empty, but findings_omitted
@@ -119,5 +119,13 @@ mod tests {
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-roundtrip");
         let p = build_payload(&s, &[&rec], false);
         assert_eq!(p["findings"][0]["finding"]["fingerprint"], "fp-roundtrip");
+    }
+
+    #[test]
+    fn impacted_resources_present_in_summary_block() {
+        let mut s = empty_summary();
+        s.impacted_resources = 7;
+        let p = build_payload(&s, &[], false);
+        assert_eq!(p["summary"]["impacted_resources"], 7);
     }
 }

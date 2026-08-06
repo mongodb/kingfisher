@@ -36,6 +36,9 @@ pub fn build_payload(
         json!({ "name": "Inactive", "value": summary.inactive.to_string() }),
         json!({ "name": "Unknown",  "value": summary.unknown.to_string() }),
     ];
+    if summary.impacted_resources > 0 {
+        facts.push(json!({ "name": "Impacted resources", "value": summary.impacted_resources.to_string() }));
+    }
     if let Some(t) = &summary.target {
         facts.push(json!({ "name": "Target", "value": t }));
     }
@@ -76,12 +79,12 @@ pub fn build_payload(
             "title": "Findings",
             "text": details,
         }));
-    } else if summary.detail == AlertDetail::Summary && summary.filtered_total > 0 {
+    } else if summary.detail == AlertDetail::Summary && summary.total > 0 {
         sections.push(json!({
             "title": "Findings",
             "text": format!(
                 "_{} findings — per-finding detail suppressed (summary mode). See full report for specifics._",
-                summary.filtered_total
+                summary.total
             ),
         }));
     }
@@ -151,7 +154,7 @@ mod tests {
             target: None,
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
-            filtered_total: total,
+            impacted_resources: 0,
         }
     }
 
@@ -186,7 +189,6 @@ mod tests {
     fn summary_mode_emits_suppression_notice() {
         let mut s = summary(40, 0);
         s.detail = crate::alerts::AlertDetail::Summary;
-        s.filtered_total = 40;
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-t");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();
@@ -196,8 +198,7 @@ mod tests {
 
     #[test]
     fn detail_mode_includes_fingerprint() {
-        let mut s = summary(1, 1);
-        s.filtered_total = 1;
+        let s = summary(1, 1);
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-teams-5");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();

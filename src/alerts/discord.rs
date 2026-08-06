@@ -29,6 +29,17 @@ pub fn build_payload(
 ) -> Value {
     let title = if summary.total == 0 {
         "Kingfisher: scan complete — no findings".to_string()
+    } else if summary.impacted_resources > 0 {
+        format!(
+            "Kingfisher: {} finding{} ({} active, {} inactive, {} unknown, {} impacted resource{})",
+            summary.total,
+            plural(summary.total),
+            summary.active,
+            summary.inactive,
+            summary.unknown,
+            summary.impacted_resources,
+            plural(summary.impacted_resources)
+        )
     } else {
         format!(
             "Kingfisher: {} finding{} ({} active, {} inactive, {} unknown)",
@@ -53,6 +64,13 @@ pub fn build_payload(
         json!({ "name": "Inactive", "value": summary.inactive.to_string(), "inline": true }),
         json!({ "name": "Unknown",  "value": summary.unknown.to_string(),  "inline": true }),
     ];
+    if summary.impacted_resources > 0 {
+        fields.push(json!({
+            "name": "Impacted resources",
+            "value": summary.impacted_resources.to_string(),
+            "inline": true,
+        }));
+    }
     if let Some(t) = &summary.target {
         fields.push(json!({
             "name": "Target",
@@ -103,10 +121,10 @@ pub fn build_payload(
             detail.push_str(&format!("…{} more findings omitted", findings.len() - take));
         }
         embed["description"] = Value::String(truncate(&detail, DESCRIPTION_SOFT_LIMIT));
-    } else if summary.detail == AlertDetail::Summary && summary.filtered_total > 0 {
+    } else if summary.detail == AlertDetail::Summary && summary.total > 0 {
         embed["description"] = Value::String(format!(
             "_{} findings — per-finding detail suppressed (summary mode). See full report for specifics._",
-            summary.filtered_total
+            summary.total
         ));
     }
 
@@ -180,7 +198,7 @@ mod tests {
             target: None,
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
-            filtered_total: total,
+            impacted_resources: 0,
         }
     }
 
@@ -229,7 +247,6 @@ mod tests {
     fn summary_mode_emits_suppression_notice() {
         let mut s = summary(50, 5);
         s.detail = crate::alerts::AlertDetail::Summary;
-        s.filtered_total = 50;
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-x");
         let p = build_payload(&s, &[&rec], false);
         let desc = p["embeds"][0]["description"].as_str().unwrap();
@@ -239,8 +256,7 @@ mod tests {
 
     #[test]
     fn detail_mode_includes_fingerprint() {
-        let mut s = summary(1, 1);
-        s.filtered_total = 1;
+        let s = summary(1, 1);
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-d-99");
         let p = build_payload(&s, &[&rec], false);
         let desc = p["embeds"][0]["description"].as_str().unwrap();

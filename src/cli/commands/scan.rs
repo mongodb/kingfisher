@@ -296,6 +296,34 @@ pub struct ScanArgs {
     #[arg(global = true, long = "alert-detail", value_name = "MODE", default_value = "auto")]
     pub alert_detail: crate::alerts::AlertDetail,
 
+    /// Restrict which findings are eligible for alert payloads, on top of
+    /// `--alert-min-confidence`. `exclude-inactive` drops "Inactive
+    /// Credential" findings; `only-active` keeps only "Active Credential"
+    /// findings; `access-map-only` keeps only findings with a matching
+    /// `--access-map` result (requires `--access-map` to be set, otherwise
+    /// this filter matches nothing).
+    #[arg(
+        global = true,
+        long = "alert-finding-filter",
+        value_name = "FILTER",
+        default_value = "all"
+    )]
+    pub alert_finding_filter: crate::alerts::AlertFindingFilter,
+
+    /// Skip a webhook entirely when `--alert-min-confidence` /
+    /// `--alert-finding-filter` leave nothing to report, instead of posting
+    /// an alert with an empty findings list. Does not affect the deliberate
+    /// `--alert-on always` clean-scan heartbeat (a scan-wide zero-finding
+    /// run still posts). Off by default to preserve existing behavior.
+    #[arg(global = true, long = "alert-prevent-empty", default_value_t = false)]
+    pub alert_prevent_empty: bool,
+
+    /// Build and log each alert sink's resolved payload instead of POSTing
+    /// it — use to validate `--alert-*` filter configuration against a real
+    /// scan before wiring a production webhook URL.
+    #[arg(global = true, long = "alert-dry-run", default_value_t = false)]
+    pub alert_dry_run: bool,
+
     /// Per-webhook overrides loaded from `kingfisher.yaml`. Indexed in lockstep
     /// with `alert_webhook` for the trailing config-sourced URLs. Not parsed
     /// from the CLI; populated by `apply_config` in main.rs.
@@ -314,6 +342,8 @@ pub struct ConfigWebhookOverride {
     pub include_secret: Option<bool>,
     pub report_url: Option<String>,
     pub detail: Option<crate::alerts::AlertDetail>,
+    pub finding_filter: Option<crate::alerts::AlertFindingFilter>,
+    pub prevent_empty: Option<bool>,
 }
 
 /// Confidence levels for findings

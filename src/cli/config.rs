@@ -59,7 +59,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::alerts::{AlertDetail, AlertFormat, AlertOn};
+use crate::alerts::{AlertDetail, AlertFindingFilter, AlertFormat, AlertOn};
 use crate::cli::commands::output::ReportOutputFormat;
 use crate::cli::commands::scan::{ConfidenceLevel, ValidationFilter};
 use crate::cli::global::TlsMode;
@@ -222,6 +222,8 @@ pub struct AlertsDefaultsConfig {
     pub include_secret: Option<bool>,
     pub report_url: Option<String>,
     pub detail: Option<AlertDetail>,
+    pub finding_filter: Option<AlertFindingFilter>,
+    pub prevent_empty: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +246,12 @@ pub struct WebhookConfig {
     /// Per-webhook override of the global `--alert-detail` mode.
     #[serde(default)]
     pub detail: Option<AlertDetail>,
+    /// Per-webhook override of the global `--alert-finding-filter`.
+    #[serde(default)]
+    pub finding_filter: Option<AlertFindingFilter>,
+    /// Per-webhook override of the global `--alert-prevent-empty`.
+    #[serde(default)]
+    pub prevent_empty: Option<bool>,
 }
 
 // ----------------------------------------------------------------------------
