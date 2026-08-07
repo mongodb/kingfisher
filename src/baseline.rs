@@ -236,6 +236,8 @@ mod tests {
             validation_response_body: None,
             validation_response_status: 0,
             validation_success: false,
+            validation_disposition:
+                kingfisher_scanner::validation::ValidationDisposition::NotAttempted,
             calculated_entropy: 0.0,
             visible: true,
             is_base64: false,

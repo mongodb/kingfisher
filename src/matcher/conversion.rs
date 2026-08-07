@@ -14,7 +14,9 @@ use crate::{
 
 use super::{BlobMatch, captures::SerializableCaptures};
 
-use kingfisher_scanner::primitives::compute_finding_fingerprint;
+use kingfisher_scanner::{
+    primitives::compute_finding_fingerprint, validation::ValidationDisposition,
+};
 
 // -------------------------------------------------------------------------------------------------
 // OwnedBlobMatch
@@ -31,6 +33,7 @@ pub struct OwnedBlobMatch {
     pub validation_response_body: ValidationResponseBody,
     pub validation_response_status: StatusCode,
     pub validation_success: bool,
+    pub validation_disposition: ValidationDisposition,
     pub calculated_entropy: f32,
     pub is_base64: bool,
     /// Variables captured from dependent rules (from depends_on_rule).
@@ -51,6 +54,7 @@ impl OwnedBlobMatch {
             validation_response_status: StatusCode::from_u16(m.validation_response_status)
                 .unwrap_or(StatusCode::CONTINUE),
             validation_success: m.validation_success,
+            validation_disposition: m.validation_disposition,
             calculated_entropy: m.calculated_entropy,
             is_base64: m.is_base64,
             dependent_captures: m.dependent_captures.clone(),
@@ -83,6 +87,7 @@ impl OwnedBlobMatch {
             validation_response_body: blob_match.validation_response_body,
             validation_response_status: blob_match.validation_response_status,
             validation_success: blob_match.validation_success,
+            validation_disposition: blob_match.validation_disposition,
             calculated_entropy: blob_match.calculated_entropy,
             finding_fingerprint: 0, //default
             is_base64: blob_match.is_base64,
@@ -142,6 +147,11 @@ pub struct Match {
 
     /// Validation Success
     pub validation_success: bool,
+
+    /// Transport-independent validation result.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub validation_disposition: ValidationDisposition,
 
     /// Validation Success
     pub calculated_entropy: f32,
@@ -204,6 +214,7 @@ impl Match {
             validation_response_body: owned_blob_match.validation_response_body.clone(),
             validation_response_status: owned_blob_match.validation_response_status.as_u16(),
             validation_success: owned_blob_match.validation_success,
+            validation_disposition: owned_blob_match.validation_disposition,
             calculated_entropy: owned_blob_match.calculated_entropy,
             is_base64: owned_blob_match.is_base64,
             dependent_captures: owned_blob_match.dependent_captures.clone(),

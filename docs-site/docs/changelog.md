@@ -7,6 +7,10 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased]
+- Added contextual Ethereum private-key, SEC1/raw public-key, and mnemonic detection plus chain-neutral BIP-39 detection. Network-free parsing derives EIP-55 addresses with Alloy and reports `Locally Derived` instead of claiming an active credential.
+- Added transport-independent validation dispositions to scanner match and cache results, including distinct local derivation, invalid-material, and validator-error states. Consumers that construct the public match structs with literals must initialize the new `validation_disposition` field.
+
 ## [v1.110.0]
 - Added 37 Titus-derived rules plus a DeviantArt OAuth client-ID helper, covering network-device configurations, hard-coded database connections, Windows artifacts, Maven credentials, and provider-specific formats. Added vendor-documented YAML validation for DeviantArt client secrets, Intra42 prefixed credentials, LaunchDarkly client-side IDs, and Mattermost webhooks and personal access tokens. Built-in coverage is now 1,051 rules (914 standalone detectors + 137 dependent rules), with 516 standalone detectors supporting live validation.
 - Fixed hidden helper findings being omitted from reports while retained in summaries; `--include-hidden-findings` exposes them for diagnostics. [#448](https://github.com/mongodb/kingfisher/issues/448) [#449](https://github.com/mongodb/kingfisher/issues/449)

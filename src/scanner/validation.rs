@@ -13,11 +13,12 @@ use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
 use futures::{FutureExt, StreamExt, stream};
 use indicatif::{ProgressBar, ProgressStyle};
+use kingfisher_scanner::validation::ValidationDisposition;
 use liquid::Parser;
 use reqwest::StatusCode;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::Notify;
-use tracing::{debug, trace, warn};
+use tracing::{trace, warn};
 
 use crate::{
     access_map::AccessMapRequest,
@@ -33,6 +34,16 @@ use crate::{
     validation_body,
     validation_rate_limit::ValidationRateLimiter,
 };
+
+type ValidationGroupKey = [u8; 32];
+
+fn validation_group_key(rule_id: &str, secret: &str) -> ValidationGroupKey {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(rule_id.as_bytes());
+    hasher.update(&[0]);
+    hasher.update(secret.as_bytes());
+    *hasher.finalize().as_bytes()
+}
 
 #[derive(Clone, Default)]
 pub struct AccessMapCollector {
@@ -492,7 +503,7 @@ pub async fn run_secret_validation(
         // Previous code stored ALL matches per group — holding thousands of
         // Arc clones alive for the entire duration of the concurrent stream.
         let total_simple = simple_matches.len();
-        let mut representatives: FxHashMap<String, Arc<FindingsStoreMessage>> =
+        let mut representatives: FxHashMap<ValidationGroupKey, Arc<FindingsStoreMessage>> =
             FxHashMap::default();
         for arc_msg in simple_matches {
             // VALIDATION DEDUP: Use get(0) to get the first/primary capture for grouping.
@@ -507,12 +518,10 @@ pub async fn run_secret_validation(
             // like (?<REGEX>...(ABC|DEF)...), causing all matches to share the same
             // validation result.
             let secret = arc_msg.2.groups.captures.first().map_or("", |c| c.raw_value());
-            let group_key = format!("{}|{}", arc_msg.2.rule.id(), secret);
+            let group_key = validation_group_key(arc_msg.2.rule.id(), secret);
             trace!(
                 rule_id = %arc_msg.2.rule.id(),
-                secret_value = %secret,
                 external_fingerprint = arc_msg.2.finding_fingerprint,
-                validation_group_key = %group_key,
                 "Grouping finding for validation"
             );
             // Only keep the first representative — extra Arcs are dropped immediately
@@ -525,7 +534,7 @@ pub async fn run_secret_validation(
             "Validation grouping complete (internal dedup)"
         );
 
-        let validation_results = DashMap::<String, CachedResponse>::new();
+        let validation_results = DashMap::<ValidationGroupKey, CachedResponse>::new();
 
         let pb = ProgressBar::new(representatives.len() as u64).with_message("Validating secrets…");
         pb.set_style(
@@ -541,8 +550,9 @@ pub async fn run_secret_validation(
         // Shared empty maps — avoids allocating throwaway DashMaps per task
         let empty_dep_vars: FxHashMap<String, Vec<(String, OffsetSpan)>> = FxHashMap::default();
         let empty_missing: FxHashMap<String, Vec<String>> = FxHashMap::default();
-        let empty_cache: Arc<DashMap<String, CachedResponse>> = Arc::new(DashMap::new());
-        let empty_inflight: Arc<DashMap<String, ()>> = Arc::new(DashMap::new());
+        let empty_cache: Arc<DashMap<ValidationGroupKey, CachedResponse>> =
+            Arc::new(DashMap::new());
+        let empty_inflight: Arc<DashMap<ValidationGroupKey, ()>> = Arc::new(DashMap::new());
 
         stream::iter(
             representatives.into_values(), // consumes map, dropping keys
@@ -567,15 +577,16 @@ pub async fn run_secret_validation(
                 // VALIDATION DEDUP: Use get(0) for the primary secret value.
                 // See comment above for why this differs from fingerprint/reporting code.
                 let secret = rep_arc.2.groups.captures.first().map_or("", |c| c.raw_value());
-                let key = format!("{}|{}", rep_arc.2.rule.id(), secret);
+                let key = validation_group_key(rep_arc.2.rule.id(), secret);
 
-                match val_res.entry(key.clone()) {
+                match val_res.entry(key) {
                     dashmap::mapref::entry::Entry::Occupied(_) => return,
                     dashmap::mapref::entry::Entry::Vacant(entry) => {
                         entry.insert(CachedResponse {
                             body: validation_body::from_string(String::new()),
                             status: StatusCode::ACCEPTED,
                             is_valid: false,
+                            disposition: ValidationDisposition::NotAttempted,
                             timestamp: Instant::now(),
                         });
                     }
@@ -610,6 +621,7 @@ pub async fn run_secret_validation(
                     body: om.validation_response_body.clone(),
                     status: om.validation_response_status,
                     is_valid: om.validation_success,
+                    disposition: om.validation_disposition,
                     timestamp: Instant::now(),
                 };
                 val_res.insert(key, cr);
@@ -636,12 +648,13 @@ pub async fn run_secret_validation(
                     continue;
                 }
                 let secret = match_arc.2.groups.captures.first().map_or("", |c| c.raw_value());
-                let key = format!("{}|{}", match_arc.2.rule.id(), secret);
+                let key = validation_group_key(match_arc.2.rule.id(), secret);
                 if let Some(cr) = validation_results.get(&key) {
                     let (_, _, existing) = Arc::make_mut(match_arc);
                     existing.validation_success = cr.is_valid;
                     existing.validation_response_status = cr.status.as_u16();
                     existing.validation_response_body = cr.body.clone();
+                    existing.validation_disposition = cr.disposition;
                 }
             }
         }
@@ -685,8 +698,8 @@ pub async fn run_secret_validation(
         );
         pb.enable_steady_tick(Duration::from_millis(100));
 
-        let val_cache = Arc::new(DashMap::<String, CachedResponse>::new());
-        let in_flight = Arc::new(DashMap::<String, ()>::new());
+        let val_cache = Arc::new(DashMap::<ValidationGroupKey, CachedResponse>::new());
+        let in_flight = Arc::new(DashMap::<ValidationGroupKey, ()>::new());
 
         // Collect validation results keyed by finding_fingerprint:
         // (validation_success, response_body, response_status_u16, dependent_captures)
@@ -694,6 +707,7 @@ pub async fn run_secret_validation(
             bool,
             crate::validation_body::ValidationResponseBody,
             u16,
+            ValidationDisposition,
             std::collections::BTreeMap<String, String>,
         );
         let mut dep_updates: FxHashMap<u64, DepUpdate> = FxHashMap::default();
@@ -730,7 +744,7 @@ pub async fn run_secret_validation(
 
                         let (dep_vars, missing_deps) = collect_variables_and_dependencies(&owned);
 
-                        let mut by_key: FxHashMap<String, Vec<OwnedBlobMatch>> =
+                        let mut by_key: FxHashMap<ValidationGroupKey, Vec<OwnedBlobMatch>> =
                             FxHashMap::default();
                         for om in owned {
                             by_key.entry(build_cache_key(&om)).or_default().push(om);
@@ -778,6 +792,7 @@ pub async fn run_secret_validation(
                                             rep.validation_response_body.clone();
                                         d.validation_response_status =
                                             rep.validation_response_status;
+                                        d.validation_disposition = rep.validation_disposition;
                                     }
                                     let mut out = vec![rep];
                                     out.extend(dups);
@@ -805,6 +820,7 @@ pub async fn run_secret_validation(
                             om.validation_success,
                             om.validation_response_body.clone(),
                             om.validation_response_status.as_u16(),
+                            om.validation_disposition,
                             om.dependent_captures.clone(),
                         ),
                     );
@@ -827,13 +843,14 @@ pub async fn run_secret_validation(
                 matches.as_mut_slice()
             };
             for match_arc in slice.iter_mut() {
-                if let Some((success, body, status, dep_caps)) =
+                if let Some((success, body, status, disposition, dep_caps)) =
                     dep_updates.get(&match_arc.2.finding_fingerprint).cloned()
                 {
                     let (_, _, existing) = Arc::make_mut(match_arc);
                     existing.validation_success = success;
                     existing.validation_response_status = status;
                     existing.validation_response_body = body;
+                    existing.validation_disposition = disposition;
                     existing.dependent_captures = dep_caps;
                 }
             }
@@ -856,8 +873,8 @@ async fn validate_single(
     clients: &crate::validation::ValidationClients,
     dep_vars: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
     missing_deps: &FxHashMap<String, Vec<String>>,
-    cache: &DashMap<String, CachedResponse>,
-    in_progress: &DashMap<String, ()>,
+    cache: &DashMap<ValidationGroupKey, CachedResponse>,
+    in_progress: &DashMap<ValidationGroupKey, ()>,
     success_count: &AtomicUsize,
     fail_count: &AtomicUsize,
     cache2: &Arc<SkipMap<String, CachedResponse>>,
@@ -874,20 +891,17 @@ async fn validate_single(
         om.validation_success = cached.is_valid;
         om.validation_response_body = cached.body.clone();
         om.validation_response_status = cached.status;
-        if om.validation_success && is_counted_validation_status(om.validation_response_status) {
-            success_count.fetch_add(1, Ordering::Relaxed);
-        } else if is_counted_validation_status(om.validation_response_status) {
-            fail_count.fetch_add(1, Ordering::Relaxed);
-        }
+        om.validation_disposition = cached.disposition;
+        count_validation_result(om.validation_disposition, success_count, fail_count);
         maybe_record_access_map(om, access_map);
         return;
     }
 
-    static NOTIFY: std::sync::LazyLock<DashMap<String, Arc<Notify>>> =
+    static NOTIFY: std::sync::LazyLock<DashMap<ValidationGroupKey, Arc<Notify>>> =
         std::sync::LazyLock::new(DashMap::new);
 
-    let notify = NOTIFY.entry(cache_key.clone()).or_insert_with(|| Arc::new(Notify::new())).clone();
-    let first = in_progress.insert(cache_key.clone(), ()).is_none();
+    let notify = NOTIFY.entry(cache_key).or_insert_with(|| Arc::new(Notify::new())).clone();
+    let first = in_progress.insert(cache_key, ()).is_none();
     if !first {
         notify.notified().await; // suspend with zero polling
         // cached result now present
@@ -895,12 +909,8 @@ async fn validate_single(
             om.validation_success = cached.is_valid;
             om.validation_response_body = cached.body.clone();
             om.validation_response_status = cached.status;
-            if om.validation_success && is_counted_validation_status(om.validation_response_status)
-            {
-                success_count.fetch_add(1, Ordering::Relaxed);
-            } else if is_counted_validation_status(om.validation_response_status) {
-                fail_count.fetch_add(1, Ordering::Relaxed);
-            }
+            om.validation_disposition = cached.disposition;
+            count_validation_result(om.validation_disposition, success_count, fail_count);
             maybe_record_access_map(om, access_map);
             return; // Exit early if cached result is found
         }
@@ -962,57 +972,57 @@ impl ValidationOutcome {
 
 fn apply_validation_outcome(
     om: &mut OwnedBlobMatch,
-    cache_key: &str,
+    cache_key: &ValidationGroupKey,
     outcome: ValidationOutcome,
     success_count: &AtomicUsize,
     fail_count: &AtomicUsize,
-    cache: &DashMap<String, CachedResponse>,
+    cache: &DashMap<ValidationGroupKey, CachedResponse>,
 ) {
     match outcome {
         ValidationOutcome::Completed => {
-            if om.validation_success && is_counted_validation_status(om.validation_response_status)
-            {
-                success_count.fetch_add(1, Ordering::Relaxed);
-            } else if is_counted_validation_status(om.validation_response_status) {
-                fail_count.fetch_add(1, Ordering::Relaxed);
+            if om.validation_disposition == ValidationDisposition::NotAttempted {
+                om.validation_disposition = ValidationDisposition::from_legacy(
+                    om.validation_success,
+                    om.validation_response_status,
+                );
             }
+            count_validation_result(om.validation_disposition, success_count, fail_count);
             cache.insert(
-                cache_key.to_owned(),
+                *cache_key,
                 CachedResponse {
                     is_valid: om.validation_success,
                     status: om.validation_response_status,
                     body: om.validation_response_body.clone(),
+                    disposition: om.validation_disposition,
                     timestamp: Instant::now(),
                 },
             );
         }
-        ValidationOutcome::Panicked(panic_message) => {
+        ValidationOutcome::Panicked(_panic_message) => {
             // The panic payload can embed secret material (e.g. a token captured
             // in a debug string), so it must never reach the cached or
             // user-visible body. Keep WARN free of the payload too; truncated
-            // panic detail is only emitted at DEBUG for troubleshooting.
+            // panic detail is never logged because it may include the secret.
             warn!(
                 rule_id = %om.rule.id(),
                 "validator panicked; marking match as failed",
             );
-            debug!(
-                rule_id = %om.rule.id(),
-                panic = %truncate_for_log(&panic_message),
-                "validator panic detail",
-            );
+
             om.validation_success = false;
             om.validation_response_body = validation_body::from_string(format!(
                 "Validation panicked for rule {}",
                 om.rule.id()
             ));
             om.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
+            om.validation_disposition = ValidationDisposition::Error;
             fail_count.fetch_add(1, Ordering::Relaxed);
             cache.insert(
-                cache_key.to_owned(),
+                *cache_key,
                 CachedResponse {
                     is_valid: om.validation_success,
                     status: om.validation_response_status,
                     body: om.validation_response_body.clone(),
+                    disposition: om.validation_disposition,
                     timestamp: Instant::now(),
                 },
             );
@@ -1020,8 +1030,24 @@ fn apply_validation_outcome(
     }
 }
 
-fn is_counted_validation_status(status: StatusCode) -> bool {
-    !matches!(status, StatusCode::CONTINUE | StatusCode::PRECONDITION_REQUIRED)
+fn count_validation_result(
+    disposition: ValidationDisposition,
+    success_count: &AtomicUsize,
+    fail_count: &AtomicUsize,
+) {
+    match disposition {
+        ValidationDisposition::Active => {
+            success_count.fetch_add(1, Ordering::Relaxed);
+        }
+        ValidationDisposition::Inactive
+        | ValidationDisposition::Error
+        | ValidationDisposition::InvalidMaterial => {
+            fail_count.fetch_add(1, Ordering::Relaxed);
+        }
+        ValidationDisposition::NotAttempted
+        | ValidationDisposition::Skipped
+        | ValidationDisposition::LocallyDerived => {}
+    }
 }
 
 /// Defensive, last-resort boundary around a validator future.
@@ -1058,25 +1084,14 @@ fn describe_panic_payload(payload: Box<dyn std::any::Any + Send>) -> String {
     }
 }
 
-/// Bound a panic message before it reaches the logs. Panic payloads are
-/// unbounded in length and may be influenced by scanned content, so cap them at
-/// a fixed length on a UTF-8 boundary.
-fn truncate_for_log(message: &str) -> String {
-    const MAX_LEN: usize = 256;
-    if message.len() <= MAX_LEN {
-        return message.to_string();
-    }
-    let mut end = MAX_LEN;
-    while !message.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}… (truncated)", &message[..end])
-}
-
 // Helper to compute the cache key for an OwnedBlobMatch.
-fn build_cache_key(om: &OwnedBlobMatch) -> String {
-    let capture0 =
-        om.captures.captures.first().map_or(String::new(), |c| c.raw_value().to_string());
+fn build_cache_key(om: &OwnedBlobMatch) -> ValidationGroupKey {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(om.rule.id().as_bytes());
+    hasher.update(&[0]);
+    if let Some(capture) = om.captures.captures.first() {
+        hasher.update(capture.raw_value().as_bytes());
+    }
 
     let has_context_dependency = om
         .rule
@@ -1086,17 +1101,12 @@ fn build_cache_key(om: &OwnedBlobMatch) -> String {
         .flatten()
         .any(|dep| !dep.variable.eq_ignore_ascii_case("TOKEN"));
     if has_context_dependency {
-        return format!(
-            "{}|{}|{}|{}|{}",
-            om.rule.name(),
-            capture0,
-            om.blob_id,
-            om.matching_input_offset_span.start,
-            om.matching_input_offset_span.end
-        );
+        hasher.update(om.blob_id.as_bytes());
+        hasher.update(&om.matching_input_offset_span.start.to_le_bytes());
+        hasher.update(&om.matching_input_offset_span.end.to_le_bytes());
     }
 
-    format!("{}|{}", om.rule.name(), capture0)
+    *hasher.finalize().as_bytes()
 }
 
 fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapCollector>) {
@@ -1730,6 +1740,7 @@ mod tests {
             validation_response_body: None,
             validation_response_status: StatusCode::CONTINUE,
             validation_success: false,
+            validation_disposition: ValidationDisposition::NotAttempted,
             calculated_entropy: 0.0,
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
@@ -1737,11 +1748,53 @@ mod tests {
     }
 
     #[test]
-    fn counted_validation_status_excludes_skipped_statuses() {
-        assert!(!is_counted_validation_status(StatusCode::CONTINUE));
-        assert!(!is_counted_validation_status(StatusCode::PRECONDITION_REQUIRED));
-        assert!(is_counted_validation_status(StatusCode::OK));
-        assert!(is_counted_validation_status(StatusCode::UNAUTHORIZED));
+    fn validation_counts_use_semantic_dispositions() {
+        let success = AtomicUsize::new(0);
+        let fail = AtomicUsize::new(0);
+        count_validation_result(ValidationDisposition::LocallyDerived, &success, &fail);
+        count_validation_result(ValidationDisposition::InvalidMaterial, &success, &fail);
+        count_validation_result(ValidationDisposition::Active, &success, &fail);
+        assert_eq!(success.load(Ordering::Relaxed), 1);
+        assert_eq!(fail.load(Ordering::Relaxed), 1);
+    }
+
+    #[test]
+    fn completed_infrastructure_failure_is_reported_as_error() {
+        let mut om = make_owned_blob_match();
+        om.validation_response_status = StatusCode::BAD_GATEWAY;
+        let cache_key = build_cache_key(&om);
+        let cache = DashMap::new();
+        let success_count = AtomicUsize::new(0);
+        let fail_count = AtomicUsize::new(0);
+
+        apply_validation_outcome(
+            &mut om,
+            &cache_key,
+            ValidationOutcome::Completed,
+            &success_count,
+            &fail_count,
+            &cache,
+        );
+
+        assert_eq!(om.validation_disposition, ValidationDisposition::Error);
+        assert_eq!(success_count.load(Ordering::Relaxed), 0);
+        assert_eq!(fail_count.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            cache.get(&cache_key).expect("result should be cached").disposition,
+            ValidationDisposition::Error
+        );
+    }
+
+    #[test]
+    fn validation_cache_keys_are_stable_and_secret_specific() {
+        let first = make_owned_blob_match();
+        let mut duplicate = make_owned_blob_match();
+        duplicate.finding_fingerprint = 2;
+        let mut second = make_owned_blob_match();
+        second.captures.captures[0].value = intern("different-secret");
+
+        assert_eq!(build_cache_key(&first), build_cache_key(&duplicate));
+        assert_ne!(build_cache_key(&first), build_cache_key(&second));
     }
 
     #[test]

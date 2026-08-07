@@ -174,7 +174,9 @@ Kingfisher searches the surrounding lines for these tokens without requiring lan
 
 ## Validation Tuning
 
-Use these options with `kingfisher scan` to customize live validation behavior:
+Use these options with `kingfisher scan` to customize validation behavior:
+
+Most validators make provider or protocol requests. Ethereum private-key, public-key, and chain-qualified BIP-39 findings are an exception: Kingfisher parses them locally and uses Alloy to report a derived EIP-55 address. Reports label successful checks `Locally Derived`; they do not count as active credentials or select exit code 205. Mnemonic output is a candidate derived at `m/44'/60'/0'/0/0` under an explicitly reported empty-passphrase assumption. It is not evidence of ownership, funds, or on-chain activity. `--no-validate` skips these local checks along with all other validation.
 
 ```bash
 # Set per-request timeout (default: 10 seconds, range: 1-60)
@@ -363,7 +365,7 @@ The cache key includes the resolved rule order, rule patterns, platform, cache f
 
 ## Custom Rules
 
-Kingfisher currently ships with 1,013 built-in rules, but you may want to add your own custom rules or modify existing detection to better suit your needs.
+Kingfisher currently ships with 1,055 built-in rules, but you may want to add your own custom rules or modify existing detection to better suit your needs.
 
 First, review [RULES.md](RULES.md) to learn how to create custom Kingfisher rules.
 

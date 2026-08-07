@@ -12,11 +12,13 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use crossbeam_skiplist::SkipMap;
+use kingfisher_scanner::validation::ValidationDisposition;
 use liquid::Object;
 use liquid_core::{Value, ValueView};
 use reqwest::Client;
-use serde::Serialize;
+use serde::{Serialize, Serializer, ser::SerializeStruct};
 use tracing::debug;
+use zeroize::Zeroizing;
 
 use crate::{
     cli::{commands::validate::ValidateArgs, global::GlobalArgs},
@@ -61,18 +63,68 @@ fn preview_body_for_display(body: &str, max_bytes: usize) -> String {
 }
 
 /// Result of a direct validation attempt.
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone)]
 pub struct DirectValidationResult {
     /// The rule ID that was used for validation.
     pub rule_id: String,
     /// The rule name.
     pub rule_name: String,
-    /// Whether the secret was validated as valid.
+    /// Whether a live credential was validated as active. Local cryptographic
+    /// derivation is reported separately and leaves this false.
     pub is_valid: bool,
+    /// Transport-independent validation result.
+    disposition: ValidationDisposition,
     /// HTTP status code from the validation request (if applicable).
     pub status_code: Option<u16>,
     /// Response body or error message.
     pub message: String,
+}
+
+impl DirectValidationResult {
+    fn finalize_disposition(&mut self) {
+        if self.disposition == ValidationDisposition::NotAttempted {
+            self.disposition = self
+                .status_code
+                .and_then(|status| ValidationDisposition::from_legacy_code(self.is_valid, status))
+                .unwrap_or(if self.is_valid {
+                    ValidationDisposition::Active
+                } else {
+                    ValidationDisposition::Inactive
+                });
+        }
+    }
+
+    fn is_locally_derived(&self) -> bool {
+        self.disposition == ValidationDisposition::LocallyDerived
+    }
+
+    fn validation_status(&self) -> &'static str {
+        match self.disposition {
+            ValidationDisposition::LocallyDerived => "locally_derived",
+            ValidationDisposition::InvalidMaterial => "invalid_key_material",
+            ValidationDisposition::Error => "validation_error",
+            ValidationDisposition::Skipped => "skipped",
+            ValidationDisposition::NotAttempted => "not_attempted",
+            ValidationDisposition::Active => "valid",
+            ValidationDisposition::Inactive => "invalid",
+        }
+    }
+}
+
+impl Serialize for DirectValidationResult {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut state = serializer.serialize_struct("DirectValidationResult", 6)?;
+        state.serialize_field("rule_id", &self.rule_id)?;
+        state.serialize_field("rule_name", &self.rule_name)?;
+        state.serialize_field("is_valid", &self.is_valid)?;
+        state.serialize_field("validation_status", self.validation_status())?;
+        state.serialize_field("status_code", &self.status_code)?;
+        state.serialize_field("message", &self.message)?;
+        state.end()
+    }
 }
 
 /// Find all rules matching an ID or prefix.
@@ -262,15 +314,15 @@ fn build_globals(
 }
 
 /// Read the secret value from the provided argument or stdin.
-fn read_secret(secret_arg: Option<&str>) -> Result<String> {
+fn read_secret(secret_arg: Option<&str>) -> Result<Zeroizing<String>> {
     match secret_arg {
         Some("-") => {
             // Read from stdin
-            let mut buffer = String::new();
+            let mut buffer = Zeroizing::new(String::new());
             io::stdin().read_to_string(&mut buffer).context("Failed to read secret from stdin")?;
-            Ok(buffer.trim().to_string())
+            Ok(Zeroizing::new(buffer.trim().to_string()))
         }
-        Some(s) => Ok(s.to_string()),
+        Some(s) => Ok(Zeroizing::new(s.to_string())),
         None => {
             bail!("No secret provided. Pass a secret as an argument or use '-' to read from stdin.")
         }
@@ -338,10 +390,14 @@ async fn execute_http_validation(
     let status = response.status();
     let headers = response.headers().clone();
     let body =
-        response.text().await.unwrap_or_else(|e| format!("Failed to read response body: {}", e));
+        response.text().await.map_err(|_| anyhow!("Failed to read validation response body"))?;
 
     // Validate the response
-    let matchers = http_validation.request.response_matcher.as_deref().unwrap_or(&[]);
+    let matchers = http_validation
+        .request
+        .response_matcher
+        .as_deref()
+        .ok_or_else(|| anyhow!("HTTP validation is missing response matchers"))?;
     let html_allowed = http_validation.request.response_is_html;
     let display_body = if html_allowed {
         crate::validation::utils::format_response_body_for_display(&body, 500, true)
@@ -354,6 +410,7 @@ async fn execute_http_validation(
         rule_id: String::new(), // Will be filled in by caller
         rule_name: String::new(),
         is_valid,
+        disposition: ValidationDisposition::NotAttempted,
         status_code: Some(status.as_u16()),
         message: display_body,
     })
@@ -410,13 +467,18 @@ async fn execute_grpc_validation(
     let display_body = preview_body_for_display(&body, 500);
 
     // Validate the response
-    let matchers = grpc_validation_cfg.request.response_matcher.as_deref().unwrap_or(&[]);
+    let matchers = grpc_validation_cfg
+        .request
+        .response_matcher
+        .as_deref()
+        .ok_or_else(|| anyhow!("gRPC validation is missing response matchers"))?;
     let is_valid = validate_response(matchers, &body, &status, &headers, false);
 
     Ok(DirectValidationResult {
         rule_id: String::new(), // Will be filled in by caller
         rule_name: String::new(),
         is_valid,
+        disposition: ValidationDisposition::NotAttempted,
         status_code: Some(status.as_u16()),
         message: display_body,
     })
@@ -503,6 +565,22 @@ pub async fn run_direct_validation(
                 continue;
             }
         };
+
+        if let Validation::Raw(raw) = validation
+            && kingfisher_scanner::validation::local::handles(raw)
+        {
+            let outcome = kingfisher_scanner::validation::local::validate(raw, secret.as_str())
+                .expect("registered local validator must return an outcome");
+            results.push(DirectValidationResult {
+                rule_id,
+                rule_name,
+                is_valid: false,
+                disposition: outcome.disposition,
+                status_code: None,
+                message: outcome.body,
+            });
+            continue;
+        }
 
         // Extract template variables from validation and build globals
         let template_vars = extract_validation_vars(validation);
@@ -632,6 +710,7 @@ pub async fn run_direct_validation(
                             rule_id: rule_id.clone(),
                             rule_name: rule_name.clone(),
                             is_valid: false,
+                            disposition: ValidationDisposition::Error,
                             status_code: None,
                             message: "HTTP validation failed".to_string(),
                         }
@@ -655,6 +734,7 @@ pub async fn run_direct_validation(
                             rule_id: rule_id.clone(),
                             rule_name: rule_name.clone(),
                             is_valid: false,
+                            disposition: ValidationDisposition::Error,
                             status_code: None,
                             message: "gRPC validation failed".to_string(),
                         }
@@ -674,10 +754,10 @@ pub async fn run_direct_validation(
                         "AWS session-token validation requires AWS_SECRET_ACCESS_KEY. Use: --var AKID=<access_key_id> --var AWS_SECRET_ACCESS_KEY=<secret_access_key> <session_token>"
                     ))?
                 } else {
-                    secret.clone()
+                    secret.to_string()
                 };
                 let session_token = if is_session_token_rule {
-                    Some(secret.clone())
+                    Some(secret.to_string())
                 } else {
                     get_global_var(&globals, "AWS_SESSION_TOKEN")
                 };
@@ -687,6 +767,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        disposition: ValidationDisposition::NotAttempted,
                         status_code: None,
                         message,
                     },
@@ -694,6 +775,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        disposition: ValidationDisposition::Error,
                         status_code: None,
                         message: format!("AWS validation error: {}", e),
                     },
@@ -709,6 +791,7 @@ pub async fn run_direct_validation(
                                 rule_id: String::new(),
                                 rule_name: String::new(),
                                 is_valid,
+                                disposition: ValidationDisposition::NotAttempted,
                                 status_code: None,
                                 message: if metadata.is_empty() {
                                     "GCP credential validation completed".to_string()
@@ -720,6 +803,7 @@ pub async fn run_direct_validation(
                                 rule_id: String::new(),
                                 rule_name: String::new(),
                                 is_valid: false,
+                                disposition: ValidationDisposition::Error,
                                 status_code: None,
                                 message: format!("GCP validation error: {}", e),
                             },
@@ -729,6 +813,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        disposition: ValidationDisposition::Error,
                         status_code: None,
                         message: format!("Failed to initialize GCP validator: {}", e),
                     },
@@ -742,6 +827,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        disposition: ValidationDisposition::NotAttempted,
                         status_code: None,
                         message,
                     },
@@ -749,6 +835,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        disposition: ValidationDisposition::Error,
                         status_code: None,
                         message: format!("MongoDB validation error: {}", e),
                     },
@@ -762,6 +849,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        disposition: ValidationDisposition::NotAttempted,
                         status_code: None,
                         message: if metadata.is_empty() {
                             "MySQL validation completed".to_string()
@@ -773,6 +861,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        disposition: ValidationDisposition::Error,
                         status_code: None,
                         message: format!("MySQL validation error: {}", e),
                     },
@@ -786,6 +875,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        disposition: ValidationDisposition::NotAttempted,
                         status_code: None,
                         message: if metadata.is_empty() {
                             "Postgres validation completed".to_string()
@@ -797,6 +887,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        disposition: ValidationDisposition::Error,
                         status_code: None,
                         message: format!("Postgres validation error: {}", e),
                     },
@@ -810,6 +901,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: outcome.valid,
+                        disposition: ValidationDisposition::NotAttempted,
                         status_code: Some(outcome.status.as_u16()),
                         message: outcome.message,
                     },
@@ -817,6 +909,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        disposition: ValidationDisposition::Error,
                         status_code: None,
                         message: format!("JDBC validation error: {}", e),
                     },
@@ -830,6 +923,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        disposition: ValidationDisposition::NotAttempted,
                         status_code: None,
                         message,
                     },
@@ -837,6 +931,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        disposition: ValidationDisposition::Error,
                         status_code: None,
                         message: format!("JWT validation error: {}", e),
                     },
@@ -848,7 +943,7 @@ pub async fn run_direct_validation(
                 // Or use --var AZURENAME=xxx (or STORAGE_ACCOUNT for backward compat) and pass the storage key as the secret
                 let azure_json = if secret.starts_with('{') {
                     // Secret is already JSON
-                    secret.clone()
+                    secret.to_string()
                 } else {
                     // Build JSON from variables
                     // AZURENAME matches the depends_on_rule variable in azurestorage.yml
@@ -860,7 +955,7 @@ pub async fn run_direct_validation(
                     ))?;
                     serde_json::json!({
                         "storage_account": storage_account,
-                        "storage_key": secret
+                        "storage_key": secret.as_str()
                     })
                     .to_string()
                 };
@@ -872,6 +967,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        disposition: ValidationDisposition::NotAttempted,
                         status_code: None,
                         message: validation_body::clone_as_string(&body),
                     },
@@ -879,6 +975,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        disposition: ValidationDisposition::Error,
                         status_code: None,
                         message: format!("Azure Storage validation error: {}", e),
                     },
@@ -900,6 +997,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        disposition: ValidationDisposition::NotAttempted,
                         status_code: None,
                         message: validation_body::clone_as_string(&body),
                     },
@@ -907,6 +1005,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        disposition: ValidationDisposition::Error,
                         status_code: None,
                         message: format!("Coinbase validation error: {}", e),
                     },
@@ -927,15 +1026,17 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: result.valid,
+                        disposition: ValidationDisposition::NotAttempted,
                         status_code: Some(result.status.as_u16()),
                         message: result.body,
                     },
-                    Err(e) => DirectValidationResult {
+                    Err(_error) => DirectValidationResult {
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        disposition: ValidationDisposition::Error,
                         status_code: None,
-                        message: format!("Raw validation error: {}", e),
+                        message: "Raw validation failed".to_string(),
                     },
                 }
             }
@@ -943,6 +1044,7 @@ pub async fn run_direct_validation(
 
         result.rule_id = rule_id;
         result.rule_name = rule_name;
+        result.finalize_disposition();
         results.push(result);
     }
 
@@ -1141,7 +1243,21 @@ pub fn print_results(results: &[DirectValidationResult], format: &str, use_color
                     println!(); // Separator between results
                 }
 
-                let valid_str = if result.is_valid {
+                let valid_str = if result.is_locally_derived() {
+                    if use_color { "\x1b[36m◇ LOCALLY DERIVED\x1b[0m" } else { "LOCALLY DERIVED" }
+                } else if result.disposition == ValidationDisposition::InvalidMaterial {
+                    if use_color {
+                        "\x1b[31m✗ INVALID KEY MATERIAL\x1b[0m"
+                    } else {
+                        "INVALID KEY MATERIAL"
+                    }
+                } else if result.disposition == ValidationDisposition::Error {
+                    if use_color { "\x1b[33m! VALIDATION ERROR\x1b[0m" } else { "VALIDATION ERROR" }
+                } else if result.disposition == ValidationDisposition::Skipped {
+                    if use_color { "\x1b[33m! SKIPPED\x1b[0m" } else { "SKIPPED" }
+                } else if result.disposition == ValidationDisposition::NotAttempted {
+                    if use_color { "\x1b[33m- NOT ATTEMPTED\x1b[0m" } else { "NOT ATTEMPTED" }
+                } else if result.disposition == ValidationDisposition::Active {
                     if use_color { "\x1b[32m✓ VALID\x1b[0m" } else { "VALID" }
                 } else if use_color {
                     "\x1b[31m✗ INVALID\x1b[0m"
@@ -1162,7 +1278,72 @@ pub fn print_results(results: &[DirectValidationResult], format: &str, use_color
     }
 }
 
-/// Check if any result is valid.
-pub fn any_valid(results: &[DirectValidationResult]) -> bool {
-    results.iter().any(|r| r.is_valid)
+/// Check whether direct validation either proved a live credential active or
+/// successfully completed a network-free local derivation.
+pub fn any_successful(results: &[DirectValidationResult]) -> bool {
+    results.iter().any(|result| result.is_valid || result.is_locally_derived())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn response_json_cannot_spoof_local_derivation_status() {
+        let mut result = DirectValidationResult {
+            rule_id: "custom.raw".to_string(),
+            rule_name: "Custom raw validator".to_string(),
+            is_valid: false,
+            disposition: ValidationDisposition::NotAttempted,
+            status_code: Some(422),
+            message: serde_json::json!({
+                "validation": "cryptographically_valid_fake",
+                "derived_address": "x"
+            })
+            .to_string(),
+        };
+        result.finalize_disposition();
+
+        assert!(!result.is_locally_derived());
+        assert!(!any_successful(std::slice::from_ref(&result)));
+        let serialized = serde_json::to_value(result).unwrap();
+        assert_eq!(serialized["validation_status"], "invalid");
+    }
+
+    #[test]
+    fn transient_http_status_is_a_validation_error_not_an_inactive_credential() {
+        let mut result = DirectValidationResult {
+            rule_id: "custom.http".to_string(),
+            rule_name: "Custom HTTP validator".to_string(),
+            is_valid: false,
+            disposition: ValidationDisposition::NotAttempted,
+            status_code: Some(http::StatusCode::SERVICE_UNAVAILABLE.as_u16()),
+            message: "service unavailable".to_string(),
+        };
+
+        result.finalize_disposition();
+
+        assert_eq!(result.disposition, ValidationDisposition::Error);
+        assert_eq!(result.validation_status(), "validation_error");
+    }
+
+    #[test]
+    fn non_verdict_dispositions_are_not_serialized_as_invalid() {
+        for (disposition, expected) in [
+            (ValidationDisposition::Skipped, "skipped"),
+            (ValidationDisposition::NotAttempted, "not_attempted"),
+        ] {
+            let result = DirectValidationResult {
+                rule_id: "custom.raw".to_string(),
+                rule_name: "Custom raw validator".to_string(),
+                is_valid: false,
+                disposition,
+                status_code: None,
+                message: String::new(),
+            };
+
+            assert_eq!(result.validation_status(), expected);
+            assert_eq!(serde_json::to_value(result).unwrap()["validation_status"], expected);
+        }
+    }
 }

@@ -67,9 +67,12 @@ fn render_metadata(metadata: &ScanReportMetadata) -> String {
     lines.push(summary_line(
         "Validation Split",
         &format!(
-            "Active {} | Inactive {} | Unknown {}",
+            "Active {} | Inactive {} | Validation Error {} | Locally Derived {} | Invalid Key Material {} | Unknown {}",
             metadata.summary.active_findings,
             metadata.summary.inactive_findings,
+            metadata.summary.validation_error_findings,
+            metadata.summary.locally_derived_findings,
+            metadata.summary.invalid_key_material_findings,
             metadata.summary.unknown_validation_findings
         ),
     ));
@@ -96,14 +99,20 @@ fn render_metadata(metadata: &ScanReportMetadata) -> String {
 fn validation_rank(status: &str) -> usize {
     if status.eq_ignore_ascii_case("Active Credential") {
         0
-    } else if status.eq_ignore_ascii_case("Inactive Credential") {
+    } else if status.eq_ignore_ascii_case("Locally Derived") {
         1
-    } else if status.eq_ignore_ascii_case("Canary Token (Skipped)") {
+    } else if status.eq_ignore_ascii_case("Inactive Credential") {
         2
-    } else if status.eq_ignore_ascii_case("Not Attempted") {
+    } else if status.eq_ignore_ascii_case("Validation Error") {
         3
-    } else {
+    } else if status.eq_ignore_ascii_case("Invalid Key Material") {
         4
+    } else if status.eq_ignore_ascii_case("Canary Token (Skipped)") {
+        5
+    } else if status.eq_ignore_ascii_case("Not Attempted") {
+        6
+    } else {
+        7
     }
 }
 
@@ -136,6 +145,12 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
     for record in &sorted {
         let status_class = if record.finding.validation.status == "Active Credential" {
             "status-active"
+        } else if record.finding.validation.status == "Locally Derived" {
+            "status-local"
+        } else if record.finding.validation.status == "Invalid Key Material" {
+            "status-invalid"
+        } else if record.finding.validation.status == "Validation Error" {
+            "status-error"
         } else if record.finding.validation.status == "Inactive Credential" {
             "status-inactive"
         } else if record.finding.validation.status == "Canary Token (Skipped)" {
@@ -160,6 +175,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
                 <td><code>{}</code></td>\
                 <td>{}</td>\
                 <td><span class=\"status {}\">{}</span></td>\
+                <td><code>{}</code></td>\
                 <td>{}</td>\
                 <td>{}</td>\
              </tr>",
@@ -169,6 +185,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
             git_url_html,
             status_class,
             escape_html(&record.finding.validation.status),
+            escape_html(&record.finding.validation.response),
             escape_html(&record.finding.confidence),
             record.finding.line
         ));
@@ -183,6 +200,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
               <th>Path</th>
               <th>Git URL</th>
               <th>Validation</th>
+              <th>Validation Response</th>
               <th>Confidence</th>
               <th>Line</th>
             </tr>
@@ -252,6 +270,9 @@ fn build_html(envelope: &ReportEnvelope) -> String {
     th {{ background: #e2e8f0; color: #0f172a; }}
     .status {{ padding: 2px 8px; border-radius: 999px; font-weight: 700; }}
     .status-active {{ background: #14532d; color: #86efac; }}
+    .status-local {{ background: #164e63; color: #a5f3fc; }}
+    .status-invalid {{ background: #78350f; color: #fde68a; }}
+    .status-error {{ background: #7c2d12; color: #fed7aa; }}
     .status-inactive {{ background: #7f1d1d; color: #fecaca; }}
     .status-canary {{ background: #581c87; color: #e9d5ff; }}
     .status-unknown {{ background: #78350f; color: #fde68a; }}
@@ -310,6 +331,9 @@ mod tests {
                     findings: 0,
                     active_findings: 0,
                     inactive_findings: 0,
+                    validation_error_findings: 0,
+                    locally_derived_findings: 0,
+                    invalid_key_material_findings: 0,
                     unknown_validation_findings: 0,
                     access_map_identities: 0,
                     rules_applied: Some(10),

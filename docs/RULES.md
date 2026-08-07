@@ -10,7 +10,7 @@ A _rule_ in Kingfisher is a YAML document that describes how to detect and (opti
 
 This document explains how to write custom rules for Kingfisher using a YAML-based rule system. The rules define regular expressions to detect secrets in source code and other textual data, and they can include validation or revocation steps to confirm or invalidate the secret. By using a rules-based system, Kingfisher is highly extensible—new rules can be added or existing ones modified without changing the core code.
 
-Kingfisher currently bundles 1,051 rules: 914 standalone detectors and 137 dependent rules. Of the standalone detectors, 516 support live validation.
+Kingfisher currently bundles 1,055 rules: 918 standalone detectors and 137 dependent rules. Of the standalone detectors, 519 support validation.
 
 ## 1. Rule Schema
 
@@ -189,9 +189,17 @@ validation:
   content: kraken
 ```
 
-Use `Raw` only when the provider check cannot be expressed reliably with `Http` or `Grpc` and does not justify a new reusable validator family. Raw validator implementations live in `crates/kingfisher-scanner/src/validation/raw.rs`.
+Use `Raw` only when the provider check cannot be expressed reliably with `Http` or `Grpc` and does not justify a new reusable validator family. Provider/protocol implementations live in `crates/kingfisher-scanner/src/validation/raw.rs`; network-free Ethereum parsing is isolated in `validation/ethereum.rs`.
 
 Typed validators are safer and more reusable because the validator kind is part of the schema. `Raw` validators are string-dispatched; an unknown `content` name is reported as an unimplemented, unverified validation result. If you need a Rust-backed exception path for one provider, prefer `Raw`; reserve new typed validators for stable validation families that can be reused across rules.
+
+Three built-in Ethereum rules use deterministic local validation:
+
+- `ethereum_private_key` parses a 32-byte secp256k1 scalar and derives its EIP-55 address with Alloy.
+- `ethereum_public_key` validates a compressed SEC1 point, an uncompressed SEC1 point, or a raw 64-byte `x || y` point and derives its EIP-55 address with Alloy. Because public keys are identifiers rather than secrets, this helper rule is hidden from ordinary reports; use `--include-hidden-findings` when inventorying them.
+- `ethereum_mnemonic` verifies English BIP-39 material and derives one candidate account at `m/44'/60'/0'/0/0` with an explicitly assumed empty BIP-39 passphrase.
+
+These validators live behind the network-free `validation-ethereum` feature and never transmit key material. A successful scan result is labeled `Locally Derived`, does not increment successful credential validations, and does not trigger the active-credential exit code. It proves only that the captured material parses cryptographically and yields the reported address—not that the address has funds, has transacted, or is active on-chain. For mnemonics, a different BIP-39 passphrase or derivation path can yield a different address. Generic labels such as `mnemonic` are reported by the chain-neutral `kingfisher.bip39.mnemonic` rule and are not assigned an Ethereum address.
 
 ## gRPC Validation (Grpc)
 
@@ -484,6 +492,7 @@ Below is the complete list of Liquid filters available in Kingfisher, along with
 | `b64dec`              | –                                            | Decodes a Base64 string.                                                                                        | `{{ "aGVsbG8=" \| b64dec }}`                                         |
 | `b64url_dec`          | –                                            | Decodes a URL-safe Base64 string (with or without padding).                                                     | `{{ "Kys_Pw" \| b64url_dec }}`                                       |
 | `sha256`              | –                                            | Computes the SHA-256 hex digest of the input.                                                                  | `{{ TOKEN \| sha256 }}`                                              |
+| `bip39_valid`         | –                                            | Returns `true` only for a checksum-valid English BIP-39 mnemonic. Intended for local `pattern_requirements.checksum`; it does not derive keys or check wallet activity. | `{{ MNEMONIC \| bip39_valid }}` |
 | `crc32`               | –                                            | Computes the CRC32 checksum of the input and returns a decimal value. | `{{ TOKEN \| crc32 }}` |
 | `crc32_dec`           | `digits` (integer, optional)                 | Computes the CRC32 checksum and returns the last `digits` decimal characters (zero-padded). Defaults to the full value when omitted. | `{{ TOKEN \| crc32_dec: 6 }}` |
 | `crc32_hex`           | `digits` (integer, optional)                 | Computes the CRC32 checksum and returns the last `digits` hexadecimal characters (zero-padded). Defaults to the full value when omitted. | `{{ TOKEN \| crc32_hex: 8 }}` |

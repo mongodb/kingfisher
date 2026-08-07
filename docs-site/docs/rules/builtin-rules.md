@@ -1,13 +1,13 @@
 ---
 title: "Built-in Rules List"
-description: "Complete list of all 1051 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
+description: "Complete list of all 1055 built-in secret detection rules in Kingfisher. Searchable and filterable by provider, confidence level, and validation support."
 ---
 
 # Built-in Rules
 
-Kingfisher ships with **1051 detection rules** across **612 providers**
-(914 detectors + 137 dependent rules).
-Of these, **516** include live validation and **52** support direct revocation.
+Kingfisher ships with **1055 detection rules** across **614 providers**
+(918 detectors + 137 dependent rules).
+Of these, **519** include validation and **52** support direct revocation.
 
 !!! tip "Search"
     Use the search box below to filter rules by provider name, rule ID, or confidence level.
@@ -1057,6 +1057,14 @@ Of these, **516** include live validation and **52** support direct revocation.
 <td><code>kingfisher.betterstack.1</code></td>
 <td>Medium</td>
 <td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Bip39</td>
+<td>BIP-39 Seed Phrase</td>
+<td><code>kingfisher.bip39.mnemonic</code></td>
+<td>Medium</td>
+<td></td>
 <td></td>
 </tr>
 <tr>
@@ -2719,6 +2727,30 @@ Of these, **516** include live validation and **52** support direct revocation.
 <td>Eraserio</td>
 <td>Eraser API Key</td>
 <td><code>kingfisher.eraser.1</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Ethereum</td>
+<td>Ethereum BIP-39 Seed Phrase</td>
+<td><code>kingfisher.ethereum.mnemonic</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Ethereum</td>
+<td>Ethereum Private Key</td>
+<td><code>kingfisher.ethereum.private_key</code></td>
+<td>Medium</td>
+<td>Yes</td>
+<td></td>
+</tr>
+<tr>
+<td>Ethereum</td>
+<td>Ethereum Public Key (Public Identifier)</td>
+<td><code>kingfisher.ethereum.public_key</code></td>
 <td>Medium</td>
 <td>Yes</td>
 <td></td>

@@ -288,6 +288,11 @@ mod tests {
             validation_response_body: validation_body::from_string("validation response"),
             validation_response_status: 200,
             validation_success,
+            validation_disposition:
+                kingfisher_scanner::validation::ValidationDisposition::from_legacy(
+                    validation_success,
+                    http::StatusCode::OK,
+                ),
             calculated_entropy: 4.5,
             visible: true,
             is_base64: false,
@@ -435,6 +440,54 @@ mod tests {
             let validation_status = first["finding"]["validation"]["status"].as_str().unwrap();
             assert_eq!(validation_status, expected_status);
         }
+        Ok(())
+    }
+
+    #[test]
+    fn local_derivation_status_uses_disposition_and_strict_safe_response() -> Result<()> {
+        let mut mock_match =
+            create_mock_match("Ethereum Private Key", "kingfisher.ethereum.private_key", false);
+        Arc::make_mut(&mut mock_match.rule).syntax.validation =
+            Some(crate::rules::Validation::Raw("ethereum_private_key".to_string()));
+        mock_match.validation_response_status = http::StatusCode::CONTINUE.as_u16();
+        mock_match.validation_disposition =
+            kingfisher_scanner::validation::ValidationDisposition::LocallyDerived;
+        mock_match.validation_response_body = validation_body::from_string(
+            serde_json::json!({
+                "validation": "cryptographically_valid_key_material",
+                "derived_address": "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+                "derivation": "local",
+                "key_type": "secp256k1_private_key",
+            })
+            .to_string(),
+        );
+
+        let reporter = setup_mock_reporter(vec![ReportMatch {
+            origin: OriginSet::new(Origin::from_file(PathBuf::from("/mock/path/file.rs")), vec![]),
+            blob_metadata: BlobMetadata {
+                id: BlobId::new(b"mock_blob"),
+                num_bytes: 1024,
+                mime_essence: Some("text/plain".to_string()),
+                language: Some("Rust".to_string()),
+            },
+            validation_response_body: mock_match.validation_response_body.clone(),
+            validation_response_status: mock_match.validation_response_status,
+            validation_success: false,
+            m: mock_match,
+            comment: None,
+            match_confidence: Confidence::Medium,
+            visible: true,
+        }]);
+        let mut output = Cursor::new(Vec::new());
+        reporter.json_format(&mut output, &create_default_args())?;
+        let report: serde_json::Value = serde_json::from_slice(&output.into_inner())?;
+        assert_eq!(report["findings"][0]["finding"]["validation"]["status"], "Locally Derived");
+        assert!(
+            report["findings"][0]["finding"]["validation"]["response"]
+                .as_str()
+                .unwrap()
+                .contains("derived_address")
+        );
         Ok(())
     }
 }

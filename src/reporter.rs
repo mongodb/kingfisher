@@ -12,7 +12,9 @@ use schemars::JsonSchema;
 use serde::Serialize;
 use url::Url;
 
-use kingfisher_scanner::validation::http_validation::is_auto_provided_request_var;
+use kingfisher_scanner::validation::{
+    ValidationDisposition, http_validation::is_auto_provided_request_var,
+};
 
 use crate::{
     access_map::{
@@ -932,36 +934,47 @@ impl DetailsReporter {
                 .find(|c| c.name.map(|n| n.eq_ignore_ascii_case("TOKEN")).unwrap_or(false))
                 .or_else(|| rm.m.groups.captures.first());
 
-        // Get raw snippet value (for revoke/validate command) and display snippet (for output)
-        let (raw_snippet, snippet) = if let Some(capture) = snippet_capture {
-            let raw = capture.raw_value().to_string();
+        // Build only the display value here. The raw value is borrowed below
+        // only when command generation is enabled, so redacted reports do not
+        // allocate another owned plaintext copy of the secret.
+        let snippet = if let Some(capture) = snippet_capture {
             let displayed = capture.display_value();
-            (raw, Escaped(displayed.as_ref().as_bytes()).to_string())
+            Escaped(displayed.as_ref().as_bytes()).to_string()
         } else {
-            (String::new(), String::new())
-        };
-
-        let validation_status = if rm.validation_success {
-            "Active Credential".to_string()
-        } else if rm.validation_response_status == StatusCode::PRECONDITION_REQUIRED.as_u16()
-            && validation_body::as_str(&rm.validation_response_body)
-                .starts_with("(skip list entry)")
-        {
-            "Canary Token (Skipped)".to_string()
-        } else if matches!(
-            rm.validation_response_status,
-            status if status == StatusCode::CONTINUE.as_u16()
-                || status == StatusCode::PRECONDITION_REQUIRED.as_u16()
-        ) {
-            "Not Attempted".to_string()
-        } else {
-            "Inactive Credential".to_string()
+            String::new()
         };
 
         let validation_body_str = validation_body::as_str(&rm.validation_response_body);
+        let disposition = Self::validation_disposition(rm);
+        let canary_skipped = rm.validation_response_status
+            == StatusCode::PRECONDITION_REQUIRED.as_u16()
+            && validation_body::as_str(&rm.validation_response_body)
+                .starts_with("(skip list entry)");
+        let validation_status = match disposition {
+            ValidationDisposition::LocallyDerived => "Locally Derived",
+            ValidationDisposition::InvalidMaterial => "Invalid Key Material",
+            ValidationDisposition::Active => "Active Credential",
+            ValidationDisposition::Error => "Validation Error",
+            ValidationDisposition::Skipped if canary_skipped => "Canary Token (Skipped)",
+            ValidationDisposition::NotAttempted | ValidationDisposition::Skipped => "Not Attempted",
+            ValidationDisposition::Inactive => "Inactive Credential",
+        }
+        .to_string();
+
+        let sanitized_local_response = match rm.m.rule.syntax.validation.as_ref() {
+            Some(crate::rules::Validation::Raw(kind)) if disposition.is_local() => {
+                kingfisher_scanner::validation::local::sanitized_report_body(
+                    kind,
+                    disposition,
+                    validation_body_str,
+                )
+            }
+            _ => None,
+        };
+
         let response_body = format_validation_response(
-            validation_body_str,
-            args.redact,
+            sanitized_local_response.as_deref().unwrap_or(validation_body_str),
+            if disposition.is_local() { sanitized_local_response.is_none() } else { args.redact },
             args.full_validation_response,
         );
 
@@ -996,6 +1009,8 @@ impl DetailsReporter {
         let (validate_command, revoke_command) = if args.redact {
             (None, None)
         } else {
+            let raw_snippet =
+                snippet_capture.map(|capture| capture.raw_value()).unwrap_or_default();
             // Try to find AKID from captures (for AWS)
             let akid_from_captures: Option<String> =
                 rm.m.groups
@@ -1025,7 +1040,7 @@ impl DetailsReporter {
                 build_validate_command(
                     rm.m.rule.id(),
                     validation,
-                    &raw_snippet,
+                    raw_snippet,
                     &merged_vars,
                     akid_from_captures.as_deref(),
                     akid_from_body.as_deref(),
@@ -1052,7 +1067,7 @@ impl DetailsReporter {
                     build_revoke_command(
                         rm.m.rule.id(),
                         revocation,
-                        &raw_snippet,
+                        raw_snippet,
                         &merged_vars,
                         akid_from_captures.as_deref(),
                         akid_from_body.as_deref(),
@@ -1145,6 +1160,18 @@ impl DetailsReporter {
         if value.trim().is_empty() { None } else { Some(value) }
     }
 
+    fn validation_disposition(rm: &ReportMatch) -> ValidationDisposition {
+        if rm.m.validation_disposition == ValidationDisposition::NotAttempted {
+            ValidationDisposition::from_legacy_code(
+                rm.validation_success,
+                rm.validation_response_status,
+            )
+            .unwrap_or(ValidationDisposition::NotAttempted)
+        } else {
+            rm.m.validation_disposition
+        }
+    }
+
     pub fn build_finding_records(
         &self,
         args: &cli::commands::scan::ScanArgs,
@@ -1157,9 +1184,13 @@ impl DetailsReporter {
         &self,
         args: &cli::commands::scan::ScanArgs,
     ) -> Result<ReportEnvelope> {
-        let findings = self.build_finding_records(args)?;
+        let matches = self.matches_for_output(args)?;
+        let dispositions = matches.iter().map(Self::validation_disposition).collect::<Vec<_>>();
+        let findings: Vec<_> =
+            matches.iter().map(|rm| self.build_finding_record(rm, args)).collect();
         let access_map = self.build_access_map_records(args);
-        let metadata = self.build_report_metadata(args, &findings, access_map.as_ref());
+        let metadata =
+            self.build_report_metadata(args, findings.len(), &dispositions, access_map.as_ref());
 
         Ok(ReportEnvelope { findings, access_map, metadata: Some(metadata) })
     }
@@ -1167,21 +1198,27 @@ impl DetailsReporter {
     fn build_report_metadata(
         &self,
         args: &cli::commands::scan::ScanArgs,
-        findings: &[FindingReporterRecord],
+        finding_count: usize,
+        dispositions: &[ValidationDisposition],
         access_map: Option<&Vec<AccessMapEntry>>,
     ) -> ScanReportMetadata {
         let mut active_findings = 0usize;
         let mut inactive_findings = 0usize;
+        let mut validation_error_findings = 0usize;
+        let mut locally_derived_findings = 0usize;
+        let mut invalid_key_material_findings = 0usize;
         let mut unknown_validation_findings = 0usize;
 
-        for record in findings {
-            let status = record.finding.validation.status.to_ascii_lowercase();
-            if status.contains("inactive") {
-                inactive_findings += 1;
-            } else if status.contains("active") {
-                active_findings += 1;
-            } else {
-                unknown_validation_findings += 1;
+        for disposition in dispositions {
+            match disposition {
+                ValidationDisposition::Active => active_findings += 1,
+                ValidationDisposition::Inactive => inactive_findings += 1,
+                ValidationDisposition::Error => validation_error_findings += 1,
+                ValidationDisposition::LocallyDerived => locally_derived_findings += 1,
+                ValidationDisposition::InvalidMaterial => invalid_key_material_findings += 1,
+                ValidationDisposition::NotAttempted | ValidationDisposition::Skipped => {
+                    unknown_validation_findings += 1;
+                }
             }
         }
 
@@ -1210,9 +1247,12 @@ impl DetailsReporter {
                 .as_ref()
                 .and_then(|ctx| ctx.update_check_status.clone()),
             summary: ScanReportSummary {
-                findings: findings.len(),
+                findings: finding_count,
                 active_findings,
                 inactive_findings,
+                validation_error_findings,
+                locally_derived_findings,
+                invalid_key_material_findings,
                 unknown_validation_findings,
                 access_map_identities: access_map.map_or(0, Vec::len),
                 rules_applied: self.audit_context.as_ref().and_then(|ctx| ctx.rules_applied),
@@ -1591,6 +1631,9 @@ pub struct ScanReportSummary {
     pub findings: usize,
     pub active_findings: usize,
     pub inactive_findings: usize,
+    pub validation_error_findings: usize,
+    pub locally_derived_findings: usize,
+    pub invalid_key_material_findings: usize,
     pub unknown_validation_findings: usize,
     pub access_map_identities: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1997,6 +2040,11 @@ mod tests {
                 validation_response_body: validation_body_stored.clone(),
                 validation_response_status: validation_status,
                 validation_success,
+                validation_disposition: ValidationDisposition::from_legacy(
+                    validation_success,
+                    http::StatusCode::from_u16(validation_status)
+                        .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR),
+                ),
                 calculated_entropy: 5.29,
                 visible: true,
                 is_base64: false,
@@ -2158,6 +2206,52 @@ mod tests {
 
         assert!(!response.contains(secret));
         assert!(response.starts_with("[REDACTED:"));
+    }
+
+    #[test]
+    fn malformed_local_evidence_is_redacted_fail_closed() {
+        let secret = "private-material-must-not-appear";
+        let unsafe_body = serde_json::json!({
+            "validation": "cryptographically_valid_key_material",
+            "derived_address": "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf",
+            "derivation": "local",
+            "key_type": "secp256k1_private_key",
+            "unexpected_private_material": secret,
+        })
+        .to_string();
+        let (mut report_match, _) =
+            sample_report_match(&unsafe_body, StatusCode::CONTINUE.as_u16(), false);
+        report_match.m.rule = Arc::new(Rule::new(RuleSyntax {
+            name: "Ethereum Private Key".into(),
+            id: "kingfisher.ethereum.private_key".into(),
+            pattern: ".*".into(),
+            min_entropy: 0.0,
+            confidence: Confidence::Medium,
+            visible: true,
+            examples: vec![],
+            negative_examples: vec![],
+            references: vec![],
+            validation: Some(crate::rules::Validation::Raw("ethereum_private_key".into())),
+            revocation: None,
+            depends_on_rule: vec![],
+            pattern_requirements: None,
+            tls_mode: None,
+        }));
+        report_match.m.validation_disposition = ValidationDisposition::LocallyDerived;
+
+        let temp = tempdir().unwrap();
+        let reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
+                temp.path().to_path_buf(),
+            ))),
+            styles: Styles::new(false),
+            only_valid: false,
+            audit_context: None,
+        };
+        let record = reporter.build_finding_record(&report_match, &sample_scan_args());
+
+        assert!(!record.finding.validation.response.contains(secret));
+        assert!(record.finding.validation.response.starts_with("[REDACTED:"));
     }
 
     #[test]

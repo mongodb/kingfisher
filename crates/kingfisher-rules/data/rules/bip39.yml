@@ -1,0 +1,51 @@
+rules:
+  # A generic BIP-39 label proves key material, but not which chain uses it.
+  - name: BIP-39 Seed Phrase
+    id: kingfisher.bip39.mnemonic
+    pattern: |
+      (?xi)
+      ["']?
+      \b(?:mnemonic|seed[_-]?phrase|recovery[_-]?phrase)\b
+      ["']?
+      [[:blank:]]*
+      (?:[:=][[:blank:]]*|\([[:blank:]]*)
+      ["']?
+      (
+        (?P<mnemonic>
+          (?:
+            (?:[[:alpha:]]{3,8}[[:space:]]{1,16}){23}[[:alpha:]]{3,8}
+            |
+            (?:[[:alpha:]]{3,8}[[:space:]]{1,16}){20}[[:alpha:]]{3,8}
+            |
+            (?:[[:alpha:]]{3,8}[[:space:]]{1,16}){17}[[:alpha:]]{3,8}
+            |
+            (?:[[:alpha:]]{3,8}[[:space:]]{1,16}){14}[[:alpha:]]{3,8}
+            |
+            (?:[[:alpha:]]{3,8}[[:space:]]{1,16}){11}[[:alpha:]]{3,8}
+          )
+        )
+      )
+      (?:["'][[:blank:]]*|[[:blank:]]*)
+      (?:
+        [,;)\]}]
+        |
+        [\r\n]
+        |
+        (?:\#|//)[^\r\n]*(?:[\r\n]|$)
+        |
+        $
+      )
+    pattern_requirements:
+      checksum:
+        actual:
+          template: "{{ MNEMONIC | bip39_valid }}"
+          requires_capture: mnemonic
+        expected: "true"
+        skip_if_missing: false
+    min_entropy: 0.0
+    confidence: medium
+    examples:
+      - "\"mnemonic\": \"abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about\""
+      - "seed_phrase = abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"
+    references:
+      - https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki

@@ -48,6 +48,7 @@
 //!
 //! - **validation**: Enable credential validation support
 //! - **validation-http**: HTTP-based validation (included in `validation`)
+//! - **validation-ethereum**: Network-free Ethereum key parsing and address derivation
 //! - **validation-aws**: AWS credential validation via STS
 //! - **validation-all**: Enable all validation features
 
@@ -67,6 +68,8 @@ mod scanner_pool;
     feature = "validation-gcp",
     feature = "validation-jwt",
     feature = "validation-database",
+    feature = "validation-ethereum",
+    feature = "validation-raw",
     feature = "validation-all",
 ))]
 pub mod validation;

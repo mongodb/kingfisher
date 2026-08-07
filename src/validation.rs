@@ -1,7 +1,6 @@
 use std::{
     collections::BTreeMap,
     fs,
-    hash::{Hash, Hasher},
     panic::AssertUnwindSafe,
     sync::Arc,
     time::{Duration, Instant},
@@ -18,7 +17,7 @@ use liquid_core::{Value, ValueView};
 use reqwest::{Client, Url, header, header::HeaderValue, multipart};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::{sync::Notify, time};
-use tracing::{debug, trace, warn};
+use tracing::{debug, warn};
 
 use crate::{
     cli::global::TlsMode,
@@ -43,7 +42,7 @@ pub use kingfisher_scanner::validation::http_validation as httpvalidation;
 pub use kingfisher_scanner::validation::mysql::validate_mysql;
 pub use kingfisher_scanner::validation::postgres::validate_postgres;
 pub use kingfisher_scanner::validation::{
-    azure, coinbase, gcp, jdbc, jwt, mongodb, mysql, postgres,
+    ValidationDisposition, azure, coinbase, gcp, jdbc, jwt, mongodb, mysql, postgres,
 };
 pub mod utils;
 
@@ -258,7 +257,9 @@ impl ValidationClients {
 // Use SkipMap-based cache instead of a mutex-wrapped FxHashMap.
 type Cache = kingfisher_scanner::validation::Cache;
 
-/// Returns an opaque 64-bit key for internal validation deduplication.
+type ValidationCacheKey = [u8; 32];
+
+/// Returns an opaque, collision-resistant key for internal validation deduplication.
 ///
 /// This is an INTERNAL key used only for validation deduplication within a single scan.
 /// It uses `captures.get(0)` to get the primary secret value. Rules with dependent
@@ -272,51 +273,42 @@ type Cache = kingfisher_scanner::validation::Cache;
 ///
 /// The external fingerprint uses `get(1).or_else(get(0))` for backward compatibility
 /// and must remain stable. This internal key can evolve independently.
-fn validation_dedup_key(m: &OwnedBlobMatch) -> u64 {
-    let mut hasher = xxhash_rust::xxh3::Xxh3::new();
-    m.rule.syntax().id.hash(&mut hasher);
+fn validation_dedup_key(m: &OwnedBlobMatch) -> ValidationCacheKey {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(m.rule.syntax().id.as_bytes());
+    hasher.update(&[0]);
 
     // Use the first capture (primary secret) for deduplication.
-    // Note: capture_value is stored in a variable because it's also used in trace! below.
-    let capture_value = m.captures.captures.first().map(|c| c.raw_value());
-    if let Some(val) = capture_value {
-        val.hash(&mut hasher);
+    if let Some(value) = m.captures.captures.first().map(|c| c.raw_value()) {
+        hasher.update(value.as_bytes());
     }
 
     if !m.rule.syntax().depends_on_rule.is_empty() {
-        m.blob_id.hash(&mut hasher);
-        m.matching_input_offset_span.start.hash(&mut hasher);
-        m.matching_input_offset_span.end.hash(&mut hasher);
+        hasher.update(m.blob_id.as_bytes());
+        hasher.update(&m.matching_input_offset_span.start.to_le_bytes());
+        hasher.update(&m.matching_input_offset_span.end.to_le_bytes());
     }
 
-    let key = hasher.finish();
-
-    trace!(
-        rule_id = %m.rule.syntax().id,
-        capture_value = ?capture_value,
-        validation_dedup_key = key,
-        "Computed internal validation dedup key"
-    );
-
-    key
+    *hasher.finalize().as_bytes()
 }
 
-static VALIDATION_CACHE: OnceLock<DashMap<u64, CachedResponse>> = OnceLock::new();
-static IN_FLIGHT: OnceLock<DashMap<u64, Arc<Notify>>> = OnceLock::new();
+static VALIDATION_CACHE: OnceLock<DashMap<ValidationCacheKey, CachedResponse>> = OnceLock::new();
+static IN_FLIGHT: OnceLock<DashMap<ValidationCacheKey, Arc<Notify>>> = OnceLock::new();
 
-fn cache_validation_result(fp: u64, m: &OwnedBlobMatch) {
+fn cache_validation_result(fp: ValidationCacheKey, m: &OwnedBlobMatch) {
     VALIDATION_CACHE.get_or_init(DashMap::new).insert(
         fp,
         CachedResponse {
             body: m.validation_response_body.clone(),
             status: m.validation_response_status,
             is_valid: m.validation_success,
+            disposition: m.validation_disposition,
             timestamp: Instant::now(),
         },
     );
 }
 
-fn clear_in_flight_validation(fp: u64) {
+fn clear_in_flight_validation(fp: ValidationCacheKey) {
     if let Some((_, notify)) = IN_FLIGHT.get_or_init(DashMap::new).remove(&fp) {
         notify.notify_waiters();
     }
@@ -515,6 +507,7 @@ pub async fn validate_single_match(
                 m.rule.syntax().id
             ));
             m.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
+            m.validation_disposition = ValidationDisposition::Error;
             cache_validation_result(fp, m);
             clear_in_flight_validation(fp);
         }
@@ -525,6 +518,7 @@ pub async fn validate_single_match(
                 validation_timeout.as_secs()
             ));
             m.validation_response_status = StatusCode::REQUEST_TIMEOUT;
+            m.validation_disposition = ValidationDisposition::Error;
             cache_validation_result(fp, m);
             clear_in_flight_validation(fp);
         }
@@ -563,6 +557,7 @@ async fn timed_validate_single_match(
         m.validation_success = entry.is_valid;
         m.validation_response_body = entry.body.clone();
         m.validation_response_status = entry.status;
+        m.validation_disposition = entry.disposition;
         return;
     }
     if let Some(wait) =
@@ -573,6 +568,7 @@ async fn timed_validate_single_match(
             m.validation_success = entry.is_valid;
             m.validation_response_body = entry.body.clone();
             m.validation_response_status = entry.status;
+            m.validation_disposition = entry.disposition;
         }
         return;
     }
@@ -595,11 +591,35 @@ async fn timed_validate_single_match(
             missing.join(", ")
         ));
         m.validation_response_status = StatusCode::PRECONDITION_REQUIRED;
+        m.validation_disposition = ValidationDisposition::Skipped;
         commit_and_return(m);
         return;
     }
 
-    // 3. capture processing
+    // 3. deterministic local validation. Read the interned capture directly
+    // instead of allocating another plaintext copy in `process_captures`.
+    if let Some(Validation::Raw(raw)) = m.rule.syntax().validation.as_ref()
+        && kingfisher_scanner::validation::local::handles(raw)
+    {
+        let token = m
+            .captures
+            .captures
+            .iter()
+            .find(|capture| capture.name.is_some_and(|name| name.eq_ignore_ascii_case("TOKEN")))
+            .or_else(|| m.captures.captures.iter().find(|capture| capture.name.is_none()))
+            .map(|capture| capture.raw_value())
+            .unwrap_or_default();
+        let result = kingfisher_scanner::validation::local::validate(raw, token)
+            .expect("registered local validator must return an outcome");
+        m.validation_success = false;
+        m.validation_response_body = validation_body::from_string(result.body);
+        m.validation_response_status = StatusCode::CONTINUE;
+        m.validation_disposition = result.disposition;
+        commit_and_return(m);
+        return;
+    }
+
+    // 4. capture processing for network-backed validators
     let match_re_result = m.rule.syntax().as_anchored_regex();
     let mut captured_values: Vec<(String, String, usize, usize)> = match match_re_result {
         Ok(_) => utils::process_captures(&m.captures),
@@ -608,6 +628,7 @@ async fn timed_validate_single_match(
             m.validation_response_body =
                 validation_body::from_string(format!("Regex error: {}", e));
             m.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
+            m.validation_disposition = ValidationDisposition::Error;
             commit_and_return(m);
             return;
         }
@@ -746,7 +767,12 @@ async fn timed_validate_single_match(
         None => { /* no validation specified */ }
     }
 
-    // 5. persist result for success path
+    if m.validation_disposition == ValidationDisposition::NotAttempted {
+        m.validation_disposition =
+            ValidationDisposition::from_legacy(m.validation_success, m.validation_response_status);
+    }
+
+    // 6. persist result for success path
     commit_and_return(m);
 }
 
@@ -854,6 +880,7 @@ async fn validate_http(
                 m.validation_success = c.is_valid;
                 m.validation_response_body = c.body.clone();
                 m.validation_response_status = c.status;
+                m.validation_disposition = c.disposition;
                 return;
             }
         }
@@ -975,6 +1002,7 @@ async fn validate_http(
                         rule_name
                     ));
                     m.validation_response_status = StatusCode::BAD_REQUEST;
+                    m.validation_disposition = ValidationDisposition::Error;
                     return;
                 }
             };
@@ -997,6 +1025,10 @@ async fn validate_http(
                         body: body_opt,
                         status,
                         is_valid: m.validation_success,
+                        disposition: ValidationDisposition::from_legacy(
+                            m.validation_success,
+                            status,
+                        ),
                         timestamp: Instant::now(),
                     },
                 );
@@ -1127,6 +1159,7 @@ async fn validate_mongodb_rule(
             m.validation_success = c.is_valid;
             m.validation_response_body = c.body.clone();
             m.validation_response_status = c.status;
+            m.validation_disposition = c.disposition;
             return;
         }
     }
@@ -1174,6 +1207,7 @@ async fn validate_mysql_rule(
             m.validation_success = c.is_valid;
             m.validation_response_body = c.body.clone();
             m.validation_response_status = c.status;
+            m.validation_disposition = c.disposition;
             return;
         }
     }
@@ -1203,6 +1237,10 @@ async fn validate_mysql_rule(
             body: m.validation_response_body.clone(),
             status: m.validation_response_status,
             is_valid: m.validation_success,
+            disposition: ValidationDisposition::from_legacy(
+                m.validation_success,
+                m.validation_response_status,
+            ),
             timestamp: Instant::now(),
         },
     );
@@ -1240,6 +1278,7 @@ async fn validate_azure_storage(
             m.validation_success = c.is_valid;
             m.validation_response_body = c.body.clone();
             m.validation_response_status = c.status;
+            m.validation_disposition = c.disposition;
             return;
         }
     }
@@ -1264,6 +1303,10 @@ async fn validate_azure_storage(
             body: m.validation_response_body.clone(),
             status: m.validation_response_status,
             is_valid: m.validation_success,
+            disposition: ValidationDisposition::from_legacy(
+                m.validation_success,
+                m.validation_response_status,
+            ),
             timestamp: Instant::now(),
         },
     );
@@ -1296,6 +1339,7 @@ async fn validate_jdbc_rule(
             m.validation_success = c.is_valid;
             m.validation_response_body = c.body.clone();
             m.validation_response_status = c.status;
+            m.validation_disposition = c.disposition;
             return;
         }
     }
@@ -1320,6 +1364,10 @@ async fn validate_jdbc_rule(
             body: m.validation_response_body.clone(),
             status: m.validation_response_status,
             is_valid: m.validation_success,
+            disposition: ValidationDisposition::from_legacy(
+                m.validation_success,
+                m.validation_response_status,
+            ),
             timestamp: Instant::now(),
         },
     );
@@ -1352,6 +1400,7 @@ async fn validate_postgres_rule(
             m.validation_success = c.is_valid;
             m.validation_response_body = c.body.clone();
             m.validation_response_status = c.status;
+            m.validation_disposition = c.disposition;
             return;
         }
     }
@@ -1380,6 +1429,10 @@ async fn validate_postgres_rule(
             body: m.validation_response_body.clone(),
             status: m.validation_response_status,
             is_valid: m.validation_success,
+            disposition: ValidationDisposition::from_legacy(
+                m.validation_success,
+                m.validation_response_status,
+            ),
             timestamp: Instant::now(),
         },
     );
@@ -1480,6 +1533,7 @@ async fn validate_aws_rule(
                     m.validation_success = c.is_valid;
                     m.validation_response_body = c.body.clone();
                     m.validation_response_status = c.status;
+                    m.validation_disposition = c.disposition;
                     return;
                 }
                 last_body = Some(c.body.clone());
@@ -1499,6 +1553,7 @@ async fn validate_aws_rule(
                     body: body.clone(),
                     status: StatusCode::PRECONDITION_REQUIRED,
                     is_valid: false,
+                    disposition: ValidationDisposition::Skipped,
                     timestamp: Instant::now(),
                 },
             );
@@ -1516,6 +1571,7 @@ async fn validate_aws_rule(
                     body: body.clone(),
                     status: StatusCode::BAD_REQUEST,
                     is_valid: false,
+                    disposition: ValidationDisposition::Inactive,
                     timestamp: Instant::now(),
                 },
             );
@@ -1540,6 +1596,7 @@ async fn validate_aws_rule(
                             body: m.validation_response_body.clone(),
                             status: m.validation_response_status,
                             is_valid: true,
+                            disposition: ValidationDisposition::Active,
                             timestamp: Instant::now(),
                         },
                     );
@@ -1556,6 +1613,7 @@ async fn validate_aws_rule(
                         body: body.clone(),
                         status: StatusCode::UNAUTHORIZED,
                         is_valid: false,
+                        disposition: ValidationDisposition::Inactive,
                         timestamp: Instant::now(),
                     },
                 );
@@ -1649,6 +1707,7 @@ async fn validate_gcp_rule(m: &mut OwnedBlobMatch, globals: &Object, cache: &Cac
             m.validation_success = c.is_valid;
             m.validation_response_body = c.body.clone();
             m.validation_response_status = c.status;
+            m.validation_disposition = c.disposition;
             return;
         }
     }
@@ -1681,6 +1740,10 @@ async fn validate_gcp_rule(m: &mut OwnedBlobMatch, globals: &Object, cache: &Cac
             body: m.validation_response_body.clone(),
             status: m.validation_response_status,
             is_valid: m.validation_success,
+            disposition: ValidationDisposition::from_legacy(
+                m.validation_success,
+                m.validation_response_status,
+            ),
             timestamp: Instant::now(),
         },
     );
@@ -1750,12 +1813,12 @@ async fn validate_raw_rule(
             m.validation_response_body = validation_body::from_string(result.body);
             m.validation_response_status = result.status;
         }
-        Err(e) => {
-            debug!("Raw validation error for {}: {}", raw, e);
+        Err(_error) => {
+            debug!(raw_validator = raw, "Raw validation failed");
             m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("Raw validation error: {}", e));
+            m.validation_response_body = validation_body::from_string("Raw validation failed");
             m.validation_response_status = StatusCode::BAD_GATEWAY;
+            m.validation_disposition = ValidationDisposition::Error;
         }
     }
 }

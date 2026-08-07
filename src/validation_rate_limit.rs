@@ -117,8 +117,12 @@ fn selector_matches(rule_id: &str, selector: &str) -> bool {
         || rule_id.strip_prefix(selector).is_some_and(|suffix| suffix.starts_with('.'))
 }
 
-pub fn should_rate_limit_validation(_validation: &Validation) -> bool {
-    true
+pub fn should_rate_limit_validation(validation: &Validation) -> bool {
+    !matches!(
+        validation,
+        Validation::Raw(kind)
+            if kingfisher_scanner::validation::local::handles(kind)
+    )
 }
 
 #[cfg(test)]
@@ -177,5 +181,14 @@ mod tests {
     #[test]
     fn should_rate_limit_raw_validation() {
         assert!(should_rate_limit_validation(&Validation::Raw("azurebatch".to_string())));
+    }
+
+    #[test]
+    fn should_not_rate_limit_local_ethereum_validation() {
+        assert!(!should_rate_limit_validation(&Validation::Raw(
+            "ethereum_private_key".to_string()
+        )));
+        assert!(!should_rate_limit_validation(&Validation::Raw("ethereum_mnemonic".to_string())));
+        assert!(!should_rate_limit_validation(&Validation::Raw("ethereum_public_key".to_string())));
     }
 }

@@ -272,6 +272,8 @@ pub(crate) fn filter_match<'b>(
             validation_response_body: None,
             validation_response_status: StatusCode::from_u16(0).unwrap_or(StatusCode::CONTINUE),
             validation_success: false,
+            validation_disposition:
+                kingfisher_scanner::validation::ValidationDisposition::NotAttempted,
             calculated_entropy,
             is_base64,
         });

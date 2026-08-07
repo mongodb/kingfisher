@@ -31,7 +31,7 @@ use crate::{
     scanner_pool::ScannerPool,
     validation_body::ValidationResponseBody,
 };
-use kingfisher_scanner::primitives::find_secret_capture;
+use kingfisher_scanner::{primitives::find_secret_capture, validation::ValidationDisposition};
 
 use self::{base64_decode::get_base64_strings as get_b64_strings, filter::filter_match};
 
@@ -93,6 +93,7 @@ pub struct BlobMatch<'a> {
     pub validation_response_status: StatusCode,
 
     pub validation_success: bool,
+    pub validation_disposition: ValidationDisposition,
     pub calculated_entropy: f32,
     pub is_base64: bool,
 }

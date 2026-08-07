@@ -4,8 +4,8 @@ use std::{
 };
 
 use chrono::Local;
-use http::StatusCode;
 use indicatif::HumanBytes;
+use kingfisher_scanner::validation::ValidationDisposition;
 use serde_json::json;
 use thousands::Separable;
 use tokio::time::Instant;
@@ -91,25 +91,31 @@ pub fn compute_scan_totals(
             if !args.include_hidden_findings && !match_item.visible {
                 return (success, fail, skipped);
             }
-            if match_item.validation_success {
-                if match_item.validation_response_status != StatusCode::CONTINUE.as_u16() {
+            let disposition =
+                if match_item.validation_disposition == ValidationDisposition::NotAttempted {
+                    ValidationDisposition::from_legacy_code(
+                        match_item.validation_success,
+                        match_item.validation_response_status,
+                    )
+                    .unwrap_or(ValidationDisposition::NotAttempted)
+                } else {
+                    match_item.validation_disposition
+                };
+            match disposition {
+                ValidationDisposition::Active => {
                     if args.no_dedup {
                         (success + origin_set.len(), fail, skipped)
                     } else {
                         (success + 1, fail, skipped)
                     }
-                } else {
+                }
+                ValidationDisposition::Inactive
+                | ValidationDisposition::Error
+                | ValidationDisposition::InvalidMaterial => (success, fail + 1, skipped),
+                ValidationDisposition::Skipped => (success, fail, skipped + 1),
+                ValidationDisposition::NotAttempted | ValidationDisposition::LocallyDerived => {
                     (success, fail, skipped)
                 }
-            } else if match_item.validation_response_status
-                == StatusCode::PRECONDITION_REQUIRED.as_u16()
-            {
-                // Skipped validations (e.g., missing dependent rules)
-                (success, fail, skipped + 1)
-            } else if match_item.validation_response_status != StatusCode::CONTINUE.as_u16() {
-                (success, fail + 1, skipped)
-            } else {
-                (success, fail, skipped)
             }
         });
 

@@ -1508,6 +1508,9 @@
     }
     .status-badge.active { background: #ecfdf5; color: #15803d; }
     .status-badge.inactive { background: #fef2f2; color: #b91c1c; }
+    .status-badge.locally-derived { background: #ecfeff; color: #0e7490; }
+    .status-badge.invalid-key-material { background: #fffbeb; color: #b45309; }
+    .status-badge.validation-error { background: #fff7ed; color: #c2410c; }
     .status-badge.unknown { background: var(--surface-muted); color: var(--text-muted); }
 
     /* Finding detail snippet */
@@ -2592,6 +2595,9 @@
                     <option value="all" selected>All validation states</option>
                     <option value="active">Active Credential</option>
                     <option value="inactive">Inactive Credential</option>
+                    <option value="validation_error">Validation Error</option>
+                    <option value="locally_derived">Locally Derived</option>
+                    <option value="invalid_key_material">Invalid Key Material</option>
                     <option value="not_attempted">Not Attempted</option>
                     <option value="canary">Canary Token (Skipped)</option>
                   </select>
@@ -3494,12 +3500,18 @@
         findings: normalizedFindings.length,
         active_findings: counts.active || 0,
         inactive_findings: counts.inactive || 0,
+        validation_error_findings: counts.validation_error || 0,
+        locally_derived_findings: counts.locally_derived || 0,
+        invalid_key_material_findings: counts.invalid_key_material || 0,
         unknown_validation_findings: counts.unknown || 0,
         access_map_identities: 0,
         confidence_level: toolName === "Gitleaks" ? "imported" : "imported",
         custom_rules_used: false,
         successful_validations: counts.active || 0,
-        failed_validations: counts.inactive || 0,
+        failed_validations:
+          (counts.inactive || 0) +
+          (counts.validation_error || 0) +
+          (counts.invalid_key_material || 0),
         skipped_validations: counts.not_attempted || 0,
       };
     }
@@ -4577,6 +4589,9 @@
           findings: Number(reportSummary.findings || 0),
           active: Number(reportSummary.active_findings || 0),
           inactive: Number(reportSummary.inactive_findings || 0),
+          validationError: Number(reportSummary.validation_error_findings || 0),
+          locallyDerived: Number(reportSummary.locally_derived_findings || 0),
+          invalidKeyMaterial: Number(reportSummary.invalid_key_material_findings || 0),
           unknown: Number(reportSummary.unknown_validation_findings || 0),
           identities: Number(reportSummary.access_map_identities || 0),
           rulesApplied: Number(reportSummary.rules_applied || 0),
@@ -4786,6 +4801,12 @@
           return normalizedStatus === "active";
         } else if (validation === "inactive") {
           return normalizedStatus === "inactive";
+        } else if (validation === "validation_error") {
+          return normalizedStatus === "validation_error";
+        } else if (validation === "locally_derived") {
+          return normalizedStatus === "locally_derived";
+        } else if (validation === "invalid_key_material") {
+          return normalizedStatus === "invalid_key_material";
         } else if (validation === "not_attempted") {
           return normalizedStatus === "not_attempted";
         } else if (validation === "canary") {
@@ -4882,6 +4903,18 @@
         return "inactive";
       }
 
+      if (normalized === "validation error" || normalized === "validation_error") {
+        return "validation_error";
+      }
+
+      if (normalized === "locally derived" || normalized === "locally_derived") {
+        return "locally_derived";
+      }
+
+      if (normalized === "invalid key material" || normalized === "invalid_key_material") {
+        return "invalid_key_material";
+      }
+
       if (normalized === "not attempted" || normalized === "not_attempted") {
         return "not_attempted";
       }
@@ -4894,7 +4927,16 @@
     }
 
     function calculateValidationCounts(list = findings) {
-      const counts = { active: 0, inactive: 0, not_attempted: 0, canary: 0, unknown: 0 };
+      const counts = {
+        active: 0,
+        inactive: 0,
+        validation_error: 0,
+        locally_derived: 0,
+        invalid_key_material: 0,
+        not_attempted: 0,
+        canary: 0,
+        unknown: 0,
+      };
       (list || []).forEach((f) => {
         const status =
           f.finding && f.finding.validation && f.finding.validation.status
@@ -5189,6 +5231,9 @@
       const palette = {
         active: "#22c55e",
         inactive: "#f97316",
+        validation_error: "#ea580c",
+        locally_derived: "#06b6d4",
+        invalid_key_material: "#eab308",
         not_attempted: "#38bdf8",
         canary: "#a855f7",
         unknown: "#9ca3af",
@@ -5196,6 +5241,9 @@
       const dataPoints = [
         { key: "active", label: "Active", color: palette.active },
         { key: "inactive", label: "Inactive", color: palette.inactive },
+        { key: "validation_error", label: "Validation Error", color: palette.validation_error },
+        { key: "locally_derived", label: "Locally Derived", color: palette.locally_derived },
+        { key: "invalid_key_material", label: "Invalid Key Material", color: palette.invalid_key_material },
         { key: "not_attempted", label: "Not Attempted", color: palette.not_attempted },
         { key: "canary", label: "Canary Token", color: palette.canary },
         { key: "unknown", label: "Unknown", color: palette.unknown },
@@ -5485,7 +5533,16 @@
         return;
       }
 
-      const statusOrder = { active: 0, inactive: 1, canary: 2, not_attempted: 3, unknown: 4 };
+      const statusOrder = {
+        active: 0,
+        locally_derived: 1,
+        inactive: 2,
+        validation_error: 3,
+        invalid_key_material: 4,
+        canary: 5,
+        not_attempted: 6,
+        unknown: 7,
+      };
       let baseFindings =
         scope === "filtered" ? getFilteredSortedFindings().slice() : (Array.isArray(findings) ? findings.slice() : []);
       if (activeOnly) {
@@ -5504,8 +5561,8 @@
         const fb = b.finding || {};
         const keyA = normalizeValidationStatus(fa.validation && fa.validation.status ? fa.validation.status : "");
         const keyB = normalizeValidationStatus(fb.validation && fb.validation.status ? fb.validation.status : "");
-        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 4;
-        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 4;
+        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 6;
+        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 6;
         if (sa !== sb) return sa - sb;
 
         const ra = (a.rule && (a.rule.name || a.rule.id)) || "";
@@ -5552,7 +5609,17 @@
               const findingId = getFindingIdFromFinding(finding);
               const gitUrl = getFileUrlFromFinding(finding);
               const sourceTool = getFindingSourceDisplayName(finding);
-              const statusColor = normalizedStatus === "active" ? "#dc2626" : normalizedStatus === "inactive" ? "#f97316" : "#6b7280";
+              const statusColor = normalizedStatus === "active"
+                ? "#dc2626"
+                : normalizedStatus === "inactive"
+                  ? "#f97316"
+                  : normalizedStatus === "locally_derived"
+                    ? "#0891b2"
+                    : normalizedStatus === "validation_error"
+                      ? "#c2410c"
+                    : normalizedStatus === "invalid_key_material"
+                        ? "#ca8a04"
+                        : "#6b7280";
               return `
                 <tr>
                   <td>${escapeHtml(rule.name || rule.id || "")}</td>
@@ -5625,6 +5692,9 @@
         execSummary = `<div style="padding:12px 16px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:13px;color:#92400e;line-height:1.6;margin-bottom:16px;">
           <strong>Review Recommended:</strong> This scan found <strong>${baseFindings.length} finding${baseFindings.length !== 1 ? "s" : ""}</strong>.
           ${counts.inactive > 0 ? `${counts.inactive} credential${counts.inactive !== 1 ? "s were" : " was"} inactive at scan time.` : ""}
+          ${counts.validation_error > 0 ? `${counts.validation_error} validation attempt${counts.validation_error !== 1 ? "s encountered" : " encountered"} an error.` : ""}
+          ${counts.locally_derived > 0 ? `${counts.locally_derived} finding${counts.locally_derived !== 1 ? "s have" : " has"} a locally derived public address without an activity check.` : ""}
+          ${counts.invalid_key_material > 0 ? `${counts.invalid_key_material} finding${counts.invalid_key_material !== 1 ? "s contain" : " contains"} invalid key material.` : ""}
           ${counts.not_attempted > 0 ? `${counts.not_attempted} ${counts.not_attempted !== 1 ? "were" : "was"} not validated.` : ""}
           ${counts.canary > 0 ? `${counts.canary} ${counts.canary !== 1 ? "were" : "was"} canary token${counts.canary !== 1 ? "s" : ""} (skipped).` : ""}
           ${scanMetadata.imported ? `Imported reports do not include Kingfisher access-map data or command workflows.` : ""}
@@ -5679,6 +5749,9 @@
       <div class="stat"><div class="label">High Confidence</div><div class="value">${highConfidence}</div></div>
       <div class="stat"><div class="label">Active</div><div class="value" style="color:#dc2626;">${counts.active || 0}</div></div>
       <div class="stat"><div class="label">Inactive</div><div class="value" style="color:#f97316;">${counts.inactive || 0}</div></div>
+      <div class="stat"><div class="label">Validation Error</div><div class="value" style="color:#c2410c;">${counts.validation_error || 0}</div></div>
+      <div class="stat"><div class="label">Locally Derived</div><div class="value" style="color:#0891b2;">${counts.locally_derived || 0}</div></div>
+      <div class="stat"><div class="label">Invalid Key Material</div><div class="value" style="color:#ca8a04;">${counts.invalid_key_material || 0}</div></div>
       <div class="stat"><div class="label">Not Validated</div><div class="value">${counts.not_attempted || 0}</div></div>
       <div class="stat"><div class="label">Identities</div><div class="value">${(accessMap || []).length}</div></div>
     </div>
@@ -5687,6 +5760,9 @@
       <div class="legend">
         <span><span class="dot" style="background:#22c55e"></span> Active: ${counts.active || 0}</span>
         <span><span class="dot" style="background:#f97316"></span> Inactive: ${counts.inactive || 0}</span>
+        <span><span class="dot" style="background:#ea580c"></span> Validation Error: ${counts.validation_error || 0}</span>
+        <span><span class="dot" style="background:#06b6d4"></span> Locally Derived: ${counts.locally_derived || 0}</span>
+        <span><span class="dot" style="background:#eab308"></span> Invalid Key Material: ${counts.invalid_key_material || 0}</span>
         <span><span class="dot" style="background:#38bdf8"></span> Not Attempted: ${counts.not_attempted || 0}</span>
         <span><span class="dot" style="background:#a855f7"></span> Canary Token: ${counts.canary || 0}</span>
         <span><span class="dot" style="background:#9ca3af"></span> Unknown: ${counts.unknown || 0}</span>
@@ -5951,7 +6027,13 @@
               ? "active"
               : normalizedStatus === "inactive"
                 ? "inactive"
-                : "unknown";
+                : normalizedStatus === "validation_error"
+                  ? "validation-error"
+                : normalizedStatus === "locally_derived"
+                    ? "locally-derived"
+                    : normalizedStatus === "invalid_key_material"
+                      ? "invalid-key-material"
+                      : "unknown";
 
           const enrichedChip = finding.kingfisher_enrichment
             ? `<span class="chip-enriched" title="Enriched with Kingfisher validation and revoke data">Enriched</span>`
@@ -6069,7 +6151,13 @@
           ? "active"
           : normalizedStatus === "inactive"
             ? "inactive"
-            : "unknown";
+            : normalizedStatus === "validation_error"
+              ? "validation-error"
+            : normalizedStatus === "locally_derived"
+                ? "locally-derived"
+                : normalizedStatus === "invalid_key_material"
+                  ? "invalid-key-material"
+                  : "unknown";
       const statusEl = document.getElementById("fd-validation-status");
       if (statusEl) {
         statusEl.innerHTML = `<span class="status-badge ${badgeClass}">${escapeHtml(statusRaw)}</span>`;
@@ -6257,7 +6345,17 @@
 
       const statusRaw = enr.validation && enr.validation.status ? String(enr.validation.status) : "Unknown";
       const normalized = normalizeValidationStatus(statusRaw);
-      const badgeClass = normalized === "active" ? "active" : normalized === "inactive" ? "inactive" : "unknown";
+      const badgeClass = normalized === "active"
+        ? "active"
+        : normalized === "inactive"
+          ? "inactive"
+          : normalized === "validation_error"
+            ? "validation-error"
+          : normalized === "locally_derived"
+              ? "locally-derived"
+              : normalized === "invalid_key_material"
+                ? "invalid-key-material"
+                : "unknown";
       const validationEl = document.getElementById("fd-kf-validation");
       if (validationEl) {
         validationEl.innerHTML = `<span class="status-badge ${badgeClass}">${escapeHtml(statusRaw)}</span>`;
@@ -6700,14 +6798,23 @@
       }
 
       // Sort: active first, then by rule name
-      const statusOrder = { active: 0, inactive: 1, canary: 2, not_attempted: 3, unknown: 4 };
+      const statusOrder = {
+        active: 0,
+        locally_derived: 1,
+        inactive: 2,
+        validation_error: 3,
+        invalid_key_material: 4,
+        canary: 5,
+        not_attempted: 6,
+        unknown: 7,
+      };
       const sorted = pool.sort((a, b) => {
         const fa = a.finding || {};
         const fb = b.finding || {};
         const keyA = normalizeValidationStatus(fa.validation && fa.validation.status ? fa.validation.status : "");
         const keyB = normalizeValidationStatus(fb.validation && fb.validation.status ? fb.validation.status : "");
-        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 4;
-        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 4;
+        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 6;
+        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 6;
         if (sa !== sb) return sa - sb;
         const ra = (a.rule && (a.rule.name || a.rule.id)) || "";
         const rb = (b.rule && (b.rule.name || b.rule.id)) || "";

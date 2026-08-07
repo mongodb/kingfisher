@@ -17,6 +17,7 @@ repository = "https://github.com/mongodb/kingfisher"
 publish = false
 
 [workspace.dependencies]
+alloy-primitives = { version = "0.8.26", default-features = false, features = ["std", "k256"] }
 anyhow = "1.0"
 thiserror = "2.0.18"
 serde = { version = "1.0", features = ["derive"] }
@@ -36,6 +37,8 @@ sha2 = "0.11"
 hmac = "0.13"
 base32 = "0.5.1"
 base64 = "0.22"
+bip32 = { version = "0.5.3", default-features = false, features = ["secp256k1", "std"] }
+bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
 percent-encoding = "2.3"
 time = "0.3"
 uuid = "1.23"
@@ -43,6 +46,7 @@ rand = "0.10"
 hex = "0.4"
 rustc-hash = "2.1"
 http = "1.4"
+zeroize = "1.8"
 
 
 [package]
@@ -199,6 +203,7 @@ cfb = "0.14"
 rusqlite = { version = "0.40", features = ["bundled"] }
 blake3 = "1.8.5"
 memchr = "2.8"
+zeroize.workspace = true
 memmap2 = "0.9.10"
 futures = "0.3.32"
 dashmap = "6.2.1"

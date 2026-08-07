@@ -83,7 +83,7 @@ def generate_markdown(rules):
         '',
         f'Kingfisher ships with **{total} detection rules** across **{providers} providers**',
         f'({detectors} detectors + {dependent} dependent rules).',
-        f'Of these, **{validated}** include live validation and **{revocable}** support direct revocation.',
+        f'Of these, **{validated}** include validation and **{revocable}** support direct revocation.',
         '',
         '!!! tip "Search"',
         '    Use the search box below to filter rules by provider name, rule ID, or confidence level.',

@@ -190,7 +190,7 @@ cat /path/to/file.py | kingfisher scan -
 
 ### Direct secret validation with `kingfisher validate`
 
-When you already know a secret's type and have the raw value, use `kingfisher validate` to check if it's still active—without needing the surrounding context that detection rules require.
+When you already know a secret's type and have the raw value, use `kingfisher validate` without needing the surrounding context that detection rules require. Network-backed validators check whether a credential is still active. Ethereum key-material validators only parse the material and derive a candidate public address locally; they report `LOCALLY DERIVED` and do not prove ownership, on-chain balance, transaction history, or current activity.
 
 This is useful for:
 - Re-validating a known secret from a previous scan

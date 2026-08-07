@@ -1308,8 +1308,9 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                 direct_validate::run_direct_validation(&validate_args, &global_args).await?;
             let use_color = global_args.use_color(std::io::stdout());
             direct_validate::print_results(&results, &validate_args.format, use_color);
-            // Exit with code 0 if any result is valid, 1 if all invalid
-            if direct_validate::any_valid(&results) {
+            // Local derivation is a successful operation but is not evidence
+            // that a credential is active.
+            if direct_validate::any_successful(&results) {
                 Ok(AsyncMainOutcome::Done)
             } else {
                 std::process::exit(1);

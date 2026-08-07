@@ -13,7 +13,7 @@ A _rule_ in Kingfisher is a YAML document that describes how to detect and (opti
 
 This document explains how to write custom rules for Kingfisher using a YAML-based rule system. The rules define regular expressions to detect secrets in source code and other textual data, and they can include validation or revocation steps to confirm or invalidate the secret. By using a rules-based system, Kingfisher is highly extensible—new rules can be added or existing ones modified without changing the core code.
 
-Kingfisher currently bundles 1,051 rules: 914 standalone detectors and 137 dependent rules. Of the standalone detectors, 516 support live validation.
+Kingfisher currently bundles 1,055 rules: 918 standalone detectors and 137 dependent rules. Of the standalone detectors, 519 support validation.
 
 ## 1. Rule Schema
 
@@ -86,8 +86,8 @@ rules:
             content-type: application/grpc
             te: trailers
             Authorization: "Bearer {{ TOKEN }}"
-          # Raw bytes are allowed (YAML \\u0000 escapes become NUL bytes).
-          body: "\\u0000\\u0000\\u0000\\u0000\\u0000"
+          # Raw bytes are allowed (YAML \u0000 escapes become NUL bytes).
+          body: "\u0000\u0000\u0000\u0000\u0000"
           response_matcher:
             - report_response: true
             - type: HeaderMatch
@@ -192,9 +192,17 @@ validation:
   content: kraken
 ```
 
-Use `Raw` only when the provider check cannot be expressed reliably with `Http` or `Grpc` and does not justify a new reusable validator family. Raw validator implementations live in `crates/kingfisher-scanner/src/validation/raw.rs`.
+Use `Raw` only when the provider check cannot be expressed reliably with `Http` or `Grpc` and does not justify a new reusable validator family. Provider/protocol implementations live in `crates/kingfisher-scanner/src/validation/raw.rs`; network-free Ethereum parsing is isolated in `validation/ethereum.rs`.
 
-Typed validators are safer and more reusable because the validator kind is part of the schema. `Raw` validators are string-dispatched and fail at runtime if the `content` name is unknown. If you need a Rust-backed exception path for one provider, prefer `Raw`; reserve new typed validators for stable validation families that can be reused across rules.
+Typed validators are safer and more reusable because the validator kind is part of the schema. `Raw` validators are string-dispatched; an unknown `content` name is reported as an unimplemented, unverified validation result. If you need a Rust-backed exception path for one provider, prefer `Raw`; reserve new typed validators for stable validation families that can be reused across rules.
+
+Three built-in Ethereum rules use deterministic local validation:
+
+- `ethereum_private_key` parses a 32-byte secp256k1 scalar and derives its EIP-55 address with Alloy.
+- `ethereum_public_key` validates a compressed SEC1 point, an uncompressed SEC1 point, or a raw 64-byte `x || y` point and derives its EIP-55 address with Alloy. Because public keys are identifiers rather than secrets, this helper rule is hidden from ordinary reports; use `--include-hidden-findings` when inventorying them.
+- `ethereum_mnemonic` verifies English BIP-39 material and derives one candidate account at `m/44'/60'/0'/0/0` with an explicitly assumed empty BIP-39 passphrase.
+
+These validators live behind the network-free `validation-ethereum` feature and never transmit key material. A successful scan result is labeled `Locally Derived`, does not increment successful credential validations, and does not trigger the active-credential exit code. It proves only that the captured material parses cryptographically and yields the reported address—not that the address has funds, has transacted, or is active on-chain. For mnemonics, a different BIP-39 passphrase or derivation path can yield a different address. Generic labels such as `mnemonic` are reported by the chain-neutral `kingfisher.bip39.mnemonic` rule and are not assigned an Ethereum address.
 
 ## gRPC Validation (Grpc)
 
@@ -489,6 +497,7 @@ Below is the complete list of Liquid filters available in Kingfisher, along with
 | `b64dec`              | –                                            | Decodes a Base64 string.                                                                                        | `{{ "aGVsbG8=" \| b64dec }}`                                         |
 | `b64url_dec`          | –                                            | Decodes a URL-safe Base64 string (with or without padding).                                                     | `{{ "Kys_Pw" \| b64url_dec }}`                                       |
 | `sha256`              | –                                            | Computes the SHA-256 hex digest of the input.                                                                  | `{{ TOKEN \| sha256 }}`                                              |
+| `bip39_valid`         | –                                            | Returns `true` only for a checksum-valid English BIP-39 mnemonic. Intended for local `pattern_requirements.checksum`; it does not derive keys or check wallet activity. | `{{ MNEMONIC \| bip39_valid }}` |
 | `crc32`               | –                                            | Computes the CRC32 checksum of the input and returns a decimal value. | `{{ TOKEN \| crc32 }}` |
 | `crc32_dec`           | `digits` (integer, optional)                 | Computes the CRC32 checksum and returns the last `digits` decimal characters (zero-padded). Defaults to the full value when omitted. | `{{ TOKEN \| crc32_dec: 6 }}` |
 | `crc32_hex`           | `digits` (integer, optional)                 | Computes the CRC32 checksum and returns the last `digits` hexadecimal characters (zero-padded). Defaults to the full value when omitted. | `{{ TOKEN \| crc32_hex: 8 }}` |
@@ -665,6 +674,37 @@ generic matches.
   credential, test it against a fixture or a targeted scan. Check an individual file with
   `kingfisher rules check` before running the rule-crate tests.
 
+### POSIX Character Classes
+
+Hyperscan/Vectorscan supports POSIX character classes inside bracket expressions, written as
+`[[:name:]]`. These are the classes relevant to rule authoring:
+
+| Class        | Matches                         | ASCII equivalent          |
+| ------------ | ------------------------------- | ------------------------- |
+| `[:alnum:]`  | Letters and digits              | `[a-zA-Z0-9]`             |
+| `[:alpha:]`  | Letters only                     | `[a-zA-Z]`                |
+| `[:digit:]`  | Digits                          | `[0-9]`                   |
+| `[:lower:]`  | Lowercase letters only          | `[a-z]`                   |
+| `[:upper:]`  | Uppercase letters only          | `[A-Z]`                   |
+| `[:xdigit:]` | Hexadecimal digits              | `[0-9A-Fa-f]`             |
+| `[:blank:]`  | Space and tab                   | `[ \t]`                   |
+| `[:space:]`  | Whitespace                      | `[ \t\r\n\v\f]`           |
+| `[:punct:]`  | Punctuation characters          | `[\x21-\x2F\x3A-\x40\x5B-\x60\x7B-\x7E]` |
+| `[:graph:]`  | Visible characters (no space)    | `[\x21-\x7E]`             |
+| `[:print:]`  | Printable characters            | `[\x20-\x7E]`             |
+| `[:cntrl:]`  | Control characters              | `[\x00-\x1F\x7F]`         |
+
+Notes:
+
+- `[:alnum:]` is the workhorse for token alphabets; it covers both letter cases **and** digits.
+- `[:lower:]` and `[:upper:]` match a single case by default. Under `(?i)` / `(?xi)` they become
+  case-insensitive, so `[:lower:]` will also match uppercase letters and vice versa.
+- `[:digit:]` matches only `0-9`; it does **not** include letters. For letters **and** digits use
+  `[:alnum:]`; for lowercase letters **and** digits combine them as `[[:lower:][:digit:]]`.
+- `[:xdigit:]` matches `0-9`, `a-f`, and `A-F` regardless of the `(?i)` flag.
+- Classes can be combined inside one bracket expression, for example `[[:alnum:]_=-]` adds
+  underscore, equals, and hyphen to the alphanumeric set.
+
 ## Character Requirements
 
 The `pattern_requirements` field allows you to specify data type requirements for matched secrets. This is particularly useful when:
@@ -804,7 +844,7 @@ When writing custom rules, consider the following best practices:
 2. **Optimize for Performance:** Structure your regex to minimize backtracking. Use non-capturing groups where possible and keep the pattern as concise as possible.
 3. **Validation Integration:** Define a `validation` section if you want to verify the detected secret. Prefer `Http` or `Grpc`; use an existing typed validator when the rule matches a supported validator family; use `Raw` only for rare provider-specific exception paths. You can use Liquid templating to insert dynamic values where supported. Use the unnamed capture as `TOKEN` and any named captures in uppercase.
 4. **Revocation Integration:** Define a `revocation` section if you want to revoke a detected secret. It uses the same HTTP request format and template variables as `validation`.
-5. **Test with Examples:** Always include examples that should match and, optionally, negative examples to ensure your rule behaves as expected.
+5. **Test with Examples:** Always include examples that should match, and run `kingfisher rules check` for the changed rule file.
 
 ## Examples
 
@@ -831,9 +871,6 @@ rules:
     confidence: medium
     examples:
       - sk-ant-api668-Clm512odot9WDD7itfUU9R880nefA1EtYZDbpE-C9b0XQEWpqFKf9DQUo03vOfXl16oSmyar1CLF1SzV3YzpZJ6bahcpLAA
-    categories:
-      - api
-      - secret
     references:
       - https://docs.anthropic.com/claude/reference/authentication
     validation:
@@ -858,10 +895,10 @@ rules:
             - status:
                 - 200
               type: StatusMatch
-            - report_response: true
             - type: WordMatch
               words:
-                - '"type":"invalid_request_error"'
+                - '"type":"message"'
+                - "credit balance is too low"
           url: https://api.anthropic.com/v1/messages
 ```
 

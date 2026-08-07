@@ -22,6 +22,8 @@
 //! - **JWT**: JWT token validation (requires `validation-jwt` feature)
 //! - **Raw**: provider/protocol-specific validators that need custom logic
 //!   (requires `validation-raw` feature)
+//! - **Ethereum**: network-free key parsing and address derivation
+//!   (requires `validation-ethereum` feature)
 
 mod utils;
 mod validation_body;
@@ -56,8 +58,13 @@ pub mod mysql;
 #[cfg(feature = "validation-database")]
 pub mod postgres;
 
+#[cfg(feature = "validation-ethereum")]
+pub mod local;
 #[cfg(feature = "validation-raw")]
 pub mod raw;
+
+#[cfg(feature = "validation-ethereum")]
+mod ethereum;
 
 // Re-exports
 pub use utils::{find_closest_variable, process_captures};
@@ -85,9 +92,12 @@ pub use aws::{
 };
 
 use std::{
-    sync::{Arc, LazyLock, OnceLock},
+    sync::Arc,
     time::{Duration, Instant},
 };
+
+#[cfg(feature = "validation-http")]
+use std::sync::{LazyLock, OnceLock};
 
 use crossbeam_skiplist::SkipMap;
 
@@ -144,14 +154,83 @@ pub struct CachedResponse {
     pub status: http::StatusCode,
     /// Whether the credential was valid.
     pub is_valid: bool,
+    /// Transport-independent semantic result.
+    pub disposition: ValidationDisposition,
     /// When this result was cached.
     pub timestamp: Instant,
+}
+
+/// Semantic result of a validation attempt, independent of any transport status code.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ValidationDisposition {
+    /// Validation was not requested or has not run yet.
+    #[default]
+    NotAttempted,
+    /// A remote validator proved that the credential is active.
+    Active,
+    /// Validation ran and did not prove that the credential is active.
+    Inactive,
+    /// Validation could not produce a credential verdict because the validator failed.
+    Error,
+    /// Validation was skipped because a prerequisite was unavailable.
+    Skipped,
+    /// Network-free validation parsed the material and derived public evidence.
+    LocallyDerived,
+    /// Network-free validation rejected malformed cryptographic material.
+    InvalidMaterial,
+}
+
+impl ValidationDisposition {
+    /// Whether this is a network-free validation result.
+    pub const fn is_local(self) -> bool {
+        matches!(self, Self::LocallyDerived | Self::InvalidMaterial)
+    }
+
+    /// Map the legacy success/status representation used by network validators.
+    pub fn from_legacy(is_valid: bool, status: http::StatusCode) -> Self {
+        if status == http::StatusCode::CONTINUE {
+            Self::NotAttempted
+        } else if status == http::StatusCode::PRECONDITION_REQUIRED {
+            Self::Skipped
+        } else if is_valid {
+            Self::Active
+        } else if status == http::StatusCode::REQUEST_TIMEOUT
+            || status == http::StatusCode::TOO_MANY_REQUESTS
+            || status.is_server_error()
+        {
+            // These statuses describe an unavailable validator or provider,
+            // not an authentication verdict about the credential.
+            Self::Error
+        } else {
+            Self::Inactive
+        }
+    }
+
+    /// Map a numeric legacy status when it is a valid HTTP status code.
+    pub fn from_legacy_code(is_valid: bool, status: u16) -> Option<Self> {
+        http::StatusCode::from_u16(status).ok().map(|status| Self::from_legacy(is_valid, status))
+    }
 }
 
 impl CachedResponse {
     /// Create a new cached response.
     pub fn new(body: ValidationResponseBody, status: http::StatusCode, is_valid: bool) -> Self {
-        Self { body, status, is_valid, timestamp: Instant::now() }
+        Self::with_disposition(
+            body,
+            status,
+            is_valid,
+            ValidationDisposition::from_legacy(is_valid, status),
+        )
+    }
+
+    /// Create a cached response with an explicit semantic disposition.
+    pub fn with_disposition(
+        body: ValidationResponseBody,
+        status: http::StatusCode,
+        is_valid: bool,
+        disposition: ValidationDisposition,
+    ) -> Self {
+        Self { body, status, is_valid, disposition, timestamp: Instant::now() }
     }
 
     /// Check if this cached response is still valid.
@@ -170,5 +249,31 @@ mod tests {
 
         assert!(response.is_still_valid(Duration::from_secs(60)));
         assert!(response.is_still_valid(Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn legacy_status_mapping_does_not_treat_infrastructure_failures_as_inactive() {
+        for status in [
+            http::StatusCode::REQUEST_TIMEOUT,
+            http::StatusCode::TOO_MANY_REQUESTS,
+            http::StatusCode::INTERNAL_SERVER_ERROR,
+            http::StatusCode::BAD_GATEWAY,
+            http::StatusCode::SERVICE_UNAVAILABLE,
+            http::StatusCode::GATEWAY_TIMEOUT,
+        ] {
+            assert_eq!(
+                ValidationDisposition::from_legacy(false, status),
+                ValidationDisposition::Error,
+                "{status} must not imply an inactive credential"
+            );
+        }
+        assert_eq!(
+            ValidationDisposition::from_legacy(false, http::StatusCode::UNAUTHORIZED),
+            ValidationDisposition::Inactive
+        );
+        assert_eq!(
+            ValidationDisposition::from_legacy(true, http::StatusCode::OK),
+            ValidationDisposition::Active
+        );
     }
 }

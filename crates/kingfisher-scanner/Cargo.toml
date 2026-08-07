@@ -43,6 +43,15 @@ validation-raw = [
     "dep:ldap3",
 ]
 
+# Network-free Ethereum key parsing, public-address recovery, and BIP-39/BIP-32 derivation.
+validation-ethereum = [
+    "dep:alloy-primitives",
+    "dep:bip32",
+    "dep:bip39",
+    "dep:hex",
+    "dep:zeroize",
+]
+
 # AWS credential validation
 validation-aws = [
     "validation-http",
@@ -112,6 +121,7 @@ validation-database = [
 validation-all = [
     "validation",
     "validation-raw",
+    "validation-ethereum",
     "validation-aws",
     "validation-azure",
     "validation-coinbase",
@@ -165,6 +175,12 @@ base64.workspace = true
 tracing.workspace = true
 
 # ---- Optional validation dependencies ----
+
+# Local Ethereum key material validation
+alloy-primitives = { workspace = true, optional = true }
+bip32 = { workspace = true, optional = true }
+bip39 = { workspace = true, optional = true }
+zeroize = { workspace = true, optional = true }
 
 # HTTP validation
 reqwest = { version = "0.13", default-features = false, features = [

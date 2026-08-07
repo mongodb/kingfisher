@@ -142,6 +142,162 @@ mod validate {
     }
 
     #[test]
+    fn validate_ethereum_key_material_locally_recovers_address() {
+        // Publicly documented Anvil defaults: https://getfoundry.sh/anvil/index.html
+        const ANVIL_PRIVATE_KEY: &str =
+            "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+        const ANVIL_MNEMONIC: &str = "test test test test test test test test test test test junk";
+        const PUBLIC_KEY: &str =
+            "0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798";
+        const RAW_PUBLIC_KEY: &str = concat!(
+            "79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798",
+            "483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8"
+        );
+        const RAW_PUBLIC_KEY_STARTING_WITH_SEC1_MARKER: &str = concat!(
+            "049370a4b5f43412ea25f514e8ecdad05266115e4a7ecb1387231808f8b45963",
+            "758f3f41afd6ed428b3081b0512fd62a54c3f3afbb5b6764b653052a12949c9a"
+        );
+        const ANVIL_ADDRESS: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+        const SCALAR_ONE_ADDRESS: &str = "0x7E5F4552091A69125d5DfCb7b8C2659029395Bdf";
+
+        for (rule, material, expected_address) in [
+            ("kingfisher.ethereum.private_key", ANVIL_PRIVATE_KEY, ANVIL_ADDRESS),
+            ("kingfisher.ethereum.mnemonic", ANVIL_MNEMONIC, ANVIL_ADDRESS),
+            ("kingfisher.ethereum.public_key", PUBLIC_KEY, SCALAR_ONE_ADDRESS),
+            ("kingfisher.ethereum.public_key", RAW_PUBLIC_KEY, SCALAR_ONE_ADDRESS),
+            (
+                "kingfisher.ethereum.public_key",
+                RAW_PUBLIC_KEY_STARTING_WITH_SEC1_MARKER,
+                "0x6C23faCE014F20B3ebb65aE96D0D7FF32aB94c17",
+            ),
+        ] {
+            let output = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+                .args([
+                    "-vvv",
+                    "validate",
+                    "--rule",
+                    rule,
+                    "-",
+                    "--format",
+                    "json",
+                    "--no-update-check",
+                ])
+                .write_stdin(material)
+                .output()
+                .expect("validation should run");
+            assert!(output.status.success());
+            let combined = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let result: Value =
+                serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+            assert_eq!(result["is_valid"], false);
+            assert_eq!(result["validation_status"], "locally_derived");
+            let message: Value =
+                serde_json::from_str(result["message"].as_str().unwrap()).expect("message JSON");
+            assert_eq!(message["derived_address"], expected_address);
+            assert_eq!(message["validation"], "cryptographically_valid_key_material");
+            assert_eq!(message["derivation"], "local");
+            assert!(!combined.contains(material));
+        }
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "validate",
+                "--rule",
+                "kingfisher.ethereum.private_key",
+                "-",
+                "--no-update-check",
+            ])
+            .write_stdin(ANVIL_PRIVATE_KEY)
+            .assert()
+            .success()
+            .stdout(contains("LOCALLY DERIVED").and(contains("Result:   VALID").not()));
+    }
+
+    #[test]
+    fn validate_ethereum_mnemonic_normalizes_detector_accepted_whitespace() {
+        const MNEMONIC: &str = "test  test\ttest test test test test test test test test junk";
+        const EXPECTED_ADDRESS: &str = "0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266";
+
+        let output = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "-vvv",
+                "validate",
+                "--rule",
+                "kingfisher.ethereum.mnemonic",
+                "-",
+                "--format",
+                "json",
+                "--no-update-check",
+            ])
+            .write_stdin(MNEMONIC)
+            .output()
+            .expect("validation should run");
+
+        assert!(output.status.success());
+        let combined = format!(
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(!combined.contains(MNEMONIC));
+        let result: Value = serde_json::from_slice(&output.stdout).expect("stdout should be JSON");
+        assert_eq!(result["is_valid"], false);
+        assert_eq!(result["validation_status"], "locally_derived");
+        let message: Value =
+            serde_json::from_str(result["message"].as_str().unwrap()).expect("message JSON");
+        assert_eq!(message["derived_address"], EXPECTED_ADDRESS);
+        assert_eq!(message["derivation_path"], "m/44'/60'/0'/0/0");
+        assert_eq!(message["bip39_passphrase_assumption"], "empty");
+        assert_eq!(message["derived_address_status"], "candidate");
+    }
+
+    #[test]
+    fn invalid_ethereum_key_material_from_stdin_never_appears_in_verbose_output() {
+        for (rule_id, secret) in [
+            (
+                "kingfisher.ethereum.private_key",
+                "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            ),
+            (
+                "kingfisher.ethereum.mnemonic",
+                "test test test test test test test test test test test unknown",
+            ),
+        ] {
+            let output = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+                .args([
+                    "-vvv",
+                    "validate",
+                    "--rule",
+                    rule_id,
+                    "-",
+                    "--format",
+                    "json",
+                    "--no-update-check",
+                ])
+                .write_stdin(secret)
+                .output()
+                .expect("validation should run");
+
+            assert_eq!(output.status.code(), Some(1));
+            let combined = format!(
+                "{}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert!(!combined.contains(secret), "secret leaked for {rule_id}");
+            let response: Value =
+                serde_json::from_slice(&output.stdout).expect("valid JSON output");
+            assert!(response["status_code"].is_null());
+            assert_eq!(response["validation_status"], "invalid_key_material");
+            assert!(response["message"].as_str().unwrap().contains("invalid_key_material"));
+        }
+    }
+
+    #[test]
     fn validate_toon_output() {
         let assert = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args([
@@ -181,6 +337,43 @@ mod validate {
             .stdout(contains("Rule:").and(contains("Result:")));
     }
 
+    #[test]
+    fn validate_ssrf_preflight_is_skipped_not_invalid() {
+        const INTERNAL_REDIS_URI: &str = "redis://user:synthetic-password@192.168.1.10:6379/0";
+
+        let json_output = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "validate",
+                "--rule",
+                "kingfisher.redis.1",
+                INTERNAL_REDIS_URI,
+                "--format",
+                "json",
+                "--no-update-check",
+            ])
+            .output()
+            .expect("validation should run");
+        assert_eq!(json_output.status.code(), Some(1));
+        let result: Value =
+            serde_json::from_slice(&json_output.stdout).expect("stdout should be JSON");
+        assert_eq!(result["status_code"], 428);
+        assert_eq!(result["validation_status"], "skipped");
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "validate",
+                "--rule",
+                "kingfisher.redis.1",
+                INTERNAL_REDIS_URI,
+                "--format",
+                "text",
+                "--no-update-check",
+            ])
+            .assert()
+            .code(1)
+            .stdout(contains("Result:   SKIPPED").and(contains("Result:   INVALID").not()));
+    }
+
     /// HTTP infrastructure failures (DNS, SSRF preflight, connection
     /// refused, etc.) must surface as a structured DirectValidationResult
     /// rather than short-circuiting the validate command. Also verifies
@@ -212,6 +405,10 @@ mod validate {
         let decoded: Value = serde_json::from_str(&stdout).expect("json should decode");
         assert_eq!(decoded.get("rule_id").and_then(|v| v.as_str()), Some("kingfisher.github.2"));
         assert_eq!(decoded.get("is_valid").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            decoded.get("validation_status").and_then(|v| v.as_str()),
+            Some("validation_error")
+        );
         let message = decoded.get("message").and_then(|v| v.as_str()).unwrap_or("");
         assert!(
             message.contains("HTTP validation failed"),
@@ -284,6 +481,10 @@ rules:
         let decoded: Value = serde_json::from_str(&stdout).expect("json should decode");
         assert_eq!(decoded.get("rule_id").and_then(|v| v.as_str()), Some("test.custom.grpc"));
         assert_eq!(decoded.get("is_valid").and_then(|v| v.as_bool()), Some(false));
+        assert_eq!(
+            decoded.get("validation_status").and_then(|v| v.as_str()),
+            Some("validation_error")
+        );
         let message = decoded.get("message").and_then(|v| v.as_str()).unwrap_or("");
         assert!(
             message.contains("gRPC validation failed"),

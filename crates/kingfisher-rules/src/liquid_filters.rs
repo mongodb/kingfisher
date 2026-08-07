@@ -1,6 +1,7 @@
 //! Collection of small Liquid filters that make HTTP validations & API-signing templates easy
 
 use base64::{Engine, engine::general_purpose};
+use bip39::{Language, Mnemonic};
 use crc32fast::Hasher;
 use hmac::{Hmac, KeyInit, Mac};
 use liquid_core::{
@@ -17,6 +18,7 @@ use time::{
     format_description::well_known::{Iso8601, Rfc2822},
 };
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 // -----------------------------------------------------------------------------
 // Helper macro – keeps most filters <10 lines long
@@ -1084,6 +1086,22 @@ static_filter!(
     |_input: &dyn ValueView| -> String { Uuid::new_v4().to_string() }
 );
 
+static_filter!(
+    /// Return whether the input is a checksum-valid English BIP-39 mnemonic.
+    Bip39ValidFilter, "bip39_valid",
+    |input: &dyn ValueView| -> String {
+        // Covers 24 eight-letter words with every detector-accepted 16-byte separator.
+        const MAX_MNEMONIC_BYTES: usize = 640;
+        let input = input.to_kstr();
+        if input.len() > MAX_MNEMONIC_BYTES {
+            return "false".to_string();
+        }
+        let normalized =
+            Zeroizing::new(input.split_whitespace().collect::<Vec<_>>().join(" "));
+        Mnemonic::parse_in_normalized(Language::English, &normalized).is_ok().to_string()
+    }
+);
+
 pub fn register_all(builder: liquid::ParserBuilder) -> liquid::ParserBuilder {
     builder
         // zero-arg helpers
@@ -1092,6 +1110,7 @@ pub fn register_all(builder: liquid::ParserBuilder) -> liquid::ParserBuilder {
         .filter(B64UrlDecFilter)
         .filter(Sha256Filter)
         .filter(Sha256B32Filter)
+        .filter(Bip39ValidFilter)
         .filter(UrlEncodeFilter)
         .filter(JsonEscapeFilter)
         .filter(UnixTimestampFilter)
@@ -1160,6 +1179,40 @@ mod tests {
     fn sha256_filter() {
         let expect = hex::encode(Sha256::digest(b"hello"));
         assert_eq!(render(r#"{{ "hello" | sha256 }}"#), expect);
+    }
+
+    #[test]
+    fn bip39_valid_filter_accepts_standard_lengths_and_rejects_invalid_phrases() {
+        let valid = [
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon address",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon agent",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon admit",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+        ];
+
+        for phrase in valid {
+            assert_eq!(render(&format!("{{{{ {phrase:?} | bip39_valid }}}}")), "true");
+        }
+
+        let invalid = [
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon unknown",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+        ];
+        for phrase in invalid {
+            assert_eq!(render(&format!("{{{{ {phrase:?} | bip39_valid }}}}")), "false");
+        }
+
+        assert_eq!(
+            render(
+                r#"{{ "  abandon  abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about  " | bip39_valid }}"#
+            ),
+            "true"
+        );
+
+        let oversized = "a".repeat(641);
+        assert_eq!(render(&format!("{{{{ {oversized:?} | bip39_valid }}}}")), "false");
     }
 
     #[test]

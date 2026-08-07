@@ -37,6 +37,8 @@ liquid-core = "0.26"
 # Crypto for liquid filters
 base32.workspace = true
 base64.workspace = true
+bip39.workspace = true
+zeroize.workspace = true
 crc32fast = "1.5"
 hmac.workspace = true
 sha1.workspace = true

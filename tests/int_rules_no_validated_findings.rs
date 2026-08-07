@@ -2,8 +2,8 @@ use anyhow::Result;
 use assert_cmd::Command;
 use serde_json::Value;
 
-/// Ensure that none of the example secrets embedded in the built-in rule YAML
-/// files validate as active credentials.
+/// Ensure that no example secret embedded in built-in rule YAML validates as an
+/// active credential. Network-free derivation checks are not active validation.
 ///
 /// Kingfisher writes two JSON documents to stdout when `--format json` is used:
 ///   1. A summary object (`{"findings": N, "successful_validations": M, ...}`)
@@ -18,11 +18,8 @@ use serde_json::Value;
 ///   * 200 — visible findings present, but none validated as active
 ///   * 205 — at least one validated (active) finding
 ///
-/// This test passes as long as `successful_validations` is zero and no entry
-/// in the optional findings envelope has validation status "active credential".
-/// It is deliberately tolerant of exit code 200, of failed HTTP validations
-/// (e.g. network unreachable in CI), and of the summary-only / envelope-only
-/// stdout shapes.
+/// The test is deliberately tolerant of failed HTTP validations (e.g. network
+/// unreachable in CI) and of the summary-only / envelope-only stdout shapes.
 #[test]
 fn scan_rules_has_no_validated_findings() -> Result<()> {
     let output = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
@@ -108,17 +105,14 @@ fn scan_rules_has_no_validated_findings() -> Result<()> {
     }
 
     assert!(
-        successful_validations == 0 && validated_rule_ids.is_empty(),
-        "Validated findings detected in rules.\n  successful_validations: {}\n  active rule ids: {}\nstdout:\n{}\nstderr:\n{}",
+        validated_rule_ids.is_empty() && successful_validations == 0,
+        "Unexpected validated findings detected in rules.\n  successful_validations: {}\n  active rule ids: {}\nstdout:\n{}\nstderr:\n{}",
         successful_validations,
         validated_rule_ids.join(", "),
         stdout,
         stderr,
     );
 
-    // Accept exit codes 0 (no findings) and 200 (findings but none validated).
-    // Anything else — in particular 205 (active validated findings) or a
-    // crash-style exit — is a real failure.
     match output.status.code() {
         Some(0) | Some(200) => Ok(()),
         Some(code) => {
