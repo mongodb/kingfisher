@@ -1508,7 +1508,9 @@
     }
     .status-badge.active { background: #ecfdf5; color: #15803d; }
     .status-badge.assumed { background: #eff6ff; color: #1d4ed8; }
+    .status-badge.local { background: #ecfeff; color: #0e7490; }
     .status-badge.inactive { background: #fef2f2; color: #b91c1c; }
+    .status-badge.invalid-material { background: #fff1f2; color: #be123c; }
     .status-badge.unknown { background: var(--surface-muted); color: var(--text-muted); }
 
     /* Finding detail snippet */
@@ -2593,7 +2595,9 @@
                     <option value="all" selected>All validation states</option>
                     <option value="active">Active Credential</option>
                     <option value="assumed">Assumed Valid (Not Live-Validated)</option>
+                    <option value="local">Locally Derived</option>
                     <option value="inactive">Inactive Credential</option>
+                    <option value="invalid_material">Invalid Cryptographic Material</option>
                     <option value="inconclusive">Inconclusive Validation</option>
                     <option value="not_attempted">Not Attempted</option>
                     <option value="canary">Canary Token (Skipped)</option>
@@ -3497,6 +3501,8 @@
         findings: normalizedFindings.length,
         active_findings: counts.active || 0,
         inactive_findings: counts.inactive || 0,
+        locally_derived_findings: counts.local || 0,
+        invalid_material_findings: counts.invalid_material || 0,
         unknown_validation_findings: counts.unknown || 0,
         access_map_identities: 0,
         confidence_level: toolName === "Gitleaks" ? "imported" : "imported",
@@ -4579,7 +4585,9 @@
         scanMetadata.summary = {
           findings: Number(reportSummary.findings || 0),
           active: Number(reportSummary.active_findings || 0),
+          locallyDerived: Number(reportSummary.locally_derived_findings || 0),
           inactive: Number(reportSummary.inactive_findings || 0),
+          invalidMaterial: Number(reportSummary.invalid_material_findings || 0),
           unknown: Number(reportSummary.unknown_validation_findings || 0),
           identities: Number(reportSummary.access_map_identities || 0),
           rulesApplied: Number(reportSummary.rules_applied || 0),
@@ -4789,8 +4797,12 @@
           return normalizedStatus === "active";
         } else if (validation === "assumed") {
           return normalizedStatus === "assumed";
+        } else if (validation === "local") {
+          return normalizedStatus === "local";
         } else if (validation === "inactive") {
           return normalizedStatus === "inactive";
+        } else if (validation === "invalid_material") {
+          return normalizedStatus === "invalid_material";
         } else if (validation === "inconclusive") {
           return normalizedStatus === "inconclusive";
         } else if (validation === "not_attempted") {
@@ -4904,6 +4916,18 @@
         return "inactive";
       }
 
+      if (normalized === "locally derived" || normalized === "locally_derived") {
+        return "local";
+      }
+
+      if (
+        normalized === "invalid cryptographic material" ||
+        normalized === "invalid material" ||
+        normalized === "invalid_material"
+      ) {
+        return "invalid_material";
+      }
+
       if (
         normalized === "inconclusive validation" ||
         normalized === "validation unavailable" ||
@@ -4931,11 +4955,26 @@
       return "unknown";
     }
 
+    function validationBadgeClass(normalizedStatus) {
+      if (
+        normalizedStatus === "active" ||
+        normalizedStatus === "assumed" ||
+        normalizedStatus === "inactive"
+      ) {
+        return normalizedStatus;
+      }
+      if (normalizedStatus === "local") return "local";
+      if (normalizedStatus === "invalid_material") return "invalid-material";
+      return "unknown";
+    }
+
     function calculateValidationCounts(list = findings) {
       const counts = {
         active: 0,
         assumed: 0,
+        local: 0,
         inactive: 0,
+        invalid_material: 0,
         inconclusive: 0,
         not_attempted: 0,
         canary: 0,
@@ -5235,7 +5274,9 @@
       const palette = {
         active: "#22c55e",
         assumed: "#3b82f6",
+        local: "#06b6d4",
         inactive: "#f97316",
+        invalid_material: "#e11d48",
         not_attempted: "#38bdf8",
         canary: "#a855f7",
         unknown: "#9ca3af",
@@ -5243,7 +5284,9 @@
       const dataPoints = [
         { key: "active", label: "Active", color: palette.active },
         { key: "assumed", label: "Assumed Valid", color: palette.assumed },
+        { key: "local", label: "Locally Derived", color: palette.local },
         { key: "inactive", label: "Inactive", color: palette.inactive },
+        { key: "invalid_material", label: "Invalid Material", color: palette.invalid_material },
         { key: "not_attempted", label: "Not Attempted", color: palette.not_attempted },
         { key: "canary", label: "Canary Token", color: palette.canary },
         { key: "unknown", label: "Unknown", color: palette.unknown },
@@ -5533,7 +5576,7 @@
         return;
       }
 
-      const statusOrder = { active: 0, assumed: 1, inconclusive: 2, inactive: 3, canary: 4, not_attempted: 5, unknown: 6 };
+      const statusOrder = { active: 0, assumed: 1, local: 2, inconclusive: 3, inactive: 4, invalid_material: 5, canary: 6, not_attempted: 7, unknown: 8 };
       let baseFindings =
         scope === "filtered" ? getFilteredSortedFindings().slice() : (Array.isArray(findings) ? findings.slice() : []);
       if (activeOnly) {
@@ -5552,8 +5595,8 @@
         const fb = b.finding || {};
         const keyA = normalizeValidationStatus(fa.validation && fa.validation.status ? fa.validation.status : "");
         const keyB = normalizeValidationStatus(fb.validation && fb.validation.status ? fb.validation.status : "");
-        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 6;
-        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 6;
+        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : statusOrder.unknown;
+        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : statusOrder.unknown;
         if (sa !== sb) return sa - sb;
 
         const ra = (a.rule && (a.rule.name || a.rule.id)) || "";
@@ -5995,14 +6038,7 @@
               ? String(finding.validation.status)
               : "Unknown";
           const normalizedStatus = normalizeValidationStatus(status);
-          const badgeClass =
-            normalizedStatus === "active"
-              ? "active"
-              : normalizedStatus === "assumed"
-                ? "assumed"
-              : normalizedStatus === "inactive"
-                ? "inactive"
-                : "unknown";
+          const badgeClass = validationBadgeClass(normalizedStatus);
 
           const enrichedChip = finding.kingfisher_enrichment
             ? `<span class="chip-enriched" title="Enriched with Kingfisher validation and revoke data">Enriched</span>`
@@ -6115,14 +6151,7 @@
       const statusRaw =
         finding.validation && finding.validation.status ? String(finding.validation.status) : "Unknown";
       const normalizedStatus = normalizeValidationStatus(statusRaw);
-      const badgeClass =
-        normalizedStatus === "active"
-          ? "active"
-          : normalizedStatus === "assumed"
-            ? "assumed"
-          : normalizedStatus === "inactive"
-            ? "inactive"
-            : "unknown";
+      const badgeClass = validationBadgeClass(normalizedStatus);
       const statusEl = document.getElementById("fd-validation-status");
       if (statusEl) {
         statusEl.innerHTML = `<span class="status-badge ${badgeClass}">${escapeHtml(statusRaw)}</span>`;
@@ -6310,7 +6339,7 @@
 
       const statusRaw = enr.validation && enr.validation.status ? String(enr.validation.status) : "Unknown";
       const normalized = normalizeValidationStatus(statusRaw);
-      const badgeClass = normalized === "active" ? "active" : normalized === "inactive" ? "inactive" : "unknown";
+      const badgeClass = validationBadgeClass(normalized);
       const validationEl = document.getElementById("fd-kf-validation");
       if (validationEl) {
         validationEl.innerHTML = `<span class="status-badge ${badgeClass}">${escapeHtml(statusRaw)}</span>`;
@@ -6753,14 +6782,14 @@
       }
 
       // Sort: active first, then by rule name
-      const statusOrder = { active: 0, inconclusive: 1, inactive: 2, canary: 3, not_attempted: 4, unknown: 5 };
+      const statusOrder = { active: 0, assumed: 1, local: 2, inconclusive: 3, inactive: 4, invalid_material: 5, canary: 6, not_attempted: 7, unknown: 8 };
       const sorted = pool.sort((a, b) => {
         const fa = a.finding || {};
         const fb = b.finding || {};
         const keyA = normalizeValidationStatus(fa.validation && fa.validation.status ? fa.validation.status : "");
         const keyB = normalizeValidationStatus(fb.validation && fb.validation.status ? fb.validation.status : "");
-        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 6;
-        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 6;
+        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : statusOrder.unknown;
+        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : statusOrder.unknown;
         if (sa !== sb) return sa - sb;
         const ra = (a.rule && (a.rule.name || a.rule.id)) || "";
         const rb = (b.rule && (b.rule.name || b.rule.id)) || "";

@@ -29,7 +29,11 @@ pub enum ValidationOutcome {
     VerifiedActive,
     /// The rule author marked the credential as valid without live validation.
     Assumed,
-    /// A live or cryptographic validator authoritatively rejected the credential.
+    /// Network-free cryptographic validation parsed the material and derived public evidence.
+    LocallyDerived,
+    /// Network-free cryptographic validation rejected malformed key material.
+    InvalidMaterial,
+    /// A live validator authoritatively rejected the credential.
     VerifiedInactive,
     /// Validation was attempted but infrastructure or the remote service was unavailable.
     Unavailable,
@@ -49,7 +53,7 @@ impl ValidationOutcome {
 
     /// Whether this outcome should pass the actionable validation filter.
     pub const fn is_actionable(self) -> bool {
-        matches!(self, Self::VerifiedActive | Self::Assumed)
+        matches!(self, Self::VerifiedActive | Self::Assumed | Self::LocallyDerived)
     }
 
     /// Stable human-readable label used by reports.
@@ -57,6 +61,8 @@ impl ValidationOutcome {
         match self {
             Self::VerifiedActive => "Active Credential",
             Self::Assumed => "Assumed Valid (Not Live-Validated)",
+            Self::LocallyDerived => "Locally Derived",
+            Self::InvalidMaterial => "Invalid Cryptographic Material",
             Self::VerifiedInactive => "Inactive Credential",
             Self::Unavailable => "Inconclusive Validation",
             Self::Skipped => "Validation Skipped",
@@ -94,6 +100,8 @@ mod tests {
     fn actionable_outcomes_are_explicit() {
         assert!(ValidationOutcome::VerifiedActive.is_actionable());
         assert!(ValidationOutcome::Assumed.is_actionable());
+        assert!(ValidationOutcome::LocallyDerived.is_actionable());
+        assert!(!ValidationOutcome::InvalidMaterial.is_actionable());
         assert!(!ValidationOutcome::VerifiedInactive.is_actionable());
         assert!(!ValidationOutcome::Unavailable.is_actionable());
         assert!(!ValidationOutcome::Skipped.is_actionable());
@@ -123,6 +131,14 @@ mod tests {
 
     #[test]
     fn outcome_serialization_is_stable_snake_case() {
+        assert_eq!(
+            serde_json::to_string(&ValidationOutcome::LocallyDerived).unwrap(),
+            "\"locally_derived\""
+        );
+        assert_eq!(
+            serde_json::to_string(&ValidationOutcome::InvalidMaterial).unwrap(),
+            "\"invalid_material\""
+        );
         assert_eq!(
             serde_json::to_string(&ValidationOutcome::NotAttempted).unwrap(),
             "\"not_attempted\""

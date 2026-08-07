@@ -137,6 +137,51 @@ fn apply_repo_clone_limit(
     *repo_urls = limited;
 }
 
+/// Run independent jobs on a bounded Rayon pool and stream successful results
+/// back to the calling thread.
+///
+/// The receiver must stay outside a Rayon scope: Rayon executes a scope's
+/// coordinator closure on a pool worker, so a coordinator that blocks on the
+/// result channel deadlocks when the pool has exactly one worker.
+fn stream_parallel_results<I, O, Items, Worker, Consumer>(
+    num_threads: usize,
+    items: Items,
+    worker: Worker,
+    mut consume: Consumer,
+) -> Result<()>
+where
+    I: Send + 'static,
+    O: Send + 'static,
+    Items: IntoIterator<Item = I>,
+    Worker: Fn(I) -> Option<O> + Send + Sync + 'static,
+    Consumer: FnMut(O),
+{
+    let num_threads = num_threads.max(1);
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(num_threads)
+        .build()
+        .context("Failed to build git clone thread pool")?;
+    let (result_tx, result_rx) = crossbeam_channel::bounded(std::cmp::max(2, num_threads * 2));
+    let worker = Arc::new(worker);
+
+    for item in items {
+        let result_tx = result_tx.clone();
+        let worker = Arc::clone(&worker);
+        pool.spawn(move || {
+            if let Some(result) = worker(item) {
+                let _ = result_tx.send(result);
+            }
+        });
+    }
+    drop(result_tx);
+
+    for result in result_rx {
+        consume(result);
+    }
+
+    Ok(())
+}
+
 pub fn clone_or_update_git_repos_streaming<F>(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
@@ -180,104 +225,111 @@ where
     };
 
     let clone_concurrency = std::cmp::max(1, args.num_jobs);
-    // Bound this internal channel so cloner workers block on `send` when the
-    // single-threaded dispatcher loop below can't forward fast enough (e.g.
-    // because the outer bounded scan channel is full). Without this bound,
-    // cloners would race ahead and fill `/tmp` with completed-but-unscanned
-    // clones, which is exactly the disk-overflow bug we're trying to fix.
-    let (ready_tx, ready_rx) = crossbeam_channel::bounded(std::cmp::max(2, clone_concurrency * 2));
     let ignore_certs = global_args.ignore_certs;
     let provider_hosts = provider_hosts(args, global_args);
+    let datastore = Arc::clone(datastore);
+    let worker_progress = progress.clone();
 
-    ThreadPoolBuilder::new()
-        .num_threads(clone_concurrency)
-        .build()
-        .context("Failed to build git clone thread pool")?
-        .scope(|scope| {
-            for repo_url in repo_urls {
-                let ready_tx = ready_tx.clone();
-                let datastore = Arc::clone(datastore);
-                let repo_url = repo_url.clone();
-                let progress = progress.clone();
-                let provider_hosts = provider_hosts.clone();
-                scope.spawn(move |_| {
-                    let git = Git::with_provider_hosts(ignore_certs, &provider_hosts);
-                    let output_dir = {
-                        let datastore = datastore.lock().unwrap();
-                        datastore.clone_destination(&repo_url)
-                    };
+    // The helper's bounded result channel prevents cloners from racing ahead
+    // of the scanner and filling the clone directory with completed work.
+    stream_parallel_results(
+        clone_concurrency,
+        repo_urls.iter().cloned(),
+        move |repo_url| {
+            let git = Git::with_provider_hosts(ignore_certs, &provider_hosts);
+            let output_dir = {
+                let datastore = datastore.lock().unwrap();
+                datastore.clone_destination(&repo_url)
+            };
 
-                    if output_dir.is_dir() {
-                        progress.suspend(|| info!("Updating clone of {repo_url}..."));
-                        match git.update_clone(&repo_url, &output_dir) {
-                            Ok(()) => {
-                                {
-                                    let mut ds = datastore.lock().unwrap();
-                                    ds.register_repo_link(output_dir.clone(), repo_url.to_string());
-                                }
-                                let _ = ready_tx.send(output_dir);
-                                progress.inc(1);
-                                return;
-                            }
-                            Err(e) => {
-                                progress.suspend(|| {
-                                    debug!(
-                                        "Failed to update clone of {repo_url} at {}: {e}",
-                                        output_dir.display()
-                                    )
-                                });
-                                if let Err(e) = std::fs::remove_dir_all(&output_dir) {
-                                    progress.suspend(|| {
-                                        debug!(
-                                            "Failed to remove clone directory at {}: {e}",
-                                            output_dir.display()
-                                        )
-                                    });
-                                }
-                            }
+            if output_dir.is_dir() {
+                worker_progress.suspend(|| info!("Updating clone of {repo_url}..."));
+                match git.update_clone(&repo_url, &output_dir) {
+                    Ok(()) => {
+                        {
+                            let mut ds = datastore.lock().unwrap();
+                            ds.register_repo_link(output_dir.clone(), repo_url.to_string());
+                        }
+                        worker_progress.inc(1);
+                        return Some(output_dir);
+                    }
+                    Err(e) => {
+                        worker_progress.suspend(|| {
+                            debug!(
+                                "Failed to update clone of {repo_url} at {}: {e}",
+                                output_dir.display()
+                            )
+                        });
+                        if let Err(e) = std::fs::remove_dir_all(&output_dir) {
+                            worker_progress.suspend(|| {
+                                debug!(
+                                    "Failed to remove clone directory at {}: {e}",
+                                    output_dir.display()
+                                )
+                            });
                         }
                     }
+                }
+            }
 
-                    progress.suspend(|| info!("Cloning {repo_url}..."));
-                    if let Err(e) = git.create_fresh_clone(&repo_url, &output_dir, clone_mode) {
-                        progress.suspend(|| {
-                            if repo_url.as_str().ends_with(".wiki.git") {
-                                info!("Wiki repository not found for {repo_url}, skipping");
-                                debug!(
-                                    "Failed to clone {repo_url} to {}: {e}",
-                                    output_dir.display()
-                                );
-                            } else {
-                                error!(
-                                    "Failed to clone {repo_url} to {}: {e}",
-                                    output_dir.display()
-                                );
-                            }
-                            debug!("Skipping scan of {repo_url}");
-                        });
-                        progress.inc(1);
-                        return;
+            worker_progress.suspend(|| info!("Cloning {repo_url}..."));
+            if let Err(e) = git.create_fresh_clone(&repo_url, &output_dir, clone_mode) {
+                worker_progress.suspend(|| {
+                    if repo_url.as_str().ends_with(".wiki.git") {
+                        info!("Wiki repository not found for {repo_url}, skipping");
+                        debug!("Failed to clone {repo_url} to {}: {e}", output_dir.display());
+                    } else {
+                        error!("Failed to clone {repo_url} to {}: {e}", output_dir.display());
                     }
-
-                    {
-                        let mut ds = datastore.lock().unwrap();
-                        ds.register_repo_link(output_dir.clone(), repo_url.to_string());
-                    }
-
-                    let _ = ready_tx.send(output_dir);
-                    progress.inc(1);
+                    debug!("Skipping scan of {repo_url}");
                 });
+                worker_progress.inc(1);
+                return None;
             }
 
-            drop(ready_tx);
-
-            for repo_root in ready_rx.iter() {
-                on_repo_ready(repo_root);
+            {
+                let mut ds = datastore.lock().unwrap();
+                ds.register_repo_link(output_dir.clone(), repo_url.to_string());
             }
-        });
+
+            worker_progress.inc(1);
+            Some(output_dir)
+        },
+        &mut on_repo_ready,
+    )?;
 
     progress.finish();
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{sync::mpsc, thread, time::Duration};
+
+    use super::stream_parallel_results;
+
+    #[test]
+    fn streaming_pool_makes_progress_with_one_worker() {
+        let (done_tx, done_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            let mut streamed = Vec::new();
+            let result = stream_parallel_results(
+                1,
+                0..4,
+                |value| Some(value * 2),
+                |value| streamed.push(value),
+            );
+            done_tx.send((result, streamed)).expect("test receiver should remain open");
+        });
+
+        let (result, mut streamed) = done_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("one-worker streaming pool should not deadlock");
+        result.expect("streaming jobs should succeed");
+        streamed.sort_unstable();
+        assert_eq!(streamed, vec![0, 2, 4, 6]);
+        handle.join().expect("streaming thread should not panic");
+    }
 }
 
 pub async fn enumerate_github_repos(

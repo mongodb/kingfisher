@@ -18,6 +18,8 @@ publish = false
 
 [workspace.dependencies]
 anyhow = "1.0"
+bip32 = { version = "0.5.3", default-features = false, features = ["secp256k1", "std"] }
+bip39 = { version = "2.2.2", default-features = false, features = ["std", "zeroize"] }
 thiserror = "2.0.18"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -33,6 +35,7 @@ ignore = "0.4"
 walkdir = "2.5"
 sha1 = "0.11"
 sha2 = "0.11"
+sha3 = { version = "0.12", default-features = false }
 hmac = "0.13"
 base32 = "0.5.1"
 base64 = "0.23"
@@ -43,11 +46,12 @@ rand = "0.10"
 hex = "0.4"
 rustc-hash = "2.1"
 http = "1.4"
+zeroize = "1.8"
 
 
 [package]
 name = "kingfisher"
-version = "1.111.0"
+version = "1.112.0"
 description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 edition.workspace = true
 rust-version.workspace = true

@@ -12,6 +12,7 @@ import yaml
 REPO_ROOT = Path(__file__).resolve().parent.parent.parent
 RULES_DIR = REPO_ROOT / "crates" / "kingfisher-rules" / "data" / "rules"
 OUTPUT = REPO_ROOT / "docs-site" / "docs" / "rules" / "builtin-rules.md"
+NON_LIVE_VALIDATION_TYPES = {"Assumed", "Ethereum"}
 
 
 def load_rules():
@@ -58,6 +59,7 @@ def load_rules():
                     "id": rule_id,
                     "confidence": confidence,
                     "validates": has_validation,
+                    "validation_type": validation.get("type") if isinstance(validation, dict) else None,
                     "revokes": has_revocation,
                     "dependent": is_dependent,
                 })
@@ -70,7 +72,13 @@ def generate_markdown(rules):
     total = len(rules)
     detectors = sum(1 for r in rules if not r["dependent"])
     dependent = total - detectors
-    validated = sum(1 for r in rules if r["validates"] and not r["dependent"])
+    validated = sum(
+        1
+        for r in rules
+        if r["validates"]
+        and not r["dependent"]
+        and r["validation_type"] not in NON_LIVE_VALIDATION_TYPES
+    )
     revocable = sum(1 for r in rules if r["revokes"] and not r["dependent"])
     providers = len(set(r["provider"] for r in rules))
 

@@ -37,6 +37,7 @@ The `kingfisher-scanner` crate supports optional validation features:
 | `validation` | Core validation support (includes HTTP validation) |
 | `validation-http` | HTTP-based validation for API tokens |
 | `validation-raw` | Provider/protocol-specific raw validation flows for `validation: type: Raw` rules |
+| `validation-ethereum` | Network-free Ethereum key parsing and EIP-55 address derivation |
 | `validation-aws` | AWS credential validation via STS GetCallerIdentity |
 | `validation-azure` | Azure storage credential validation |
 | `validation-coinbase` | Coinbase credential validation |
@@ -265,7 +266,7 @@ flowchart TD
 
 ### Loading Builtin Rules
 
-Kingfisher currently ships with 1,051 built-in rules for common secret types:
+Kingfisher currently ships with 1,089 built-in rules for common secret types:
 
 ```rust
 use kingfisher_rules::{get_builtin_rules, Confidence};
@@ -731,6 +732,7 @@ kingfisher-scanner = { git = "https://github.com/mongodb/kingfisher", features =
 | `validation` | Core validation support with HTTP validation |
 | `validation-http` | HTTP-based validation for API tokens |
 | `validation-raw` | Provider/protocol-specific raw validation flows for `validation: type: Raw` rules |
+| `validation-ethereum` | Network-free Ethereum key parsing and EIP-55 address derivation |
 | `validation-aws` | AWS credential validation via STS |
 | `validation-azure` | Azure storage credential validation |
 | `validation-coinbase` | Coinbase credential validation |
@@ -742,8 +744,10 @@ kingfisher-scanner = { git = "https://github.com/mongodb/kingfisher", features =
 `validation: type: Raw` is the ad-hoc validator path for provider-specific or protocol-specific checks that are not generic enough to become schema-level validator families. Typed validators such as `AWS`, `GCP`, `MongoDB`, and `JWT` remain separate validator kinds in the rule schema.
 
 `kingfisher_core::ValidationOutcome` provides the transport-independent result model used by
-Kingfisher reports: `VerifiedActive`, `Assumed`, `VerifiedInactive`, `Unavailable`, `Skipped`, and
-`NotAttempted`. The human-readable statuses for `VerifiedActive`, `Assumed`, and `Unavailable` are
+Kingfisher reports: `VerifiedActive`, `Assumed`, `LocallyDerived`, `InvalidMaterial`,
+`VerifiedInactive`, `Unavailable`, `Skipped`, and `NotAttempted`. `LocallyDerived` means a
+network-free cryptographic validator accepted key material and derived public metadata; it does
+not assert current activity or ownership. The human-readable statuses for `VerifiedActive`, `Assumed`, and `Unavailable` are
 **Active Credential**, **Assumed Valid (Not Live-Validated)**, and
 **Inconclusive Validation**, respectively. The assumed outcome is high-confidence static detection,
 not proof that a credential is currently usable.
@@ -756,12 +760,13 @@ Use the built-in predicates when selecting findings:
 use kingfisher_core::ValidationOutcome;
 
 let outcome = ValidationOutcome::Assumed;
-assert!(outcome.is_actionable());       // active or assumed-valid
+assert!(outcome.is_actionable());       // active, assumed-valid, or locally derived
 assert!(!outcome.is_verified_active()); // live validation was not performed
 ```
 
 Serde serializes the variants as stable snake-case values (`verified_active`, `assumed`,
-`verified_inactive`, `unavailable`, `skipped`, and `not_attempted`).
+`locally_derived`, `invalid_material`, `verified_inactive`, `unavailable`, `skipped`, and
+`not_attempted`).
 
 ### HTTP Validation Example
 

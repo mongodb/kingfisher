@@ -118,7 +118,7 @@ fn selector_matches(rule_id: &str, selector: &str) -> bool {
 }
 
 pub fn should_rate_limit_validation(validation: &Validation) -> bool {
-    !matches!(validation, Validation::Assumed)
+    !matches!(validation, Validation::Assumed | Validation::Ethereum(_))
 }
 
 #[cfg(test)]
@@ -168,6 +168,9 @@ mod tests {
     #[test]
     fn should_rate_limit_non_http_validators() {
         assert!(should_rate_limit_validation(&Validation::AWS));
+        assert!(!should_rate_limit_validation(&Validation::Ethereum(
+            kingfisher_rules::EthereumValidation::PrivateKey
+        )));
         assert!(should_rate_limit_validation(&Validation::GCP));
         assert!(should_rate_limit_validation(&Validation::MongoDB));
         assert!(should_rate_limit_validation(&Validation::Postgres));

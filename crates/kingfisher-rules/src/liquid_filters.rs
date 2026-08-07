@@ -1,6 +1,7 @@
 //! Collection of small Liquid filters that make HTTP validations & API-signing templates easy
 
 use base64::{Engine, engine::general_purpose};
+use bip39::{Language, Mnemonic};
 use crc32fast::Hasher;
 use hmac::{Hmac, KeyInit, Mac};
 use liquid_core::{
@@ -17,6 +18,7 @@ use time::{
     format_description::well_known::{Iso8601, Rfc2822},
 };
 use uuid::Uuid;
+use zeroize::Zeroizing;
 
 // -----------------------------------------------------------------------------
 // Helper macro – keeps most filters <10 lines long
@@ -521,6 +523,24 @@ static_filter!(
     /// a literal newline in the template would break indentation.
     NewlineFilter, "newline",
     |_input: &dyn ValueView| -> String { "\n".to_string() }
+);
+
+// {{ TOKEN | bip39_valid }}
+static_filter!(
+    /// Return whether the input is a checksum-valid English BIP-39 mnemonic.
+    Bip39ValidFilter, "bip39_valid",
+    |input: &dyn ValueView| -> bool {
+        const MAX_MNEMONIC_BYTES: usize = 640;
+        let input = input.to_kstr();
+        if input.len() > MAX_MNEMONIC_BYTES {
+            return false;
+        }
+
+        // This contains the full mnemonic. Keep `Zeroizing`: the crypto-inventory Semgrep rule
+        // flags the crate generically, but wiping this temporary is intentional memory hygiene.
+        let normalized = Zeroizing::new(input.split_whitespace().collect::<Vec<_>>().join(" "));
+        Mnemonic::parse_in_normalized(Language::English, &normalized).is_ok()
+    }
 );
 
 // -----------------------------------------------------------------------------
@@ -1100,6 +1120,7 @@ pub fn register_all(builder: liquid::ParserBuilder) -> liquid::ParserBuilder {
         .filter(IsoTimestampNoFracFilter)
         .filter(Rfc1123DateFilter)
         .filter(UuidFilter)
+        .filter(Bip39ValidFilter)
         .filter(JwtHeaderFilter)
         .filter(B64EncFilter)
         .filter(B64DecFilter)
@@ -1382,6 +1403,50 @@ mod tests {
                 .unwrap();
         let v = render(r#"{{ "" | uuid }}"#);
         assert!(uuid_re.is_match(&v));
+    }
+
+    #[test]
+    fn bip39_valid_filter_accepts_standard_lengths_and_whitespace() {
+        for phrase in [
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon address",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon agent",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon admit",
+            "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art",
+        ] {
+            assert_eq!(render(&format!(r#"{{{{ {phrase:?} | bip39_valid }}}}"#)), "true");
+        }
+
+        let spaced = "abandon  abandon\tabandon abandon abandon abandon abandon abandon abandon abandon abandon about";
+        assert_eq!(render(&format!(r#"{{{{ "{spaced}" | bip39_valid }}}}"#)), "true");
+    }
+
+    #[test]
+    fn bip39_valid_filter_rejects_bad_checksum_and_oversized_input() {
+        assert_eq!(
+            render(
+                r#"{{ "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon" | bip39_valid }}"#
+            ),
+            "false"
+        );
+        let oversized = "abandon ".repeat(81);
+        assert_eq!(render(&format!(r#"{{{{ {oversized:?} | bip39_valid }}}}"#)), "false");
+    }
+
+    #[test]
+    fn bip39_valid_filter_is_boolean_in_conditionals() {
+        assert_eq!(
+            render(
+                r#"{% assign valid = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" | bip39_valid %}{% if valid %}valid{% else %}invalid{% endif %}"#
+            ),
+            "valid"
+        );
+        assert_eq!(
+            render(
+                r#"{% assign valid = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon" | bip39_valid %}{% if valid %}valid{% else %}invalid{% endif %}"#
+            ),
+            "invalid"
+        );
     }
 
     #[test]

@@ -22,6 +22,7 @@ except ModuleNotFoundError as exc:
 DEFAULT_RULES_DIR = (
     Path(__file__).resolve().parents[3] / "crates/kingfisher-rules/data/rules"
 )
+NON_LIVE_VALIDATION_TYPES = {"Assumed", "Ethereum"}
 
 
 def parse_args() -> argparse.Namespace:
@@ -110,11 +111,11 @@ def main() -> int:
 
             identifier = rule_identifier(rule, path, index)
             validation = rule.get("validation")
-            is_assumed = (
+            is_non_live = (
                 isinstance(validation, dict)
-                and validation.get("type") == "Assumed"
+                and validation.get("type") in NON_LIVE_VALIDATION_TYPES
             )
-            if validation and not is_assumed:
+            if validation and not is_non_live:
                 standalone_with_validator.append(identifier)
             else:
                 standalone_without_validator.append(identifier)

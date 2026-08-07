@@ -12,6 +12,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow, bail};
 use crossbeam_skiplist::SkipMap;
+use kingfisher_core::ValidationOutcome;
 use liquid::Object;
 use liquid_core::{Value, ValueView};
 use reqwest::Client;
@@ -60,6 +61,10 @@ fn preview_body_for_display(body: &str, max_bytes: usize) -> String {
     format!("{}...", &body[..end])
 }
 
+fn outcome_from_validator_result(is_valid: bool) -> ValidationOutcome {
+    if is_valid { ValidationOutcome::VerifiedActive } else { ValidationOutcome::VerifiedInactive }
+}
+
 /// Result of a direct validation attempt.
 #[derive(Debug, Clone, Serialize)]
 pub struct DirectValidationResult {
@@ -67,9 +72,11 @@ pub struct DirectValidationResult {
     pub rule_id: String,
     /// The rule name.
     pub rule_name: String,
-    /// Whether the validator accepted the secret. For an assumed rule this is true even though no
-    /// live validation request was performed; inspect `message` for the explicit classification.
+    /// Whether a live validator accepted the secret. Assumed rules retain legacy `true`; local
+    /// derivation remains `false`. Use `validation_outcome` for the semantic classification.
     pub is_valid: bool,
+    /// Semantic validation classification. Local derivation is distinct from live validity.
+    pub validation_outcome: ValidationOutcome,
     /// HTTP status code from the validation request (if applicable).
     pub status_code: Option<u16>,
     /// Response body or error message.
@@ -133,6 +140,9 @@ fn extract_validation_vars(validation: &Validation) -> BTreeSet<String> {
 
     match validation {
         Validation::Assumed => {}
+        Validation::Ethereum(_) => {
+            vars.insert("TOKEN".to_string());
+        }
         Validation::Http(http) => {
             // Extract from URL
             vars.extend(extract_template_vars(&http.request.url));
@@ -356,6 +366,7 @@ async fn execute_http_validation(
         rule_id: String::new(), // Will be filled in by caller
         rule_name: String::new(),
         is_valid,
+        validation_outcome: ValidationOutcome::from_legacy(false, is_valid, status.as_u16()),
         status_code: Some(status.as_u16()),
         message: display_body,
     })
@@ -419,6 +430,7 @@ async fn execute_grpc_validation(
         rule_id: String::new(), // Will be filled in by caller
         rule_name: String::new(),
         is_valid,
+        validation_outcome: ValidationOutcome::from_legacy(false, is_valid, status.as_u16()),
         status_code: Some(status.as_u16()),
         message: display_body,
     })
@@ -614,9 +626,21 @@ pub async fn run_direct_validation(
                 rule_id: String::new(),
                 rule_name: String::new(),
                 is_valid: true,
+                validation_outcome: ValidationOutcome::Assumed,
                 status_code: None,
                 message: kingfisher_core::ValidationOutcome::Assumed.display_name().to_string(),
             },
+            Validation::Ethereum(kind) => {
+                let outcome = kingfisher_scanner::validation::ethereum::validate(*kind, &secret);
+                DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid: false,
+                    validation_outcome: outcome.outcome,
+                    status_code: None,
+                    message: outcome.body,
+                }
+            }
             Validation::Http(http_validation) => {
                 match execute_http_validation(
                     http_validation,
@@ -641,6 +665,7 @@ pub async fn run_direct_validation(
                             rule_id: rule_id.clone(),
                             rule_name: rule_name.clone(),
                             is_valid: false,
+                            validation_outcome: ValidationOutcome::Unavailable,
                             status_code: None,
                             message: "HTTP validation failed".to_string(),
                         }
@@ -664,6 +689,7 @@ pub async fn run_direct_validation(
                             rule_id: rule_id.clone(),
                             rule_name: rule_name.clone(),
                             is_valid: false,
+                            validation_outcome: ValidationOutcome::Unavailable,
                             status_code: None,
                             message: "gRPC validation failed".to_string(),
                         }
@@ -696,6 +722,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        validation_outcome: outcome_from_validator_result(is_valid),
                         status_code: None,
                         message,
                     },
@@ -703,6 +730,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        validation_outcome: ValidationOutcome::Unavailable,
                         status_code: None,
                         message: format!("AWS validation error: {}", e),
                     },
@@ -718,6 +746,7 @@ pub async fn run_direct_validation(
                                 rule_id: String::new(),
                                 rule_name: String::new(),
                                 is_valid,
+                                validation_outcome: outcome_from_validator_result(is_valid),
                                 status_code: None,
                                 message: if metadata.is_empty() {
                                     "GCP credential validation completed".to_string()
@@ -729,6 +758,7 @@ pub async fn run_direct_validation(
                                 rule_id: String::new(),
                                 rule_name: String::new(),
                                 is_valid: false,
+                                validation_outcome: ValidationOutcome::Unavailable,
                                 status_code: None,
                                 message: format!("GCP validation error: {}", e),
                             },
@@ -738,6 +768,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        validation_outcome: ValidationOutcome::Unavailable,
                         status_code: None,
                         message: format!("Failed to initialize GCP validator: {}", e),
                     },
@@ -751,6 +782,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        validation_outcome: outcome_from_validator_result(is_valid),
                         status_code: None,
                         message,
                     },
@@ -758,6 +790,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        validation_outcome: ValidationOutcome::Unavailable,
                         status_code: None,
                         message: format!("MongoDB validation error: {}", e),
                     },
@@ -771,6 +804,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        validation_outcome: outcome_from_validator_result(is_valid),
                         status_code: None,
                         message: if metadata.is_empty() {
                             "MySQL validation completed".to_string()
@@ -782,6 +816,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        validation_outcome: ValidationOutcome::Unavailable,
                         status_code: None,
                         message: format!("MySQL validation error: {}", e),
                     },
@@ -795,6 +830,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        validation_outcome: outcome_from_validator_result(is_valid),
                         status_code: None,
                         message: if metadata.is_empty() {
                             "Postgres validation completed".to_string()
@@ -806,6 +842,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        validation_outcome: ValidationOutcome::Unavailable,
                         status_code: None,
                         message: format!("Postgres validation error: {}", e),
                     },
@@ -819,6 +856,11 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: outcome.valid,
+                        validation_outcome: ValidationOutcome::from_legacy(
+                            false,
+                            outcome.valid,
+                            outcome.status.as_u16(),
+                        ),
                         status_code: Some(outcome.status.as_u16()),
                         message: outcome.message,
                     },
@@ -826,6 +868,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        validation_outcome: ValidationOutcome::Unavailable,
                         status_code: None,
                         message: format!("JDBC validation error: {}", e),
                     },
@@ -839,6 +882,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        validation_outcome: outcome_from_validator_result(is_valid),
                         status_code: None,
                         message,
                     },
@@ -846,6 +890,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        validation_outcome: ValidationOutcome::Unavailable,
                         status_code: None,
                         message: format!("JWT validation error: {}", e),
                     },
@@ -881,6 +926,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        validation_outcome: outcome_from_validator_result(is_valid),
                         status_code: None,
                         message: validation_body::clone_as_string(&body),
                     },
@@ -888,6 +934,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        validation_outcome: ValidationOutcome::Unavailable,
                         status_code: None,
                         message: format!("Azure Storage validation error: {}", e),
                     },
@@ -909,6 +956,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid,
+                        validation_outcome: outcome_from_validator_result(is_valid),
                         status_code: None,
                         message: validation_body::clone_as_string(&body),
                     },
@@ -916,6 +964,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        validation_outcome: ValidationOutcome::Unavailable,
                         status_code: None,
                         message: format!("Coinbase validation error: {}", e),
                     },
@@ -936,6 +985,11 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: result.valid,
+                        validation_outcome: ValidationOutcome::from_legacy(
+                            false,
+                            result.valid,
+                            result.status.as_u16(),
+                        ),
                         status_code: Some(result.status.as_u16()),
                         message: result.body,
                     },
@@ -943,6 +997,7 @@ pub async fn run_direct_validation(
                         rule_id: String::new(),
                         rule_name: String::new(),
                         is_valid: false,
+                        validation_outcome: ValidationOutcome::Unavailable,
                         status_code: None,
                         message: format!("Raw validation error: {}", e),
                     },
@@ -1151,13 +1206,19 @@ pub fn print_results(results: &[DirectValidationResult], format: &str, use_color
                     println!(); // Separator between results
                 }
 
-                let is_high_confidence =
-                    result.message == kingfisher_core::ValidationOutcome::Assumed.display_name();
-                let valid_str = if is_high_confidence {
+                let valid_str = if result.validation_outcome == ValidationOutcome::Assumed {
                     if use_color {
                         "\x1b[94m🔒 Assumed Valid (Not Live-Validated)\x1b[0m"
                     } else {
                         "Assumed Valid (Not Live-Validated)"
+                    }
+                } else if result.validation_outcome == ValidationOutcome::LocallyDerived {
+                    if use_color { "\x1b[36m◇ LOCALLY DERIVED\x1b[0m" } else { "LOCALLY DERIVED" }
+                } else if result.validation_outcome == ValidationOutcome::InvalidMaterial {
+                    if use_color {
+                        "\x1b[31m✗ INVALID MATERIAL\x1b[0m"
+                    } else {
+                        "INVALID MATERIAL"
                     }
                 } else if result.is_valid {
                     if use_color { "\x1b[32m✓ VALID\x1b[0m" } else { "VALID" }
@@ -1180,7 +1241,7 @@ pub fn print_results(results: &[DirectValidationResult], format: &str, use_color
     }
 }
 
-/// Check if any result is valid.
-pub fn any_valid(results: &[DirectValidationResult]) -> bool {
-    results.iter().any(|r| r.is_valid)
+/// Check if any result produced an actionable validation outcome.
+pub fn any_actionable(results: &[DirectValidationResult]) -> bool {
+    results.iter().any(|r| r.validation_outcome.is_actionable())
 }
