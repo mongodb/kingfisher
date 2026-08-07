@@ -529,19 +529,17 @@ static_filter!(
 static_filter!(
     /// Return whether the input is a checksum-valid English BIP-39 mnemonic.
     Bip39ValidFilter, "bip39_valid",
-    |input: &dyn ValueView| -> String {
+    |input: &dyn ValueView| -> bool {
         const MAX_MNEMONIC_BYTES: usize = 640;
         let input = input.to_kstr();
         if input.len() > MAX_MNEMONIC_BYTES {
-            return "false".to_string();
+            return false;
         }
 
         // This contains the full mnemonic. Keep `Zeroizing`: the crypto-inventory Semgrep rule
         // flags the crate generically, but wiping this temporary is intentional memory hygiene.
         let normalized = Zeroizing::new(input.split_whitespace().collect::<Vec<_>>().join(" "));
-        Mnemonic::parse_in_normalized(Language::English, &normalized)
-            .is_ok()
-            .to_string()
+        Mnemonic::parse_in_normalized(Language::English, &normalized).is_ok()
     }
 );
 
@@ -1433,6 +1431,22 @@ mod tests {
         );
         let oversized = "abandon ".repeat(81);
         assert_eq!(render(&format!(r#"{{{{ {oversized:?} | bip39_valid }}}}"#)), "false");
+    }
+
+    #[test]
+    fn bip39_valid_filter_is_boolean_in_conditionals() {
+        assert_eq!(
+            render(
+                r#"{% assign valid = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about" | bip39_valid %}{% if valid %}valid{% else %}invalid{% endif %}"#
+            ),
+            "valid"
+        );
+        assert_eq!(
+            render(
+                r#"{% assign valid = "abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon" | bip39_valid %}{% if valid %}valid{% else %}invalid{% endif %}"#
+            ),
+            "invalid"
+        );
     }
 
     #[test]

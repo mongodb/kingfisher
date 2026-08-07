@@ -387,7 +387,7 @@ fn build_validate_command(
             ))
         }
         Validation::GCP | Validation::Ethereum(_) => {
-            // GCP validation uses the service account JSON key
+            // Both validators use the captured token directly.
             Some(format!(
                 "kingfisher validate --rule {} {}{}",
                 rule_id,
@@ -973,8 +973,10 @@ impl DetailsReporter {
             }
             _ => Some(raw_validation_body.to_string()),
         };
+        const SANITIZATION_FAILURE_PLACEHOLDER: &str =
+            "[validation response omitted: local evidence failed sanitization]";
         let response_body = format_validation_response(
-            sanitized_local_body.as_deref().unwrap_or_default(),
+            sanitized_local_body.as_deref().unwrap_or(SANITIZATION_FAILURE_PLACEHOLDER),
             args.redact,
             args.full_validation_response,
         );
@@ -2205,6 +2207,34 @@ mod tests {
 
         let record = reporter.build_finding_record(&report_match, &sample_scan_args());
         assert_eq!(record.finding.validation.status, "Inconclusive Validation");
+    }
+
+    #[test]
+    fn malformed_local_evidence_uses_safe_placeholder() {
+        let temp = tempdir().unwrap();
+        let datastore =
+            Arc::new(Mutex::new(findings_store::FindingsStore::new(temp.path().to_path_buf())));
+        let reporter = DetailsReporter {
+            datastore,
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+
+        let (mut report_match, _) = sample_report_match("{}", StatusCode::OK.as_u16(), false);
+        Arc::get_mut(&mut report_match.m.rule)
+            .expect("sample rule must be uniquely owned")
+            .syntax
+            .validation = Some(crate::rules::Validation::Ethereum(
+            crate::rules::rule::EthereumValidation::PrivateKey,
+        ));
+        report_match.validation_outcome = kingfisher_core::ValidationOutcome::LocallyDerived;
+
+        let record = reporter.build_finding_record(&report_match, &sample_scan_args());
+        assert_eq!(
+            record.finding.validation.response,
+            "[validation response omitted: local evidence failed sanitization]"
+        );
     }
 
     #[test]
