@@ -69,3 +69,88 @@ rules:
       - gcp_secret = ANzaSy0c3475372a7b10f7740dbda47abfdca42
     references:
       - https://cloud.google.com/iam/docs/keys-create-delete
+  - name: GCP Express Mode API Key
+    id: kingfisher.gcp.4
+    pattern: |
+      (?x)
+      \b
+      (
+        AQ\.Ab8R
+        [[:alnum:]_-]{46}
+      )
+      (?:[^[:alnum:]_-]|$)
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - AQ.Ab8RA1B2C3D4E5F6a7B8c9D0e1F2a3B4c5D6e7F8a9B0A1B2C3
+      - AQ.Ab8RN6L79LMWuo3FIh-eH0Zs3G4rxFjYUlgAt1ye9NQ6A6plhg
+      # Betterleaks identifies the N6 sub-family as Gemini authorization keys.
+      - AQ.Ab8RN6AbCdEfGhIjKlMnOpQrStUvWxYz0123456789_-ABCDEF
+    references:
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/gcpexpressmode/detector.go
+      - https://github.com/betterleaks/betterleaks/blob/e8c8ab9e72e96086ae77a2155a60145dd1153d30/cmd/generate/config/rules/gcp.go
+    validation:
+      type: Raw
+      content: gcp_api_key
+  - name: Google Cloud Storage HMAC Key
+    id: kingfisher.gcp.5
+    pattern: |
+      (?x)
+      \b
+      (?P<GCS_ACCESS_ID>GOOG[[:upper:][:digit:]]{57}|GOOG[[:upper:][:digit:]]{20})
+      \b
+      (?:.|[\n\r]){0,96}?
+      (?i:secret|access[\s_-]?key|hmac[\s_-]?(?:secret|key)?)
+      (?:.|[\n\r]){0,24}?
+      [:=]
+      \s{0,8}
+      ["']?
+      (
+        [[:alnum:]/+]{40}
+      )
+      ["']?
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - |
+        GCS_HMAC_ACCESS_ID="GOOGA1B2C3D4E5F6A7B8C9D0E1F2A3B4C5D6E7F8A9B0A1B2C3D4E5F6A7B8C"
+        GCS_HMAC_SECRET="aBcDeFgHiJkLmNoPqRsTuVwXyZ0123456789+/aB"
+    references:
+      - https://cloud.google.com/storage/docs/authentication/hmackeys
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/gcshmackey/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/gcshmackey/validator.go
+    validation:
+      type: Raw
+      content: gcs_hmac
+  - name: GCP Application Default Credentials
+    id: kingfisher.gcp.6
+    # Authorized-user ADC files contain a client secret and refresh token in a
+    # single flat JSON object. The raw validator restricts token_uri to Google's
+    # two supported OAuth endpoints before exchanging the refresh token.
+    pattern: |
+      (?xs)
+      (
+        \{
+        [^{}]*
+        (?:
+          "client_secret"\s*:\s*"[^"]+"
+          [^{}]*
+          "refresh_token"\s*:\s*"[^"]+"
+          |
+          "refresh_token"\s*:\s*"[^"]+"
+          [^{}]*
+          "client_secret"\s*:\s*"[^"]+"
+        )
+        [^{}]*
+        \}
+      )
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - '{"type":"authorized_user","client_id":"1234567890-example.apps.googleusercontent.com","client_secret":"GOCSPX-ExampleClientSecret123456789","refresh_token":"1//0exampleRefreshTokenAbCdEfGhIjKlMnOpQrStUv","token_uri":"https://oauth2.googleapis.com/token"}'
+    references:
+      - https://cloud.google.com/docs/authentication/application-default-credentials
+      - https://github.com/betterleaks/betterleaks/blob/e8c8ab9e72e96086ae77a2155a60145dd1153d30/cmd/generate/config/rules/gcp.go
+    validation:
+      type: Raw
+      content: gcp_adc

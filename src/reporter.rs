@@ -6,6 +6,7 @@ use std::{
 
 use anyhow::Result;
 use chrono::{Local, Utc};
+#[cfg(test)]
 use http::StatusCode;
 use percent_encoding::{AsciiSet, CONTROLS, utf8_percent_encode};
 use schemars::JsonSchema;
@@ -57,6 +58,7 @@ fn required_vars_for_validation(validation: &crate::rules::Validation) -> BTreeS
     let mut vars = BTreeSet::new();
 
     match validation {
+        Validation::Assumed => {}
         Validation::Http(http) => {
             vars.extend(extract_template_vars(&http.request.url));
             for (k, v) in &http.request.headers {
@@ -362,6 +364,7 @@ fn build_validate_command(
     );
 
     match validation {
+        Validation::Assumed => None,
         Validation::AWS => {
             // AWS needs the access key ID (AKID) in addition to the secret
             let akid = akid_from_captures.or(akid_from_validation_body)?;
@@ -558,14 +561,18 @@ pub fn run_with_writer<W: std::io::Write>(
     let styles = Styles::new(use_color);
 
     let ds_clone = Arc::clone(&ds);
-    let reporter =
-        DetailsReporter { datastore: ds_clone, styles, only_valid: args.only_valid, audit_context };
+    let reporter = DetailsReporter {
+        datastore: ds_clone,
+        styles,
+        validation_filter: args.effective_validation_filter(),
+        audit_context,
+    };
     reporter.report(args.output_args.format, writer, args)
 }
 pub struct DetailsReporter {
     pub datastore: Arc<Mutex<findings_store::FindingsStore>>,
     pub styles: Styles,
-    pub only_valid: bool,
+    pub validation_filter: cli::commands::scan::ValidationFilter,
     pub audit_context: Option<ScanAuditContext>,
 }
 
@@ -786,30 +793,27 @@ impl DetailsReporter {
         None
     }
 
-    fn process_matches(&self, only_valid: bool, filter_visible: bool) -> Result<Vec<ReportMatch>> {
+    fn process_matches(
+        &self,
+        validation_filter: cli::commands::scan::ValidationFilter,
+        filter_visible: bool,
+    ) -> Result<Vec<ReportMatch>> {
         let datastore = self.datastore.lock().unwrap();
         Ok(datastore
             .get_matches()
             .iter()
             .filter(|msg| {
                 let (_origin, _blob_metadata, match_item) = &***msg;
-                if only_valid {
-                    // If filter_visible is true, require the match to be visible.
-                    if filter_visible {
-                        match_item.validation_success
-                            && match_item.validation_response_status
-                                != StatusCode::CONTINUE.as_u16()
-                            && match_item.visible
-                    } else {
-                        // Do not filter by visibility when not needed (for validation)
-                        match_item.validation_success
-                            && match_item.validation_response_status
-                                != StatusCode::CONTINUE.as_u16()
+                let outcome_matches = match validation_filter {
+                    cli::commands::scan::ValidationFilter::All => true,
+                    cli::commands::scan::ValidationFilter::Active => {
+                        match_item.validation_outcome.is_verified_active()
                     }
-                } else {
-                    // When not filtering by only_valid, use visibility if desired.
-                    if filter_visible { match_item.visible } else { true }
-                }
+                    cli::commands::scan::ValidationFilter::Actionable => {
+                        match_item.validation_outcome.is_actionable()
+                    }
+                };
+                outcome_matches && (!filter_visible || match_item.visible)
             })
             .map(|msg| {
                 let (origin, blob_metadata, match_item) = &**msg;
@@ -823,17 +827,21 @@ impl DetailsReporter {
                     validation_response_body: match_item.validation_response_body.clone(),
                     validation_response_status: match_item.validation_response_status,
                     validation_success: match_item.validation_success,
+                    validation_outcome: match_item.validation_outcome,
                 }
             })
             .collect())
     }
 
     pub fn get_filtered_matches(&self, include_hidden_findings: bool) -> Result<Vec<ReportMatch>> {
-        self.process_matches(self.only_valid, !include_hidden_findings)
+        self.process_matches(self.validation_filter, !include_hidden_findings)
     }
 
-    pub fn get_unfiltered_matches(&self, only_valid: Option<bool>) -> Result<Vec<ReportMatch>> {
-        self.process_matches(only_valid.unwrap_or(self.only_valid), false)
+    pub fn get_unfiltered_matches(
+        &self,
+        validation_filter: Option<cli::commands::scan::ValidationFilter>,
+    ) -> Result<Vec<ReportMatch>> {
+        self.process_matches(validation_filter.unwrap_or(self.validation_filter), false)
     }
 
     pub fn deduplicate_matches(
@@ -941,21 +949,14 @@ impl DetailsReporter {
             (String::new(), String::new())
         };
 
-        let validation_status = if rm.validation_success {
-            "Active Credential".to_string()
-        } else if rm.validation_response_status == StatusCode::PRECONDITION_REQUIRED.as_u16()
+        let validation_status = if rm.validation_outcome
+            == kingfisher_core::ValidationOutcome::Skipped
             && validation_body::as_str(&rm.validation_response_body)
                 .starts_with("(skip list entry)")
         {
             "Canary Token (Skipped)".to_string()
-        } else if matches!(
-            rm.validation_response_status,
-            status if status == StatusCode::CONTINUE.as_u16()
-                || status == StatusCode::PRECONDITION_REQUIRED.as_u16()
-        ) {
-            "Not Attempted".to_string()
         } else {
-            "Inactive Credential".to_string()
+            rm.validation_outcome.display_name().to_string()
         };
 
         let validation_body_str = validation_body::as_str(&rm.validation_response_body);
@@ -1035,7 +1036,7 @@ impl DetailsReporter {
             };
 
             // Generate revoke command for active credentials with revocation support
-            let revoke_cmd = if rm.validation_success {
+            let revoke_cmd = if rm.validation_outcome.is_verified_active() {
                 if let Some(revocation) = &rm.m.rule.syntax().revocation {
                     // Merge dependent captures with named regex captures so the generated command is runnable.
                     // (Some rules capture required revocation parameters directly in the match.)
@@ -1077,7 +1078,11 @@ impl DetailsReporter {
                 fingerprint: rm.m.finding_fingerprint.to_string(),
                 confidence: rm.match_confidence.to_string(),
                 entropy: format!("{:.2}", rm.m.calculated_entropy),
-                validation: ValidationInfo { status: validation_status, response: response_body },
+                validation: ValidationInfo {
+                    outcome: rm.validation_outcome,
+                    status: validation_status,
+                    response: response_body,
+                },
                 language: rm
                     .blob_metadata
                     .language
@@ -1175,13 +1180,10 @@ impl DetailsReporter {
         let mut unknown_validation_findings = 0usize;
 
         for record in findings {
-            let status = record.finding.validation.status.to_ascii_lowercase();
-            if status.contains("inactive") {
-                inactive_findings += 1;
-            } else if status.contains("active") {
-                active_findings += 1;
-            } else {
-                unknown_validation_findings += 1;
+            match record.finding.validation.outcome {
+                kingfisher_core::ValidationOutcome::VerifiedActive => active_findings += 1,
+                kingfisher_core::ValidationOutcome::VerifiedInactive => inactive_findings += 1,
+                _ => unknown_validation_findings += 1,
             }
         }
 
@@ -1483,6 +1485,9 @@ pub struct ReportMatch {
 
     /// Validation Success
     pub validation_success: bool,
+
+    /// Semantic validation outcome used for filtering and reporting.
+    pub validation_outcome: kingfisher_core::ValidationOutcome,
 }
 
 #[derive(Serialize, JsonSchema, Clone, Debug)]
@@ -1619,6 +1624,7 @@ pub struct RuleMetadata {
 
 #[derive(Serialize, JsonSchema, Clone, Debug)]
 pub struct ValidationInfo {
+    pub outcome: kingfisher_core::ValidationOutcome,
     pub status: String,
     pub response: String,
 }
@@ -1898,6 +1904,7 @@ mod tests {
             no_validate: false,
             access_map: false,
             only_valid: false,
+            validation_filter: None,
             include_hidden_findings: false,
             min_entropy: None,
             rule_stats: false,
@@ -1997,6 +2004,13 @@ mod tests {
                 validation_response_body: validation_body_stored.clone(),
                 validation_response_status: validation_status,
                 validation_success,
+                validation_outcome: if validation_success {
+                    kingfisher_core::ValidationOutcome::VerifiedActive
+                } else if validation_status == StatusCode::PRECONDITION_REQUIRED.as_u16() {
+                    kingfisher_core::ValidationOutcome::Skipped
+                } else {
+                    kingfisher_core::ValidationOutcome::VerifiedInactive
+                },
                 calculated_entropy: 5.29,
                 visible: true,
                 is_base64: false,
@@ -2008,6 +2022,13 @@ mod tests {
             validation_response_body: validation_body_stored,
             validation_response_status: validation_status,
             validation_success,
+            validation_outcome: if validation_success {
+                kingfisher_core::ValidationOutcome::VerifiedActive
+            } else if validation_status == StatusCode::PRECONDITION_REQUIRED.as_u16() {
+                kingfisher_core::ValidationOutcome::Skipped
+            } else {
+                kingfisher_core::ValidationOutcome::VerifiedInactive
+            },
         };
 
         (report_match, blob_path)
@@ -2024,7 +2045,7 @@ mod tests {
         let reporter = DetailsReporter {
             datastore,
             styles: Styles::new(false),
-            only_valid: false,
+            validation_filter: cli::commands::scan::ValidationFilter::All,
             audit_context: None,
         };
 
@@ -2038,6 +2059,50 @@ mod tests {
     }
 
     #[test]
+    fn validation_filters_use_semantic_outcomes() {
+        use kingfisher_core::ValidationOutcome;
+
+        let outcomes = [
+            ValidationOutcome::VerifiedActive,
+            ValidationOutcome::Assumed,
+            ValidationOutcome::VerifiedInactive,
+            ValidationOutcome::Unavailable,
+            ValidationOutcome::Skipped,
+            ValidationOutcome::NotAttempted,
+        ];
+        let temp = tempdir().unwrap();
+        let mut store = findings_store::FindingsStore::new(temp.path().to_path_buf());
+        let mut batch = Vec::new();
+        for (index, outcome) in outcomes.into_iter().enumerate() {
+            let (mut report_match, _) = sample_report_match("", StatusCode::OK.as_u16(), false);
+            report_match.m.finding_fingerprint = index as u64;
+            report_match.m.validation_outcome = outcome;
+            batch.push((
+                Arc::new(report_match.origin),
+                Arc::new(report_match.blob_metadata),
+                report_match.m,
+            ));
+        }
+        store.record(batch, false);
+
+        let mut reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(store)),
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+        assert_eq!(reporter.get_filtered_matches(false).unwrap().len(), 6);
+
+        reporter.validation_filter = cli::commands::scan::ValidationFilter::Active;
+        assert_eq!(reporter.get_filtered_matches(false).unwrap().len(), 1);
+
+        reporter.validation_filter = cli::commands::scan::ValidationFilter::Actionable;
+        let actionable = reporter.get_filtered_matches(false).unwrap();
+        assert_eq!(actionable.len(), 2);
+        assert!(actionable.iter().all(|finding| finding.validation_outcome.is_actionable()));
+    }
+
+    #[test]
     fn build_finding_record_uses_git_blob_path() {
         let temp = tempdir().unwrap();
         let datastore =
@@ -2045,7 +2110,7 @@ mod tests {
         let reporter = DetailsReporter {
             datastore,
             styles: Styles::new(false),
-            only_valid: false,
+            validation_filter: cli::commands::scan::ValidationFilter::All,
             audit_context: None,
         };
 
@@ -2075,7 +2140,7 @@ mod tests {
         let reporter = DetailsReporter {
             datastore,
             styles: Styles::new(false),
-            only_valid: false,
+            validation_filter: cli::commands::scan::ValidationFilter::All,
             audit_context: None,
         };
 
@@ -2092,6 +2157,29 @@ mod tests {
             record.finding.validation.response,
             "(skip list entry) AWS validation not attempted for account 111122223333."
         );
+    }
+
+    #[test]
+    fn unavailable_validation_surfaces_as_inconclusive_validation() {
+        let temp = tempdir().unwrap();
+        let datastore =
+            Arc::new(Mutex::new(findings_store::FindingsStore::new(temp.path().to_path_buf())));
+        let reporter = DetailsReporter {
+            datastore,
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+
+        let (mut report_match, _) = sample_report_match(
+            "validator unavailable",
+            StatusCode::SERVICE_UNAVAILABLE.as_u16(),
+            false,
+        );
+        report_match.validation_outcome = kingfisher_core::ValidationOutcome::Unavailable;
+
+        let record = reporter.build_finding_record(&report_match, &sample_scan_args());
+        assert_eq!(record.finding.validation.status, "Inconclusive Validation");
     }
 
     #[test]
@@ -2168,7 +2256,7 @@ mod tests {
         let reporter = DetailsReporter {
             datastore,
             styles: Styles::new(false),
-            only_valid: false,
+            validation_filter: cli::commands::scan::ValidationFilter::All,
             audit_context: None,
         };
 
@@ -2226,7 +2314,7 @@ mod tests {
         let reporter = DetailsReporter {
             datastore,
             styles: Styles::new(false),
-            only_valid: false,
+            validation_filter: cli::commands::scan::ValidationFilter::All,
             audit_context: None,
         };
 
@@ -2281,6 +2369,7 @@ impl From<finding_data::FindingDataEntry> for ReportMatch {
             validation_response_body: e.validation_response_body.clone(),
             validation_response_status: e.validation_response_status,
             validation_success: e.validation_success,
+            validation_outcome: e.validation_outcome,
         }
     }
 }

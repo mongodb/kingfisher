@@ -1,0 +1,68 @@
+rules:
+  - name: HashiCorp Cloud Platform Client ID
+    id: kingfisher.hcp.1
+    pattern: |
+      (?x)
+      \b
+      (?:HCP_CLIENT_ID|hcp_client_id)
+      \b
+      \s*
+      [:=]
+      \s*
+      ["']?
+      (
+        [[:alnum:]]{32}
+      )
+      ["']?
+    min_entropy: 3.3
+    confidence: medium
+    visible: false
+    examples:
+      - 'HCP_CLIENT_ID="Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0Kk"'
+    references:
+      - https://developer.hashicorp.com/hcp/docs/client-credentials
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/hcp/detector.go
+
+  - name: HashiCorp Cloud Platform Client Secret
+    id: kingfisher.hcp.2
+    pattern: |
+      (?x)
+      \b
+      (?:HCP_CLIENT_SECRET|hcp_client_secret)
+      \b
+      \s*
+      [:=]
+      \s*
+      ["']?
+      (
+        [[:alnum:]._~-]{64}
+      )
+      ["']?
+    min_entropy: 4.2
+    confidence: medium
+    examples:
+      - 'HCP_CLIENT_SECRET="Aa1Bb2Cc3Dd4Ee5Ff6Gg7Hh8Ii9Jj0KkLl.Mm~Nn_Oo-Pp.Qq~Rr_Ss-Tt.Uu_Vv"'
+    references:
+      - https://developer.hashicorp.com/hcp/docs/client-credentials
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/hcp/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/hcp/validator.go
+    depends_on_rule:
+      - rule_id: kingfisher.hcp.1
+        variable: CLIENT_ID
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://auth.idp.hashicorp.com/oauth2/token
+          headers:
+            Content-Type: application/x-www-form-urlencoded
+          body: grant_type=client_credentials&client_id={{ CLIENT_ID | url_encode }}&client_secret={{ TOKEN | url_encode }}
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: StatusMatch
+              status: [400, 401]
+              negative: true
+            - type: JsonValid

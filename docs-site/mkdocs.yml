@@ -101,7 +101,7 @@ nav:
     - Baseline Management: usage/baseline.md
     - Deployment: usage/deployment.md
   - Features:
-    - Access Map (Blast Radius): features/access-map.md
+    - Blast Radius (aka Access Map): features/access-map.md
     - Hosted Report Viewer: features/report-viewer.md
     - Secret Revocation: features/revocation.md
     - Source Code Parsing: features/parsing.md

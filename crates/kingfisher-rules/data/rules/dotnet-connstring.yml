@@ -7,10 +7,22 @@ rules:
       [^"'\n]{0,200}?(?:Password|Pwd)\s*=\s*([^;"'\s$%*{]{4,128})
     confidence: medium
     pattern_requirements:
-      ignore_if_contains: ["****", "xxxx", "PLACEHOLDER", "CHANGEME", "EXAMPLE", "YOUR_", "yourpassword", "${DB_", "%PASSWORD", "ENV_"]
+      ignore_if_contains:
+        [
+          "****",
+          "xxxx",
+          "PLACEHOLDER",
+          "CHANGEME",
+          "EXAMPLE",
+          "YOUR_",
+          "yourpassword",
+          "${DB_",
+          "%PASSWORD",
+          "ENV_",
+        ]
     examples:
-      - 'Data Source=myServer;User Id=admin;Password=s3cretP@ss;'
-      - 'Server=prod.db.internal;Database=app;User Id=sa;Password=MyP@ssw0rd!'
+      - "Data Source=myServer;User Id=admin;Password=s3cretP@ss;"
+      - "Server=prod.db.internal;Database=app;User Id=sa;Password=MyP@ssw0rd!"
     references:
       - https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/connection-strings
       - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/dotnet-connstring.yml
@@ -24,7 +36,7 @@ rules:
     pattern_requirements:
       ignore_if_contains: ["Password=", "Pwd="]
     examples:
-      - 'Data Source=sqlserver01;Integrated Security=SSPI;Database=HR'
+      - "Data Source=sqlserver01;Integrated Security=SSPI;Database=HR"
     references:
       - https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/connection-strings
       - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/dotnet-connstring.yml

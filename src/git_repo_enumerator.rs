@@ -17,7 +17,7 @@ use tracing::{debug, debug_span};
 
 use crate::{
     blob::{BlobAppearance, BlobAppearanceSet},
-    git_commit_metadata::CommitMetadata,
+    git_commit_metadata::{CommitMetadata, intern_git_identity},
     git_metadata_graph::{GitMetadataGraph, RepositoryIndex},
 };
 
@@ -176,10 +176,12 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
                         };
                         let parsed = Arc::new(CommitMetadata {
                             commit_id: e.commit_oid,
-                            committer_name: String::from_utf8_lossy(committer.name.as_ref())
-                                .into_owned(),
-                            committer_email: String::from_utf8_lossy(committer.email.as_ref())
-                                .into_owned(),
+                            committer_name: intern_git_identity(
+                                String::from_utf8_lossy(committer.name.as_ref()).as_ref(),
+                            ),
+                            committer_email: intern_git_identity(
+                                String::from_utf8_lossy(committer.email.as_ref()).as_ref(),
+                            ),
                             committer_timestamp: parse_sig_time(committer.time),
                         });
                         commit_metadata.insert(e.commit_oid, Arc::clone(&parsed));

@@ -1,0 +1,40 @@
+rules:
+  - name: Google Tink Plaintext Keyset (JSON)
+    id: kingfisher.tink.1
+    pattern: |
+      (?x)
+      (
+        \{\s*"primaryKeyId"\s*:\s*[[:digit:]]+,\s*"key"\s*:\s*\[\s*
+        (?:.|[\n\r]){0,4096}?
+        \]\s*\}
+      )
+    min_entropy: 2.5
+    confidence: medium
+    examples:
+      - '{"primaryKeyId":42,"key":[{"keyData":{"typeUrl":"type.googleapis.com/google.crypto.tink.AesGcmKey","value":"GATY"},"status":"ENABLED","keyId":42,"outputPrefixType":"TINK"}]}'
+    references:
+      - https://github.com/google/tink/blob/master/docs/KEY-MANAGEMENT.md
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/tinkkeyset/detector.go
+
+  - name: Google Tink Plaintext Keyset (Base64)
+    id: kingfisher.tink.2
+    pattern: |
+      (?x)
+      (
+        [[:alnum:]+/]{0,1024}
+        (?:
+          dHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpb
+          |
+          R5cGUuZ29vZ2xlYXBpcy5jb20vZ29vZ2xlLmNyeXB0by50aW5r
+          |
+          0eXBlLmdvb2dsZWFwaXMuY29tL2dvb2dsZS5jcnlwdG8udGlua
+        )
+        [[:alnum:]+/]{0,8192}={0,2}
+      )
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - AAAAdHlwZS5nb29nbGVhcGlzLmNvbS9nb29nbGUuY3J5cHRvLnRpbm0=
+    references:
+      - https://github.com/google/tink/blob/master/docs/KEY-MANAGEMENT.md
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/tinkkeyset/detector.go

@@ -4,7 +4,6 @@ use std::{
 };
 
 use chrono::Local;
-use http::StatusCode;
 use indicatif::HumanBytes;
 use serde_json::json;
 use thousands::Separable;
@@ -79,37 +78,41 @@ pub fn compute_scan_totals(
             if !args.include_hidden_findings && !match_item.visible {
                 return count;
             }
-            if match_item.validation_success { count + origin_set.len() } else { count + 1 }
+            if match_item.validation_outcome.is_verified_active() {
+                count + origin_set.len()
+            } else {
+                count + 1
+            }
         })
     } else {
         if args.include_hidden_findings { all_matches.len() } else { ds.get_num_matches() }
     };
 
+    let actionable_filter =
+        args.effective_validation_filter() == scan::ValidationFilter::Actionable;
     let (successful_validations, failed_validations, skipped_validations) =
         all_matches.iter().fold((0, 0, 0), |(success, fail, skipped), msg| {
             let (origin_set, _, match_item) = &**msg;
             if !args.include_hidden_findings && !match_item.visible {
                 return (success, fail, skipped);
             }
-            if match_item.validation_success {
-                if match_item.validation_response_status != StatusCode::CONTINUE.as_u16() {
-                    if args.no_dedup {
-                        (success + origin_set.len(), fail, skipped)
-                    } else {
-                        (success + 1, fail, skipped)
-                    }
-                } else {
-                    (success, fail, skipped)
+            let increment = if args.no_dedup { origin_set.len() } else { 1 };
+            match match_item.validation_outcome {
+                kingfisher_core::ValidationOutcome::VerifiedActive => {
+                    (success + increment, fail, skipped)
                 }
-            } else if match_item.validation_response_status
-                == StatusCode::PRECONDITION_REQUIRED.as_u16()
-            {
-                // Skipped validations (e.g., missing dependent rules)
-                (success, fail, skipped + 1)
-            } else if match_item.validation_response_status != StatusCode::CONTINUE.as_u16() {
-                (success, fail + 1, skipped)
-            } else {
-                (success, fail, skipped)
+                kingfisher_core::ValidationOutcome::Assumed => {
+                    if actionable_filter {
+                        (success + increment, fail, skipped)
+                    } else {
+                        (success, fail, skipped + increment)
+                    }
+                }
+                kingfisher_core::ValidationOutcome::VerifiedInactive => {
+                    (success, fail + increment, skipped)
+                }
+                kingfisher_core::ValidationOutcome::Skipped => (success, fail, skipped + increment),
+                _ => (success, fail, skipped),
             }
         });
 

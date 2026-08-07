@@ -61,6 +61,48 @@ kingfisher scan ~/src/myrepo --no-validate
 kingfisher scan /path/to/repo --only-valid
 ```
 
+`--only-valid` is a compatibility alias for `--validation-filter active`. To retain active
+credentials and high-confidence secrets marked assumed valid, use:
+
+```bash
+kingfisher scan /path/to/repo --validation-filter actionable
+```
+
+The available filters are:
+
+| Filter | Included outcomes |
+|---|---|
+| `all` | Every finding (default) |
+| `active` | `verified_active` only |
+| `actionable` | `verified_active` and `assumed` |
+
+`--only-valid` is a compatibility alias for `--validation-filter active`. The two options are
+mutually exclusive; select `actionable` when both active and assumed-valid findings are required.
+Use `all` to retain inconclusive, skipped, inactive, and not-attempted findings.
+
+Each JSON, JSONL, BSON, TOON, and SARIF finding exposes a machine-readable validation outcome.
+Human-readable reports distinguish verified-active credentials, high-confidence static secrets,
+inactive credentials, inconclusive validation, skipped validation, and findings not live-validated.
+
+In JSON and JSONL, use `finding.validation.outcome` for automation instead of parsing the display
+label or inferring state from an HTTP response:
+
+```json
+{
+  "finding": {
+    "validation": {
+      "outcome": "assumed",
+      "status": "Assumed Valid (Not Live-Validated)",
+      "response": ""
+    }
+  }
+}
+```
+
+TOON emits the same value as `validation_outcome`; SARIF stores it in each result location's
+`properties.validation_outcome`. The stable values are the six outcomes listed under
+[Finding Validation Statuses](#finding-validation-statuses).
+
 ### Output JSON and capture to a file
 
 ```bash
@@ -89,32 +131,32 @@ kingfisher scan /path/to/repo --format html --output kingfisher-audit.html
 
 The HTML audit report is standalone and includes scan metadata designed for evidence workflows, including scan timestamp, sanitized CLI arguments, version, and finding summary counts.
 
-### Access map outputs and viewer
+### Blast Radius (aka Access Map) outputs and viewer
 
 **Stop Guessing, Start Mapping: Understand Your True Blast Radius**
 
 Finding a leaked credential is only the first step. The critical question isn't just "Is this a secret?"—it's "What can an attacker do with it?"
 
-Kingfisher's `--access-map` feature transforms secret detection from a simple alert into a comprehensive threat assessment. Instead of leaving you with a cryptic API key, Kingfisher actively authenticates against your cloud provider (AWS, GCP, Azure Storage, Microsoft Entra ID and Graph, Azure RBAC, Azure DevOps, GitHub, GitLab, Slack, or Microsoft Teams) to map the full extent of the credential's power.
+Kingfisher's blast-radius feature transforms secret detection from a simple alert into a comprehensive threat assessment. Instead of leaving you with a cryptic API key, Kingfisher actively authenticates against your cloud provider (AWS, GCP, Azure Storage, Microsoft Entra ID and Graph, Azure RBAC, Azure DevOps, GitHub, GitLab, Slack, or Microsoft Teams) to map the full extent of the credential's power.
 
 * Instant Identity Resolution: Immediately identify who the key belongs to—whether it's a specific IAM user, an assumed role, or a service account.
 * Visualize the Blast Radius: See exactly which resources (S3 buckets, EC2 instances, projects, storage containers) are exposed and at risk.
  
 
-Add `--access-map` to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with an `access_map` containing the resources and the permissions that the key can access - for each resource (grouped when identical).
-- If you validated cloud credentials without `--access-map`, Kingfisher will remind you on stderr to rerun with the flag so the access map appears in the output.
+Add `--access-map` to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with blast-radius data in the `access_map` field, including the resources and permissions the key can access (grouped when identical).
+- If you validated cloud credentials without `--access-map`, Kingfisher will remind you on stderr to rerun with the flag so blast-radius results appear in the output.
 - Run `kingfisher view ./kingfisher.json` to explore a report locally in a local web UI (opens your browser automatically when a report is provided).
 - Or use `kingfisher scan --view-report ...` to generate a JSON report, start the viewer at `http://127.0.0.1:7890`, and open it in your browser.
 
-> **Use the access map functionality only when you are authorized to inspect the target account, as Kingfisher will issue additional network requests to determine what access the secret grants**
+> **Use blast-radius mapping only when you are authorized to inspect the target account, as Kingfisher will issue additional network requests to determine what access the secret grants**
 
-### View access-map reports locally
+### View blast-radius reports locally
 
 ```bash
 kingfisher view kingfisher.json
 ```
 
-The `view` subcommand starts a server (default port `7890`, bind address `127.0.0.1`) that bundles the HTML, CSS, and JavaScript for the access-map viewer directly into the Kingfisher binary. Provide a JSON, JSONL, or SARIF report to load it automatically and Kingfisher will open your browser, or open the page and upload a report in the browser. If port 7890 is already in use, re-run with `--port <PORT>`. To allow access from Docker or other hosts, use `--address 0.0.0.0`.
+The `view` subcommand starts a server (default port `7890`, bind address `127.0.0.1`) that bundles the HTML, CSS, and JavaScript for the blast-radius viewer directly into the Kingfisher binary. Provide a JSON, JSONL, or SARIF report to load it automatically and Kingfisher will open your browser, or open the page and upload a report in the browser. If port 7890 is already in use, re-run with `--port <PORT>`. To allow access from Docker or other hosts, use `--address 0.0.0.0`.
 
 You can pass multiple files or a directory to combine reports. Findings are deduplicated by fingerprint. Non-matching files in a directory are silently skipped (no recursion).
 
@@ -166,22 +208,29 @@ Raw JSON and SARIF output from Kingfisher, Gitleaks, and TruffleHog are excellen
 
 - **A skimmable overview** — findings are grouped by detector, rule, file, and repository, with counts and validation state, instead of one JSON object per line.
 - **Cross-tool triage in one UI** — import a Gitleaks scan, a TruffleHog scan, and a Kingfisher scan of the same codebase into the same session and look at them side-by-side with deduplication, instead of reconciling three different schemas.
-- **Clear "this is live" signals** — validated Kingfisher findings and TruffleHog-verified findings are surfaced as active credentials so you rotate real keys first; unverified/static matches are marked as not attempted rather than active or inactive.
+- **Clear "this is live" signals** — validated Kingfisher findings and TruffleHog-verified findings are surfaced as `Active Credential` so you rotate proven-live keys first; high-confidence static findings are explicitly marked `Assumed Valid (Not Live-Validated)`, while other findings without a live result are marked `Not Attempted`.
 - **Fingerprint-aware deduplication** — the same secret appearing across multiple reports, directories, or scan runs collapses to one entry.
-- **Blast-radius context** — when a Kingfisher report was produced with `--access-map`, the viewer opens an interactive access-map graph and inspector so you can trace the identity, reachable resources, and permission mix without digging through nested JSON.
+- **Blast-radius context** — when a Kingfisher report was produced with `--access-map`, the viewer opens an interactive blast-radius graph and inspector so you can trace the identity, reachable resources, and permission mix without digging through nested JSON.
 - **A shareable, offline-friendly workbench** — runs locally via `kingfisher view` or via the hosted static page; nothing about the report is exfiltrated.
 
 Gitleaks and TruffleHog are great at surfacing candidate matches. Kingfisher's viewer turns their candidates (and its own) into a triageable workflow without changing the scanner you already use.
 
 #### Caveats for imported reports
 
-Imported Gitleaks, TruffleHog, and generic SARIF reports are display-oriented. Kingfisher-produced SARIF can restore compatible validation status, command, fingerprint, and `access_map` properties when present, but generic SARIF does not carry Kingfisher-native `access_map` data and cannot be driven by `kingfisher validate` / `revoke`. Imported fingerprints use the report's native fingerprint when available, otherwise the viewer synthesizes one from rule, location, and snippet data. TruffleHog findings marked as verified are shown as active credentials; all other imported findings are treated as not attempted rather than inactive. For full validation context and blast-radius mapping, re-scan with Kingfisher and add `--access-map` when appropriate.
+Imported Gitleaks, TruffleHog, and generic SARIF reports are display-oriented. Kingfisher-produced SARIF can restore compatible validation status, command, fingerprint, and `access_map` properties when present, but generic SARIF does not carry Kingfisher-native `access_map` data and cannot be driven by `kingfisher validate` / `revoke`. Imported fingerprints use the report's native fingerprint when available, otherwise the viewer synthesizes one from rule, location, and snippet data. TruffleHog findings marked as verified are shown as verified-active credentials; all other imported findings are treated as not attempted rather than inactive. For full validation context and blast-radius mapping, re-scan with Kingfisher and add `--access-map` when appropriate.
 
 ### Pipe any text directly into Kingfisher by passing `-`
 
 ```bash
 cat /path/to/file.py | kingfisher scan -
+
+# Scan stdin and named paths in the same invocation
+cat generated.env | kingfisher scan - ./src ./tests
 ```
+
+Only the `-` placeholder consumes stdin. Redirected stdin does not replace an explicitly named
+path, Git URL, organization, bucket, image, or other scan target. If `-` appears more than once,
+Kingfisher stages and scans the stdin content once while preserving every other path.
 
 ### Direct secret validation with `kingfisher validate`
 
@@ -219,6 +268,9 @@ kingfisher validate --rule github "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
 ```bash
 # Validate an OpsGenie API key (using rule prefix matching)
 kingfisher validate --rule opsgenie "12345678-9abc-def0-1234-56789abcdef0"
+
+# Validate an Atlassian Admin API key against the Organizations API
+kingfisher validate --rule kingfisher.atlassian.3 "AT..."
 
 # Validate from stdin
 echo "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" | kingfisher validate --rule github -
@@ -1205,6 +1257,16 @@ Bitbucket no longer supports App Tokens as of September 9, 2025: https://support
 
 Use `--api-url` to point Kingfisher at your server's REST endpoint, for example `https://bitbucket.example.com/rest/api/1.0/`. Provide credentials with `KF_BITBUCKET_USERNAME` plus either `KF_BITBUCKET_TOKEN` or `KF_BITBUCKET_PASSWORD`, and pass `--tls-mode=off` (or the legacy `--ignore-certs`) when connecting to HTTP or otherwise insecure instances.
 
+```bash
+KF_BITBUCKET_USERNAME="scanner" KF_BITBUCKET_TOKEN="$BITBUCKET_TOKEN" \
+  kingfisher scan bitbucket --project SEC \
+  --api-url https://bitbucket.example.com/rest/api/1.0/
+```
+
+Kingfisher prefers the HTTP/HTTPS clone link returned by the Server API, including links labeled
+`http` whose URL uses HTTPS. This allows token- or password-authenticated HTTPS cloning without
+requiring an SSH key when the API also returns an SSH clone link.
+
 ---
 
 ## Hugging Face
@@ -1481,7 +1543,7 @@ Scan Summary:
  |Findings....................: 15
  |__Successful Validations....: 3
  |__Failed Validations........: 5
- |__Skipped Validations.......: 2
+ |__Skipped Validations.......: 6
  |Rules Applied...............: 120
  |__Blobs Scanned.............: 1,234
  |Bytes Scanned...............: 45.2 MB
@@ -1493,9 +1555,40 @@ Scan Summary:
 
 | Counter | Description |
 | ------- | ----------- |
-| **Successful Validations** | Credentials confirmed as active by the provider (e.g., API returned valid response) |
-| **Failed Validations** | Validations that were attempted but failed (HTTP errors, connection timeouts, invalid credentials) |
-| **Skipped Validations** | Validations that could not be attempted due to missing preconditions (e.g., missing dependent rules) |
+| **Successful Validations** | Findings classified as `Active Credential`. With `--validation-filter actionable`, assumed-valid findings are also counted here so the total matches the actionable set. |
+| **Failed Validations** | Findings classified as `Inactive Credential`: the provider authoritatively rejected the credential. |
+| **Skipped Validations** | Findings classified as `Validation Skipped` or `Canary Token (Skipped)`, plus assumed-valid findings unless `--validation-filter actionable` is used. |
+
+These summary counters do not cover every validation status. In particular,
+`Inconclusive Validation` and `Not Attempted` remain visible on individual findings but do not
+have separate summary counters.
+
+### Finding Validation Statuses
+
+The ` |Validation....: ` line on a finding describes the semantic validation result:
+
+| Finding status | Machine-readable outcome | Meaning |
+| -------------- | ------------------------ | ------- |
+| **Active Credential** | `verified_active` | A live or cryptographic validator proved that the credential is usable. |
+| **Assumed Valid (Not Live-Validated)** | `assumed` | The rule identified secret material with high confidence without proving that the credential is currently usable. It is included by `actionable`, but not by `active`/`--only-valid`. |
+| **Inactive Credential** | `verified_inactive` | A live validator authoritatively rejected the credential. This is different from a network or provider outage. |
+| **Inconclusive Validation** | `unavailable` | Validation was attempted, but a timeout, rate limit, server error, validator panic, or similar condition prevented a conclusion. It is neither proof of activity nor proof of inactivity. |
+| **Validation Skipped** | `skipped` | Validation was intentionally not attempted because a dependency or other precondition was missing. |
+| **Canary Token (Skipped)** | `skipped` | A canary/honey-token match was recognized from the skip list and was deliberately not sent to the provider. |
+| **Not Attempted** | `not_attempted` | No validation result was produced—for example, the rule has no validator or `--no-validate` was used. |
+
+`--validation-filter active` (and its `--only-valid` compatibility alias) includes only
+`Active Credential` findings. The `actionable` filter additionally includes
+`Assumed Valid (Not Live-Validated)` and excludes every other outcome.
+Use `all` to retain inconclusive, skipped, inactive, and not-attempted findings. `--only-valid` and
+`--validation-filter` cannot be combined.
+
+In colorized stdout, active credentials use `🔓`. High-confidence assumed-valid secrets use the
+same bright color with `🔒`; the icon and explicit status make their lack of live validation clear.
+
+Assumed-valid findings are counted as **Skipped Validations** by default because no live validation
+was attempted. With `--validation-filter actionable`, they instead count as **Successful
+Validations**, aligning the counter with the actionable output.
 
 ### Why Validations Are Skipped
 
@@ -1507,11 +1600,13 @@ Validations are marked as "skipped" when:
 When a validation is skipped, the finding will show:
 
 ```
- |Validation....: Inactive Credential
+ |Validation....: Validation Skipped
  |__Response....: Validation skipped - missing dependent rules: helper-rule-id
 ```
 
-This distinction helps you understand validation coverage: **Failed Validations** represent actual validation attempts, while **Skipped Validations** indicate opportunities to improve rule coverage or provide additional context.
+This distinction helps you understand validation coverage: **Failed Validations** represent
+authoritative provider rejections, while **Skipped Validations** indicate that validation could
+not be attempted and may need additional context.
 
 ---
 
@@ -1532,7 +1627,9 @@ This distinction helps you understand validation coverage: **Failed Validations*
 | `KF_HUGGINGFACE_TOKEN` | Hugging Face access token for API enumeration and git cloning |
 | `KF_HUGGINGFACE_USERNAME` | Optional username for Hugging Face git operations (defaults to `hf_user`) |
 | `KF_JIRA_TOKEN`   | Jira API token               |
+| `KF_JIRA_USER`    | Jira account email; required with `KF_JIRA_TOKEN` for Jira Cloud API tokens |
 | `KF_CONFLUENCE_TOKEN` | Confluence API token      |
+| `KF_CONFLUENCE_USER` | Confluence account email; required with `KF_CONFLUENCE_TOKEN` for Confluence Cloud API tokens |
 | `KF_SLACK_TOKEN`  | Slack API token              |
 | `KF_TEAMS_TOKEN`  | Microsoft Graph API token for Teams message search |
 | `KF_DOCKER_TOKEN` | Docker registry token (`user:pass` or bearer token). If unset, credentials from the Docker keychain are used |
@@ -1554,12 +1651,16 @@ To authenticate Jira requests:
 
 ```bash
 export KF_JIRA_TOKEN="token"
+# Jira Cloud API tokens also require the account email.
+export KF_JIRA_USER="user@example.com"
 ```
 
 To authenticate Confluence requests:
 
 ```bash
 export KF_CONFLUENCE_TOKEN="token"
+# Confluence Cloud API tokens also require the account email.
+export KF_CONFLUENCE_USER="user@example.com"
 ```
 
 _If no token is provided Kingfisher still works for public repositories._

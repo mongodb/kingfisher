@@ -419,8 +419,24 @@ Use `--rule-stats` to collect timing information for every rule. After scanning,
 kingfisher scan /path/to/repo --rule-stats
 ```
 
+## Control Scan Concurrency
+
+`--jobs` sets the scanner worker pool used for matching and Git scans. By default, Kingfisher uses
+the available logical CPUs, capped at approximately one worker per GiB of RAM. Reduce the value on
+memory-constrained CI runners or when scanning very large Git histories; a lower value trades some
+throughput for lower peak memory usage.
+
+```bash
+# Use four scanner workers for a large repository
+kingfisher scan /path/to/large-repo --jobs 4
+```
+
+For project config, set `scan.jobs`. Pass `--jobs` on the command line when the Tokio runtime and
+scanner pool must use the same explicit value; see [Project Configuration caveats](../usage/configuration.md#caveats).
+
 ## Notable Scan Options
 
+- `--jobs <N>`: Set the number of parallel scanner workers; see [Control Scan Concurrency](#control-scan-concurrency).
 - `--no-dedup`: Report every occurrence of a finding (disable the default de-duplicate behavior)
 - `--include-hidden-findings`: Include hidden helper-rule matches in reports and scan summary counts (diagnostic use)
 - `--no-base64`: By default, Kingfisher finds and decodes base64 blobs and scans them for secrets. This adds a slight performance overhead; use this flag to disable

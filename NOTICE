@@ -16,6 +16,59 @@ Source repository: https://github.com/mongodb/kingfisher
 --------------------------------------------------------------------
 Upstream notices
 --------------------------------------------------------------------
+Certain detection rules and validation definitions are adapted from the
+Veles secret detectors in OSV-SCALIBR:
+
+    https://github.com/google/osv-scalibr
+
+The adapted definitions were translated to Kingfisher YAML, modified for
+Vectorscan compatibility, and integrated with Kingfisher's validation model.
+The affected rule and implementation files are:
+ * crates/kingfisher-rules/data/rules/anthropic.yml
+ * crates/kingfisher-rules/data/rules/bitbucket.yml
+ * crates/kingfisher-rules/data/rules/bitwarden.yml
+ * crates/kingfisher-rules/data/rules/circleci.yml
+ * crates/kingfisher-rules/data/rules/cloudflare.yml
+ * crates/kingfisher-rules/data/rules/cursor.yml
+ * crates/kingfisher-rules/data/rules/databricks.yml
+ * crates/kingfisher-rules/data/rules/deno.yml
+ * crates/kingfisher-rules/data/rules/discord.yml
+ * crates/kingfisher-rules/data/rules/elastic.yml
+ * crates/kingfisher-rules/data/rules/gcp.yml
+ * crates/kingfisher-rules/data/rules/hcp.yml
+ * crates/kingfisher-rules/data/rules/hashicorp.yml
+ * crates/kingfisher-rules/data/rules/heroku.yml
+ * crates/kingfisher-rules/data/rules/huggingface.yml
+ * crates/kingfisher-rules/data/rules/onepassword.yml
+ * crates/kingfisher-rules/data/rules/packagist.yml
+ * crates/kingfisher-rules/data/rules/paystack.yml
+ * crates/kingfisher-rules/data/rules/postman.yml
+ * crates/kingfisher-rules/data/rules/pyx.yml
+ * crates/kingfisher-rules/data/rules/rubygems.yml
+ * crates/kingfisher-rules/data/rules/salesforce.yml
+ * crates/kingfisher-rules/data/rules/sendgrid.yml
+ * crates/kingfisher-rules/data/rules/square.yml
+ * crates/kingfisher-rules/data/rules/stripe.yml
+ * crates/kingfisher-rules/data/rules/supabase.yml
+ * crates/kingfisher-rules/data/rules/tink.yml
+
+OSV-SCALIBR
+Copyright 2025-2026 Google LLC
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+--------------------------------------------------------------------
+
 Copyright 2022 Praetorian Security, Inc <https://praetorian.com>.
 
 This product includes software from the Nosey Parker project developed
@@ -166,6 +219,8 @@ Certain detection rules:
  * crates/kingfisher-rules/data/rules/etsy.yml
  * crates/kingfisher-rules/data/rules/flutterwave.yml
  * crates/kingfisher-rules/data/rules/freemius.yml
+ * crates/kingfisher-rules/data/rules/gcp.yml
+ * crates/kingfisher-rules/data/rules/google.yml
  * crates/kingfisher-rules/data/rules/jfrog.yml
  * crates/kingfisher-rules/data/rules/kraken.yml
  * crates/kingfisher-rules/data/rules/kucoin.yml

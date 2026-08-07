@@ -8,6 +8,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use base64::{Engine, engine::general_purpose::STANDARD as B64};
+use chrono::{DateTime, Utc};
 use hmac::{Hmac, Mac, digest::KeyInit};
 use http::StatusCode;
 use ldap3::LdapConnSettings;
@@ -91,6 +92,9 @@ pub fn required_vars(kind: &str) -> BTreeSet<String> {
         "azurebatch" => {
             vars.insert("BATCH_URL".to_string());
         }
+        "gcs_hmac" => {
+            vars.insert("GCS_ACCESS_ID".to_string());
+        }
         "kraken" => {
             vars.insert("KRAKEN_API_KEY".to_string());
         }
@@ -123,6 +127,9 @@ pub async fn validate_raw(
     match kind {
         "azurebatch" => validate_azure_batch(globals, client).await,
         "ftp" => validate_ftp(globals, use_lax_tls).await,
+        "gcp_adc" => validate_gcp_adc(globals, client).await,
+        "gcp_api_key" => validate_gcp_api_key(globals, client).await,
+        "gcs_hmac" => validate_gcs_hmac(globals, client).await,
         "kraken" => validate_kraken(globals, client).await,
         "ldap" => validate_ldap(globals, use_lax_tls).await,
         "rabbitmq" => validate_rabbitmq(globals, use_lax_tls).await,
@@ -140,6 +147,23 @@ fn raw_validation_target_url(kind: &str, globals: &Object) -> Result<Option<Url>
         "azurebatch" => string_var(globals, "BATCH_URL")
             .map(|s| Url::parse(&s).context("invalid BATCH_URL"))
             .transpose(),
+        "gcp_api_key" => Ok(Some(
+            Url::parse(
+                "https://www.googleapis.com/identitytoolkit/v3/relyingparty/getProjectConfig",
+            )
+            .expect("static GCP validation URL must parse"),
+        )),
+        "gcp_adc" => {
+            let token = string_var(globals, "TOKEN").ok_or_else(|| anyhow!("missing TOKEN"))?;
+            let value: serde_json::Value =
+                serde_json::from_str(&token).context("GCP ADC is not valid JSON")?;
+            let endpoint = allowed_gcp_token_endpoint(value["token_uri"].as_str())?;
+            Ok(Some(Url::parse(endpoint).expect("allowed GCP validation URL must parse")))
+        }
+        "gcs_hmac" => Ok(Some(
+            Url::parse("https://storage.googleapis.com/")
+                .expect("static GCS validation URL must parse"),
+        )),
         "ftp" | "ldap" | "rabbitmq" | "redis" => string_var(globals, "TOKEN")
             .map(|s| Url::parse(&s).context("invalid raw validation URI"))
             .transpose(),
@@ -270,6 +294,321 @@ async fn validate_azure_batch(globals: &Object, client: &Client) -> Result<RawVa
     let valid = status == StatusCode::OK;
 
     Ok(RawValidationOutcome { valid, status, body })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GcpApiKeyProbeVerdict {
+    Active,
+    Inactive,
+    Inconclusive,
+}
+
+fn classify_gcp_api_key_probe(status: StatusCode, body: &str) -> GcpApiKeyProbeVerdict {
+    if status == StatusCode::OK {
+        return GcpApiKeyProbeVerdict::Active;
+    }
+
+    // Both the Identity Toolkit and Generative Language APIs use HTTP 400 for a
+    // syntactically well-formed key that Google does not recognize. Betterleaks
+    // uses the same distinction for its GCP API-key validator.
+    if status == StatusCode::BAD_REQUEST
+        && (body.contains("API_KEY_INVALID")
+            || body.contains("API key not valid")
+            || body.contains("INVALID_ARGUMENT"))
+    {
+        return GcpApiKeyProbeVerdict::Inactive;
+    }
+
+    // Application and API restrictions are evaluated only after Google has
+    // recognized the key. A 403 therefore proves liveness even though the
+    // scanner's request is not authorized for this particular API or origin.
+    if status == StatusCode::FORBIDDEN {
+        return GcpApiKeyProbeVerdict::Active;
+    }
+
+    GcpApiKeyProbeVerdict::Inconclusive
+}
+
+async fn run_gcp_api_key_probe(
+    client: &Client,
+    url: &str,
+    token: &str,
+) -> Result<(StatusCode, String)> {
+    let response = client
+        .get(url)
+        .query(&[("key", token)])
+        .send()
+        .await
+        .context("GCP API-key validation request failed")?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Ok((status, body))
+}
+
+fn gcp_api_key_active_summary(
+    service: &str,
+    status: StatusCode,
+    prior_probe: Option<(&str, StatusCode)>,
+) -> String {
+    let result = if status == StatusCode::OK { "accepted" } else { "recognized but restricted" };
+    let mut summary =
+        format!("Google API key is active. {service} {result} the key (HTTP {status}).");
+    if let Some((prior_service, prior_status)) = prior_probe {
+        summary.push_str(&format!(
+            " The earlier {prior_service} probe was inconclusive (HTTP {prior_status})."
+        ));
+    }
+    summary
+}
+
+fn gcp_api_key_inactive_summary(
+    service: &str,
+    status: StatusCode,
+    prior_probe: Option<(&str, StatusCode)>,
+) -> String {
+    let mut summary = format!("Google rejected the API key as invalid ({service}: HTTP {status}).");
+    if let Some((prior_service, prior_status)) = prior_probe {
+        summary.push_str(&format!(
+            " The earlier {prior_service} probe was inconclusive (HTTP {prior_status})."
+        ));
+    }
+    summary
+}
+
+async fn validate_gcp_api_key(globals: &Object, client: &Client) -> Result<RawValidationOutcome> {
+    const PROJECT_CONFIG_URL: &str =
+        "https://www.googleapis.com/identitytoolkit/v3/relyingparty/getProjectConfig";
+    const GEMINI_MODELS_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
+
+    let token = string_var(globals, "TOKEN").ok_or_else(|| anyhow!("missing TOKEN"))?;
+    let (project_status, project_body) =
+        run_gcp_api_key_probe(client, PROJECT_CONFIG_URL, &token).await?;
+    match classify_gcp_api_key_probe(project_status, &project_body) {
+        GcpApiKeyProbeVerdict::Active => {
+            return Ok(RawValidationOutcome {
+                valid: true,
+                status: project_status,
+                body: gcp_api_key_active_summary("Identity Toolkit", project_status, None),
+            });
+        }
+        GcpApiKeyProbeVerdict::Inactive => {
+            return Ok(RawValidationOutcome {
+                valid: false,
+                status: StatusCode::UNAUTHORIZED,
+                body: gcp_api_key_inactive_summary("Identity Toolkit", project_status, None),
+            });
+        }
+        GcpApiKeyProbeVerdict::Inconclusive => {}
+    }
+
+    // Fall back to a second read-only Google API. This covers transient or
+    // endpoint-specific responses without treating arbitrary JSON as proof of
+    // either liveness or revocation.
+    let (gemini_status, gemini_body) =
+        run_gcp_api_key_probe(client, GEMINI_MODELS_URL, &token).await?;
+    match classify_gcp_api_key_probe(gemini_status, &gemini_body) {
+        GcpApiKeyProbeVerdict::Active => Ok(RawValidationOutcome {
+            valid: true,
+            status: gemini_status,
+            body: gcp_api_key_active_summary(
+                "Generative Language API",
+                gemini_status,
+                Some(("Identity Toolkit", project_status)),
+            ),
+        }),
+        GcpApiKeyProbeVerdict::Inactive => Ok(RawValidationOutcome {
+            valid: false,
+            status: StatusCode::UNAUTHORIZED,
+            body: gcp_api_key_inactive_summary(
+                "Generative Language API",
+                gemini_status,
+                Some(("Identity Toolkit", project_status)),
+            ),
+        }),
+        GcpApiKeyProbeVerdict::Inconclusive => Ok(RawValidationOutcome {
+            valid: false,
+            status: StatusCode::BAD_GATEWAY,
+            body: format!(
+                "Google API-key validation was inconclusive (Identity Toolkit: HTTP {project_status}; Generative Language API: HTTP {gemini_status}).\nIdentity Toolkit response:\n{project_body}\n\nGenerative Language response:\n{gemini_body}"
+            ),
+        }),
+    }
+}
+
+fn allowed_gcp_token_endpoint(value: Option<&str>) -> Result<&'static str> {
+    match value.unwrap_or("https://oauth2.googleapis.com/token") {
+        "https://oauth2.googleapis.com/token" => Ok("https://oauth2.googleapis.com/token"),
+        "https://accounts.google.com/o/oauth2/token" => {
+            Ok("https://accounts.google.com/o/oauth2/token")
+        }
+        other => Err(anyhow!("GCP token_uri is not an allowed Google OAuth endpoint: {other}")),
+    }
+}
+
+async fn validate_gcp_adc(globals: &Object, client: &Client) -> Result<RawValidationOutcome> {
+    let token = string_var(globals, "TOKEN").ok_or_else(|| anyhow!("missing TOKEN"))?;
+    let value: serde_json::Value =
+        serde_json::from_str(&token).context("GCP ADC is not valid JSON")?;
+    let client_id = value["client_id"]
+        .as_str()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow!("GCP ADC is missing client_id"))?;
+    let client_secret = value["client_secret"]
+        .as_str()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow!("GCP ADC is missing client_secret"))?;
+    let refresh_token = value["refresh_token"]
+        .as_str()
+        .filter(|v| !v.is_empty())
+        .ok_or_else(|| anyhow!("GCP ADC is missing refresh_token"))?;
+    let endpoint = allowed_gcp_token_endpoint(value["token_uri"].as_str())?;
+
+    let response = client
+        .post(endpoint)
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("client_id", client_id),
+            ("client_secret", client_secret),
+            ("refresh_token", refresh_token),
+        ])
+        .send()
+        .await
+        .context("GCP ADC validation request failed")?;
+    let remote_status = response.status();
+    let body = response.text().await.unwrap_or_default();
+
+    Ok(classify_gcp_adc_response(remote_status, &body))
+}
+
+fn classify_gcp_adc_response(remote_status: StatusCode, body: &str) -> RawValidationOutcome {
+    if remote_status == StatusCode::OK {
+        let valid = serde_json::from_str::<serde_json::Value>(body)
+            .ok()
+            .and_then(|v| v["access_token"].as_str().map(|s| !s.is_empty()))
+            .unwrap_or(false);
+        return RawValidationOutcome {
+            valid,
+            status: if valid { StatusCode::OK } else { StatusCode::BAD_GATEWAY },
+            // Never copy the freshly minted bearer token into a scan report.
+            body: if valid {
+                "Google OAuth accepted the GCP application default credentials.".to_string()
+            } else {
+                "Google OAuth returned HTTP 200 without an access_token.".to_string()
+            },
+        };
+    }
+
+    if matches!(remote_status, StatusCode::BAD_REQUEST | StatusCode::UNAUTHORIZED) {
+        return RawValidationOutcome {
+            valid: false,
+            status: StatusCode::UNAUTHORIZED,
+            body: body.to_string(),
+        };
+    }
+
+    RawValidationOutcome {
+        valid: false,
+        status: StatusCode::BAD_GATEWAY,
+        body: format!("Unexpected Google OAuth response HTTP {remote_status}.\n{body}"),
+    }
+}
+
+struct GcsSigV4Headers {
+    amz_date: String,
+    payload_hash: String,
+    authorization: String,
+}
+
+fn hmac_sha256(key: &[u8], data: &str) -> Result<Vec<u8>> {
+    let mut mac = <Hmac<Sha256> as KeyInit>::new_from_slice(key)
+        .map_err(|e| anyhow!("invalid HMAC-SHA256 key: {e}"))?;
+    mac.update(data.as_bytes());
+    Ok(mac.finalize().into_bytes().to_vec())
+}
+
+fn gcs_sigv4_headers(access_id: &str, secret: &str, now: DateTime<Utc>) -> Result<GcsSigV4Headers> {
+    const HOST: &str = "storage.googleapis.com";
+    const REGION: &str = "auto";
+    const SERVICE: &str = "s3";
+    const SIGNED_HEADERS: &str = "host;x-amz-content-sha256;x-amz-date";
+
+    let amz_date = now.format("%Y%m%dT%H%M%SZ").to_string();
+    let date = now.format("%Y%m%d").to_string();
+    let payload_hash = hex::encode(Sha256::digest([]));
+    let canonical_headers =
+        format!("host:{HOST}\nx-amz-content-sha256:{payload_hash}\nx-amz-date:{amz_date}\n");
+    let canonical_request =
+        format!("GET\n/\n\n{canonical_headers}\n{SIGNED_HEADERS}\n{payload_hash}");
+    let canonical_request_hash = hex::encode(Sha256::digest(canonical_request.as_bytes()));
+    let credential_scope = format!("{date}/{REGION}/{SERVICE}/aws4_request");
+    let string_to_sign =
+        format!("AWS4-HMAC-SHA256\n{amz_date}\n{credential_scope}\n{canonical_request_hash}");
+
+    let date_key = hmac_sha256(format!("AWS4{secret}").as_bytes(), &date)?;
+    let region_key = hmac_sha256(&date_key, REGION)?;
+    let service_key = hmac_sha256(&region_key, SERVICE)?;
+    let signing_key = hmac_sha256(&service_key, "aws4_request")?;
+    let signature = hex::encode(hmac_sha256(&signing_key, &string_to_sign)?);
+    let authorization = format!(
+        "AWS4-HMAC-SHA256 Credential={access_id}/{credential_scope}, SignedHeaders={SIGNED_HEADERS}, Signature={signature}"
+    );
+
+    Ok(GcsSigV4Headers { amz_date, payload_hash, authorization })
+}
+
+fn classify_gcs_hmac_response(status: StatusCode, body: &str) -> RawValidationOutcome {
+    if status == StatusCode::OK {
+        return RawValidationOutcome {
+            valid: true,
+            status,
+            // A successful ListBuckets response contains bucket names. They
+            // prove liveness but do not belong in the scanner's report body.
+            body: "GCS accepted the HMAC credentials for ListBuckets.".to_string(),
+        };
+    }
+
+    if body.contains("<Code>AccessDenied</Code>") {
+        return RawValidationOutcome {
+            valid: true,
+            status,
+            body: "GCS verified the HMAC signature but denied ListBuckets access.".to_string(),
+        };
+    }
+
+    if body.contains("<Code>SignatureDoesNotMatch</Code>")
+        || body.contains("<Code>InvalidAccessKeyId</Code>")
+    {
+        return RawValidationOutcome {
+            valid: false,
+            status: StatusCode::UNAUTHORIZED,
+            body: body.to_string(),
+        };
+    }
+
+    RawValidationOutcome {
+        valid: false,
+        status: StatusCode::BAD_GATEWAY,
+        body: format!("Unexpected GCS HMAC validation response HTTP {status}.\n{body}"),
+    }
+}
+
+async fn validate_gcs_hmac(globals: &Object, client: &Client) -> Result<RawValidationOutcome> {
+    let access_id =
+        string_var(globals, "GCS_ACCESS_ID").ok_or_else(|| anyhow!("missing GCS_ACCESS_ID"))?;
+    let secret = string_var(globals, "TOKEN").ok_or_else(|| anyhow!("missing TOKEN"))?;
+    let headers = gcs_sigv4_headers(&access_id, &secret, Utc::now())?;
+
+    let response = client
+        .get("https://storage.googleapis.com/")
+        .header("X-Amz-Content-Sha256", headers.payload_hash)
+        .header("X-Amz-Date", headers.amz_date)
+        .header("Authorization", headers.authorization)
+        .send()
+        .await
+        .context("GCS HMAC validation request failed")?;
+    let status = response.status();
+    let body = response.text().await.unwrap_or_default();
+    Ok(classify_gcs_hmac_response(status, &body))
 }
 
 async fn validate_ftp(globals: &Object, use_lax_tls: bool) -> Result<RawValidationOutcome> {
@@ -633,4 +972,143 @@ where
         .await
         .context("Redis server did not reply in time")??;
     Ok(line)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::TimeZone;
+
+    use super::*;
+
+    #[test]
+    fn gcp_api_key_probe_distinguishes_liveness_from_transport_failures() {
+        assert_eq!(
+            classify_gcp_api_key_probe(StatusCode::OK, r#"{"projectId":"example"}"#),
+            GcpApiKeyProbeVerdict::Active
+        );
+        assert_eq!(
+            classify_gcp_api_key_probe(StatusCode::BAD_REQUEST, r#"{"reason":"API_KEY_INVALID"}"#,),
+            GcpApiKeyProbeVerdict::Inactive
+        );
+        assert_eq!(
+            classify_gcp_api_key_probe(
+                StatusCode::FORBIDDEN,
+                r#"{"reason":"API_KEY_HTTP_REFERRER_BLOCKED"}"#,
+            ),
+            GcpApiKeyProbeVerdict::Active
+        );
+        assert_eq!(
+            classify_gcp_api_key_probe(StatusCode::INTERNAL_SERVER_ERROR, "server error"),
+            GcpApiKeyProbeVerdict::Inconclusive
+        );
+    }
+
+    #[test]
+    fn gcp_api_key_active_summary_leads_with_the_successful_probe() {
+        assert_eq!(
+            gcp_api_key_active_summary(
+                "Generative Language API",
+                StatusCode::OK,
+                Some(("Identity Toolkit", StatusCode::UNAUTHORIZED)),
+            ),
+            "Google API key is active. Generative Language API accepted the key (HTTP 200 OK). The earlier Identity Toolkit probe was inconclusive (HTTP 401 Unauthorized)."
+        );
+
+        assert_eq!(
+            gcp_api_key_active_summary("Generative Language API", StatusCode::FORBIDDEN, None,),
+            "Google API key is active. Generative Language API recognized but restricted the key (HTTP 403 Forbidden)."
+        );
+    }
+
+    #[test]
+    fn gcp_adc_allows_only_google_token_endpoints() {
+        assert_eq!(
+            allowed_gcp_token_endpoint(None).unwrap(),
+            "https://oauth2.googleapis.com/token"
+        );
+        assert_eq!(
+            allowed_gcp_token_endpoint(Some("https://accounts.google.com/o/oauth2/token")).unwrap(),
+            "https://accounts.google.com/o/oauth2/token"
+        );
+        assert!(
+            allowed_gcp_token_endpoint(Some("https://attacker.example/token")).is_err(),
+            "an ADC file must not redirect validation to an attacker-controlled token endpoint"
+        );
+    }
+
+    #[test]
+    fn gcp_adc_validation_does_not_report_the_minted_access_token() {
+        let outcome = classify_gcp_adc_response(
+            StatusCode::OK,
+            r#"{"access_token":"ya29.fresh-bearer-token","token_type":"Bearer"}"#,
+        );
+
+        assert!(outcome.valid);
+        assert_eq!(outcome.status, StatusCode::OK);
+        assert!(!outcome.body.contains("ya29.fresh-bearer-token"));
+    }
+
+    #[test]
+    fn gcs_hmac_response_classification_matches_gcs_error_semantics() {
+        let list_buckets = classify_gcs_hmac_response(
+            StatusCode::OK,
+            "<ListAllMyBucketsResult><Name>private-bucket</Name></ListAllMyBucketsResult>",
+        );
+        assert!(list_buckets.valid);
+        assert!(!list_buckets.body.contains("private-bucket"));
+        assert!(
+            classify_gcs_hmac_response(
+                StatusCode::FORBIDDEN,
+                "<Error><Code>AccessDenied</Code></Error>",
+            )
+            .valid
+        );
+
+        let invalid = classify_gcs_hmac_response(
+            StatusCode::FORBIDDEN,
+            "<Error><Code>SignatureDoesNotMatch</Code></Error>",
+        );
+        assert!(!invalid.valid);
+        assert_eq!(invalid.status, StatusCode::UNAUTHORIZED);
+
+        let unknown = classify_gcs_hmac_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "<Error><Code>SlowDown</Code></Error>",
+        );
+        assert!(!unknown.valid);
+        assert_eq!(unknown.status, StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn gcs_sigv4_headers_are_deterministic_and_scoped_to_gcs() {
+        let now = Utc.with_ymd_and_hms(2025, 11, 7, 18, 17, 14).unwrap();
+        let headers = gcs_sigv4_headers(
+            "GOOG1EXAMPLEACCESSID",
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+            now,
+        )
+        .unwrap();
+
+        assert_eq!(headers.amz_date, "20251107T181714Z");
+        assert_eq!(
+            headers.payload_hash,
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        );
+        assert!(
+            headers
+                .authorization
+                .contains("Credential=GOOG1EXAMPLEACCESSID/20251107/auto/s3/aws4_request")
+        );
+        assert!(
+            headers.authorization.contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date")
+        );
+    }
+
+    #[test]
+    fn gcs_hmac_raw_validator_requires_the_access_id_pair() {
+        assert_eq!(
+            required_vars("gcs_hmac"),
+            BTreeSet::from(["GCS_ACCESS_ID".to_string(), "TOKEN".to_string()])
+        );
+    }
 }

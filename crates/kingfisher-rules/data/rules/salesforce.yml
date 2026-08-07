@@ -2,13 +2,10 @@ rules:
   - name: Salesforce Access Token
     id: kingfisher.salesforce.1
     pattern: |
-      (?xi)
+      (?x)
       \b
       (
-        00
-        [[:alnum:]]{13}
-        !
-        [A-Z0-9._-]{80,260}
+        00D[[:alnum:]]{8,15}![[:alnum:]._-]{30,260}
       )
     pattern_requirements:
       min_digits: 6
@@ -37,10 +34,11 @@ rules:
             - report_response: true
             - type: StatusMatch
               status: [200]
-            - type: WordMatch
-              words: ["DailyApiRequests"]
-              match_all_words: true
-          url: "https://{{ INSTANCE }}/services/data/v60.0/limits"
+            - type: StatusMatch
+              status: [401]
+              negative: true
+            - type: JsonValid
+          url: https://login.salesforce.com/services/oauth2/userinfo
     references:
       - https://developer.salesforce.com/docs/atlas.en-us.api_rest.meta/api_rest/intro_authentication.htm
       - https://developer.salesforce.com/docs/data/data-cloud-query-guide/references/data-cloud-query-api-reference/c360a-direct-api-connected-app.html
@@ -49,9 +47,8 @@ rules:
       - https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_userpermissionaccess.htm
       - https://developer.salesforce.com/docs/atlas.en-us.object_reference.meta/object_reference/sforce_api_objects_permissionsetassignment.htm
       - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/salesforce.yml
-    depends_on_rule:
-      - rule_id: "kingfisher.salesforce.2"
-        variable: INSTANCE
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/salesforceoauth2access/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/salesforceoauth2access/validator.go
 
   - name: Salesforce Instance URL
     id: kingfisher.salesforce.2

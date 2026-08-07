@@ -29,7 +29,7 @@ rules:
       (?x)
       \b
       (
-        (?:sk|rk)_live_[A-Za-z0-9]{24,128}
+        (?:sk|rk)_live_[[:alnum:]]{24,128}
       )
       \b
     pattern_requirements:
@@ -64,3 +64,23 @@ rules:
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/stripe/stripe-access-token.yaml
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/stripe-api-key.yaml
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/global-matchers/secrets-patterns-rules.yaml
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/stripeapikeys/validator.go
+
+  - name: Stripe Webhook Signing Secret
+    id: kingfisher.stripe.3
+    pattern: |
+      (?x)
+      \b
+      (
+        whsec_[[:alnum:]]{32}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - whsec_UOTBUgpYjyLswPFMxvzo4PyUxleOAiJd
+    references:
+      - https://docs.stripe.com/webhooks/signature
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/stripeapikeys/detector.go
+    # Webhook secrets validate signatures over provider-supplied request
+    # payloads; there is no safe token-only live validation request.

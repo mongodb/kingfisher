@@ -145,7 +145,7 @@ jq '.findings[] | select(.validation.status == "Active")' findings.json
 
 Then prioritize by blast radius. For AWS, GCP, GitHub, GitLab, and Slack
 tokens, Kingfisher can already map what each credential can access. Look at
-the `access_map` field in JSON output, or the **Access Map** panel in the
+the `access_map` field in JSON output, or the **Blast Radius** panel in the
 HTML report (`kingfisher view ./report.json` or `kingfisher scan /path/to/code --view-report`)
 
 ## Revoke from the CLI

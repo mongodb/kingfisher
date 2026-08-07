@@ -5,13 +5,9 @@ rules:
       (?x)
       \b
       (
-        ddp_[A-Za-z0-9]{36}
+        ddp_[[:alnum:]]{36}
       )
       \b
-    pattern_requirements:
-      min_digits: 4
-      min_uppercase: 4
-      min_lowercase: 4
     min_entropy: 3.6
     confidence: medium
     examples:
@@ -22,12 +18,14 @@ rules:
       - https://api.deno.com/v1
       - https://docs.deno.com/subhosting/api/authentication/
       - https://docs.deno.com/subhosting/api/
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/denopat/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/denopat/validator.go
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: https://api.deno.com/v1/user
+          url: https://api.deno.com/user
           headers:
             Authorization: "Bearer {{ TOKEN }}"
             Accept: application/json
@@ -38,3 +36,39 @@ rules:
             - type: WordMatch
               words:
                 - '"id"'
+
+  - name: Deno Organization Token
+    id: kingfisher.deno.2
+    pattern: |
+      (?x)
+      \b
+      (
+        ddo_[[:alnum:]]{36}
+      )
+      \b
+    min_entropy: 3.6
+    confidence: medium
+    examples:
+      - DENO_DEPLOY_TOKEN=ddo_u7mo08lBNHm8GMGLhtrEVfcgBsCuSp36dumX
+    references:
+      - https://docs.deno.com/subhosting/api/authentication/
+      - https://docs.deno.com/subhosting/manual/api_migration_guide/
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/denopat/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/denopat/validator.go
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.deno.com/organization
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: StatusMatch
+              status: [401, 403]
+              negative: true
+            - type: JsonValid

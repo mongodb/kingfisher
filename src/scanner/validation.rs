@@ -642,6 +642,7 @@ pub async fn run_secret_validation(
                     existing.validation_success = cr.is_valid;
                     existing.validation_response_status = cr.status.as_u16();
                     existing.validation_response_body = cr.body.clone();
+                    existing.refresh_validation_outcome();
                 }
             }
         }
@@ -694,6 +695,7 @@ pub async fn run_secret_validation(
             bool,
             crate::validation_body::ValidationResponseBody,
             u16,
+            kingfisher_core::ValidationOutcome,
             std::collections::BTreeMap<String, String>,
         );
         let mut dep_updates: FxHashMap<u64, DepUpdate> = FxHashMap::default();
@@ -778,6 +780,7 @@ pub async fn run_secret_validation(
                                             rep.validation_response_body.clone();
                                         d.validation_response_status =
                                             rep.validation_response_status;
+                                        d.validation_outcome = rep.validation_outcome;
                                     }
                                     let mut out = vec![rep];
                                     out.extend(dups);
@@ -805,6 +808,7 @@ pub async fn run_secret_validation(
                             om.validation_success,
                             om.validation_response_body.clone(),
                             om.validation_response_status.as_u16(),
+                            om.validation_outcome,
                             om.dependent_captures.clone(),
                         ),
                     );
@@ -827,13 +831,14 @@ pub async fn run_secret_validation(
                 matches.as_mut_slice()
             };
             for match_arc in slice.iter_mut() {
-                if let Some((success, body, status, dep_caps)) =
+                if let Some((success, body, status, outcome, dep_caps)) =
                     dep_updates.get(&match_arc.2.finding_fingerprint).cloned()
                 {
                     let (_, _, existing) = Arc::make_mut(match_arc);
                     existing.validation_success = success;
                     existing.validation_response_status = status;
                     existing.validation_response_body = body;
+                    existing.validation_outcome = outcome;
                     existing.dependent_captures = dep_caps;
                 }
             }
@@ -874,9 +879,12 @@ async fn validate_single(
         om.validation_success = cached.is_valid;
         om.validation_response_body = cached.body.clone();
         om.validation_response_status = cached.status;
-        if om.validation_success && is_counted_validation_status(om.validation_response_status) {
+        om.refresh_validation_outcome();
+        if om.validation_outcome.is_verified_active()
+            || om.validation_outcome == kingfisher_core::ValidationOutcome::Assumed
+        {
             success_count.fetch_add(1, Ordering::Relaxed);
-        } else if is_counted_validation_status(om.validation_response_status) {
+        } else if om.validation_outcome == kingfisher_core::ValidationOutcome::VerifiedInactive {
             fail_count.fetch_add(1, Ordering::Relaxed);
         }
         maybe_record_access_map(om, access_map);
@@ -895,10 +903,13 @@ async fn validate_single(
             om.validation_success = cached.is_valid;
             om.validation_response_body = cached.body.clone();
             om.validation_response_status = cached.status;
-            if om.validation_success && is_counted_validation_status(om.validation_response_status)
+            om.refresh_validation_outcome();
+            if om.validation_outcome.is_verified_active()
+                || om.validation_outcome == kingfisher_core::ValidationOutcome::Assumed
             {
                 success_count.fetch_add(1, Ordering::Relaxed);
-            } else if is_counted_validation_status(om.validation_response_status) {
+            } else if om.validation_outcome == kingfisher_core::ValidationOutcome::VerifiedInactive
+            {
                 fail_count.fetch_add(1, Ordering::Relaxed);
             }
             maybe_record_access_map(om, access_map);
@@ -908,7 +919,7 @@ async fn validate_single(
     }
     // If we reach here, we're the first task to validate this key
     // Perform validation
-    let outcome = ValidationOutcome::from_panic_result(
+    let outcome = ValidationRunOutcome::from_panic_result(
         catch_validation_panic(
             validate_single_match(
                 om,
@@ -942,7 +953,7 @@ async fn validate_single(
 /// Flattens panic handling into a self-describing enum so call sites and
 /// signatures stay readable. Validation timeouts are handled inside
 /// `validate_single_match`, where the module-local de-dupe state can be cleaned.
-enum ValidationOutcome {
+enum ValidationRunOutcome {
     /// Validation ran to completion; the match's own fields describe whether it
     /// succeeded or failed.
     Completed,
@@ -951,11 +962,11 @@ enum ValidationOutcome {
     Panicked(String),
 }
 
-impl ValidationOutcome {
+impl ValidationRunOutcome {
     fn from_panic_result(result: std::result::Result<(), String>) -> Self {
         match result {
-            Ok(()) => ValidationOutcome::Completed,
-            Err(panic_message) => ValidationOutcome::Panicked(panic_message),
+            Ok(()) => ValidationRunOutcome::Completed,
+            Err(panic_message) => ValidationRunOutcome::Panicked(panic_message),
         }
     }
 }
@@ -963,17 +974,20 @@ impl ValidationOutcome {
 fn apply_validation_outcome(
     om: &mut OwnedBlobMatch,
     cache_key: &str,
-    outcome: ValidationOutcome,
+    outcome: ValidationRunOutcome,
     success_count: &AtomicUsize,
     fail_count: &AtomicUsize,
     cache: &DashMap<String, CachedResponse>,
 ) {
     match outcome {
-        ValidationOutcome::Completed => {
-            if om.validation_success && is_counted_validation_status(om.validation_response_status)
+        ValidationRunOutcome::Completed => {
+            om.refresh_validation_outcome();
+            if om.validation_outcome.is_verified_active()
+                || om.validation_outcome == kingfisher_core::ValidationOutcome::Assumed
             {
                 success_count.fetch_add(1, Ordering::Relaxed);
-            } else if is_counted_validation_status(om.validation_response_status) {
+            } else if om.validation_outcome == kingfisher_core::ValidationOutcome::VerifiedInactive
+            {
                 fail_count.fetch_add(1, Ordering::Relaxed);
             }
             cache.insert(
@@ -986,7 +1000,7 @@ fn apply_validation_outcome(
                 },
             );
         }
-        ValidationOutcome::Panicked(panic_message) => {
+        ValidationRunOutcome::Panicked(panic_message) => {
             // The panic payload can embed secret material (e.g. a token captured
             // in a debug string), so it must never reach the cached or
             // user-visible body. Keep WARN free of the payload too; truncated
@@ -1006,7 +1020,7 @@ fn apply_validation_outcome(
                 om.rule.id()
             ));
             om.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
-            fail_count.fetch_add(1, Ordering::Relaxed);
+            om.refresh_validation_outcome();
             cache.insert(
                 cache_key.to_owned(),
                 CachedResponse {
@@ -1020,6 +1034,7 @@ fn apply_validation_outcome(
     }
 }
 
+#[cfg(test)]
 fn is_counted_validation_status(status: StatusCode) -> bool {
     !matches!(status, StatusCode::CONTINUE | StatusCode::PRECONDITION_REQUIRED)
 }
@@ -1730,6 +1745,7 @@ mod tests {
             validation_response_body: None,
             validation_response_status: StatusCode::CONTINUE,
             validation_success: false,
+            validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
             calculated_entropy: 0.0,
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
@@ -1820,14 +1836,14 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn panic_outcome_is_reported_as_failure_and_cached() {
+    async fn panic_outcome_is_reported_as_unavailable_and_cached() {
         let mut om = make_owned_blob_match();
         let cache_key = build_cache_key(&om);
         let cache = DashMap::new();
         let success_count = AtomicUsize::new(0);
         let fail_count = AtomicUsize::new(0);
 
-        let outcome = ValidationOutcome::from_panic_result(
+        let outcome = ValidationRunOutcome::from_panic_result(
             catch_validation_panic(async {
                 panic!("validator blew up");
             })
@@ -1838,12 +1854,13 @@ mod tests {
 
         assert!(!om.validation_success);
         assert_eq!(om.validation_response_status, StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(om.validation_outcome, kingfisher_core::ValidationOutcome::Unavailable);
         let body = validation_body::clone_as_string(&om.validation_response_body);
         assert!(body.contains("Validation panicked for rule test.panic"));
         // The raw panic payload must never leak into the user-visible body.
         assert!(!body.contains("validator blew up"));
         assert_eq!(success_count.load(Ordering::Relaxed), 0);
-        assert_eq!(fail_count.load(Ordering::Relaxed), 1);
+        assert_eq!(fail_count.load(Ordering::Relaxed), 0);
 
         let cached = cache.get(&cache_key).expect("panic result should be cached");
         assert!(!cached.is_valid);

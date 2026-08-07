@@ -80,6 +80,15 @@ use ignore::{DirEntry, WalkBuilder, WalkState};
 use tokio::time::Duration;
 use tracing::debug;
 
+const DEFAULT_GIX_PACK_CACHE_BYTES: usize = 96 * 1024 * 1024;
+const MIN_GIX_PACK_CACHE_BYTES: usize = 16 * 1024 * 1024;
+const TOTAL_GIX_PACK_CACHE_BUDGET_BYTES: usize = 256 * 1024 * 1024;
+
+fn gix_pack_cache_bytes_for_threads(num_threads: usize) -> usize {
+    (TOTAL_GIX_PACK_CACHE_BUDGET_BYTES / num_threads.max(1))
+        .clamp(MIN_GIX_PACK_CACHE_BYTES, DEFAULT_GIX_PACK_CACHE_BYTES)
+}
+
 #[derive(Clone)]
 pub struct GitDiffConfig {
     pub since_ref: Option<String>,
@@ -368,7 +377,14 @@ pub fn open_git_repo_with_options(
     path: &Path,
     open_path_as_is: bool,
 ) -> Result<Option<Repository>> {
-    let opts = Options::isolated().open_path_as_is(open_path_as_is);
+    // gix creates one delta-base cache for every thread-local repository handle. Keep the
+    // aggregate cache footprint bounded as scan parallelism grows instead of multiplying its
+    // 96 MiB default by every Rayon worker.
+    let pack_cache_bytes = gix_pack_cache_bytes_for_threads(rayon::current_num_threads());
+    let pack_cache_override = format!("gitoxide.core.deltaBaseCacheLimit={pack_cache_bytes}");
+    let opts = Options::isolated()
+        .config_overrides([pack_cache_override])
+        .open_path_as_is(open_path_as_is);
     match open_opts(path, opts) {
         Err(gix::open::Error::NotARepository { .. }) => Ok(None),
         Err(err) => Err(err.into()),
@@ -381,6 +397,15 @@ mod tests {
     use super::*;
     use git2::Repository as Git2Repository;
     use tempfile::tempdir;
+
+    #[test]
+    fn gix_pack_cache_uses_a_bounded_process_budget() {
+        assert_eq!(gix_pack_cache_bytes_for_threads(1), DEFAULT_GIX_PACK_CACHE_BYTES);
+        assert_eq!(gix_pack_cache_bytes_for_threads(4), 64 * 1024 * 1024);
+        assert_eq!(gix_pack_cache_bytes_for_threads(16), MIN_GIX_PACK_CACHE_BYTES);
+        assert_eq!(gix_pack_cache_bytes_for_threads(32), MIN_GIX_PACK_CACHE_BYTES);
+        assert_eq!(gix_pack_cache_bytes_for_threads(128), MIN_GIX_PACK_CACHE_BYTES);
+    }
 
     #[test]
     fn open_git_repo_accepts_worktree_root() -> Result<()> {

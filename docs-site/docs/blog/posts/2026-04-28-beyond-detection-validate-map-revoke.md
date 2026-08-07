@@ -109,7 +109,7 @@ kingfisher access-map github ./github.token --format json > github.access-map.js
 kingfisher access-map gcp ./service-account.json --format json > gcp.access-map.json
 ```
 
-The access-map HTML report renders the access map as an interactive
+The blast-radius HTML report renders the blast radius as an interactive
 graph with a details panel: identities are grouped by provider, resources
 are easy to click through, and the permissions stay visible in context.
 It is a much faster way to explain severity to an incident commander or

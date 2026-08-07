@@ -132,9 +132,9 @@ into permitting `http://` for a remote host.
 - **`scan.jobs` and the Tokio runtime.** The Tokio runtime is sized from the
   CLI value of `--jobs` *before* `kingfisher.yaml` is loaded, so config-only
   `scan.jobs` will resize the scanner's job pool but not the underlying async
-  worker pool. If you want both to match, pass `--jobs N` on the CLI (or set
-  the same value in both places). This only affects parallelism, never
-  correctness.
+  worker pool. To size both pools explicitly, pass `--jobs N` on the CLI;
+  a CLI value takes precedence over `scan.jobs`. This only affects
+  parallelism, never correctness.
 - **Subcommand scope.** Project config only applies to `kingfisher scan`.
   `validate`, `revoke`, `access-map`, `view`, and `rules` commands ignore
   `kingfisher.yaml`; pass their flags on the CLI directly.
@@ -163,6 +163,7 @@ scan:
   min_entropy: 3.5              # float                          (--min-entropy)
   no_validate: false            # bool                           (--no-validate)
   only_valid: false             # bool                           (--only-valid)
+  validation_filter: actionable # all | active | actionable      (--validation-filter)
   redact: false                 # bool                           (--redact)
   no_dedup: false               # bool                           (--no-dedup)
   turbo: false                  # bool                           (--turbo)
@@ -252,6 +253,15 @@ git:
   github_api_url: null          # URL  GHE / self-hosted GH       (--github-api-url)
   gitlab_api_url: null          # URL  self-hosted GitLab         (--gitlab-api-url)
 ```
+
+`scan.only_valid: true` is a compatibility alias for `validation_filter: active`. They are mutually
+exclusive; configure one or the other. Use `validation_filter: actionable` to retain active
+credentials and high-confidence static secrets marked assumed valid. Use `validation_filter: all`
+to also retain inconclusive, skipped, inactive, and not-attempted findings.
+
+High-confidence assumed-valid secrets count as skipped validations by default. With
+`validation_filter: actionable`, they count as successful validations so the summary matches the
+actionable output.
 
 Unknown fields are rejected (typo protection). Empty sections and a missing
 top-level file are both fine.

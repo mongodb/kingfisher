@@ -35,7 +35,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Kingfisher Access Map</title>
+    <title>Kingfisher Blast Radius</title>
     <style>
     :root {
       --bg: #f5f1eb;
@@ -349,8 +349,8 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
 </head>
   <body>
     <header>
-      <h1>Access Map</h1>
-      <div class="hint">Unified Access Map Report</div>
+      <h1>Blast Radius</h1>
+      <div class="hint">Unified Blast Radius Report</div>
     </header>
     <div id="data-error" style="display:none; max-width: 1400px; margin: 12px auto 0;">
       <div class="card" style="border-color: #e56a6a; background: #fff6f6;">
@@ -973,7 +973,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
       if (!items.length) {
         const empty = document.createElement('div');
         empty.className = 'empty';
-        empty.textContent = 'No Access Map results found.';
+        empty.textContent = 'No Blast Radius results found.';
         container.appendChild(empty);
         return;
       }
@@ -1222,7 +1222,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
           renderAll(models);
         })
         .catch(err => {
-          console.error('Failed to load embedded Access Map:', err);
+          console.error('Failed to load embedded Blast Radius:', err);
           showDataError(err?.message || 'Unable to decode embedded data.');
         });
     });

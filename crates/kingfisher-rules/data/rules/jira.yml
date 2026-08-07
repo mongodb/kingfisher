@@ -46,19 +46,26 @@ rules:
         request:
           headers:
             Accept: application/json
-            Authorization: Basic {{ TOKEN }}
+            Authorization: "Basic {{ ATLASSIAN_EMAIL | append: ':' | append: TOKEN | b64enc }}"
           method: GET
           response_matcher:
             - report_response: true
             - status:
                 - 200
               type: StatusMatch
-          url: "{{ JIRA_CLOUD_BASE_URL }}/rest/api/3/dashboard"
+            - type: JsonValid
+            - type: WordMatch
+              words:
+                - '"accountId"'
+          url: "https://{{ DOMAIN }}/rest/api/3/myself"
     references:
       - https://developer.atlassian.com/cloud/jira/platform/basic-auth-for-rest-apis/
+      - https://developer.atlassian.com/cloud/jira/platform/rest/v3/api-group-myself/
     depends_on_rule:
       - rule_id: kingfisher.jira.1
         variable: DOMAIN
+      - rule_id: kingfisher.atlassian.4
+        variable: ATLASSIAN_EMAIL
   - name: Jira Data Center Personal Access Token
     id: kingfisher.jira.3
     pattern: |

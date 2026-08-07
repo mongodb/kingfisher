@@ -3,7 +3,7 @@
 //! This module provides types for tracking commit information associated
 //! with blobs found in git history.
 
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use gix::{ObjectId, date::Time};
 use schemars::{JsonSchema, Schema, SchemaGenerator};
@@ -149,11 +149,11 @@ pub struct CommitMetadata {
     #[serde(with = "HexObjectId")]
     pub commit_id: ObjectId,
 
-    /// The committer's name.
-    pub committer_name: String,
+    /// The committer's interned name.
+    pub committer_name: Arc<str>,
 
-    /// The committer's email address.
-    pub committer_email: String,
+    /// The committer's interned email address.
+    pub committer_email: Arc<str>,
 
     /// The commit timestamp.
     #[serde(with = "TextTime")]

@@ -61,6 +61,7 @@ fn make_match(fp: u64, rule_id: &str) -> Match {
         validation_response_body: None,
         validation_response_status: 0,
         validation_success: false,
+        validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
         calculated_entropy: 0.0,
         visible: true,
         is_base64: false,
@@ -113,7 +114,7 @@ fn reporter_deduplicates_across_git_commits() -> Result<()> {
     let reporter = DetailsReporter {
         datastore: Arc::new(Mutex::new(FindingsStore::new(PathBuf::from("/tmp")))),
         styles: Styles::new(false),
-        only_valid: false,
+        validation_filter: kingfisher::cli::commands::scan::ValidationFilter::All,
         audit_context: None,
     };
 
@@ -133,6 +134,7 @@ fn reporter_deduplicates_across_git_commits() -> Result<()> {
             validation_response_body: None,
             validation_response_status: 0,
             validation_success: false,
+            validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
         },
         ReportMatch {
             origin: origin_b,
@@ -149,6 +151,7 @@ fn reporter_deduplicates_across_git_commits() -> Result<()> {
             validation_response_body: None,
             validation_response_status: 0,
             validation_success: false,
+            validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
         },
     ];
 
@@ -172,7 +175,7 @@ fn dedup_preserves_distinct_rules_with_same_fingerprint() -> Result<()> {
     let reporter = DetailsReporter {
         datastore: Arc::new(Mutex::new(FindingsStore::new(PathBuf::from("/tmp")))),
         styles: Styles::new(false),
-        only_valid: false,
+        validation_filter: kingfisher::cli::commands::scan::ValidationFilter::All,
         audit_context: None,
     };
 
@@ -192,6 +195,7 @@ fn dedup_preserves_distinct_rules_with_same_fingerprint() -> Result<()> {
             validation_response_body: None,
             validation_response_status: 0,
             validation_success: false,
+            validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
         },
         ReportMatch {
             origin,
@@ -208,6 +212,7 @@ fn dedup_preserves_distinct_rules_with_same_fingerprint() -> Result<()> {
             validation_response_body: None,
             validation_response_status: 0,
             validation_success: false,
+            validation_outcome: kingfisher_core::ValidationOutcome::NotAttempted,
         },
     ];
 

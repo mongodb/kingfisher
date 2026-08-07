@@ -220,6 +220,7 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
         access_map: false,
         rule_stats: false,
         only_valid: false,
+        validation_filter: None,
         include_hidden_findings: false,
         min_entropy: Some(0.0),
         redact: false,

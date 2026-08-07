@@ -53,7 +53,7 @@ pub enum AccessMapOutputFormat {
     /// Pretty-printed JSON
     Json,
 
-    /// Standalone HTML access-map report
+    /// Standalone HTML blast-radius report
     Html,
 }
 

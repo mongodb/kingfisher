@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use anyhow::Result;
 use http::StatusCode;
+use kingfisher_core::ValidationOutcome;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
@@ -35,7 +36,7 @@ use kingfisher_scanner::primitives::find_secret_capture;
 
 use self::{base64_decode::get_base64_strings as get_b64_strings, filter::filter_match};
 
-const MAX_CHUNK_SIZE: usize = 1 << 30; // 1 GiB per scan segment
+const MAX_CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8 MiB per scan segment
 const CHUNK_OVERLAP: usize = 64 * 1024; // 64 KiB overlap to catch boundary matches
 const RAW_MATCH_LOOKBACK: usize = 4 * 1024; // Re-scan a bounded suffix ending at the raw match.
 const BASE64_SCAN_LIMIT: usize = 64 * 1024 * 1024; // skip expensive Base64 pass on huge blobs
@@ -93,6 +94,7 @@ pub struct BlobMatch<'a> {
     pub validation_response_status: StatusCode,
 
     pub validation_success: bool,
+    pub validation_outcome: ValidationOutcome,
     pub calculated_entropy: f32,
     pub is_base64: bool,
 }
@@ -206,6 +208,7 @@ impl<'a> Matcher<'a> {
         })
     }
 
+    #[cfg(test)]
     fn scan_bytes_raw(&mut self, input: &[u8], _filename: &str) -> Result<()> {
         // Remember previous peak automatically
         let prev_capacity = self.user_data.raw_matches_scratch.capacity();
@@ -240,6 +243,72 @@ impl<'a> Matcher<'a> {
     }
 
     #[allow(clippy::too_many_arguments)]
+    fn scan_and_process_raw_matches<'b>(
+        &mut self,
+        blob: &'b Blob,
+        origin: &OriginSet,
+        filename: &str,
+        redact: bool,
+        matches: &mut Vec<BlobMatch<'b>>,
+        previous_matches: &mut FxHashMap<usize, Vec<OffsetSpan>>,
+        seen_matches: &mut FxHashSet<u64>,
+        match_rule_indices: &mut Vec<usize>,
+    ) -> Result<()>
+    where
+        'a: 'b,
+    {
+        let input = blob.bytes();
+        self.user_data.input_len = input.len() as u64;
+
+        // Build the same overlapping ranges as `scan_bytes_raw`, then process them in reverse.
+        // The old implementation collected every raw match and iterated that Vec in reverse;
+        // reversing ranges preserves that ordering while bounding scratch to one segment.
+        let mut ranges = Vec::new();
+        let mut offset = 0;
+        while offset < input.len() {
+            let end = (offset + MAX_CHUNK_SIZE).min(input.len());
+            ranges.push(offset..end);
+            if end == input.len() {
+                break;
+            }
+            offset = end.saturating_sub(CHUNK_OVERLAP);
+        }
+
+        let mut seen_raw_match_ends: FxHashSet<(usize, usize)> = FxHashSet::default();
+        let mut previous_full_matches: FxHashMap<usize, Vec<OffsetSpan>> = FxHashMap::default();
+
+        for range in ranges.into_iter().rev() {
+            self.user_data.raw_matches_scratch.clear();
+            let base = range.start as u64;
+            self.scanner_pool.with(|scanner| {
+                scanner.scan(&input[range], |rule_id, from, to, _flags| {
+                    self.user_data.raw_matches_scratch.push(RawMatch {
+                        rule_id,
+                        start_idx: from + base,
+                        end_idx: to + base,
+                    });
+                    vectorscan_rs::Scan::Continue
+                })
+            })?;
+
+            self.process_raw_matches(
+                blob,
+                origin,
+                filename,
+                redact,
+                matches,
+                previous_matches,
+                seen_matches,
+                match_rule_indices,
+                &mut seen_raw_match_ends,
+                &mut previous_full_matches,
+            );
+        }
+
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn process_raw_matches<'b>(
         &self,
         blob: &'b Blob,
@@ -250,12 +319,12 @@ impl<'a> Matcher<'a> {
         previous_matches: &mut FxHashMap<usize, Vec<OffsetSpan>>,
         seen_matches: &mut FxHashSet<u64>,
         match_rule_indices: &mut Vec<usize>,
+        seen_raw_match_ends: &mut FxHashSet<(usize, usize)>,
+        previous_full_matches: &mut FxHashMap<usize, Vec<OffsetSpan>>,
     ) where
         'a: 'b,
     {
         let rules_db = self.rules_db;
-        let mut seen_raw_match_ends: FxHashSet<(usize, usize)> = FxHashSet::default();
-        let mut previous_full_matches: FxHashMap<usize, Vec<OffsetSpan>> = FxHashMap::default();
         for &RawMatch { rule_id, start_idx, end_idx } in
             self.user_data.raw_matches_scratch.iter().rev()
         {
@@ -277,7 +346,7 @@ impl<'a> Matcher<'a> {
                 scan_start,
                 end_idx_usize,
                 matches,
-                Some(&mut previous_full_matches),
+                Some(&mut *previous_full_matches),
                 previous_matches,
                 rule_id_usize,
                 seen_matches,
@@ -321,9 +390,6 @@ impl<'a> Matcher<'a> {
             .and_then(|name| name.to_str())
             .unwrap_or("unknown_file")
             .to_string();
-        // Perform the scan
-        self.scan_bytes_raw(blob.bytes(), &filename)?;
-
         // Opportunistically look for standalone Base64 blobs. If neither
         // the raw scan nor this check yields anything, we can return early
         // before doing any heavier work.
@@ -334,20 +400,13 @@ impl<'a> Matcher<'a> {
         };
 
         let lang_hint = lang.as_deref();
-        let has_raw_matches = !self.user_data.raw_matches_scratch.is_empty();
-        let has_base64_items = !b64_items.is_empty();
-
-        if !has_raw_matches && !has_base64_items {
-            return Ok(ScanResult::New(Vec::new()));
-        }
-
         let mut seen_matches = FxHashSet::default();
         let mut previous_matches: FxHashMap<usize, Vec<OffsetSpan>> = FxHashMap::default();
         let mut match_rule_indices: Vec<usize> = Vec::new();
 
         let blob_len = blob.len();
         let mut matches = Vec::new();
-        self.process_raw_matches(
+        self.scan_and_process_raw_matches(
             blob,
             origin,
             &filename,
@@ -356,7 +415,11 @@ impl<'a> Matcher<'a> {
             &mut previous_matches,
             &mut seen_matches,
             &mut match_rule_indices,
-        );
+        )?;
+
+        if matches.is_empty() && b64_items.is_empty() {
+            return Ok(ScanResult::New(Vec::new()));
+        }
 
         if !no_base64 {
             let rules_db = self.rules_db;
@@ -930,6 +993,58 @@ mod test {
         // we should still only have two unique raw matches recorded
         assert_eq!(first_len, 2);
         assert_eq!(second_len, 2);
+        Ok(())
+    }
+
+    #[test]
+    fn scan_blob_preserves_matches_and_order_across_chunk_boundary() -> Result<()> {
+        const TOKEN: &[u8] = b"chunk_boundary_token_7f3a9c";
+
+        let rule = Rule::new(RuleSyntax {
+            id: "chunk.boundary".into(),
+            name: "chunk boundary".into(),
+            pattern: String::from_utf8(TOKEN.to_vec()).unwrap(),
+            confidence: crate::rules::rule::Confidence::Low,
+            min_entropy: 0.0,
+            visible: true,
+            examples: vec![],
+            negative_examples: vec![],
+            references: vec![],
+            validation: None::<Validation>,
+            revocation: None,
+            depends_on_rule: vec![],
+            pattern_requirements: None,
+            tls_mode: None,
+        });
+
+        let rules_db = RulesDatabase::from_rules(vec![rule])?;
+        let seen = BlobIdMap::new();
+        let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let mut matcher =
+            Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
+
+        let boundary_start = MAX_CHUNK_SIZE - TOKEN.len() / 2;
+        let later_start = MAX_CHUNK_SIZE + CHUNK_OVERLAP + 128;
+        let mut bytes = vec![b'x'; later_start + TOKEN.len() + 1];
+        bytes[boundary_start..boundary_start + TOKEN.len()].copy_from_slice(TOKEN);
+        bytes[later_start..later_start + TOKEN.len()].copy_from_slice(TOKEN);
+
+        let blob = Blob::from_bytes(bytes);
+        let origin = OriginSet::from(Origin::from_file(PathBuf::from("chunk-boundary.txt")));
+        let found = match matcher.scan_blob(&blob, &origin, None, false, false, true)? {
+            ScanResult::New(found) => found,
+            other => panic!(
+                "expected new scan result, got {}",
+                match other {
+                    ScanResult::SeenWithMatches => "seen with matches",
+                    ScanResult::SeenSansMatches => "seen without matches",
+                    ScanResult::New(_) => unreachable!(),
+                }
+            ),
+        };
+
+        let starts: Vec<_> = found.iter().map(|m| m.matching_input_offset_span.start).collect();
+        assert_eq!(starts, vec![later_start, boundary_start]);
         Ok(())
     }
 

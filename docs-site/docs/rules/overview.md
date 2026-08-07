@@ -86,8 +86,8 @@ rules:
             content-type: application/grpc
             te: trailers
             Authorization: "Bearer {{ TOKEN }}"
-          # Raw bytes are allowed (YAML \\u0000 escapes become NUL bytes).
-          body: "\\u0000\\u0000\\u0000\\u0000\\u0000"
+          # Raw bytes are allowed (YAML \u0000 escapes become NUL bytes).
+          body: "\u0000\u0000\u0000\u0000\u0000"
           response_matcher:
             - report_response: true
             - type: HeaderMatch
@@ -173,16 +173,31 @@ revocation:
 | visible                 | false to hide non‑secret captures (e.g. IDs)                         |
 | depends_on_rule         | Chain rules: use captures from one rule in another's validation      |
 | pattern_requirements  | Require character types and/or exclude placeholder words from matches |
-| validation              | Configure `Http`, `Grpc`, typed validators (`AWS`, `GCP`, etc.), or `Raw` exception-path checks to verify live validity |
+| validation              | Configure `Assumed`, `Http`, `Grpc`, typed validators, or `Raw` exception-path checks |
 | revocation              | Configure HTTP, AWS, or multi-step revocation for a detected secret  |
 
 ## Validation Types
 
-Kingfisher supports three validation buckets:
+Kingfisher supports these validation types:
 
-1. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
-2. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`.
-3. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
+1. `Assumed`: a rule-level marker for secret material accepted with high confidence without live validation. It produces the `Assumed Valid (Not Live-Validated)` finding status and is included by the `actionable` filter, but not by the strict `active` filter. In colorized pretty output it uses the same bright color as an active credential but with a locked icon. It counts as skipped validation by default and as successful validation with the `actionable` filter.
+2. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
+3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`.
+4. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
+
+Rules without a `validation` block produce `Not Attempted` findings. They are not treated as
+active, inactive, or skipped because no validation result was produced.
+
+An assumed validation is configured as:
+
+```yaml
+validation:
+  type: Assumed
+```
+
+The bundled private-key rules use this marker because their high-signal formats can be accepted
+without a provider request; their findings are reported as
+`Assumed Valid (Not Live-Validated)`.
 
 Raw validation looks like this:
 
@@ -194,7 +209,7 @@ validation:
 
 Use `Raw` only when the provider check cannot be expressed reliably with `Http` or `Grpc` and does not justify a new reusable validator family. Raw validator implementations live in `crates/kingfisher-scanner/src/validation/raw.rs`.
 
-Typed validators are safer and more reusable because the validator kind is part of the schema. `Raw` validators are string-dispatched and fail at runtime if the `content` name is unknown. If you need a Rust-backed exception path for one provider, prefer `Raw`; reserve new typed validators for stable validation families that can be reused across rules.
+Typed validators are safer and more reusable because the validator kind is part of the schema. `Raw` validators are string-dispatched; an unknown `content` name is reported as an unimplemented, unverified validation result. If you need a Rust-backed exception path for one provider, prefer `Raw`; reserve new typed validators for stable validation families that can be reused across rules.
 
 ## gRPC Validation (Grpc)
 
@@ -665,6 +680,37 @@ generic matches.
   credential, test it against a fixture or a targeted scan. Check an individual file with
   `kingfisher rules check` before running the rule-crate tests.
 
+### POSIX Character Classes
+
+Hyperscan/Vectorscan supports POSIX character classes inside bracket expressions, written as
+`[[:name:]]`. These are the classes relevant to rule authoring:
+
+| Class        | Matches                         | ASCII equivalent          |
+| ------------ | ------------------------------- | ------------------------- |
+| `[:alnum:]`  | Letters and digits              | `[a-zA-Z0-9]`             |
+| `[:alpha:]`  | Letters only                     | `[a-zA-Z]`                |
+| `[:digit:]`  | Digits                          | `[0-9]`                   |
+| `[:lower:]`  | Lowercase letters only          | `[a-z]`                   |
+| `[:upper:]`  | Uppercase letters only          | `[A-Z]`                   |
+| `[:xdigit:]` | Hexadecimal digits              | `[0-9A-Fa-f]`             |
+| `[:blank:]`  | Space and tab                   | `[ \t]`                   |
+| `[:space:]`  | Whitespace                      | `[ \t\r\n\v\f]`           |
+| `[:punct:]`  | Punctuation characters          | `[\x21-\x2F\x3A-\x40\x5B-\x60\x7B-\x7E]` |
+| `[:graph:]`  | Visible characters (no space)    | `[\x21-\x7E]`             |
+| `[:print:]`  | Printable characters            | `[\x20-\x7E]`             |
+| `[:cntrl:]`  | Control characters              | `[\x00-\x1F\x7F]`         |
+
+Notes:
+
+- `[:alnum:]` is the workhorse for token alphabets; it covers both letter cases **and** digits.
+- `[:lower:]` and `[:upper:]` match a single case by default. Under `(?i)` / `(?xi)` they become
+  case-insensitive, so `[:lower:]` will also match uppercase letters and vice versa.
+- `[:digit:]` matches only `0-9`; it does **not** include letters. For letters **and** digits use
+  `[:alnum:]`; for lowercase letters **and** digits combine them as `[[:lower:][:digit:]]`.
+- `[:xdigit:]` matches `0-9`, `a-f`, and `A-F` regardless of the `(?i)` flag.
+- Classes can be combined inside one bracket expression, for example `[[:alnum:]_=-]` adds
+  underscore, equals, and hyphen to the alphanumeric set.
+
 ## Character Requirements
 
 The `pattern_requirements` field allows you to specify data type requirements for matched secrets. This is particularly useful when:
@@ -804,7 +850,7 @@ When writing custom rules, consider the following best practices:
 2. **Optimize for Performance:** Structure your regex to minimize backtracking. Use non-capturing groups where possible and keep the pattern as concise as possible.
 3. **Validation Integration:** Define a `validation` section if you want to verify the detected secret. Prefer `Http` or `Grpc`; use an existing typed validator when the rule matches a supported validator family; use `Raw` only for rare provider-specific exception paths. You can use Liquid templating to insert dynamic values where supported. Use the unnamed capture as `TOKEN` and any named captures in uppercase.
 4. **Revocation Integration:** Define a `revocation` section if you want to revoke a detected secret. It uses the same HTTP request format and template variables as `validation`.
-5. **Test with Examples:** Always include examples that should match and, optionally, negative examples to ensure your rule behaves as expected.
+5. **Test with Examples:** Always include examples that should match, and run `kingfisher rules check` for the changed rule file.
 
 ## Examples
 
@@ -831,9 +877,6 @@ rules:
     confidence: medium
     examples:
       - sk-ant-api668-Clm512odot9WDD7itfUU9R880nefA1EtYZDbpE-C9b0XQEWpqFKf9DQUo03vOfXl16oSmyar1CLF1SzV3YzpZJ6bahcpLAA
-    categories:
-      - api
-      - secret
     references:
       - https://docs.anthropic.com/claude/reference/authentication
     validation:
@@ -858,10 +901,10 @@ rules:
             - status:
                 - 200
               type: StatusMatch
-            - report_response: true
             - type: WordMatch
               words:
-                - '"type":"invalid_request_error"'
+                - '"type":"message"'
+                - "credit balance is too low"
           url: https://api.anthropic.com/v1/messages
 ```
 

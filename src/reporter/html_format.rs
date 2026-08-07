@@ -74,7 +74,7 @@ fn render_metadata(metadata: &ScanReportMetadata) -> String {
         ),
     ));
     lines.push(summary_line(
-        "Access Map Identities",
+        "Blast Radius Identities",
         &metadata.summary.access_map_identities.to_string(),
     ));
 
@@ -96,14 +96,31 @@ fn render_metadata(metadata: &ScanReportMetadata) -> String {
 fn validation_rank(status: &str) -> usize {
     if status.eq_ignore_ascii_case("Active Credential") {
         0
-    } else if status.eq_ignore_ascii_case("Inactive Credential") {
+    } else if status.eq_ignore_ascii_case("Assumed Valid (Not Live-Validated)") {
         1
-    } else if status.eq_ignore_ascii_case("Canary Token (Skipped)") {
+    } else if status.eq_ignore_ascii_case("Inconclusive Validation") {
         2
-    } else if status.eq_ignore_ascii_case("Not Attempted") {
+    } else if status.eq_ignore_ascii_case("Inactive Credential") {
         3
-    } else {
+    } else if status.eq_ignore_ascii_case("Canary Token (Skipped)")
+        || status.eq_ignore_ascii_case("Validation Skipped")
+    {
         4
+    } else if status.eq_ignore_ascii_case("Not Attempted") {
+        5
+    } else {
+        6
+    }
+}
+
+fn validation_status_class(outcome: kingfisher_core::ValidationOutcome) -> &'static str {
+    match outcome {
+        kingfisher_core::ValidationOutcome::VerifiedActive => "status-active",
+        kingfisher_core::ValidationOutcome::Assumed => "status-assumed",
+        kingfisher_core::ValidationOutcome::VerifiedInactive => "status-inactive",
+        kingfisher_core::ValidationOutcome::Unavailable => "status-unavailable",
+        kingfisher_core::ValidationOutcome::Skipped => "status-canary",
+        kingfisher_core::ValidationOutcome::NotAttempted => "status-unknown",
     }
 }
 
@@ -134,15 +151,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
 
     let mut rows = String::new();
     for record in &sorted {
-        let status_class = if record.finding.validation.status == "Active Credential" {
-            "status-active"
-        } else if record.finding.validation.status == "Inactive Credential" {
-            "status-inactive"
-        } else if record.finding.validation.status == "Canary Token (Skipped)" {
-            "status-canary"
-        } else {
-            "status-unknown"
-        };
+        let status_class = validation_status_class(record.finding.validation.outcome);
         let git_url_html = finding_git_url(record)
             .map(|url| {
                 format!(
@@ -212,7 +221,7 @@ fn render_access_map(access_map: Option<&Vec<AccessMapEntry>>) -> String {
     }
     format!(
         "<section class=\"panel\">
-            <h2>Access Map Summary</h2>
+            <h2>Blast Radius Summary</h2>
             <ul>{items}</ul>
         </section>"
     )
@@ -252,8 +261,10 @@ fn build_html(envelope: &ReportEnvelope) -> String {
     th {{ background: #e2e8f0; color: #0f172a; }}
     .status {{ padding: 2px 8px; border-radius: 999px; font-weight: 700; }}
     .status-active {{ background: #14532d; color: #86efac; }}
+    .status-assumed {{ background: #1e3a8a; color: #bfdbfe; }}
     .status-inactive {{ background: #7f1d1d; color: #fecaca; }}
     .status-canary {{ background: #581c87; color: #e9d5ff; }}
+    .status-unavailable {{ background: #7f1d1d; color: #fecaca; }}
     .status-unknown {{ background: #78350f; color: #fde68a; }}
   </style>
 </head>
@@ -287,6 +298,16 @@ impl DetailsReporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skipped_validations_have_a_stable_rank_and_style() {
+        assert_eq!(validation_rank("Canary Token (Skipped)"), 4);
+        assert_eq!(validation_rank("Validation Skipped"), 4);
+        assert_eq!(
+            validation_status_class(kingfisher_core::ValidationOutcome::Skipped),
+            "status-canary"
+        );
+    }
 
     #[test]
     fn build_html_includes_audit_title_and_cli_args() {

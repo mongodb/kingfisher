@@ -45,7 +45,7 @@ flowchart LR
         Store[FindingsStore]
         Filter[Dedup baseline safelist]
         Validate[Validate]
-        Map[Access map]
+        Map[Blast radius]
         Report[Report]
         Viewer[Viewer]
     end

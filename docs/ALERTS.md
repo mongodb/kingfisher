@@ -130,9 +130,13 @@ red if any active. Facts list active/inactive/unknown counts and the top rules.
 Findings are the same shape as `kingfisher scan --format json` produces, so
 existing JSON consumers work unchanged.
 
+`summary.target` describes the scan target requested on the command line. It supports local paths,
+Git URLs, repository hosts, cloud buckets, container images, and collaboration-platform scans; a
+non-path scan running with redirected stdin is not mislabeled as an internal temporary file.
+
 ### Discord (Embed)
 
-A single embed with a color-coded sidebar — red on any active credential,
+A single embed with a color-coded sidebar — red on any verified-active credential,
 amber when findings exist but none are verified active, green on a clean run.
 Inline `Active`/`Inactive`/`Unknown` fields, a `Top rules` field, the
 per-finding detail in the embed `description` (capped at 10 entries), and a
@@ -152,7 +156,7 @@ A modern `cardsV2` card with a "Summary" section (`decoratedText` widgets for
 active/inactive/unknown counts and a top-rules paragraph) and a "Findings"
 section (capped at 10 entries). Google Chat does not expose a card-color knob
 in its public webhook API, so severity is conveyed textually — the title is
-prefixed with 🚨 when any active credential is detected.
+prefixed with 🚨 when any verified-active credential is detected.
 
 ## Configuring via `kingfisher.yaml`
 

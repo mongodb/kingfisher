@@ -81,3 +81,37 @@ rules:
             - type: WordMatch
               words:
                 - '"user_id"'
+
+  - name: Elastic Cloud Serverless API Key
+    id: kingfisher.elastic.3
+    pattern: |
+      (?x)
+      \b
+      (
+        essu_(?:[[:alnum:]+/]{92}|[[:alnum:]+/]{91}=|[[:alnum:]+/]{90}==)
+      )
+    min_entropy: 4.0
+    confidence: medium
+    categories: [api, key]
+    examples:
+      - essu_VWtSQlNXNWFjMEpWWVZsbFVUZDBORmRQTldJNmNuWnVYMU5yY1ZGdlJ6aHVlRE5rWmxGelIyUk9kdz09AAAAANx5Zs4=
+    references:
+      - https://www.elastic.co/docs/api/doc/elastic-cloud-serverless/authentication
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/elasticcloudapikey/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/elasticcloudapikey/validator.go
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://api.elastic-cloud.com/api/v1/account
+          headers:
+            Authorization: "ApiKey {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200, 403]
+            - type: StatusMatch
+              status: [401]
+              negative: true

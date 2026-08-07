@@ -6,7 +6,7 @@ rules:
       \b
       (
         key_
-        [0-9a-fA-F]{64}
+        [[:lower:][:digit:]]{64}
       )
       \b
     min_entropy: 3.8
@@ -18,6 +18,8 @@ rules:
     references:
       - https://cursor.com/docs/cloud-agent/api/endpoints
       - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/cursor.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/cursorapikey/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/cursorapikey/validator.go
     validation:
       type: Http
       content:
@@ -26,8 +28,12 @@ rules:
           url: https://api.cursor.com/v0/me
           headers:
             Accept: application/json
-            Authorization: "Basic {{ TOKEN | b64enc }}"
+            Authorization: "Basic {{ TOKEN | append: ':' | b64enc }}"
           response_matcher:
             - report_response: true
-            - type: WordMatch
-              words: ['"userEmail"']
+            - type: StatusMatch
+              status: [200, 429]
+            - type: StatusMatch
+              status: [401, 403]
+              negative: true
+            - type: JsonValid

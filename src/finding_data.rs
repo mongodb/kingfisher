@@ -31,6 +31,9 @@ pub struct FindingDataEntry {
 
     /// Validation Success
     pub validation_success: bool,
+
+    /// Semantic validation outcome.
+    pub validation_outcome: kingfisher_core::ValidationOutcome,
 }
 // -------------------------------------------------------------------------------------------------
 // FindingMetadata

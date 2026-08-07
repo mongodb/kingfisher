@@ -117,8 +117,8 @@ fn selector_matches(rule_id: &str, selector: &str) -> bool {
         || rule_id.strip_prefix(selector).is_some_and(|suffix| suffix.starts_with('.'))
 }
 
-pub fn should_rate_limit_validation(_validation: &Validation) -> bool {
-    true
+pub fn should_rate_limit_validation(validation: &Validation) -> bool {
+    !matches!(validation, Validation::Assumed)
 }
 
 #[cfg(test)]

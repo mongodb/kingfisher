@@ -41,10 +41,10 @@ rules:
     id: kingfisher.circleci.2
     pattern: |
       (?xi)
-      \b                     
+      \b
       circleci
       (?:.|[\n\r]){0,64}?
-      (                      
+      (
         [[:xdigit:]]{40}
       )
       \b
@@ -58,6 +58,8 @@ rules:
       - "CIRCLECI_API_TOKEN: a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2"
     references:
       - https://circleci.com/docs/api/v1/index.html#projects
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/circleci/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/circleci/validator.go
     validation:
       type: Http
       content:
@@ -68,10 +70,43 @@ rules:
           method: GET
           response_matcher:
             - report_response: true
-            - status:
-                - 200
-              type: StatusMatch
-            - type: WordMatch
-              words:
-                - '"vcs_url"'
-          url: https://circleci.com/api/v1.1/projects
+            - type: StatusMatch
+              status: [200, 404]
+            - type: StatusMatch
+              status: [401]
+              negative: true
+          url: https://circleci.com/api/v1.1/project/scalibr-validation-nonexistent-a8f3c2d9
+
+  - name: CircleCI API Project Token (Prefixed)
+    id: kingfisher.circleci.3
+    pattern: |
+      (?x)
+      \b
+      (
+        CCIPRJ_[[:alnum:]]{22}_[[:digit:]a-f]{40}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: high
+    examples:
+      - CCIPRJ_GHFzqc7fRZ2GviZQ7hbdeb_9f54ac82eef4bb69a8fece88199a7414f32d8b36
+    references:
+      - https://circleci.com/docs/api/v1/index.html#projects
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/circleci/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/circleci/validator.go
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://circleci.com/api/v1.1/project/scalibr-validation-nonexistent-a8f3c2d9
+          headers:
+            Accept: application/json
+            Circle-Token: "{{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200, 404]
+            - type: StatusMatch
+              status: [401]
+              negative: true

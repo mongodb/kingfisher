@@ -8,7 +8,19 @@ rules:
     min_entropy: 3.0
     confidence: medium
     pattern_requirements:
-      ignore_if_contains: ["****", "xxxx", "YOUR_PASSWORD", "${", "{{", "changeit", "changeme", "example", "test", "dummy"]
+      ignore_if_contains:
+        [
+          "****",
+          "xxxx",
+          "YOUR_PASSWORD",
+          "${",
+          "{{",
+          "changeit",
+          "changeme",
+          "example",
+          "test",
+          "dummy",
+        ]
     examples:
       - |
         <server>

@@ -174,6 +174,23 @@ For a shareable, upload-based experience, the docs site also hosts the same view
 kingfisher scan /path/to/code --only-valid
 ```
 
+Use the actionable filter for findings that warrant immediate response: active credentials and
+high-confidence secrets marked assumed valid:
+
+```bash
+kingfisher scan /path/to/code --validation-filter actionable
+```
+
+`--only-valid` is a compatibility alias for `--validation-filter active` and remains restricted to
+credentials proven active. It cannot be combined with `--validation-filter`; use `actionable`
+when both active and assumed-valid findings should be retained. Use `all` to also retain
+inconclusive, skipped, inactive, and not-attempted findings.
+
+Pretty output preserves the established `Active Credential` label (`🔓`). Assumed rules use the
+same bright color with a locked icon and the label
+`Assumed Valid (Not Live-Validated)`. They count as skipped validations by default, or as
+successful validations with `--validation-filter actionable`.
+
 ### 5: Revoke a discovered secret
 
 ```bash
@@ -403,8 +420,8 @@ Gitleaks and TruffleHog are both widely used open-source secret scanners with th
 Note: when you pass `--view-report`, Kingfisher starts a web server on port `7890` (default) and opens it in your default browser. By default it binds to `127.0.0.1` for security. You'll see this near the end of the scan output, and **Kingfisher will keep running** until you stop it.
 
 ```bash
-INFO kingfisher::cli::commands::view: Starting access-map viewer address=127.0.0.1:7890
-Serving access-map viewer at http://127.0.0.1:7890 (Ctrl+C to stop)
+INFO kingfisher::cli::commands::view: Starting blast-radius viewer address=127.0.0.1:7890
+Serving blast-radius viewer at http://127.0.0.1:7890 (Ctrl+C to stop)
 ```
 
 **Usage:**
@@ -412,7 +429,7 @@ Serving access-map viewer at http://127.0.0.1:7890 (Ctrl+C to stop)
 kingfisher scan /path/to/scan --access-map --view-report
 ```
 
-![Kingfisher access map and report viewer demo](docs/kingfisher-usage-access-map-01.gif)
+![Kingfisher blast radius and report viewer demo](docs/kingfisher-usage-access-map-01.gif)
 
 **Click to view video**
 [![Demo](docs/demos/findings-thumbnail.png)](https://github.com/user-attachments/assets/d33ee7a6-c60a-4e42-88e0-ac03cb429a46)
@@ -504,6 +521,9 @@ kingfisher scan ~/src/myrepo --turbo
 # Display only secrets confirmed active by third‑party APIs
 kingfisher scan /path/to/repo --only-valid
 
+# Include active credentials and high-confidence assumed-valid secrets
+kingfisher scan /path/to/repo --validation-filter actionable
+
 # Output JSON and capture to a file
 kingfisher scan . --format json | tee kingfisher.json
 
@@ -511,22 +531,22 @@ kingfisher scan . --format json | tee kingfisher.json
 kingfisher scan /path/to/repo --format sarif --output findings.sarif
 ```
 
-## Access Map and Visualization
+## Blast Radius (aka Access Map) and Visualization
 
 **Stop Guessing, Start Mapping: Understand Your True Blast Radius**
 
 Finding a leaked credential is only the first step. The critical question isn't just "Is this a secret?"—it's "What can an attacker do with it?"
 
-Kingfisher's `--access-map` feature transforms secret detection from a simple alert into a comprehensive threat assessment. Instead of leaving you with a cryptic API key, Kingfisher actively authenticates against the provider to map the full extent of the credential's power.
+Kingfisher's blast-radius feature transforms secret detection from a simple alert into a comprehensive threat assessment. Instead of leaving you with a cryptic API key, Kingfisher actively authenticates against the provider to map the full extent of the credential's power.
 
 * **Instant Identity Resolution**: Immediately identify who the key belongs to—whether it's a specific IAM user, an assumed role, or a service account.
 * **Visualize the Blast Radius**: See exactly which resources (S3 buckets, EC2 instances, projects, storage containers) are exposed and at risk.
 
 ```bash
-# Generate access map during scan
+# Generate blast-radius results during scan
 kingfisher scan /path/to/code --access-map --view-report
 
-# View access-map reports locally
+# View blast-radius reports locally
 kingfisher view kingfisher.json
 kingfisher view kingfisher.sarif
 
@@ -541,14 +561,14 @@ kingfisher view report1.json report2.jsonl report3.sarif
 kingfisher view ./reports/
 ```
 
-The viewer can import SARIF, Gitleaks JSON, and TruffleHog JSON/JSONL in addition to native Kingfisher reports. Imported findings are normalized for browsing, filtering, and export. Kingfisher-produced SARIF can preserve compatible validation status, command, fingerprint, and `access_map` properties when present; generic imported reports remain display-oriented and full blast-radius linking still requires a Kingfisher scan.
+The viewer can import SARIF, Gitleaks JSON, and TruffleHog JSON/JSONL in addition to native Kingfisher reports. Imported findings are normalized for browsing, filtering, and export. Kingfisher-produced SARIF can preserve compatible validation outcome/status, command, fingerprint, and `access_map` properties when present; generic imported reports remain display-oriented and full blast-radius linking still requires a Kingfisher scan.
 
-> **Use the access map functionality only when you are authorized to inspect the target account, as Kingfisher will issue additional network requests to determine what access the secret grants**
+> **Use blast-radius mapping only when you are authorized to inspect the target account, as Kingfisher will issue additional network requests to determine what access the secret grants**
 
 
-![Access map example](docs/access-map.png)
+![Blast radius example](docs/access-map.png)
 
-### Supported Access Map Providers (43)
+### Supported Blast Radius Providers (43)
 
 | Cloud & Infra | DevOps & CI/CD | SaaS & APIs | Data & Messaging |
 |:---|:---|:---|:---|
@@ -577,6 +597,9 @@ The viewer can import SARIF, Gitleaks JSON, and TruffleHog JSON/JSONL in additio
 ```bash
 # Validate a known secret without scanning
 kingfisher validate --rule opsgenie "12345678-9abc-def0-1234-56789abcdef0"
+
+# Validate an Atlassian Admin API key against the Organizations API
+kingfisher validate --rule kingfisher.atlassian.3 "AT..."
 
 # Validate from stdin
 echo "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" | kingfisher validate --rule github -
@@ -619,6 +642,12 @@ kingfisher scan /path/to/code --format html --output kingfisher-audit.html
 ```bash
 # Pipe any text directly into Kingfisher
 cat /path/to/file.py | kingfisher scan -
+
+# Scan stdin together with files or directories; `-` marks the stdin input
+cat generated.env | kingfisher scan - ./src ./tests
+
+# Limit scanner workers on a memory-constrained runner
+kingfisher scan /path/to/large-repo --jobs 4
 
 # Limit maximum file size scanned (default: 256 MB)
 kingfisher scan /some/file --max-file-size 500
@@ -839,8 +868,8 @@ kingfisher scan /tmp/repo --branch feature-1 \
 | [INSTALLATION.md](docs/INSTALLATION.md) | Complete installation guide including pre-commit hooks setup for git, pre-commit framework, and Husky |
 | [INTEGRATIONS.md](docs/INTEGRATIONS.md) | Platform-specific scanning guide (GitHub, GitLab, AWS S3, Docker, Jira, Confluence, Slack, etc.) |
 | [ALERTS.md](docs/ALERTS.md) | Alert webhooks for Slack, Teams, Discord, Mattermost, Google Chat, and generic HTTPS endpoints |
-| [ACCESS_MAP.md](docs/ACCESS_MAP.md) | Access map: supported tokens and credential formats (43 providers including AWS, GCP, Azure, Alibaba Cloud, Stripe, Jira, monday.com, Asana, Pinecone, and more) |
-| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | High-level Mermaid architecture diagram of the CLI, scanner pipeline, validation, access map, and outputs |
+| [ACCESS_MAP.md](docs/ACCESS_MAP.md) | Blast radius: supported tokens and credential formats (43 providers including AWS, GCP, Azure, Alibaba Cloud, Stripe, Jira, monday.com, Asana, Pinecone, and more) |
+| [ARCHITECTURE.md](docs/ARCHITECTURE.md) | High-level Mermaid architecture diagram of the CLI, scanner pipeline, validation, blast-radius mapping, and outputs |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment models for self-serve CLI use, CI/pre-commit enforcement, centralized scanning, and embedded library integrations |
 | [ADVANCED.md](docs/ADVANCED.md) | Advanced features: baselines, confidence levels, validation tuning, CI scanning, and more |
 | [RULES.md](docs/RULES.md) | Writing custom detection rules, pattern requirements, and checksum intelligence |

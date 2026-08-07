@@ -1,6 +1,6 @@
 ---
 title: "Architecture"
-description: "High-level architecture of Kingfisher: CLI, scanner pipeline, rule engine, validation, access mapping, and output formats."
+description: "High-level architecture of Kingfisher: CLI, scanner pipeline, rule engine, validation, blast-radius mapping, and output formats."
 ---
 
 # Kingfisher Architecture
@@ -50,7 +50,7 @@ flowchart LR
         Store[FindingsStore]
         Filter[Dedup baseline safelist]
         Validate[Validate]
-        Map[Access map]
+        Map[Blast radius]
         Report[Report]
         Viewer[Viewer]
     end

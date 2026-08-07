@@ -362,7 +362,10 @@ function renderTable() {
 function filteredFindings() {
   return findings
     .filter((f) => {
-      if (validationFilter === "active" && f.validationStatus.toLowerCase() !== "active credential") return false;
+      if (
+        validationFilter === "active" &&
+        !["verified active credential", "active credential"].includes(f.validationStatus.toLowerCase())
+      ) return false;
       if (validationFilter === "inactive" && f.validationStatus.toLowerCase() !== "inactive credential") return false;
       if (validationFilter === "not_attempted" && f.validationStatus.toLowerCase() !== "not attempted") return false;
 
@@ -571,4 +574,3 @@ document.getElementById("download-csv").addEventListener("click", exportCsv);
 document.getElementById("copy-access-map").addEventListener("click", copyAccessMap);
 
 loadEmbeddedReport();
-

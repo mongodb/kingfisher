@@ -4,16 +4,8 @@ rules:
     pattern: |
       (?x)
       (
-        sk-ant-api
-        \d{2,4}
-        -
-        [\w\-]{93}
-        AA
+        sk-ant-api[[:digit:]]{2,4}-[[:alnum:]_-]{40,180}
       )
-    pattern_requirements:
-      min_digits: 2
-      min_uppercase: 1
-      min_lowercase: 1
     min_entropy: 3.3
     confidence: medium
     examples:
@@ -24,34 +16,24 @@ rules:
       - https://docs.anthropic.com/en/api/getting-started
       - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/anthropic.yml
       - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/anthropic.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/anthropicapikey/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/anthropicapikey/model_validator.go
     validation:
       type: Http
       content:
         request:
-          body: |
-            {
-              "model": "claude-3-haiku-20240307",
-              "max_tokens": 1024,
-              "messages": [
-                {"role": "user", "content": "respond only with 'success'"}
-              ]
-            }
           headers:
-            Content-Type: application/json
             anthropic-version: "2023-06-01"
             x-api-key: "{{ TOKEN }}"
-          method: POST
+          method: GET
           response_matcher:
             - report_response: true
-            - status:
-                - 200
-              type: StatusMatch
-            - report_response: true
-            - type: WordMatch
-              words:
-                - '"type":"message"'
-                - "credit balance is too low"
-          url: https://api.anthropic.com/v1/messages
+            - type: StatusMatch
+              status: [200, 429]
+            - type: StatusMatch
+              status: [401]
+              negative: true
+          url: https://api.anthropic.com/v1/models
 
   - name: Anthropic Admin API Key
     id: kingfisher.anthropic.2

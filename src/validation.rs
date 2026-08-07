@@ -529,6 +529,7 @@ pub async fn validate_single_match(
             clear_in_flight_validation(fp);
         }
     }
+    m.refresh_validation_outcome();
 }
 
 /// Perform the actual validation of a match.
@@ -676,6 +677,9 @@ async fn timed_validate_single_match(
     let rule_tls_mode_for_raw = m.rule.syntax().tls_mode;
 
     match &validation {
+        Some(Validation::Assumed) => {
+            // Assumed validation intentionally produces no live validation result.
+        }
         Some(Validation::Http(http_validation)) => {
             validate_http(
                 m,

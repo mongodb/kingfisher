@@ -43,7 +43,7 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help=(
             "Print the IDs of standalone detectors with and "
-            "without a validator"
+            "without a live validator"
         ),
     )
     return parser.parse_args()
@@ -109,7 +109,12 @@ def main() -> int:
                 continue
 
             identifier = rule_identifier(rule, path, index)
-            if rule.get("validation"):
+            validation = rule.get("validation")
+            is_assumed = (
+                isinstance(validation, dict)
+                and validation.get("type") == "Assumed"
+            )
+            if validation and not is_assumed:
                 standalone_with_validator.append(identifier)
             else:
                 standalone_without_validator.append(identifier)
@@ -121,23 +126,23 @@ def main() -> int:
     print(f"Dependent rules: {dependent_rules}")
     print(f"Standalone detectors: {standalone_detector_rules}")
     print(
-        "Standalone detectors with validator: "
+        "Standalone detectors with live validator: "
         f"{len(standalone_with_validator)}"
     )
     print(
-        "Standalone detectors without validator: "
+        "Standalone detectors without live validator: "
         f"{len(standalone_without_validator)}"
     )
 
     if args.list_validators:
         print(
-            "\nStandalone detectors with validator "
+            "\nStandalone detectors with live validator "
             f"({len(standalone_with_validator)}):"
         )
         for name in standalone_with_validator:
             print(f"  {name}")
         print(
-            "\nStandalone detectors without validator "
+            "\nStandalone detectors without live validator "
             f"({len(standalone_without_validator)}):"
         )
         for name in standalone_without_validator:

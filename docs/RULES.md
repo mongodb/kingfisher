@@ -170,16 +170,31 @@ revocation:
 | visible                 | false to hide non‑secret captures (e.g. IDs)                         |
 | depends_on_rule         | Chain rules: use captures from one rule in another's validation      |
 | pattern_requirements  | Require character types and/or exclude placeholder words from matches |
-| validation              | Configure `Http`, `Grpc`, typed validators (`AWS`, `GCP`, etc.), or `Raw` exception-path checks to verify live validity |
+| validation              | Configure `Assumed`, `Http`, `Grpc`, typed validators, or `Raw` exception-path checks |
 | revocation              | Configure HTTP, AWS, or multi-step revocation for a detected secret  |
 
 ## Validation Types
 
-Kingfisher supports three validation buckets:
+Kingfisher supports these validation types:
 
-1. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
-2. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`.
-3. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
+1. `Assumed`: a rule-level marker for secret material accepted with high confidence without live validation. It produces the `Assumed Valid (Not Live-Validated)` finding status and is included by the `actionable` filter, but not by the strict `active` filter. In colorized pretty output it uses the same bright color as an active credential but with a locked icon. It counts as skipped validation by default and as successful validation with the `actionable` filter.
+2. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
+3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`.
+4. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
+
+Rules without a `validation` block produce `Not Attempted` findings. They are not treated as
+active, inactive, or skipped because no validation result was produced.
+
+An assumed validation is configured as:
+
+```yaml
+validation:
+  type: Assumed
+```
+
+The bundled private-key rules use this marker because their high-signal formats can be accepted
+without a provider request; their findings are reported as
+`Assumed Valid (Not Live-Validated)`.
 
 Raw validation looks like this:
 

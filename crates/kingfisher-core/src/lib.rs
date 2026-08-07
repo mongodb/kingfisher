@@ -15,6 +15,7 @@ pub mod error;
 pub mod git_commit_metadata;
 pub mod location;
 pub mod origin;
+pub mod validation;
 
 // Re-export commonly used types at the crate root
 pub use blob::{
@@ -27,3 +28,4 @@ pub use error::{Error, Result};
 pub use git_commit_metadata::CommitMetadata;
 pub use location::{Location, LocationMapping, OffsetSpan, SourcePoint, SourceSpan};
 pub use origin::{CommitOrigin, ExtendedOrigin, FileOrigin, GitRepoOrigin, Origin, OriginSet};
+pub use validation::ValidationOutcome;

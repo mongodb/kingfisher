@@ -2,20 +2,18 @@ rules:
   - name: Supabase Management Token
     id: kingfisher.supabase.1
     pattern: |
-      (?xi)
+      (?x)
       (
-        sbp_[a-z0-9_-]{40}
+        sbp_[[:digit:]a-f]{40}
       )
-    pattern_requirements:
-      min_digits: 2
     min_entropy: 3.5
     confidence: medium
     examples:
-      - sbp_abcd1234efgh5678ijkl9012mnop3456qrst7890
-      - sbp_1234567890abcdefghij1234567890klmnopqrst
+      - sbp_08414cedf15b7d3a53ce954db0b2ec90f4248ba0
     references:
       - https://supabase.com/docs/reference/api/v1-get-an-organization
       - https://github.com/betterleaks/betterleaks/blob/8e6d2391899a7c38c1653ab26f493953cdcaa329/cmd/generate/config/rules/supabase.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/supabase/detector.go
     validation:
       type: Http
       content:
@@ -34,7 +32,7 @@ rules:
     pattern: |
       (?xi)
       (
-        sb_secret_[a-z0-9_-]{31}
+        sb_secret_[[:alnum:]_-]{31,36}
       )
     pattern_requirements:
       min_uppercase: 3
@@ -59,6 +57,7 @@ rules:
                 - '"host":'
     references:
       - https://supabase.com/docs/reference/api/v1-get-an-organization
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/supabase/detector.go
     examples:
       - "sb_secret_9uM4GhB0STF5R4K3HxQtlg_bzWW6DRj"
       - "sb_secret_szE_jsbktD3pWgnfUjgahw_hcHEIOBH"

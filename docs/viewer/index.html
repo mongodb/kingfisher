@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Kingfisher Access Map Viewer</title>
+  <title>Kingfisher Blast Radius Viewer</title>
   <style>
     :root {
       color-scheme: dark;
@@ -1507,6 +1507,7 @@
       font-weight: 600;
     }
     .status-badge.active { background: #ecfdf5; color: #15803d; }
+    .status-badge.assumed { background: #eff6ff; color: #1d4ed8; }
     .status-badge.inactive { background: #fef2f2; color: #b91c1c; }
     .status-badge.unknown { background: var(--surface-muted); color: var(--text-muted); }
 
@@ -2235,7 +2236,7 @@
       <div class="hero__icon">K</div>
       <div style="display:flex; align-items:center;">
         <span class="hero__title">Kingfisher Report Viewer</span>
-        <span class="hero__subtitle">Access Map &amp; Findings</span>
+        <span class="hero__subtitle">Blast Radius &amp; Findings</span>
       </div>
     </div>
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
@@ -2318,7 +2319,7 @@
                   <span class="nav-button__sub">Overview and report mix</span>
                 </span>
               </button>
-              <button class="nav-button" data-view-target="view-access" title="Access Map">
+              <button class="nav-button" data-view-target="view-access" title="Blast Radius">
                 <span class="nav-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24">
                     <circle cx="12" cy="12" r="8"></circle>
@@ -2328,7 +2329,7 @@
                   </svg>
                 </span>
                 <span class="nav-button__content">
-                  <span class="nav-button__title">Access Map</span>
+                  <span class="nav-button__title">Blast Radius</span>
                   <span class="nav-button__sub">Identity reach and permissions</span>
                 </span>
               </button>
@@ -2359,7 +2360,7 @@
                   <div class="workspace-overview__title" id="sidebar-summary-source">No report loaded</div>
                   <div class="workspace-overview__meta" id="sidebar-summary-target">Load a report to explore findings and blast radius.</div>
                 </div>
-                <div class="workspace-pill">Access map: <span id="sidebar-summary-access">No</span></div>
+                <div class="workspace-pill">Blast radius: <span id="sidebar-summary-access">No</span></div>
               </div>
               <div class="workspace-overview__stats">
                 <div class="workspace-overview__stat">
@@ -2399,7 +2400,7 @@
                   <input type="checkbox" id="scan-active-only"> Active credentials only
                 </label>
                 <div class="sidebar-help">Scan summary for tickets and remediation tracking.</div>
-                <button class="btn" id="download-access-report" type="button" style="width:100%; margin-top:4px;" disabled>Access Map Report</button>
+                <button class="btn" id="download-access-report" type="button" style="width:100%; margin-top:4px;" disabled>Blast Radius Report</button>
               </div>
             </div>
           </section>
@@ -2536,14 +2537,14 @@
             <section class="panel" id="am-section">
               <div class="panel__header">
                 <div class="panel__title">
-                  <h3>Access Map</h3>
+                  <h3>Blast Radius</h3>
                   <p>Credentials and what they can reach</p>
                 </div>
                 <div style="display:flex; gap:10px; align-items:center;">
                   <button class="btn" id="copy-access-map" type="button">Copy JSON</button>
                 </div>
               </div>
-              <div id="am-empty-notice" class="am-empty-hint hidden">No Access Map entries in this report. Run a scan with <code>--access-map</code> to map credential blast radius.</div>
+              <div id="am-empty-notice" class="am-empty-hint hidden">No Blast Radius entries in this report. Run a scan with <code>--access-map</code> to map credential blast radius.</div>
               <div class="am-container" id="am-container">
                 <div id="am-stats-bar" class="am-stats hidden"></div>
                 <div class="am-toolbar" style="display:flex; gap:10px; align-items:center;">
@@ -2552,7 +2553,7 @@
                     <input type="checkbox" id="am-critical-checkbox">
                     <span>Critical only</span>
                   </label>
-                  <div class="am-view-switch" aria-label="Access map view">
+                  <div class="am-view-switch" aria-label="Blast radius view">
                     <button class="am-view-switch__button active" id="am-view-map" type="button" aria-pressed="true">Map</button>
                     <button class="am-view-switch__button" id="am-view-details" type="button" aria-pressed="false">Details</button>
                   </div>
@@ -2563,7 +2564,7 @@
                 </div>
                 <div id="am-card-list" class="am-card-list">
                   <div style="color:var(--text-muted); font-size:13px; text-align:center; padding:32px 0;">
-                    No access map data found in report.
+                    No blast-radius data found in report.
                   </div>
                 </div>
               </div>
@@ -2591,7 +2592,9 @@
                   <select id="validation-filter" class="rows-select">
                     <option value="all" selected>All validation states</option>
                     <option value="active">Active Credential</option>
+                    <option value="assumed">Assumed Valid (Not Live-Validated)</option>
                     <option value="inactive">Inactive Credential</option>
+                    <option value="inconclusive">Inconclusive Validation</option>
                     <option value="not_attempted">Not Attempted</option>
                     <option value="canary">Canary Token (Skipped)</option>
                   </select>
@@ -3500,7 +3503,7 @@
         custom_rules_used: false,
         successful_validations: counts.active || 0,
         failed_validations: counts.inactive || 0,
-        skipped_validations: counts.not_attempted || 0,
+        skipped_validations: (counts.canary || 0) + (counts.assumed || 0),
       };
     }
 
@@ -3955,7 +3958,7 @@
       const firstEntry = entries.find((item) => item && typeof item === "object") || {};
       const notes = toolName === "TruffleHog"
         ? ["Imported from the open-source TruffleHog JSON output. Only findings marked verified are shown as Active; others are Not Attempted. Re-scan with Kingfisher --access-map for validation, revoke commands, and blast radius. Not affiliated with Truffle Security Co."]
-        : ["Imported from the open-source Gitleaks JSON output. No validation, revoke commands, or access-map data. Re-scan with Kingfisher --access-map for full enrichment. Not affiliated with the Gitleaks project."];
+        : ["Imported from the open-source Gitleaks JSON output. No validation, revoke commands, or blast-radius data. Re-scan with Kingfisher --access-map for full enrichment. Not affiliated with the Gitleaks project."];
       const target = String(firstNonEmpty(
         firstEntry.SourceName,
         firstEntry.sourceName,
@@ -4491,9 +4494,9 @@
 
     function getAccessMapEmptyMessage() {
       if (scanMetadata.imported && (!scanMetadata.capabilities || !scanMetadata.capabilities.accessMapSupported)) {
-        return "Imported reports do not include Kingfisher access-map data. Re-scan with <code>kingfisher scan --access-map</code> for blast-radius mapping.";
+        return "Imported reports do not include Kingfisher blast-radius data. Re-scan with <code>kingfisher scan --access-map</code> for blast-radius mapping.";
       }
-      return "No Access Map entries in this report. Run a scan with <code>--access-map</code> to map credential blast radius.";
+      return "No Blast Radius entries in this report. Run a scan with <code>--access-map</code> to map credential blast radius.";
     }
 
     function getImportNoticeHtml(importNotes) {
@@ -4784,8 +4787,12 @@
 
         if (validation === "active") {
           return normalizedStatus === "active";
+        } else if (validation === "assumed") {
+          return normalizedStatus === "assumed";
         } else if (validation === "inactive") {
           return normalizedStatus === "inactive";
+        } else if (validation === "inconclusive") {
+          return normalizedStatus === "inconclusive";
         } else if (validation === "not_attempted") {
           return normalizedStatus === "not_attempted";
         } else if (validation === "canary") {
@@ -4874,19 +4881,50 @@
     function normalizeValidationStatus(status) {
       const normalized = (status || "").toString().trim().toLowerCase();
 
-      if (normalized === "active credential" || normalized === "active") {
+      if (
+        normalized === "verified active credential" ||
+        normalized === "active credential" ||
+        normalized === "active"
+      ) {
         return "active";
+      }
+
+      if (
+        normalized === "assumed valid (not live-validated)" ||
+        normalized === "high-confidence secret (assumed valid; not live-validated)" ||
+        normalized === "high-confidence secret (not live-validated)" ||
+        normalized === "high-confidence secret" ||
+        normalized === "assumed valid" ||
+        normalized === "assumed"
+      ) {
+        return "assumed";
       }
 
       if (normalized === "inactive credential" || normalized === "inactive") {
         return "inactive";
       }
 
-      if (normalized === "not attempted" || normalized === "not_attempted") {
+      if (
+        normalized === "inconclusive validation" ||
+        normalized === "validation unavailable" ||
+        normalized === "inconclusive" ||
+        normalized === "unavailable"
+      ) {
+        return "inconclusive";
+      }
+
+      if (
+        normalized === "not attempted" ||
+        normalized === "not_attempted"
+      ) {
         return "not_attempted";
       }
 
-      if (normalized === "canary token (skipped)" || normalized === "canary") {
+      if (
+        normalized === "validation skipped" ||
+        normalized === "canary token (skipped)" ||
+        normalized === "canary"
+      ) {
         return "canary";
       }
 
@@ -4894,7 +4932,15 @@
     }
 
     function calculateValidationCounts(list = findings) {
-      const counts = { active: 0, inactive: 0, not_attempted: 0, canary: 0, unknown: 0 };
+      const counts = {
+        active: 0,
+        assumed: 0,
+        inactive: 0,
+        inconclusive: 0,
+        not_attempted: 0,
+        canary: 0,
+        unknown: 0,
+      };
       (list || []).forEach((f) => {
         const status =
           f.finding && f.finding.validation && f.finding.validation.status
@@ -5188,6 +5234,7 @@
     function renderStatusChart(counts) {
       const palette = {
         active: "#22c55e",
+        assumed: "#3b82f6",
         inactive: "#f97316",
         not_attempted: "#38bdf8",
         canary: "#a855f7",
@@ -5195,6 +5242,7 @@
       };
       const dataPoints = [
         { key: "active", label: "Active", color: palette.active },
+        { key: "assumed", label: "Assumed Valid", color: palette.assumed },
         { key: "inactive", label: "Inactive", color: palette.inactive },
         { key: "not_attempted", label: "Not Attempted", color: palette.not_attempted },
         { key: "canary", label: "Canary Token", color: palette.canary },
@@ -5485,7 +5533,7 @@
         return;
       }
 
-      const statusOrder = { active: 0, inactive: 1, canary: 2, not_attempted: 3, unknown: 4 };
+      const statusOrder = { active: 0, assumed: 1, inconclusive: 2, inactive: 3, canary: 4, not_attempted: 5, unknown: 6 };
       let baseFindings =
         scope === "filtered" ? getFilteredSortedFindings().slice() : (Array.isArray(findings) ? findings.slice() : []);
       if (activeOnly) {
@@ -5504,8 +5552,8 @@
         const fb = b.finding || {};
         const keyA = normalizeValidationStatus(fa.validation && fa.validation.status ? fa.validation.status : "");
         const keyB = normalizeValidationStatus(fb.validation && fb.validation.status ? fb.validation.status : "");
-        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 4;
-        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 4;
+        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 6;
+        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 6;
         if (sa !== sb) return sa - sb;
 
         const ra = (a.rule && (a.rule.name || a.rule.id)) || "";
@@ -5552,7 +5600,7 @@
               const findingId = getFindingIdFromFinding(finding);
               const gitUrl = getFileUrlFromFinding(finding);
               const sourceTool = getFindingSourceDisplayName(finding);
-              const statusColor = normalizedStatus === "active" ? "#dc2626" : normalizedStatus === "inactive" ? "#f97316" : "#6b7280";
+              const statusColor = normalizedStatus === "active" ? "#dc2626" : normalizedStatus === "assumed" ? "#2563eb" : normalizedStatus === "inactive" ? "#f97316" : "#6b7280";
               return `
                 <tr>
                   <td>${escapeHtml(rule.name || rule.id || "")}</td>
@@ -5619,7 +5667,7 @@
           <strong>Action Required:</strong> This scan found <strong>${counts.active} active credential${counts.active !== 1 ? "s" : ""}</strong> that validated successfully.
           These credentials are live and should be rotated or revoked immediately.
           ${highConfidence > 0 ? `${highConfidence} finding${highConfidence !== 1 ? "s" : ""} ${highConfidence !== 1 ? "are" : "is"} high confidence.` : ""}
-          ${hasAccess ? `Access mapping identified ${accessMap.length} identit${accessMap.length !== 1 ? "ies" : "y"} with resource access.` : ""}
+          ${hasAccess ? `Blast-radius mapping identified ${accessMap.length} identit${accessMap.length !== 1 ? "ies" : "y"} with resource access.` : ""}
         </div>`;
       } else if (baseFindings.length > 0) {
         execSummary = `<div style="padding:12px 16px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:13px;color:#92400e;line-height:1.6;margin-bottom:16px;">
@@ -5627,7 +5675,7 @@
           ${counts.inactive > 0 ? `${counts.inactive} credential${counts.inactive !== 1 ? "s were" : " was"} inactive at scan time.` : ""}
           ${counts.not_attempted > 0 ? `${counts.not_attempted} ${counts.not_attempted !== 1 ? "were" : "was"} not validated.` : ""}
           ${counts.canary > 0 ? `${counts.canary} ${counts.canary !== 1 ? "were" : "was"} canary token${counts.canary !== 1 ? "s" : ""} (skipped).` : ""}
-          ${scanMetadata.imported ? `Imported reports do not include Kingfisher access-map data or command workflows.` : ""}
+          ${scanMetadata.imported ? `Imported reports do not include Kingfisher blast-radius data or command workflows.` : ""}
         </div>`;
       } else {
         execSummary = `<div style="padding:12px 16px;background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;font-size:13px;color:#166534;line-height:1.6;margin-bottom:16px;">
@@ -5686,6 +5734,7 @@
       ${statusImage ? `<img src="${statusImage}" alt="Status chart" style="max-width:240px; border:1px solid #d1d5db; border-radius:10px;">` : ""}
       <div class="legend">
         <span><span class="dot" style="background:#22c55e"></span> Active: ${counts.active || 0}</span>
+        <span><span class="dot" style="background:#3b82f6"></span> Assumed Valid: ${counts.assumed || 0}</span>
         <span><span class="dot" style="background:#f97316"></span> Inactive: ${counts.inactive || 0}</span>
         <span><span class="dot" style="background:#38bdf8"></span> Not Attempted: ${counts.not_attempted || 0}</span>
         <span><span class="dot" style="background:#a855f7"></span> Canary Token: ${counts.canary || 0}</span>
@@ -5746,7 +5795,7 @@
 
     function generateAccessMapReport() {
       if (!Array.isArray(accessMap) || accessMap.length === 0) {
-        alert("No Access Map entries are available. Run a scan with --access-map first.");
+        alert("No Blast Radius entries are available. Run a scan with --access-map first.");
         return;
       }
 
@@ -5848,7 +5897,7 @@
 <html>
 <head>
   <meta charset="UTF-8">
-  <title>Kingfisher Access Map Report</title>
+  <title>Kingfisher Blast Radius Report</title>
   <style>
     * { box-sizing: border-box; }
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 24px; color: #0f172a; }
@@ -5871,7 +5920,7 @@
 </head>
 <body>
   <div class="report-header">
-    <h1>Kingfisher Access Map Report</h1>
+    <h1>Kingfisher Blast Radius Report</h1>
     <div class="report-date">${escapeHtml(new Date().toLocaleString())}</div>
   </div>
 
@@ -5906,7 +5955,7 @@
 
       const win = window.open("", "_blank", "width=1200,height=900");
       if (!win) {
-        alert("Please allow pop-ups to view the Access Map report.");
+        alert("Please allow pop-ups to view the Blast Radius report.");
         return;
       }
       win.document.write(pdfHtml);
@@ -5949,6 +5998,8 @@
           const badgeClass =
             normalizedStatus === "active"
               ? "active"
+              : normalizedStatus === "assumed"
+                ? "assumed"
               : normalizedStatus === "inactive"
                 ? "inactive"
                 : "unknown";
@@ -6017,7 +6068,7 @@
           if (hasEntry) {
               const btn = document.createElement("button");
               btn.className = "badge";
-              btn.textContent = "Go to Access Map";
+              btn.textContent = "Go to Blast Radius";
               btn.style.marginLeft = "10px";
               btn.style.cursor = "pointer";
               btn.style.background = "var(--brand-soft)";
@@ -6067,6 +6118,8 @@
       const badgeClass =
         normalizedStatus === "active"
           ? "active"
+          : normalizedStatus === "assumed"
+            ? "assumed"
           : normalizedStatus === "inactive"
             ? "inactive"
             : "unknown";
@@ -6326,18 +6379,18 @@
         if (importInfo && scanMetadata.imported && (!scanMetadata.capabilities || !scanMetadata.capabilities.accessMapSupported)) {
           return {
             level: isActive ? "low" : "none",
-            text: `This finding was imported from ${escapeHtml(importInfo.source_tool || "an external tool")}. Imported reports do not carry Kingfisher access-map data, so blast radius cannot be derived here. Re-scan with <code>kingfisher scan --access-map</code> for native mapping.`,
+            text: `This finding was imported from ${escapeHtml(importInfo.source_tool || "an external tool")}. Imported reports do not carry Kingfisher blast-radius data, so blast radius cannot be derived here. Re-scan with <code>kingfisher scan --access-map</code> for native mapping.`,
           };
         }
         if (isActive) {
           return {
             level: "medium",
-            text: `This is an active ${escapeHtml(rule.name || "credential")} found in ${escapeHtml(fd.path || "the codebase")}. No access map data is available, but the credential validated successfully, indicating it grants live access to the target service.`,
+            text: `This is an active ${escapeHtml(rule.name || "credential")} found in ${escapeHtml(fd.path || "the codebase")}. No blast-radius data is available, but the credential validated successfully, indicating it grants live access to the target service.`,
           };
         }
         return {
           level: "none",
-          text: "No access map data is linked to this finding. Run a scan with --access-map to map the blast radius of validated credentials.",
+          text: "No blast-radius data is linked to this finding. Run a scan with --access-map to map the blast radius of validated credentials.",
         };
       }
 
@@ -6406,7 +6459,7 @@
           text += ` Token scopes: ${scopeInfo.slice(0, 5).map((s) => escapeHtml(s)).join(", ")}${scopeInfo.length > 5 ? ` (+${scopeInfo.length - 5} more)` : ""}.`;
         }
       } else {
-        text = `This ${escapeHtml(rule.name || "credential")} has access map data showing <strong>${resourceCount} resource${resourceCount !== 1 ? "s" : ""}</strong> that would be accessible if the credential were active.`;
+        text = `This ${escapeHtml(rule.name || "credential")} has blast-radius data showing <strong>${resourceCount} resource${resourceCount !== 1 ? "s" : ""}</strong> that would be accessible if the credential were active.`;
         if (typeDescriptions) {
           text += ` Resources include ${typeDescriptions}.`;
         }
@@ -6660,7 +6713,7 @@
   ${accessHtml}
   ` : `
   <h2>Blast Radius</h2>
-  <p style="color:#6b7280;">No access map data available. Run with <code>--access-map</code> to map credential blast radius.</p>
+  <p style="color:#6b7280;">No blast-radius data available. Run with <code>--access-map</code> to map credential blast radius.</p>
   `}
 
   <div class="no-print" style="margin-top:24px;text-align:center;">
@@ -6700,14 +6753,14 @@
       }
 
       // Sort: active first, then by rule name
-      const statusOrder = { active: 0, inactive: 1, canary: 2, not_attempted: 3, unknown: 4 };
+      const statusOrder = { active: 0, inconclusive: 1, inactive: 2, canary: 3, not_attempted: 4, unknown: 5 };
       const sorted = pool.sort((a, b) => {
         const fa = a.finding || {};
         const fb = b.finding || {};
         const keyA = normalizeValidationStatus(fa.validation && fa.validation.status ? fa.validation.status : "");
         const keyB = normalizeValidationStatus(fb.validation && fb.validation.status ? fb.validation.status : "");
-        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 4;
-        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 4;
+        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 6;
+        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 6;
         if (sa !== sb) return sa - sb;
         const ra = (a.rule && (a.rule.name || a.rule.id)) || "";
         const rb = (b.rule && (b.rule.name || b.rule.id)) || "";
@@ -6811,7 +6864,7 @@
     Generated ${escapeHtml(new Date().toLocaleString())} ·
     Scope: ${escapeHtml(riskScopeLabel)} ·
     ${sorted.length} finding${sorted.length !== 1 ? "s" : ""} ·
-    ${findingsWithAccess.length} with access map data
+    ${findingsWithAccess.length} with blast-radius data
   </div>
 
   <div class="summary-grid">
@@ -7832,7 +7885,7 @@
 
     function copyFilteredAccessMap() {
       if (!filteredAccessMapView || filteredAccessMapView.length === 0) {
-        alert("No access map entries are available for the current filter.");
+        alert("No blast-radius entries are available for the current filter.");
         return;
       }
 
@@ -7849,13 +7902,13 @@
         area.select();
         document.execCommand("copy");
         document.body.removeChild(area);
-        alert("Copied access map for " + payload.length + " identities.");
+        alert("Copied blast radius for " + payload.length + " identities.");
       };
 
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard
           .writeText(text)
-          .then(() => alert("Copied access map for " + payload.length + " identities."))
+          .then(() => alert("Copied blast radius for " + payload.length + " identities."))
           .catch(fallbackCopy);
       } else {
         fallbackCopy();

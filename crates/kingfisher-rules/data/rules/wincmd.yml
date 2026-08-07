@@ -27,7 +27,7 @@ rules:
       (?xim)^\s*cmdkey\s+/(?:add|generic):\S+[^\n]*/pass:(\S+)
     confidence: medium
     examples:
-      - 'cmdkey /add:server01 /user:admin /pass:P@ssw0rd'
+      - "cmdkey /add:server01 /user:admin /pass:P@ssw0rd"
     references:
       - https://learn.microsoft.com/en-us/windows-server/administration/windows-commands/cmdkey
       - https://github.com/praetorian-inc/titus/blob/1e0b18f06b363df54abac3a78f3a3aa8b8278f62/pkg/rule/rules/wincmd.yml

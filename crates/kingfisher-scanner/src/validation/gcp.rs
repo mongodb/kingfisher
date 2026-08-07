@@ -16,6 +16,16 @@ use super::GLOBAL_USER_AGENT;
 
 static GLOBAL_VALIDATOR: OnceLock<GcpValidator> = OnceLock::new();
 
+fn allowed_token_uri(token_uri: &str) -> Result<&'static str> {
+    match token_uri {
+        "https://oauth2.googleapis.com/token" => Ok("https://oauth2.googleapis.com/token"),
+        "https://accounts.google.com/o/oauth2/token" => {
+            Ok("https://accounts.google.com/o/oauth2/token")
+        }
+        other => Err(anyhow!("GCP token_uri is not an allowed Google OAuth endpoint: {other}")),
+    }
+}
+
 pub struct GcpValidator {
     semaphore: Arc<Semaphore>,
     client: Client,
@@ -60,7 +70,7 @@ impl GcpValidator {
         let project_id = token_info["project_id"].as_str().unwrap_or("").to_string();
         let client_email = token_info["client_email"].as_str().unwrap_or("").to_string();
         let private_key = token_info["private_key"].as_str().unwrap_or("").to_string();
-        let token_uri = token_info["token_uri"].as_str().unwrap_or("").to_string();
+        let token_uri = token_info["token_uri"].as_str().unwrap_or("");
 
         if project_id.is_empty()
             || client_email.is_empty()
@@ -72,10 +82,13 @@ impl GcpValidator {
             ));
         }
 
-        let jwt = self.create_jwt(&client_email, &private_key, &token_uri)?;
+        // Credential files are untrusted scanner input. Never send the signed
+        // assertion to an arbitrary token_uri embedded in a finding.
+        let token_uri = allowed_token_uri(token_uri)?;
+        let jwt = self.create_jwt(&client_email, &private_key, token_uri)?;
         let response = self
             .client
-            .post(&token_uri)
+            .post(token_uri)
             .form(&[
                 ("grant_type", "urn:ietf:params:oauth:grant-type:jwt-bearer"),
                 ("assertion", &jwt),
@@ -91,6 +104,24 @@ impl GcpValidator {
             .to_string();
 
         Ok(GcpTokenContext { access_token, project_id, client_email })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_account_validation_allows_only_google_token_endpoints() {
+        assert_eq!(
+            allowed_token_uri("https://oauth2.googleapis.com/token").unwrap(),
+            "https://oauth2.googleapis.com/token"
+        );
+        assert_eq!(
+            allowed_token_uri("https://accounts.google.com/o/oauth2/token").unwrap(),
+            "https://accounts.google.com/o/oauth2/token"
+        );
+        assert!(allowed_token_uri("https://attacker.example/token").is_err());
     }
 }
 
