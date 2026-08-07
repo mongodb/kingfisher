@@ -6,11 +6,9 @@ rules:
       \b                     
       (                      
         rubygems_
-        [a-zA-Z0-9]{42,52}
+        [[:digit:]a-f]{48}
       )
       \b
-    pattern_requirements:
-      min_digits: 2
     min_entropy: 3.5
     confidence: medium
     categories: [api, secret]
@@ -19,6 +17,7 @@ rules:
       - https://guides.rubygems.org/api-key-scopes/
       - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/rubygems.yml
       - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/rubygems.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/rubygemsapikey/detector.go
     examples:
       - |
         $ curl -H 'Authorization:rubygems_b9ce70c306b3a2e248679fbbbd66723d408d3c8c5f00566c' \

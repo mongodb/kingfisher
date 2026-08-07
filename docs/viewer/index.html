@@ -4915,13 +4915,16 @@
 
       if (
         normalized === "not attempted" ||
-        normalized === "not_attempted" ||
-        normalized === "validation skipped"
+        normalized === "not_attempted"
       ) {
         return "not_attempted";
       }
 
-      if (normalized === "canary token (skipped)" || normalized === "canary") {
+      if (
+        normalized === "validation skipped" ||
+        normalized === "canary token (skipped)" ||
+        normalized === "canary"
+      ) {
         return "canary";
       }
 

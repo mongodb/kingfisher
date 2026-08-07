@@ -102,12 +102,25 @@ fn validation_rank(status: &str) -> usize {
         2
     } else if status.eq_ignore_ascii_case("Inactive Credential") {
         3
-    } else if status.eq_ignore_ascii_case("Canary Token (Skipped)") {
+    } else if status.eq_ignore_ascii_case("Canary Token (Skipped)")
+        || status.eq_ignore_ascii_case("Validation Skipped")
+    {
         4
     } else if status.eq_ignore_ascii_case("Not Attempted") {
         5
     } else {
         6
+    }
+}
+
+fn validation_status_class(outcome: kingfisher_core::ValidationOutcome) -> &'static str {
+    match outcome {
+        kingfisher_core::ValidationOutcome::VerifiedActive => "status-active",
+        kingfisher_core::ValidationOutcome::Assumed => "status-assumed",
+        kingfisher_core::ValidationOutcome::VerifiedInactive => "status-inactive",
+        kingfisher_core::ValidationOutcome::Unavailable => "status-unavailable",
+        kingfisher_core::ValidationOutcome::Skipped => "status-canary",
+        kingfisher_core::ValidationOutcome::NotAttempted => "status-unknown",
     }
 }
 
@@ -138,18 +151,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
 
     let mut rows = String::new();
     for record in &sorted {
-        let status_class = match record.finding.validation.outcome {
-            kingfisher_core::ValidationOutcome::VerifiedActive => "status-active",
-            kingfisher_core::ValidationOutcome::Assumed => "status-assumed",
-            kingfisher_core::ValidationOutcome::VerifiedInactive => "status-inactive",
-            kingfisher_core::ValidationOutcome::Unavailable => "status-unavailable",
-            kingfisher_core::ValidationOutcome::Skipped
-                if record.finding.validation.status == "Canary Token (Skipped)" =>
-            {
-                "status-canary"
-            }
-            _ => "status-unknown",
-        };
+        let status_class = validation_status_class(record.finding.validation.outcome);
         let git_url_html = finding_git_url(record)
             .map(|url| {
                 format!(
@@ -296,6 +298,16 @@ impl DetailsReporter {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skipped_validations_have_a_stable_rank_and_style() {
+        assert_eq!(validation_rank("Canary Token (Skipped)"), 4);
+        assert_eq!(validation_rank("Validation Skipped"), 4);
+        assert_eq!(
+            validation_status_class(kingfisher_core::ValidationOutcome::Skipped),
+            "status-canary"
+        );
+    }
 
     #[test]
     fn build_html_includes_audit_title_and_cli_args() {

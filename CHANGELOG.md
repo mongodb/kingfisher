@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 - Reduced Git scan metadata memory usage by interning repeated committer names and email addresses.
 - Reduced peak memory during large scans by bounding Git delta caches per worker and streaming matcher chunks; `--jobs` now controls the scanner worker pool.
 - Added first-class validation outcomes and `--validation-filter actionable`, allowing active credentials and high-confidence assumed-valid secrets such as private keys to remain visible together without labeling assumed findings active. `--only-valid` remains strict active filtering. Thanks @wing-cheng. [#440](https://github.com/mongodb/kingfisher/issues/440)
+- Expanded GCP coverage with validated generic and Express Mode API keys, GCS HMAC key pairs, and Application Default Credentials, drawing on Veles and Betterleaks.
+- Hardened GCP validation with Google-only OAuth endpoints, read-only multi-API key probes, and concise responses that avoid exposing minted access tokens or bucket metadata.
 - Fixed alert webhooks reporting a temporary stdin file instead of an explicitly requested non-path scan target in non-interactive runs. [#452](https://github.com/mongodb/kingfisher/issues/452)
 - Fixed `kingfisher scan - <path>` discarding the sibling paths when staging stdin; stdin now replaces only the `-` placeholder.
 - Fixed direct validation for Atlassian API keys using the documented Organizations API. [#461](https://github.com/mongodb/kingfisher/issues/461)

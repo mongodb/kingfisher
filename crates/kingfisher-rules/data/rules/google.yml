@@ -203,44 +203,55 @@ rules:
     references:
       - https://developers.google.com/identity/protocols/oauth2/web-server
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/google/google-client-id.yaml
-  - name: Google Gemini API Key
+  - name: GCP API Key
     id: kingfisher.google.7
+    # Google API keys are product-agnostic: API restrictions are server-side
+    # and cannot be inferred from the key string. Betterleaks uses the broad
+    # AIza + 35 format, while Google's Veles detector documents the common
+    # AIzaSy[ABCD] sub-format. Keep the broader detector and let the safe raw
+    # validator distinguish active keys from random format matches.
     pattern: |
-      (?xi)           
+      (?x)
       \b
-      (               
-        AIzaSy
-        [A-Za-z0-9_-]{33}
+      (
+        AIza
+        [A-Za-z0-9_-]{35}
       )
+      (?:[^A-Za-z0-9_-]|$)
     pattern_requirements:
-      min_digits: 2
-      min_uppercase: 1
-      min_lowercase: 1
-    min_entropy: 3.5
+      ignore_if_contains:
+        # Public example keys shipped by the Firebase Android SDK and filtered
+        # by Betterleaks. These are fixtures, not credentials to report.
+        - AIzaSyabcdefghijklmnopqrstuvwxyz1234567
+        - AIzaSyAnLA7NfeLquW1tJFpx_eQCxoX-oo6YyIs
+        - AIzaSyCkEhVjf3pduRDt6d1yKOMitrUEke8agEM
+        - AIzaSyDMAScliyLx7F0NPDEJi1QmyCgHIAODrlU
+        - AIzaSyD3asb-2pEZVqMkmL6M9N6nHZRR_znhrh0
+        - AIzayDNSXIbFmlXbIE6mCzDLQAqITYefhixbX4A
+        - AIzaSyAdOS2zB6NCsk1pCdZ4-P6GBdi_UUPwX7c
+        - AIzaSyASWm6HmTMdYWpgMnjRBjxcQ9CKctWmLd4
+        - AIzaSyANUvH9H9BsUccjsu2pCmEkOPjjaXeDQgY
+        - AIzaSyA5_iVawFQ8ABuTZNUdcwERLJv_a_p4wtM
+        - AIzaSyA4UrcGxgwQFTfaI3no3t7Lt1sjmdnP5sQ
+        - AIzaSyDSb51JiIcB6OJpwwMicseKRhhrOq1cS7g
+        - AIzaSyBF2RrAIm4a0mO64EShQfqfd2AFnzAvvuU
+        - AIzaSyBcE-OOIbhjyR83gm4r2MFCu4MJmprNXsw
+        - AIzaSyB8qGxt4ec15vitgn44duC5ucxaOi4FmqE
+        - AIzaSyA8vmApnrHNFE0bApF4hoZ11srVL_n0nvY
+    min_entropy: 4.0
     confidence: medium
     examples:
       - AIzaSyByz6BGQf8QtcQLml8spbyy8x5_327PTow
       - AIzaSyDhISgbccTi6mfp2GOSmTtqdU__IdevJes
       - AIzaSyA_uW1h2CF4ak3vHr7si_RFD_yWxM4tMAM
+      - AIzaSyNHxIf32IQ1a1yjl3ZJIqKZqzLAK1XhDk-
     references:
-      - https://ai.google.dev/docs/gemini_api_overview
+      - https://cloud.google.com/docs/authentication/api-keys
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/gcpapikey/detector.go
+      - https://github.com/betterleaks/betterleaks/blob/e8c8ab9e72e96086ae77a2155a60145dd1153d30/cmd/generate/config/rules/gcp.go
       - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/google.yml
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/google/google-api-key.yaml
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/google/google-api.yaml
     validation:
-      type: Http
-      content:
-        request:
-          method: GET
-          url: https://generativelanguage.googleapis.com/v1/models
-          headers:
-            X-goog-api-key: "{{ TOKEN }}"
-          response_matcher:
-            - report_response: true
-            - type: StatusMatch
-              status: [200]
-            - type: WordMatch
-              match_all_words: true
-              words:
-                - '"models"'
-                - '"name"'
+      type: Raw
+      content: gcp_api_key

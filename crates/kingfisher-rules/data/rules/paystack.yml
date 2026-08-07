@@ -2,13 +2,13 @@ rules:
   - name: Paystack API Key
     id: kingfisher.paystack.1
     pattern: |
-      (?xi)
+      (?x)
       \b
       (
         sk_
-        [a-z]{1,}
+        [[:lower:]]{1,15}
         _
-        [[:alnum:]]{40}
+        [[:lower:][:digit:]]{40}
       )
       \b
     pattern_requirements:
@@ -16,17 +16,18 @@ rules:
     min_entropy: 3.3
     confidence: medium
     examples:
-      - sk_test_abcdef1234567890abcdef1234567890abcdef12
-      - sk_live_gwjaoi1234567890abcdef1234567890abcdef12
+      - sk_test_bmuas223uty73mmpzdjbyy9xrcb7qe73saos9022
+      - sk_live_gixbo7tt4ybdxu1qmzft09spbbbz7xt0o9zwlfjz
     references:
       - https://paystack.com/docs/api/authentication/
       - https://paystack.com/docs/api/transfer-control/
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/paystacksecretkey/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/paystacksecretkey/validator.go
     validation:
       type: Http
       content:
         request:
           method: GET
-          # Different endpoint than /customer: Check Balance
           url: https://api.paystack.co/balance
           headers:
             Authorization: "Bearer {{ TOKEN }}"

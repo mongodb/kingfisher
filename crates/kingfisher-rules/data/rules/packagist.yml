@@ -1,0 +1,225 @@
+rules:
+  - name: Packagist API Key
+    id: kingfisher.packagist.1
+    pattern: |
+      (?x)
+      \b
+      (
+        packagist_ack_
+        [[:xdigit:]]{28,32}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - PACKAGIST_API_KEY=packagist_ack_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6
+    references:
+      - https://packagist.com/apidoc/api
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/validator.go
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://packagist.com/api/packages/
+          headers:
+            Accept: application/json
+            Authorization: "PACKAGIST-TOKEN {{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: StatusMatch
+              status: [401]
+              negative: true
+            - type: JsonValid
+
+  - name: Packagist API Secret
+    id: kingfisher.packagist.2
+    pattern: |
+      (?x)
+      \b
+      (
+        packagist_acs_
+        [[:xdigit:]]{64,96}
+      )
+      \b
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - packagist_acs_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
+    references:
+      - https://packagist.com/apidoc/api
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/validator.go
+    depends_on_rule:
+      - rule_id: kingfisher.packagist.1
+        variable: PACKAGIST_KEY
+    # HMAC-SHA256 validation modeled on the Veles Packagist API secret
+    # validator: signs "GET\npackagist.com\n/api/packages/\n<cnonce=..&key=..&timestamp=..>"
+    # with the secret and sends the result in a PACKAGIST-HMAC-SHA256 header.
+    # Requires the API key (kingfisher.packagist.1) to be present nearby.
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://packagist.com/api/packages/
+          headers:
+            Accept: application/json
+            Authorization: |-
+              {%- assign ts = "" | unix_timestamp -%}
+              {%- assign cnonce = "" | uuid -%}
+              {%- assign enc_cnonce = cnonce | url_encode -%}
+              {%- assign enc_key = PACKAGIST_KEY | url_encode -%}
+              {%- assign enc_ts = ts | url_encode -%}
+              {%- assign params = "cnonce=" | append: enc_cnonce | append: "&key=" | append: enc_key | append: "&timestamp=" | append: enc_ts -%}
+              {%- capture to_sign -%}GET
+              packagist.com
+              /api/packages/
+              {{ params }}{%- endcapture -%}
+              {%- assign sig = to_sign | hmac_sha256: TOKEN -%}
+              PACKAGIST-HMAC-SHA256 Key={{ PACKAGIST_KEY }}, Timestamp={{ ts }}, Cnonce={{ cnonce }}, Signature={{ sig }}
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: StatusMatch
+              status: [401, 403]
+              negative: true
+            - type: JsonValid
+
+  - name: Packagist Repository URL
+    id: kingfisher.packagist.3
+    pattern: |
+      (?x)
+      (
+        https?://repo\.packagist\.com[/[:alnum:]_.-]*
+      )
+    min_entropy: 3.0
+    confidence: medium
+    visible: false
+    examples:
+      - https://repo.packagist.com/acme-corp
+    references:
+      - https://packagist.com/apidoc/api
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/detector.go
+
+  - name: Packagist Organization Read Token
+    id: kingfisher.packagist.4
+    pattern: |
+      (?x)
+      \b
+      (
+        packagist_ort_
+        [[:xdigit:]]{68}
+      )
+      \b
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - packagist_ort_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123
+    references:
+      - https://packagist.com/apidoc/api
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/validator.go
+    depends_on_rule:
+      - rule_id: kingfisher.packagist.3
+        variable: REPO_URL
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "{{ REPO_URL }}/packages.json"
+          headers:
+            Accept: application/json
+            Authorization: "Basic {{ 'token:' | append: TOKEN | b64enc }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: StatusMatch
+              status: [401, 403]
+              negative: true
+            - type: JsonValid
+
+  - name: Packagist Organization Update Token
+    id: kingfisher.packagist.5
+    pattern: |
+      (?x)
+      \b
+      (
+        packagist_out_
+        [[:xdigit:]]{68}
+      )
+      \b
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - packagist_out_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123
+    references:
+      - https://packagist.com/apidoc/api
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/validator.go
+    depends_on_rule:
+      - rule_id: kingfisher.packagist.3
+        variable: REPO_URL
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "{{ REPO_URL }}/packages.json"
+          headers:
+            Accept: application/json
+            Authorization: "Basic {{ 'token:' | append: TOKEN | b64enc }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: StatusMatch
+              status: [401, 403]
+              negative: true
+            - type: JsonValid
+
+  - name: Packagist User Update Token
+    id: kingfisher.packagist.6
+    pattern: |
+      (?x)
+      \b
+      (
+        packagist_uut_
+        [[:xdigit:]]{68}
+      )
+      \b
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - packagist_uut_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123
+    references:
+      - https://packagist.com/apidoc/api
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/validator.go
+    # Validation not added: Veles validates with Basic auth username:token,
+    # which requires capturing a nearby username. A broad username helper is
+    # omitted to avoid false positives, so this rule detects the token only.
+
+  - name: Packagist Conductor Update Token
+    id: kingfisher.packagist.7
+    pattern: |
+      (?x)
+      \b
+      (
+        packagist_cut_
+        [[:xdigit:]]{68}
+      )
+      \b
+    min_entropy: 4.0
+    confidence: medium
+    examples:
+      - packagist_cut_0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123
+    references:
+      - https://packagist.com/apidoc/api
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/packagist/detector.go

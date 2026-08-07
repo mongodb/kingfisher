@@ -22,6 +22,7 @@ rules:
       - https://learning.postman.com/docs/administration/managing-your-team/managing-api-keys/
       - https://github.com/praetorian-inc/noseyparker/blob/ca4ef4d2a4771f69e64daf7fbb4f8fafdd18f19d/crates/noseyparker/data/default/builtin/rules/postman.yml
       - https://github.com/gitleaks/gitleaks/blob/c11adc91ad701db3e2c8df030f747086ebca8847/cmd/generate/config/rules/postman.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/postmanapikey/detector.go
     validation:
       type: Http
       content:
@@ -38,3 +39,37 @@ rules:
               words:
                 - '"user":'
           url: https://api.getpostman.com/me
+
+  - name: Postman Collection Access Token
+    id: kingfisher.postman.2
+    pattern: |
+      (?x)
+      \b
+      (
+        PMAT-[[:alnum:]]{26}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - PMAT-01K4A58P2HS2Q43TXHSXFRDBZX
+    references:
+      - https://learning.postman.com/docs/collaborating-in-postman/using-version-control/forking-elements/#create-a-collection-access-key
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/postmanapikey/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/postmanapikey/validator.go
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: "https://api.postman.com/collections/aaaaaaaa-aaaaaaaa-aaaa-aaaa-aaaaaaaaaaaa?access_key={{ TOKEN | url_encode }}"
+          headers:
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200, 403]
+            - type: StatusMatch
+              status: [401]
+              negative: true
+            - type: JsonValid

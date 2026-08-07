@@ -7,9 +7,9 @@ rules:
       (
         SG
         \.
-        [0-9A-Z_-]{20,24}
+        [[:alnum:]_-]{22}
         \.
-        [0-9A-Z_-]{39,47}
+        [[:alnum:]_-]{43}
       )
       \b
     pattern_requirements:
@@ -27,6 +27,8 @@ rules:
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/sendgrid/sendgrid-api-key.yaml
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/sendgrid-api.yaml
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/global-matchers/secrets-patterns-rules.yaml
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/sendgrid/detector.go
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/sendgrid/validator.go
     validation:
       type: Http
       content:

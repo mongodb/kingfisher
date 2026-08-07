@@ -151,3 +151,46 @@ rules:
     min_entropy: 3.0
     references:
       - https://developer.hashicorp.com/vault/docs/concepts/seal
+
+  - name: Hashicorp Vault AppRole Role ID
+    id: kingfisher.hashicorp.8
+    pattern: |
+      (?x)
+      (?i: role[_-]?id )
+      \s* [:\s=] \s*
+      (
+        [[:xdigit:]]{8}
+        (?:-[[:xdigit:]]{4}){3}
+        -[[:xdigit:]]{12}
+      )
+      \b
+    min_entropy: 3.0
+    confidence: medium
+    visible: false
+    examples:
+      - "role_id: 87654321-4321-4321-4321-210987654321"
+    references:
+      - https://developer.hashicorp.com/vault/docs/auth/approle
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/hashicorpvault/detector.go
+
+  - name: Hashicorp Vault AppRole Secret ID
+    id: kingfisher.hashicorp.9
+    pattern: |
+      (?x)
+      (?i: secret[_-]?id )
+      \s* [:\s=] \s*
+      (
+        [[:xdigit:]]{8}
+        (?:-[[:xdigit:]]{4}){3}
+        -[[:xdigit:]]{12}
+      )
+      \b
+    min_entropy: 3.0
+    confidence: medium
+    examples:
+      - "secret_id: 1a85e8c0-3fed-4f06-8f1b-f52bd3de4617"
+    references:
+      - https://developer.hashicorp.com/vault/docs/auth/approle
+      - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/hashicorpvault/detector.go
+    # AppRole validation also requires the role ID and deployment-specific Vault URL.
+    # Do not send discovered credentials to arbitrary scan-derived hosts.
