@@ -13,6 +13,8 @@ use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
 
+use kingfisher_core::ValidationOutcome;
+
 use crate::cli::commands::scan::ConfidenceLevel;
 use crate::reporter::{AccessMapEntry, FindingReporterRecord};
 
@@ -113,9 +115,10 @@ pub enum AlertFindingFilter {
     /// No filtering by validation status or access-map result.
     #[default]
     All,
-    /// Drop `"Inactive Credential"` findings; keep active + unknown/not-attempted.
+    /// Drop `VerifiedInactive` findings; keep active + unknown/not-attempted.
     ExcludeInactive,
-    /// Keep only `"Active Credential"` findings.
+    /// Keep only `VerifiedActive` findings. Note this excludes `Assumed`, which
+    /// was never live-validated.
     OnlyActive,
     /// Keep only findings with a matching `--access-map` result (implies
     /// active, since access-mapping only runs on validated credentials).
@@ -206,8 +209,8 @@ impl AlertSummary {
         for f in findings {
             *by_rule_map.entry(f.rule.id.clone()).or_default() += 1;
             match f.finding.validation.outcome {
-                kingfisher_core::ValidationOutcome::VerifiedActive => active += 1,
-                kingfisher_core::ValidationOutcome::VerifiedInactive => inactive += 1,
+                ValidationOutcome::VerifiedActive => active += 1,
+                ValidationOutcome::VerifiedInactive => inactive += 1,
                 _ => unknown += 1,
             }
             impacted_resources +=
@@ -386,7 +389,7 @@ pub async fn dispatch(
             .filter(|f| matches_min_confidence(&f.finding.confidence, sink.min_confidence))
             .filter(|f| {
                 matches_finding_filter(
-                    &f.finding.validation.status,
+                    f.finding.validation.outcome,
                     &f.finding.fingerprint,
                     sink.finding_filter,
                     &access_map_impact,
@@ -470,17 +473,17 @@ fn matches_min_confidence(finding_confidence: &str, threshold: ConfidenceLevel) 
 }
 
 fn matches_finding_filter(
-    status: &str,
+    outcome: ValidationOutcome,
     fingerprint: &str,
     filter: AlertFindingFilter,
     access_map_impact: &HashMap<String, usize>,
 ) -> bool {
     match filter {
         AlertFindingFilter::All => true,
-        AlertFindingFilter::ExcludeInactive => status != "Inactive Credential",
-        AlertFindingFilter::OnlyActive => status == "Active Credential",
+        AlertFindingFilter::ExcludeInactive => outcome != ValidationOutcome::VerifiedInactive,
+        AlertFindingFilter::OnlyActive => outcome.is_verified_active(),
         AlertFindingFilter::AccessMapOnly => {
-            status == "Active Credential" && access_map_impact.contains_key(fingerprint)
+            outcome.is_verified_active() && access_map_impact.contains_key(fingerprint)
         }
     }
 }
@@ -522,7 +525,7 @@ pub(crate) fn make_test_record(
             confidence: "Medium".to_string(),
             entropy: "4.5".to_string(),
             validation: ValidationInfo {
-                outcome: kingfisher_core::ValidationOutcome::VerifiedActive,
+                outcome: ValidationOutcome::VerifiedActive,
                 status: "Active Credential".to_string(),
                 response: String::new(),
             },
@@ -542,6 +545,7 @@ pub(crate) fn make_test_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kingfisher_core::ValidationOutcome as VO;
 
     #[test]
     fn redact_webhook_keeps_host() {
@@ -661,33 +665,28 @@ mod tests {
     #[test]
     fn finding_filter_all_matches_everything() {
         let map = HashMap::new();
-        assert!(matches_finding_filter("Active Credential", "fp1", AlertFindingFilter::All, &map));
-        assert!(matches_finding_filter(
-            "Inactive Credential",
-            "fp1",
-            AlertFindingFilter::All,
-            &map
-        ));
-        assert!(matches_finding_filter("Not Attempted", "fp1", AlertFindingFilter::All, &map));
+        for outcome in [VO::VerifiedActive, VO::VerifiedInactive, VO::NotAttempted, VO::Assumed] {
+            assert!(matches_finding_filter(outcome, "fp1", AlertFindingFilter::All, &map));
+        }
     }
 
     #[test]
     fn finding_filter_exclude_inactive_drops_only_inactive() {
         let map = HashMap::new();
         assert!(matches_finding_filter(
-            "Active Credential",
+            VO::VerifiedActive,
             "fp1",
             AlertFindingFilter::ExcludeInactive,
             &map
         ));
         assert!(matches_finding_filter(
-            "Not Attempted",
+            VO::NotAttempted,
             "fp1",
             AlertFindingFilter::ExcludeInactive,
             &map
         ));
         assert!(!matches_finding_filter(
-            "Inactive Credential",
+            VO::VerifiedInactive,
             "fp1",
             AlertFindingFilter::ExcludeInactive,
             &map
@@ -695,26 +694,19 @@ mod tests {
     }
 
     #[test]
-    fn finding_filter_only_active_keeps_only_active() {
+    fn finding_filter_only_active_keeps_only_verified_active() {
         let map = HashMap::new();
         assert!(matches_finding_filter(
-            "Active Credential",
+            VO::VerifiedActive,
             "fp1",
             AlertFindingFilter::OnlyActive,
             &map
         ));
-        assert!(!matches_finding_filter(
-            "Inactive Credential",
-            "fp1",
-            AlertFindingFilter::OnlyActive,
-            &map
-        ));
-        assert!(!matches_finding_filter(
-            "Not Attempted",
-            "fp1",
-            AlertFindingFilter::OnlyActive,
-            &map
-        ));
+        // `Assumed` was never live-validated, so it is not "active" here even
+        // though `is_actionable()` accepts it for --validation-filter.
+        for outcome in [VO::VerifiedInactive, VO::NotAttempted, VO::Assumed, VO::Unavailable] {
+            assert!(!matches_finding_filter(outcome, "fp1", AlertFindingFilter::OnlyActive, &map));
+        }
     }
 
     #[test]
@@ -722,13 +714,13 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("fp-mapped".to_string(), 3usize);
         assert!(matches_finding_filter(
-            "Active Credential",
+            VO::VerifiedActive,
             "fp-mapped",
             AlertFindingFilter::AccessMapOnly,
             &map
         ));
         assert!(!matches_finding_filter(
-            "Active Credential",
+            VO::VerifiedActive,
             "fp-other",
             AlertFindingFilter::AccessMapOnly,
             &map
@@ -736,7 +728,7 @@ mod tests {
     }
 
     #[test]
-    fn finding_filter_access_map_only_still_requires_active_status() {
+    fn finding_filter_access_map_only_still_requires_active_outcome() {
         // Regression: an access-map entry can exist for a fingerprint whose
         // finding did NOT validate as active (e.g. a GitLab-rule finding
         // recorded on a bare 2xx response per maybe_record_access_map in
@@ -745,20 +737,22 @@ mod tests {
         let mut map = HashMap::new();
         map.insert("fp-gitlab".to_string(), 1usize);
         assert!(!matches_finding_filter(
-            "Inactive Credential",
+            VO::VerifiedInactive,
             "fp-gitlab",
             AlertFindingFilter::AccessMapOnly,
             &map
         ));
     }
 
-    /// Like `make_test_record`, but with a configurable confidence/status so
-    /// dispatch-level tests can exercise `min_confidence` / `finding_filter`.
+    /// Like `make_test_record`, but with a configurable confidence/validation
+    /// outcome so dispatch-level tests can exercise `min_confidence` /
+    /// `finding_filter`. `status` is derived from `outcome` so the record stays
+    /// internally consistent, matching what the reporter produces.
     fn record_with(
         rule_id: &str,
         fingerprint: &str,
         confidence: &str,
-        status: &str,
+        outcome: ValidationOutcome,
     ) -> crate::reporter::FindingReporterRecord {
         use crate::reporter::{
             FindingRecordData, FindingReporterRecord, RuleMetadata, ValidationInfo,
@@ -770,7 +764,11 @@ mod tests {
                 fingerprint: fingerprint.to_string(),
                 confidence: confidence.to_string(),
                 entropy: "4.5".to_string(),
-                validation: ValidationInfo { status: status.to_string(), response: String::new() },
+                validation: ValidationInfo {
+                    outcome,
+                    status: outcome.display_name().to_string(),
+                    response: String::new(),
+                },
                 language: "rust".to_string(),
                 line: 42,
                 column_start: 10,
@@ -816,7 +814,7 @@ mod tests {
             sink.prevent_empty = true;
 
             let findings =
-                vec![record_with("kingfisher.aws.1", "fp1", "Medium", "Active Credential")];
+                vec![record_with("kingfisher.aws.1", "fp1", "Medium", VO::VerifiedActive)];
             dispatch(&[sink], &findings, &[], None, false).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
@@ -835,7 +833,7 @@ mod tests {
             sink.prevent_empty = false;
 
             let findings =
-                vec![record_with("kingfisher.aws.1", "fp1", "Medium", "Active Credential")];
+                vec![record_with("kingfisher.aws.1", "fp1", "Medium", VO::VerifiedActive)];
             dispatch(&[sink], &findings, &[], None, false).await;
 
             let requests = server.received_requests().await.unwrap();
@@ -879,8 +877,8 @@ mod tests {
             sink.finding_filter = AlertFindingFilter::AccessMapOnly;
             sink.min_confidence = ConfidenceLevel::Low;
 
-            let mapped = record_with("kingfisher.aws.1", "fp-mapped", "High", "Active Credential");
-            let unmapped = record_with("kingfisher.aws.2", "fp-other", "High", "Active Credential");
+            let mapped = record_with("kingfisher.aws.1", "fp-mapped", "High", VO::VerifiedActive);
+            let unmapped = record_with("kingfisher.aws.2", "fp-other", "High", VO::VerifiedActive);
             let access_map = vec![AccessMapEntry {
                 provider: "aws".to_string(),
                 account: None,
@@ -928,7 +926,7 @@ mod tests {
             sink.prevent_empty = true;
 
             let inactive_but_mapped =
-                record_with("kingfisher.gitlab.1", "fp-gitlab", "High", "Inactive Credential");
+                record_with("kingfisher.gitlab.1", "fp-gitlab", "High", VO::VerifiedInactive);
             let access_map = vec![AccessMapEntry {
                 provider: "gitlab".to_string(),
                 account: None,
@@ -960,8 +958,7 @@ mod tests {
             sink.finding_filter = AlertFindingFilter::AccessMapOnly;
             sink.prevent_empty = true;
 
-            let findings =
-                vec![record_with("kingfisher.aws.1", "fp1", "High", "Active Credential")];
+            let findings = vec![record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive)];
             dispatch(&[sink], &findings, &[], None, false).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
@@ -976,8 +973,7 @@ mod tests {
                 .await;
 
             let sink = test_sink(&server.uri());
-            let findings =
-                vec![record_with("kingfisher.aws.1", "fp1", "High", "Active Credential")];
+            let findings = vec![record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive)];
             dispatch(&[sink], &findings, &[], None, true).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
@@ -995,8 +991,8 @@ mod tests {
             sink.finding_filter = AlertFindingFilter::OnlyActive;
 
             let findings = vec![
-                record_with("kingfisher.aws.1", "fp-active", "High", "Active Credential"),
-                record_with("kingfisher.aws.2", "fp-inactive", "High", "Inactive Credential"),
+                record_with("kingfisher.aws.1", "fp-active", "High", VO::VerifiedActive),
+                record_with("kingfisher.aws.2", "fp-inactive", "High", VO::VerifiedInactive),
             ];
             dispatch(&[sink], &findings, &[], None, false).await;
 

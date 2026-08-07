@@ -69,10 +69,13 @@ inline in committed files.
 independent of confidence:
 
 - **`all`** (default) — no filtering by validation status or access-map result.
-- **`exclude-inactive`** — drop findings validated as `Inactive Credential`;
-  keep active findings plus ones with no validation result (unknown/not
-  attempted).
-- **`only-active`** — keep only findings validated as `Active Credential`.
+- **`exclude-inactive`** — drop findings a validator authoritatively rejected
+  (`Inactive Credential`); keep active findings plus every inconclusive
+  outcome (assumed-valid, inconclusive, skipped, not attempted).
+- **`only-active`** — keep only live-validated `Active Credential` findings.
+  This deliberately excludes `Assumed Valid (Not Live-Validated)`, which was
+  never confirmed against the provider — use `exclude-inactive` if you want
+  assumed-valid findings to page you too.
 - **`access-map-only`** — keep only findings that have a matching
   `--access-map` result. This requires `--access-map` to also be passed;
   without it, the filter matches nothing and the sink never reports (a
