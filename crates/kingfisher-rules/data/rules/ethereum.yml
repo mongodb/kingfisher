@@ -1,0 +1,155 @@
+rules:
+  - name: Ethereum Private Key
+    id: kingfisher.ethereum.1
+    pattern: |
+      (?xi)
+      (?:
+        ["']?
+        \b
+        (?:
+          (?:[[:alnum:]]{1,24}[_-]){0,4}
+          (?:ethereum|eth|evm)
+          (?:[_-][[:alnum:]]{1,24}){0,4}
+          [_-]private[_-]?key
+          |
+          (?:ethereum|eth|evm)privatekey
+          |
+          privatekeytoaccount
+        )
+        \b
+        ["']?
+      )
+      [[:blank:]]*
+      (?:
+        (?::[[:blank:]]*(?:hex|string|bytes32)[[:blank:]]*)?=[[:blank:]]*
+        |
+        :[[:blank:]]*
+        |
+        \([[:blank:]]*
+      )
+      ["']?
+      (
+        (?:0x)?[[:xdigit:]]{64}
+      )
+      \b
+    min_entropy: 0.0
+    confidence: medium
+    examples:
+      - "ETHEREUM_APP_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000001"
+      - "EVM_PRIVATE_KEY: 0000000000000000000000000000000000000000000000000000000000000002"
+      - "ETH_WALLET_PRIVATE_KEY=0x0000000000000000000000000000000000000000000000000000000000000003"
+      - 'privateKeyToAccount("0x0000000000000000000000000000000000000000000000000000000000000004")'
+    references:
+      - https://ethereum.org/en/developers/docs/accounts/
+      - https://www.secg.org/sec2-v2.pdf
+    validation:
+      type: Ethereum
+      content: private_key
+
+  - name: Ethereum BIP-39 Seed Phrase
+    id: kingfisher.ethereum.2
+    pattern: |
+      (?xi)
+      ["']?
+      \b
+      (?:
+        (?:[[:alnum:]]{1,24}[_-]){0,4}
+        (?:ethereum|eth|evm)
+        (?:[_-][[:alnum:]]{1,24}){0,4}
+        [_-](?:mnemonic|seed[_-]?phrase|recovery[_-]?phrase)
+        |
+        (?:ethereum|eth|evm)(?:mnemonic|seedphrase|recoveryphrase)
+      )
+      \b
+      ["']?
+      [[:blank:]]*
+      (?:[:=][[:blank:]]*|\([[:blank:]]*)
+      ["']?
+      (
+        (?P<mnemonic>
+          (?:
+            (?:[[:alpha:]]{3,8}[[:space:]]{1,16}){23}[[:alpha:]]{3,8}
+            |
+            (?:[[:alpha:]]{3,8}[[:space:]]{1,16}){20}[[:alpha:]]{3,8}
+            |
+            (?:[[:alpha:]]{3,8}[[:space:]]{1,16}){17}[[:alpha:]]{3,8}
+            |
+            (?:[[:alpha:]]{3,8}[[:space:]]{1,16}){14}[[:alpha:]]{3,8}
+            |
+            (?:[[:alpha:]]{3,8}[[:space:]]{1,16}){11}[[:alpha:]]{3,8}
+          )
+        )
+      )
+      (?:["'][[:blank:]]*|[[:blank:]]*)
+      (?:
+        [,;)\]}]
+        |
+        [\r\n]
+        |
+        (?:\#|//)[^\r\n]*(?:[\r\n]|$)
+        |
+        $
+      )
+    pattern_requirements:
+      checksum:
+        actual:
+          template: "{{ MNEMONIC | bip39_valid }}"
+          requires_capture: mnemonic
+        expected: "true"
+        skip_if_missing: false
+    min_entropy: 0.0
+    confidence: medium
+    examples:
+      - "ETHEREUM_MNEMONIC: abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon about"
+      - "ethSeedPhrase = abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon art"
+    references:
+      - https://github.com/bitcoin/bips/blob/master/bip-0039.mediawiki
+      - https://ethereum.org/en/wallets/
+    validation:
+      type: Ethereum
+      content: mnemonic
+
+  # Public keys are identifiers, not credentials. This hidden helper is retained
+  # for deterministic address derivation and requires explicit chain context.
+  - name: Ethereum Public Key (Public Identifier)
+    id: kingfisher.ethereum.3
+    pattern: |
+      (?xi)
+      ["']?
+      \b
+      (?:
+        (?:[[:alnum:]]{1,24}[_-]){0,4}
+        (?:ethereum|eth|evm)
+        (?:[_-][[:alnum:]]{1,24}){0,4}
+        [_-](?:public[_-]?key|pubkey)
+        |
+        (?:ethereum|eth|evm)(?:publickey|pubkey)
+      )
+      \b
+      ["']?
+      [[:blank:]]*
+      (?:
+        (?::[[:blank:]]*(?:hex|string|bytes33|bytes65)[[:blank:]]*)?=[[:blank:]]*
+        |
+        :[[:blank:]]*
+        |
+        \([[:blank:]]*
+      )
+      ["']?
+      (
+        (?:0x)?(?:(?:02|03)[[:xdigit:]]{64}|04[[:xdigit:]]{128}|[[:xdigit:]]{128})
+      )
+      \b
+    min_entropy: 0.0
+    confidence: medium
+    visible: false
+    examples:
+      - "ETHEREUM_PUBLIC_KEY: 0279be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798"
+      - "ethereum_public_key = 0x0479be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8"
+      - "EVM_PUBLIC_KEY: 79be667ef9dcbbac55a06295ce870b07029bfcdb2dce28d959f2815b16f81798483ada7726a3c4655da4fbfc0e1108a8fd17b448a68554199c47d08ffb10d4b8"
+    references:
+      - https://www.secg.org/sec1-v2.pdf
+      - https://ethereum.org/en/developers/docs/accounts/
+    validation:
+      type: Ethereum
+      content: public_key

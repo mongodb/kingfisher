@@ -76,9 +76,20 @@ pub enum Validation {
     Postgres,
     Jdbc,
     JWT,
+    /// Deterministic, network-free Ethereum key-material validation.
+    Ethereum(EthereumValidation),
     Raw(String),
     Http(HttpValidation),
     Grpc(GrpcValidation),
+}
+
+/// Ethereum key material that can be validated and mapped to a public address locally.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum EthereumValidation {
+    PrivateKey,
+    PublicKey,
+    Mnemonic,
 }
 
 /// Represents revocation actions that a rule can perform.

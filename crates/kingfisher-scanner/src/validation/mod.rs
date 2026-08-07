@@ -22,9 +22,13 @@
 //! - **JWT**: JWT token validation (requires `validation-jwt` feature)
 //! - **Raw**: provider/protocol-specific validators that need custom logic
 //!   (requires `validation-raw` feature)
+//! - **Ethereum**: network-free key parsing and address derivation
+//!   (requires `validation-ethereum` feature)
 
 mod utils;
 mod validation_body;
+
+use kingfisher_core::ValidationOutcome;
 
 #[cfg(feature = "validation-http")]
 pub mod http_validation;
@@ -56,6 +60,9 @@ pub mod mysql;
 #[cfg(feature = "validation-database")]
 pub mod postgres;
 
+#[cfg(feature = "validation-ethereum")]
+pub mod ethereum;
+
 #[cfg(feature = "validation-raw")]
 pub mod raw;
 
@@ -84,8 +91,10 @@ pub use aws::{
     validate_aws_credentials, validate_aws_credentials_input,
 };
 
+#[cfg(feature = "validation-http")]
+use std::sync::{LazyLock, OnceLock};
 use std::{
-    sync::{Arc, LazyLock, OnceLock},
+    sync::Arc,
     time::{Duration, Instant},
 };
 
@@ -144,6 +153,8 @@ pub struct CachedResponse {
     pub status: http::StatusCode,
     /// Whether the credential was valid.
     pub is_valid: bool,
+    /// Semantic validation classification, including offline outcomes.
+    pub outcome: ValidationOutcome,
     /// When this result was cached.
     pub timestamp: Instant,
 }
@@ -151,7 +162,14 @@ pub struct CachedResponse {
 impl CachedResponse {
     /// Create a new cached response.
     pub fn new(body: ValidationResponseBody, status: http::StatusCode, is_valid: bool) -> Self {
-        Self { body, status, is_valid, timestamp: Instant::now() }
+        let outcome = ValidationOutcome::from_legacy(false, is_valid, status.as_u16());
+        Self { body, status, is_valid, outcome, timestamp: Instant::now() }
+    }
+
+    /// Override the inferred legacy outcome with an explicit semantic outcome.
+    pub fn with_outcome(mut self, outcome: ValidationOutcome) -> Self {
+        self.outcome = outcome;
+        self
     }
 
     /// Check if this cached response is still valid.

@@ -35,10 +35,14 @@ impl DetailsReporter {
         let validation_outcome = record.finding.validation.outcome;
         let is_active = validation_outcome.is_verified_active();
         let is_high_confidence = validation_outcome == kingfisher_core::ValidationOutcome::Assumed;
+        let is_local = validation_outcome == kingfisher_core::ValidationOutcome::LocallyDerived;
+        let is_actionable = is_active || is_high_confidence || is_local;
         let lock_icon = if is_active {
             "🔓 "
         } else if is_high_confidence {
             "🔒 "
+        } else if is_local {
+            "◇ "
         } else {
             ""
         };
@@ -48,9 +52,7 @@ impl DetailsReporter {
             record.rule.name.to_uppercase(),
             record.rule.id.to_uppercase()
         );
-        if is_active {
-            writeln!(writer, "{}", self.style_finding_active_heading(formatted_heading))?;
-        } else if is_high_confidence {
+        if is_actionable {
             writeln!(writer, "{}", self.style_finding_active_heading(formatted_heading))?;
         } else {
             writeln!(writer, "{}", self.style_finding_heading(formatted_heading))?;
@@ -141,9 +143,9 @@ impl<'a> Display for PrettyFindingRecord<'a> {
         let validation_outcome = record.finding.validation.outcome;
         let is_active = validation_outcome.is_verified_active();
         let is_high_confidence = validation_outcome == kingfisher_core::ValidationOutcome::Assumed;
-        let style_fn: Box<dyn Fn(&str) -> String> = if is_active {
-            Box::new(|s| reporter.style_active_creds(s).to_string())
-        } else if is_high_confidence {
+        let is_local = validation_outcome == kingfisher_core::ValidationOutcome::LocallyDerived;
+        let is_actionable = is_active || is_high_confidence || is_local;
+        let style_fn: Box<dyn Fn(&str) -> String> = if is_actionable {
             Box::new(|s| reporter.style_active_creds(s).to_string())
         } else {
             Box::new(|s| reporter.style_match(s).to_string())
@@ -156,13 +158,7 @@ impl<'a> Display for PrettyFindingRecord<'a> {
         writeln!(f, " |Fingerprint...: {}", finding.fingerprint)?;
         writeln!(f, " |Confidence....: {}", finding.confidence)?;
         writeln!(f, " |Entropy.......: {}", finding.entropy)?;
-        if is_active {
-            writeln!(
-                f,
-                " |Validation....: {}",
-                reporter.style_finding_active_heading(&finding.validation.status)
-            )?;
-        } else if is_high_confidence {
+        if is_actionable {
             writeln!(
                 f,
                 " |Validation....: {}",

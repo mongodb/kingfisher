@@ -7,6 +7,11 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v1.112.0]
+- Added offline Ethereum key/BIP-39 detection with explicit local-validation outcomes, inspired by [#468](https://github.com/mongodb/kingfisher/pull/468) from @audityourcontracts.
+- Hardened validation caching and panic handling to avoid secret exposure.
+- Fixed remote Git URL scans hanging with `--jobs 1`. [#469](https://github.com/mongodb/kingfisher/issues/469)
+
 ## [v1.111.0]
 - Reduced Git scan metadata memory usage by interning repeated committer names and email addresses.
 - Reduced peak memory during large scans by bounding Git delta caches per worker and streaming matcher chunks; `--jobs` now controls the scanner worker pool.

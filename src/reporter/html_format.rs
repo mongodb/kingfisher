@@ -67,9 +67,11 @@ fn render_metadata(metadata: &ScanReportMetadata) -> String {
     lines.push(summary_line(
         "Validation Split",
         &format!(
-            "Active {} | Inactive {} | Unknown {}",
+            "Active {} | Local {} | Inactive {} | Invalid material {} | Unknown {}",
             metadata.summary.active_findings,
+            metadata.summary.locally_derived_findings,
             metadata.summary.inactive_findings,
+            metadata.summary.invalid_material_findings,
             metadata.summary.unknown_validation_findings
         ),
     ));
@@ -98,18 +100,22 @@ fn validation_rank(status: &str) -> usize {
         0
     } else if status.eq_ignore_ascii_case("Assumed Valid (Not Live-Validated)") {
         1
-    } else if status.eq_ignore_ascii_case("Inconclusive Validation") {
+    } else if status.eq_ignore_ascii_case("Locally Derived") {
         2
-    } else if status.eq_ignore_ascii_case("Inactive Credential") {
+    } else if status.eq_ignore_ascii_case("Invalid Cryptographic Material") {
+        4
+    } else if status.eq_ignore_ascii_case("Inconclusive Validation") {
         3
+    } else if status.eq_ignore_ascii_case("Inactive Credential") {
+        4
     } else if status.eq_ignore_ascii_case("Canary Token (Skipped)")
         || status.eq_ignore_ascii_case("Validation Skipped")
     {
-        4
-    } else if status.eq_ignore_ascii_case("Not Attempted") {
         5
-    } else {
+    } else if status.eq_ignore_ascii_case("Not Attempted") {
         6
+    } else {
+        7
     }
 }
 
@@ -117,6 +123,8 @@ fn validation_status_class(outcome: kingfisher_core::ValidationOutcome) -> &'sta
     match outcome {
         kingfisher_core::ValidationOutcome::VerifiedActive => "status-active",
         kingfisher_core::ValidationOutcome::Assumed => "status-assumed",
+        kingfisher_core::ValidationOutcome::LocallyDerived => "status-local",
+        kingfisher_core::ValidationOutcome::InvalidMaterial => "status-invalid-material",
         kingfisher_core::ValidationOutcome::VerifiedInactive => "status-inactive",
         kingfisher_core::ValidationOutcome::Unavailable => "status-unavailable",
         kingfisher_core::ValidationOutcome::Skipped => "status-canary",
@@ -262,6 +270,8 @@ fn build_html(envelope: &ReportEnvelope) -> String {
     .status {{ padding: 2px 8px; border-radius: 999px; font-weight: 700; }}
     .status-active {{ background: #14532d; color: #86efac; }}
     .status-assumed {{ background: #1e3a8a; color: #bfdbfe; }}
+    .status-local {{ background: #164e63; color: #a5f3fc; }}
+    .status-invalid-material {{ background: #7f1d1d; color: #fecaca; }}
     .status-inactive {{ background: #7f1d1d; color: #fecaca; }}
     .status-canary {{ background: #581c87; color: #e9d5ff; }}
     .status-unavailable {{ background: #7f1d1d; color: #fecaca; }}
@@ -301,8 +311,9 @@ mod tests {
 
     #[test]
     fn skipped_validations_have_a_stable_rank_and_style() {
-        assert_eq!(validation_rank("Canary Token (Skipped)"), 4);
-        assert_eq!(validation_rank("Validation Skipped"), 4);
+        assert_eq!(validation_rank("Canary Token (Skipped)"), 5);
+        assert_eq!(validation_rank("Validation Skipped"), 5);
+        assert_eq!(validation_rank("future validation state"), 7);
         assert_eq!(
             validation_status_class(kingfisher_core::ValidationOutcome::Skipped),
             "status-canary"
@@ -331,6 +342,8 @@ mod tests {
                     findings: 0,
                     active_findings: 0,
                     inactive_findings: 0,
+                    locally_derived_findings: 0,
+                    invalid_material_findings: 0,
                     unknown_validation_findings: 0,
                     access_map_identities: 0,
                     rules_applied: Some(10),

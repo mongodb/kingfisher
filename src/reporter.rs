@@ -59,6 +59,9 @@ fn required_vars_for_validation(validation: &crate::rules::Validation) -> BTreeS
 
     match validation {
         Validation::Assumed => {}
+        Validation::Ethereum(_) => {
+            vars.insert("TOKEN".to_string());
+        }
         Validation::Http(http) => {
             vars.extend(extract_template_vars(&http.request.url));
             for (k, v) in &http.request.headers {
@@ -383,7 +386,7 @@ fn build_validate_command(
                 escape_for_shell(snippet)
             ))
         }
-        Validation::GCP => {
+        Validation::GCP | Validation::Ethereum(_) => {
             // GCP validation uses the service account JSON key
             Some(format!(
                 "kingfisher validate --rule {} {}{}",
@@ -959,9 +962,19 @@ impl DetailsReporter {
             rm.validation_outcome.display_name().to_string()
         };
 
-        let validation_body_str = validation_body::as_str(&rm.validation_response_body);
+        let raw_validation_body = validation_body::as_str(&rm.validation_response_body);
+        let sanitized_local_body = match rm.m.rule.syntax().validation.as_ref() {
+            Some(crate::rules::Validation::Ethereum(kind)) => {
+                kingfisher_scanner::validation::ethereum::sanitized_report_body(
+                    *kind,
+                    rm.validation_outcome,
+                    raw_validation_body,
+                )
+            }
+            _ => Some(raw_validation_body.to_string()),
+        };
         let response_body = format_validation_response(
-            validation_body_str,
+            sanitized_local_body.as_deref().unwrap_or_default(),
             args.redact,
             args.full_validation_response,
         );
@@ -1177,12 +1190,18 @@ impl DetailsReporter {
     ) -> ScanReportMetadata {
         let mut active_findings = 0usize;
         let mut inactive_findings = 0usize;
+        let mut locally_derived_findings = 0usize;
+        let mut invalid_material_findings = 0usize;
         let mut unknown_validation_findings = 0usize;
 
         for record in findings {
             match record.finding.validation.outcome {
                 kingfisher_core::ValidationOutcome::VerifiedActive => active_findings += 1,
                 kingfisher_core::ValidationOutcome::VerifiedInactive => inactive_findings += 1,
+                kingfisher_core::ValidationOutcome::LocallyDerived => locally_derived_findings += 1,
+                kingfisher_core::ValidationOutcome::InvalidMaterial => {
+                    invalid_material_findings += 1
+                }
                 _ => unknown_validation_findings += 1,
             }
         }
@@ -1215,6 +1234,8 @@ impl DetailsReporter {
                 findings: findings.len(),
                 active_findings,
                 inactive_findings,
+                locally_derived_findings,
+                invalid_material_findings,
                 unknown_validation_findings,
                 access_map_identities: access_map.map_or(0, Vec::len),
                 rules_applied: self.audit_context.as_ref().and_then(|ctx| ctx.rules_applied),
@@ -1596,6 +1617,8 @@ pub struct ScanReportSummary {
     pub findings: usize,
     pub active_findings: usize,
     pub inactive_findings: usize,
+    pub locally_derived_findings: usize,
+    pub invalid_material_findings: usize,
     pub unknown_validation_findings: usize,
     pub access_map_identities: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -2065,6 +2088,8 @@ mod tests {
         let outcomes = [
             ValidationOutcome::VerifiedActive,
             ValidationOutcome::Assumed,
+            ValidationOutcome::LocallyDerived,
+            ValidationOutcome::InvalidMaterial,
             ValidationOutcome::VerifiedInactive,
             ValidationOutcome::Unavailable,
             ValidationOutcome::Skipped,
@@ -2091,14 +2116,14 @@ mod tests {
             validation_filter: cli::commands::scan::ValidationFilter::All,
             audit_context: None,
         };
-        assert_eq!(reporter.get_filtered_matches(false).unwrap().len(), 6);
+        assert_eq!(reporter.get_filtered_matches(false).unwrap().len(), 8);
 
         reporter.validation_filter = cli::commands::scan::ValidationFilter::Active;
         assert_eq!(reporter.get_filtered_matches(false).unwrap().len(), 1);
 
         reporter.validation_filter = cli::commands::scan::ValidationFilter::Actionable;
         let actionable = reporter.get_filtered_matches(false).unwrap();
-        assert_eq!(actionable.len(), 2);
+        assert_eq!(actionable.len(), 3);
         assert!(actionable.iter().all(|finding| finding.validation_outcome.is_actionable()));
     }
 

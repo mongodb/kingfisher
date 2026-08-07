@@ -16,11 +16,11 @@ pub mod rules_database;
 
 // Re-export rule types
 pub use rule::{
-    ChecksumActual, ChecksumRequirement, Confidence, DependsOnRule, GrpcRequest, GrpcValidation,
-    HttpMultiStepRevocation, HttpRequest, HttpValidation, MultipartConfig, MultipartPart,
-    PatternRequirementContext, PatternRequirements, PatternValidationResult, RULE_COMMENTS_PATTERN,
-    ReportResponseData, ResponseExtractor, ResponseMatcher, Revocation, RevocationStep, Rule,
-    RuleSyntax, TlsMode, Validation,
+    ChecksumActual, ChecksumRequirement, Confidence, DependsOnRule, EthereumValidation,
+    GrpcRequest, GrpcValidation, HttpMultiStepRevocation, HttpRequest, HttpValidation,
+    MultipartConfig, MultipartPart, PatternRequirementContext, PatternRequirements,
+    PatternValidationResult, RULE_COMMENTS_PATTERN, ReportResponseData, ResponseExtractor,
+    ResponseMatcher, Revocation, RevocationStep, Rule, RuleSyntax, TlsMode, Validation,
 };
 
 // Re-export Rules collection

@@ -79,7 +79,7 @@ The available filters are:
 |---|---|
 | `all` | Every finding (default) |
 | `active` | `verified_active` only |
-| `actionable` | `verified_active` and `assumed` |
+| `actionable` | `verified_active`, `assumed`, and `locally_derived` |
 
 `--only-valid` is a compatibility alias for `--validation-filter active`. The two options are
 mutually exclusive; select `actionable` when both active and assumed-valid findings are required.
@@ -1560,9 +1560,9 @@ Scan Summary:
 
 | Counter | Description |
 | ------- | ----------- |
-| **Successful Validations** | Findings classified as `Active Credential`. With `--validation-filter actionable`, assumed-valid findings are also counted here so the total matches the actionable set. |
+| **Successful Validations** | Findings classified as `Active Credential`. With `--validation-filter actionable`, assumed-valid and locally-derived findings are also counted here so the total matches the actionable set. |
 | **Failed Validations** | Findings classified as `Inactive Credential`: the provider authoritatively rejected the credential. |
-| **Skipped Validations** | Findings classified as `Validation Skipped` or `Canary Token (Skipped)`, plus assumed-valid findings unless `--validation-filter actionable` is used. |
+| **Skipped Validations** | Findings classified as `Validation Skipped` or `Canary Token (Skipped)`, plus assumed-valid and locally-derived findings unless `--validation-filter actionable` is used. |
 
 These summary counters do not cover every validation status. In particular,
 `Inconclusive Validation` and `Not Attempted` remain visible on individual findings but do not
@@ -1576,6 +1576,8 @@ The ` |Validation....: ` line on a finding describes the semantic validation res
 | -------------- | ------------------------ | ------- |
 | **Active Credential** | `verified_active` | A live or cryptographic validator proved that the credential is usable. |
 | **Assumed Valid (Not Live-Validated)** | `assumed` | The rule identified secret material with high confidence without proving that the credential is currently usable. It is included by `actionable`, but not by `active`/`--only-valid`. |
+| **Locally Derived** | `locally_derived` | Network-free cryptographic validation accepted key material and derived public metadata. This proves structure, not current activity or ownership. It is included by `actionable`, but not by `active`/`--only-valid`. |
+| **Invalid Cryptographic Material** | `invalid_material` | Network-free parsing or curve validation rejected the captured material. |
 | **Inactive Credential** | `verified_inactive` | A live validator authoritatively rejected the credential. This is different from a network or provider outage. |
 | **Inconclusive Validation** | `unavailable` | Validation was attempted, but a timeout, rate limit, server error, validator panic, or similar condition prevented a conclusion. It is neither proof of activity nor proof of inactivity. |
 | **Validation Skipped** | `skipped` | Validation was intentionally not attempted because a dependency or other precondition was missing. |
@@ -1584,16 +1586,16 @@ The ` |Validation....: ` line on a finding describes the semantic validation res
 
 `--validation-filter active` (and its `--only-valid` compatibility alias) includes only
 `Active Credential` findings. The `actionable` filter additionally includes
-`Assumed Valid (Not Live-Validated)` and excludes every other outcome.
+`Assumed Valid (Not Live-Validated)` and `Locally Derived`, and excludes every other outcome.
 Use `all` to retain inconclusive, skipped, inactive, and not-attempted findings. `--only-valid` and
 `--validation-filter` cannot be combined.
 
 In colorized stdout, active credentials use `🔓`. High-confidence assumed-valid secrets use the
 same bright color with `🔒`; the icon and explicit status make their lack of live validation clear.
 
-Assumed-valid findings are counted as **Skipped Validations** by default because no live validation
-was attempted. With `--validation-filter actionable`, they instead count as **Successful
-Validations**, aligning the counter with the actionable output.
+Assumed-valid and locally-derived findings are counted as **Skipped Validations** by default because
+no live validation was attempted. With `--validation-filter actionable`, they instead count as
+**Successful Validations**, aligning the counter with the actionable output.
 
 ### Why Validations Are Skipped
 

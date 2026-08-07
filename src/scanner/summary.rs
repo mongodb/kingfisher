@@ -101,7 +101,8 @@ pub fn compute_scan_totals(
                 kingfisher_core::ValidationOutcome::VerifiedActive => {
                     (success + increment, fail, skipped)
                 }
-                kingfisher_core::ValidationOutcome::Assumed => {
+                kingfisher_core::ValidationOutcome::Assumed
+                | kingfisher_core::ValidationOutcome::LocallyDerived => {
                     if actionable_filter {
                         (success + increment, fail, skipped)
                     } else {
@@ -109,6 +110,9 @@ pub fn compute_scan_totals(
                     }
                 }
                 kingfisher_core::ValidationOutcome::VerifiedInactive => {
+                    (success, fail + increment, skipped)
+                }
+                kingfisher_core::ValidationOutcome::InvalidMaterial => {
                     (success, fail + increment, skipped)
                 }
                 kingfisher_core::ValidationOutcome::Skipped => (success, fail, skipped + increment),

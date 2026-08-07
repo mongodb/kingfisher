@@ -182,7 +182,7 @@ Kingfisher supports these validation types:
 
 1. `Assumed`: a rule-level marker for secret material accepted with high confidence without live validation. It produces the `Assumed Valid (Not Live-Validated)` finding status and is included by the `actionable` filter, but not by the strict `active` filter. In colorized pretty output it uses the same bright color as an active credential but with a locked icon. It counts as skipped validation by default and as successful validation with the `actionable` filter.
 2. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
-3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`.
+3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `Ethereum`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`. `Ethereum` is deterministic and network-free; it validates key material and derives an address without claiming the address is active.
 4. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
 
 Rules without a `validation` block produce `Not Attempted` findings. They are not treated as
@@ -210,6 +210,11 @@ validation:
 Use `Raw` only when the provider check cannot be expressed reliably with `Http` or `Grpc` and does not justify a new reusable validator family. Raw validator implementations live in `crates/kingfisher-scanner/src/validation/raw.rs`.
 
 Typed validators are safer and more reusable because the validator kind is part of the schema. `Raw` validators are string-dispatched; an unknown `content` name is reported as an unimplemented, unverified validation result. If you need a Rust-backed exception path for one provider, prefer `Raw`; reserve new typed validators for stable validation families that can be reused across rules.
+
+The Ethereum family uses `content: private_key`, `public_key`, or `mnemonic`. Mnemonics use the
+standard `m/44'/60'/0'/0/0` path and explicitly assume an empty BIP-39 passphrase, so the reported
+address is a candidate. Validation responses contain only allowlisted derivation metadata and never
+the private key or seed phrase.
 
 ## gRPC Validation (Grpc)
 
@@ -504,6 +509,7 @@ Below is the complete list of Liquid filters available in Kingfisher, along with
 | `b64dec`              | –                                            | Decodes a Base64 string.                                                                                        | `{{ "aGVsbG8=" \| b64dec }}`                                         |
 | `b64url_dec`          | –                                            | Decodes a URL-safe Base64 string (with or without padding).                                                     | `{{ "Kys_Pw" \| b64url_dec }}`                                       |
 | `sha256`              | –                                            | Computes the SHA-256 hex digest of the input.                                                                  | `{{ TOKEN \| sha256 }}`                                              |
+| `bip39_valid`         | –                                            | Returns `true` only for a checksum-valid English BIP-39 mnemonic; the temporary normalized phrase is wiped on drop. | `{{ MNEMONIC \| bip39_valid }}`                                  |
 | `crc32`               | –                                            | Computes the CRC32 checksum of the input and returns a decimal value. | `{{ TOKEN \| crc32 }}` |
 | `crc32_dec`           | `digits` (integer, optional)                 | Computes the CRC32 checksum and returns the last `digits` decimal characters (zero-padded). Defaults to the full value when omitted. | `{{ TOKEN \| crc32_dec: 6 }}` |
 | `crc32_hex`           | `digits` (integer, optional)                 | Computes the CRC32 checksum and returns the last `digits` hexadecimal characters (zero-padded). Defaults to the full value when omitted. | `{{ TOKEN \| crc32_hex: 8 }}` |

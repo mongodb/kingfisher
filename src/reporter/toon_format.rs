@@ -129,6 +129,8 @@ impl DetailsReporter {
                         findings: envelope.findings.len(),
                         active_findings: 0,
                         inactive_findings: 0,
+                        locally_derived_findings: 0,
+                        invalid_material_findings: 0,
                         unknown_validation_findings: 0,
                         access_map_identities: envelope.access_map.as_ref().map_or(0, Vec::len),
                         rules_applied: None,

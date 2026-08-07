@@ -13,11 +13,12 @@ use crossbeam_skiplist::SkipMap;
 use dashmap::DashMap;
 use futures::{FutureExt, StreamExt, stream};
 use indicatif::{ProgressBar, ProgressStyle};
+use kingfisher_core::ValidationOutcome;
 use liquid::Parser;
 use reqwest::StatusCode;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::Notify;
-use tracing::{debug, trace, warn};
+use tracing::{trace, warn};
 
 use crate::{
     access_map::AccessMapRequest,
@@ -507,10 +508,9 @@ pub async fn run_secret_validation(
             // like (?<REGEX>...(ABC|DEF)...), causing all matches to share the same
             // validation result.
             let secret = arc_msg.2.groups.captures.first().map_or("", |c| c.raw_value());
-            let group_key = format!("{}|{}", arc_msg.2.rule.id(), secret);
+            let group_key = validation_group_key(arc_msg.2.rule.id(), secret);
             trace!(
                 rule_id = %arc_msg.2.rule.id(),
-                secret_value = %secret,
                 external_fingerprint = arc_msg.2.finding_fingerprint,
                 validation_group_key = %group_key,
                 "Grouping finding for validation"
@@ -567,7 +567,7 @@ pub async fn run_secret_validation(
                 // VALIDATION DEDUP: Use get(0) for the primary secret value.
                 // See comment above for why this differs from fingerprint/reporting code.
                 let secret = rep_arc.2.groups.captures.first().map_or("", |c| c.raw_value());
-                let key = format!("{}|{}", rep_arc.2.rule.id(), secret);
+                let key = validation_group_key(rep_arc.2.rule.id(), secret);
 
                 match val_res.entry(key.clone()) {
                     dashmap::mapref::entry::Entry::Occupied(_) => return,
@@ -576,6 +576,7 @@ pub async fn run_secret_validation(
                             body: validation_body::from_string(String::new()),
                             status: StatusCode::ACCEPTED,
                             is_valid: false,
+                            outcome: ValidationOutcome::NotAttempted,
                             timestamp: Instant::now(),
                         });
                     }
@@ -610,6 +611,7 @@ pub async fn run_secret_validation(
                     body: om.validation_response_body.clone(),
                     status: om.validation_response_status,
                     is_valid: om.validation_success,
+                    outcome: om.validation_outcome,
                     timestamp: Instant::now(),
                 };
                 val_res.insert(key, cr);
@@ -636,13 +638,13 @@ pub async fn run_secret_validation(
                     continue;
                 }
                 let secret = match_arc.2.groups.captures.first().map_or("", |c| c.raw_value());
-                let key = format!("{}|{}", match_arc.2.rule.id(), secret);
+                let key = validation_group_key(match_arc.2.rule.id(), secret);
                 if let Some(cr) = validation_results.get(&key) {
                     let (_, _, existing) = Arc::make_mut(match_arc);
                     existing.validation_success = cr.is_valid;
                     existing.validation_response_status = cr.status.as_u16();
                     existing.validation_response_body = cr.body.clone();
-                    existing.refresh_validation_outcome();
+                    existing.validation_outcome = cr.outcome;
                 }
             }
         }
@@ -879,12 +881,18 @@ async fn validate_single(
         om.validation_success = cached.is_valid;
         om.validation_response_body = cached.body.clone();
         om.validation_response_status = cached.status;
-        om.refresh_validation_outcome();
+        om.validation_outcome = cached.outcome;
         if om.validation_outcome.is_verified_active()
-            || om.validation_outcome == kingfisher_core::ValidationOutcome::Assumed
+            || matches!(
+                om.validation_outcome,
+                ValidationOutcome::Assumed | ValidationOutcome::LocallyDerived
+            )
         {
             success_count.fetch_add(1, Ordering::Relaxed);
-        } else if om.validation_outcome == kingfisher_core::ValidationOutcome::VerifiedInactive {
+        } else if matches!(
+            om.validation_outcome,
+            ValidationOutcome::VerifiedInactive | ValidationOutcome::InvalidMaterial
+        ) {
             fail_count.fetch_add(1, Ordering::Relaxed);
         }
         maybe_record_access_map(om, access_map);
@@ -903,13 +911,18 @@ async fn validate_single(
             om.validation_success = cached.is_valid;
             om.validation_response_body = cached.body.clone();
             om.validation_response_status = cached.status;
-            om.refresh_validation_outcome();
+            om.validation_outcome = cached.outcome;
             if om.validation_outcome.is_verified_active()
-                || om.validation_outcome == kingfisher_core::ValidationOutcome::Assumed
+                || matches!(
+                    om.validation_outcome,
+                    ValidationOutcome::Assumed | ValidationOutcome::LocallyDerived
+                )
             {
                 success_count.fetch_add(1, Ordering::Relaxed);
-            } else if om.validation_outcome == kingfisher_core::ValidationOutcome::VerifiedInactive
-            {
+            } else if matches!(
+                om.validation_outcome,
+                ValidationOutcome::VerifiedInactive | ValidationOutcome::InvalidMaterial
+            ) {
                 fail_count.fetch_add(1, Ordering::Relaxed);
             }
             maybe_record_access_map(om, access_map);
@@ -957,16 +970,15 @@ enum ValidationRunOutcome {
     /// Validation ran to completion; the match's own fields describe whether it
     /// succeeded or failed.
     Completed,
-    /// Validation panicked. The payload is captured for logging only and must
-    /// never be surfaced to the user or cache (it may embed secret material).
-    Panicked(String),
+    /// Validation panicked. The payload is discarded because it may contain secrets.
+    Panicked,
 }
 
 impl ValidationRunOutcome {
-    fn from_panic_result(result: std::result::Result<(), String>) -> Self {
+    fn from_panic_result(result: std::result::Result<(), ()>) -> Self {
         match result {
             Ok(()) => ValidationRunOutcome::Completed,
-            Err(panic_message) => ValidationRunOutcome::Panicked(panic_message),
+            Err(()) => ValidationRunOutcome::Panicked,
         }
     }
 }
@@ -983,11 +995,16 @@ fn apply_validation_outcome(
         ValidationRunOutcome::Completed => {
             om.refresh_validation_outcome();
             if om.validation_outcome.is_verified_active()
-                || om.validation_outcome == kingfisher_core::ValidationOutcome::Assumed
+                || matches!(
+                    om.validation_outcome,
+                    ValidationOutcome::Assumed | ValidationOutcome::LocallyDerived
+                )
             {
                 success_count.fetch_add(1, Ordering::Relaxed);
-            } else if om.validation_outcome == kingfisher_core::ValidationOutcome::VerifiedInactive
-            {
+            } else if matches!(
+                om.validation_outcome,
+                ValidationOutcome::VerifiedInactive | ValidationOutcome::InvalidMaterial
+            ) {
                 fail_count.fetch_add(1, Ordering::Relaxed);
             }
             cache.insert(
@@ -996,23 +1013,15 @@ fn apply_validation_outcome(
                     is_valid: om.validation_success,
                     status: om.validation_response_status,
                     body: om.validation_response_body.clone(),
+                    outcome: om.validation_outcome,
                     timestamp: Instant::now(),
                 },
             );
         }
-        ValidationRunOutcome::Panicked(panic_message) => {
-            // The panic payload can embed secret material (e.g. a token captured
-            // in a debug string), so it must never reach the cached or
-            // user-visible body. Keep WARN free of the payload too; truncated
-            // panic detail is only emitted at DEBUG for troubleshooting.
+        ValidationRunOutcome::Panicked => {
             warn!(
                 rule_id = %om.rule.id(),
                 "validator panicked; marking match as failed",
-            );
-            debug!(
-                rule_id = %om.rule.id(),
-                panic = %truncate_for_log(&panic_message),
-                "validator panic detail",
             );
             om.validation_success = false;
             om.validation_response_body = validation_body::from_string(format!(
@@ -1027,6 +1036,7 @@ fn apply_validation_outcome(
                     is_valid: om.validation_success,
                     status: om.validation_response_status,
                     body: om.validation_response_body.clone(),
+                    outcome: om.validation_outcome,
                     timestamp: Instant::now(),
                 },
             );
@@ -1043,8 +1053,8 @@ fn is_counted_validation_status(status: StatusCode) -> bool {
 ///
 /// Validators perform network I/O and parse untrusted responses, so a stray
 /// `panic!`/`unwrap` would otherwise tear down the entire scan. We catch the
-/// unwind here and surface it as `Err(message)` so the caller can fail just the
-/// one match.
+/// unwind here and fail just the one match. The panic payload is discarded
+/// immediately because it may contain secret material.
 ///
 /// `AssertUnwindSafe` is required because the future borrows `&mut om`. It is
 /// sound for this use because the unwind is never observed as a partial result:
@@ -1053,45 +1063,23 @@ fn is_counted_validation_status(status: StatusCode) -> bool {
 /// `validation_response_body`) with a deterministic failure state. The shared
 /// counters and response cache are only mutated *after* this boundary returns,
 /// so a panic cannot leave them inconsistent.
-async fn catch_validation_panic<F>(future: F) -> std::result::Result<(), String>
+async fn catch_validation_panic<F>(future: F) -> std::result::Result<(), ()>
 where
     F: Future<Output = ()>,
 {
     match AssertUnwindSafe(future).catch_unwind().await {
         Ok(()) => Ok(()),
-        Err(payload) => Err(describe_panic_payload(payload)),
+        Err(_payload) => Err(()),
     }
-}
-
-fn describe_panic_payload(payload: Box<dyn std::any::Any + Send>) -> String {
-    if let Some(message) = payload.downcast_ref::<&str>() {
-        (*message).to_string()
-    } else if let Some(message) = payload.downcast_ref::<String>() {
-        message.clone()
-    } else {
-        "non-string panic payload".to_string()
-    }
-}
-
-/// Bound a panic message before it reaches the logs. Panic payloads are
-/// unbounded in length and may be influenced by scanned content, so cap them at
-/// a fixed length on a UTF-8 boundary.
-fn truncate_for_log(message: &str) -> String {
-    const MAX_LEN: usize = 256;
-    if message.len() <= MAX_LEN {
-        return message.to_string();
-    }
-    let mut end = MAX_LEN;
-    while !message.is_char_boundary(end) {
-        end -= 1;
-    }
-    format!("{}… (truncated)", &message[..end])
 }
 
 // Helper to compute the cache key for an OwnedBlobMatch.
 fn build_cache_key(om: &OwnedBlobMatch) -> String {
-    let capture0 =
-        om.captures.captures.first().map_or(String::new(), |c| c.raw_value().to_string());
+    let capture0 = om.captures.captures.first().map_or("", |c| c.raw_value());
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"kingfisher.validation-cache.v1\0");
+    hash_cache_key_part(&mut hasher, om.rule.id().as_bytes());
+    hash_cache_key_part(&mut hasher, capture0.as_bytes());
 
     let has_context_dependency = om
         .rule
@@ -1101,17 +1089,25 @@ fn build_cache_key(om: &OwnedBlobMatch) -> String {
         .flatten()
         .any(|dep| !dep.variable.eq_ignore_ascii_case("TOKEN"));
     if has_context_dependency {
-        return format!(
-            "{}|{}|{}|{}|{}",
-            om.rule.name(),
-            capture0,
-            om.blob_id,
-            om.matching_input_offset_span.start,
-            om.matching_input_offset_span.end
-        );
+        hash_cache_key_part(&mut hasher, om.blob_id.to_string().as_bytes());
+        hash_cache_key_part(&mut hasher, &om.matching_input_offset_span.start.to_le_bytes());
+        hash_cache_key_part(&mut hasher, &om.matching_input_offset_span.end.to_le_bytes());
     }
 
-    format!("{}|{}", om.rule.name(), capture0)
+    hasher.finalize().to_hex().to_string()
+}
+
+fn validation_group_key(rule_id: &str, secret: &str) -> String {
+    let mut hasher = blake3::Hasher::new();
+    hasher.update(b"kingfisher.validation-group.v1\0");
+    hash_cache_key_part(&mut hasher, rule_id.as_bytes());
+    hash_cache_key_part(&mut hasher, secret.as_bytes());
+    hasher.finalize().to_hex().to_string()
+}
+
+fn hash_cache_key_part(hasher: &mut blake3::Hasher, part: &[u8]) {
+    hasher.update(&(part.len() as u64).to_le_bytes());
+    hasher.update(part);
 }
 
 fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapCollector>) {
@@ -1826,13 +1822,13 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn catch_validation_panic_returns_panic_message() {
+    async fn catch_validation_panic_discards_panic_message() {
         let result = catch_validation_panic(async {
             panic!("validator blew up");
         })
         .await;
 
-        assert_eq!(result.unwrap_err(), "validator blew up");
+        assert_eq!(result.unwrap_err(), ());
     }
 
     #[tokio::test]
