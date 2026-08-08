@@ -1,0 +1,46 @@
+rules:
+  - name: Google Chat Incoming Webhook
+    id: kingfisher.googlechat.1
+    pattern: |
+      (?x)
+      \b
+      (
+        https://chat\.googleapis\.com/v1/spaces/[A-Za-z0-9_-]+/messages
+        \?key=[A-Za-z0-9_-]+
+        &token=[A-Za-z0-9_%=\-]+
+      )
+      (?:[^A-Za-z0-9_%=\-]|$)
+    pattern_requirements:
+      min_digits: 4
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - "https://chat.googleapis.com/v1/spaces/AAAAexample/messages?key=AIzaSyByz6BGQf8QtcQLml8spbyy8x5_327PTow&token=abcDEF123-_examplewebhooktoken"
+    validation:
+      # An empty message body makes a live webhook reject on content while
+      # preserving the authentication check.
+      type: Http
+      content:
+        request:
+          method: POST
+          url: "{{ TOKEN }}"
+          body: "{}"
+          headers:
+            Content-Type: application/json
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [400]
+            - type: JsonValid
+            - type: WordMatch
+              words:
+                - API_KEY_INVALID
+                - PERMISSION_DENIED
+                - UNAUTHENTICATED
+              match_all_words: false
+              negative: true
+    references:
+      - https://developers.google.com/workspace/chat/quickstart/webhooks
+      - https://developers.google.com/workspace/chat/api/reference/rest/v1/spaces.messages/create
+      - https://developers.google.com/workspace/chat/api/reference/rest/v1/spaces.messages
+      - https://cloud.google.com/php/docs/reference/common-protos/latest/Api.ErrorReason

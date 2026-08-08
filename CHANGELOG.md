@@ -2,6 +2,11 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v1.113.0]
+- Fixed Google API-key attribution and validation, including YouTube handling; added Google Chat webhook detection and authoritative rule provenance.
+- Removed the duplicate Google OAuth rule and clarified Firebase FCM legacy server-key detection and documentation.
+- Refreshed built-in rule and revocation coverage documentation.
+
 ## [v1.112.0]
 - Added offline Ethereum key/BIP-39 detection with explicit local-validation outcomes, inspired by [#468](https://github.com/mongodb/kingfisher/pull/468) from @audityourcontracts.
 - Hardened validation caching and panic handling to avoid secret exposure.

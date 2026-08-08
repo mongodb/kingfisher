@@ -7,7 +7,7 @@ description: "Complete list of all 1089 built-in secret detection rules in Kingf
 
 Kingfisher ships with **1089 detection rules** across **620 providers**
 (948 detectors + 141 dependent rules).
-Of these, **527** include live validation and **52** support direct revocation.
+Of these, **527** include live validation and **51** support direct revocation.
 
 !!! tip "Search"
     Use the search box below to filter rules by provider name, rule ID, or confidence level.
@@ -3013,7 +3013,7 @@ Of these, **527** include live validation and **52** support direct revocation.
 </tr>
 <tr>
 <td>Firebase</td>
-<td>Firebase Cloud Messaging Server Key</td>
+<td>Firebase Cloud Messaging Legacy Server Key</td>
 <td><code>kingfisher.firebase.1</code></td>
 <td>Medium</td>
 <td></td>
@@ -3660,12 +3660,12 @@ Of these, **527** include live validation and **52** support direct revocation.
 <td></td>
 </tr>
 <tr>
-<td>Googleoauth2</td>
-<td>Google OAuth2 Access Token</td>
-<td><code>kingfisher.google.oauth2.1</code></td>
+<td>Googlechat</td>
+<td>Google Chat Incoming Webhook</td>
+<td><code>kingfisher.googlechat.1</code></td>
 <td>Medium</td>
 <td>Yes</td>
-<td>Yes</td>
+<td></td>
 </tr>
 <tr>
 <td>Gpp</td>

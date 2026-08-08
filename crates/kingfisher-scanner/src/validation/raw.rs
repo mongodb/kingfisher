@@ -304,13 +304,21 @@ enum GcpApiKeyProbeVerdict {
 }
 
 fn classify_gcp_api_key_probe(status: StatusCode, body: &str) -> GcpApiKeyProbeVerdict {
+    // Google documents that API restrictions are independent of the key string
+    // and exposes API_KEY_INVALID separately from restriction failures. Keep
+    // those cases distinct so a key that is live but unavailable to the probe
+    // is not reported as inactive.
+    //
+    // References:
+    // https://cloud.google.com/docs/authentication/api-keys
+    // https://cloud.google.com/php/docs/reference/common-protos/latest/Api.ErrorReason
     if status == StatusCode::OK {
         return GcpApiKeyProbeVerdict::Active;
     }
 
     // Both the Identity Toolkit and Generative Language APIs use HTTP 400 for a
-    // syntactically well-formed key that Google does not recognize. Betterleaks
-    // uses the same distinction for its GCP API-key validator.
+    // syntactically well-formed key that Google does not recognize. The Google
+    // API error taxonomy identifies API_KEY_INVALID as the invalid-key reason.
     if status == StatusCode::BAD_REQUEST
         && (body.contains("API_KEY_INVALID")
             || body.contains("API key not valid")
@@ -997,6 +1005,15 @@ mod tests {
             ),
             GcpApiKeyProbeVerdict::Active
         );
+        for reason in ["API_KEY_SERVICE_BLOCKED", "PERMISSION_DENIED", "CONSUMER_SUSPENDED"] {
+            assert_eq!(
+                classify_gcp_api_key_probe(
+                    StatusCode::FORBIDDEN,
+                    &format!(r#"{{"reason":"{reason}"}}"#),
+                ),
+                GcpApiKeyProbeVerdict::Active
+            );
+        }
         assert_eq!(
             classify_gcp_api_key_probe(StatusCode::INTERNAL_SERVER_ERROR, "server error"),
             GcpApiKeyProbeVerdict::Inconclusive

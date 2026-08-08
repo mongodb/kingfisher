@@ -1,6 +1,10 @@
 rules:
-  - name: Firebase Cloud Messaging Server Key
+  - name: Firebase Cloud Messaging Legacy Server Key
     id: kingfisher.firebase.1
+    # Legacy FCM server keys authorize server-to-FCM sends and must be treated
+    # as secrets. They are distinct from public Firebase Web API keys and
+    # device registration tokens. Current FCM HTTP v1 uses OAuth 2.0 service-
+    # account credentials instead; this rule covers historical key exposure.
     pattern: |
       (?x)
       \b
@@ -25,12 +29,9 @@ rules:
       - FCM_SERVER_KEY=AAAAA1b2CdE:APA91bAbCdEfGhIjKlMnOpQrStUvWxYz0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-AaBbCcDdEeFfGgHhIiJj
       - 'firebase_server_key: "AAAAQ1w2ErT:APA91bZaYxWvUtSrQpOnMlKjIhGfEdCbA9876543210ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789_-MmNnOoPpQqRrSsTtUuVv"'
     references:
-      - https://firebase.google.com/docs/cloud-messaging/migrate-v1
-      # FCM legacy server keys no longer have a safe token-only validation path.
-      # HTTP v1 requires OAuth2 access tokens from service accounts rather than the legacy key itself.
+      - https://firebase.google.com/docs/cloud-messaging/server-environment
       - https://firebase.google.com/docs/cloud-messaging/send/v1-api
       - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/http/exposures/tokens/firebase-fcm-server-key-disclosure.yaml
-      - https://github.com/projectdiscovery/nuclei-templates/blob/a165bbb8fd498d7dc59b755d8d5ba7561ac6f0c5/file/keys/fcm-api-key.yaml
 
   - name: Firebase Cloud Messaging Device Token
     id: kingfisher.firebase.2
