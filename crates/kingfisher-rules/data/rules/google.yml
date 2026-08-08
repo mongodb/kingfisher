@@ -248,6 +248,8 @@ rules:
     references:
       - https://cloud.google.com/docs/authentication/api-keys
       - https://cloud.google.com/php/docs/reference/common-protos/latest/Api.ErrorReason
+      - https://ai.google.dev/gemini-api/docs/api-key
+      - https://ai.google.dev/api
       - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/gcpapikey/detector.go
     validation:
       type: Raw

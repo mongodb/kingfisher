@@ -337,15 +337,34 @@ fn classify_gcp_api_key_probe(status: StatusCode, body: &str) -> GcpApiKeyProbeV
     GcpApiKeyProbeVerdict::Inconclusive
 }
 
+#[derive(Debug, Clone, Copy)]
+enum GcpApiKeyProbeAuth {
+    QueryParameter,
+    GeminiHeader,
+}
+
+fn build_gcp_api_key_probe_request(
+    client: &Client,
+    url: &str,
+    token: &str,
+    auth: GcpApiKeyProbeAuth,
+) -> Result<reqwest::Request> {
+    let request = client.get(url);
+    let request = match auth {
+        GcpApiKeyProbeAuth::QueryParameter => request.query(&[("key", token)]),
+        GcpApiKeyProbeAuth::GeminiHeader => request.header("x-goog-api-key", token),
+    };
+    request.build().context("failed to build GCP API-key validation request")
+}
+
 async fn run_gcp_api_key_probe(
     client: &Client,
     url: &str,
     token: &str,
+    auth: GcpApiKeyProbeAuth,
 ) -> Result<(StatusCode, String)> {
     let response = client
-        .get(url)
-        .query(&[("key", token)])
-        .send()
+        .execute(build_gcp_api_key_probe_request(client, url, token, auth)?)
         .await
         .context("GCP API-key validation request failed")?;
     let status = response.status();
@@ -389,8 +408,13 @@ async fn validate_gcp_api_key(globals: &Object, client: &Client) -> Result<RawVa
     const GEMINI_MODELS_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
     let token = string_var(globals, "TOKEN").ok_or_else(|| anyhow!("missing TOKEN"))?;
-    let (project_status, project_body) =
-        run_gcp_api_key_probe(client, PROJECT_CONFIG_URL, &token).await?;
+    let (project_status, project_body) = run_gcp_api_key_probe(
+        client,
+        PROJECT_CONFIG_URL,
+        &token,
+        GcpApiKeyProbeAuth::QueryParameter,
+    )
+    .await?;
     match classify_gcp_api_key_probe(project_status, &project_body) {
         GcpApiKeyProbeVerdict::Active => {
             return Ok(RawValidationOutcome {
@@ -411,9 +435,12 @@ async fn validate_gcp_api_key(globals: &Object, client: &Client) -> Result<RawVa
 
     // Fall back to a second read-only Google API. This covers transient or
     // endpoint-specific responses without treating arbitrary JSON as proof of
-    // either liveness or revocation.
+    // either liveness or revocation. The Generative Language API documents the
+    // x-goog-api-key header; keep this probe out of the URL so the token is not
+    // unnecessarily exposed in request-target logging.
     let (gemini_status, gemini_body) =
-        run_gcp_api_key_probe(client, GEMINI_MODELS_URL, &token).await?;
+        run_gcp_api_key_probe(client, GEMINI_MODELS_URL, &token, GcpApiKeyProbeAuth::GeminiHeader)
+            .await?;
     match classify_gcp_api_key_probe(gemini_status, &gemini_body) {
         GcpApiKeyProbeVerdict::Active => Ok(RawValidationOutcome {
             valid: true,
@@ -987,6 +1014,35 @@ mod tests {
     use chrono::TimeZone;
 
     use super::*;
+
+    #[test]
+    fn gcp_api_key_probe_uses_the_authentication_form_for_each_api() {
+        let client = Client::new();
+        let token = "AIzaSy-example-token";
+
+        let identity_request = build_gcp_api_key_probe_request(
+            &client,
+            "https://www.googleapis.com/identitytoolkit/v3/relyingparty/getProjectConfig",
+            token,
+            GcpApiKeyProbeAuth::QueryParameter,
+        )
+        .unwrap();
+        assert_eq!(identity_request.url().query_pairs().next(), Some(("key".into(), token.into())));
+        assert!(identity_request.headers().get("x-goog-api-key").is_none());
+
+        let gemini_request = build_gcp_api_key_probe_request(
+            &client,
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            token,
+            GcpApiKeyProbeAuth::GeminiHeader,
+        )
+        .unwrap();
+        assert!(gemini_request.url().query().is_none());
+        assert_eq!(
+            gemini_request.headers().get("x-goog-api-key").and_then(|value| value.to_str().ok()),
+            Some(token)
+        );
+    }
 
     #[test]
     fn gcp_api_key_probe_distinguishes_liveness_from_transport_failures() {
