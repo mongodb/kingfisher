@@ -208,8 +208,8 @@ rules:
     id: kingfisher.google.7
     # Google documents API-key strings with the AIzaSy... shape and explains
     # that API restrictions are applied server-side. The Apache-2.0-licensed
-    # OSV ScaLibr detector documents a narrower AIzaSy[ABCD] family; keep this
-    # rule generic across Google products and use the broader AIza + 35 shape.
+    # Nosey Parker rule uses this same AIza + 35 shape; OSV ScaLibr documents
+    # a narrower AIzaSy[ABCD] family. Keep this rule generic across products.
     pattern: |
       (?x)
       \b
@@ -250,6 +250,9 @@ rules:
       - https://cloud.google.com/php/docs/reference/common-protos/latest/Api.ErrorReason
       - https://ai.google.dev/gemini-api/docs/api-key
       - https://ai.google.dev/api
+      - https://codelabs.developers.google.com/secure-agentic-coding?hl=en
+      - https://github.com/firebase/firebase-tools/issues/2470
+      - https://github.com/praetorian-inc/noseyparker/blob/2e6e7f36ce36619852532bbe698d8cb7a26d2da7/crates/noseyparker/data/default/builtin/rules/google.yml
       - https://github.com/google/osv-scalibr/blob/8dec65935b947e6bac64a2fed73838286db4c971/veles/secrets/gcpapikey/detector.go
     validation:
       type: Raw
