@@ -337,6 +337,7 @@ Kingfisher supports multiple installation methods:
 - **Install scripts**: One-line installers for Linux, macOS, and Windows - [INSTALLATION.md](docs/INSTALLATION.md)
 - **Docker**: `docker run ghcr.io/mongodb/kingfisher:latest`
 - **Pre-commit hooks**: Integrate with git hooks, pre-commit framework, or Husky
+- **MegaLinter**: Kingfisher is bundled in [MegaLinter](https://megalinter.io/latest/descriptors/repository_kingfisher/), so CI pipelines using it get Kingfisher scans out of the box
 - **Compile from source**: Build with `make` for your platform
 
 **For complete installation instructions and pre-commit hook setup, see [docs/INSTALLATION.md](docs/INSTALLATION.md).**
