@@ -252,11 +252,8 @@ pub struct AccessMapResult {
     /// Unique fingerprint of the finding.
     pub fingerprint: Option<String>,
 
-    /// `Some(error)` when identity mapping failed and every field below is a
-    /// placeholder produced by [`build_failed_result`] rather than a real
-    /// provider answer. Consumers must not read a failed result as confirmed
-    /// impact: the placeholder carries a synthetic resource entry, so treating
-    /// it as success reports blast radius that was never established.
+    /// `Some(error)` when identity mapping failed, meaning every field below is
+    /// a placeholder from [`build_failed_result`] and not confirmed impact.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mapping_error: Option<String>,
 

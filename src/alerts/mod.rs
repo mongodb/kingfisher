@@ -193,12 +193,8 @@ pub struct AlertSummary {
     pub unfiltered_total: usize,
 }
 
-/// `--access-map` results indexed for alert dispatch: which findings belong to
-/// a mapped credential, and how many resources that credential exposes.
-///
-/// Impact is stored per credential rather than per finding, since one mapping
-/// result covers every occurrence of the same credential — see
-/// [`AccessMapImpact::impacted_resources`].
+/// `--access-map` results indexed for alert dispatch. Impact is keyed per
+/// credential, not per finding, since one mapping covers every occurrence.
 #[derive(Clone, Debug, Default)]
 pub struct AccessMapImpact {
     credential_by_fingerprint: HashMap<String, usize>,
@@ -407,9 +403,8 @@ pub async fn dispatch(
     if sinks.is_empty() {
         return;
     }
-    // A dry run never POSTs, so it must not depend on the TLS/runtime
-    // prerequisites of client construction — build the client only when we
-    // actually intend to send something.
+    // A dry run never POSTs, so it must not depend on client construction
+    // succeeding.
     let client = if dry_run {
         None
     } else {
@@ -474,9 +469,8 @@ pub async fn dispatch(
         summary.detail = resolved_detail;
         summary.unfiltered_total = unfiltered_total;
 
-        // A dry-run payload is written to the log, where it typically persists
-        // (CI job output, journald, log shipper). Never copy a secret there,
-        // even when the sink is configured to include secrets in real POSTs.
+        // The dry-run payload is logged, and logs persist — never copy a
+        // secret there, even for a sink that includes secrets in real POSTs.
         let include_secret = sink.include_secret && !dry_run;
         if dry_run && sink.include_secret {
             warn!(
@@ -509,8 +503,8 @@ pub async fn dispatch(
             continue;
         }
 
-        // `client` is always `Some` here: it is only `None` under `dry_run`,
-        // which `continue`d above.
+        // Always `Some` here: only `dry_run` leaves it `None`, and that
+        // `continue`d above.
         if let Some(client) = &client {
             match post(client, &sink.url, &payload).await {
                 Ok(()) => {
@@ -844,9 +838,8 @@ mod tests {
         }
     }
 
-    /// A successfully-mapped access-map entry for `fingerprint`, with a single
-    /// permission group covering `resources`. Tests that need a failed mapping
-    /// set `mapping_error` on the returned entry.
+    /// A successfully-mapped entry for `fingerprint`, with one permission group
+    /// covering `resources`.
     fn access_map_entry(
         provider: &str,
         fingerprint: &str,
@@ -1007,10 +1000,9 @@ mod tests {
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
         }
 
-        /// Regression: `map_requests` assigns the finding fingerprint even when
-        /// the mapper fell back to `build_failed_result`, whose placeholder
-        /// carries one synthetic resource. A failed mapping established no
-        /// blast radius, so `access-map-only` must not treat it as impact.
+        /// Regression: `map_requests` assigns a fingerprint even to the
+        /// `build_failed_result` placeholder, whose synthetic resource must not
+        /// be read as confirmed impact.
         #[tokio::test]
         async fn access_map_only_excludes_findings_whose_mapping_failed() {
             let server = MockServer::start().await;
@@ -1034,9 +1026,8 @@ mod tests {
         }
 
         /// Regression: the collector maps a credential once and keeps only the
-        /// first occurrence's fingerprint, while finding fingerprints include
-        /// the occurrence offsets. Every occurrence the mapping covers must
-        /// still be reported, and its resources counted once.
+        /// first occurrence's fingerprint, but every occurrence it covers must
+        /// still be reported — with its resources counted once.
         #[tokio::test]
         async fn access_map_only_keeps_every_occurrence_of_a_mapped_credential() {
             let server = MockServer::start().await;
@@ -1072,8 +1063,7 @@ mod tests {
                 .mount(&server)
                 .await;
 
-            // `all` still reports both findings — only the impact number must
-            // stay honest about one mapping having failed.
+            // `all` still reports both findings; only the impact count changes.
             let sink = test_sink(&server.uri());
 
             let mut failed = access_map_entry("aws", "fp-failed", &[""]);
@@ -1126,9 +1116,8 @@ mod tests {
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
         }
 
-        /// A dry-run payload goes to the log, which typically persists (CI job
-        /// output, journald). `--alert-include-secret` must not leak the secret
-        /// there, even though it would be included in a real POST.
+        /// The dry-run payload is logged, and logs persist, so
+        /// `--alert-include-secret` must not leak the secret into it.
         #[tokio::test]
         async fn dry_run_redacts_secrets_even_when_the_sink_includes_them() {
             let logs = CaptureWriter::default();
@@ -1137,8 +1126,8 @@ mod tests {
                 .with_ansi(false)
                 .with_max_level(tracing::Level::INFO)
                 .finish();
-            // `#[tokio::test]` runs on the current thread, so a thread-local
-            // default subscriber stays installed across the `.await` below.
+            // `#[tokio::test]` is single-threaded, so this thread-local
+            // subscriber stays installed across the `.await` below.
             let _guard = tracing::subscriber::set_default(subscriber);
 
             let mut sink = test_sink("https://hooks.example.com/services/T0/B0/XXX");
@@ -1157,8 +1146,7 @@ mod tests {
             assert!(logged.contains("<redacted>"), "dry-run log has no payload: {logged}");
         }
 
-        /// In-memory `MakeWriter` so a test can assert on what `dispatch`
-        /// actually wrote to the log.
+        /// In-memory `MakeWriter` to assert on what `dispatch` logged.
         #[derive(Clone, Default)]
         struct CaptureWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 

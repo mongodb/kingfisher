@@ -1554,9 +1554,8 @@ pub struct AccessMapEntry {
     /// found more than once. Empty when `fingerprint` is the only occurrence.
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub fingerprints: Vec<String>,
-    /// `Some(error)` when identity mapping failed for this credential, meaning
-    /// the groups below are placeholders rather than an observed blast radius.
-    /// Consumers that report impact must exclude these entries.
+    /// `Some(error)` when identity mapping failed: the groups below are
+    /// placeholders, not an observed blast radius.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mapping_error: Option<String>,
     /// Permissions classified by severity (admin / privilege_escalation / risky / read_only).
