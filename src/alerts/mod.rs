@@ -196,7 +196,7 @@ pub struct AlertSummary {
 /// `--access-map` results indexed for alert dispatch. Impact is keyed per
 /// credential, not per finding, since one mapping covers every occurrence.
 #[derive(Clone, Debug, Default)]
-pub struct AccessMapImpact {
+struct AccessMapImpact {
     credential_by_fingerprint: HashMap<String, usize>,
     resources_per_credential: Vec<usize>,
 }
@@ -204,7 +204,7 @@ pub struct AccessMapImpact {
 impl AccessMapImpact {
     /// Entries whose identity mapping failed are skipped: their placeholder
     /// resource would report impact that was never established.
-    pub fn from_entries(entries: &[AccessMapEntry]) -> Self {
+    fn from_entries(entries: &[AccessMapEntry]) -> Self {
         let mut credential_by_fingerprint: HashMap<String, usize> = HashMap::new();
         let mut resources_per_credential = Vec::new();
         for entry in entries.iter().filter(|e| e.mapping_error.is_none()) {
@@ -225,13 +225,13 @@ impl AccessMapImpact {
     }
 
     /// True when this finding's credential was successfully access-mapped.
-    pub fn is_mapped(&self, fingerprint: &str) -> bool {
+    fn is_mapped(&self, fingerprint: &str) -> bool {
         self.credential_by_fingerprint.contains_key(fingerprint)
     }
 
     /// Resources exposed by the distinct credentials behind `findings`. A
     /// credential found at several offsets contributes its resources once.
-    pub fn impacted_resources(&self, findings: &[&FindingReporterRecord]) -> usize {
+    fn impacted_resources(&self, findings: &[&FindingReporterRecord]) -> usize {
         let mut counted = std::collections::HashSet::new();
         findings
             .iter()
@@ -243,13 +243,7 @@ impl AccessMapImpact {
 }
 
 impl AlertSummary {
-    /// `access_map_impact` is this scan's access-map index (see `dispatch`);
-    /// pass a default value when access-map data isn't available.
-    pub fn from_findings(
-        findings: &[&FindingReporterRecord],
-        target: Option<String>,
-        access_map_impact: &AccessMapImpact,
-    ) -> Self {
+    pub fn from_findings(findings: &[&FindingReporterRecord], target: Option<String>) -> Self {
         let mut active = 0usize;
         let mut inactive = 0usize;
         let mut unknown = 0usize;
@@ -262,7 +256,6 @@ impl AlertSummary {
                 _ => unknown += 1,
             }
         }
-        let impacted_resources = access_map_impact.impacted_resources(findings);
         let mut by_rule: Vec<(String, usize)> = by_rule_map.into_iter().collect();
         by_rule.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         by_rule.truncate(5);
@@ -276,12 +269,9 @@ impl AlertSummary {
             kingfisher_version: env!("CARGO_PKG_VERSION").to_string(),
             target,
             report_url: None,
-            // Placeholder; `dispatch` overwrites this per-sink with a resolved
-            // value (`Summary` or `Detail`) before calling `build_payload`.
+            // `dispatch` overlays these three per-sink, before any builder runs.
             detail: AlertDetail::Detail,
-            impacted_resources,
-            // Placeholder; `dispatch` overwrites this immediately with the
-            // whole-scan finding count.
+            impacted_resources: 0,
             unfiltered_total: 0,
         }
     }
@@ -463,11 +453,11 @@ pub async fn dispatch(
             }
             other => other,
         };
-        let mut summary =
-            AlertSummary::from_findings(&filtered, target.clone(), &access_map_impact);
+        let mut summary = AlertSummary::from_findings(&filtered, target.clone());
         summary.report_url = sink.report_url.clone();
         summary.detail = resolved_detail;
         summary.unfiltered_total = unfiltered_total;
+        summary.impacted_resources = access_map_impact.impacted_resources(&filtered);
 
         // The dry-run payload is logged, and logs persist — never copy a
         // secret there, even for a sink that includes secrets in real POSTs.
