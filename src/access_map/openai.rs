@@ -742,6 +742,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let severity = derive_severity(&permissions, &orgs, has_model_capabilities);
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "openai".into(),
         identity: AccessSummary {
             id: identity_id,

@@ -207,6 +207,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let severity = derive_severity(&senders);
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "sendinblue".into(),
         identity,
         roles,

@@ -74,6 +74,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
 
     let severity = Severity::Medium;
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "jfrog_xray".into(),
         identity: AccessSummary {
             id: "unknown_xray_user".into(),
@@ -234,6 +235,7 @@ pub async fn map_access_from_token_and_url(token: &str, base_url: &str) -> Resul
     }
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "jfrog_xray".into(),
         identity: AccessSummary {
             id: "xray_token".into(),

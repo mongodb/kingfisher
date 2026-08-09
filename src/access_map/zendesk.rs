@@ -188,6 +188,7 @@ pub async fn map_access_from_token_and_subdomain(
         .unwrap_or_else(|| format!("zendesk_user:{user_id}"));
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "zendesk".into(),
         identity: AccessSummary {
             id: identity_id,

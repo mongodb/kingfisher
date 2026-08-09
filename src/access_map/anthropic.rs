@@ -185,6 +185,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let severity = derive_severity(&permissions);
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "anthropic".into(),
         identity: AccessSummary {
             id: "anthropic_api_key".into(),

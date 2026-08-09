@@ -81,7 +81,10 @@ independent of confidence:
   without it, the filter matches nothing and the sink never reports (a
   `WARN` is logged at startup if this combination is detected). Since
   access-mapping only ever runs on validated, active credentials, this is
-  the strictest tier — a subset of `only-active`.
+  the strictest tier — a subset of `only-active`. Credentials whose identity
+  mapping *failed* (the provider refused the lookup, the network was
+  unavailable, …) do not count: the report records the mapping error, and the
+  finding is treated as unmapped rather than as confirmed impact.
 
 Every summary count in a payload (total/active/inactive/unknown, and
 `impacted_resources` when access-map data is available) reflects that sink's

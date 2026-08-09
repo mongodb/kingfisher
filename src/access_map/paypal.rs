@@ -188,6 +188,7 @@ pub async fn map_access_from_credentials(
     permissions.read_only.dedup();
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "paypal".into(),
         identity: AccessSummary {
             id: identity_id,

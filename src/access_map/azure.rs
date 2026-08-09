@@ -175,6 +175,7 @@ async fn map_storage_access(
     };
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "azure".into(),
         identity,
         roles,
@@ -735,6 +736,7 @@ async fn map_enterprise_access(config: EnterpriseCredential) -> Result<AccessMap
     }
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "azure".into(),
         identity: AccessSummary {
             id: identity_id,

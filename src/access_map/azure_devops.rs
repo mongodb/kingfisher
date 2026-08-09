@@ -221,6 +221,7 @@ pub async fn map_access_from_token(token: &str, organization: &str) -> Result<Ac
     let token_scopes = if scopes.is_empty() { pat_scopes.clone() } else { scopes.clone() };
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "azure_devops".into(),
         identity,
         roles,

@@ -213,6 +213,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
         .or_else(|| Some(user.login.clone()));
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "gitea".into(),
         identity,
         roles,

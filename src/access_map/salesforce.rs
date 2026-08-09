@@ -466,6 +466,7 @@ fn build_access_map(
     recommendations.dedup();
 
     AccessMapResult {
+        mapping_error: None,
         cloud: "salesforce".into(),
         identity: AccessSummary {
             id: identity_id,

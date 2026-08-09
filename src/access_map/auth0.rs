@@ -208,6 +208,7 @@ pub async fn map_access_from_credentials(
     permissions.read_only.dedup();
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "auth0".into(),
         identity: AccessSummary {
             id: format!("{client_id}@{domain}"),

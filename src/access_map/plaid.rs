@@ -158,6 +158,7 @@ pub async fn map_access_from_credentials(client_id: &str, secret: &str) -> Resul
     permissions.read_only.dedup();
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "plaid".into(),
         identity: AccessSummary {
             id: client_id.to_string(),

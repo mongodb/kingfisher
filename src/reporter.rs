@@ -1293,6 +1293,7 @@ impl DetailsReporter {
                 token_details: result.token_details.clone(),
                 provider_metadata: result.provider_metadata.clone(),
                 fingerprint: result.fingerprint.clone(),
+                mapping_error: result.mapping_error.clone(),
                 permissions_by_severity,
                 context,
             });
@@ -1508,6 +1509,11 @@ pub struct AccessMapEntry {
     pub provider_metadata: Option<ProviderMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// `Some(error)` when identity mapping failed for this credential, meaning
+    /// the groups below are placeholders rather than an observed blast radius.
+    /// Consumers that report impact must exclude these entries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mapping_error: Option<String>,
     /// Permissions classified by severity (admin / privilege_escalation / risky / read_only).
     /// Same shape as PermissionSummary; aggregated across all groups for this identity.
     /// Absent when the underlying provider didn't classify (e.g., imported reports).

@@ -375,9 +375,12 @@ pub async fn dispatch(
     // Sum of per-group resource counts per fingerprint; a resource split
     // across two permission groups is counted twice — acceptable for a rough
     // "impacted resources" indicator. Entries without a fingerprint can't be
-    // tied to a specific finding and are excluded.
+    // tied to a specific finding and are excluded, and so are entries whose
+    // identity mapping failed: those carry a placeholder resource, so counting
+    // them would report impact that was never established.
     let access_map_impact: HashMap<String, usize> = access_map
         .iter()
+        .filter(|e| e.mapping_error.is_none())
         .filter_map(|e| {
             e.fingerprint.clone().map(|fp| (fp, e.groups.iter().map(|g| g.resources.len()).sum()))
         })
@@ -802,6 +805,31 @@ mod tests {
         }
     }
 
+    /// A successfully-mapped access-map entry for `fingerprint`, with a single
+    /// permission group covering `resources`. Tests that need a failed mapping
+    /// set `mapping_error` on the returned entry.
+    fn access_map_entry(
+        provider: &str,
+        fingerprint: &str,
+        resources: &[&str],
+    ) -> crate::reporter::AccessMapEntry {
+        use crate::reporter::{AccessMapEntry, AccessMapResourceGroup};
+        AccessMapEntry {
+            provider: provider.to_string(),
+            account: None,
+            groups: vec![AccessMapResourceGroup {
+                resources: resources.iter().map(|r| r.to_string()).collect(),
+                permissions: vec![],
+            }],
+            token_details: None,
+            provider_metadata: None,
+            fingerprint: Some(fingerprint.to_string()),
+            mapping_error: None,
+            permissions_by_severity: None,
+            context: None,
+        }
+    }
+
     fn test_sink(url: &str) -> AlertSink {
         AlertSink {
             url: url.to_string(),
@@ -885,8 +913,6 @@ mod tests {
 
         #[tokio::test]
         async fn access_map_only_filters_to_matching_fingerprint_and_reports_impact() {
-            use crate::reporter::AccessMapResourceGroup;
-
             let server = MockServer::start().await;
             Mock::given(method("POST"))
                 .respond_with(ResponseTemplate::new(200))
@@ -899,22 +925,11 @@ mod tests {
 
             let mapped = record_with("kingfisher.aws.1", "fp-mapped", "High", VO::VerifiedActive);
             let unmapped = record_with("kingfisher.aws.2", "fp-other", "High", VO::VerifiedActive);
-            let access_map = vec![AccessMapEntry {
-                provider: "aws".to_string(),
-                account: None,
-                groups: vec![AccessMapResourceGroup {
-                    resources: vec![
-                        "arn:aws:s3:::bucket-a".to_string(),
-                        "arn:aws:s3:::bucket-b".to_string(),
-                    ],
-                    permissions: vec![],
-                }],
-                token_details: None,
-                provider_metadata: None,
-                fingerprint: Some("fp-mapped".to_string()),
-                permissions_by_severity: None,
-                context: None,
-            }];
+            let access_map = vec![access_map_entry(
+                "aws",
+                "fp-mapped",
+                &["arn:aws:s3:::bucket-a", "arn:aws:s3:::bucket-b"],
+            )];
 
             dispatch(&[sink], &[mapped, unmapped], &access_map, None, false).await;
 
@@ -928,8 +943,6 @@ mod tests {
 
         #[tokio::test]
         async fn access_map_only_excludes_finding_with_access_map_entry_but_inactive_status() {
-            use crate::reporter::AccessMapResourceGroup;
-
             // Regression: an access-map entry can be recorded for a finding
             // that never validated as active (e.g. a GitLab-rule finding
             // recorded on a bare 2xx response). AccessMapOnly must still
@@ -947,23 +960,66 @@ mod tests {
 
             let inactive_but_mapped =
                 record_with("kingfisher.gitlab.1", "fp-gitlab", "High", VO::VerifiedInactive);
-            let access_map = vec![AccessMapEntry {
-                provider: "gitlab".to_string(),
-                account: None,
-                groups: vec![AccessMapResourceGroup {
-                    resources: vec!["group/project".to_string()],
-                    permissions: vec![],
-                }],
-                token_details: None,
-                provider_metadata: None,
-                fingerprint: Some("fp-gitlab".to_string()),
-                permissions_by_severity: None,
-                context: None,
-            }];
+            let access_map = vec![access_map_entry("gitlab", "fp-gitlab", &["group/project"])];
 
             dispatch(&[sink], &[inactive_but_mapped], &access_map, None, false).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        }
+
+        /// Regression: `map_requests` assigns the finding fingerprint even when
+        /// the mapper fell back to `build_failed_result`, whose placeholder
+        /// carries one synthetic resource. A failed mapping established no
+        /// blast radius, so `access-map-only` must not treat it as impact.
+        #[tokio::test]
+        async fn access_map_only_excludes_findings_whose_mapping_failed() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.finding_filter = AlertFindingFilter::AccessMapOnly;
+            sink.prevent_empty = true;
+
+            let mut failed = access_map_entry("aws", "fp-failed", &[""]);
+            failed.mapping_error = Some("sts:GetCallerIdentity returned 403".to_string());
+
+            let findings =
+                vec![record_with("kingfisher.aws.1", "fp-failed", "High", VO::VerifiedActive)];
+            dispatch(&[sink], &findings, &[failed], None, false).await;
+
+            assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        }
+
+        #[tokio::test]
+        async fn failed_mapping_is_not_counted_in_impacted_resources() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            // `all` still reports both findings — only the impact number must
+            // stay honest about one mapping having failed.
+            let sink = test_sink(&server.uri());
+
+            let mut failed = access_map_entry("aws", "fp-failed", &[""]);
+            failed.mapping_error = Some("sts:GetCallerIdentity returned 403".to_string());
+            let mapped = access_map_entry("aws", "fp-mapped", &["arn:aws:s3:::bucket-a"]);
+
+            let findings = vec![
+                record_with("kingfisher.aws.1", "fp-failed", "High", VO::VerifiedActive),
+                record_with("kingfisher.aws.2", "fp-mapped", "High", VO::VerifiedActive),
+            ];
+            dispatch(&[sink], &findings, &[failed, mapped], None, false).await;
+
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            let body: serde_json::Value = requests[0].body_json().unwrap();
+            assert_eq!(body["findings"].as_array().unwrap().len(), 2);
+            assert_eq!(body["summary"]["impacted_resources"], 1);
         }
 
         #[tokio::test]

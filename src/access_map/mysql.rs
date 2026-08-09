@@ -191,6 +191,7 @@ pub async fn map_access_from_uri(uri: &str) -> Result<AccessMapResult> {
     };
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "mysql".into(),
         identity,
         roles,

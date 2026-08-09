@@ -170,6 +170,7 @@ pub async fn map_access_with_credentials(
     }
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "alibaba".into(),
         identity,
         roles,

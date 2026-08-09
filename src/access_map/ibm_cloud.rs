@@ -205,6 +205,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     }
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "ibm_cloud".into(),
         identity,
         roles,

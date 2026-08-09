@@ -164,6 +164,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let identity_label = token_name.unwrap_or_else(|| "harness_api_key".to_string());
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "harness".into(),
         identity: AccessSummary {
             id: identity_label,

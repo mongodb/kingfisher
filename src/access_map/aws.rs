@@ -140,6 +140,7 @@ async fn map_access_with_config(config: SdkConfig) -> Result<AccessMapResult> {
     let recommendations = build_recommendations(severity);
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "aws".into(),
         identity,
         roles,

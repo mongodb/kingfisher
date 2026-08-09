@@ -82,6 +82,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
 
     let severity = Severity::Medium;
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "artifactory".into(),
         identity: AccessSummary {
             id: "unknown_artifactory_user".into(),
@@ -219,6 +220,7 @@ pub async fn map_access_from_token_and_url(token: &str, base_url: &str) -> Resul
     let identity_id = user_email.clone().unwrap_or_else(|| username.clone());
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "artifactory".into(),
         identity: AccessSummary {
             id: if identity_id.is_empty() { "artifactory_token".to_string() } else { identity_id },

@@ -236,6 +236,7 @@ pub async fn map_access_from_uri(pg_url: &str) -> Result<AccessMapResult> {
     };
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "postgres".into(),
         identity,
         roles,

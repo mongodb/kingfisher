@@ -201,6 +201,7 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
     });
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "gcp".into(),
         identity,
         roles,

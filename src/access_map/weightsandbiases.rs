@@ -101,6 +101,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let severity = Severity::Medium;
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "weightsandbiases".into(),
         identity: AccessSummary {
             id: identity_id,

@@ -200,6 +200,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let severity = derive_severity(has_payments, has_customers, &detected_scopes);
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "square".into(),
         identity,
         roles,

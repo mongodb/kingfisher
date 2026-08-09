@@ -161,6 +161,7 @@ pub async fn map_access_from_token_and_subdomain(
     }
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "shopify".into(),
         identity: AccessSummary {
             id: shop_email.clone().unwrap_or_else(|| shop_name.clone()),

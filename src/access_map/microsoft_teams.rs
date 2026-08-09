@@ -79,6 +79,7 @@ pub async fn map_access_from_webhook_url(webhook_url: &str) -> Result<AccessMapR
     };
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "microsoft_teams".into(),
         identity: AccessSummary {
             id: format!("webhook:{}", parsed.webhook_id),

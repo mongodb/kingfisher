@@ -159,6 +159,7 @@ pub async fn map_access_from_token_and_url(token: &str, base_url: &str) -> Resul
     }
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "jira".into(),
         identity: AccessSummary {
             id: identity_id,

@@ -236,6 +236,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     }
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "pinecone".into(),
         identity: AccessSummary {
             id: "pinecone_api_key".into(),

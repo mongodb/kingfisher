@@ -167,6 +167,7 @@ pub async fn map_access_from_credentials(app_id: &str, api_key: &str) -> Result<
     permissions.read_only.dedup();
 
     Ok(AccessMapResult {
+        mapping_error: None,
         cloud: "algolia".into(),
         identity: AccessSummary {
             id: format!("{app_id}:{}", &api_key[..api_key.len().min(8)]),
