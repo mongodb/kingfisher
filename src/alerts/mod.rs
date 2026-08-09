@@ -344,7 +344,8 @@ pub fn redact_webhook(url: &str) -> String {
 /// `access_map` is the (possibly empty) set of `--access-map` results for
 /// this scan; used both for `AlertFindingFilter::AccessMapOnly` filtering and
 /// to populate `AlertSummary::impacted_resources`. `dry_run` builds and logs
-/// each sink's resolved payload instead of POSTing it.
+/// each sink's resolved payload instead of POSTing it — always redacted, since
+/// a logged payload outlives the run.
 pub async fn dispatch(
     sinks: &[AlertSink],
     findings: &[FindingReporterRecord],
@@ -431,20 +432,28 @@ pub async fn dispatch(
         summary.detail = resolved_detail;
         summary.unfiltered_total = unfiltered_total;
 
+        // A dry-run payload is written to the log, where it typically persists
+        // (CI job output, journald, log shipper). Never copy a secret there,
+        // even when the sink is configured to include secrets in real POSTs.
+        let include_secret = sink.include_secret && !dry_run;
+        if dry_run && sink.include_secret {
+            warn!(
+                "alert dry-run: secrets are redacted in the logged payload for {}; \
+                 --alert-include-secret only applies to real POSTs",
+                redact_webhook(&sink.url)
+            );
+        }
+
         let payload = match sink.format {
-            AlertFormat::Slack => slack::build_payload(&summary, &filtered, sink.include_secret),
-            AlertFormat::Teams => teams::build_payload(&summary, &filtered, sink.include_secret),
-            AlertFormat::Generic => {
-                generic::build_payload(&summary, &filtered, sink.include_secret)
-            }
-            AlertFormat::Discord => {
-                discord::build_payload(&summary, &filtered, sink.include_secret)
-            }
+            AlertFormat::Slack => slack::build_payload(&summary, &filtered, include_secret),
+            AlertFormat::Teams => teams::build_payload(&summary, &filtered, include_secret),
+            AlertFormat::Generic => generic::build_payload(&summary, &filtered, include_secret),
+            AlertFormat::Discord => discord::build_payload(&summary, &filtered, include_secret),
             AlertFormat::Mattermost => {
-                mattermost::build_payload(&summary, &filtered, sink.include_secret)
+                mattermost::build_payload(&summary, &filtered, include_secret)
             }
             AlertFormat::Googlechat => {
-                googlechat::build_payload(&summary, &filtered, sink.include_secret)
+                googlechat::build_payload(&summary, &filtered, include_secret)
             }
         };
 
@@ -988,6 +997,67 @@ mod tests {
             dispatch(&[sink], &findings, &[], None, true).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        }
+
+        /// A dry-run payload goes to the log, which typically persists (CI job
+        /// output, journald). `--alert-include-secret` must not leak the secret
+        /// there, even though it would be included in a real POST.
+        #[tokio::test]
+        async fn dry_run_redacts_secrets_even_when_the_sink_includes_them() {
+            let logs = CaptureWriter::default();
+            let subscriber = tracing_subscriber::fmt()
+                .with_writer(logs.clone())
+                .with_ansi(false)
+                .with_max_level(tracing::Level::INFO)
+                .finish();
+            // `#[tokio::test]` runs on the current thread, so a thread-local
+            // default subscriber stays installed across the `.await` below.
+            let _guard = tracing::subscriber::set_default(subscriber);
+
+            let mut sink = test_sink("https://hooks.example.com/services/T0/B0/XXX");
+            sink.include_secret = true;
+
+            let mut finding = record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive);
+            finding.finding.snippet = "AKIAIOSFODNN7EXAMPLE-live-value".to_string();
+
+            dispatch(&[sink], &[finding], &[], None, true).await;
+
+            let logged = logs.contents();
+            assert!(
+                !logged.contains("AKIAIOSFODNN7EXAMPLE"),
+                "dry-run log leaked the secret: {logged}"
+            );
+            assert!(logged.contains("<redacted>"), "dry-run log has no payload: {logged}");
+        }
+
+        /// In-memory `MakeWriter` so a test can assert on what `dispatch`
+        /// actually wrote to the log.
+        #[derive(Clone, Default)]
+        struct CaptureWriter(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+        impl CaptureWriter {
+            fn contents(&self) -> String {
+                String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
+            }
+        }
+
+        impl std::io::Write for CaptureWriter {
+            fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for CaptureWriter {
+            type Writer = Self;
+
+            fn make_writer(&'a self) -> Self::Writer {
+                self.clone()
+            }
         }
 
         #[tokio::test]

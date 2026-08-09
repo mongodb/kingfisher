@@ -52,12 +52,12 @@ always self-hosted), so it is **never** inferred — pass
 | `--alert-format slack\|teams\|generic\|discord\|mattermost\|googlechat` | inferred | Payload shape. |
 | `--alert-on findings\|always` | `findings` | `always` posts even on a clean run. |
 | `--alert-min-confidence low\|medium\|high` | `medium` | Findings below this are dropped from the payload. |
-| `--alert-include-secret` | off | Include the (truncated to ~32 chars) secret value in the payload. |
+| `--alert-include-secret` | off | Include the (truncated to ~32 chars) secret value in the payload. Ignored under `--alert-dry-run`, which always redacts. |
 | `--alert-report-url URL` | *(none)* | Pivot link rendered in every payload — typically a CI run URL or report-artifact URL. Reads `KINGFISHER_ALERT_REPORT_URL` env var as a fallback. |
 | `--alert-detail summary\|detail\|auto` | `auto` | How much per-finding detail to render. `auto` switches to `summary` once the per-sink filtered finding count exceeds 25. |
 | `--alert-finding-filter all\|exclude-inactive\|only-active\|access-map-only` | `all` | Restrict which findings a sink reports, on top of `--alert-min-confidence`. See [Finding filters](#finding-filters) below. |
 | `--alert-prevent-empty` | off | Skip a sink entirely when `--alert-min-confidence` / `--alert-finding-filter` leave nothing to report, instead of posting an alert with an empty findings list. Does **not** suppress the deliberate `--alert-on always` clean-scan heartbeat. Off by default to preserve existing behavior on upgrade. |
-| `--alert-dry-run` | off | Build and log each sink's resolved payload instead of POSTing it — use to validate filter configuration before wiring a real webhook URL. |
+| `--alert-dry-run` | off | Build and log each sink's resolved payload instead of POSTing it — use to validate filter configuration before wiring a real webhook URL. Secrets are always redacted in the logged payload (a log outlives the run), so `--alert-include-secret` has no effect here; a `WARN` is emitted when both are set. |
 
 Webhook URLs are sensitive: the host/path/query are redacted in logs. Pass them
 via environment variables (`$SLACK_SECURITY_WEBHOOK`) or CI secrets, never
