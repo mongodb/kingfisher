@@ -247,18 +247,22 @@ impl AlertSummary {
         let mut active = 0usize;
         let mut inactive = 0usize;
         let mut unknown = 0usize;
-        let mut by_rule_map: HashMap<String, usize> = HashMap::new();
+        // Borrow the rule ids while counting; this runs once per sink, so only
+        // the five that survive the truncation are worth allocating.
+        let mut by_rule_map: HashMap<&str, usize> = HashMap::new();
         for f in findings {
-            *by_rule_map.entry(f.rule.id.clone()).or_default() += 1;
+            *by_rule_map.entry(f.rule.id.as_str()).or_default() += 1;
             match f.finding.validation.outcome {
                 ValidationOutcome::VerifiedActive => active += 1,
                 ValidationOutcome::VerifiedInactive => inactive += 1,
                 _ => unknown += 1,
             }
         }
-        let mut by_rule: Vec<(String, usize)> = by_rule_map.into_iter().collect();
-        by_rule.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
-        by_rule.truncate(5);
+        let mut counted: Vec<(&str, usize)> = by_rule_map.into_iter().collect();
+        counted.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+        counted.truncate(5);
+        let by_rule: Vec<(String, usize)> =
+            counted.into_iter().map(|(id, count)| (id.to_string(), count)).collect();
 
         Self {
             total: findings.len(),
