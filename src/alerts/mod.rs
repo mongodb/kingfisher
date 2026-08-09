@@ -192,19 +192,70 @@ pub struct AlertSummary {
     pub unfiltered_total: usize,
 }
 
+/// `--access-map` results indexed for alert dispatch: which findings belong to
+/// a mapped credential, and how many resources that credential exposes.
+///
+/// Impact is stored per credential rather than per finding, since one mapping
+/// result covers every occurrence of the same credential — see
+/// [`AccessMapImpact::impacted_resources`].
+#[derive(Clone, Debug, Default)]
+pub struct AccessMapImpact {
+    credential_by_fingerprint: HashMap<String, usize>,
+    resources_per_credential: Vec<usize>,
+}
+
+impl AccessMapImpact {
+    /// Entries whose identity mapping failed are skipped: their placeholder
+    /// resource would report impact that was never established.
+    pub fn from_entries(entries: &[AccessMapEntry]) -> Self {
+        let mut credential_by_fingerprint: HashMap<String, usize> = HashMap::new();
+        let mut resources_per_credential = Vec::new();
+        for entry in entries.iter().filter(|e| e.mapping_error.is_none()) {
+            // A resource split across two permission groups is counted twice —
+            // acceptable for a rough "impacted resources" indicator.
+            let resources: usize = entry.groups.iter().map(|g| g.resources.len()).sum();
+            let credential = resources_per_credential.len();
+            let mut mapped = false;
+            for fingerprint in entry.fingerprint.iter().chain(entry.fingerprints.iter()) {
+                credential_by_fingerprint.insert(fingerprint.clone(), credential);
+                mapped = true;
+            }
+            if mapped {
+                resources_per_credential.push(resources);
+            }
+        }
+        Self { credential_by_fingerprint, resources_per_credential }
+    }
+
+    /// True when this finding's credential was successfully access-mapped.
+    pub fn is_mapped(&self, fingerprint: &str) -> bool {
+        self.credential_by_fingerprint.contains_key(fingerprint)
+    }
+
+    /// Resources exposed by the distinct credentials behind `findings`. A
+    /// credential found at several offsets contributes its resources once.
+    pub fn impacted_resources(&self, findings: &[&FindingReporterRecord]) -> usize {
+        let mut counted = std::collections::HashSet::new();
+        findings
+            .iter()
+            .filter_map(|f| self.credential_by_fingerprint.get(&f.finding.fingerprint))
+            .filter(|credential| counted.insert(**credential))
+            .map(|credential| self.resources_per_credential[*credential])
+            .sum()
+    }
+}
+
 impl AlertSummary {
-    /// `access_map_impact` maps a finding's fingerprint to its impacted-
-    /// resource count (see `dispatch`); pass an empty map when access-map
-    /// data isn't available.
+    /// `access_map_impact` is this scan's access-map index (see `dispatch`);
+    /// pass a default value when access-map data isn't available.
     pub fn from_findings(
         findings: &[&FindingReporterRecord],
         target: Option<String>,
-        access_map_impact: &HashMap<String, usize>,
+        access_map_impact: &AccessMapImpact,
     ) -> Self {
         let mut active = 0usize;
         let mut inactive = 0usize;
         let mut unknown = 0usize;
-        let mut impacted_resources = 0usize;
         let mut by_rule_map: HashMap<String, usize> = HashMap::new();
         for f in findings {
             *by_rule_map.entry(f.rule.id.clone()).or_default() += 1;
@@ -213,9 +264,8 @@ impl AlertSummary {
                 ValidationOutcome::VerifiedInactive => inactive += 1,
                 _ => unknown += 1,
             }
-            impacted_resources +=
-                access_map_impact.get(&f.finding.fingerprint).copied().unwrap_or(0);
         }
+        let impacted_resources = access_map_impact.impacted_resources(findings);
         let mut by_rule: Vec<(String, usize)> = by_rule_map.into_iter().collect();
         by_rule.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
         by_rule.truncate(5);
@@ -372,19 +422,7 @@ pub async fn dispatch(
     };
 
     let unfiltered_total = findings.len();
-    // Sum of per-group resource counts per fingerprint; a resource split
-    // across two permission groups is counted twice — acceptable for a rough
-    // "impacted resources" indicator. Entries without a fingerprint can't be
-    // tied to a specific finding and are excluded, and so are entries whose
-    // identity mapping failed: those carry a placeholder resource, so counting
-    // them would report impact that was never established.
-    let access_map_impact: HashMap<String, usize> = access_map
-        .iter()
-        .filter(|e| e.mapping_error.is_none())
-        .filter_map(|e| {
-            e.fingerprint.clone().map(|fp| (fp, e.groups.iter().map(|g| g.resources.len()).sum()))
-        })
-        .collect();
+    let access_map_impact = AccessMapImpact::from_entries(access_map);
     debug!("alert dispatch: total={} sinks={}", unfiltered_total, sinks.len());
 
     for sink in sinks {
@@ -499,14 +537,14 @@ fn matches_finding_filter(
     outcome: ValidationOutcome,
     fingerprint: &str,
     filter: AlertFindingFilter,
-    access_map_impact: &HashMap<String, usize>,
+    access_map_impact: &AccessMapImpact,
 ) -> bool {
     match filter {
         AlertFindingFilter::All => true,
         AlertFindingFilter::ExcludeInactive => outcome != ValidationOutcome::VerifiedInactive,
         AlertFindingFilter::OnlyActive => outcome.is_verified_active(),
         AlertFindingFilter::AccessMapOnly => {
-            outcome.is_verified_active() && access_map_impact.contains_key(fingerprint)
+            outcome.is_verified_active() && access_map_impact.is_mapped(fingerprint)
         }
     }
 }
@@ -687,7 +725,7 @@ mod tests {
 
     #[test]
     fn finding_filter_all_matches_everything() {
-        let map = HashMap::new();
+        let map = AccessMapImpact::default();
         for outcome in [VO::VerifiedActive, VO::VerifiedInactive, VO::NotAttempted, VO::Assumed] {
             assert!(matches_finding_filter(outcome, "fp1", AlertFindingFilter::All, &map));
         }
@@ -695,7 +733,7 @@ mod tests {
 
     #[test]
     fn finding_filter_exclude_inactive_drops_only_inactive() {
-        let map = HashMap::new();
+        let map = AccessMapImpact::default();
         assert!(matches_finding_filter(
             VO::VerifiedActive,
             "fp1",
@@ -718,7 +756,7 @@ mod tests {
 
     #[test]
     fn finding_filter_only_active_keeps_only_verified_active() {
-        let map = HashMap::new();
+        let map = AccessMapImpact::default();
         assert!(matches_finding_filter(
             VO::VerifiedActive,
             "fp1",
@@ -734,8 +772,11 @@ mod tests {
 
     #[test]
     fn finding_filter_access_map_only_requires_fingerprint_match() {
-        let mut map = HashMap::new();
-        map.insert("fp-mapped".to_string(), 3usize);
+        let map = AccessMapImpact::from_entries(&[access_map_entry(
+            "aws",
+            "fp-mapped",
+            &["bucket-a", "bucket-b", "bucket-c"],
+        )]);
         assert!(matches_finding_filter(
             VO::VerifiedActive,
             "fp-mapped",
@@ -757,8 +798,8 @@ mod tests {
         // recorded on a bare 2xx response per maybe_record_access_map in
         // scanner/validation.rs). AccessMapOnly must not let that through —
         // its doc comment promises it's a subset of OnlyActive.
-        let mut map = HashMap::new();
-        map.insert("fp-gitlab".to_string(), 1usize);
+        let map =
+            AccessMapImpact::from_entries(&[access_map_entry("gitlab", "fp-gitlab", &["group/p"])]);
         assert!(!matches_finding_filter(
             VO::VerifiedInactive,
             "fp-gitlab",
@@ -824,6 +865,7 @@ mod tests {
             token_details: None,
             provider_metadata: None,
             fingerprint: Some(fingerprint.to_string()),
+            fingerprints: Vec::new(),
             mapping_error: None,
             permissions_by_severity: None,
             context: None,
@@ -991,6 +1033,37 @@ mod tests {
             dispatch(&[sink], &findings, &[failed], None, false).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        }
+
+        /// Regression: the collector maps a credential once and keeps only the
+        /// first occurrence's fingerprint, while finding fingerprints include
+        /// the occurrence offsets. Every occurrence the mapping covers must
+        /// still be reported, and its resources counted once.
+        #[tokio::test]
+        async fn access_map_only_keeps_every_occurrence_of_a_mapped_credential() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.finding_filter = AlertFindingFilter::AccessMapOnly;
+
+            let mut entry = access_map_entry("aws", "fp-first", &["arn:aws:s3:::bucket-a"]);
+            entry.fingerprints = vec!["fp-first".to_string(), "fp-second".to_string()];
+
+            let findings = vec![
+                record_with("kingfisher.aws.1", "fp-first", "High", VO::VerifiedActive),
+                record_with("kingfisher.aws.1", "fp-second", "High", VO::VerifiedActive),
+            ];
+            dispatch(&[sink], &findings, &[entry], None, false).await;
+
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            let body: serde_json::Value = requests[0].body_json().unwrap();
+            assert_eq!(body["findings"].as_array().unwrap().len(), 2);
+            assert_eq!(body["summary"]["impacted_resources"], 1);
         }
 
         #[tokio::test]

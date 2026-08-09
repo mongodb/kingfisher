@@ -84,7 +84,9 @@ independent of confidence:
   the strictest tier — a subset of `only-active`. Credentials whose identity
   mapping *failed* (the provider refused the lookup, the network was
   unavailable, …) do not count: the report records the mapping error, and the
-  finding is treated as unmapped rather than as confirmed impact.
+  finding is treated as unmapped rather than as confirmed impact. A credential
+  found in several places is mapped once, and every occurrence is reported;
+  `impacted_resources` counts that credential's resources once.
 
 Every summary count in a payload (total/active/inactive/unknown, and
 `impacted_resources` when access-map data is available) reflects that sink's

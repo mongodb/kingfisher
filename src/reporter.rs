@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fmt::Write,
     sync::{Arc, Mutex},
 };
@@ -24,6 +24,7 @@ use crate::{
     cli,
     cli::global::GlobalArgs,
     finding_data, findings_store,
+    findings_store::FindingsStoreMessage,
     matcher::{Match, compute_finding_fingerprint},
     origin::{Origin, OriginSet},
     rules::Revocation,
@@ -1257,6 +1258,8 @@ impl DetailsReporter {
             return None;
         }
 
+        let occurrences = credential_occurrences(ds.get_matches());
+
         let mut entries = Vec::new();
         for result in raw_results {
             let account = summarize_account(&result.identity);
@@ -1293,6 +1296,12 @@ impl DetailsReporter {
                 token_details: result.token_details.clone(),
                 provider_metadata: result.provider_metadata.clone(),
                 fingerprint: result.fingerprint.clone(),
+                fingerprints: result
+                    .fingerprint
+                    .as_ref()
+                    .and_then(|fp| occurrences.get(fp.as_str()))
+                    .cloned()
+                    .unwrap_or_default(),
                 mapping_error: result.mapping_error.clone(),
                 permissions_by_severity,
                 context,
@@ -1330,6 +1339,38 @@ impl DetailsReporter {
     fn style_active_creds<D>(&self, val: D) -> StyledObject<D> {
         self.styles.style_active_creds.apply_to(val)
     }
+}
+
+/// Maps a finding fingerprint to every fingerprint of the same credential, for
+/// credentials found more than once.
+///
+/// Access-mapping runs on one representative per credential — validation
+/// de-duplicates on `(rule id, primary capture)` before mapping — and the
+/// resulting fingerprint identifies that one occurrence, because finding
+/// fingerprints include the match offsets. Grouping on the same key recovers
+/// the other occurrences the single mapping result covers.
+fn credential_occurrences(matches: &[Arc<FindingsStoreMessage>]) -> HashMap<String, Vec<String>> {
+    let mut by_credential: HashMap<(&str, &str), Vec<String>> = HashMap::new();
+    for (_, _, m) in matches.iter().map(|arc| &**arc) {
+        let secret = m.groups.captures.first().map_or("", |c| c.raw_value());
+        by_credential
+            .entry((m.rule.id(), secret))
+            .or_default()
+            .push(m.finding_fingerprint.to_string());
+    }
+
+    let mut occurrences: HashMap<String, Vec<String>> = HashMap::new();
+    for (_, mut group) in by_credential {
+        group.sort_unstable();
+        group.dedup();
+        if group.len() < 2 {
+            continue;
+        }
+        for fingerprint in &group {
+            occurrences.insert(fingerprint.clone(), group.clone());
+        }
+    }
+    occurrences
 }
 
 fn normalize_permissions(cloud: &str, permissions: &[String]) -> Vec<String> {
@@ -1509,6 +1550,10 @@ pub struct AccessMapEntry {
     pub provider_metadata: Option<ProviderMetadata>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fingerprint: Option<String>,
+    /// Every finding fingerprint this mapping covers, when the credential was
+    /// found more than once. Empty when `fingerprint` is the only occurrence.
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub fingerprints: Vec<String>,
     /// `Some(error)` when identity mapping failed for this credential, meaning
     /// the groups below are placeholders rather than an observed blast radius.
     /// Consumers that report impact must exclude these entries.
@@ -2041,6 +2086,50 @@ mod tests {
         };
 
         (report_match, blob_path)
+    }
+
+    /// One occurrence of `secret` matched by `rule_id`, as the datastore holds it.
+    fn sample_occurrence(
+        rule_id: &str,
+        secret: &'static str,
+        fingerprint: u64,
+    ) -> FindingsStoreMessage {
+        let (mut report_match, _) = sample_report_match("", StatusCode::OK.as_u16(), true);
+        let mut syntax = report_match.m.rule.syntax().clone();
+        syntax.id = rule_id.to_string();
+        report_match.m.rule = Arc::new(Rule::new(syntax));
+        report_match.m.finding_fingerprint = fingerprint;
+        report_match.m.groups.captures.push(SerializableCapture {
+            name: None,
+            match_number: 0,
+            start: 0,
+            end: secret.len(),
+            value: secret,
+        });
+        (Arc::new(report_match.origin), Arc::new(report_match.blob_metadata), report_match.m)
+    }
+
+    /// Regression: access-mapping only ever sees one occurrence per credential
+    /// (validation de-duplicates on the same key before mapping), so the other
+    /// occurrences have to be recovered from the finding set.
+    #[test]
+    fn credential_occurrences_groups_repeated_credentials() {
+        let matches: Vec<Arc<FindingsStoreMessage>> = vec![
+            Arc::new(sample_occurrence("kingfisher.aws.1", "AKIAREPEATED", 11)),
+            Arc::new(sample_occurrence("kingfisher.aws.1", "AKIAREPEATED", 22)),
+            Arc::new(sample_occurrence("kingfisher.aws.1", "AKIAOTHER", 33)),
+            Arc::new(sample_occurrence("kingfisher.gcp.1", "AKIAREPEATED", 44)),
+        ];
+
+        let occurrences = credential_occurrences(&matches);
+
+        let group = vec!["11".to_string(), "22".to_string()];
+        assert_eq!(occurrences.get("11"), Some(&group));
+        assert_eq!(occurrences.get("22"), Some(&group));
+        // A single occurrence needs no entry, and a different rule matching the
+        // same value is a different credential for validation and mapping.
+        assert_eq!(occurrences.get("33"), None);
+        assert_eq!(occurrences.get("44"), None);
     }
 
     fn build_validation_response(
