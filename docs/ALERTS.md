@@ -57,7 +57,7 @@ always self-hosted), so it is **never** inferred — pass
 | `--alert-detail summary\|detail\|auto` | `auto` | How much per-finding detail to render. `auto` switches to `summary` once the per-sink filtered finding count exceeds 25. |
 | `--alert-finding-filter all\|exclude-inactive\|only-active\|access-map-only` | `all` | Restrict which findings a sink reports, on top of `--alert-min-confidence`. See [Finding filters](#finding-filters) below. |
 | `--alert-prevent-empty` | off | Skip a sink entirely when `--alert-min-confidence` / `--alert-finding-filter` leave nothing to report, instead of posting an alert with an empty findings list. Does **not** suppress the deliberate `--alert-on always` clean-scan heartbeat. Off by default to preserve existing behavior on upgrade. |
-| `--alert-dry-run` | off | Build and log each sink's resolved payload instead of POSTing it — use to validate filter configuration before wiring a real webhook URL. Secrets are always redacted in the logged payload (a log outlives the run), so `--alert-include-secret` has no effect here; a `WARN` is emitted when both are set. |
+| `--alert-dry-run` | off | Build and log each sink's resolved payload instead of POSTing it — use to validate filter configuration before wiring a real webhook URL. A URL is still required and still validated, so pass a placeholder such as `https://example.invalid/hook`. Secrets are always redacted in the logged payload (a log outlives the run), so `--alert-include-secret` has no effect here; a `WARN` is emitted when both are set. |
 
 Webhook URLs are sensitive: the host/path/query are redacted in logs. Pass them
 via environment variables (`$SLACK_SECURITY_WEBHOOK`) or CI secrets, never
@@ -79,7 +79,7 @@ independent of confidence:
 - **`access-map-only`** — keep only findings that have a matching
   `--access-map` result. This requires `--access-map` to also be passed;
   without it, the filter matches nothing and the sink never reports (a
-  `WARN` is logged at startup if this combination is detected). Since
+  `WARN` is logged when alerts are dispatched, i.e. after the scan). Since
   access-mapping only ever runs on validated, active credentials, this is
   the strictest tier — a subset of `only-active`. Credentials whose identity
   mapping *failed* (the provider refused the lookup, the network was
@@ -92,7 +92,9 @@ Every summary count in a payload (total/active/inactive/unknown, and
 `impacted_resources` when access-map data is available) reflects that sink's
 own filtered results, not the whole scan — a sink with `--alert-finding-filter
 only-active` never shows a header count that includes inactive findings it
-didn't list.
+didn't list. **This changed:** these counts previously came from the whole
+scan, so a sink already using `--alert-min-confidence` will see them drop to
+its own filtered numbers. `unfiltered_total` carries the whole-scan count.
 
 ```bash
 # Page only on findings with confirmed cloud impact.
@@ -167,6 +169,8 @@ red if any active. Facts list active/inactive/unknown counts and the top rules.
     "active": 1,
     "inactive": 1,
     "unknown": 1,
+    "impacted_resources": 0,
+    "unfiltered_total": 3,
     "by_rule": [{"rule_id": "kingfisher.aws.1", "count": 2}],
     "target": "./repo"
   },
