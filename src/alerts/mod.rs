@@ -17,6 +17,7 @@ use kingfisher_core::ValidationOutcome;
 
 use crate::cli::commands::scan::ConfidenceLevel;
 use crate::reporter::{AccessMapEntry, FindingReporterRecord};
+use crate::rules::rule::Confidence;
 
 pub mod discord;
 pub mod generic;
@@ -524,13 +525,10 @@ pub async fn dispatch(
 }
 
 fn matches_min_confidence(finding_confidence: &str, threshold: ConfidenceLevel) -> bool {
-    let level = match finding_confidence {
-        "Low" => ConfidenceLevel::Low,
-        "Medium" => ConfidenceLevel::Medium,
-        "High" => ConfidenceLevel::High,
-        _ => ConfidenceLevel::Medium,
-    };
-    level >= threshold
+    // The reporter renders confidence through `Confidence: Display`, which is
+    // lowercase; parsing is case-insensitive so either spelling works.
+    let level = finding_confidence.parse::<Confidence>().unwrap_or(Confidence::Medium);
+    level.is_at_least(&Confidence::from(threshold))
 }
 
 fn matches_finding_filter(
@@ -583,7 +581,7 @@ pub(crate) fn make_test_record(
         finding: FindingRecordData {
             snippet: "AKIAEXAMPLE_REDACTED_TOKEN_12345".to_string(),
             fingerprint: fingerprint.to_string(),
-            confidence: "Medium".to_string(),
+            confidence: "medium".to_string(),
             entropy: "4.5".to_string(),
             validation: ValidationInfo {
                 outcome: ValidationOutcome::VerifiedActive,
@@ -904,7 +902,7 @@ mod tests {
             sink.prevent_empty = true;
 
             let findings =
-                vec![record_with("kingfisher.aws.1", "fp1", "Medium", VO::VerifiedActive)];
+                vec![record_with("kingfisher.aws.1", "fp1", "medium", VO::VerifiedActive)];
             dispatch(&[sink], &findings, &[], None, false).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
@@ -923,7 +921,7 @@ mod tests {
             sink.prevent_empty = false;
 
             let findings =
-                vec![record_with("kingfisher.aws.1", "fp1", "Medium", VO::VerifiedActive)];
+                vec![record_with("kingfisher.aws.1", "fp1", "medium", VO::VerifiedActive)];
             dispatch(&[sink], &findings, &[], None, false).await;
 
             let requests = server.received_requests().await.unwrap();
@@ -965,8 +963,8 @@ mod tests {
             sink.finding_filter = AlertFindingFilter::AccessMapOnly;
             sink.min_confidence = ConfidenceLevel::Low;
 
-            let mapped = record_with("kingfisher.aws.1", "fp-mapped", "High", VO::VerifiedActive);
-            let unmapped = record_with("kingfisher.aws.2", "fp-other", "High", VO::VerifiedActive);
+            let mapped = record_with("kingfisher.aws.1", "fp-mapped", "high", VO::VerifiedActive);
+            let unmapped = record_with("kingfisher.aws.2", "fp-other", "high", VO::VerifiedActive);
             let access_map = vec![access_map_entry(
                 "aws",
                 "fp-mapped",
@@ -1001,7 +999,7 @@ mod tests {
             sink.prevent_empty = true;
 
             let inactive_but_mapped =
-                record_with("kingfisher.gitlab.1", "fp-gitlab", "High", VO::VerifiedInactive);
+                record_with("kingfisher.gitlab.1", "fp-gitlab", "high", VO::VerifiedInactive);
             let access_map = vec![access_map_entry("gitlab", "fp-gitlab", &["group/project"])];
 
             dispatch(&[sink], &[inactive_but_mapped], &access_map, None, false).await;
@@ -1029,7 +1027,7 @@ mod tests {
             failed.mapping_error = Some("sts:GetCallerIdentity returned 403".to_string());
 
             let findings =
-                vec![record_with("kingfisher.aws.1", "fp-failed", "High", VO::VerifiedActive)];
+                vec![record_with("kingfisher.aws.1", "fp-failed", "high", VO::VerifiedActive)];
             dispatch(&[sink], &findings, &[failed], None, false).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
@@ -1054,8 +1052,8 @@ mod tests {
             entry.fingerprints = vec!["fp-first".to_string(), "fp-second".to_string()];
 
             let findings = vec![
-                record_with("kingfisher.aws.1", "fp-first", "High", VO::VerifiedActive),
-                record_with("kingfisher.aws.1", "fp-second", "High", VO::VerifiedActive),
+                record_with("kingfisher.aws.1", "fp-first", "high", VO::VerifiedActive),
+                record_with("kingfisher.aws.1", "fp-second", "high", VO::VerifiedActive),
             ];
             dispatch(&[sink], &findings, &[entry], None, false).await;
 
@@ -1083,8 +1081,8 @@ mod tests {
             let mapped = access_map_entry("aws", "fp-mapped", &["arn:aws:s3:::bucket-a"]);
 
             let findings = vec![
-                record_with("kingfisher.aws.1", "fp-failed", "High", VO::VerifiedActive),
-                record_with("kingfisher.aws.2", "fp-mapped", "High", VO::VerifiedActive),
+                record_with("kingfisher.aws.1", "fp-failed", "high", VO::VerifiedActive),
+                record_with("kingfisher.aws.2", "fp-mapped", "high", VO::VerifiedActive),
             ];
             dispatch(&[sink], &findings, &[failed, mapped], None, false).await;
 
@@ -1107,7 +1105,7 @@ mod tests {
             sink.finding_filter = AlertFindingFilter::AccessMapOnly;
             sink.prevent_empty = true;
 
-            let findings = vec![record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive)];
+            let findings = vec![record_with("kingfisher.aws.1", "fp1", "high", VO::VerifiedActive)];
             dispatch(&[sink], &findings, &[], None, false).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
@@ -1122,7 +1120,7 @@ mod tests {
                 .await;
 
             let sink = test_sink(&server.uri());
-            let findings = vec![record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive)];
+            let findings = vec![record_with("kingfisher.aws.1", "fp1", "high", VO::VerifiedActive)];
             dispatch(&[sink], &findings, &[], None, true).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
@@ -1146,7 +1144,7 @@ mod tests {
             let mut sink = test_sink("https://hooks.example.com/services/T0/B0/XXX");
             sink.include_secret = true;
 
-            let mut finding = record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive);
+            let mut finding = record_with("kingfisher.aws.1", "fp1", "high", VO::VerifiedActive);
             finding.finding.snippet = "AKIAIOSFODNN7EXAMPLE-live-value".to_string();
 
             dispatch(&[sink], &[finding], &[], None, true).await;
@@ -1201,8 +1199,8 @@ mod tests {
             sink.finding_filter = AlertFindingFilter::OnlyActive;
 
             let findings = vec![
-                record_with("kingfisher.aws.1", "fp-active", "High", VO::VerifiedActive),
-                record_with("kingfisher.aws.2", "fp-inactive", "High", VO::VerifiedInactive),
+                record_with("kingfisher.aws.1", "fp-active", "high", VO::VerifiedActive),
+                record_with("kingfisher.aws.2", "fp-inactive", "high", VO::VerifiedInactive),
             ];
             dispatch(&[sink], &findings, &[], None, false).await;
 
