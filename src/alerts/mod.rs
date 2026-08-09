@@ -355,11 +355,18 @@ pub async fn dispatch(
     if sinks.is_empty() {
         return;
     }
-    let client = match build_client() {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("alert dispatch: failed to build HTTP client: {}", e);
-            return;
+    // A dry run never POSTs, so it must not depend on the TLS/runtime
+    // prerequisites of client construction — build the client only when we
+    // actually intend to send something.
+    let client = if dry_run {
+        None
+    } else {
+        match build_client() {
+            Ok(c) => Some(c),
+            Err(e) => {
+                warn!("alert dispatch: failed to build HTTP client: {}", e);
+                return;
+            }
         }
     };
 
@@ -451,12 +458,16 @@ pub async fn dispatch(
             continue;
         }
 
-        match post(&client, &sink.url, &payload).await {
-            Ok(()) => {
-                info!("alert posted to {}", redact_webhook(&sink.url));
-            }
-            Err(e) => {
-                warn!("alert dispatch failed for {}: {}", redact_webhook(&sink.url), e);
+        // `client` is always `Some` here: it is only `None` under `dry_run`,
+        // which `continue`d above.
+        if let Some(client) = &client {
+            match post(client, &sink.url, &payload).await {
+                Ok(()) => {
+                    info!("alert posted to {}", redact_webhook(&sink.url));
+                }
+                Err(e) => {
+                    warn!("alert dispatch failed for {}: {}", redact_webhook(&sink.url), e);
+                }
             }
         }
     }
