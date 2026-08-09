@@ -1177,6 +1177,29 @@ mod tests {
             assert_eq!(body["summary"]["impacted_resources"], 1);
         }
 
+        /// `prevent_empty` only spares the clean-scan heartbeat, which keys on
+        /// the whole-scan total. With `on: always` and findings that this
+        /// sink's filters all reject, the sink stays silent.
+        #[tokio::test]
+        async fn prevent_empty_silences_an_always_sink_when_filters_reject_everything() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.on = AlertOn::Always;
+            sink.prevent_empty = true;
+            sink.finding_filter = AlertFindingFilter::OnlyActive;
+
+            let findings =
+                vec![record_with("kingfisher.aws.1", "fp1", "high", VO::VerifiedInactive)];
+            dispatch(&[sink], &findings, &[], None, false).await;
+
+            assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        }
+
         #[tokio::test]
         async fn access_map_only_filters_everything_when_access_map_is_empty() {
             let server = MockServer::start().await;
@@ -1224,13 +1247,26 @@ mod tests {
             // subscriber stays installed across the `.await` below.
             let _guard = tracing::subscriber::set_default(subscriber);
 
-            let mut sink = test_sink("https://hooks.example.com/services/T0/B0/XXX");
-            sink.include_secret = true;
-
             let mut finding = record_with("kingfisher.aws.1", "fp1", "high", VO::VerifiedActive);
             finding.finding.snippet = "AKIAIOSFODNN7EXAMPLE-live-value".to_string();
+            finding.finding.validate_command =
+                Some("kingfisher validate --rule kingfisher.aws.1 'AKIAIOSFODNN7EXAMPLE'".into());
 
-            dispatch(&[sink], &[finding], &[], None, true).await;
+            // Every format, so a builder added later cannot opt out of this.
+            for format in [
+                AlertFormat::Slack,
+                AlertFormat::Teams,
+                AlertFormat::Generic,
+                AlertFormat::Discord,
+                AlertFormat::Mattermost,
+                AlertFormat::Googlechat,
+            ] {
+                let mut sink = test_sink("https://hooks.example.com/services/T0/B0/XXX");
+                sink.include_secret = true;
+                sink.format = format;
+
+                dispatch(&[sink], &[finding.clone()], &[], None, true).await;
+            }
 
             let logged = logs.contents();
             assert!(

@@ -2530,6 +2530,8 @@ alerts:
     min_confidence: high
     include_secret: true
     detail: summary
+    finding_filter: only-active
+    prevent_empty: true
 "#;
         let cfg = parse_str(yaml).unwrap();
         let (args, matches) = parse(&["kingfisher", "scan", "."]);
@@ -2544,6 +2546,11 @@ alerts:
         assert_eq!(scan_args.alert_min_confidence, ConfidenceLevel::High);
         assert!(scan_args.alert_include_secret);
         assert_eq!(scan_args.alert_detail, kingfisher::alerts::AlertDetail::Summary);
+        assert_eq!(
+            scan_args.alert_finding_filter,
+            kingfisher::alerts::AlertFindingFilter::OnlyActive
+        );
+        assert!(scan_args.alert_prevent_empty);
     }
 
     #[test]
@@ -2564,6 +2571,38 @@ alerts:
             matches.subcommand_matches("scan"),
         );
         assert_eq!(scan_args.alert_min_confidence, ConfidenceLevel::Low);
+    }
+
+    /// The per-webhook `finding_filter` / `prevent_empty` overrides must reach
+    /// the resolved sink, and `access-map-only` must round-trip through serde's
+    /// kebab-case renaming.
+    #[test]
+    fn webhook_overrides_win_over_alert_globals() {
+        let yaml = r#"
+alerts:
+  defaults:
+    finding_filter: only-active
+    prevent_empty: false
+  webhooks:
+    - url: https://hooks.slack.com/services/T0/B0/AAA
+      finding_filter: access-map-only
+      prevent_empty: true
+"#;
+        let cfg = parse_str(yaml).unwrap();
+        let (args, matches) = parse(&["kingfisher", "scan", "."]);
+        let mut global_args = args.global_args.clone();
+        let mut scan_args = into_scan(args);
+        super::apply_config(
+            &mut scan_args,
+            &mut global_args,
+            &cfg,
+            matches.subcommand_matches("scan"),
+        );
+
+        let sinks = super::build_alert_sinks(&scan_args);
+        assert_eq!(sinks.len(), 1);
+        assert_eq!(sinks[0].finding_filter, kingfisher::alerts::AlertFindingFilter::AccessMapOnly);
+        assert!(sinks[0].prevent_empty);
     }
 
     #[test]
