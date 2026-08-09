@@ -290,6 +290,69 @@ fn build_client() -> Result<Client> {
         .context("failed to build webhook reqwest::Client")
 }
 
+/// How much of a secret a payload shows under `--alert-include-secret`.
+pub(crate) const SNIPPET_LIMIT: usize = 32;
+
+pub(crate) fn plural(n: usize) -> &'static str {
+    if n == 1 { "" } else { "s" }
+}
+
+pub(crate) fn truncate(s: &str, n: usize) -> String {
+    if s.chars().count() <= n {
+        return s.to_string();
+    }
+    let prefix: String = s.chars().take(n).collect();
+    format!("{prefix}…")
+}
+
+/// Headline for a sink with nothing to report, which has to tell a clean scan
+/// apart from filters that excluded everything. `None` when there are findings.
+pub(crate) fn empty_headline(summary: &AlertSummary) -> Option<String> {
+    if summary.total > 0 {
+        return None;
+    }
+    Some(if summary.unfiltered_total > 0 {
+        format!(
+            "Kingfisher: scan complete — 0 of {} finding{} matched this alert's filters",
+            summary.unfiltered_total,
+            plural(summary.unfiltered_total)
+        )
+    } else {
+        "Kingfisher: scan complete — no findings".to_string()
+    })
+}
+
+/// Headline carrying the per-outcome counts. Sinks that prefix an emoji or want
+/// a shorter title build on [`empty_headline`] instead.
+pub(crate) fn headline(summary: &AlertSummary) -> String {
+    if let Some(empty) = empty_headline(summary) {
+        return empty;
+    }
+    let counts = format!(
+        "{} active, {} inactive, {} unknown",
+        summary.active, summary.inactive, summary.unknown
+    );
+    let impact = if summary.impacted_resources > 0 {
+        format!(
+            ", {} impacted resource{}",
+            summary.impacted_resources,
+            plural(summary.impacted_resources)
+        )
+    } else {
+        String::new()
+    };
+    format!("Kingfisher: {} finding{} ({counts}{impact})", summary.total, plural(summary.total))
+}
+
+/// Body text for `AlertDetail::Summary`, where per-finding lines are dropped.
+/// Callers wrap it in their own emphasis markup.
+pub(crate) fn suppression_notice(total: usize) -> String {
+    format!(
+        "{total} findings — per-finding detail suppressed (summary mode). See full report for \
+         specifics."
+    )
+}
+
 /// Tail-match a hostname against a webhook host so substrings like
 /// `not-slack.com.attacker.example` cannot be misclassified.
 fn host_matches(host: &str, suffix: &str) -> bool {
@@ -703,6 +766,47 @@ mod tests {
         assert_eq!(AUTO_DETAIL_THRESHOLD, 25);
         // The resolution itself lives inside `dispatch`; this test pins the
         // constant so any future tuning is intentional.
+    }
+
+    /// Pins the wording every chat sink renders, including the impact clause
+    /// and the distinction between a clean scan and filters that matched
+    /// nothing.
+    #[test]
+    fn headline_covers_every_branch() {
+        let mut s = AlertSummary::from_findings(&[], None);
+        assert_eq!(headline(&s), "Kingfisher: scan complete — no findings");
+
+        s.unfiltered_total = 1;
+        assert_eq!(
+            headline(&s),
+            "Kingfisher: scan complete — 0 of 1 finding matched this alert's filters"
+        );
+        s.unfiltered_total = 4;
+        assert_eq!(
+            headline(&s),
+            "Kingfisher: scan complete — 0 of 4 findings matched this alert's filters"
+        );
+
+        s.total = 1;
+        s.active = 1;
+        assert_eq!(headline(&s), "Kingfisher: 1 finding (1 active, 0 inactive, 0 unknown)");
+
+        s.total = 3;
+        s.inactive = 1;
+        s.unknown = 1;
+        s.impacted_resources = 1;
+        assert_eq!(
+            headline(&s),
+            "Kingfisher: 3 findings (1 active, 1 inactive, 1 unknown, 1 impacted resource)"
+        );
+        s.impacted_resources = 2;
+        assert_eq!(
+            headline(&s),
+            "Kingfisher: 3 findings (1 active, 1 inactive, 1 unknown, 2 impacted resources)"
+        );
+
+        // A sink with findings never renders the empty-headline variants.
+        assert!(empty_headline(&s).is_none());
     }
 
     #[test]

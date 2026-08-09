@@ -7,7 +7,9 @@
 
 use serde_json::{Value, json};
 
-use crate::alerts::{AlertDetail, AlertSummary};
+use crate::alerts::{
+    AlertDetail, AlertSummary, SNIPPET_LIMIT, empty_headline, plural, suppression_notice, truncate,
+};
 use crate::reporter::FindingReporterRecord;
 
 const PER_FINDING_LIMIT: usize = 10;
@@ -17,19 +19,10 @@ pub fn build_payload(
     findings: &[&FindingReporterRecord],
     include_secret: bool,
 ) -> Value {
-    let title = if summary.total == 0 {
-        if summary.unfiltered_total > 0 {
-            format!(
-                "Kingfisher: scan complete — 0 of {} finding{} matched this alert's filters",
-                summary.unfiltered_total,
-                plural(summary.unfiltered_total)
-            )
-        } else {
-            "Kingfisher: scan complete — no findings".to_string()
-        }
-    } else {
+    // Teams keeps a short card title; the counts render as facts below.
+    let title = empty_headline(summary).unwrap_or_else(|| {
         format!("Kingfisher: {} finding{}", summary.total, plural(summary.total))
-    };
+    });
 
     let theme_color = if summary.active > 0 {
         "C0392B" // red — active live secrets
@@ -66,7 +59,7 @@ pub fn build_payload(
         let mut details = String::new();
         for f in findings.iter().take(take) {
             let snippet = if include_secret {
-                escape_for_code_span(&truncate(&f.finding.snippet, 32))
+                escape_for_code_span(&truncate(&f.finding.snippet, SNIPPET_LIMIT))
             } else {
                 "redacted".to_string()
             };
@@ -91,8 +84,7 @@ pub fn build_payload(
         sections.push(json!({
             "title": "Findings",
             "text": format!(
-                "_{} findings — per-finding detail suppressed (summary mode). See full report for specifics._",
-                summary.total
+                "_{}_", suppression_notice(summary.total)
             ),
         }));
     }
@@ -118,10 +110,6 @@ pub fn build_payload(
     card
 }
 
-fn plural(n: usize) -> &'static str {
-    if n == 1 { "" } else { "s" }
-}
-
 /// Escape a value before embedding it in a backtick code span. Replace
 /// backticks with U+02CB so a user-controlled value cannot terminate the
 /// span and inject Teams markdown, and collapse newlines so a single
@@ -137,14 +125,6 @@ fn escape_bold(s: &str) -> String {
         .replace('_', "\\_")
         .replace('|', "\\|")
         .replace(['\n', '\r'], " ")
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        return s.to_string();
-    }
-    let prefix: String = s.chars().take(n).collect();
-    format!("{prefix}…")
 }
 
 #[cfg(test)]

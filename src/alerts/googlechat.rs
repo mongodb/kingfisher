@@ -9,7 +9,10 @@
 
 use serde_json::{Value, json};
 
-use crate::alerts::{AlertDetail, AlertSummary};
+use crate::alerts::{
+    AlertDetail, AlertSummary, SNIPPET_LIMIT, empty_headline, headline, suppression_notice,
+    truncate,
+};
 use crate::reporter::FindingReporterRecord;
 
 const PER_FINDING_LIMIT: usize = 10;
@@ -19,41 +22,11 @@ pub fn build_payload(
     findings: &[&FindingReporterRecord],
     include_secret: bool,
 ) -> Value {
-    let title = if summary.total == 0 {
-        if summary.unfiltered_total > 0 {
-            format!(
-                "Kingfisher: scan complete — 0 of {} finding{} matched this alert's filters",
-                summary.unfiltered_total,
-                plural(summary.unfiltered_total)
-            )
-        } else {
-            "Kingfisher: scan complete — no findings".to_string()
-        }
-    } else {
-        let prefix = if summary.active > 0 { "🚨 " } else { "" };
-        if summary.impacted_resources > 0 {
-            format!(
-                "{}Kingfisher: {} finding{} ({} active, {} inactive, {} unknown, {} impacted resource{})",
-                prefix,
-                summary.total,
-                plural(summary.total),
-                summary.active,
-                summary.inactive,
-                summary.unknown,
-                summary.impacted_resources,
-                plural(summary.impacted_resources)
-            )
-        } else {
-            format!(
-                "{}Kingfisher: {} finding{} ({} active, {} inactive, {} unknown)",
-                prefix,
-                summary.total,
-                plural(summary.total),
-                summary.active,
-                summary.inactive,
-                summary.unknown
-            )
-        }
+    let title = match empty_headline(summary) {
+        Some(empty) => empty,
+        // Google Chat card titles carry an emoji when something is live.
+        None if summary.active > 0 => format!("🚨 {}", headline(summary)),
+        None => headline(summary),
     };
 
     let mut summary_widgets: Vec<Value> = vec![
@@ -92,7 +65,7 @@ pub fn build_payload(
         let mut detail = String::new();
         for f in findings.iter().take(take) {
             let snippet = if include_secret {
-                escape_html(&truncate(&f.finding.snippet, 32))
+                escape_html(&truncate(&f.finding.snippet, SNIPPET_LIMIT))
             } else {
                 "redacted".to_string()
             };
@@ -117,8 +90,7 @@ pub fn build_payload(
         sections.push(json!({
             "header": "Findings",
             "widgets": [{ "textParagraph": { "text": format!(
-                "<i>{} findings — per-finding detail suppressed (summary mode). See full report for specifics.</i>",
-                summary.total
+                "<i>{}</i>", suppression_notice(summary.total)
             ) }}],
         }));
     }
@@ -150,18 +122,6 @@ pub fn build_payload(
             }
         }]
     })
-}
-
-fn plural(n: usize) -> &'static str {
-    if n == 1 { "" } else { "s" }
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        return s.to_string();
-    }
-    let prefix: String = s.chars().take(n).collect();
-    format!("{prefix}…")
 }
 
 /// Google Chat `textParagraph.text` is HTML-ish — `<b>`, `<code>`, `<br>`, etc.

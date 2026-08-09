@@ -13,7 +13,9 @@
 
 use serde_json::{Value, json};
 
-use crate::alerts::{AlertDetail, AlertSummary};
+use crate::alerts::{
+    AlertDetail, AlertSummary, SNIPPET_LIMIT, headline, suppression_notice, truncate,
+};
 use crate::reporter::FindingReporterRecord;
 
 const PER_FINDING_LIMIT: usize = 10;
@@ -27,37 +29,7 @@ pub fn build_payload(
     findings: &[&FindingReporterRecord],
     include_secret: bool,
 ) -> Value {
-    let header = if summary.total == 0 {
-        if summary.unfiltered_total > 0 {
-            format!(
-                "Kingfisher: scan complete — 0 of {} finding{} matched this alert's filters",
-                summary.unfiltered_total,
-                plural(summary.unfiltered_total)
-            )
-        } else {
-            "Kingfisher: scan complete — no findings".to_string()
-        }
-    } else if summary.impacted_resources > 0 {
-        format!(
-            "Kingfisher: {} finding{} ({} active, {} inactive, {} unknown, {} impacted resource{})",
-            summary.total,
-            plural(summary.total),
-            summary.active,
-            summary.inactive,
-            summary.unknown,
-            summary.impacted_resources,
-            plural(summary.impacted_resources)
-        )
-    } else {
-        format!(
-            "Kingfisher: {} finding{} ({} active, {} inactive, {} unknown)",
-            summary.total,
-            plural(summary.total),
-            summary.active,
-            summary.inactive,
-            summary.unknown
-        )
-    };
+    let header = headline(summary);
 
     let color = if summary.active > 0 {
         COLOR_RED
@@ -111,7 +83,7 @@ pub fn build_payload(
         let mut details = String::new();
         for f in findings.iter().take(take) {
             let snippet = if include_secret {
-                escape_for_code_span(&truncate(&f.finding.snippet, 32))
+                escape_for_code_span(&truncate(&f.finding.snippet, SNIPPET_LIMIT))
             } else {
                 "redacted".to_string()
             };
@@ -130,10 +102,7 @@ pub fn build_payload(
         }
         attachment["text"] = Value::String(details);
     } else if summary.detail == AlertDetail::Summary && summary.total > 0 {
-        attachment["text"] = Value::String(format!(
-            "_{} findings — per-finding detail suppressed (summary mode). See full report for specifics._",
-            summary.total
-        ));
+        attachment["text"] = Value::String(format!("_{}_", suppression_notice(summary.total)));
     }
 
     if let Some(url) = &summary.report_url {
@@ -156,10 +125,6 @@ pub fn build_payload(
     })
 }
 
-fn plural(n: usize) -> &'static str {
-    if n == 1 { "" } else { "s" }
-}
-
 /// Escape a value before embedding it in a backtick code span. Replace
 /// backticks with U+02CB so a user-controlled value cannot terminate the
 /// span and inject markdown, and collapse newlines so a single finding
@@ -175,14 +140,6 @@ fn escape_bold(s: &str) -> String {
         .replace('_', "\\_")
         .replace('|', "\\|")
         .replace(['\n', '\r'], " ")
-}
-
-fn truncate(s: &str, n: usize) -> String {
-    if s.chars().count() <= n {
-        return s.to_string();
-    }
-    let prefix: String = s.chars().take(n).collect();
-    format!("{prefix}…")
 }
 
 #[cfg(test)]
