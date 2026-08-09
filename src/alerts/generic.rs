@@ -34,6 +34,15 @@ pub fn build_payload(
                 && let Some(obj) = record.get_mut("finding").and_then(|v| v.as_object_mut())
             {
                 obj.insert("snippet".into(), Value::String("<redacted>".to_string()));
+                // These embed the raw secret too: the commands quote it as an
+                // argument, and a validation response body can carry it in a
+                // rendered request URL.
+                obj.remove("validate_command");
+                obj.remove("revoke_command");
+                if let Some(validation) = obj.get_mut("validation").and_then(|v| v.as_object_mut())
+                {
+                    validation.insert("response".into(), Value::String(String::new()));
+                }
             }
             record
         })
@@ -121,6 +130,29 @@ mod tests {
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-roundtrip");
         let p = build_payload(&s, &[&rec], false);
         assert_eq!(p["findings"][0]["finding"]["fingerprint"], "fp-roundtrip");
+    }
+
+    /// Regression: this sink serializes the whole record, and `snippet` is not
+    /// the only field carrying the secret — `validate_command` and
+    /// `revoke_command` quote it as a shell argument, and a validation response
+    /// body can hold it in a rendered request URL.
+    #[test]
+    fn redaction_covers_every_field_carrying_the_secret() {
+        let s = empty_summary();
+        let mut rec = crate::alerts::make_test_record("kingfisher.slack.2", "fp-leak");
+        rec.finding.validate_command =
+            Some("kingfisher validate --rule kingfisher.slack.2 'xoxb-REAL-SECRET'".to_string());
+        rec.finding.revoke_command =
+            Some("kingfisher revoke --rule kingfisher.slack.2 'xoxb-REAL-SECRET'".to_string());
+        rec.finding.validation.response =
+            "GET https://slack.com/api/auth.test?token=xoxb-REAL-SECRET".to_string();
+
+        let redacted = build_payload(&s, &[&rec], false).to_string();
+        assert!(!redacted.contains("xoxb-REAL-SECRET"), "payload leaked the secret: {redacted}");
+
+        // `--alert-include-secret` still opts in to the full record.
+        let with_secret = build_payload(&s, &[&rec], true).to_string();
+        assert!(with_secret.contains("xoxb-REAL-SECRET"));
     }
 
     #[test]
