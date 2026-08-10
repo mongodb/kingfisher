@@ -234,10 +234,16 @@ impl AccessMapImpact {
 
     /// Resources exposed by the distinct credentials behind `findings`. A
     /// credential found at several offsets contributes its resources once.
+    ///
+    /// Only verified-active findings count, matching what `AccessMapOnly`
+    /// reports: an entry can exist for a finding that never validated as active
+    /// (see `maybe_record_access_map`), and claiming impact for a credential the
+    /// same payload calls inactive would contradict itself.
     fn impacted_resources(&self, findings: &[&FindingReporterRecord]) -> usize {
         let mut counted = std::collections::HashSet::new();
         findings
             .iter()
+            .filter(|f| f.finding.validation.outcome.is_verified_active())
             .filter_map(|f| self.credential_by_fingerprint.get(&f.finding.fingerprint))
             .filter(|credential| counted.insert(**credential))
             .map(|credential| self.resources_per_credential[*credential])
@@ -275,7 +281,8 @@ impl AlertSummary {
             kingfisher_version: env!("CARGO_PKG_VERSION").to_string(),
             target,
             report_url: None,
-            // `dispatch` overlays these three per-sink, before any builder runs.
+            // `dispatch` overlays all four of these per-sink, before any
+            // builder runs.
             detail: AlertDetail::Detail,
             impacted_resources: 0,
             unfiltered_total: 0,
@@ -1179,6 +1186,30 @@ mod tests {
             let body: serde_json::Value = requests[0].body_json().unwrap();
             assert_eq!(body["findings"].as_array().unwrap().len(), 2);
             assert_eq!(body["summary"]["impacted_resources"], 1);
+        }
+
+        /// An entry can exist for a finding that never validated as active, so
+        /// a payload must not call a credential inactive and claim its impact in
+        /// the same breath.
+        #[tokio::test]
+        async fn inactive_findings_are_not_counted_in_impacted_resources() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let sink = test_sink(&server.uri());
+            let access_map = vec![access_map_entry("gitlab", "fp-gitlab", &["group/a", "group/b"])];
+            let findings =
+                vec![record_with("kingfisher.gitlab.1", "fp-gitlab", "high", VO::VerifiedInactive)];
+
+            dispatch(&[sink], &findings, &access_map, None, false).await;
+
+            let requests = server.received_requests().await.unwrap();
+            let body: serde_json::Value = requests[0].body_json().unwrap();
+            assert_eq!(body["summary"]["inactive"], 1);
+            assert_eq!(body["summary"]["impacted_resources"], 0);
         }
 
         #[tokio::test]
