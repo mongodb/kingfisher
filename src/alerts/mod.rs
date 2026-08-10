@@ -106,10 +106,11 @@ impl AlertFormat {
 
 /// Which findings a sink is allowed to report, independent of `min_confidence`.
 ///
-/// Each variant is a strict subset of the previous one: `AccessMapOnly` only
-/// ever matches findings that are also `OnlyActive` (access-mapping requires a
-/// validated, active credential), which is itself a subset of `Actionable`, of
-/// `ExcludeInactive`, of `All`.
+/// Each variant is a strict subset of the previous one: `AccessMapOnly` ⊆
+/// `OnlyActive` ⊆ `Actionable` ⊆ `ExcludeInactive` ⊆ `All`. The first relation
+/// holds because `matches_finding_filter` requires an active outcome on top of
+/// the mapping — a mapping alone does not imply one, since `kingfisher.gitlab.*`
+/// findings are mapped on any 2xx (see `maybe_record_access_map`).
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 #[clap(rename_all = "kebab-case")]
@@ -117,7 +118,8 @@ pub enum AlertFindingFilter {
     /// No filtering by validation status or access-map result.
     #[default]
     All,
-    /// Drop `VerifiedInactive` findings; keep active + unknown/not-attempted.
+    /// Drop `VerifiedInactive` findings; keep everything else, including
+    /// assumed-valid and never-attempted.
     ExcludeInactive,
     /// Keep active and assumed-valid findings, like `--validation-filter
     /// actionable`: private keys page, unverifiable noise does not.
@@ -125,8 +127,7 @@ pub enum AlertFindingFilter {
     /// Keep only `VerifiedActive` findings. Note this excludes `Assumed`, which
     /// was never live-validated.
     OnlyActive,
-    /// Keep only findings with a matching `--access-map` result (implies
-    /// active, since access-mapping only runs on validated credentials).
+    /// Keep only active findings with a matching `--access-map` result.
     AccessMapOnly,
 }
 

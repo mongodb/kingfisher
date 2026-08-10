@@ -270,8 +270,9 @@ pub struct ScanArgs {
     )]
     pub alert_min_confidence: ConfidenceLevel,
 
-    /// Include the (possibly truncated) secret value in alert payloads.
-    /// Off by default; on, the snippet is truncated to ~32 chars.
+    /// Include the secret value in alert payloads. Chat formats truncate it
+    /// to 32 chars; the generic payload carries the record verbatim. Always
+    /// redacted under `--alert-dry-run`.
     #[arg(global = true, long = "alert-include-secret", default_value_t = false)]
     pub alert_include_secret: bool,
 
@@ -321,7 +322,8 @@ pub struct ScanArgs {
 
     /// Build and log each alert sink's resolved payload instead of POSTing
     /// it — use to validate `--alert-*` filter configuration against a real
-    /// scan before wiring a production webhook URL.
+    /// scan before wiring a production webhook URL. Secrets are always
+    /// redacted in the logged payload.
     #[arg(global = true, long = "alert-dry-run", default_value_t = false)]
     pub alert_dry_run: bool,
 

@@ -234,6 +234,8 @@ alerts:
     detail: auto                # summary | detail | auto        (--alert-detail)
     finding_filter: all         # all | exclude-inactive | actionable | only-active | access-map-only  (--alert-finding-filter)
     prevent_empty: false        # bool                           (--alert-prevent-empty)
+    # `--alert-dry-run` has no config key on purpose: a committed `true` would
+    # silently stop every alert from being delivered.
   webhooks:
     - url: https://hooks.slack.com/services/T0/B0/AAA   # required
       format: slack                                      # slack | teams | generic | discord | mattermost | googlechat

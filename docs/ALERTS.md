@@ -82,14 +82,19 @@ independent of confidence:
 - **`access-map-only`** — keep only findings that have a matching
   `--access-map` result. This requires `--access-map` to also be passed;
   without it, the filter matches nothing and the sink never reports (a
-  `WARN` is logged when alerts are dispatched, i.e. after the scan). Since
-  access-mapping only ever runs on validated, active credentials, this is
-  the strictest tier — a subset of `only-active`. Credentials whose identity
+  `WARN` is logged when alerts are dispatched, i.e. after the scan). It is the
+  strictest tier — a subset of `only-active` — because it requires an active
+  outcome as well as a mapping: a mapping alone does not imply one, since
+  GitLab-rule findings are mapped on any 2xx. Credentials whose identity
   mapping *failed* (the provider refused the lookup, the network was
   unavailable, …) do not count: the report records the mapping error, and the
   finding is treated as unmapped rather than as confirmed impact. A credential
   found in several places is mapped once, and every occurrence is reported;
   `impacted_resources` counts that credential's resources once.
+
+With `--alert-prevent-empty`, an `--alert-on always` sink is still silenced
+when the scan found findings but this sink's filters rejected them all; only a
+scan-wide zero-finding run is exempt.
 
 `only-active` and `access-map-only` cannot match anything under
 `--no-validate`, and `access-map-only` needs `--access-map`; a `WARN` names the
