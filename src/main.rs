@@ -1265,6 +1265,26 @@ fn replace_stdin_placeholders(path_inputs: &mut Vec<PathBuf>, stdin_file: PathBu
     *path_inputs = resolved;
 }
 
+/// The scan flag a finding filter needs but did not get, when that leaves the
+/// filter unable to ever match. `--alert-prevent-empty` turns such a sink into
+/// silence, so it is worth a `WARN` either way.
+///
+/// `actionable` is deliberately absent: assumed-valid findings such as private
+/// keys need no live validation, so it still reports under `--no-validate`.
+fn unreachable_filter_reason(
+    filter: kingfisher::alerts::AlertFindingFilter,
+    scan_args: &cli::commands::scan::ScanArgs,
+) -> Option<&'static str> {
+    use kingfisher::alerts::AlertFindingFilter as F;
+    match filter {
+        F::AccessMapOnly if !scan_args.access_map => Some("--access-map"),
+        F::AccessMapOnly | F::OnlyActive if scan_args.no_validate => {
+            Some("credential validation (--no-validate was passed)")
+        }
+        _ => None,
+    }
+}
+
 /// Build the resolved list of alert sinks from CLI flags + config overrides.
 /// `scan_args.config_webhook_overrides` aligns with the trailing entries of
 /// `scan_args.alert_webhook` (those that came from `kingfisher.yaml`); CLI URLs
@@ -1289,13 +1309,16 @@ fn build_alert_sinks(
                 .or(scan_args.alert_format)
                 .unwrap_or_else(|| kingfisher::alerts::AlertFormat::infer_from_url(url));
             let finding_filter = override_.finding_filter.unwrap_or(scan_args.alert_finding_filter);
-            if finding_filter == kingfisher::alerts::AlertFindingFilter::AccessMapOnly
-                && !scan_args.access_map
-            {
+            if let Some(missing) = unreachable_filter_reason(finding_filter, scan_args) {
+                let value = clap::ValueEnum::to_possible_value(&finding_filter)
+                    .map(|v| v.get_name().to_string())
+                    .unwrap_or_default();
                 warn!(
-                    "alert sink {} uses access-map-only filtering but --access-map was not \
-                     enabled; this sink will never report findings",
-                    kingfisher::alerts::redact_webhook(url)
+                    "alert sink {} filters on `{}` but {} was not enabled; this sink will never \
+                     report findings",
+                    kingfisher::alerts::redact_webhook(url),
+                    value,
+                    missing
                 );
             }
             kingfisher::alerts::AlertSink {
@@ -2571,6 +2594,30 @@ alerts:
             matches.subcommand_matches("scan"),
         );
         assert_eq!(scan_args.alert_min_confidence, ConfidenceLevel::Low);
+    }
+
+    #[test]
+    fn unreachable_filters_are_flagged_but_actionable_is_not() {
+        use kingfisher::alerts::AlertFindingFilter as F;
+
+        let (args, _) = parse(&["kingfisher", "scan", "."]);
+        let mut plain = into_scan(args);
+        plain.no_validate = false;
+        plain.access_map = false;
+
+        assert!(super::unreachable_filter_reason(F::AccessMapOnly, &plain).is_some());
+        assert!(super::unreachable_filter_reason(F::OnlyActive, &plain).is_none());
+
+        let mut no_validate = plain.clone();
+        no_validate.no_validate = true;
+        no_validate.access_map = true;
+        assert!(super::unreachable_filter_reason(F::OnlyActive, &no_validate).is_some());
+        assert!(super::unreachable_filter_reason(F::AccessMapOnly, &no_validate).is_some());
+        // Private keys are assumed-valid without any live check, so this tier
+        // still reports under --no-validate.
+        assert!(super::unreachable_filter_reason(F::Actionable, &no_validate).is_none());
+        assert!(super::unreachable_filter_reason(F::All, &no_validate).is_none());
+        assert!(super::unreachable_filter_reason(F::ExcludeInactive, &no_validate).is_none());
     }
 
     /// The per-webhook `finding_filter` / `prevent_empty` overrides must reach

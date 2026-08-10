@@ -91,6 +91,11 @@ independent of confidence:
   found in several places is mapped once, and every occurrence is reported;
   `impacted_resources` counts that credential's resources once.
 
+`only-active` and `access-map-only` cannot match anything under
+`--no-validate`, and `access-map-only` needs `--access-map`; a `WARN` names the
+sink and the missing flag when alerts are dispatched. `actionable` is exempt:
+assumed-valid findings need no live check.
+
 Every summary count in a payload (total/active/inactive/unknown, and
 `impacted_resources` when access-map data is available) reflects that sink's
 own filtered results, not the whole scan — a sink with `--alert-finding-filter
