@@ -212,6 +212,16 @@ fn render_access_map(access_map: Option<&Vec<AccessMapEntry>>) -> String {
     let mut items = String::new();
     for entry in entries {
         let account = entry.account.clone().unwrap_or_else(|| "(identity)".to_string());
+        // A failed mapping resolved nothing; its groups are placeholders.
+        if let Some(error) = &entry.mapping_error {
+            items.push_str(&format!(
+                "<li><strong>{}</strong> <span>{}</span> (not mapped: {})</li>",
+                escape_html(&account),
+                escape_html(&entry.provider.to_uppercase()),
+                escape_html(error)
+            ));
+            continue;
+        }
         items.push_str(&format!(
             "<li><strong>{}</strong> <span>{}</span> ({} groups)</li>",
             escape_html(&account),

@@ -70,6 +70,13 @@ impl DetailsReporter {
 
         writeln!(writer, " |{}", self.style_heading("BLAST RADIUS"))?;
         for entry in entries {
+            // A failed mapping resolved nothing; its groups are placeholders.
+            if let Some(error) = &entry.mapping_error {
+                writeln!(writer, " |_service.......: {}", entry.provider.to_uppercase())?;
+                writeln!(writer, " |__unmapped....: {}", error)?;
+                writeln!(writer)?;
+                continue;
+            }
             for group in &entry.groups {
                 writeln!(writer, " |_service.......: {}", entry.provider.to_uppercase())?;
                 if let Some(account) = &entry.account {

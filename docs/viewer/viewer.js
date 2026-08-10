@@ -151,6 +151,7 @@ function normalizeAccessMap(entries = []) {
     return entries.map((entry) => ({
       provider: entry.provider,
       account: entry.account,
+      mappingError: entry.mapping_error ?? null,
       groups: (entry.groups || []).map((group) => ({
         resources: Array.isArray(group.resources) ? group.resources : [],
         permissions: Array.isArray(group.permissions) ? group.permissions : [],
@@ -172,6 +173,7 @@ function normalizeAccessMap(entries = []) {
     return {
       provider: entry.provider,
       account: entry.account,
+      mappingError: entry.mapping_error ?? null,
       groups: [{ resources: resource, permissions }],
     };
   });
@@ -180,6 +182,8 @@ function normalizeAccessMap(entries = []) {
 function flattenAccessMap(entries = []) {
   const rows = [];
   entries.forEach((entry) => {
+    // A failed mapping resolved nothing; its groups are placeholders.
+    if (entry.mappingError) return;
     (entry.groups || []).forEach((group) => {
       (group.resources || []).forEach((resource) => {
         rows.push({
