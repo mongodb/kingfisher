@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     fmt::Write,
     sync::{Arc, Mutex},
 };
@@ -854,7 +854,6 @@ impl DetailsReporter {
             return matches;
         }
 
-        use std::collections::HashMap;
         let mut by_fp: HashMap<(u64, String), ReportMatch> = HashMap::new();
 
         for rm in matches {
@@ -1217,7 +1216,8 @@ impl DetailsReporter {
                 active_findings,
                 inactive_findings,
                 unknown_validation_findings,
-                access_map_identities: access_map.map_or(0, Vec::len),
+                access_map_identities: access_map
+                    .map_or(0, |e| e.iter().filter(|x| x.mapping_error.is_none()).count()),
                 rules_applied: self.audit_context.as_ref().and_then(|ctx| ctx.rules_applied),
                 confidence_level: args.confidence.to_string(),
                 custom_rules_used: !args.rules.rules_path.is_empty() || !args.rules.load_builtins,
@@ -1258,7 +1258,9 @@ impl DetailsReporter {
             return None;
         }
 
-        let occurrences = credential_occurrences(ds.get_matches());
+        let mapped: HashSet<&str> =
+            raw_results.iter().filter_map(|r| r.fingerprint.as_deref()).collect();
+        let occurrences = credential_occurrences(ds.get_matches(), &mapped);
 
         let mut entries = Vec::new();
         for result in raw_results {
@@ -1341,22 +1343,26 @@ impl DetailsReporter {
     }
 }
 
-/// Maps a finding fingerprint to every fingerprint of the same credential, for
-/// credentials found more than once.
+/// For each fingerprint in `mapped`, every fingerprint of the same credential.
 ///
-/// Access-mapping runs on one representative per credential — validation
-/// de-duplicates on `(rule id, primary capture)` before mapping — and the
-/// resulting fingerprint identifies that one occurrence, because finding
-/// fingerprints include the match offsets. Grouping on the same key recovers
-/// the other occurrences the single mapping result covers.
+/// `AccessMapCollector` maps a credential once and the result carries the
+/// fingerprint of the occurrence it was collected from; grouping on rule id
+/// plus secret value recovers the others, since fingerprints differ only by
+/// match offsets. These are match fingerprints, so a group can name a match
+/// that reporting filters later dropped.
 fn credential_occurrences(
     matches: &[Arc<FindingsStoreMessage>],
+    mapped: &HashSet<&str>,
 ) -> HashMap<String, Arc<Vec<String>>> {
+    if mapped.is_empty() {
+        return HashMap::new();
+    }
+
     let mut by_credential: HashMap<(&str, &str), Vec<String>> = HashMap::new();
     for (_, _, m) in matches.iter().map(|arc| &**arc) {
         let secret = m.groups.captures.first().map_or("", |c| c.raw_value());
-        // Without a captured value there is no credential to group on, and
-        // every such match of the rule would collapse into one bogus group.
+        // With no captured value every such match of the rule would collapse
+        // into one bogus group.
         if secret.is_empty() {
             continue;
         }
@@ -1366,13 +1372,14 @@ fn credential_occurrences(
             .push(m.finding_fingerprint.to_string());
     }
 
-    // One shared group per credential: a secret repeated thousands of times
-    // across git history would otherwise store a clone per occurrence.
+    // One shared group per credential, and only for credentials a result
+    // actually mapped: a secret repeated across git history would otherwise
+    // store a clone per occurrence.
     let mut occurrences: HashMap<String, Arc<Vec<String>>> = HashMap::new();
     for (_, mut group) in by_credential {
         group.sort_unstable();
         group.dedup();
-        if group.len() < 2 {
+        if group.len() < 2 || !group.iter().any(|fp| mapped.contains(fp.as_str())) {
             continue;
         }
         let group = Arc::new(group);
@@ -2130,7 +2137,8 @@ mod tests {
             Arc::new(sample_occurrence("kingfisher.gcp.1", "AKIAREPEATED", 44)),
         ];
 
-        let occurrences = credential_occurrences(&matches);
+        let mapped = HashSet::from(["11"]);
+        let occurrences = credential_occurrences(&matches, &mapped);
 
         let group = vec!["11".to_string(), "22".to_string()];
         assert_eq!(occurrences.get("11").map(|g| g.as_ref()), Some(&group));
@@ -2141,6 +2149,9 @@ mod tests {
         // same value is a different credential for validation and mapping.
         assert_eq!(occurrences.get("33"), None);
         assert_eq!(occurrences.get("44"), None);
+        // Groups no mapping result points at are never materialized.
+        let unmapped = HashSet::from(["99"]);
+        assert!(credential_occurrences(&matches, &unmapped).is_empty());
     }
 
     #[test]
@@ -2155,7 +2166,8 @@ mod tests {
             .map(|rm| Arc::new((Arc::new(rm.origin), Arc::new(rm.blob_metadata), rm.m)))
             .collect();
 
-        assert!(credential_occurrences(&matches).is_empty());
+        let mapped = HashSet::from(["55"]);
+        assert!(credential_occurrences(&matches, &mapped).is_empty());
     }
 
     fn build_validation_response(

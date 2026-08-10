@@ -320,6 +320,35 @@ mod tests {
     }
 
     #[test]
+    fn failed_mappings_are_labelled_instead_of_listed_as_impact() {
+        use crate::reporter::{AccessMapEntry, AccessMapResourceGroup};
+
+        let entry = |mapping_error: Option<&str>| AccessMapEntry {
+            provider: "aws".to_string(),
+            account: Some("123456789012".to_string()),
+            groups: vec![AccessMapResourceGroup {
+                resources: vec!["arn:aws:s3:::bucket-a".to_string()],
+                permissions: vec![],
+            }],
+            token_details: None,
+            provider_metadata: None,
+            fingerprint: Some("fp-1".to_string()),
+            fingerprints: Vec::new(),
+            mapping_error: mapping_error.map(str::to_string),
+            permissions_by_severity: None,
+            context: None,
+        };
+
+        let mapped = render_access_map(Some(&vec![entry(None)]));
+        assert!(mapped.contains("1 groups"), "got: {mapped}");
+        assert!(!mapped.contains("not mapped"));
+
+        let failed = render_access_map(Some(&vec![entry(Some("sts:GetCallerIdentity 403"))]));
+        assert!(failed.contains("not mapped: sts:GetCallerIdentity 403"), "got: {failed}");
+        assert!(!failed.contains("groups"), "placeholder groups must not be counted: {failed}");
+    }
+
+    #[test]
     fn build_html_includes_audit_title_and_cli_args() {
         let envelope = ReportEnvelope {
             findings: Vec::new(),
