@@ -165,10 +165,9 @@ pub struct AlertSink {
 /// payload can tell a genuinely clean scan apart from a sink whose filters
 /// excluded everything.
 ///
-/// Per-sink fields (`report_url`, `detail`, `unfiltered_total`) are overlaid
-/// by `dispatch` immediately after construction. They are intentionally not
-/// parameters of `from_findings` because they don't derive from the (already
-/// filtered) finding list passed to it.
+/// `report_url`, `detail`, `impacted_resources` and `unfiltered_total` are
+/// overlaid by `dispatch` right after construction: they are per-sink and do
+/// not derive from the finding list alone.
 #[derive(Clone, Debug, Serialize)]
 pub struct AlertSummary {
     pub total: usize,
@@ -184,9 +183,9 @@ pub struct AlertSummary {
     pub report_url: Option<String>,
     /// Resolved detail level (`Summary` or `Detail`, never `Auto`).
     pub detail: AlertDetail,
-    /// Sum of impacted-resource counts (from `--access-map`) across findings
-    /// in this summary. `0` when access-map wasn't run or none of this sink's
-    /// findings have a matching access-map result.
+    /// Resources exposed by the distinct credentials in this summary, from
+    /// `--access-map`. A credential found several times counts once. `0` when
+    /// access-map wasn't run or nothing here was mapped.
     pub impacted_resources: usize,
     /// Whole-scan finding count, before this sink's `min_confidence` /
     /// `finding_filter` were applied. Used only to distinguish "the scan

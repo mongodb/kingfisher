@@ -52,7 +52,7 @@ always self-hosted), so it is **never** inferred — pass
 | `--alert-format slack\|teams\|generic\|discord\|mattermost\|googlechat` | inferred | Payload shape. |
 | `--alert-on findings\|always` | `findings` | `always` posts even on a clean run. |
 | `--alert-min-confidence low\|medium\|high` | `medium` | Findings below this are dropped from the payload. |
-| `--alert-include-secret` | off | Include the (truncated to ~32 chars) secret value in the payload. Ignored under `--alert-dry-run`, which always redacts. |
+| `--alert-include-secret` | off | Include the secret value in the payload — truncated to 32 chars by the chat formats, verbatim in the `generic` record so it matches `--format json`. Ignored under `--alert-dry-run`, which always redacts. |
 | `--alert-report-url URL` | *(none)* | Pivot link rendered in every payload — typically a CI run URL or report-artifact URL. Reads `KINGFISHER_ALERT_REPORT_URL` env var as a fallback. |
 | `--alert-detail summary\|detail\|auto` | `auto` | How much per-finding detail to render. `auto` switches to `summary` once the per-sink filtered finding count exceeds 25. |
 | `--alert-finding-filter all\|exclude-inactive\|actionable\|only-active\|access-map-only` | `all` | Restrict which findings a sink reports, on top of `--alert-min-confidence`. See [Finding filters](#finding-filters) below. |
