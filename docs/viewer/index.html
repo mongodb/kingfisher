@@ -6064,7 +6064,7 @@
       fpEl.innerHTML = fpVal; // reset content
 
       if (fpVal && Array.isArray(accessMap)) {
-          const hasEntry = accessMap.some(entry => entry.fingerprint === fpVal);
+          const hasEntry = getAccessMapForFingerprint(fpVal).length > 0;
           if (hasEntry) {
               const btn = document.createElement("button");
               btn.className = "badge";
@@ -6342,9 +6342,28 @@
       }
     }
 
+    // An entry covers every occurrence of its credential: `fingerprint` is the
+    // occurrence that was mapped, `fingerprints` the others.
+    function accessEntryCoversFingerprint(entry, fingerprint) {
+      if (!entry || !fingerprint) return false;
+      if (entry.fingerprint === fingerprint) return true;
+      return Array.isArray(entry.fingerprints) && entry.fingerprints.includes(fingerprint);
+    }
+
+    // A failed mapping resolved nothing, so its groups are placeholders and
+    // must not be read as blast radius.
     function getAccessMapForFingerprint(fingerprint) {
       if (!fingerprint || !Array.isArray(accessMap)) return [];
-      return accessMap.filter((entry) => entry.fingerprint === fingerprint);
+      return accessMap.filter(
+        (entry) => accessEntryCoversFingerprint(entry, fingerprint) && !entry.mapping_error
+      );
+    }
+
+    function getUnmappedAccessForFingerprint(fingerprint) {
+      if (!fingerprint || !Array.isArray(accessMap)) return [];
+      return accessMap.filter(
+        (entry) => accessEntryCoversFingerprint(entry, fingerprint) && entry.mapping_error
+      );
     }
 
     function countResources(entries) {
@@ -6488,13 +6507,26 @@
 
       // Count
       const resourceTotal = countResources(entries);
+      const unmapped = getUnmappedAccessForFingerprint(fingerprint);
       blastCount.textContent = entries.length > 0
         ? `${entries.length} identit${entries.length !== 1 ? "ies" : "y"}, ${resourceTotal} resource${resourceTotal !== 1 ? "s" : ""}`
-        : "No access data";
+        : unmapped.length > 0
+          ? "Identity mapping failed"
+          : "No access data";
 
       // Render entries
       blastEntries.innerHTML = "";
-      if (entries.length === 0) return;
+      if (entries.length === 0) {
+        // Say why rather than showing nothing: the credential was collected,
+        // the provider lookup is what failed.
+        unmapped.forEach((entry) => {
+          const note = document.createElement("div");
+          note.className = "am-empty-hint";
+          note.textContent = `${entry.provider || "provider"}: ${entry.mapping_error}`;
+          blastEntries.appendChild(note);
+        });
+        return;
+      }
 
       entries.forEach((entry) => {
         const identity = document.createElement("div");

@@ -268,7 +268,7 @@ function normalizeAccessMap(entries = []) {
       provider: entry.provider,
       account: entry.account,
       fingerprint: entry.fingerprint,
-      mappingError: entry.mapping_error ?? null,
+      mappingError: entry.mapping_error ?? entry.mappingError ?? null,
       groups: (entry.groups || []).map((group) => ({
         resources: Array.isArray(group.resources) ? group.resources : [],
         permissions: Array.isArray(group.permissions) ? group.permissions : [],
@@ -280,7 +280,7 @@ function normalizeAccessMap(entries = []) {
     provider: entry.provider,
     account: entry.account,
     fingerprint: entry.fingerprint,
-    mappingError: entry.mapping_error ?? null,
+    mappingError: entry.mapping_error ?? entry.mappingError ?? null,
     groups: [
       {
         resources: entry.resource ? [entry.resource] : [],
