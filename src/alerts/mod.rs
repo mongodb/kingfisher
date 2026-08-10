@@ -261,7 +261,10 @@ impl AccessMapImpact {
 }
 
 impl AlertSummary {
-    pub fn from_findings(findings: &[&FindingReporterRecord], target: Option<String>) -> Self {
+    pub(crate) fn from_findings(
+        findings: &[&FindingReporterRecord],
+        target: Option<String>,
+    ) -> Self {
         let mut active = 0usize;
         let mut inactive = 0usize;
         let mut unknown = 0usize;
@@ -384,8 +387,9 @@ pub(crate) fn markdown_link_target(url: &str) -> String {
 /// Callers wrap it in their own emphasis markup.
 pub(crate) fn suppression_notice(total: usize) -> String {
     format!(
-        "{total} findings — per-finding detail suppressed (summary mode). See full report for \
-         specifics."
+        "{total} finding{} — per-finding detail suppressed (summary mode). See full report for \
+         specifics.",
+        plural(total)
     )
 }
 
@@ -797,12 +801,8 @@ mod tests {
     }
 
     #[test]
-    fn auto_detail_threshold_is_inclusive_at_25() {
-        // Boundary regression: filtered.len() == THRESHOLD must stay in
-        // Detail mode; > THRESHOLD must escalate to Summary.
+    fn auto_detail_threshold_is_pinned() {
         assert_eq!(AUTO_DETAIL_THRESHOLD, 25);
-        // The resolution itself lives inside `dispatch`; this test pins the
-        // constant so any future tuning is intentional.
     }
 
     /// Pins the wording every chat sink renders.
@@ -842,6 +842,20 @@ mod tests {
 
         // A sink with findings never renders the empty-headline variants.
         assert!(empty_headline(&s).is_none());
+    }
+
+    /// The reporter writes `Confidence`'s lowercase `Display`, and comparing
+    /// against TitleCase silently dropped every finding into the default tier.
+    #[test]
+    fn min_confidence_matches_the_reporter_spelling() {
+        assert!(matches_min_confidence("high", ConfidenceLevel::High));
+        assert!(matches_min_confidence("medium", ConfidenceLevel::Medium));
+        assert!(!matches_min_confidence("low", ConfidenceLevel::Medium));
+        assert!(!matches_min_confidence("medium", ConfidenceLevel::High));
+        // Parsing is case-insensitive, and anything unknown falls back to medium.
+        assert!(matches_min_confidence("High", ConfidenceLevel::High));
+        assert!(matches_min_confidence("nonsense", ConfidenceLevel::Medium));
+        assert!(!matches_min_confidence("nonsense", ConfidenceLevel::High));
     }
 
     #[test]
@@ -1370,7 +1384,9 @@ mod tests {
                 !logged.contains("AKIAIOSFODNN7EXAMPLE"),
                 "dry-run log leaked the secret: {logged}"
             );
-            assert!(logged.contains("<redacted>"), "dry-run log has no payload: {logged}");
+            // Assert on payload content: the log line's own redacted URL would
+            // satisfy a check for "<redacted>" even with an empty payload.
+            assert!(logged.contains("fp1"), "dry-run log has no payload: {logged}");
         }
 
         /// In-memory `MakeWriter` to assert on what `dispatch` logged.

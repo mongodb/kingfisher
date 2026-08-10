@@ -102,6 +102,12 @@ pub fn build_payload(
             );
             // Truncating instead would cut the omitted-count line below.
             if detail.chars().count() + line.chars().count() > DESCRIPTION_LINE_BUDGET {
+                // Keep a truncated first line rather than rendering no detail
+                // at all when one line already fills the budget.
+                if rendered == 0 {
+                    detail.push_str(&truncate(&line, DESCRIPTION_LINE_BUDGET));
+                    rendered += 1;
+                }
                 break;
             }
             detail.push_str(&line);
@@ -259,6 +265,20 @@ mod tests {
         assert!(fields.contains("%28") && fields.contains("%29") && fields.contains("%20"));
         // The structured link keeps the URL verbatim.
         assert_eq!(p["embeds"][0]["url"], "https://ci.example/run(7)?x=1 2");
+    }
+
+    #[test]
+    fn one_oversized_finding_still_renders_truncated() {
+        let s = summary(3, 3);
+        let mut rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-huge");
+        rec.finding.path = "x".repeat(4000);
+        let refs: Vec<&crate::reporter::FindingReporterRecord> = (0..3).map(|_| &rec).collect();
+
+        let p = build_payload(&s, &refs, false);
+        let desc = p["embeds"][0]["description"].as_str().unwrap();
+        assert!(desc.contains("kingfisher.aws.1"), "no detail rendered at all: {desc}");
+        assert!(desc.contains("…2 findings omitted"), "got: {desc}");
+        assert!(desc.chars().count() <= DESCRIPTION_SOFT_LIMIT);
     }
 
     #[test]

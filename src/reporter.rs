@@ -1345,11 +1345,9 @@ impl DetailsReporter {
 
 /// For each fingerprint in `mapped`, every fingerprint of the same credential.
 ///
-/// `AccessMapCollector` maps a credential once and the result carries the
-/// fingerprint of the occurrence it was collected from; grouping on rule id
-/// plus secret value recovers the others, since fingerprints differ only by
-/// match offsets. These are match fingerprints, so a group can name a match
-/// that reporting filters later dropped.
+/// A credential is mapped once, from one occurrence; grouping on rule id plus
+/// secret value recovers the others, since fingerprints differ only by match
+/// offsets. A group can name a match that reporting filters later dropped.
 fn credential_occurrences(
     matches: &[Arc<FindingsStoreMessage>],
     mapped: &HashSet<&str>,
