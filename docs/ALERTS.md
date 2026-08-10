@@ -55,7 +55,7 @@ always self-hosted), so it is **never** inferred — pass
 | `--alert-include-secret` | off | Include the (truncated to ~32 chars) secret value in the payload. Ignored under `--alert-dry-run`, which always redacts. |
 | `--alert-report-url URL` | *(none)* | Pivot link rendered in every payload — typically a CI run URL or report-artifact URL. Reads `KINGFISHER_ALERT_REPORT_URL` env var as a fallback. |
 | `--alert-detail summary\|detail\|auto` | `auto` | How much per-finding detail to render. `auto` switches to `summary` once the per-sink filtered finding count exceeds 25. |
-| `--alert-finding-filter all\|exclude-inactive\|only-active\|access-map-only` | `all` | Restrict which findings a sink reports, on top of `--alert-min-confidence`. See [Finding filters](#finding-filters) below. |
+| `--alert-finding-filter all\|exclude-inactive\|actionable\|only-active\|access-map-only` | `all` | Restrict which findings a sink reports, on top of `--alert-min-confidence`. See [Finding filters](#finding-filters) below. |
 | `--alert-prevent-empty` | off | Skip a sink entirely when `--alert-min-confidence` / `--alert-finding-filter` leave nothing to report, instead of posting an alert with an empty findings list. Does **not** suppress the deliberate `--alert-on always` clean-scan heartbeat. Off by default to preserve existing behavior on upgrade. |
 | `--alert-dry-run` | off | Build and log each sink's resolved payload instead of POSTing it — use to validate filter configuration before wiring a real webhook URL. A URL is still required and still validated, so pass a placeholder such as `https://example.invalid/hook`. Secrets are always redacted in the logged payload (a log outlives the run), so `--alert-include-secret` has no effect here; a `WARN` is emitted when both are set. |
 
@@ -72,10 +72,13 @@ independent of confidence:
 - **`exclude-inactive`** — drop findings a validator authoritatively rejected
   (`Inactive Credential`); keep active findings plus every inconclusive
   outcome (assumed-valid, inconclusive, skipped, not attempted).
+- **`actionable`** — keep active plus `Assumed Valid (Not Live-Validated)`
+  findings, the same tier `--validation-filter actionable` reports. Use this to
+  page on high-signal secrets that no provider API can confirm — private keys,
+  for instance — without also paging on everything the scan could not check.
 - **`only-active`** — keep only live-validated `Active Credential` findings.
-  This deliberately excludes `Assumed Valid (Not Live-Validated)`, which was
-  never confirmed against the provider — use `exclude-inactive` if you want
-  assumed-valid findings to page you too.
+  This deliberately excludes `Assumed Valid (Not Live-Validated)`: use
+  `actionable` if you want those to page you too.
 - **`access-map-only`** — keep only findings that have a matching
   `--access-map` result. This requires `--access-map` to also be passed;
   without it, the filter matches nothing and the sink never reports (a

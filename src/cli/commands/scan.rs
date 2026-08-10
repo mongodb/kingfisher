@@ -298,10 +298,11 @@ pub struct ScanArgs {
 
     /// Restrict which findings are eligible for alert payloads, on top of
     /// `--alert-min-confidence`. `exclude-inactive` drops "Inactive
-    /// Credential" findings; `only-active` keeps only "Active Credential"
-    /// findings; `access-map-only` keeps only findings with a matching
-    /// `--access-map` result (requires `--access-map` to be set, otherwise
-    /// this filter matches nothing).
+    /// Credential" findings; `actionable` keeps active plus assumed-valid
+    /// findings (private keys and the like); `only-active` keeps only "Active
+    /// Credential" findings; `access-map-only` keeps only findings with a
+    /// matching `--access-map` result (requires `--access-map` to be set,
+    /// otherwise this filter matches nothing).
     #[arg(
         global = true,
         long = "alert-finding-filter",

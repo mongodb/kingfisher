@@ -227,7 +227,7 @@ alerts:
     include_secret: false       # bool                           (--alert-include-secret)
     report_url: null            # URL                            (--alert-report-url)
     detail: auto                # summary | detail | auto        (--alert-detail)
-    finding_filter: all         # all | exclude-inactive | only-active | access-map-only  (--alert-finding-filter)
+    finding_filter: all         # all | exclude-inactive | actionable | only-active | access-map-only  (--alert-finding-filter)
     prevent_empty: false        # bool                           (--alert-prevent-empty)
     # `--alert-dry-run` has no config key on purpose: a committed `true` would
     # silently stop every alert from being delivered.
@@ -239,7 +239,7 @@ alerts:
       include_secret: false                              # default false
       report_url: https://ci.example/run/42              # optional pivot link rendered in payload
       detail: auto                                       # summary | detail | auto (default auto)
-      finding_filter: all                                # all | exclude-inactive | only-active | access-map-only (default all)
+      finding_filter: all                                # all | exclude-inactive | actionable | only-active | access-map-only (default all)
       prevent_empty: false                               # skip this sink when filters leave nothing to report (default false)
 
 global:

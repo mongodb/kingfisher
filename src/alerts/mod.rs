@@ -108,7 +108,8 @@ impl AlertFormat {
 ///
 /// Each variant is a strict subset of the previous one: `AccessMapOnly` only
 /// ever matches findings that are also `OnlyActive` (access-mapping requires a
-/// validated, active credential), which is itself a subset of `All`.
+/// validated, active credential), which is itself a subset of `Actionable`, of
+/// `ExcludeInactive`, of `All`.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 #[clap(rename_all = "kebab-case")]
@@ -118,6 +119,10 @@ pub enum AlertFindingFilter {
     All,
     /// Drop `VerifiedInactive` findings; keep active + unknown/not-attempted.
     ExcludeInactive,
+    /// Keep active and assumed-valid findings — the same tier
+    /// `--validation-filter actionable` reports. Private keys and other
+    /// unvalidatable high-signal secrets page; unverifiable noise does not.
+    Actionable,
     /// Keep only `VerifiedActive` findings. Note this excludes `Assumed`, which
     /// was never live-validated.
     OnlyActive,
@@ -591,6 +596,7 @@ fn matches_finding_filter(
     match filter {
         AlertFindingFilter::All => true,
         AlertFindingFilter::ExcludeInactive => outcome != ValidationOutcome::VerifiedInactive,
+        AlertFindingFilter::Actionable => outcome.is_actionable(),
         AlertFindingFilter::OnlyActive => outcome.is_verified_active(),
         AlertFindingFilter::AccessMapOnly => {
             outcome.is_verified_active() && access_map_impact.is_mapped(fingerprint)
@@ -857,6 +863,20 @@ mod tests {
         // though `is_actionable()` accepts it for --validation-filter.
         for outcome in [VO::VerifiedInactive, VO::NotAttempted, VO::Assumed, VO::Unavailable] {
             assert!(!matches_finding_filter(outcome, "fp1", AlertFindingFilter::OnlyActive, &map));
+        }
+    }
+
+    /// `actionable` exists for secrets no provider API can confirm — a private
+    /// key is `Assumed`, never `VerifiedActive` — while still excluding the
+    /// outcomes that mean "we could not check".
+    #[test]
+    fn finding_filter_actionable_keeps_assumed_but_not_unchecked() {
+        let map = AccessMapImpact::default();
+        for outcome in [VO::VerifiedActive, VO::Assumed] {
+            assert!(matches_finding_filter(outcome, "fp1", AlertFindingFilter::Actionable, &map));
+        }
+        for outcome in [VO::VerifiedInactive, VO::NotAttempted, VO::Unavailable, VO::Skipped] {
+            assert!(!matches_finding_filter(outcome, "fp1", AlertFindingFilter::Actionable, &map));
         }
     }
 
