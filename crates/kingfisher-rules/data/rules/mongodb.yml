@@ -149,6 +149,16 @@ rules:
       \b
     pattern_requirements:
       ignore_if_contains:
+        # Common template values rather than credential material.
+        - "_username:"
+        - "_password@"
+        - "_user_token:"
+        - "_pass_token@"
+        - "_user-token:"
+        - "_pass-token@"
+        # Unix-domain-socket connection targets remain useful to scan, but are
+        # not remotely reachable and are commonly local test fixtures.
+        - "%2ftmp%2f"
         - "****"
         - "xxxx"
         - "example"
