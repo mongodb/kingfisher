@@ -1300,7 +1300,7 @@ impl DetailsReporter {
                     .fingerprint
                     .as_ref()
                     .and_then(|fp| occurrences.get(fp.as_str()))
-                    .cloned()
+                    .map(|group| group.as_ref().clone())
                     .unwrap_or_default(),
                 mapping_error: result.mapping_error.clone(),
                 permissions_by_severity,
@@ -1349,25 +1349,35 @@ impl DetailsReporter {
 /// resulting fingerprint identifies that one occurrence, because finding
 /// fingerprints include the match offsets. Grouping on the same key recovers
 /// the other occurrences the single mapping result covers.
-fn credential_occurrences(matches: &[Arc<FindingsStoreMessage>]) -> HashMap<String, Vec<String>> {
+fn credential_occurrences(
+    matches: &[Arc<FindingsStoreMessage>],
+) -> HashMap<String, Arc<Vec<String>>> {
     let mut by_credential: HashMap<(&str, &str), Vec<String>> = HashMap::new();
     for (_, _, m) in matches.iter().map(|arc| &**arc) {
         let secret = m.groups.captures.first().map_or("", |c| c.raw_value());
+        // Without a captured value there is no credential to group on, and
+        // every such match of the rule would collapse into one bogus group.
+        if secret.is_empty() {
+            continue;
+        }
         by_credential
             .entry((m.rule.id(), secret))
             .or_default()
             .push(m.finding_fingerprint.to_string());
     }
 
-    let mut occurrences: HashMap<String, Vec<String>> = HashMap::new();
+    // One shared group per credential: a secret repeated thousands of times
+    // across git history would otherwise store a clone per occurrence.
+    let mut occurrences: HashMap<String, Arc<Vec<String>>> = HashMap::new();
     for (_, mut group) in by_credential {
         group.sort_unstable();
         group.dedup();
         if group.len() < 2 {
             continue;
         }
-        for fingerprint in &group {
-            occurrences.insert(fingerprint.clone(), group.clone());
+        let group = Arc::new(group);
+        for fingerprint in group.iter() {
+            occurrences.insert(fingerprint.clone(), Arc::clone(&group));
         }
     }
     occurrences
@@ -2123,12 +2133,29 @@ mod tests {
         let occurrences = credential_occurrences(&matches);
 
         let group = vec!["11".to_string(), "22".to_string()];
-        assert_eq!(occurrences.get("11"), Some(&group));
-        assert_eq!(occurrences.get("22"), Some(&group));
+        assert_eq!(occurrences.get("11").map(|g| g.as_ref()), Some(&group));
+        assert_eq!(occurrences.get("22").map(|g| g.as_ref()), Some(&group));
+        // One shared allocation, not a clone per occurrence.
+        assert!(Arc::ptr_eq(occurrences.get("11").unwrap(), occurrences.get("22").unwrap()));
         // A single occurrence needs no entry, and a different rule matching the
         // same value is a different credential for validation and mapping.
         assert_eq!(occurrences.get("33"), None);
         assert_eq!(occurrences.get("44"), None);
+    }
+
+    #[test]
+    fn credential_occurrences_ignores_matches_without_a_capture() {
+        // Two capture-less matches of one rule are not the same credential.
+        let (mut a, _) = sample_report_match("", StatusCode::OK.as_u16(), true);
+        a.m.finding_fingerprint = 55;
+        let (mut b, _) = sample_report_match("", StatusCode::OK.as_u16(), true);
+        b.m.finding_fingerprint = 66;
+        let matches: Vec<Arc<FindingsStoreMessage>> = vec![a, b]
+            .into_iter()
+            .map(|rm| Arc::new((Arc::new(rm.origin), Arc::new(rm.blob_metadata), rm.m)))
+            .collect();
+
+        assert!(credential_occurrences(&matches).is_empty());
     }
 
     fn build_validation_response(
