@@ -83,21 +83,24 @@ rules:
       - https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/databricks.go
       - https://github.com/google/osv-scalibr/blob/55c87fa3e90372b2411b3c6ed111f7d257ced048/veles/secrets/databrickspat/detector.go
 
+  # This host feeds the DOMAIN/DATABRICKS_DOMAIN variable that the token rules
+  # below POST credentials to, so it must only ever match hosts Databricks
+  # actually serves. `azurewebsites.net` was previously accepted here, which
+  # meant a bearer token could be sent to an unrelated Azure App Service host.
   - name: Databricks Domain
     id: kingfisher.databricks.3
     pattern: |
-      (?xi)                
-      \b 
-      (                   
-        [a-z0-9-]+ 
-        (?: 
-          \.[a-z0-9\-]+ 
-        )*
-        \.                
-        (
-          cloud\.databricks\.com |
-          gcp\.databricks\.com   |
-          azurewebsites\.net
+      (?xi)
+      \b
+      (
+        (?:
+          (?: [[:alnum:]-]+ \. )+
+          (?: cloud | gcp )
+          \. databricks \. com
+          |
+          adb- [[:alnum:]-]+
+          \. [[:digit:]]+
+          \. azuredatabricks \. net
         )
       )
       \b
@@ -106,6 +109,7 @@ rules:
     confidence: medium
     examples:
       - company-name.cloud.databricks.com
+      - adb-4839201756384920.11.azuredatabricks.net
     categories:
       - cloud
       - infrastructure
@@ -113,3 +117,75 @@ rules:
       - https://docs.databricks.com/workspace/workspace-details.html
       - https://docs.gcp.databricks.com/workspace/workspace-details.html
       - https://docs.microsoft.com/en-us/azure/databricks/scenarios/what-is-azure-databricks
+      - https://learn.microsoft.com/en-us/azure/databricks/workspace/workspace-details
+      - https://github.com/google/osv-scalibr/pull/1787
+
+  - name: Databricks OAuth Client ID
+    id: kingfisher.databricks.4
+    pattern: |
+      (?xi)
+      \b
+      (?:databricks|dbx)
+      (?:.|[\n\r]){0,64}?
+      (?:\b|_)client[_-]?id\b
+      (?:.|[\n\r]){0,16}?
+      [=:"'\s]
+      \b
+      (
+        [A-Za-z0-9-]{32,36}
+      )
+      \b
+    pattern_requirements:
+      min_digits: 2
+    min_entropy: 3.5
+    confidence: medium
+    visible: false
+    examples:
+      - 'DATABRICKS_CLIENT_ID="e0e362e3-a77e-3bfe-d9f2-8ab252567ad4"'
+    references:
+      - https://docs.databricks.com/aws/en/dev-tools/auth/oauth-m2m
+      - https://github.com/google/osv-scalibr/pull/1787
+
+  # Databricks issues the same `dose`-prefixed secret for service-principal
+  # (M2M) and user-account (U2M) OAuth clients, so one rule covers both. Only
+  # the workspace token endpoint is validated: the account-level endpoint needs
+  # `/oidc/accounts/<account-id>/v1/token`, and a rule gets exactly one
+  # validation request with no conditional templating, so a second rule for it
+  # would report every secret twice. `DATABRICKS_HOST` (a workspace host) is
+  # also far more commonly co-located with the secret than an account ID is.
+  - name: Databricks OAuth Client Secret
+    id: kingfisher.databricks.5
+    pattern: |
+      (?x)
+      \b
+      (
+        dose[[:alnum:]_.-]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'DATABRICKS_CLIENT_SECRET="doseIqLzmviuoubffILcGr.a1igZf37LiHaU"'
+    depends_on_rule:
+      - rule_id: kingfisher.databricks.3
+        variable: DATABRICKS_DOMAIN
+      - rule_id: kingfisher.databricks.4
+        variable: CLIENT_ID
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://{{ DATABRICKS_DOMAIN }}/oidc/v1/token
+          headers:
+            Authorization: "Basic {{ CLIENT_ID | append: ':' | append: TOKEN | b64enc }}"
+            Content-Type: application/x-www-form-urlencoded
+          body: grant_type=client_credentials&scope=all-apis
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+    references:
+      - https://docs.databricks.com/aws/en/dev-tools/auth/oauth-m2m
+      - https://github.com/google/osv-scalibr/pull/1787

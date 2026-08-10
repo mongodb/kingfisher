@@ -117,3 +117,40 @@ rules:
             - type: StatusMatch
               status: [200, 403]
             - type: JsonValid
+
+  # A ServiceAccount token is a JWT, so `kingfisher.jwt.1` also matches it. That
+  # overlap is deliberate: YAML rules cannot decode a JWT payload to inspect
+  # Kubernetes claims, so the only way to attribute a token to Kubernetes is the
+  # surrounding label, and an operator routing on rule id needs a Kubernetes-named
+  # finding to rotate the ServiceAccount rather than triage an anonymous JWT.
+  # Both rules run the same JWT validator, so neither is a strictly weaker
+  # duplicate of the other; expect one credential to surface under both ids.
+  - name: Kubernetes ServiceAccount Token
+    id: kingfisher.kubernetes.4
+    pattern: |
+      (?x)
+      \b
+      (?i:kubernetes|k8s)
+      (?:.|[\n\r]){0,64}?
+      (?i:service[_-]?account|serviceaccount)
+      (?:.|[\n\r]){0,64}?
+      (?i:token|jwt)
+      (?:[[:blank:]]*[:=][[:blank:]]*|[[:blank:]]+)
+      ["']?
+      (
+        (?:ey|ewogIC)[A-Za-z0-9_-]{12,}\.
+        ey[A-Za-z0-9_-]{12,}\.
+        [A-Za-z0-9_-]{24,}
+      )
+      \b
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - 'KUBERNETES_SERVICE_ACCOUNT_TOKEN="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJzeXN0ZW06c2VydmljZWFjY291bnQ6ZGVmYXVsdDpkZWZhdWx0Iiwia3ViZXJuZXRlcy5pby9zZXJ2aWNlYWNjb3VudC9uYW1lc3BhY2UiOiJkZWZhdWx0In0.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c"'
+    validation:
+      type: JWT
+    tls_mode: lax
+    references:
+      - https://kubernetes.io/docs/concepts/security/service-accounts/
+      - https://kubernetes.io/docs/reference/access-authn-authz/service-accounts-admin/
+      - https://github.com/google/osv-scalibr/pull/2234
