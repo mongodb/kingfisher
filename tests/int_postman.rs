@@ -268,6 +268,9 @@ async fn test_scan_postman_all() -> Result<()> {
         alert_include_secret: false,
         alert_report_url: None,
         alert_detail: kingfisher::alerts::AlertDetail::Auto,
+        alert_finding_filter: kingfisher::alerts::AlertFindingFilter::All,
+        alert_prevent_empty: false,
+        alert_dry_run: false,
         config_webhook_overrides: Vec::new(),
     };
 

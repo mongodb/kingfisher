@@ -20,18 +20,40 @@ pub fn build_payload(
     include_secret: bool,
 ) -> Value {
     let title = if summary.total == 0 {
-        "Kingfisher: scan complete — no findings".to_string()
+        if summary.unfiltered_total > 0 {
+            format!(
+                "Kingfisher: scan complete — 0 of {} finding{} matched this alert's filters",
+                summary.unfiltered_total,
+                plural(summary.unfiltered_total)
+            )
+        } else {
+            "Kingfisher: scan complete — no findings".to_string()
+        }
     } else {
         let prefix = if summary.active > 0 { "🚨 " } else { "" };
-        format!(
-            "{}Kingfisher: {} finding{} ({} active, {} inactive, {} unknown)",
-            prefix,
-            summary.total,
-            plural(summary.total),
-            summary.active,
-            summary.inactive,
-            summary.unknown
-        )
+        if summary.impacted_resources > 0 {
+            format!(
+                "{}Kingfisher: {} finding{} ({} active, {} inactive, {} unknown, {} impacted resource{})",
+                prefix,
+                summary.total,
+                plural(summary.total),
+                summary.active,
+                summary.inactive,
+                summary.unknown,
+                summary.impacted_resources,
+                plural(summary.impacted_resources)
+            )
+        } else {
+            format!(
+                "{}Kingfisher: {} finding{} ({} active, {} inactive, {} unknown)",
+                prefix,
+                summary.total,
+                plural(summary.total),
+                summary.active,
+                summary.inactive,
+                summary.unknown
+            )
+        }
     };
 
     let mut summary_widgets: Vec<Value> = vec![
@@ -39,6 +61,11 @@ pub fn build_payload(
         json!({ "decoratedText": { "topLabel": "Inactive", "text": summary.inactive.to_string() } }),
         json!({ "decoratedText": { "topLabel": "Unknown",  "text": summary.unknown.to_string() } }),
     ];
+    if summary.impacted_resources > 0 {
+        summary_widgets.push(json!({
+            "decoratedText": { "topLabel": "Impacted resources", "text": summary.impacted_resources.to_string() }
+        }));
+    }
     if let Some(t) = &summary.target {
         summary_widgets.push(json!({
             "decoratedText": { "topLabel": "Target", "text": escape_html(t) }
@@ -86,12 +113,12 @@ pub fn build_payload(
             "header": "Findings",
             "widgets": [{ "textParagraph": { "text": detail } }],
         }));
-    } else if summary.detail == AlertDetail::Summary && summary.filtered_total > 0 {
+    } else if summary.detail == AlertDetail::Summary && summary.total > 0 {
         sections.push(json!({
             "header": "Findings",
             "widgets": [{ "textParagraph": { "text": format!(
                 "<i>{} findings — per-finding detail suppressed (summary mode). See full report for specifics.</i>",
-                summary.filtered_total
+                summary.total
             ) }}],
         }));
     }
@@ -167,7 +194,8 @@ mod tests {
             target: None,
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
-            filtered_total: total,
+            impacted_resources: 0,
+            unfiltered_total: 0,
         }
     }
 
@@ -177,6 +205,16 @@ mod tests {
         let sections = p["cardsV2"][0]["card"]["sections"].as_array().unwrap();
         assert_eq!(sections.len(), 1, "expected only the Summary section");
         assert_eq!(sections[0]["header"], "Summary");
+    }
+
+    #[test]
+    fn title_distinguishes_clean_scan_from_filtered_to_empty() {
+        let mut s = summary(0, 0);
+        s.unfiltered_total = 5;
+        let p = build_payload(&s, &[], false);
+        let title = p["cardsV2"][0]["card"]["header"]["title"].as_str().unwrap();
+        assert!(!title.contains("no findings"), "got: {title}");
+        assert!(title.contains("matched this alert's filters"), "got: {title}");
     }
 
     #[test]
@@ -214,7 +252,6 @@ mod tests {
     fn summary_mode_emits_suppression_notice() {
         let mut s = summary(60, 0);
         s.detail = crate::alerts::AlertDetail::Summary;
-        s.filtered_total = 60;
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-z");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();
@@ -226,8 +263,7 @@ mod tests {
 
     #[test]
     fn detail_mode_includes_fingerprint() {
-        let mut s = summary(1, 1);
-        s.filtered_total = 1;
+        let s = summary(1, 1);
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-gc-13");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();

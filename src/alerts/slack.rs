@@ -13,7 +13,26 @@ pub fn build_payload(
     include_secret: bool,
 ) -> Value {
     let header_text = if summary.total == 0 {
-        "Kingfisher: scan complete — no findings".to_string()
+        if summary.unfiltered_total > 0 {
+            format!(
+                "Kingfisher: scan complete — 0 of {} finding{} matched this alert's filters",
+                summary.unfiltered_total,
+                if summary.unfiltered_total == 1 { "" } else { "s" }
+            )
+        } else {
+            "Kingfisher: scan complete — no findings".to_string()
+        }
+    } else if summary.impacted_resources > 0 {
+        format!(
+            "Kingfisher: {} finding{} ({} active, {} inactive, {} unknown, {} impacted resource{})",
+            summary.total,
+            if summary.total == 1 { "" } else { "s" },
+            summary.active,
+            summary.inactive,
+            summary.unknown,
+            summary.impacted_resources,
+            if summary.impacted_resources == 1 { "" } else { "s" }
+        )
     } else {
         format!(
             "Kingfisher: {} finding{} ({} active, {} inactive, {} unknown)",
@@ -81,7 +100,7 @@ pub fn build_payload(
             "type": "section",
             "text": { "type": "mrkdwn", "text": detail_lines.join("\n") }
         }));
-    } else if summary.detail == AlertDetail::Summary && summary.filtered_total > 0 {
+    } else if summary.detail == AlertDetail::Summary && summary.total > 0 {
         // Summary-mode: explicitly tell the operator the per-finding block was
         // dropped on purpose, so they pivot to the report instead of assuming
         // the alert is incomplete.
@@ -91,7 +110,7 @@ pub fn build_payload(
                 "type": "mrkdwn",
                 "text": format!(
                     "_{} findings — per-finding detail suppressed (summary mode). See full report for specifics._",
-                    summary.filtered_total
+                    summary.total
                 )
             }
         }));
@@ -162,7 +181,8 @@ mod tests {
             target: None,
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
-            filtered_total: 0,
+            impacted_resources: 0,
+            unfiltered_total: 0,
         }
     }
 
@@ -172,6 +192,22 @@ mod tests {
         let blocks = p["blocks"].as_array().unwrap();
         let header = &blocks[0]["text"]["text"].as_str().unwrap();
         assert!(header.contains("no findings"));
+    }
+
+    #[test]
+    fn header_distinguishes_clean_scan_from_filtered_to_empty() {
+        // True clean scan: unfiltered_total == 0 too.
+        let p = build_payload(&empty_summary(), &[], false);
+        let header = p["blocks"][0]["text"]["text"].as_str().unwrap();
+        assert!(header.contains("no findings"));
+
+        // Scan found things, but this sink's filters excluded all of them.
+        let mut s = empty_summary();
+        s.unfiltered_total = 5;
+        let p2 = build_payload(&s, &[], false);
+        let header2 = p2["blocks"][0]["text"]["text"].as_str().unwrap();
+        assert!(!header2.contains("no findings"), "got: {header2}");
+        assert!(header2.contains("matched this alert's filters"), "got: {header2}");
     }
 
     #[test]
@@ -186,7 +222,8 @@ mod tests {
             target: None,
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
-            filtered_total: 1,
+            impacted_resources: 0,
+            unfiltered_total: 0,
         };
         let p = build_payload(&summary, &[], false);
         let header = p["blocks"][0]["text"]["text"].as_str().unwrap();
@@ -208,7 +245,7 @@ mod tests {
     fn summary_mode_suppresses_findings_with_notice() {
         let mut s = empty_summary();
         s.detail = crate::alerts::AlertDetail::Summary;
-        s.filtered_total = 50;
+        s.total = 50;
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-123");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();
@@ -226,7 +263,6 @@ mod tests {
     fn detail_mode_includes_fingerprint() {
         let mut s = empty_summary();
         s.total = 1;
-        s.filtered_total = 1;
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-abc-123");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();

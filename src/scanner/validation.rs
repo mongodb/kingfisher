@@ -21,7 +21,7 @@ use tokio::sync::Notify;
 use tracing::{trace, warn};
 
 use crate::{
-    access_map::AccessMapRequest,
+    access_map::{AccessMapRequest, CollectedAccessMapRequest},
     blob::BlobId,
     findings_store::{FindingsStore, FindingsStoreMessage},
     location::OffsetSpan,
@@ -38,9 +38,18 @@ use crate::{
 #[derive(Clone, Default)]
 pub struct AccessMapCollector {
     inner: Arc<DashMap<u64, AccessMapRequest>>,
+    finding_fingerprints: Arc<DashMap<u64, FxHashSet<String>>>,
 }
 
 impl AccessMapCollector {
+    fn record_request(&self, key: u64, request: AccessMapRequest) {
+        self.finding_fingerprints
+            .entry(key)
+            .or_default()
+            .insert(request.finding_fingerprint().to_string());
+        self.inner.entry(key).or_insert(request);
+    }
+
     pub fn record_aws(
         &self,
         access_key: &str,
@@ -52,20 +61,23 @@ impl AccessMapCollector {
             format!("aws|{access_key}|{secret_key}|{}", session_token.unwrap_or_default())
                 .as_bytes(),
         );
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Aws {
-            access_key: access_key.to_string(),
-            secret_key: secret_key.to_string(),
-            session_token: session_token.map(str::to_owned),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Aws {
+                access_key: access_key.to_string(),
+                secret_key: secret_key.to_string(),
+                session_token: session_token.map(str::to_owned),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_gcp(&self, credential_json: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(credential_json.as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Gcp {
-            credential_json: credential_json.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Gcp { credential_json: credential_json.to_string(), fingerprint },
+        );
     }
 
     pub fn record_azure(
@@ -75,142 +87,147 @@ impl AccessMapCollector {
         fingerprint: String,
     ) {
         let key = xxhash_rust::xxh3::xxh3_64(credential_json.as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Azure {
-            credential_json: credential_json.to_string(),
-            containers,
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Azure {
+                credential_json: credential_json.to_string(),
+                containers,
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_azure_devops(&self, token: &str, organization: &str, fingerprint: String) {
         let key =
             xxhash_rust::xxh3::xxh3_64(format!("azure_devops|{organization}|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::AzureDevops {
-            token: token.to_string(),
-            organization: organization.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::AzureDevops {
+                token: token.to_string(),
+                organization: organization.to_string(),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_github(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("github|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::Github { token: token.to_string(), fingerprint });
+        self.record_request(
+            key,
+            AccessMapRequest::Github { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_gitlab(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("gitlab|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::Gitlab { token: token.to_string(), fingerprint });
+        self.record_request(
+            key,
+            AccessMapRequest::Gitlab { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_slack(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("slack|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::Slack { token: token.to_string(), fingerprint });
+        self.record_request(key, AccessMapRequest::Slack { token: token.to_string(), fingerprint });
     }
 
     pub fn record_postgres(&self, uri: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("postgres|{uri}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::Postgres { uri: uri.to_string(), fingerprint });
+        self.record_request(key, AccessMapRequest::Postgres { uri: uri.to_string(), fingerprint });
     }
 
     pub fn record_mongodb(&self, uri: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("mongodb|{uri}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::MongoDB { uri: uri.to_string(), fingerprint });
+        self.record_request(key, AccessMapRequest::MongoDB { uri: uri.to_string(), fingerprint });
     }
 
     pub fn record_huggingface(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("huggingface|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::HuggingFace {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::HuggingFace { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_gitea(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("gitea|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::Gitea { token: token.to_string(), fingerprint });
+        self.record_request(key, AccessMapRequest::Gitea { token: token.to_string(), fingerprint });
     }
 
     pub fn record_bitbucket(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("bitbucket|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Bitbucket {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Bitbucket { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_buildkite(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("buildkite|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Buildkite {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Buildkite { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_harness(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("harness|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::Harness { token: token.to_string(), fingerprint });
+        self.record_request(
+            key,
+            AccessMapRequest::Harness { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_openai(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("openai|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::OpenAI { token: token.to_string(), fingerprint });
+        self.record_request(
+            key,
+            AccessMapRequest::OpenAI { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_anthropic(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("anthropic|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Anthropic {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Anthropic { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_salesforce(&self, token: &str, instance: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("salesforce|{instance}|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Salesforce {
-            token: token.to_string(),
-            instance: instance.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Salesforce {
+                token: token.to_string(),
+                instance: instance.to_string(),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_weightsandbiases(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("weightsandbiases|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::WeightsAndBiases {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::WeightsAndBiases { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_microsoft_teams(&self, webhook_url: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("microsoft_teams|{webhook_url}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::MicrosoftTeams {
-            webhook_url: webhook_url.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::MicrosoftTeams { webhook_url: webhook_url.to_string(), fingerprint },
+        );
     }
 
     pub fn record_airtable(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("airtable|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Airtable {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Airtable { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_alibaba(
@@ -223,30 +240,39 @@ impl AccessMapCollector {
         let key = xxhash_rust::xxh3::xxh3_64(
             format!("alibaba|{access_key}|{secret_key}|{}", session_token.unwrap_or("")).as_bytes(),
         );
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Alibaba {
-            access_key: access_key.to_string(),
-            secret_key: secret_key.to_string(),
-            session_token: session_token.map(|value| value.to_string()),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Alibaba {
+                access_key: access_key.to_string(),
+                secret_key: secret_key.to_string(),
+                session_token: session_token.map(|value| value.to_string()),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_algolia(&self, app_id: &str, api_key: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("algolia|{app_id}|{api_key}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Algolia {
-            app_id: app_id.to_string(),
-            api_key: api_key.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Algolia {
+                app_id: app_id.to_string(),
+                api_key: api_key.to_string(),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_artifactory(&self, token: &str, base_url: Option<&str>, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("artifactory|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Artifactory {
-            token: token.to_string(),
-            base_url: base_url.map(|s| s.to_string()),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Artifactory {
+                token: token.to_string(),
+                base_url: base_url.map(|s| s.to_string()),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_auth0(
@@ -259,176 +285,219 @@ impl AccessMapCollector {
         let key = xxhash_rust::xxh3::xxh3_64(
             format!("auth0|{domain}|{client_id}|{client_secret}").as_bytes(),
         );
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Auth0 {
-            client_id: client_id.to_string(),
-            client_secret: client_secret.to_string(),
-            domain: domain.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Auth0 {
+                client_id: client_id.to_string(),
+                client_secret: client_secret.to_string(),
+                domain: domain.to_string(),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_circleci(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("circleci|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::CircleCI {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::CircleCI { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_digitalocean(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("digitalocean|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::DigitalOcean {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::DigitalOcean { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_fastly(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("fastly|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::Fastly { token: token.to_string(), fingerprint });
+        self.record_request(
+            key,
+            AccessMapRequest::Fastly { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_hubspot(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("hubspot|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::HubSpot { token: token.to_string(), fingerprint });
+        self.record_request(
+            key,
+            AccessMapRequest::HubSpot { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_ibm_cloud(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("ibm_cloud|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::IbmCloud {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::IbmCloud { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_jira(&self, token: &str, base_url: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("jira|{base_url}|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Jira {
-            token: token.to_string(),
-            base_url: base_url.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Jira {
+                token: token.to_string(),
+                base_url: base_url.to_string(),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_mysql(&self, uri: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("mysql|{uri}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::MySQL { uri: uri.to_string(), fingerprint });
+        self.record_request(key, AccessMapRequest::MySQL { uri: uri.to_string(), fingerprint });
     }
 
     pub fn record_paypal(&self, client_id: &str, client_secret: &str, fingerprint: String) {
         let key =
             xxhash_rust::xxh3::xxh3_64(format!("paypal|{client_id}|{client_secret}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::PayPal {
-            client_id: client_id.to_string(),
-            client_secret: client_secret.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::PayPal {
+                client_id: client_id.to_string(),
+                client_secret: client_secret.to_string(),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_plaid(&self, client_id: &str, secret: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("plaid|{client_id}|{secret}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Plaid {
-            client_id: client_id.to_string(),
-            secret: secret.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Plaid {
+                client_id: client_id.to_string(),
+                secret: secret.to_string(),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_sendgrid(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("sendgrid|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::SendGrid {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::SendGrid { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_sendinblue(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("sendinblue|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Sendinblue {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Sendinblue { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_shopify(&self, token: &str, subdomain: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("shopify|{subdomain}|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Shopify {
-            token: token.to_string(),
-            subdomain: subdomain.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Shopify {
+                token: token.to_string(),
+                subdomain: subdomain.to_string(),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_square(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("square|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::Square { token: token.to_string(), fingerprint });
+        self.record_request(
+            key,
+            AccessMapRequest::Square { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_stripe(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("stripe|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::Stripe { token: token.to_string(), fingerprint });
+        self.record_request(
+            key,
+            AccessMapRequest::Stripe { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_terraform(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("terraform|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Terraform {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Terraform { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_xray(&self, token: &str, base_url: Option<&str>, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("xray|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Xray {
-            token: token.to_string(),
-            base_url: base_url.map(|s| s.to_string()),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Xray {
+                token: token.to_string(),
+                base_url: base_url.map(|s| s.to_string()),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_zendesk(&self, token: &str, subdomain: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("zendesk|{subdomain}|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Zendesk {
-            token: token.to_string(),
-            subdomain: subdomain.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Zendesk {
+                token: token.to_string(),
+                subdomain: subdomain.to_string(),
+                fingerprint,
+            },
+        );
     }
 
     pub fn record_monday(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("monday|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::Monday { token: token.to_string(), fingerprint });
+        self.record_request(
+            key,
+            AccessMapRequest::Monday { token: token.to_string(), fingerprint },
+        );
     }
 
     pub fn record_asana(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("asana|{token}").as_bytes());
-        self.inner
-            .entry(key)
-            .or_insert_with(|| AccessMapRequest::Asana { token: token.to_string(), fingerprint });
+        self.record_request(key, AccessMapRequest::Asana { token: token.to_string(), fingerprint });
     }
 
     pub fn record_pinecone(&self, token: &str, fingerprint: String) {
         let key = xxhash_rust::xxh3::xxh3_64(format!("pinecone|{token}").as_bytes());
-        self.inner.entry(key).or_insert_with(|| AccessMapRequest::Pinecone {
-            token: token.to_string(),
-            fingerprint,
-        });
+        self.record_request(
+            key,
+            AccessMapRequest::Pinecone { token: token.to_string(), fingerprint },
+        );
     }
 
-    pub fn into_requests(self) -> Vec<AccessMapRequest> {
-        self.inner.iter().map(|entry| entry.value().clone()).collect()
+    #[cfg(test)]
+    fn into_requests(self) -> Vec<AccessMapRequest> {
+        self.into_collected_requests().into_iter().map(|collected| collected.request).collect()
+    }
+
+    pub(crate) fn into_collected_requests(self) -> Vec<CollectedAccessMapRequest> {
+        let mut requests: Vec<_> = self
+            .inner
+            .iter()
+            .map(|entry| {
+                let key = *entry.key();
+                let mut finding_fingerprints = self
+                    .finding_fingerprints
+                    .get(&key)
+                    .map(|fingerprints| fingerprints.iter().cloned().collect::<Vec<_>>())
+                    .unwrap_or_else(|| vec![entry.value().finding_fingerprint().to_string()]);
+                finding_fingerprints.sort();
+                CollectedAccessMapRequest { request: entry.value().clone(), finding_fingerprints }
+            })
+            .collect();
+        requests
+            .sort_by(|a, b| a.request.finding_fingerprint().cmp(b.request.finding_fingerprint()));
+        requests
     }
 }
 
@@ -847,6 +916,34 @@ pub async fn run_secret_validation(
         }
     }
 
+    // Validation intentionally executes once per unique credential, but alert correlation is
+    // occurrence-specific: the same credential at two source locations has two finding
+    // fingerprints. Revisit the updated store after validation so the collector sees every
+    // occurrence, including matches dropped from the Phase 1 representative set. Existing
+    // requests are still deduplicated by credential inside AccessMapCollector.
+    //
+    // Only runs under --access-map, and pre-filters on the stored validation outcome so the
+    // per-match `OwnedBlobMatch` clone is paid only for credentials that actually validated
+    // — on a large repo the overwhelming majority of matches never reach the mapper.
+    if let Some(collector) = access_map.as_ref() {
+        let ds = datastore.lock().unwrap();
+        let matches = ds.get_matches();
+        let slice = if let Some(ref range) = range { &matches[range.clone()] } else { matches };
+        for message in slice {
+            let stored = &message.2;
+            if !is_access_map_candidate(
+                stored.rule.id(),
+                stored.validation_success,
+                stored.validation_response_status,
+            ) {
+                continue;
+            }
+            let om =
+                OwnedBlobMatch::convert_match_to_owned_blobmatch(stored, Arc::clone(&stored.rule));
+            maybe_record_access_map(&om, Some(collector));
+        }
+    }
+
     // Reclaim memory from static caches that accumulated during validation
     crate::validation::clear_validation_caches();
 
@@ -1110,10 +1207,29 @@ fn hash_cache_key_part(hasher: &mut blake3::Hasher, part: &[u8]) {
     hasher.update(part);
 }
 
+/// Whether a match is worth handing to the access mapper.
+///
+/// Split out so the post-validation sweep in `run_secret_validation` can apply
+/// the same gate to a stored `Match` *before* paying for an `OwnedBlobMatch`
+/// conversion, which clones the match's captures and blob metadata.
+fn is_access_map_candidate(
+    rule_id: &str,
+    validation_success: bool,
+    validation_response_status: u16,
+) -> bool {
+    // GitLab rules treat a bare 2xx as reachable-but-unverified, which is still
+    // enough to enumerate the token's scopes.
+    validation_success
+        || (rule_id.starts_with("kingfisher.gitlab.")
+            && (200..300).contains(&validation_response_status))
+}
+
 fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapCollector>) {
-    let is_gitlab_rule = om.rule.id().starts_with("kingfisher.gitlab.");
-    let validation_ok =
-        om.validation_success || (is_gitlab_rule && om.validation_response_status.is_success());
+    let validation_ok = is_access_map_candidate(
+        om.rule.id(),
+        om.validation_success,
+        om.validation_response_status.as_u16(),
+    );
     let collector = match collector {
         Some(c) if validation_ok => c,
         _ => return,
@@ -1322,7 +1438,7 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                     );
                 }
             }
-            if is_gitlab_rule
+            if om.rule.id().starts_with("kingfisher.gitlab.")
                 && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
                 && !value.is_empty()
             {
@@ -1764,21 +1880,23 @@ mod tests {
         collector.record_asana("2/asana-token-1", "fp-3".into());
         collector.record_asana("2/asana-token-1", "fp-4".into());
 
-        let mut requests = collector.into_requests();
-        requests.sort_by_key(|r| match r {
+        let mut requests = collector.into_collected_requests();
+        requests.sort_by_key(|r| match &r.request {
             AccessMapRequest::Monday { .. } => 0,
             AccessMapRequest::Asana { .. } => 1,
             _ => 2,
         });
         assert_eq!(requests.len(), 2);
-        match &requests[0] {
+        match &requests[0].request {
             AccessMapRequest::Monday { token, .. } => assert_eq!(token, "monday-token-1"),
             other => panic!("unexpected request: {other:?}"),
         }
-        match &requests[1] {
+        assert_eq!(requests[0].finding_fingerprints, ["fp-1", "fp-2"]);
+        match &requests[1].request {
             AccessMapRequest::Asana { token, .. } => assert_eq!(token, "2/asana-token-1"),
             other => panic!("unexpected request: {other:?}"),
         }
+        assert_eq!(requests[1].finding_fingerprints, ["fp-3", "fp-4"]);
     }
 
     #[test]

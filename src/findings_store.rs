@@ -11,7 +11,7 @@ use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::{
-    access_map::AccessMapResult,
+    access_map::ScanAccessMapResult,
     blob::{BlobId, BlobMetadata},
     finding_data,
     git_url::GitUrl,
@@ -111,7 +111,7 @@ pub struct FindingsStore {
     postman_links: FxHashMap<PathBuf, String>,
     s3_buckets: FxHashMap<PathBuf, String>,
     repo_links: FxHashMap<PathBuf, String>,
-    access_map_results: Vec<AccessMapResult>,
+    access_map_results: Vec<ScanAccessMapResult>,
 }
 
 impl FindingsStore {
@@ -182,11 +182,11 @@ impl FindingsStore {
         &mut self.matches
     }
 
-    pub fn set_access_map_results(&mut self, results: Vec<AccessMapResult>) {
+    pub(crate) fn set_access_map_results(&mut self, results: Vec<ScanAccessMapResult>) {
         self.access_map_results = results;
     }
 
-    pub fn access_map_results(&self) -> &[AccessMapResult] {
+    pub(crate) fn access_map_results(&self) -> &[ScanAccessMapResult] {
         &self.access_map_results
     }
 

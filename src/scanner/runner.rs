@@ -1364,7 +1364,7 @@ async fn finalize_access_map(
     collector: AccessMapCollector,
     _args: &scan::ScanArgs,
 ) -> Result<()> {
-    let requests = collector.into_requests();
+    let requests = collector.into_collected_requests();
 
     if requests.is_empty() {
         debug!(
@@ -1375,7 +1375,7 @@ async fn finalize_access_map(
         return Ok(());
     }
 
-    let results = access_map::map_requests(requests).await;
+    let results = access_map::map_collected_requests(requests).await;
 
     {
         let mut ds = datastore.lock().unwrap();

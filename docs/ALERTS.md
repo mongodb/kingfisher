@@ -55,10 +55,56 @@ always self-hosted), so it is **never** inferred — pass
 | `--alert-include-secret` | off | Include the (truncated to ~32 chars) secret value in the payload. |
 | `--alert-report-url URL` | *(none)* | Pivot link rendered in every payload — typically a CI run URL or report-artifact URL. Reads `KINGFISHER_ALERT_REPORT_URL` env var as a fallback. |
 | `--alert-detail summary\|detail\|auto` | `auto` | How much per-finding detail to render. `auto` switches to `summary` once the per-sink filtered finding count exceeds 25. |
+| `--alert-finding-filter all\|exclude-inactive\|only-active\|access-map-only` | `all` | Restrict which findings a sink reports, on top of `--alert-min-confidence`. See [Finding filters](#finding-filters) below. |
+| `--alert-prevent-empty` | off | Skip a sink entirely when `--alert-min-confidence` / `--alert-finding-filter` leave nothing to report, instead of posting an alert with an empty findings list. `--alert-on always` sinks are heartbeats and always post, so silence keeps meaning "the scan never ran". Off by default to preserve existing behavior on upgrade. |
+| `--alert-dry-run` | off | Build and log each sink's resolved payload instead of POSTing it. Secret values are always redacted, even with `--alert-include-secret`. |
 
 Webhook URLs are sensitive: the host/path/query are redacted in logs. Pass them
 via environment variables (`$SLACK_SECURITY_WEBHOOK`) or CI secrets, never
-inline in committed files.
+inline in committed files. Dry-run output is also always secret-redacted,
+regardless of `--alert-include-secret`, because terminal and CI logs are often
+retained.
+
+## Finding filters
+
+`--alert-finding-filter` narrows which findings a sink is allowed to report,
+independent of confidence:
+
+- **`all`** (default) — no filtering by validation status or access-map result.
+- **`exclude-inactive`** — drop findings a validator authoritatively rejected
+  (`Inactive Credential`); keep active findings plus every inconclusive
+  outcome (assumed-valid, inconclusive, skipped, not attempted).
+- **`only-active`** — keep only live-validated `Active Credential` findings.
+  This deliberately excludes `Assumed Valid (Not Live-Validated)`, which was
+  never confirmed against the provider — use `exclude-inactive` if you want
+  assumed-valid findings to page you too.
+- **`access-map-only`** — keep only findings that have a successful, matching
+  `--access-map` result. Failed mapping attempts do not qualify. This requires
+  `--access-map` to also be passed; without it, the filter matches nothing and
+  a `WARN` is logged before the scan starts. Add `--alert-prevent-empty` if the sink should
+  skip delivery when no findings match. Since access-mapping only ever runs on
+  validated, active credentials, this is the strictest tier — a subset of
+  `only-active`.
+
+Every summary count in a payload (total/active/inactive/unknown, and
+`impacted_resources` when access-map data is available) reflects that sink's
+own filtered results, not the whole scan — a sink with `--alert-finding-filter
+only-active` never shows a header count that includes inactive findings it
+didn't list.
+
+```bash
+# Page only on findings with confirmed cloud impact.
+kingfisher scan ./repo --access-map \
+  --alert-webhook "$SLACK_SECURITY_WEBHOOK" \
+  --alert-finding-filter access-map-only \
+  --alert-prevent-empty
+
+# Preview what a filter change would send, without touching the real webhook.
+kingfisher scan ./repo \
+  --alert-webhook "$SLACK_SECURITY_WEBHOOK" \
+  --alert-finding-filter only-active \
+  --alert-dry-run
+```
 
 ## Detail modes
 
@@ -119,6 +165,8 @@ red if any active. Facts list active/inactive/unknown counts and the top rules.
     "active": 1,
     "inactive": 1,
     "unknown": 1,
+    "impacted_resources": 4,
+    "unfiltered_total": 3,
     "by_rule": [{"rule_id": "kingfisher.aws.1", "count": 2}],
     "target": "./repo"
   },
@@ -129,6 +177,18 @@ red if any active. Facts list active/inactive/unknown counts and the top rules.
 
 Findings are the same shape as `kingfisher scan --format json` produces, so
 existing JSON consumers work unchanged.
+
+Every count in `summary` describes this sink's own filtered result set, with
+one exception: `unfiltered_total` is the whole-scan finding count, present so a
+consumer can tell a genuinely clean scan (`unfiltered_total == 0`) from a sink
+whose filters excluded everything (`total == 0 && unfiltered_total > 0`).
+`impacted_resources` is the number of resources `--access-map` attributed to
+this sink's findings, and is `0` when access-map wasn't run.
+
+> **Breaking change (v1.113.0):** `summary.filtered_total` was removed. It
+> duplicated `summary.total`, which now always reflects the per-sink filtered
+> set. Consumers reading `filtered_total` should read `total` instead, and use
+> the new `unfiltered_total` if they need the whole-scan count.
 
 `summary.target` describes the scan target requested on the command line. It supports local paths,
 Git URLs, repository hosts, cloud buckets, container images, and collaboration-platform scans; a
@@ -187,6 +247,11 @@ alerts:
       on: always
       report_url: https://github.com/org/repo/actions/runs/4242    # per-webhook pivot link
       detail: summary                                              # blue-team mode for this sink
+    - url: https://hooks.slack.com/services/T0/B0/CCC
+      format: slack
+      on: findings
+      finding_filter: access-map-only   # requires --access-map on the scan
+      prevent_empty: true               # skip this sink when the filter leaves nothing to report
 ```
 
 `report_url` and `detail` can be set globally via `--alert-report-url` and

@@ -5,12 +5,15 @@
 //! it only emits a `warn!` on stderr. Every webhook URL is treated as a secret —
 //! we redact path/query when logging.
 
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use anyhow::{Context, Result};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tracing::{debug, info, warn};
+
+use kingfisher_core::ValidationOutcome;
 
 use crate::cli::commands::scan::ConfidenceLevel;
 use crate::reporter::FindingReporterRecord;
@@ -58,6 +61,24 @@ pub enum AlertDetail {
 /// payload drops the per-finding block and points at the full report instead.
 pub const AUTO_DETAIL_THRESHOLD: usize = 25;
 
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+struct AccessMapImpact {
+    entry_id: usize,
+    resources: usize,
+}
+
+type AccessMapImpactIndex = HashMap<String, Vec<AccessMapImpact>>;
+
+/// Scan-only access-map metadata used to correlate findings with successful mapping results.
+/// This stays separate from the public report schema.
+#[derive(Clone, Debug)]
+#[doc(hidden)]
+pub struct AlertAccessMapEntry {
+    pub(crate) finding_fingerprints: Vec<String>,
+    pub(crate) impacted_resources: usize,
+    pub(crate) mapping_succeeded: bool,
+}
+
 /// Webhook payload format / target.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "lowercase")]
@@ -100,6 +121,28 @@ impl AlertFormat {
     }
 }
 
+/// Which findings a sink is allowed to report, independent of `min_confidence`.
+///
+/// Each variant is a strict subset of the previous one: `AccessMapOnly` only
+/// ever matches findings that are also `OnlyActive` (access-mapping requires a
+/// validated, active credential), which is itself a subset of `All`.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[serde(rename_all = "kebab-case")]
+#[clap(rename_all = "kebab-case")]
+pub enum AlertFindingFilter {
+    /// No filtering by validation status or access-map result.
+    #[default]
+    All,
+    /// Drop `VerifiedInactive` findings; keep active + unknown/not-attempted.
+    ExcludeInactive,
+    /// Keep only `VerifiedActive` findings. Note this excludes `Assumed`, which
+    /// was never live-validated.
+    OnlyActive,
+    /// Keep only findings with a matching successful `--access-map` result
+    /// (implies active, since access-mapping only runs on validated credentials).
+    AccessMapOnly,
+}
+
 /// One configured webhook destination. `--alert-webhook` may be repeated to
 /// produce more than one. The config-file equivalent is `alerts.webhooks[]`.
 #[derive(Clone, Debug)]
@@ -117,13 +160,29 @@ pub struct AlertSink {
     /// per-sink filtered finding count at dispatch time before the payload
     /// builder runs, so each `build_payload` only sees `Summary` or `Detail`.
     pub detail: AlertDetail,
+    /// Which findings this sink is allowed to report, on top of `min_confidence`.
+    pub finding_filter: AlertFindingFilter,
+    /// When `true`, skip this sink entirely if filtering (min-confidence +
+    /// finding_filter) leaves nothing to report — except for `on: Always`
+    /// sinks, which are heartbeats and always post so that silence keeps
+    /// meaning "the scan never ran". Defaults to `false` to preserve
+    /// pre-existing behavior on upgrade.
+    pub prevent_empty: bool,
 }
 
 /// Summary numbers we surface to every sink, regardless of format.
 ///
-/// Per-sink fields (`report_url`, `detail`, `filtered_total`) are populated by
-/// `dispatch` immediately before the payload builder runs. They are
-/// intentionally not part of `from_findings` because they are sink-specific.
+/// Built per-sink in `dispatch` from that sink's own filtered finding list, so
+/// every count here (including `total`) always matches what's actually
+/// rendered in the payload below it — never the whole-scan numbers — with one
+/// deliberate exception: `unfiltered_total`, which exists precisely so a
+/// payload can tell a genuinely clean scan apart from a sink whose filters
+/// excluded everything.
+///
+/// Per-sink fields (`report_url`, `detail`, `unfiltered_total`) are overlaid
+/// by `dispatch` immediately after construction. They are intentionally not
+/// parameters of `from_findings` because they don't derive from the (already
+/// filtered) finding list passed to it.
 #[derive(Clone, Debug, Serialize)]
 pub struct AlertSummary {
     pub total: usize,
@@ -139,25 +198,56 @@ pub struct AlertSummary {
     pub report_url: Option<String>,
     /// Resolved detail level (`Summary` or `Detail`, never `Auto`).
     pub detail: AlertDetail,
-    /// Count of findings the per-sink min-confidence filter let through. May
-    /// be smaller than `total` when the sink raises `min_confidence` above the
-    /// scan default.
-    pub filtered_total: usize,
+    /// Sum of impacted-resource counts (from `--access-map`) across findings
+    /// in this summary. `0` when access-map wasn't run or none of this sink's
+    /// findings have a matching access-map result.
+    pub impacted_resources: usize,
+    /// Whole-scan finding count, before this sink's `min_confidence` /
+    /// `finding_filter` were applied. Used only to distinguish "the scan
+    /// found nothing" (`unfiltered_total == 0`) from "this sink's filters
+    /// excluded everything the scan found" (`unfiltered_total > 0 && total
+    /// == 0`) — payload builders must not otherwise use this in place of
+    /// `total`.
+    pub unfiltered_total: usize,
 }
 
 impl AlertSummary {
+    /// Build a whole-scan alert summary without access-map context.
+    ///
+    /// Kept as the stable public entry point for library callers. Alert dispatch uses the
+    /// per-sink helper below after applying sink-specific filters.
     pub fn from_findings(findings: &[FindingReporterRecord], target: Option<String>) -> Self {
+        let findings: Vec<_> = findings.iter().collect();
+        Self::from_filtered_findings(&findings, target, &HashMap::new())
+    }
+
+    /// `access_map_impact` maps a finding's fingerprint to its successful
+    /// access-map entries (see `dispatch`); pass an empty map when access-map
+    /// data isn't available.
+    fn from_filtered_findings(
+        findings: &[&FindingReporterRecord],
+        target: Option<String>,
+        access_map_impact: &AccessMapImpactIndex,
+    ) -> Self {
         let mut active = 0usize;
         let mut inactive = 0usize;
         let mut unknown = 0usize;
-        let mut by_rule_map: std::collections::HashMap<String, usize> =
-            std::collections::HashMap::new();
+        let mut impacted_resources = 0usize;
+        let mut counted_access_map_entries = HashSet::new();
+        let mut by_rule_map: HashMap<String, usize> = HashMap::new();
         for f in findings {
             *by_rule_map.entry(f.rule.id.clone()).or_default() += 1;
             match f.finding.validation.outcome {
-                kingfisher_core::ValidationOutcome::VerifiedActive => active += 1,
-                kingfisher_core::ValidationOutcome::VerifiedInactive => inactive += 1,
+                ValidationOutcome::VerifiedActive => active += 1,
+                ValidationOutcome::VerifiedInactive => inactive += 1,
                 _ => unknown += 1,
+            }
+            if let Some(impacts) = access_map_impact.get(&f.finding.fingerprint) {
+                for impact in impacts {
+                    if counted_access_map_entries.insert(impact.entry_id) {
+                        impacted_resources += impact.resources;
+                    }
+                }
             }
         }
         let mut by_rule: Vec<(String, usize)> = by_rule_map.into_iter().collect();
@@ -176,7 +266,10 @@ impl AlertSummary {
             // Placeholder; `dispatch` overwrites this per-sink with a resolved
             // value (`Summary` or `Detail`) before calling `build_payload`.
             detail: AlertDetail::Detail,
-            filtered_total: findings.len(),
+            impacted_resources,
+            // Placeholder; `dispatch` overwrites this immediately with the
+            // whole-scan finding count.
+            unfiltered_total: 0,
         }
     }
 }
@@ -286,29 +379,37 @@ pub async fn dispatch(
     findings: &[FindingReporterRecord],
     target: Option<String>,
 ) {
+    dispatch_with_context(sinks, findings, &[], target, false).await;
+}
+
+/// Dispatch alerts with scan-only access-map correlation and dry-run context.
+///
+/// `access_map` is the (possibly empty) set of `--access-map` results for this scan; it is used
+/// both for `AlertFindingFilter::AccessMapOnly` filtering and to populate
+/// `AlertSummary::impacted_resources`. `dry_run` builds and logs each sink's resolved payload
+/// instead of POSTing it.
+#[doc(hidden)]
+pub async fn dispatch_with_context(
+    sinks: &[AlertSink],
+    findings: &[FindingReporterRecord],
+    access_map: &[AlertAccessMapEntry],
+    target: Option<String>,
+    dry_run: bool,
+) {
     if sinks.is_empty() {
         return;
     }
-    let client = match build_client() {
-        Ok(c) => c,
-        Err(e) => {
-            warn!("alert dispatch: failed to build HTTP client: {}", e);
-            return;
-        }
-    };
+    let mut client = None;
+    if dry_run && sinks.iter().any(|sink| sink.include_secret) {
+        warn!("alert dry-run: include_secret is ignored; dry-run payloads are always redacted");
+    }
 
-    let base_summary = AlertSummary::from_findings(findings, target);
-    debug!(
-        "alert dispatch: total={} active={} inactive={} unknown={} sinks={}",
-        base_summary.total,
-        base_summary.active,
-        base_summary.inactive,
-        base_summary.unknown,
-        sinks.len()
-    );
+    let unfiltered_total = findings.len();
+    let access_map_impact = build_access_map_impact(access_map);
+    debug!("alert dispatch: total={} sinks={}", unfiltered_total, sinks.len());
 
     for sink in sinks {
-        if matches!(sink.on, AlertOn::Findings) && base_summary.total == 0 {
+        if matches!(sink.on, AlertOn::Findings) && unfiltered_total == 0 {
             debug!(
                 "alert dispatch: skipping {} (on=findings, no findings)",
                 redact_webhook(&sink.url)
@@ -318,9 +419,31 @@ pub async fn dispatch(
         let filtered: Vec<&FindingReporterRecord> = findings
             .iter()
             .filter(|f| matches_min_confidence(&f.finding.confidence, sink.min_confidence))
+            .filter(|f| {
+                matches_finding_filter(
+                    f.finding.validation.outcome,
+                    &f.finding.fingerprint,
+                    sink.finding_filter,
+                    &access_map_impact,
+                )
+            })
             .collect();
 
-        // Per-sink summary: clone the base, overlay sink-specific fields, and
+        // `on: Always` is an explicit heartbeat: the operator has asked for a
+        // message on every run so that silence means "the scan didn't run".
+        // `prevent_empty` must not be able to reintroduce silence there —
+        // otherwise a run whose findings were all filtered out is
+        // indistinguishable from a dead CI job.
+        let is_heartbeat_sink = matches!(sink.on, AlertOn::Always);
+        if sink.prevent_empty && filtered.is_empty() && !is_heartbeat_sink {
+            debug!(
+                "alert dispatch: skipping {} (filters left nothing to report)",
+                redact_webhook(&sink.url)
+            );
+            continue;
+        }
+
+        // Per-sink summary, built from this sink's own filtered set, and
         // resolve `Auto` based on this sink's filtered count.
         let resolved_detail = match sink.detail {
             AlertDetail::Auto => {
@@ -332,29 +455,35 @@ pub async fn dispatch(
             }
             other => other,
         };
-        let mut summary = base_summary.clone();
+        let mut summary =
+            AlertSummary::from_filtered_findings(&filtered, target.clone(), &access_map_impact);
         summary.report_url = sink.report_url.clone();
         summary.detail = resolved_detail;
-        summary.filtered_total = filtered.len();
+        summary.unfiltered_total = unfiltered_total;
 
-        let payload = match sink.format {
-            AlertFormat::Slack => slack::build_payload(&summary, &filtered, sink.include_secret),
-            AlertFormat::Teams => teams::build_payload(&summary, &filtered, sink.include_secret),
-            AlertFormat::Generic => {
-                generic::build_payload(&summary, &filtered, sink.include_secret)
-            }
-            AlertFormat::Discord => {
-                discord::build_payload(&summary, &filtered, sink.include_secret)
-            }
-            AlertFormat::Mattermost => {
-                mattermost::build_payload(&summary, &filtered, sink.include_secret)
-            }
-            AlertFormat::Googlechat => {
-                googlechat::build_payload(&summary, &filtered, sink.include_secret)
-            }
-        };
+        let payload = build_sink_payload(sink, &summary, &filtered, dry_run);
 
-        match post(&client, &sink.url, &payload).await {
+        if dry_run {
+            info!(
+                "alert dry-run: would POST to {} ({} finding(s)):\n{}",
+                redact_webhook(&sink.url),
+                filtered.len(),
+                serde_json::to_string_pretty(&payload).unwrap_or_default()
+            );
+            continue;
+        }
+
+        if client.is_none() {
+            client = match build_client() {
+                Ok(client) => Some(client),
+                Err(e) => {
+                    warn!("alert dispatch: failed to build HTTP client: {}", e);
+                    return;
+                }
+            };
+        }
+
+        match post(client.as_ref().expect("client initialized above"), &sink.url, &payload).await {
             Ok(()) => {
                 info!("alert posted to {}", redact_webhook(&sink.url));
             }
@@ -362,6 +491,49 @@ pub async fn dispatch(
                 warn!("alert dispatch failed for {}: {}", redact_webhook(&sink.url), e);
             }
         }
+    }
+}
+
+fn build_access_map_impact(access_map: &[AlertAccessMapEntry]) -> AccessMapImpactIndex {
+    let mut index = HashMap::new();
+
+    for (entry_id, entry) in access_map.iter().enumerate() {
+        if !entry.mapping_succeeded {
+            continue;
+        }
+
+        // The entry id lets summaries avoid multiplying impact when one credential appears at
+        // multiple finding offsets.
+        let fingerprints: HashSet<&str> =
+            entry.finding_fingerprints.iter().map(String::as_str).collect();
+
+        for fingerprint in fingerprints {
+            index
+                .entry(fingerprint.to_string())
+                .or_insert_with(Vec::new)
+                .push(AccessMapImpact { entry_id, resources: entry.impacted_resources });
+        }
+    }
+
+    index
+}
+
+fn build_sink_payload(
+    sink: &AlertSink,
+    summary: &AlertSummary,
+    findings: &[&FindingReporterRecord],
+    dry_run: bool,
+) -> serde_json::Value {
+    // Dry-run payloads are commonly persisted in terminal or CI logs. Keep them redacted even
+    // when the real sink is explicitly configured to include truncated secrets.
+    let include_secret = sink.include_secret && !dry_run;
+    match sink.format {
+        AlertFormat::Slack => slack::build_payload(summary, findings, include_secret),
+        AlertFormat::Teams => teams::build_payload(summary, findings, include_secret),
+        AlertFormat::Generic => generic::build_payload(summary, findings, include_secret),
+        AlertFormat::Discord => discord::build_payload(summary, findings, include_secret),
+        AlertFormat::Mattermost => mattermost::build_payload(summary, findings, include_secret),
+        AlertFormat::Googlechat => googlechat::build_payload(summary, findings, include_secret),
     }
 }
 
@@ -373,6 +545,22 @@ fn matches_min_confidence(finding_confidence: &str, threshold: ConfidenceLevel) 
         _ => ConfidenceLevel::Medium,
     };
     level >= threshold
+}
+
+fn matches_finding_filter(
+    outcome: ValidationOutcome,
+    fingerprint: &str,
+    filter: AlertFindingFilter,
+    access_map_impact: &AccessMapImpactIndex,
+) -> bool {
+    match filter {
+        AlertFindingFilter::All => true,
+        AlertFindingFilter::ExcludeInactive => outcome != ValidationOutcome::VerifiedInactive,
+        AlertFindingFilter::OnlyActive => outcome.is_verified_active(),
+        AlertFindingFilter::AccessMapOnly => {
+            outcome.is_verified_active() && access_map_impact.contains_key(fingerprint)
+        }
+    }
 }
 
 async fn post(client: &Client, url: &str, payload: &serde_json::Value) -> Result<()> {
@@ -412,7 +600,7 @@ pub(crate) fn make_test_record(
             confidence: "Medium".to_string(),
             entropy: "4.5".to_string(),
             validation: ValidationInfo {
-                outcome: kingfisher_core::ValidationOutcome::VerifiedActive,
+                outcome: ValidationOutcome::VerifiedActive,
                 status: "Active Credential".to_string(),
                 response: String::new(),
             },
@@ -432,6 +620,7 @@ pub(crate) fn make_test_record(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use kingfisher_core::ValidationOutcome as VO;
 
     #[test]
     fn redact_webhook_keeps_host() {
@@ -546,5 +735,450 @@ mod tests {
         assert_eq!(AUTO_DETAIL_THRESHOLD, 25);
         // The resolution itself lives inside `dispatch`; this test pins the
         // constant so any future tuning is intentional.
+    }
+
+    #[test]
+    fn finding_filter_all_matches_everything() {
+        let map = HashMap::new();
+        for outcome in [VO::VerifiedActive, VO::VerifiedInactive, VO::NotAttempted, VO::Assumed] {
+            assert!(matches_finding_filter(outcome, "fp1", AlertFindingFilter::All, &map));
+        }
+    }
+
+    #[test]
+    fn finding_filter_exclude_inactive_drops_only_inactive() {
+        let map = HashMap::new();
+        assert!(matches_finding_filter(
+            VO::VerifiedActive,
+            "fp1",
+            AlertFindingFilter::ExcludeInactive,
+            &map
+        ));
+        assert!(matches_finding_filter(
+            VO::NotAttempted,
+            "fp1",
+            AlertFindingFilter::ExcludeInactive,
+            &map
+        ));
+        assert!(!matches_finding_filter(
+            VO::VerifiedInactive,
+            "fp1",
+            AlertFindingFilter::ExcludeInactive,
+            &map
+        ));
+    }
+
+    #[test]
+    fn finding_filter_only_active_keeps_only_verified_active() {
+        let map = HashMap::new();
+        assert!(matches_finding_filter(
+            VO::VerifiedActive,
+            "fp1",
+            AlertFindingFilter::OnlyActive,
+            &map
+        ));
+        // `Assumed` was never live-validated, so it is not "active" here even
+        // though `is_actionable()` accepts it for --validation-filter.
+        for outcome in [VO::VerifiedInactive, VO::NotAttempted, VO::Assumed, VO::Unavailable] {
+            assert!(!matches_finding_filter(outcome, "fp1", AlertFindingFilter::OnlyActive, &map));
+        }
+    }
+
+    #[test]
+    fn finding_filter_access_map_only_requires_fingerprint_match() {
+        let mut map = HashMap::new();
+        map.insert("fp-mapped".to_string(), vec![AccessMapImpact { entry_id: 0, resources: 3 }]);
+        assert!(matches_finding_filter(
+            VO::VerifiedActive,
+            "fp-mapped",
+            AlertFindingFilter::AccessMapOnly,
+            &map
+        ));
+        assert!(!matches_finding_filter(
+            VO::VerifiedActive,
+            "fp-other",
+            AlertFindingFilter::AccessMapOnly,
+            &map
+        ));
+    }
+
+    #[test]
+    fn finding_filter_access_map_only_still_requires_active_outcome() {
+        // Regression: an access-map entry can exist for a fingerprint whose
+        // finding did NOT validate as active (e.g. a GitLab-rule finding
+        // recorded on a bare 2xx response per maybe_record_access_map in
+        // scanner/validation.rs). AccessMapOnly must not let that through —
+        // its doc comment promises it's a subset of OnlyActive.
+        let mut map = HashMap::new();
+        map.insert("fp-gitlab".to_string(), vec![AccessMapImpact { entry_id: 0, resources: 1 }]);
+        assert!(!matches_finding_filter(
+            VO::VerifiedInactive,
+            "fp-gitlab",
+            AlertFindingFilter::AccessMapOnly,
+            &map
+        ));
+    }
+
+    /// Like `make_test_record`, but with a configurable confidence/validation
+    /// outcome so dispatch-level tests can exercise `min_confidence` /
+    /// `finding_filter`. `status` is derived from `outcome` so the record stays
+    /// internally consistent, matching what the reporter produces.
+    fn record_with(
+        rule_id: &str,
+        fingerprint: &str,
+        confidence: &str,
+        outcome: ValidationOutcome,
+    ) -> crate::reporter::FindingReporterRecord {
+        use crate::reporter::{
+            FindingRecordData, FindingReporterRecord, RuleMetadata, ValidationInfo,
+        };
+        FindingReporterRecord {
+            rule: RuleMetadata { name: rule_id.to_string(), id: rule_id.to_string() },
+            finding: FindingRecordData {
+                snippet: "AKIAEXAMPLE_REDACTED_TOKEN_12345".to_string(),
+                fingerprint: fingerprint.to_string(),
+                confidence: confidence.to_string(),
+                entropy: "4.5".to_string(),
+                validation: ValidationInfo {
+                    outcome,
+                    status: outcome.display_name().to_string(),
+                    response: String::new(),
+                },
+                language: "rust".to_string(),
+                line: 42,
+                column_start: 10,
+                column_end: 50,
+                path: "src/foo.rs".to_string(),
+                encoding: None,
+                git_metadata: None,
+                validate_command: None,
+                revoke_command: None,
+            },
+        }
+    }
+
+    fn test_sink(url: &str) -> AlertSink {
+        AlertSink {
+            url: url.to_string(),
+            format: AlertFormat::Generic,
+            on: AlertOn::Findings,
+            min_confidence: ConfidenceLevel::Low,
+            include_secret: false,
+            report_url: None,
+            detail: AlertDetail::Detail,
+            finding_filter: AlertFindingFilter::All,
+            prevent_empty: false,
+        }
+    }
+
+    fn access_map_entry(
+        fingerprints: &[&str],
+        resources: &[&str],
+        mapping_succeeded: bool,
+    ) -> AlertAccessMapEntry {
+        AlertAccessMapEntry {
+            finding_fingerprints: fingerprints
+                .iter()
+                .map(|fingerprint| (*fingerprint).to_string())
+                .collect(),
+            impacted_resources: resources.len(),
+            mapping_succeeded,
+        }
+    }
+
+    #[test]
+    fn dry_run_payload_stays_redacted_when_sink_includes_secrets() {
+        let mut sink = test_sink("https://example.com/webhook");
+        sink.include_secret = true;
+        let finding = record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive);
+        let findings = vec![&finding];
+        let summary = AlertSummary::from_filtered_findings(&findings, None, &HashMap::new());
+
+        let dry_run_payload = build_sink_payload(&sink, &summary, &findings, true).to_string();
+        assert!(!dry_run_payload.contains("AKIAEXAMPLE_REDACTED_TOKEN_12345"));
+        assert!(dry_run_payload.contains("<redacted>"));
+
+        let live_payload = build_sink_payload(&sink, &summary, &findings, false).to_string();
+        assert!(live_payload.contains("AKIAEXAMPLE_REDACTED_TOKEN_12345"));
+    }
+
+    #[test]
+    fn access_map_impact_ignores_failed_mappings() {
+        let access_map = vec![access_map_entry(&["fp-mapped"], &["failed identity"], false)];
+
+        assert!(build_access_map_impact(&access_map).is_empty());
+    }
+
+    #[test]
+    fn access_map_impact_accumulates_distinct_entries_for_one_fingerprint() {
+        let access_map = vec![
+            access_map_entry(&["fp-mapped"], &["bucket-a", "bucket-b"], true),
+            access_map_entry(&["fp-mapped"], &["queue-a"], true),
+        ];
+        let impact = build_access_map_impact(&access_map);
+        let finding = record_with("kingfisher.aws.1", "fp-mapped", "High", VO::VerifiedActive);
+        let summary = AlertSummary::from_filtered_findings(&[&finding], None, &impact);
+
+        assert_eq!(summary.impacted_resources, 3);
+    }
+
+    mod dispatch_tests {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+        use super::*;
+
+        #[tokio::test]
+        async fn prevent_empty_skips_sink_when_filters_leave_nothing() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.min_confidence = ConfidenceLevel::High;
+            sink.prevent_empty = true;
+
+            let findings =
+                vec![record_with("kingfisher.aws.1", "fp1", "Medium", VO::VerifiedActive)];
+            dispatch_with_context(&[sink], &findings, &[], None, false).await;
+
+            assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        }
+
+        #[tokio::test]
+        async fn prevent_empty_false_still_posts_when_filters_leave_nothing() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.min_confidence = ConfidenceLevel::High;
+            sink.prevent_empty = false;
+
+            let findings =
+                vec![record_with("kingfisher.aws.1", "fp1", "Medium", VO::VerifiedActive)];
+            dispatch_with_context(&[sink], &findings, &[], None, false).await;
+
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            // The scan wasn't clean — one finding existed, it just didn't
+            // pass this sink's min_confidence — so the posted summary must
+            // say so via unfiltered_total, not just report total == 0.
+            let body: serde_json::Value = requests[0].body_json().unwrap();
+            assert_eq!(body["summary"]["total"], 0);
+            assert_eq!(body["summary"]["unfiltered_total"], 1);
+        }
+
+        #[tokio::test]
+        async fn always_heartbeat_posts_despite_prevent_empty_on_zero_total() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.on = AlertOn::Always;
+            sink.prevent_empty = true;
+
+            dispatch_with_context(&[sink], &[], &[], None, false).await;
+
+            assert_eq!(server.received_requests().await.unwrap().len(), 1);
+        }
+
+        #[tokio::test]
+        async fn always_heartbeat_posts_even_when_filters_drop_every_finding() {
+            // A heartbeat sink exists so that silence means "the scan didn't
+            // run". If prevent_empty could mute it on a run whose findings were
+            // all filtered out, silence would become ambiguous.
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.on = AlertOn::Always;
+            sink.prevent_empty = true;
+            sink.finding_filter = AlertFindingFilter::OnlyActive;
+
+            let findings =
+                vec![record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedInactive)];
+            dispatch_with_context(&[sink], &findings, &[], None, false).await;
+
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            let body: serde_json::Value = requests[0].body_json().unwrap();
+            assert_eq!(body["summary"]["total"], 0);
+            assert_eq!(body["summary"]["unfiltered_total"], 1);
+        }
+
+        #[tokio::test]
+        async fn access_map_only_filters_to_matching_fingerprint_and_reports_impact() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.finding_filter = AlertFindingFilter::AccessMapOnly;
+            sink.min_confidence = ConfidenceLevel::Low;
+
+            let mapped = record_with("kingfisher.aws.1", "fp-mapped", "High", VO::VerifiedActive);
+            let unmapped = record_with("kingfisher.aws.2", "fp-other", "High", VO::VerifiedActive);
+            let access_map = vec![access_map_entry(
+                &["fp-mapped"],
+                &["arn:aws:s3:::bucket-a", "arn:aws:s3:::bucket-b"],
+                true,
+            )];
+
+            dispatch_with_context(&[sink], &[mapped, unmapped], &access_map, None, false).await;
+
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            let body: serde_json::Value = requests[0].body_json().unwrap();
+            assert_eq!(body["findings"].as_array().unwrap().len(), 1);
+            assert_eq!(body["findings"][0]["finding"]["fingerprint"], "fp-mapped");
+            assert_eq!(body["summary"]["impacted_resources"], 2);
+        }
+
+        #[tokio::test]
+        async fn access_map_only_excludes_finding_with_access_map_entry_but_inactive_status() {
+            // Regression: an access-map entry can be recorded for a finding
+            // that never validated as active (e.g. a GitLab-rule finding
+            // recorded on a bare 2xx response). AccessMapOnly must still
+            // exclude it, since it's documented as a subset of OnlyActive.
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.finding_filter = AlertFindingFilter::AccessMapOnly;
+            sink.min_confidence = ConfidenceLevel::Low;
+            sink.prevent_empty = true;
+
+            let inactive_but_mapped =
+                record_with("kingfisher.gitlab.1", "fp-gitlab", "High", VO::VerifiedInactive);
+            let access_map = vec![access_map_entry(&["fp-gitlab"], &["group/project"], true)];
+
+            dispatch_with_context(&[sink], &[inactive_but_mapped], &access_map, None, false).await;
+
+            assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        }
+
+        #[tokio::test]
+        async fn access_map_only_skips_failed_mapping_results() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.finding_filter = AlertFindingFilter::AccessMapOnly;
+            sink.prevent_empty = true;
+
+            let finding = record_with("kingfisher.aws.1", "fp-mapped", "High", VO::VerifiedActive);
+            let access_map = vec![access_map_entry(&["fp-mapped"], &["mapping failed"], false)];
+
+            dispatch_with_context(&[sink], &[finding], &access_map, None, false).await;
+
+            assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        }
+
+        #[tokio::test]
+        async fn repeated_credential_fingerprints_all_match_without_double_counting_impact() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.finding_filter = AlertFindingFilter::AccessMapOnly;
+
+            let findings = vec![
+                record_with("kingfisher.aws.1", "fp-first", "High", VO::VerifiedActive),
+                record_with("kingfisher.aws.1", "fp-second", "High", VO::VerifiedActive),
+            ];
+            let access_map = vec![access_map_entry(
+                &["fp-first", "fp-second"],
+                &["arn:aws:s3:::bucket-a", "arn:aws:s3:::bucket-b"],
+                true,
+            )];
+
+            dispatch_with_context(&[sink], &findings, &access_map, None, false).await;
+
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            let body: serde_json::Value = requests[0].body_json().unwrap();
+            assert_eq!(body["findings"].as_array().unwrap().len(), 2);
+            assert_eq!(body["summary"]["impacted_resources"], 2);
+        }
+
+        #[tokio::test]
+        async fn access_map_only_filters_everything_when_access_map_is_empty() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.finding_filter = AlertFindingFilter::AccessMapOnly;
+            sink.prevent_empty = true;
+
+            let findings = vec![record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive)];
+            dispatch_with_context(&[sink], &findings, &[], None, false).await;
+
+            assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        }
+
+        #[tokio::test]
+        async fn dry_run_makes_no_http_calls() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let sink = test_sink(&server.uri());
+            let findings = vec![record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive)];
+            dispatch_with_context(&[sink], &findings, &[], None, true).await;
+
+            assert_eq!(server.received_requests().await.unwrap().len(), 0);
+        }
+
+        #[tokio::test]
+        async fn header_counts_reflect_only_active_filter_not_whole_scan() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let mut sink = test_sink(&server.uri());
+            sink.finding_filter = AlertFindingFilter::OnlyActive;
+
+            let findings = vec![
+                record_with("kingfisher.aws.1", "fp-active", "High", VO::VerifiedActive),
+                record_with("kingfisher.aws.2", "fp-inactive", "High", VO::VerifiedInactive),
+            ];
+            dispatch_with_context(&[sink], &findings, &[], None, false).await;
+
+            let requests = server.received_requests().await.unwrap();
+            assert_eq!(requests.len(), 1);
+            let body: serde_json::Value = requests[0].body_json().unwrap();
+            assert_eq!(body["summary"]["total"], 1);
+            assert_eq!(body["summary"]["active"], 1);
+            assert_eq!(body["summary"]["inactive"], 0);
+            assert_eq!(body["findings"].as_array().unwrap().len(), 1);
+        }
     }
 }
