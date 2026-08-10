@@ -34,9 +34,8 @@ pub fn build_payload(
                 && let Some(obj) = record.get_mut("finding").and_then(|v| v.as_object_mut())
             {
                 obj.insert("snippet".into(), Value::String("<redacted>".to_string()));
-                // These embed the raw secret too: the commands quote it as an
-                // argument, and a validation response body can carry it in a
-                // rendered request URL.
+                // The commands quote the raw secret, and a response body can
+                // carry it in a rendered request URL.
                 obj.remove("validate_command");
                 obj.remove("revoke_command");
                 if let Some(validation) = obj.get_mut("validation").and_then(|v| v.as_object_mut())
@@ -133,9 +132,7 @@ mod tests {
     }
 
     /// Regression: this sink serializes the whole record, and `snippet` is not
-    /// the only field carrying the secret — `validate_command` and
-    /// `revoke_command` quote it as a shell argument, and a validation response
-    /// body can hold it in a rendered request URL.
+    /// the only field that carries the secret.
     #[test]
     fn redaction_covers_every_field_carrying_the_secret() {
         let s = empty_summary();

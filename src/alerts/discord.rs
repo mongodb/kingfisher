@@ -20,9 +20,7 @@ const PER_FINDING_LIMIT: usize = 10;
 // servers running older Discord clients render the embed without truncation.
 const DESCRIPTION_SOFT_LIMIT: usize = 1900;
 
-// Per-finding lines stop here so the omitted-count line always fits inside
-// `DESCRIPTION_SOFT_LIMIT`; 64 chars covers "…{count} findings omitted" for any
-// plausible count.
+// Reserve enough of the limit for the trailing omitted-count line.
 const DESCRIPTION_LINE_BUDGET: usize = DESCRIPTION_SOFT_LIMIT - 64;
 
 const COLOR_RED: u32 = 0xC0_39_2B; // active live secrets
@@ -102,9 +100,7 @@ pub fn build_payload(
                 escape_md(&f.finding.validation.status),
                 escape_for_code_span(&f.finding.fingerprint),
             );
-            // Stop before the reserve rather than letting truncation cut the
-            // omitted-count line, which would leave the embed claiming more
-            // findings than it lists.
+            // Truncating instead would cut the omitted-count line below.
             if detail.chars().count() + line.chars().count() > DESCRIPTION_LINE_BUDGET {
                 break;
             }
@@ -267,9 +263,7 @@ mod tests {
 
     #[test]
     fn omitted_count_survives_long_findings_and_stays_within_the_limit() {
-        // Long monorepo paths blow past the soft limit well before the
-        // per-finding cap, which used to truncate the omitted-count line away
-        // and leave the embed listing fewer findings than its title claimed.
+        // Long paths blow past the soft limit before the per-finding cap does.
         let s = summary(40, 40);
         let mut rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-long");
         rec.finding.path = format!("services/{}/src/config.rs", "nested-module/".repeat(20));
@@ -280,8 +274,6 @@ mod tests {
 
         assert!(desc.contains("findings omitted"), "omitted-count line was cut: {desc}");
         assert!(desc.chars().count() <= DESCRIPTION_SOFT_LIMIT);
-        // The count must match what was actually rendered, not just what the
-        // per-finding cap dropped.
         let rendered = desc.matches("fp:`fp-long`").count();
         assert!(rendered > 0 && rendered < 40);
         assert!(desc.contains(&format!("…{} findings omitted", 40 - rendered)));

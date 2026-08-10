@@ -74,8 +74,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
 
     let severity = Severity::Medium;
     Ok(AccessMapResult {
-        // Nothing was resolved when the ping failed: the identity below is a
-        // placeholder, so this must not read as confirmed impact.
+        // A failed ping resolved nothing; the identity below is a placeholder.
         mapping_error: (!ping_ok).then(|| {
             "Xray identity mapping failed: token did not respond to the JFrog cloud ping"
                 .to_string()

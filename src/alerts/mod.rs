@@ -119,9 +119,8 @@ pub enum AlertFindingFilter {
     All,
     /// Drop `VerifiedInactive` findings; keep active + unknown/not-attempted.
     ExcludeInactive,
-    /// Keep active and assumed-valid findings — the same tier
-    /// `--validation-filter actionable` reports. Private keys and other
-    /// unvalidatable high-signal secrets page; unverifiable noise does not.
+    /// Keep active and assumed-valid findings, like `--validation-filter
+    /// actionable`: private keys page, unverifiable noise does not.
     Actionable,
     /// Keep only `VerifiedActive` findings. Note this excludes `Assumed`, which
     /// was never live-validated.
@@ -252,8 +251,7 @@ impl AlertSummary {
         let mut active = 0usize;
         let mut inactive = 0usize;
         let mut unknown = 0usize;
-        // Borrow the rule ids while counting; this runs once per sink, so only
-        // the five that survive the truncation are worth allocating.
+        // Only the five ids that survive the truncation are worth allocating.
         let mut by_rule_map: HashMap<&str, usize> = HashMap::new();
         for f in findings {
             *by_rule_map.entry(f.rule.id.as_str()).or_default() += 1;
@@ -331,8 +329,8 @@ pub(crate) fn empty_headline(summary: &AlertSummary) -> Option<String> {
     })
 }
 
-/// Headline carrying the per-outcome counts. Sinks that prefix an emoji or want
-/// a shorter title build on [`empty_headline`] instead.
+/// Headline carrying the per-outcome counts. Sinks wanting an emoji or a
+/// shorter title build on [`empty_headline`] instead.
 pub(crate) fn headline(summary: &AlertSummary) -> String {
     if let Some(empty) = empty_headline(summary) {
         return empty;
@@ -792,9 +790,7 @@ mod tests {
         // constant so any future tuning is intentional.
     }
 
-    /// Pins the wording every chat sink renders, including the impact clause
-    /// and the distinction between a clean scan and filters that matched
-    /// nothing.
+    /// Pins the wording every chat sink renders.
     #[test]
     fn headline_covers_every_branch() {
         let mut s = AlertSummary::from_findings(&[], None);
@@ -880,9 +876,8 @@ mod tests {
         }
     }
 
-    /// `actionable` exists for secrets no provider API can confirm — a private
-    /// key is `Assumed`, never `VerifiedActive` — while still excluding the
-    /// outcomes that mean "we could not check".
+    /// A private key is `Assumed`, never `VerifiedActive`, and must still be
+    /// kept apart from the outcomes that mean "we could not check".
     #[test]
     fn finding_filter_actionable_keeps_assumed_but_not_unchecked() {
         let map = AccessMapImpact::default();
