@@ -40,11 +40,12 @@ pub fn build_payload(
     if summary.impacted_resources > 0 {
         facts.push(json!({ "name": "Impacted resources", "value": summary.impacted_resources.to_string() }));
     }
+    // The section sets `markdown: true`, so facts render as markup too.
     if let Some(t) = &summary.target {
-        facts.push(json!({ "name": "Target", "value": t }));
+        facts.push(json!({ "name": "Target", "value": escape_bold(t) }));
     }
     for (rule, count) in &summary.by_rule {
-        facts.push(json!({ "name": rule, "value": count.to_string() }));
+        facts.push(json!({ "name": escape_bold(rule), "value": count.to_string() }));
     }
 
     let mut sections: Vec<Value> = vec![json!({
@@ -196,6 +197,15 @@ mod tests {
         let serialized = serde_json::to_string(&p).unwrap();
         assert!(serialized.contains("per-finding detail suppressed"));
         assert!(!serialized.contains("kingfisher.aws.1"));
+    }
+
+    #[test]
+    fn target_fact_is_escaped_like_the_detail_block() {
+        let mut s = summary(1, 0);
+        s.target = Some("repo_with_**bold**_name".to_string());
+        let p = build_payload(&s, &[], false);
+        let facts = serde_json::to_string(&p["sections"][0]["facts"]).unwrap();
+        assert!(!facts.contains("**bold**"), "got: {facts}");
     }
 
     #[test]

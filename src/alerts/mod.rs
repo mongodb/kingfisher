@@ -353,6 +353,20 @@ pub(crate) fn headline(summary: &AlertSummary) -> String {
     format!("Kingfisher: {} finding{} ({counts}{impact})", summary.total, plural(summary.total))
 }
 
+/// Percent-encode what would terminate a markdown link target, so a
+/// `report_url` containing `)` or whitespace cannot break out of `[..](..)`.
+pub(crate) fn markdown_link_target(url: &str) -> String {
+    const LINK_UNSAFE: &percent_encoding::AsciiSet = &percent_encoding::CONTROLS
+        .add(b'(')
+        .add(b')')
+        .add(b' ')
+        .add(b'<')
+        .add(b'>')
+        .add(b'"')
+        .add(b'\\');
+    percent_encoding::utf8_percent_encode(url, LINK_UNSAFE).to_string()
+}
+
 /// Body text for `AlertDetail::Summary`, where per-finding lines are dropped.
 /// Callers wrap it in their own emphasis markup.
 pub(crate) fn suppression_notice(total: usize) -> String {

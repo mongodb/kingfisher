@@ -8,7 +8,8 @@
 use serde_json::{Value, json};
 
 use crate::alerts::{
-    AlertDetail, AlertSummary, SNIPPET_LIMIT, headline, plural, suppression_notice, truncate,
+    AlertDetail, AlertSummary, SNIPPET_LIMIT, headline, markdown_link_target, plural,
+    suppression_notice, truncate,
 };
 use crate::reporter::FindingReporterRecord;
 
@@ -128,7 +129,7 @@ pub fn build_payload(
         if let Some(fields_arr) = embed["fields"].as_array_mut() {
             fields_arr.push(json!({
                 "name": "Full report",
-                "value": format!("[Open]({})", url),
+                "value": format!("[Open]({})", markdown_link_target(url)),
                 "inline": false,
             }));
         }
@@ -251,6 +252,17 @@ mod tests {
         let p = build_payload(&s, &[&rec], false);
         let desc = p["embeds"][0]["description"].as_str().unwrap();
         assert!(desc.contains("fp:`fp-d-99`"));
+    }
+
+    #[test]
+    fn report_url_cannot_break_out_of_the_markdown_link() {
+        let mut s = summary(1, 0);
+        s.report_url = Some("https://ci.example/run(7)?x=1 2".to_string());
+        let p = build_payload(&s, &[], false);
+        let fields = serde_json::to_string(&p["embeds"][0]["fields"]).unwrap();
+        assert!(fields.contains("%28") && fields.contains("%29") && fields.contains("%20"));
+        // The structured link keeps the URL verbatim.
+        assert_eq!(p["embeds"][0]["url"], "https://ci.example/run(7)?x=1 2");
     }
 
     #[test]

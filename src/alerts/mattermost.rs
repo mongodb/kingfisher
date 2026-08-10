@@ -14,7 +14,8 @@
 use serde_json::{Value, json};
 
 use crate::alerts::{
-    AlertDetail, AlertSummary, SNIPPET_LIMIT, headline, suppression_notice, truncate,
+    AlertDetail, AlertSummary, SNIPPET_LIMIT, headline, markdown_link_target, suppression_notice,
+    truncate,
 };
 use crate::reporter::FindingReporterRecord;
 
@@ -114,7 +115,7 @@ pub fn build_payload(
             fields_arr.push(json!({
                 "short": false,
                 "title": "Full report",
-                "value": format!("[Open]({})", url),
+                "value": format!("[Open]({})", markdown_link_target(url)),
             }));
         }
     }
@@ -209,6 +210,16 @@ mod tests {
         s.report_url = Some("https://ci.example/run/3".to_string());
         let p = build_payload(&s, &[], false);
         assert_eq!(p["attachments"][0]["title_link"], "https://ci.example/run/3");
+    }
+
+    #[test]
+    fn report_url_cannot_break_out_of_the_markdown_link() {
+        let mut s = summary(1, 0);
+        s.report_url = Some("https://ci.example/run(7)?x=1 2".to_string());
+        let p = build_payload(&s, &[], false);
+        let fields = serde_json::to_string(&p["attachments"][0]["fields"]).unwrap();
+        assert!(fields.contains("%28") && fields.contains("%29") && fields.contains("%20"));
+        assert_eq!(p["attachments"][0]["title_link"], "https://ci.example/run(7)?x=1 2");
     }
 
     #[test]
