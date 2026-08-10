@@ -8,17 +8,21 @@
 use serde_json::{Value, json};
 
 use crate::alerts::{
-    AlertDetail, AlertSummary, SNIPPET_LIMIT, headline, suppression_notice, truncate,
+    AlertDetail, AlertSummary, SNIPPET_LIMIT, headline, plural, suppression_notice, truncate,
 };
 use crate::reporter::FindingReporterRecord;
 
 const PER_FINDING_LIMIT: usize = 10;
 
 // Discord embed `description` is capped at 4096 chars and each `fields[].value`
-// at 1024. We keep the per-finding block well under both — the section is
-// truncated to 1900 chars (leaving room for the trailing "…N more" line) so
+// at 1024. We keep the per-finding block well under both — 1900 chars — so
 // servers running older Discord clients render the embed without truncation.
 const DESCRIPTION_SOFT_LIMIT: usize = 1900;
+
+// Per-finding lines stop here so the omitted-count line always fits inside
+// `DESCRIPTION_SOFT_LIMIT`; 64 chars covers "…{count} findings omitted" for any
+// plausible count.
+const DESCRIPTION_LINE_BUDGET: usize = DESCRIPTION_SOFT_LIMIT - 64;
 
 const COLOR_RED: u32 = 0xC0_39_2B; // active live secrets
 const COLOR_AMBER: u32 = 0xF3_9C_12; // findings present, none verified active
@@ -81,13 +85,14 @@ pub fn build_payload(
     if !findings.is_empty() && summary.detail == AlertDetail::Detail {
         let take = findings.len().min(PER_FINDING_LIMIT);
         let mut detail = String::new();
+        let mut rendered = 0usize;
         for f in findings.iter().take(take) {
             let snippet = if include_secret {
                 escape_for_code_span(&truncate(&f.finding.snippet, SNIPPET_LIMIT))
             } else {
                 "redacted".to_string()
             };
-            detail.push_str(&format!(
+            let line = format!(
                 "• `{}` at `{}:{}` — `{}` (validation: {}) — fp:`{}`\n",
                 escape_for_code_span(&f.rule.id),
                 escape_for_code_span(&f.finding.path),
@@ -95,10 +100,19 @@ pub fn build_payload(
                 snippet,
                 escape_md(&f.finding.validation.status),
                 escape_for_code_span(&f.finding.fingerprint),
-            ));
+            );
+            // Stop before the reserve rather than letting truncation cut the
+            // omitted-count line, which would leave the embed claiming more
+            // findings than it lists.
+            if detail.chars().count() + line.chars().count() > DESCRIPTION_LINE_BUDGET {
+                break;
+            }
+            detail.push_str(&line);
+            rendered += 1;
         }
-        if findings.len() > take {
-            detail.push_str(&format!("…{} more findings omitted", findings.len() - take));
+        let omitted = findings.len() - rendered;
+        if omitted > 0 {
+            detail.push_str(&format!("…{} finding{} omitted", omitted, plural(omitted)));
         }
         embed["description"] = Value::String(truncate(&detail, DESCRIPTION_SOFT_LIMIT));
     } else if summary.detail == AlertDetail::Summary && summary.total > 0 {
@@ -237,5 +251,27 @@ mod tests {
         let p = build_payload(&s, &[&rec], false);
         let desc = p["embeds"][0]["description"].as_str().unwrap();
         assert!(desc.contains("fp:`fp-d-99`"));
+    }
+
+    #[test]
+    fn omitted_count_survives_long_findings_and_stays_within_the_limit() {
+        // Long monorepo paths blow past the soft limit well before the
+        // per-finding cap, which used to truncate the omitted-count line away
+        // and leave the embed listing fewer findings than its title claimed.
+        let s = summary(40, 40);
+        let mut rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-long");
+        rec.finding.path = format!("services/{}/src/config.rs", "nested-module/".repeat(20));
+        let refs: Vec<&crate::reporter::FindingReporterRecord> = (0..40).map(|_| &rec).collect();
+
+        let p = build_payload(&s, &refs, false);
+        let desc = p["embeds"][0]["description"].as_str().unwrap();
+
+        assert!(desc.contains("findings omitted"), "omitted-count line was cut: {desc}");
+        assert!(desc.chars().count() <= DESCRIPTION_SOFT_LIMIT);
+        // The count must match what was actually rendered, not just what the
+        // per-finding cap dropped.
+        let rendered = desc.matches("fp:`fp-long`").count();
+        assert!(rendered > 0 && rendered < 40);
+        assert!(desc.contains(&format!("…{} findings omitted", 40 - rendered)));
     }
 }
