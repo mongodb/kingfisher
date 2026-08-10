@@ -201,7 +201,10 @@ pub struct AlertSummary {
 /// credential, not per finding, since one mapping covers every occurrence.
 #[derive(Clone, Debug, Default)]
 struct AccessMapImpact {
-    credential_by_fingerprint: HashMap<String, usize>,
+    /// One finding can map to several credentials: the same secret paired with
+    /// two different contexts (AWS access-key ids, hosts, subdomains) is two
+    /// identities to the collector but one `(rule, secret)` group here.
+    credentials_by_fingerprint: HashMap<String, Vec<usize>>,
     resources_per_credential: Vec<usize>,
 }
 
@@ -209,7 +212,7 @@ impl AccessMapImpact {
     /// Entries whose identity mapping failed are skipped: their placeholder
     /// resource would report impact that was never established.
     fn from_entries(entries: &[AccessMapEntry]) -> Self {
-        let mut credential_by_fingerprint: HashMap<String, usize> = HashMap::new();
+        let mut credentials_by_fingerprint: HashMap<String, Vec<usize>> = HashMap::new();
         let mut resources_per_credential = Vec::new();
         for entry in entries.iter().filter(|e| e.mapping_error.is_none()) {
             // A resource split across two permission groups is counted twice —
@@ -218,19 +221,23 @@ impl AccessMapImpact {
             let credential = resources_per_credential.len();
             let mut mapped = false;
             for fingerprint in entry.fingerprint.iter().chain(entry.fingerprints.iter()) {
-                credential_by_fingerprint.insert(fingerprint.clone(), credential);
+                let credentials =
+                    credentials_by_fingerprint.entry(fingerprint.clone()).or_default();
+                if !credentials.contains(&credential) {
+                    credentials.push(credential);
+                }
                 mapped = true;
             }
             if mapped {
                 resources_per_credential.push(resources);
             }
         }
-        Self { credential_by_fingerprint, resources_per_credential }
+        Self { credentials_by_fingerprint, resources_per_credential }
     }
 
     /// True when this finding's credential was successfully access-mapped.
     fn is_mapped(&self, fingerprint: &str) -> bool {
-        self.credential_by_fingerprint.contains_key(fingerprint)
+        self.credentials_by_fingerprint.contains_key(fingerprint)
     }
 
     /// Resources exposed by the distinct credentials behind `findings`. A
@@ -245,7 +252,8 @@ impl AccessMapImpact {
         findings
             .iter()
             .filter(|f| f.finding.validation.outcome.is_verified_active())
-            .filter_map(|f| self.credential_by_fingerprint.get(&f.finding.fingerprint))
+            .filter_map(|f| self.credentials_by_fingerprint.get(&f.finding.fingerprint))
+            .flatten()
             .filter(|credential| counted.insert(**credential))
             .map(|credential| self.resources_per_credential[*credential])
             .sum()
@@ -1211,6 +1219,31 @@ mod tests {
             let body: serde_json::Value = requests[0].body_json().unwrap();
             assert_eq!(body["summary"]["inactive"], 1);
             assert_eq!(body["summary"]["impacted_resources"], 0);
+        }
+
+        /// One `(rule, secret)` group can map to two identities — the same
+        /// secret paired with two access-key ids, say — and both count.
+        #[tokio::test]
+        async fn impact_sums_every_identity_a_finding_maps_to() {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(ResponseTemplate::new(200))
+                .mount(&server)
+                .await;
+
+            let sink = test_sink(&server.uri());
+            let mut first = access_map_entry("aws", "fp-shared", &["arn:aws:s3:::bucket-a"]);
+            first.fingerprints = vec!["fp-shared".to_string()];
+            let mut second = access_map_entry("aws", "fp-shared", &["arn:aws:s3:::bucket-b"]);
+            second.fingerprints = vec!["fp-shared".to_string()];
+
+            let findings =
+                vec![record_with("kingfisher.aws.2", "fp-shared", "high", VO::VerifiedActive)];
+            dispatch(&[sink], &findings, &[first, second], None, false).await;
+
+            let requests = server.received_requests().await.unwrap();
+            let body: serde_json::Value = requests[0].body_json().unwrap();
+            assert_eq!(body["summary"]["impacted_resources"], 2);
         }
 
         #[tokio::test]
