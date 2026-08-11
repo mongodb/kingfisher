@@ -8,6 +8,7 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 All notable changes to this project will be documented in this file.
 
 ## [v1.113.0]
+- Added repository-aware v2 baselines with safe multi-repository updates, atomic writes, and automatic migration while retaining legacy baseline compatibility.
 - Added configurable webhook finding filters, empty-alert suppression, dry-run previews, and access-map impact summaries.
 - **Breaking:** the alert payload field `summary.filtered_total` was removed; read `summary.total` (now always the per-sink filtered count) and the new `summary.unfiltered_total` for the whole-scan count.
 - **Breaking (library):** `FindingsStore::access_map_results`/`set_access_map_results` and `AccessMapCollector::into_requests` are no longer public.
