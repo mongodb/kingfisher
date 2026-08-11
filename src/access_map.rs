@@ -482,13 +482,11 @@ pub(crate) async fn map_collected_requests(
     for collected in requests {
         let (mut attempt, primary_fingerprint) =
             dispatch_access_map_request(collected.request).await;
-        attempt.result.fingerprint = Some(primary_fingerprint.clone());
         let mut finding_fingerprints = collected.finding_fingerprints;
-        if !finding_fingerprints.contains(&primary_fingerprint) {
-            finding_fingerprints.push(primary_fingerprint);
-        }
-        finding_fingerprints.sort();
+        finding_fingerprints.push(primary_fingerprint);
+        finding_fingerprints.sort_unstable();
         finding_fingerprints.dedup();
+        attempt.result.fingerprint = finding_fingerprints.first().cloned();
         results.push(ScanAccessMapResult {
             result: attempt.result,
             finding_fingerprints,

@@ -495,8 +495,9 @@ impl AccessMapCollector {
                 CollectedAccessMapRequest { request: entry.value().clone(), finding_fingerprints }
             })
             .collect();
-        requests
-            .sort_by(|a, b| a.request.finding_fingerprint().cmp(b.request.finding_fingerprint()));
+        requests.sort_unstable_by(|a, b| {
+            a.finding_fingerprints.first().cmp(&b.finding_fingerprints.first())
+        });
         requests
     }
 }
@@ -1875,17 +1876,12 @@ mod tests {
     #[test]
     fn access_map_collector_dedupes_monday_and_asana_tokens() {
         let collector = AccessMapCollector::default();
-        collector.record_monday("monday-token-1", "fp-1".into());
         collector.record_monday("monday-token-1", "fp-2".into());
-        collector.record_asana("2/asana-token-1", "fp-3".into());
         collector.record_asana("2/asana-token-1", "fp-4".into());
+        collector.record_monday("monday-token-1", "fp-1".into());
+        collector.record_asana("2/asana-token-1", "fp-3".into());
 
-        let mut requests = collector.into_collected_requests();
-        requests.sort_by_key(|r| match &r.request {
-            AccessMapRequest::Monday { .. } => 0,
-            AccessMapRequest::Asana { .. } => 1,
-            _ => 2,
-        });
+        let requests = collector.into_collected_requests();
         assert_eq!(requests.len(), 2);
         match &requests[0].request {
             AccessMapRequest::Monday { token, .. } => assert_eq!(token, "monday-token-1"),
