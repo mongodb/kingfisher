@@ -23,16 +23,21 @@ rules:
           url: https://www.googleapis.com/youtube/v3/videos?part=id&id=dummy&key={{ TOKEN }}
           response_matcher:
             - report_response: true
+            # A key that is live but not enabled for YouTube can return 403.
             - type: StatusMatch
-              status: [200]
+              status: [200, 403]
+            - type: JsonValid
+            # Only explicit invalid-key responses should make it inactive.
             - type: WordMatch
               words:
                 - "API key not valid"
                 - "keyInvalid"
                 - "API_KEY_INVALID"
-                - "forbidden"
               match_all_words: false
               negative: true
-            - type: JsonValid
     references:
       - https://developers.google.com/youtube/v3/getting-started#before-you-start
+      - https://cloud.google.com/docs/authentication/api-keys
+      - https://developers.google.com/youtube/v3/docs/videos/list
+      - https://developers.google.com/youtube/v3/docs/errors
+      - https://cloud.google.com/php/docs/reference/common-protos/latest/Api.ErrorReason

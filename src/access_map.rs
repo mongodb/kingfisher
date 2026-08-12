@@ -90,7 +90,7 @@ pub async fn run(args: AccessMapArgs) -> Result<()> {
 }
 
 type AccessMapResultFuture<'a> = Pin<Box<dyn Future<Output = Result<AccessMapResult>> + Send + 'a>>;
-type MappedRequestFuture = Pin<Box<dyn Future<Output = (AccessMapResult, String)> + Send>>;
+type MappedRequestFuture = Pin<Box<dyn Future<Output = (AccessMapAttempt, String)> + Send>>;
 
 fn dispatch_cli_request(args: &AccessMapArgs) -> AccessMapResultFuture<'_> {
     match &args.provider {
@@ -243,6 +243,65 @@ pub enum AccessMapRequest {
     Pinecone { token: String, fingerprint: String },
 }
 
+impl AccessMapRequest {
+    /// Finding fingerprint attached to this credential occurrence.
+    pub(crate) fn finding_fingerprint(&self) -> &str {
+        match self {
+            Self::Aws { fingerprint, .. }
+            | Self::Gcp { fingerprint, .. }
+            | Self::Azure { fingerprint, .. }
+            | Self::AzureDevops { fingerprint, .. }
+            | Self::Github { fingerprint, .. }
+            | Self::Gitlab { fingerprint, .. }
+            | Self::Slack { fingerprint, .. }
+            | Self::Postgres { fingerprint, .. }
+            | Self::MongoDB { fingerprint, .. }
+            | Self::HuggingFace { fingerprint, .. }
+            | Self::Gitea { fingerprint, .. }
+            | Self::Bitbucket { fingerprint, .. }
+            | Self::Buildkite { fingerprint, .. }
+            | Self::Harness { fingerprint, .. }
+            | Self::OpenAI { fingerprint, .. }
+            | Self::Anthropic { fingerprint, .. }
+            | Self::Salesforce { fingerprint, .. }
+            | Self::WeightsAndBiases { fingerprint, .. }
+            | Self::MicrosoftTeams { fingerprint, .. }
+            | Self::Airtable { fingerprint, .. }
+            | Self::Alibaba { fingerprint, .. }
+            | Self::CircleCI { fingerprint, .. }
+            | Self::DigitalOcean { fingerprint, .. }
+            | Self::Fastly { fingerprint, .. }
+            | Self::HubSpot { fingerprint, .. }
+            | Self::IbmCloud { fingerprint, .. }
+            | Self::SendGrid { fingerprint, .. }
+            | Self::Sendinblue { fingerprint, .. }
+            | Self::Stripe { fingerprint, .. }
+            | Self::Terraform { fingerprint, .. }
+            | Self::Square { fingerprint, .. }
+            | Self::Jira { fingerprint, .. }
+            | Self::MySQL { fingerprint, .. }
+            | Self::Algolia { fingerprint, .. }
+            | Self::Auth0 { fingerprint, .. }
+            | Self::PayPal { fingerprint, .. }
+            | Self::Plaid { fingerprint, .. }
+            | Self::Shopify { fingerprint, .. }
+            | Self::Zendesk { fingerprint, .. }
+            | Self::Artifactory { fingerprint, .. }
+            | Self::Xray { fingerprint, .. }
+            | Self::Monday { fingerprint, .. }
+            | Self::Asana { fingerprint, .. }
+            | Self::Pinecone { fingerprint, .. } => fingerprint,
+        }
+    }
+}
+
+/// One credential mapping request plus every finding occurrence that supplied it.
+#[derive(Clone, Debug)]
+pub(crate) struct CollectedAccessMapRequest {
+    pub request: AccessMapRequest,
+    pub finding_fingerprints: Vec<String>,
+}
+
 /// Structured output describing the resolved identity and its risk profile.
 #[derive(Debug, Serialize, Clone)]
 pub struct AccessMapResult {
@@ -276,6 +335,20 @@ pub struct AccessMapResult {
     /// Optional provider metadata (for GitLab instance details, etc.).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub provider_metadata: Option<ProviderMetadata>,
+}
+
+#[derive(Debug)]
+struct AccessMapAttempt {
+    result: AccessMapResult,
+    succeeded: bool,
+}
+
+/// Access-map output retained by scans together with alert correlation metadata.
+#[derive(Debug, Clone)]
+pub(crate) struct ScanAccessMapResult {
+    pub result: AccessMapResult,
+    pub finding_fingerprints: Vec<String>,
+    pub mapping_succeeded: bool,
 }
 
 /// Identity details such as email or ARN.
@@ -389,49 +462,98 @@ pub async fn map_requests(requests: Vec<AccessMapRequest>) -> Vec<AccessMapResul
     let mut results = Vec::new();
 
     for request in requests {
-        let (mut mapped, fp) = dispatch_access_map_request(request).await;
+        let (mut attempt, fp) = dispatch_access_map_request(request).await;
 
-        mapped.fingerprint = Some(fp);
-        results.push(mapped);
+        attempt.result.fingerprint = Some(fp);
+        results.push(attempt.result);
     }
 
     results
+}
+
+/// Map deduplicated scan credentials while preserving every finding occurrence and whether
+/// identity mapping actually succeeded. The public `map_requests` API intentionally retains its
+/// existing result shape; scan alerting uses this richer internal path.
+pub(crate) async fn map_collected_requests(
+    requests: Vec<CollectedAccessMapRequest>,
+) -> Vec<ScanAccessMapResult> {
+    let mut results = Vec::with_capacity(requests.len());
+
+    for collected in requests {
+        let (mut attempt, primary_fingerprint) =
+            dispatch_access_map_request(collected.request).await;
+        let mut finding_fingerprints = collected.finding_fingerprints;
+        finding_fingerprints.push(primary_fingerprint);
+        finding_fingerprints.sort_unstable();
+        finding_fingerprints.dedup();
+        attempt.result.fingerprint = finding_fingerprints.first().cloned();
+        results.push(ScanAccessMapResult {
+            result: attempt.result,
+            finding_fingerprints,
+            mapping_succeeded: attempt.succeeded,
+        });
+    }
+
+    results
+}
+
+fn finish_mapping(
+    result: Result<AccessMapResult>,
+    cloud: &str,
+    identity_label: &str,
+) -> AccessMapAttempt {
+    match result {
+        Ok(result) => AccessMapAttempt { result, succeeded: true },
+        Err(err) => AccessMapAttempt {
+            result: build_failed_result(cloud, identity_label, err),
+            succeeded: false,
+        },
+    }
 }
 
 fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture {
     match request {
         AccessMapRequest::Aws { access_key, secret_key, session_token, fingerprint } => {
             Box::pin(async move {
-                let mapped = aws::map_access_with_credentials(
+                let mapped = finish_mapping(
+                    aws::map_access_with_credentials(
+                        &access_key,
+                        &secret_key,
+                        session_token.as_deref(),
+                    )
+                    .await,
+                    "aws",
                     &access_key,
-                    &secret_key,
-                    session_token.as_deref(),
-                )
-                .await
-                .unwrap_or_else(|err| build_failed_result("aws", &access_key, err));
+                );
                 (mapped, fingerprint)
             })
         }
         AccessMapRequest::Gcp { credential_json, fingerprint } => Box::pin(async move {
-            let mapped = gcp::map_access_from_json(&credential_json)
-                .await
-                .unwrap_or_else(|err| build_failed_result("gcp", "service_account", err));
+            let mapped = finish_mapping(
+                gcp::map_access_from_json(&credential_json).await,
+                "gcp",
+                "service_account",
+            );
             (mapped, fingerprint)
         }),
         AccessMapRequest::Azure { credential_json, containers, fingerprint } => {
             Box::pin(async move {
-                let mapped =
+                let mapped = finish_mapping(
                     azure::map_access_from_json_with_hints(&credential_json, containers.as_deref())
-                        .await
-                        .unwrap_or_else(|err| build_failed_result("azure", "credential", err));
+                        .await,
+                    "azure",
+                    "credential",
+                );
                 (mapped, fingerprint)
             })
         }
         AccessMapRequest::AzureDevops { token, organization, fingerprint } => {
             Box::pin(async move {
-                let mapped = azure_devops::map_access_from_token(&token, &organization)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("azure_devops", "pat", err));
+                let mapped = finish_mapping(
+                    azure_devops::map_access_from_token(&token, &organization).await,
+                    "azure_devops",
+                    "pat",
+                );
                 (mapped, fingerprint)
             })
         }
@@ -445,15 +567,12 @@ fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture
             Box::pin(async move { (map_token(&SlackMapper, &token).await, fingerprint) })
         }
         AccessMapRequest::Postgres { uri, fingerprint } => Box::pin(async move {
-            let mapped = postgres::map_access_from_uri(&uri)
-                .await
-                .unwrap_or_else(|err| build_failed_result("postgres", "uri", err));
+            let mapped =
+                finish_mapping(postgres::map_access_from_uri(&uri).await, "postgres", "uri");
             (mapped, fingerprint)
         }),
         AccessMapRequest::MongoDB { uri, fingerprint } => Box::pin(async move {
-            let mapped = mongodb::map_access_from_uri(&uri)
-                .await
-                .unwrap_or_else(|err| build_failed_result("mongodb", "uri", err));
+            let mapped = finish_mapping(mongodb::map_access_from_uri(&uri).await, "mongodb", "uri");
             (mapped, fingerprint)
         }),
         AccessMapRequest::HuggingFace { token, fingerprint } => {
@@ -478,18 +597,22 @@ fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture
             Box::pin(async move { (map_token(&AnthropicMapper, &token).await, fingerprint) })
         }
         AccessMapRequest::Salesforce { token, instance, fingerprint } => Box::pin(async move {
-            let mapped = salesforce::map_access_from_token_and_instance(&token, &instance)
-                .await
-                .unwrap_or_else(|err| build_failed_result("salesforce", "token", err));
+            let mapped = finish_mapping(
+                salesforce::map_access_from_token_and_instance(&token, &instance).await,
+                "salesforce",
+                "token",
+            );
             (mapped, fingerprint)
         }),
         AccessMapRequest::WeightsAndBiases { token, fingerprint } => {
             Box::pin(async move { (map_token(&WeightsAndBiasesMapper, &token).await, fingerprint) })
         }
         AccessMapRequest::MicrosoftTeams { webhook_url, fingerprint } => Box::pin(async move {
-            let mapped = microsoft_teams::map_access_from_webhook_url(&webhook_url)
-                .await
-                .unwrap_or_else(|err| build_failed_result("microsoft_teams", "webhook", err));
+            let mapped = finish_mapping(
+                microsoft_teams::map_access_from_webhook_url(&webhook_url).await,
+                "microsoft_teams",
+                "webhook",
+            );
             (mapped, fingerprint)
         }),
         AccessMapRequest::Airtable { token, fingerprint } => {
@@ -497,13 +620,16 @@ fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture
         }
         AccessMapRequest::Alibaba { access_key, secret_key, session_token, fingerprint } => {
             Box::pin(async move {
-                let mapped = alibaba::map_access_with_credentials(
+                let mapped = finish_mapping(
+                    alibaba::map_access_with_credentials(
+                        &access_key,
+                        &secret_key,
+                        session_token.as_deref(),
+                    )
+                    .await,
+                    "alibaba",
                     &access_key,
-                    &secret_key,
-                    session_token.as_deref(),
-                )
-                .await
-                .unwrap_or_else(|err| build_failed_result("alibaba", &access_key, err));
+                );
                 (mapped, fingerprint)
             })
         }
@@ -538,72 +664,89 @@ fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture
             Box::pin(async move { (map_token(&SquareMapper, &token).await, fingerprint) })
         }
         AccessMapRequest::Jira { token, base_url, fingerprint } => Box::pin(async move {
-            let mapped = jira::map_access_from_token_and_url(&token, &base_url)
-                .await
-                .unwrap_or_else(|err| build_failed_result("jira", "token", err));
+            let mapped = finish_mapping(
+                jira::map_access_from_token_and_url(&token, &base_url).await,
+                "jira",
+                "token",
+            );
             (mapped, fingerprint)
         }),
         AccessMapRequest::MySQL { uri, fingerprint } => Box::pin(async move {
-            let mapped = mysql::map_access_from_uri(&uri)
-                .await
-                .unwrap_or_else(|err| build_failed_result("mysql", "uri", err));
+            let mapped = finish_mapping(mysql::map_access_from_uri(&uri).await, "mysql", "uri");
             (mapped, fingerprint)
         }),
         AccessMapRequest::Algolia { app_id, api_key, fingerprint } => Box::pin(async move {
-            let mapped = algolia::map_access_from_credentials(&app_id, &api_key)
-                .await
-                .unwrap_or_else(|err| build_failed_result("algolia", &app_id, err));
+            let mapped = finish_mapping(
+                algolia::map_access_from_credentials(&app_id, &api_key).await,
+                "algolia",
+                &app_id,
+            );
             (mapped, fingerprint)
         }),
         AccessMapRequest::Auth0 { client_id, client_secret, domain, fingerprint } => {
             Box::pin(async move {
-                let mapped =
-                    auth0::map_access_from_credentials(&client_id, &client_secret, &domain)
-                        .await
-                        .unwrap_or_else(|err| build_failed_result("auth0", &client_id, err));
+                let mapped = finish_mapping(
+                    auth0::map_access_from_credentials(&client_id, &client_secret, &domain).await,
+                    "auth0",
+                    &client_id,
+                );
                 (mapped, fingerprint)
             })
         }
         AccessMapRequest::PayPal { client_id, client_secret, fingerprint } => {
             Box::pin(async move {
-                let mapped = paypal::map_access_from_credentials(&client_id, &client_secret)
-                    .await
-                    .unwrap_or_else(|err| build_failed_result("paypal", &client_id, err));
+                let mapped = finish_mapping(
+                    paypal::map_access_from_credentials(&client_id, &client_secret).await,
+                    "paypal",
+                    &client_id,
+                );
                 (mapped, fingerprint)
             })
         }
         AccessMapRequest::Plaid { client_id, secret, fingerprint } => Box::pin(async move {
-            let mapped = plaid::map_access_from_credentials(&client_id, &secret)
-                .await
-                .unwrap_or_else(|err| build_failed_result("plaid", &client_id, err));
+            let mapped = finish_mapping(
+                plaid::map_access_from_credentials(&client_id, &secret).await,
+                "plaid",
+                &client_id,
+            );
             (mapped, fingerprint)
         }),
         AccessMapRequest::Shopify { token, subdomain, fingerprint } => Box::pin(async move {
-            let mapped = shopify::map_access_from_token_and_subdomain(&token, &subdomain)
-                .await
-                .unwrap_or_else(|err| build_failed_result("shopify", &subdomain, err));
+            let mapped = finish_mapping(
+                shopify::map_access_from_token_and_subdomain(&token, &subdomain).await,
+                "shopify",
+                &subdomain,
+            );
             (mapped, fingerprint)
         }),
         AccessMapRequest::Zendesk { token, subdomain, fingerprint } => Box::pin(async move {
-            let mapped = zendesk::map_access_from_token_and_subdomain(&token, &subdomain)
-                .await
-                .unwrap_or_else(|err| build_failed_result("zendesk", &subdomain, err));
+            let mapped = finish_mapping(
+                zendesk::map_access_from_token_and_subdomain(&token, &subdomain).await,
+                "zendesk",
+                &subdomain,
+            );
             (mapped, fingerprint)
         }),
         AccessMapRequest::Artifactory { token, base_url, fingerprint } => Box::pin(async move {
-            let mapped = match base_url {
-                Some(url) => artifactory::map_access_from_token_and_url(&token, &url).await,
-                None => artifactory::map_access_from_token(&token).await,
-            }
-            .unwrap_or_else(|err| build_failed_result("artifactory", "token", err));
+            let mapped = finish_mapping(
+                match base_url {
+                    Some(url) => artifactory::map_access_from_token_and_url(&token, &url).await,
+                    None => artifactory::map_access_from_token(&token).await,
+                },
+                "artifactory",
+                "token",
+            );
             (mapped, fingerprint)
         }),
         AccessMapRequest::Xray { token, base_url, fingerprint } => Box::pin(async move {
-            let mapped = match base_url {
-                Some(url) => xray::map_access_from_token_and_url(&token, &url).await,
-                None => xray::map_access_from_token(&token).await,
-            }
-            .unwrap_or_else(|err| build_failed_result("jfrog_xray", "token", err));
+            let mapped = finish_mapping(
+                match base_url {
+                    Some(url) => xray::map_access_from_token_and_url(&token, &url).await,
+                    None => xray::map_access_from_token(&token).await,
+                },
+                "jfrog_xray",
+                "token",
+            );
             (mapped, fingerprint)
         }),
         AccessMapRequest::Monday { token, fingerprint } => {
@@ -618,12 +761,9 @@ fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture
     }
 }
 
-/// Maps a token credential using a `TokenAccessMapper`, with fallback error handling.
-async fn map_token(mapper: &impl TokenAccessMapper, token: &str) -> AccessMapResult {
-    mapper
-        .map_access_from_token(token)
-        .await
-        .unwrap_or_else(|err| build_failed_result(mapper.cloud_name(), "token", err))
+/// Maps a token credential using a `TokenAccessMapper`, retaining explicit success state.
+async fn map_token(mapper: &impl TokenAccessMapper, token: &str) -> AccessMapAttempt {
+    finish_mapping(mapper.map_access_from_token(token).await, mapper.cloud_name(), "token")
 }
 
 /// Write HTML/JSON outputs for a collection of identity map results.

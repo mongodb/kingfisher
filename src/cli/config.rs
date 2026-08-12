@@ -59,7 +59,7 @@ use std::path::PathBuf;
 use anyhow::{Context, Result, bail};
 use serde::{Deserialize, Serialize};
 
-use crate::alerts::{AlertDetail, AlertFormat, AlertOn};
+use crate::alerts::{AlertDetail, AlertFindingFilter, AlertFormat, AlertOn};
 use crate::cli::commands::output::ReportOutputFormat;
 use crate::cli::commands::scan::{ConfidenceLevel, ValidationFilter};
 use crate::cli::global::TlsMode;
@@ -222,6 +222,8 @@ pub struct AlertsDefaultsConfig {
     pub include_secret: Option<bool>,
     pub report_url: Option<String>,
     pub detail: Option<AlertDetail>,
+    pub finding_filter: Option<AlertFindingFilter>,
+    pub prevent_empty: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -244,6 +246,12 @@ pub struct WebhookConfig {
     /// Per-webhook override of the global `--alert-detail` mode.
     #[serde(default)]
     pub detail: Option<AlertDetail>,
+    /// Per-webhook override of the global `--alert-finding-filter`.
+    #[serde(default)]
+    pub finding_filter: Option<AlertFindingFilter>,
+    /// Per-webhook override of the global `--alert-prevent-empty`.
+    #[serde(default)]
+    pub prevent_empty: Option<bool>,
 }
 
 // ----------------------------------------------------------------------------
@@ -551,9 +559,13 @@ alerts:
     min_confidence: high
     include_secret: false
     detail: summary
+    finding_filter: only-active
+    prevent_empty: true
   webhooks:
     - url: https://hooks.slack.com/services/T0/B0/AAA
       format: slack
+      finding_filter: access-map-only
+      prevent_empty: false
 global:
   tls_mode: lax
   allow_internal_ips: true
@@ -589,6 +601,13 @@ git:
         );
         assert!(matches!(cfg.alerts.defaults.min_confidence, Some(ConfigConfidence::High)));
         assert!(matches!(cfg.alerts.defaults.detail, Some(AlertDetail::Summary)));
+        assert!(matches!(cfg.alerts.defaults.finding_filter, Some(AlertFindingFilter::OnlyActive)));
+        assert_eq!(cfg.alerts.defaults.prevent_empty, Some(true));
+        assert!(matches!(
+            cfg.alerts.webhooks[0].finding_filter,
+            Some(AlertFindingFilter::AccessMapOnly)
+        ));
+        assert_eq!(cfg.alerts.webhooks[0].prevent_empty, Some(false));
         assert!(matches!(cfg.global.tls_mode, Some(ConfigTlsMode::Lax)));
         assert_eq!(cfg.global.endpoints.len(), 1);
         assert_eq!(cfg.git.clone_dir.as_deref().map(|p| p.to_str().unwrap()), Some("./clones"));

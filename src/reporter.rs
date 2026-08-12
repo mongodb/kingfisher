@@ -19,6 +19,7 @@ use crate::{
     access_map::{
         AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata, ResourceExposure,
     },
+    alerts::AlertAccessMapEntry,
     blob::BlobMetadata,
     bstring_escape::Escaped,
     cli,
@@ -1265,7 +1266,7 @@ impl DetailsReporter {
         }
     }
 
-    fn build_access_map_records(
+    pub(crate) fn build_access_map_records(
         &self,
         args: &cli::commands::scan::ScanArgs,
     ) -> Option<Vec<AccessMapEntry>> {
@@ -1281,7 +1282,8 @@ impl DetailsReporter {
         }
 
         let mut entries = Vec::new();
-        for result in raw_results {
+        for mapped in raw_results {
+            let result = &mapped.result;
             let account = summarize_account(&result.identity);
             let mut grouped: BTreeMap<Vec<String>, Vec<String>> = BTreeMap::new();
 
@@ -1322,6 +1324,28 @@ impl DetailsReporter {
         }
 
         Some(entries)
+    }
+
+    #[doc(hidden)]
+    pub fn build_alert_access_map_entries(
+        &self,
+        args: &cli::commands::scan::ScanArgs,
+    ) -> Vec<AlertAccessMapEntry> {
+        if !args.access_map {
+            return Vec::new();
+        }
+
+        let ds = self.datastore.lock().unwrap();
+        ds.access_map_results()
+            .iter()
+            .map(|mapped| AlertAccessMapEntry {
+                finding_fingerprints: mapped.finding_fingerprints.clone(),
+                // Report output represents a mapped identity as one resource when the provider
+                // returns no child resources, so alert impact follows the same convention.
+                impacted_resources: mapped.result.resources.len().max(1),
+                mapping_succeeded: mapped.mapping_succeeded,
+            })
+            .collect()
     }
 
     fn style_finding_heading<D>(&self, val: D) -> StyledObject<D> {
@@ -1963,6 +1987,9 @@ mod tests {
             alert_include_secret: false,
             alert_report_url: None,
             alert_detail: crate::alerts::AlertDetail::Auto,
+            alert_finding_filter: crate::alerts::AlertFindingFilter::All,
+            alert_prevent_empty: false,
+            alert_dry_run: false,
             config_webhook_overrides: Vec::new(),
         }
     }

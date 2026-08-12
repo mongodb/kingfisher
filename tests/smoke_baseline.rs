@@ -70,6 +70,10 @@ fn baseline_create_and_filter() -> anyhow::Result<()> {
     assert!(baseline.exists(), "baseline file created");
 
     let initial_baseline = fs::read_to_string(&baseline)?;
+    assert!(initial_baseline.contains("version: 2"));
+    assert!(initial_baseline.contains("fingerprint_algorithm: kingfisher-v1"));
+    assert!(initial_baseline.contains("repositories:"));
+    assert!(!initial_baseline.contains("ExactFindings:"));
 
     // Scanning with the baseline should suppress the existing finding and leave
     // the baseline untouched.

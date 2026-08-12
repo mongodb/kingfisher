@@ -204,6 +204,13 @@ pub async fn run_async_scan(
             .clone()
             .unwrap_or_else(|| std::path::PathBuf::from("baseline-file.yaml")),
     );
+    let baseline = Arc::new(
+        if (args.baseline_file.is_some() || args.manage_baseline) && baseline_path.exists() {
+            crate::baseline::load_baseline(baseline_path.as_ref())?
+        } else {
+            crate::baseline::BaselineFile::default()
+        },
+    );
 
     let skip_aws_accounts = load_skip_aws_accounts(args)?;
     crate::validation::set_skip_aws_account_ids(skip_aws_accounts);
@@ -253,6 +260,7 @@ pub async fn run_async_scan(
             enable_profiling,
             &matcher_stats,
             &baseline_path,
+            &baseline,
             &validation_deps,
             &mut access_map_collector,
             progress_enabled,
@@ -279,6 +287,7 @@ pub async fn run_async_scan(
         enable_profiling,
         &matcher_stats,
         &baseline_path,
+        &baseline,
         &validation_deps,
         &mut access_map_collector,
         progress_enabled,
@@ -696,12 +705,33 @@ fn build_scan_audit_context(
 fn apply_baseline_if_configured(
     args: &scan::ScanArgs,
     datastore: &Arc<Mutex<FindingsStore>>,
-    baseline_path: &std::path::Path,
+    baseline: &crate::baseline::BaselineFile,
     roots: &[PathBuf],
 ) -> Result<()> {
     if args.baseline_file.is_some() || args.manage_baseline {
         let mut ds = datastore.lock().unwrap();
-        crate::baseline::apply_baseline(&mut ds, baseline_path, args.manage_baseline, roots)?;
+        crate::baseline::apply_loaded_baseline(&mut ds, baseline, roots)?;
+    }
+    Ok(())
+}
+
+fn update_baseline_if_configured(
+    args: &scan::ScanArgs,
+    datastore: &Arc<Mutex<FindingsStore>>,
+    baseline_path: &std::path::Path,
+    baseline: &crate::baseline::BaselineFile,
+    roots: &[PathBuf],
+) -> Result<()> {
+    if !args.manage_baseline {
+        return Ok(());
+    }
+
+    let updated = {
+        let ds = datastore.lock().unwrap();
+        crate::baseline::build_managed_baseline(&ds, baseline, roots)?
+    };
+    if updated != *baseline || !baseline_path.exists() {
+        crate::baseline::save_baseline(baseline_path, &updated)?;
     }
     Ok(())
 }
@@ -759,6 +789,7 @@ async fn run_sequential_scan(
     enable_profiling: bool,
     matcher_stats: &Arc<Mutex<MatcherStats>>,
     baseline_path: &Arc<PathBuf>,
+    baseline: &Arc<crate::baseline::BaselineFile>,
     validation_deps: &Option<ValidationDeps>,
     access_map_collector: &mut Option<AccessMapCollector>,
     progress_enabled: bool,
@@ -843,7 +874,14 @@ async fn run_sequential_scan(
     artifact_result.map_err(|e| e.context("artifact fetching failed"))?;
 
     deduplicate_new_matches(datastore, global_args, args, 0)?;
-    apply_baseline_if_configured(args, datastore, baseline_path.as_ref(), input_roots)?;
+    apply_baseline_if_configured(args, datastore, baseline.as_ref(), input_roots)?;
+    update_baseline_if_configured(
+        args,
+        datastore,
+        baseline_path.as_ref(),
+        baseline.as_ref(),
+        input_roots,
+    )?;
 
     run_validation_phase(datastore, validation_deps, args, None, access_map_collector.clone())
         .await?;
@@ -899,6 +937,7 @@ async fn run_parallel_scan(
     enable_profiling: bool,
     matcher_stats: &Arc<Mutex<MatcherStats>>,
     baseline_path: &Arc<PathBuf>,
+    baseline: &Arc<crate::baseline::BaselineFile>,
     validation_deps: &Option<ValidationDeps>,
     access_map_collector: &mut Option<AccessMapCollector>,
     progress_enabled: bool,
@@ -908,7 +947,7 @@ async fn run_parallel_scan(
     auto_cleanup_clones: bool,
 ) -> Result<()> {
     deduplicate_new_matches(datastore, global_args, args, 0)?;
-    apply_baseline_if_configured(args, datastore, baseline_path.as_ref(), repo_roots)?;
+    apply_baseline_if_configured(args, datastore, baseline.as_ref(), repo_roots)?;
 
     // Validate initial (non-repo) matches
     if let Some(validation) = validation_deps {
@@ -943,6 +982,7 @@ async fn run_parallel_scan(
 
     let ran_repo_scan = Arc::new(AtomicBool::new(false));
     let repo_errors: Arc<Mutex<Vec<anyhow::Error>>> = Arc::new(Mutex::new(Vec::new()));
+    let successful_roots: Arc<Mutex<Vec<PathBuf>>> = Arc::new(Mutex::new(Vec::new()));
     let output_to_file = args.output_args.output.is_some();
 
     // Bound concurrent in-flight repo scans. The bounded `repo_rx` only caps
@@ -1052,7 +1092,7 @@ async fn run_parallel_scan(
 
                     let repo_rules = repo_rules.clone();
                     let base_clone_root = base_clone_root.clone();
-                    let baseline_path = Arc::clone(baseline_path);
+                    let baseline = Arc::clone(baseline);
                     let shared_profiler = Arc::clone(shared_profiler);
                     let args = args.clone();
                     let root = root.clone();
@@ -1062,6 +1102,7 @@ async fn run_parallel_scan(
                     let rt_handle = rt_handle.clone();
                     let ran_repo_scan = Arc::clone(&ran_repo_scan);
                     let repo_errors = Arc::clone(&repo_errors);
+                    let successful_roots = Arc::clone(&successful_roots);
                     let datastore = Arc::clone(datastore);
                     let access_map = access_map_collector.clone();
                     let permit_release = permit_return.clone();
@@ -1110,8 +1151,13 @@ async fn run_parallel_scan(
                             let repo_datastore =
                                 Arc::new(Mutex::new(FindingsStore::new(base_clone_root.clone())));
                             {
+                                let repo_link =
+                                    datastore.lock().unwrap().repo_links().get(&root).cloned();
                                 let mut ds = repo_datastore.lock().unwrap();
                                 ds.record_rules(&repo_rules);
+                                if let Some(repo_link) = repo_link {
+                                    ds.register_repo_link(root.clone(), repo_link);
+                                }
                             }
 
                             let repo_matcher_stats = Mutex::new(MatcherStats::default());
@@ -1147,10 +1193,9 @@ async fn run_parallel_scan(
 
                             if args.baseline_file.is_some() || args.manage_baseline {
                                 let mut ds = repo_datastore.lock().unwrap();
-                                crate::baseline::apply_baseline(
+                                crate::baseline::apply_loaded_baseline(
                                     &mut ds,
-                                    baseline_path.as_ref(),
-                                    args.manage_baseline,
+                                    baseline.as_ref(),
                                     std::slice::from_ref(&root),
                                 )?;
                             }
@@ -1232,6 +1277,7 @@ async fn run_parallel_scan(
                                 ds.merge_from(&repo_datastore.lock().unwrap(), !args.no_dedup);
                             }
 
+                            successful_roots.lock().unwrap().push(root.clone());
                             ran_repo_scan.store(true, Ordering::Relaxed);
                             Ok(())
                         })();
@@ -1278,6 +1324,17 @@ async fn run_parallel_scan(
         return Err(err);
     }
 
+    if ran_repo_scan.load(Ordering::Relaxed) {
+        let scanned_roots = successful_roots.lock().unwrap().clone();
+        update_baseline_if_configured(
+            args,
+            datastore,
+            baseline_path.as_ref(),
+            baseline.as_ref(),
+            &scanned_roots,
+        )?;
+    }
+
     if output_to_file && ran_repo_scan.load(Ordering::Relaxed) {
         let audit_context = build_scan_audit_context(
             args,
@@ -1294,7 +1351,14 @@ async fn run_parallel_scan(
 
     if !ran_repo_scan.load(Ordering::Relaxed) {
         deduplicate_new_matches(datastore, global_args, args, 0)?;
-        apply_baseline_if_configured(args, datastore, baseline_path.as_ref(), repo_roots)?;
+        apply_baseline_if_configured(args, datastore, baseline.as_ref(), repo_roots)?;
+        update_baseline_if_configured(
+            args,
+            datastore,
+            baseline_path.as_ref(),
+            baseline.as_ref(),
+            repo_roots,
+        )?;
 
         run_validation_phase(datastore, validation_deps, args, None, access_map_collector.clone())
             .await?;
@@ -1364,7 +1428,7 @@ async fn finalize_access_map(
     collector: AccessMapCollector,
     _args: &scan::ScanArgs,
 ) -> Result<()> {
-    let requests = collector.into_requests();
+    let requests = collector.into_collected_requests();
 
     if requests.is_empty() {
         debug!(
@@ -1375,7 +1439,7 @@ async fn finalize_access_map(
         return Ok(());
     }
 
-    let results = access_map::map_requests(requests).await;
+    let results = access_map::map_collected_requests(requests).await;
 
     {
         let mut ds = datastore.lock().unwrap();

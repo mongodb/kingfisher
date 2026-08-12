@@ -304,13 +304,21 @@ enum GcpApiKeyProbeVerdict {
 }
 
 fn classify_gcp_api_key_probe(status: StatusCode, body: &str) -> GcpApiKeyProbeVerdict {
+    // Google documents that API restrictions are independent of the key string
+    // and exposes API_KEY_INVALID separately from restriction failures. Keep
+    // those cases distinct so a key that is live but unavailable to the probe
+    // is not reported as inactive.
+    //
+    // References:
+    // https://cloud.google.com/docs/authentication/api-keys
+    // https://cloud.google.com/php/docs/reference/common-protos/latest/Api.ErrorReason
     if status == StatusCode::OK {
         return GcpApiKeyProbeVerdict::Active;
     }
 
     // Both the Identity Toolkit and Generative Language APIs use HTTP 400 for a
-    // syntactically well-formed key that Google does not recognize. Betterleaks
-    // uses the same distinction for its GCP API-key validator.
+    // syntactically well-formed key that Google does not recognize. The Google
+    // API error taxonomy identifies API_KEY_INVALID as the invalid-key reason.
     if status == StatusCode::BAD_REQUEST
         && (body.contains("API_KEY_INVALID")
             || body.contains("API key not valid")
@@ -329,15 +337,34 @@ fn classify_gcp_api_key_probe(status: StatusCode, body: &str) -> GcpApiKeyProbeV
     GcpApiKeyProbeVerdict::Inconclusive
 }
 
+#[derive(Debug, Clone, Copy)]
+enum GcpApiKeyProbeAuth {
+    QueryParameter,
+    GeminiHeader,
+}
+
+fn build_gcp_api_key_probe_request(
+    client: &Client,
+    url: &str,
+    token: &str,
+    auth: GcpApiKeyProbeAuth,
+) -> Result<reqwest::Request> {
+    let request = client.get(url);
+    let request = match auth {
+        GcpApiKeyProbeAuth::QueryParameter => request.query(&[("key", token)]),
+        GcpApiKeyProbeAuth::GeminiHeader => request.header("x-goog-api-key", token),
+    };
+    request.build().context("failed to build GCP API-key validation request")
+}
+
 async fn run_gcp_api_key_probe(
     client: &Client,
     url: &str,
     token: &str,
+    auth: GcpApiKeyProbeAuth,
 ) -> Result<(StatusCode, String)> {
     let response = client
-        .get(url)
-        .query(&[("key", token)])
-        .send()
+        .execute(build_gcp_api_key_probe_request(client, url, token, auth)?)
         .await
         .context("GCP API-key validation request failed")?;
     let status = response.status();
@@ -381,8 +408,13 @@ async fn validate_gcp_api_key(globals: &Object, client: &Client) -> Result<RawVa
     const GEMINI_MODELS_URL: &str = "https://generativelanguage.googleapis.com/v1beta/models";
 
     let token = string_var(globals, "TOKEN").ok_or_else(|| anyhow!("missing TOKEN"))?;
-    let (project_status, project_body) =
-        run_gcp_api_key_probe(client, PROJECT_CONFIG_URL, &token).await?;
+    let (project_status, project_body) = run_gcp_api_key_probe(
+        client,
+        PROJECT_CONFIG_URL,
+        &token,
+        GcpApiKeyProbeAuth::QueryParameter,
+    )
+    .await?;
     match classify_gcp_api_key_probe(project_status, &project_body) {
         GcpApiKeyProbeVerdict::Active => {
             return Ok(RawValidationOutcome {
@@ -403,9 +435,12 @@ async fn validate_gcp_api_key(globals: &Object, client: &Client) -> Result<RawVa
 
     // Fall back to a second read-only Google API. This covers transient or
     // endpoint-specific responses without treating arbitrary JSON as proof of
-    // either liveness or revocation.
+    // either liveness or revocation. The Generative Language API documents the
+    // x-goog-api-key header; keep this probe out of the URL so the token is not
+    // unnecessarily exposed in request-target logging.
     let (gemini_status, gemini_body) =
-        run_gcp_api_key_probe(client, GEMINI_MODELS_URL, &token).await?;
+        run_gcp_api_key_probe(client, GEMINI_MODELS_URL, &token, GcpApiKeyProbeAuth::GeminiHeader)
+            .await?;
     match classify_gcp_api_key_probe(gemini_status, &gemini_body) {
         GcpApiKeyProbeVerdict::Active => Ok(RawValidationOutcome {
             valid: true,
@@ -981,6 +1016,35 @@ mod tests {
     use super::*;
 
     #[test]
+    fn gcp_api_key_probe_uses_the_authentication_form_for_each_api() {
+        let client = Client::new();
+        let token = "AIzaSy-example-token";
+
+        let identity_request = build_gcp_api_key_probe_request(
+            &client,
+            "https://www.googleapis.com/identitytoolkit/v3/relyingparty/getProjectConfig",
+            token,
+            GcpApiKeyProbeAuth::QueryParameter,
+        )
+        .unwrap();
+        assert_eq!(identity_request.url().query_pairs().next(), Some(("key".into(), token.into())));
+        assert!(identity_request.headers().get("x-goog-api-key").is_none());
+
+        let gemini_request = build_gcp_api_key_probe_request(
+            &client,
+            "https://generativelanguage.googleapis.com/v1beta/models",
+            token,
+            GcpApiKeyProbeAuth::GeminiHeader,
+        )
+        .unwrap();
+        assert!(gemini_request.url().query().is_none());
+        assert_eq!(
+            gemini_request.headers().get("x-goog-api-key").and_then(|value| value.to_str().ok()),
+            Some(token)
+        );
+    }
+
+    #[test]
     fn gcp_api_key_probe_distinguishes_liveness_from_transport_failures() {
         assert_eq!(
             classify_gcp_api_key_probe(StatusCode::OK, r#"{"projectId":"example"}"#),
@@ -997,6 +1061,15 @@ mod tests {
             ),
             GcpApiKeyProbeVerdict::Active
         );
+        for reason in ["API_KEY_SERVICE_BLOCKED", "PERMISSION_DENIED", "CONSUMER_SUSPENDED"] {
+            assert_eq!(
+                classify_gcp_api_key_probe(
+                    StatusCode::FORBIDDEN,
+                    &format!(r#"{{"reason":"{reason}"}}"#),
+                ),
+                GcpApiKeyProbeVerdict::Active
+            );
+        }
         assert_eq!(
             classify_gcp_api_key_probe(StatusCode::INTERNAL_SERVER_ERROR, "server error"),
             GcpApiKeyProbeVerdict::Inconclusive

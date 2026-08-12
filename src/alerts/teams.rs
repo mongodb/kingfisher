@@ -18,15 +18,23 @@ pub fn build_payload(
     include_secret: bool,
 ) -> Value {
     let title = if summary.total == 0 {
-        "Kingfisher: scan complete — no findings".to_string()
+        if summary.unfiltered_total > 0 {
+            format!(
+                "Kingfisher: scan complete — 0 of {} finding{} matched this alert's filters",
+                summary.unfiltered_total,
+                plural(summary.unfiltered_total)
+            )
+        } else {
+            "Kingfisher: scan complete — no findings".to_string()
+        }
     } else {
         format!("Kingfisher: {} finding{}", summary.total, plural(summary.total))
     };
 
     let theme_color = if summary.active > 0 {
         "C0392B" // red — active live secrets
-    } else if summary.total > 0 {
-        "F39C12" // amber — findings present but unverified
+    } else if summary.total > 0 || summary.unfiltered_total > 0 {
+        "F39C12" // amber — findings existed, but none included here are active
     } else {
         "27AE60" // green — clean
     };
@@ -36,6 +44,9 @@ pub fn build_payload(
         json!({ "name": "Inactive", "value": summary.inactive.to_string() }),
         json!({ "name": "Unknown",  "value": summary.unknown.to_string() }),
     ];
+    if summary.impacted_resources > 0 {
+        facts.push(json!({ "name": "Impacted resources", "value": summary.impacted_resources.to_string() }));
+    }
     if let Some(t) = &summary.target {
         facts.push(json!({ "name": "Target", "value": t }));
     }
@@ -76,12 +87,12 @@ pub fn build_payload(
             "title": "Findings",
             "text": details,
         }));
-    } else if summary.detail == AlertDetail::Summary && summary.filtered_total > 0 {
+    } else if summary.detail == AlertDetail::Summary && summary.total > 0 {
         sections.push(json!({
             "title": "Findings",
             "text": format!(
                 "_{} findings — per-finding detail suppressed (summary mode). See full report for specifics._",
-                summary.filtered_total
+                summary.total
             ),
         }));
     }
@@ -151,7 +162,8 @@ mod tests {
             target: None,
             report_url: None,
             detail: crate::alerts::AlertDetail::Detail,
-            filtered_total: total,
+            impacted_resources: 0,
+            unfiltered_total: 0,
         }
     }
 
@@ -174,6 +186,20 @@ mod tests {
     }
 
     #[test]
+    fn title_distinguishes_clean_scan_from_filtered_to_empty() {
+        let p = build_payload(&summary(0, 0), &[], false);
+        assert_eq!(p["title"], "Kingfisher: scan complete — no findings");
+
+        let mut s = summary(0, 0);
+        s.unfiltered_total = 5;
+        let p2 = build_payload(&s, &[], false);
+        let title = p2["title"].as_str().unwrap();
+        assert!(!title.contains("no findings"), "got: {title}");
+        assert!(title.contains("matched this alert's filters"), "got: {title}");
+        assert_eq!(p2["themeColor"], "F39C12");
+    }
+
+    #[test]
     fn report_url_adds_open_uri_action() {
         let mut s = summary(1, 0);
         s.report_url = Some("https://ci.example/run/77".to_string());
@@ -186,7 +212,6 @@ mod tests {
     fn summary_mode_emits_suppression_notice() {
         let mut s = summary(40, 0);
         s.detail = crate::alerts::AlertDetail::Summary;
-        s.filtered_total = 40;
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-t");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();
@@ -196,8 +221,7 @@ mod tests {
 
     #[test]
     fn detail_mode_includes_fingerprint() {
-        let mut s = summary(1, 1);
-        s.filtered_total = 1;
+        let s = summary(1, 1);
         let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-teams-5");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();

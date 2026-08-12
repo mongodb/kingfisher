@@ -7,6 +7,17 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v1.113.0]
+- Added repository-aware v2 baselines with safe multi-repository updates, atomic writes, and automatic migration while retaining legacy baseline compatibility.
+- Added configurable webhook finding filters, empty-alert suppression, dry-run previews, and access-map impact summaries.
+- **Breaking:** the alert payload field `summary.filtered_total` was removed; read `summary.total` (now always the per-sink filtered count) and the new `summary.unfiltered_total` for the whole-scan count.
+- **Breaking (library):** `FindingsStore::access_map_results`/`set_access_map_results` and `AccessMapCollector::into_requests` are no longer public.
+- Added Qwen, Solana, and Starknet detection rules, plus Databricks OAuth client-secret and Kubernetes ServiceAccount token rules.
+- Tightened MongoDB Atlas API key detection and stopped the Databricks workspace-host rule from matching `azurewebsites.net`.
+- Fixed Google API-key attribution and validation, including YouTube handling and documented Gemini header authentication; added Google Chat webhook detection and authoritative rule provenance.
+- Removed the duplicate Google OAuth rule and clarified Firebase FCM legacy server-key detection and documentation.
+- Refreshed built-in rule and revocation coverage documentation.
+
 ## [v1.112.0]
 - Added offline Ethereum key/BIP-39 detection with explicit local-validation outcomes, inspired by [#468](https://github.com/mongodb/kingfisher/pull/468) from @audityourcontracts.
 - Hardened validation caching and panic handling to avoid secret exposure.

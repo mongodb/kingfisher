@@ -1,0 +1,50 @@
+rules:
+  - name: Qwen AI API Key
+    id: kingfisher.qwen.1
+    # `sk-` + 32 alphanumerics is not self-identifying: it is shared with
+    # DeepSeek (`sk-` + 32 hex, a strict subset) and several other
+    # OpenAI-compatible providers. Require Model Studio / DashScope context so
+    # the finding is attributed to the right vendor.
+    pattern: |
+      (?x)
+      \b
+      (?i:qwen|dashscope|tongyi|bailian|model[_-]?studio)
+      (?:.|[\n\r]){0,32}?
+      (?i:key|token|secret|api)
+      (?:.|[\n\r]){0,16}?
+      \b
+      (
+        sk-[[:alnum:]]{32}
+      )
+      \b
+    min_entropy: 3.5
+    confidence: medium
+    examples:
+      - 'DASHSCOPE_API_KEY="sk-aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW"'
+      - "QWEN_API_KEY=sk-Z9y8X7w6V5u4T3s2R1q0PnMlKjIhGfEd"
+    negative_examples:
+      # Same token shape, different vendor — must not be reported as Qwen.
+      - "OPENAI_API_KEY=sk-aB3dE5fG7hI9jK1lM3nO5pQ7rS9tU1vW"
+      - "DEEPSEEK_API_KEY=sk-ba588036180d4d1d9cebbf6456f1e220"
+    references:
+      - https://github.com/google/osv-scalibr/pull/1762
+      - https://www.alibabacloud.com/help/en/model-studio/get-api-key
+      - https://www.alibabacloud.com/help/en/model-studio/base-url
+      - https://www.alibabacloud.com/help/en/model-studio/error-code
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://dashscope-intl.aliyuncs.com/compatible-mode/v1/models
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Accept: application/json
+          response_matcher:
+            - report_response: true
+            # Only 200 means the key authenticated. A revoked/invalid key
+            # returns 401 with `code: invalid_api_key`; a 400 is a malformed
+            # request, not proof of a live credential.
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
