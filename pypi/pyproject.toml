@@ -41,5 +41,6 @@ only-include = [
   "kingfisher",
   "README.md",
 ]
+core-metadata-version = "2.4"
 
 [tool.hatch.build.targets.wheel.hooks.custom]
