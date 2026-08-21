@@ -16,7 +16,7 @@
 
 Kingfisher is an open source secret scanner and **live secret validation** tool built in Rust.
 
-It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale. Its default rule catalog is built from [Betterleaks](https://github.com/betterleaks/betterleaks), including compatible detection filters, dependencies, and live validation expressions.
+It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale. Its main built-in rule catalog comes from [Betterleaks](https://github.com/betterleaks/betterleaks), with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors filling gaps.
 
 Kingfisher also ships a **browser-based report viewer** that visualizes and triages findings from Kingfisher, SARIF, Gitleaks, and TruffleHog reports — so you can import scans from other tools and triage them in the same UI. A [hosted copy of the viewer](https://mongodb.github.io/kingfisher/viewer/) is published on the Kingfisher docs site [or run locally](#3-scan-and-view-results-in-browser)
 
@@ -53,11 +53,10 @@ Kingfisher is a high-performance, open source secret detection tool for source c
 
 ### Performance, Accuracy, and Extensible Rules
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
-- **Extensible rules**: Betterleaks is the default catalog; the Kingfisher 1.x YAML custom-rule format remains supported for private rules ([docs/ADVANCED.md](/docs/ADVANCED.md#default-betterleaks-rules), [docs/RULES.md](/docs/RULES.md))
-- **Validate & Revoke**: Betterleaks live validation runs natively, with selected safe built-in revocation capabilities plus Kingfisher 1.x custom workflows ([docs/USAGE.md](/docs/USAGE.md))
-- **Revocation actions**: HTTP, multi-step HTTP, AWS, and GCP actions support Betterleaks capability mappings and Kingfisher 1.x custom rules ([docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
-- **Blast Radius Mapping**: instantly map leaked keys to their effective cloud identities and exposed resources with `--access-map` (alias `--blast-radius`). Supports 43 providers (see table below).
-- **Broad AI SaaS coverage**: finds and validates tokens for OpenAI, Anthropic, Google Gemini, Cohere, AWS Bedrock, Voyage AI, Mistral, Stability AI, Replicate, xAI (Grok), Ollama, Langchain, Perplexity, Weights & Biases, Cerebras, Friendli, Fireworks.ai, NVIDIA NIM, Together.ai, Zhipu, and many more
+- **Extensible rules**: Betterleaks is the main catalog, with selected Veles detectors filling gaps; custom Betterleaks TOML and Kingfisher 1.x YAML rules are supported ([docs/ADVANCED.md](/docs/ADVANCED.md#default-betterleaks-rules), [docs/RULES.md](/docs/RULES.md))
+- **Validation and revocation**: validate discovered credentials live and revoke supported credentials from the CLI ([docs/USAGE.md](/docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
+- **Blast Radius Mapping**: use `--access-map` (alias `--blast-radius`) to map supported credentials to their effective identities, permissions, and reachable resources ([docs/ACCESS_MAP.md](docs/ACCESS_MAP.md))
+- **Broad provider coverage**: detect and validate credentials across cloud, AI, developer tooling, databases, SaaS, messaging, identity, and cryptographic systems through the Betterleaks-based built-in catalog
 - **Compressed Files**: Supports extracting and scanning compressed files for secrets, including `tar.gz`/`bz2`/`xz`, ZIP-family containers (`zip`, `jar`, `docx`, `xlsx`, `pptx`, `odt`, `epub`, `hwpx`, and more), `asar`, HWP (Hancom OLE2/CFBF binary with DEFLATE/zlib stream decoding), and EGG (ALZip; raw-byte scanning)
 - **SQLite Database Scanning**: Automatically extracts and scans SQLite database contents for secrets stored in table rows
 - **Python Bytecode (.pyc) Scanning**: Extracts and scans string constants from compiled Python (`.pyc`, `.pyo`) files
@@ -85,6 +84,7 @@ NOTE: Replay has been slowed down for demo
 # Table of Contents
 
 - [What Is Kingfisher?](#what-is-kingfisher)
+- [Why Choose Kingfisher?](#why-choose-kingfisher)
 - [Key Features](#key-features)
 - [Report Viewer (local and hosted)](#report-viewer-local-and-hosted)
 - [Alert Webhooks](#alert-webhooks)
@@ -189,8 +189,8 @@ successful validations with `--validation-filter actionable`.
 
 ### 5: Revoke a discovered secret
 
-Betterleaks does not currently model revocation, so Kingfisher joins selected Betterleaks IDs to a
-small capability overlay containing safe provider actions. For example:
+Kingfisher adds selected provider revocation actions alongside its imported detection and validation
+capabilities. For example:
 
 ```bash
 # Revoke a GitHub PAT using the built-in Betterleaks detector capability
@@ -462,24 +462,9 @@ For payload shapes, per-webhook overrides, and config-file examples, see [docs/A
 
 # Detection Rules
 
-Kingfisher uses the [Betterleaks rule catalog](https://github.com/betterleaks/betterleaks/blob/main/config/betterleaks.toml) by default. The catalog is downloaded and parsed while Kingfisher is built; it is not vendored in this repository. Rules use the `betterleaks.` ID namespace, for example `betterleaks.github-pat`.
+Kingfisher's built-in detection catalog is based on the [Betterleaks rule catalog](https://github.com/betterleaks/betterleaks/blob/main/config/betterleaks.toml), with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors filling gaps. Betterleaks filters, dependencies, and validation expressions are resolved when Kingfisher is built; built-in rules use the `betterleaks.` and `veles.` namespaces.
 
-See [Moving to Kingfisher v2.0.x](docs/V2_MIGRATION.md) for the migration impact and the Betterleaks-first rule-development direction.
-
-To add or improve a generally useful detector, contribute it to the [Betterleaks repository](https://github.com/betterleaks/betterleaks) first. Kingfisher's YAML rule format is the supported 1.x custom-rule format intended only for organization-specific custom rules. See [Default Betterleaks Rules](docs/ADVANCED.md#default-betterleaks-rules) and [Kingfisher 1.x Custom Rules](docs/RULES.md).
-
-| Category | What we catch |
-|----------|---------------|
-| **Cloud Providers** | AWS, GCP, Azure (Storage, DevOps, OpenAI, Speech, Translator), Alibaba Cloud, DigitalOcean, IBM Cloud, Cloudflare, Heroku, Fly.io, Railway, Render, Temporal Cloud, Civo, Exoscale, OVHcloud, Infomaniak, and more |
-| **AI & ML** | OpenAI, Anthropic, Google Gemini, Azure OpenAI, Cohere, Mistral, DeepSeek, Groq, xAI (Grok), Stability AI, Replicate, ElevenLabs, Ollama, Langchain, Perplexity, Weights & Biases, NVIDIA NIM, Fireworks.ai, Together.ai, Cerebras, Friendli, Hugging Face, Pinecone, Cursor, Zhipu, Kimi (Moonshot AI), LightOn Paradigm, Upstage, and more |
-| **Dev & CI/CD** | GitHub, GitLab, Bitbucket, Buildkite, CircleCI, TravisCI, TeamCity, Jenkins, Drone CI, Harness, Docker Hub, npm, PyPI, RubyGems, Crates.io, NuGet, Vercel, Netlify, Browserbase, Nango, Pulumi, Terraform, Greptile, and more |
-| **Databases** | PostgreSQL, MySQL, MongoDB, Redis, PlanetScale, Supabase, Neon, Turso, ClickHouse, DataStax Astra, Firebase, JDBC, ODBC, and more |
-| **Messaging & Email** | Slack, Discord, Microsoft Teams, Telegram, Twilio, SendGrid, Mailgun, Mailchimp, Mailjet, Postmark, Brevo (Sendinblue), Resend, Novu, and more |
-| **Observability** | Datadog, Grafana, New Relic, Sentry, Dynatrace, Honeycomb, PagerDuty, OpsGenie, Sumo Logic, Better Stack, and more |
-| **Payments & Fintech** | Stripe, PayPal, Square, GoCardless, Flutterwave, Razorpay, Plaid, Coinbase, Cielo, Mercado Pago, PagSeguro/PagBank, and more |
-| **Security & Identity** | Snyk, Auth0, Okta, Clerk, LaunchDarkly, 1Password, JFrog Artifactory/Xray, SonarCloud, Endor Labs, Dependency-Track, StackHawk, and more |
-| **CRM & Business SaaS** | Salesforce, HubSpot, Jira, Confluence, Asana, Linear, Monday.com, Zendesk, Intercom, Shopify, Airbyte, and more |
-| **Crypto Material** | Private keys (PEM, PGP/GPG, SSH), JWTs, age encryption keys, WireGuard keys, and more |
+See the [Betterleaks catalog](https://github.com/betterleaks/betterleaks) for current detection coverage and contribute generally useful detectors there first. Custom Betterleaks TOML rules and Kingfisher's 1.x YAML format are also supported; use YAML for private, organization-specific rules. See [Moving to Kingfisher v2.0.x](docs/V2_MIGRATION.md), [Default Betterleaks Rules](docs/ADVANCED.md#default-betterleaks-rules), and [Kingfisher 1.x Custom Rules](docs/RULES.md).
 
 ## Write Custom Rules
 
@@ -871,7 +856,7 @@ kingfisher scan /tmp/repo --branch feature-1 \
 | [INSTALLATION.md](docs/INSTALLATION.md) | Complete installation guide including pre-commit hooks setup for git, pre-commit framework, and Husky |
 | [INTEGRATIONS.md](docs/INTEGRATIONS.md) | Platform-specific scanning guide (GitHub, GitLab, AWS S3, Docker, Jira, Confluence, Slack, etc.) |
 | [ALERTS.md](docs/ALERTS.md) | Alert webhooks for Slack, Teams, Discord, Mattermost, Google Chat, and generic HTTPS endpoints |
-| [ACCESS_MAP.md](docs/ACCESS_MAP.md) | Blast radius: supported tokens and credential formats (43 providers including AWS, GCP, Azure, Alibaba Cloud, Stripe, Jira, monday.com, Asana, Pinecone, and more) |
+| [ACCESS_MAP.md](docs/ACCESS_MAP.md) | Blast radius: supported credentials and provider workflows |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | High-level Mermaid architecture diagram of the CLI, scanner pipeline, validation, blast-radius mapping, and outputs |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment models for self-serve CLI use, CI/pre-commit enforcement, centralized scanning, and embedded library integrations |
 | [ADVANCED.md](docs/ADVANCED.md) | Advanced features: baselines, confidence levels, validation tuning, CI scanning, and more |
@@ -902,11 +887,11 @@ kingfisher scan /tmp/repo --branch feature-1 \
 
 Kingfisher began as an internal fork of [Nosey Parker](https://github.com/praetorian-inc/noseyparker), used as a high-performance foundation for secret detection. 
 
-Since then it has evolved far beyond that starting point, introducing live validation, hundreds of new rules, additional scan targets, and major architectural changes across nearly every subsystem.
+Since then it has evolved far beyond that starting point, adding live validation, broader detection coverage, additional scan targets, and major architectural changes across nearly every subsystem.
 
 **Key areas of evolution**
 - **Live validation** of detected secrets directly within rules  
-- **Hundreds of detection rules through Betterleaks** and a supported Kingfisher 1.x custom YAML schema
+- **Betterleaks-based built-in detection coverage**, selected Veles detectors, and a supported Kingfisher 1.x custom YAML schema
 - **Baseline management** to suppress known findings over time  
 - **Parser-based context verification** layered on Hyperscan for language-aware detection  
 - **More scan targets** (GitLab, Bitbucket, Gitea, Jira, Confluence, Slack, Microsoft Teams, Postman, S3, GCS, Docker, Hugging Face, etc.)  
