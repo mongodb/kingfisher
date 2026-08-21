@@ -465,6 +465,8 @@ impl Evaluator<'_> {
                 args.first().map(Value::as_bytes).unwrap_or_default(),
             ))),
             "crypto.sha1" => {
+                // Betterleaks' OVH validation protocol requires the SHA-1 160-bit
+                // digest of its UTF-8 signing payload. SHA-256 is not wire-compatible.
                 let bytes = args.first().map(Value::as_bytes).unwrap_or_default();
                 Ok(Value::Bytes(Sha1::digest(bytes).to_vec()))
             }
@@ -957,6 +959,8 @@ fn unknown_result(response: Value) -> Value {
 }
 
 fn hmac_sha1(args: &[Value]) -> Result<Vec<u8>> {
+    // Alibaba STS signs requests with the legacy HMAC-SHA1 protocol and expects
+    // its 160-bit output. This is compatibility authentication, not new hashing.
     let mut mac =
         Hmac::<Sha1>::new_from_slice(&args.first().map(Value::as_bytes).unwrap_or_default())
             .context("HMAC-SHA1 key")?;

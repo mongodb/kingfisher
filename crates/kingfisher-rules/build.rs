@@ -81,7 +81,18 @@ fn build_default_bundle() -> Result<()> {
 }
 
 fn download_config(url: &str) -> Result<String> {
-    let mut response = ureq::get(url)
+    // ClusterFuzzLite exports sanitizer CFLAGS globally. Use the platform TLS
+    // backend here so the build-only downloader does not pull in ring, whose C
+    // objects would otherwise be sanitizer-instrumented and linked into this
+    // non-fuzz build script.
+    let agent = ureq::Agent::config_builder()
+        .tls_config(
+            ureq::tls::TlsConfig::builder().provider(ureq::tls::TlsProvider::NativeTls).build(),
+        )
+        .build()
+        .new_agent();
+    let mut response = agent
+        .get(url)
         .header("User-Agent", "kingfisher-build")
         .call()
         .with_context(|| format!("failed to download {url}"))?;

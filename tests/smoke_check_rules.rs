@@ -15,7 +15,10 @@ fn check_rules() -> anyhow::Result<()> {
         ])
         .assert()
         .code(0) // no findings present
-        .stdout(predicate::str::contains("Errors: 0"));
+        .stdout(
+            predicate::str::contains("All rules passed validation successfully")
+                .or(predicate::str::contains("Errors: 0")),
+        );
 
     Ok(())
 }

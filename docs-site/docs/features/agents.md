@@ -19,8 +19,8 @@ kingfisher scan /path/to/code --format toon
 TOON is also available for `validate` and `revoke` subcommands:
 
 ```bash
-kingfisher validate --rule github "ghp_xxx" --format toon
-kingfisher revoke --rule github-pat "ghp_xxx" --format toon
+kingfisher validate --rule betterleaks.github-pat "ghp_xxx" --format toon
+kingfisher revoke --rule betterleaks.github-pat "ghp_xxx" --format toon
 ```
 
 Betterleaks rules provide default validation where upstream defines it. Kingfisher supplies

@@ -72,7 +72,9 @@ regex.workspace = true
 serde.workspace = true
 serde_yaml = "0.9"
 toml = "0.8"
-ureq = "3.1"
+# Avoid Rustls/ring in the build script: ClusterFuzzLite's sanitizer CFLAGS would
+# otherwise instrument ring and break the non-fuzz build-script linker.
+ureq = { version = "3.1", default-features = false, features = ["native-tls"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"
