@@ -42,21 +42,19 @@ prefixes:
 ```yaml
 rules:
   enabled:
-    - kingfisher.github.1   # include exact rule IDs
-    - kingfisher.github.2
+    - betterleaks.github-pat   # include exact rule IDs
+    - betterleaks.github-fine-grained-pat
   disabled:
-    - kingfisher.openai.1    # exclude exact rule IDs
-    - kingfisher.openai.2
+    - betterleaks.openai-api-key
 ```
 
-Use a prefix like `kingfisher.github` if you want to include or exclude an
-entire family instead of single rules. Wildcards like `kingfisher.g*` are not
+Use a prefix like `betterleaks.github` if you want to include or exclude an
+entire family instead of single rules. Wildcards like `betterleaks.g*` are not
 supported.
 
 The CLI equivalents are repeated `--rule` and `--exclude-rule` flags, for
-example `kingfisher scan ./repo --rule kingfisher.github.1 --rule
-kingfisher.github.2 --exclude-rule kingfisher.openai.1 --exclude-rule
-kingfisher.openai.2`.
+example `kingfisher scan ./repo --rule betterleaks.github-pat --rule
+betterleaks.github-fine-grained-pat --exclude-rule betterleaks.openai-api-key`.
 
 ## End-to-end: create a config and scan with it
 
@@ -176,7 +174,7 @@ scan:
 rules:
   enabled: ["all"]              # list, additive                 (--rule)
   disabled:                     # list, additive                 (--exclude-rule)
-    - kingfisher.github.1
+    - betterleaks.github-pat
   paths:                        # list, additive                 (--rules-path)
     - ./custom-rules/
   load_builtins: true           # bool                           (--load-builtins)
@@ -188,7 +186,7 @@ validation:
   retries: 1                    # int, 0..=5                     (--validation-retries)
   rps: 5.0                      # float                          (--validation-rps)
   rps_per_rule:                 # map, additive                  (--validation-rps-rule)
-    kingfisher.aws: 1.0
+    betterleaks.aws: 1.0
   full_response: false          # bool                           (--full-validation-response)
   max_response_length: 2048     # bytes                          (--max-validation-response-length)
 

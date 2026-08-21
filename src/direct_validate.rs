@@ -28,7 +28,6 @@ use crate::{
     template_vars::extract_template_vars,
     validation::{
         GLOBAL_USER_AGENT,
-        aws::validate_aws_credentials,
         azure::validate_azure_storage_credentials,
         coinbase::validate_cdp_api_key,
         gcp::GcpValidator,
@@ -92,23 +91,19 @@ fn find_rules_by_selector<'a>(
 ) -> Result<Vec<&'a Rule>> {
     let mut matches: Vec<&Rule> = Vec::new();
 
-    // Try the selector as-is first, then with "kingfisher." prefix as fallback.
-    // This allows users to pass `--rule aws` instead of `--rule kingfisher.aws`.
-    let selectors_to_try: Vec<std::borrow::Cow<'_, str>> = if selector.starts_with("kingfisher.") {
-        vec![std::borrow::Cow::Borrowed(selector)]
-    } else {
-        vec![
-            std::borrow::Cow::Borrowed(selector),
-            std::borrow::Cow::Owned(format!("kingfisher.{}", selector)),
-        ]
-    };
+    // Prefer the current namespace, then retain the Kingfisher 1.x shorthand fallback.
+    let mut selectors_to_try = vec![std::borrow::Cow::Borrowed(selector)];
+    if !selector.starts_with("betterleaks.") && !selector.starts_with("kingfisher.") {
+        selectors_to_try.push(std::borrow::Cow::Owned(format!("betterleaks.{selector}")));
+        selectors_to_try.push(std::borrow::Cow::Owned(format!("kingfisher.{selector}")));
+    }
 
     for try_selector in &selectors_to_try {
         for (id, rule) in rules {
-            // Exact match OR "selector." is a prefix of id
+            // Exact match, or a namespace/provider-family prefix.
             if id == try_selector.as_ref()
                 || (id.starts_with(try_selector.as_ref())
-                    && id.as_bytes().get(try_selector.len()) == Some(&b'.'))
+                    && matches!(id.as_bytes().get(try_selector.len()), Some(b'.' | b'-')))
             {
                 matches.push(rule);
             }
@@ -173,6 +168,10 @@ fn extract_validation_vars(validation: &Validation) -> BTreeSet<String> {
                 vars.extend(extract_template_vars(body));
             }
         }
+        Validation::Betterleaks(validation) => {
+            vars.insert("TOKEN".to_string());
+            vars.extend(validation.components.values().cloned());
+        }
         // Non-HTTP validators typically use fixed variable names
         Validation::AWS => {
             vars.insert("AKID".to_string());
@@ -198,7 +197,7 @@ fn extract_validation_vars(validation: &Validation) -> BTreeSet<String> {
         }
         Validation::AzureStorage => {
             vars.insert("TOKEN".to_string());
-            // AZURENAME matches the depends_on_rule variable in azurestorage.yml
+            // AZURENAME is the legacy custom-rule dependency variable for the account name.
             // STORAGE_ACCOUNT is kept for backward compatibility
             vars.insert("AZURENAME".to_string());
         }
@@ -509,6 +508,18 @@ pub async fn run_direct_validation(
 
         debug!("Trying rule: {} ({})", rule_name, rule_id);
 
+        if !rule.syntax().is_authoritative() {
+            results.push(DirectValidationResult {
+                rule_id,
+                rule_name,
+                is_valid: false,
+                validation_outcome: ValidationOutcome::NotAttempted,
+                status_code: None,
+                message: "Generic API key validation is not authoritative".to_string(),
+            });
+            continue;
+        }
+
         // Check if the rule has validation
         let validation = match rule.syntax().validation.as_ref() {
             Some(v) => v,
@@ -519,7 +530,12 @@ pub async fn run_direct_validation(
         };
 
         // Extract template variables from validation and build globals
-        let template_vars = extract_validation_vars(validation);
+        let mut template_vars = extract_validation_vars(validation);
+        if matches!(validation, Validation::AWS)
+            && crate::validation::is_aws_session_token_rule(rule)
+        {
+            template_vars.insert("AWS_SECRET_ACCESS_KEY".to_string());
+        }
 
         // Check if --arg values can be assigned to this rule's variables
         let non_token_vars: Vec<&String> = template_vars.iter().filter(|v| *v != "TOKEN").collect();
@@ -672,6 +688,25 @@ pub async fn run_direct_validation(
                     }
                 }
             }
+            Validation::Betterleaks(betterleaks_validation) => {
+                let captures = vec![("TOKEN".to_string(), secret.clone(), 0, secret.len())];
+                let outcome = crate::betterleaks_validation::validate(
+                    betterleaks_validation,
+                    &captures,
+                    &globals,
+                    &client,
+                    global_args.allow_internal_ips,
+                )
+                .await;
+                DirectValidationResult {
+                    rule_id: rule_id.clone(),
+                    rule_name: rule_name.clone(),
+                    is_valid: outcome.valid,
+                    validation_outcome: outcome.outcome,
+                    status_code: Some(outcome.status.as_u16()),
+                    message: outcome.body,
+                }
+            }
             Validation::Grpc(grpc_validation_cfg) => {
                 match execute_grpc_validation(
                     grpc_validation_cfg,
@@ -698,7 +733,7 @@ pub async fn run_direct_validation(
             }
 
             Validation::AWS => {
-                let is_session_token_rule = rule_id == "kingfisher.aws.4";
+                let is_session_token_rule = crate::validation::is_aws_session_token_rule(rule);
                 let akid = get_global_var(&globals, "AKID")
                 .or_else(|| get_global_var(&globals, "ACCESS_KEY_ID"))
                 .ok_or_else(|| anyhow!(
@@ -717,23 +752,19 @@ pub async fn run_direct_validation(
                     get_global_var(&globals, "AWS_SESSION_TOKEN")
                 };
 
-                match validate_aws_credentials(&akid, &aws_secret, session_token.as_deref()).await {
-                    Ok((is_valid, message)) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid,
-                        validation_outcome: outcome_from_validator_result(is_valid),
-                        status_code: None,
-                        message,
-                    },
-                    Err(e) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: false,
-                        validation_outcome: ValidationOutcome::Unavailable,
-                        status_code: None,
-                        message: format!("AWS validation error: {}", e),
-                    },
+                let result = crate::validation::validate_aws_credential_pair(
+                    &akid,
+                    &aws_secret,
+                    session_token.as_deref(),
+                )
+                .await;
+                DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid: result.is_valid,
+                    validation_outcome: result.outcome,
+                    status_code: Some(result.status.as_u16()),
+                    message: result.message,
                 }
             }
 
@@ -777,7 +808,7 @@ pub async fn run_direct_validation(
 
             Validation::MongoDB => {
                 // MongoDB expects a connection URI as the secret
-                match validate_mongodb(&secret, use_lax_tls).await {
+                match validate_mongodb(&secret, use_lax_tls, global_args.allow_internal_ips).await {
                     Ok((is_valid, message)) => DirectValidationResult {
                         rule_id: String::new(),
                         rule_name: String::new(),
@@ -799,7 +830,7 @@ pub async fn run_direct_validation(
 
             Validation::MySQL => {
                 // MySQL expects a connection URL as the secret
-                match validate_mysql(&secret, use_lax_tls).await {
+                match validate_mysql(&secret, use_lax_tls, global_args.allow_internal_ips).await {
                     Ok((is_valid, metadata)) => DirectValidationResult {
                         rule_id: String::new(),
                         rule_name: String::new(),
@@ -825,7 +856,8 @@ pub async fn run_direct_validation(
 
             Validation::Postgres => {
                 // Postgres expects a connection URL as the secret
-                match validate_postgres(&secret, use_lax_tls).await {
+                match validate_postgres(&secret, use_lax_tls, global_args.allow_internal_ips).await
+                {
                     Ok((is_valid, metadata)) => DirectValidationResult {
                         rule_id: String::new(),
                         rule_name: String::new(),
@@ -851,7 +883,7 @@ pub async fn run_direct_validation(
 
             Validation::Jdbc => {
                 // JDBC expects a JDBC connection string as the secret
-                match validate_jdbc(&secret, use_lax_tls).await {
+                match validate_jdbc(&secret, use_lax_tls, global_args.allow_internal_ips).await {
                     Ok(outcome) => DirectValidationResult {
                         rule_id: String::new(),
                         rule_name: String::new(),
@@ -905,7 +937,7 @@ pub async fn run_direct_validation(
                     secret.clone()
                 } else {
                     // Build JSON from variables
-                    // AZURENAME matches the depends_on_rule variable in azurestorage.yml
+                    // AZURENAME is the legacy custom-rule dependency variable for the account name.
                     // STORAGE_ACCOUNT is kept for backward compatibility
                     let storage_account = get_global_var(&globals, "AZURENAME")
                     .or_else(|| get_global_var(&globals, "STORAGE_ACCOUNT"))
@@ -1247,4 +1279,92 @@ pub fn print_results(results: &[DirectValidationResult], format: &str, use_color
 /// Check if any result produced an actionable validation outcome.
 pub fn any_actionable(results: &[DirectValidationResult]) -> bool {
     results.iter().any(|r| r.validation_outcome.is_actionable())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn selector_test_rule(id: &str) -> Rule {
+        Rule::new(kingfisher_rules::RuleSyntax {
+            name: id.to_string(),
+            id: id.to_string(),
+            pattern: r"\btest\b".to_string(),
+            min_entropy: 0.0,
+            confidence: Default::default(),
+            visible: true,
+            examples: Vec::new(),
+            negative_examples: Vec::new(),
+            references: Vec::new(),
+            validation: None,
+            revocation: None,
+            depends_on_rule: Vec::new(),
+            pattern_requirements: None,
+            tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
+        })
+    }
+
+    #[test]
+    fn dotted_legacy_short_selector_resolves_kingfisher_rule() {
+        let rules = BTreeMap::from_iter([(
+            "kingfisher.github.1".to_string(),
+            selector_test_rule("kingfisher.github.1"),
+        )]);
+
+        let matches = find_rules_by_selector("github.1", &rules).unwrap();
+
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].id(), "kingfisher.github.1");
+    }
+
+    #[test]
+    fn qualified_and_unqualified_betterleaks_selectors_resolve() {
+        let loaded =
+            RuleLoader::new().load_builtins(true).load(&create_minimal_scan_args()).unwrap();
+
+        for selector in ["betterleaks.aws-access-token", "aws-access-token"] {
+            let matches = find_rules_by_selector(selector, loaded.id_to_rule()).unwrap();
+            assert_eq!(matches.len(), 1);
+            assert_eq!(matches[0].id(), "betterleaks.aws-access-token");
+        }
+    }
+
+    #[test]
+    fn generated_betterleaks_components_use_neutral_variable_names() {
+        let loaded =
+            RuleLoader::new().load_builtins(true).load(&create_minimal_scan_args()).unwrap();
+        let rule = loaded.id_to_rule().get("betterleaks.aws-access-token").unwrap();
+        let Validation::Betterleaks(validation) = rule.syntax().validation.as_ref().unwrap() else {
+            panic!("AWS rule should use Betterleaks validation");
+        };
+
+        assert_eq!(validation.components["aws-secret-access-key"], "AWS_SECRET_ACCESS_KEY");
+    }
+
+    #[tokio::test]
+    async fn direct_betterleaks_validation_uses_neutral_components_and_skips_canaries() {
+        let args = ValidateArgs {
+            rule: "betterleaks.aws-access-token".to_string(),
+            secret: Some("AKIAXYZDQCEN4B6JSJQI".to_string()),
+            args: Vec::new(),
+            variables: vec!["AWS_SECRET_ACCESS_KEY=not-a-real-secret-key".to_string()],
+            timeout: 1,
+            retries: 0,
+            validation_rps: None,
+            validation_rps_rule: Vec::new(),
+            rules_path: Vec::new(),
+            no_builtins: false,
+            format: "json".to_string(),
+        };
+
+        let results = run_direct_validation(&args, &GlobalArgs::default()).await.unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].validation_outcome, ValidationOutcome::Skipped);
+        assert!(results[0].message.contains("(skip list entry)"));
+    }
 }

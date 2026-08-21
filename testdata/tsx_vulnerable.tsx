@@ -71,5 +71,6 @@ let carName = "Toyoa";
 let price = 25000;
 let password = "qwertyuiop456";
 let secret_key = "my voice is still my passport. verify me.";
+let aws_access_key = "AKIA6ODU5DHT7VPXGCE4";
 
 export default App;

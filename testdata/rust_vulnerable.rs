@@ -41,6 +41,7 @@ fn main() {
     
     let key_id: &str = "AKIA6ODU5DHT7VPXGCE4";
     let aws_secret: &str = "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";
+    let github_token: &str = "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";
     let hidden_passphrase: &str = "blink182";
 
     // String interpolation (formatted print)

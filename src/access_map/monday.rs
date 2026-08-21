@@ -324,7 +324,11 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
             user_id,
             scopes: Vec::new(),
         }),
-        provider_metadata: Some(ProviderMetadata { version: plan_tier, enterprise: None }),
+        provider_metadata: Some(ProviderMetadata {
+            version: plan_tier,
+            enterprise: None,
+            authorization_evidence: None,
+        }),
         fingerprint: None,
     })
 }

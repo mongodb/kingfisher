@@ -336,6 +336,10 @@ kingfisher scan . --staged --quiet --no-update-check
 
 ## Compile from Source
 
+Source builds require outbound HTTPS access. During compilation, Kingfisher downloads the pinned
+Betterleaks release and selected Veles source files, converts them, and embeds the generated rule
+database. The upstream rule source is intentionally not vendored in this repository.
+
 You may compile for your platform via `make`:
 
 ```bash

@@ -2600,7 +2600,7 @@
                     <option value="invalid_material">Invalid Cryptographic Material</option>
                     <option value="inconclusive">Inconclusive Validation</option>
                     <option value="not_attempted">Not Attempted</option>
-                    <option value="canary">Canary Token (Skipped)</option>
+                    <option value="canary">Validation Skipped</option>
                   </select>
                   <span class="rows-label">Rows</span>
                   <select id="rows-select" class="rows-select">
@@ -4457,15 +4457,117 @@
     }
 
     function deduplicateAccessMap(list) {
-      const seen = new Set();
+      const byFingerprint = new Map();
       const result = [];
       for (const entry of list) {
         const fp = entry.fingerprint || "";
-        if (fp && seen.has(fp)) continue;
-        if (fp) seen.add(fp);
-        result.push(entry);
+        if (!fp) {
+          result.push(entry);
+          continue;
+        }
+        const existingIndex = byFingerprint.get(fp);
+        if (existingIndex === undefined) {
+          byFingerprint.set(fp, result.length);
+          result.push(entry);
+          continue;
+        }
+        const existing = result[existingIndex];
+        result[existingIndex] = mergeAccessMapEntries(existing, entry);
       }
       return result;
+    }
+
+    function mergeAccessMapEntries(existing, incoming) {
+      const preferPresent = (first, second) => second === undefined || second === null || second === "" ? first : second;
+      const merged = Object.assign({}, existing, incoming);
+      ["provider", "account", "fingerprint"].forEach((field) => {
+        merged[field] = preferPresent(existing[field], incoming[field]);
+      });
+      merged.context = Object.assign({}, existing.context || {});
+      Object.entries(incoming.context || {}).forEach(([key, value]) => {
+        merged.context[key] = preferPresent(merged.context[key], value);
+      });
+      const mergeUnique = (first, second, keyFn) => {
+        const values = new Map();
+        [...(first || []), ...(second || [])].forEach((value) => {
+          const key = keyFn(value);
+          if (!values.has(key)) values.set(key, value);
+        });
+        return [...values.values()];
+      };
+      const resourcesToPermissions = new Map();
+      [...(existing.groups || []), ...(incoming.groups || [])].forEach((group) => {
+        const permissions = group.permissions || [];
+        if (!(group.resources || []).length) {
+          const key = "__unscoped__:" + permissions.slice().sort().join("\u0000");
+          if (!resourcesToPermissions.has(key)) resourcesToPermissions.set(key, new Set());
+          permissions.forEach((permission) => resourcesToPermissions.get(key).add(permission));
+        }
+        (group.resources || []).forEach((resource) => {
+          if (!resourcesToPermissions.has(resource)) resourcesToPermissions.set(resource, new Set());
+          permissions.forEach((permission) => resourcesToPermissions.get(resource).add(permission));
+        });
+      });
+      merged.groups = [...resourcesToPermissions.entries()].map(([resource, permissions]) => ({
+        resources: resource.startsWith("__unscoped__:") ? [] : [resource],
+        permissions: [...permissions].sort(),
+      }));
+      merged.token_details = Object.assign({}, existing.token_details || {});
+      Object.entries(incoming.token_details || {}).forEach(([key, value]) => {
+        merged.token_details[key] = preferPresent(merged.token_details[key], value);
+      });
+      merged.provider_metadata = Object.assign({}, existing.provider_metadata || {});
+      Object.entries(incoming.provider_metadata || {}).forEach(([key, value]) => {
+        merged.provider_metadata[key] = preferPresent(merged.provider_metadata[key], value);
+      });
+      if (existing.permissions_by_severity || incoming.permissions_by_severity) {
+        merged.permissions_by_severity = {};
+        ["admin", "privilege_escalation", "risky", "read_only"].forEach((bucket) => {
+          merged.permissions_by_severity[bucket] = mergeUnique(
+            existing.permissions_by_severity && existing.permissions_by_severity[bucket],
+            incoming.permissions_by_severity && incoming.permissions_by_severity[bucket],
+            (value) => String(value)
+          );
+        });
+      } else {
+        delete merged.permissions_by_severity;
+      }
+      const firstEvidence = existing.provider_metadata && existing.provider_metadata.authorization_evidence;
+      const secondEvidence = incoming.provider_metadata && incoming.provider_metadata.authorization_evidence;
+      if (firstEvidence || secondEvidence) {
+        const evidence = Object.assign({}, firstEvidence || {});
+        Object.entries(secondEvidence || {}).forEach(([key, value]) => {
+          evidence[key] = preferPresent(evidence[key], value);
+        });
+        evidence.principal = Object.assign({}, (firstEvidence && firstEvidence.principal) || {});
+        Object.entries((secondEvidence && secondEvidence.principal) || {}).forEach(([key, value]) => {
+          evidence.principal[key] = preferPresent(evidence.principal[key], value);
+        });
+        const policies = new Map();
+        [...((firstEvidence && firstEvidence.policies) || []), ...((secondEvidence && secondEvidence.policies) || [])].forEach((policy) => {
+          const key = policy.id || JSON.stringify(policy);
+          const previous = policies.get(key) || {};
+          const mergedPolicy = Object.assign({}, previous, policy);
+          const statements = new Map();
+          [...(previous.statements || []), ...(policy.statements || [])].forEach((statement) => {
+            const statementKey = statement.id || JSON.stringify(statement);
+            const priorStatement = statements.get(statementKey) || {};
+            const mergedStatement = Object.assign({}, priorStatement, statement);
+            ["actions", "not_actions", "resources", "not_resources", "principals", "not_principals", "condition_keys"].forEach((field) => {
+              mergedStatement[field] = mergeUnique(priorStatement[field], statement[field], (value) => String(value));
+            });
+            statements.set(statementKey, mergedStatement);
+          });
+          mergedPolicy.statements = [...statements.values()];
+          policies.set(key, mergedPolicy);
+        });
+        evidence.policies = [...policies.values()];
+        evidence.paths = mergeUnique(firstEvidence && firstEvidence.paths, secondEvidence && secondEvidence.paths, (path) => JSON.stringify(path));
+        evidence.hierarchy = mergeUnique(firstEvidence && firstEvidence.hierarchy, secondEvidence && secondEvidence.hierarchy, (scope) => (scope.kind || "") + ":" + (scope.id || ""));
+        evidence.limitations = mergeUnique(firstEvidence && firstEvidence.limitations, secondEvidence && secondEvidence.limitations, (value) => String(value));
+        merged.provider_metadata.authorization_evidence = evidence;
+      }
+      return merged;
     }
 
     function finalizeRender(t0) {
@@ -5288,7 +5390,7 @@
         { key: "inactive", label: "Inactive", color: palette.inactive },
         { key: "invalid_material", label: "Invalid Material", color: palette.invalid_material },
         { key: "not_attempted", label: "Not Attempted", color: palette.not_attempted },
-        { key: "canary", label: "Canary Token", color: palette.canary },
+        { key: "canary", label: "Validation Skipped", color: palette.canary },
         { key: "unknown", label: "Unknown", color: palette.unknown },
       ];
       renderDonutChart(statusChartCanvas, statusLegend, dataPoints, counts, "No validation data yet");
@@ -5717,7 +5819,7 @@
           <strong>Review Recommended:</strong> This scan found <strong>${baseFindings.length} finding${baseFindings.length !== 1 ? "s" : ""}</strong>.
           ${counts.inactive > 0 ? `${counts.inactive} credential${counts.inactive !== 1 ? "s were" : " was"} inactive at scan time.` : ""}
           ${counts.not_attempted > 0 ? `${counts.not_attempted} ${counts.not_attempted !== 1 ? "were" : "was"} not validated.` : ""}
-          ${counts.canary > 0 ? `${counts.canary} ${counts.canary !== 1 ? "were" : "was"} canary token${counts.canary !== 1 ? "s" : ""} (skipped).` : ""}
+          ${counts.canary > 0 ? `${counts.canary} ${counts.canary !== 1 ? "had" : "had"} validation skipped.` : ""}
           ${scanMetadata.imported ? `Imported reports do not include Kingfisher blast-radius data or command workflows.` : ""}
         </div>`;
       } else {
@@ -5780,7 +5882,7 @@
         <span><span class="dot" style="background:#3b82f6"></span> Assumed Valid: ${counts.assumed || 0}</span>
         <span><span class="dot" style="background:#f97316"></span> Inactive: ${counts.inactive || 0}</span>
         <span><span class="dot" style="background:#38bdf8"></span> Not Attempted: ${counts.not_attempted || 0}</span>
-        <span><span class="dot" style="background:#a855f7"></span> Canary Token: ${counts.canary || 0}</span>
+        <span><span class="dot" style="background:#a855f7"></span> Validation Skipped: ${counts.canary || 0}</span>
         <span><span class="dot" style="background:#9ca3af"></span> Unknown: ${counts.unknown || 0}</span>
       </div>
     </div>
@@ -7262,6 +7364,9 @@
         ? (selection.permissions || [])
         : [...new Set((entry.groups || []).flatMap((group) => group.permissions || []))];
       const resourceCount = getGraphResources(entry).length;
+      const authorizationEvidence = identity.provider_metadata && identity.provider_metadata.authorization_evidence;
+      const pathCount = authorizationEvidence ? (authorizationEvidence.paths || []).length : 0;
+      const policyCount = authorizationEvidence ? (authorizationEvidence.policies || []).length : 0;
       const riskClass = getAccessMapRiskClass(entry, isResource ? permissions : null);
       const riskLabels = {
         admin: "Admin exposure",
@@ -7289,6 +7394,7 @@
         <div class="am-graph__section">
           <span class="rollup-chip rollup-chip--${riskClass}">${escapeHtml(riskLabels[riskClass])}</span>
           <div class="am-graph__hint">${permissions.length} effective permission${permissions.length !== 1 ? "s" : ""} shown in this access path.</div>
+          ${authorizationEvidence ? `<div class="am-graph__hint">${pathCount} authorization-capability path${pathCount !== 1 ? "s" : ""} and ${policyCount} policy evidence record${policyCount !== 1 ? "s" : ""} available in Details.</div>` : ""}
         </div>
         <div class="am-graph__section">
           <div class="am-graph__eyebrow">Permissions</div>
@@ -7596,6 +7702,15 @@
           meta.appendChild(tokenSpan);
         }
       }
+      const authorizationEvidence = identity.provider_metadata && identity.provider_metadata.authorization_evidence;
+      if (authorizationEvidence) {
+        const evidenceMeta = document.createElement("span");
+        evidenceMeta.className = "id-card__meta-item";
+        const policyCount = (authorizationEvidence.policies || []).length;
+        const pathCount = (authorizationEvidence.paths || []).length;
+        evidenceMeta.textContent = "Policy evidence: " + policyCount + " · Identity paths: " + pathCount;
+        meta.appendChild(evidenceMeta);
+      }
       info.appendChild(meta);
 
       // Severity rollup chips replace the per-permission preview.
@@ -7752,6 +7867,95 @@
       });
       body.appendChild(resSection);
 
+      if (authorizationEvidence) {
+        const evidenceSection = document.createElement("div");
+        evidenceSection.className = "id-card__section";
+        const evidenceTitle = document.createElement("div");
+        evidenceTitle.className = "id-card__section-title";
+        evidenceTitle.textContent = "Authorization evidence";
+        evidenceSection.appendChild(evidenceTitle);
+
+        const principal = authorizationEvidence.principal;
+        if (principal) {
+          const principalBox = document.createElement("div");
+          principalBox.className = "perm-group";
+          const groups = (principal.groups || []).length ? " · Groups: " + principal.groups.join(", ") : "";
+          principalBox.textContent = (principal.kind || "principal") + ": " + (principal.canonical_id || principal.id || "unknown") + groups;
+          evidenceSection.appendChild(principalBox);
+        }
+
+        const displayedPaths = (authorizationEvidence.paths || []).slice(0, 50);
+        displayedPaths.forEach((path, index) => {
+          const block = document.createElement("div");
+          block.className = "perm-group";
+          const title = document.createElement("div");
+          title.className = "perm-group__shared-note";
+          title.textContent = "Path " + (index + 1) + " [" + (path.direction || "unknown direction") + " · " + (path.status || "potential") + "]";
+          block.appendChild(title);
+          (path.hops || []).forEach((hop) => {
+            const row = document.createElement("div");
+            row.className = "token-field";
+            row.textContent = hop.from + " --" + (hop.relationship || "reaches") + "--> " + hop.to;
+            block.appendChild(row);
+          });
+          const conditions = path.conditions || [];
+          if (conditions.length) {
+            const note = document.createElement("div");
+            note.className = "perm-group__shared-note";
+            note.textContent = "Conditions: " + conditions.join(", ");
+            block.appendChild(note);
+          }
+          evidenceSection.appendChild(block);
+        });
+
+        if ((authorizationEvidence.paths || []).length > displayedPaths.length) {
+          const note = document.createElement("div");
+          note.className = "perm-group__shared-note";
+          note.textContent = "+" + ((authorizationEvidence.paths || []).length - displayedPaths.length) + " additional paths in structured output";
+          evidenceSection.appendChild(note);
+        }
+
+        const displayedPolicies = (authorizationEvidence.policies || []).slice(0, 100);
+        displayedPolicies.forEach((policy) => {
+          const block = document.createElement("div");
+          block.className = "perm-group";
+          const title = document.createElement("div");
+          title.className = "perm-group__shared-note";
+          title.textContent = (policy.name || policy.id || "Policy") + " · " + (policy.kind || "policy") + " · " + (policy.scope || policy.attached_to || "unknown scope");
+          block.appendChild(title);
+          (policy.statements || []).forEach((statement) => {
+            const row = document.createElement("div");
+            row.className = "token-field";
+            const actions = [...(statement.actions || []), ...(statement.not_actions || []).map((action) => "NOT " + action)];
+            const conditionText = (statement.condition_keys || []).length ? " · Conditions: " + statement.condition_keys.join(", ") : "";
+            row.textContent = (statement.effect || "Unknown") + " · " + (actions.join(", ") || "no actions") + ((statement.resources || []).length ? " · " + statement.resources.join(", ") : "") + conditionText;
+            block.appendChild(row);
+          });
+          evidenceSection.appendChild(block);
+        });
+
+        if ((authorizationEvidence.policies || []).length > displayedPolicies.length) {
+          const note = document.createElement("div");
+          note.className = "perm-group__shared-note";
+          note.textContent = "+" + ((authorizationEvidence.policies || []).length - displayedPolicies.length) + " additional policies in structured output";
+          evidenceSection.appendChild(note);
+        }
+
+        if ((authorizationEvidence.hierarchy || []).length) {
+          const hierarchy = document.createElement("div");
+          hierarchy.className = "perm-group__shared-note";
+          hierarchy.textContent = "Hierarchy: " + authorizationEvidence.hierarchy.map((scope) => (scope.kind || "scope") + ":" + scope.id).join(" -> ");
+          evidenceSection.appendChild(hierarchy);
+        }
+        (authorizationEvidence.limitations || []).forEach((limitation) => {
+          const note = document.createElement("div");
+          note.className = "perm-group__shared-note";
+          note.textContent = "Limit: " + limitation;
+          evidenceSection.appendChild(note);
+        });
+        body.appendChild(evidenceSection);
+      }
+
       // Token details section
       if (identity.token_details) {
         const tokenSection = document.createElement("div");
@@ -7868,7 +8072,15 @@
         const groups = Array.isArray(identity.groups) ? identity.groups : [];
 
         const fingerprint = (identity.fingerprint || "").toLowerCase();
-        const identityNameMatches = Boolean(filterLower) && (account.toLowerCase().includes(filterLower) || fingerprint.includes(filterLower));
+        const evidence = identity.provider_metadata && identity.provider_metadata.authorization_evidence;
+        const evidenceSearch = evidence ? JSON.stringify({
+          principal: evidence.principal,
+          policies: evidence.policies,
+          paths: evidence.paths,
+          hierarchy: evidence.hierarchy,
+          limitations: evidence.limitations,
+        }).toLowerCase() : "";
+        const identityNameMatches = Boolean(filterLower) && (account.toLowerCase().includes(filterLower) || fingerprint.includes(filterLower) || evidenceSearch.includes(filterLower));
         let anyResourceMatches = false;
         let anyPermMatches = false;
 

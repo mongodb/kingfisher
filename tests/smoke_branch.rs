@@ -14,12 +14,13 @@ use git2::{BranchType, Repository, Signature, build::CheckoutBuilder};
 use predicates::{prelude::PredicateBooleanExt, str::contains};
 use tempfile::{TempDir, tempdir};
 
-const AWS_SECRET_VALUE: &str = "UpUbsQANRHLf2uuQ7QOlNXPbbtV5fmseW/GgTs5D";
+const GITHUB_TOKEN_VALUE: &str = "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";
+const AWS_ACCESS_KEY_VALUE: &str = "AKIAX24QKKOLDJMZ5Y2T";
 const GCP_PRIVATE_KEY_VALUE: &str = "c4c474d61701fd6fd4191883b8fea9a8411bf771";
 const SLACK_TOKEN_VALUE: &str = "xoxb-123465789012-0987654321123-AbDcEfGhIjKlMnOpQrStUvWx";
 const STRIPE_SECRET_VALUE: &str = "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";
 
-const AWS_SECRET_LINE: &str = "AWS_SECRET_ACCESS_KEY = 'UpUbsQANRHLf2uuQ7QOlNXPbbtV5fmseW/GgTs5D/'";
+const GITHUB_TOKEN_LINE: &str = "GITHUB_TOKEN = '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'";
 const GCP_PRIVATE_KEY_LINE: &str =
     "GCP_PRIVATE_KEY_ID = 'c4c474d61701fd6fd4191883b8fea9a8411bf771'";
 const SLACK_TOKEN_LINE: &str =
@@ -41,7 +42,7 @@ fn scan_by_commit_and_branch_diff() -> anyhow::Result<()> {
     // this commit directly via `--branch <commit-hash>` in the first assertion.
     let config_path = repo_dir.join("config.py");
     let config_contents = r"# test configuration with multiple secrets
-AWS_ACCESS_SECRET_KEY = 'UpUbsQANRHLf2uuQ7QOlNXPbbtV5fmseW/GgT5D/'
+GITHUB_TOKEN = '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'
 GCP_PRIVATE_KEY_ID = 'c4c474d61701fd6fd4191883b8fea9a8411bf771'
 GOOGLE_API_KEY = 'AIzaSyBUPHAjZl3n8Eza66ka6B78iVyPteC5MgM'
 ";
@@ -106,7 +107,7 @@ aws_secret_access_key = efnegoUp/WXc3XwlL77dXu1aKIICzvz+n+7Sz88i
         .assert()
         .code(200)
         .stdout(
-            contains("AWS SECRET ACCESS KEY")
+            contains("GITHUB-PAT")
                 .and(contains("config.py"))
                 .and(contains(initial_commit_hex.as_str())),
         );
@@ -127,8 +128,8 @@ aws_secret_access_key = efnegoUp/WXc3XwlL77dXu1aKIICzvz+n+7Sz88i
         .code(200)
         .stdout(
             contains("canary-token")
-                .and(contains("AWS SECRET ACCESS KEY"))
-                .and(contains("efnegoUp/WXc3XwlL77dXu1aKIICzvz+n+7Sz88i")),
+                .and(contains("AWS-ACCESS-TOKEN"))
+                .and(contains(AWS_ACCESS_KEY_VALUE)),
         )
         .stdout(contains("config.py").not());
 
@@ -151,17 +152,17 @@ fn setup_linear_repo_with_secrets() -> Result<(TempDir, std::path::PathBuf, Vec<
 
     let secrets_path = repo_dir.join("secrets.txt");
 
-    // Commit #1 — AWS
-    fs::write(&secrets_path, AWS_SECRET_LINE)?;
+    // Commit #1 — GitHub
+    fs::write(&secrets_path, GITHUB_TOKEN_LINE)?;
     let mut index = repo.index()?;
     index.add_path(Path::new("secrets.txt"))?;
     let tree_id = index.write_tree()?;
     let tree = repo.find_tree(tree_id)?;
     let mut commits = Vec::new();
-    let c1 = repo.commit(Some("HEAD"), &sig, &sig, "Add AWS secret", &tree, &[])?;
+    let c1 = repo.commit(Some("HEAD"), &sig, &sig, "Add GitHub token", &tree, &[])?;
     commits.push(c1);
     let mut parent_commit = repo.find_commit(c1)?;
-    let mut contents = String::from(AWS_SECRET_LINE);
+    let mut contents = String::from(GITHUB_TOKEN_LINE);
 
     // Remaining commits mirror the shell script example.
     let additions = [
@@ -193,7 +194,7 @@ fn setup_linear_repo_with_secrets() -> Result<(TempDir, std::path::PathBuf, Vec<
 #[test]
 fn scan_specific_commit_reports_only_that_commit() -> Result<()> {
     let (_temp_dir, repo_dir, commits) = setup_linear_repo_with_secrets()?;
-    let c1_hex = commits[0].to_string(); // first commit (AWS only)
+    let c1_hex = commits[0].to_string(); // first commit (GitHub only)
 
     // Scan exactly the initial commit via --branch <commit>
     Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
@@ -208,9 +209,9 @@ fn scan_specific_commit_reports_only_that_commit() -> Result<()> {
         .assert()
         .code(200)
         .stdout(
-            // Must contain AWS, must NOT contain the later secrets
-            contains("AWS SECRET ACCESS KEY")
-                .and(contains(AWS_SECRET_VALUE))
+            // Must contain the first token, but none of the later secrets.
+            contains("GITHUB-PAT")
+                .and(contains(GITHUB_TOKEN_VALUE))
                 .and(contains(GCP_PRIVATE_KEY_VALUE).not())
                 .and(contains(SLACK_TOKEN_VALUE).not())
                 .and(contains(STRIPE_SECRET_VALUE).not()),
@@ -238,8 +239,8 @@ fn scan_with_branch_root_includes_descendants() -> Result<()> {
         .assert()
         .code(200)
         .stdout(
-            contains("AWS SECRET ACCESS KEY")
-                .and(contains(AWS_SECRET_VALUE))
+            contains("GITHUB-PAT")
+                .and(contains(GITHUB_TOKEN_VALUE))
                 .and(contains(GCP_PRIVATE_KEY_VALUE))
                 .and(contains(SLACK_TOKEN_VALUE))
                 .and(contains(STRIPE_SECRET_VALUE)),
@@ -270,8 +271,8 @@ fn scan_branch_tip_with_branch_root_commit() -> Result<()> {
         .assert()
         .code(200)
         .stdout(
-            contains("AWS SECRET ACCESS KEY")
-                .and(contains(AWS_SECRET_VALUE))
+            contains("GITHUB-PAT")
+                .and(contains(GITHUB_TOKEN_VALUE))
                 .and(contains(GCP_PRIVATE_KEY_VALUE))
                 .and(contains(SLACK_TOKEN_VALUE))
                 .and(contains(STRIPE_SECRET_VALUE))

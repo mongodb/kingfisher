@@ -1,22 +1,33 @@
 use anyhow::{Context, Result, anyhow};
-use reqwest::{Client, Url, header};
+use gitlab::{
+    AsyncGitlab, GitlabBuilder,
+    api::{self, AsyncQuery, Pagination, projects::Projects, users::CurrentUser},
+};
 use serde::Deserialize;
-use tracing::warn;
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata,
-    ResourceExposure, RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
+    RoleBinding, Severity, build_recommendations,
 };
 
-const DEFAULT_GITLAB_API: &str = "https://gitlab.com/api/v4/";
+const DEFAULT_GITLAB_HOST: &str = "gitlab.com";
 
 #[derive(Deserialize)]
 struct GitLabProject {
     path_with_namespace: String,
     visibility: String,
     permissions: Option<GitLabProjectPermissions>,
+}
+
+#[derive(Deserialize)]
+struct GitLabUser {
+    id: u64,
+    username: String,
+    name: String,
+    #[serde(default)]
+    email: Option<String>,
 }
 
 #[derive(Clone, Deserialize)]
@@ -28,23 +39,6 @@ struct GitLabProjectPermissions {
 #[derive(Clone, Deserialize)]
 struct GitLabAccess {
     access_level: u32,
-}
-
-#[derive(Deserialize)]
-struct GitLabTokenInfo {
-    _id: Option<u64>,
-    name: Option<String>,
-    created_at: Option<String>,
-    last_used_at: Option<String>,
-    expires_at: Option<String>,
-    scopes: Option<Vec<String>>,
-    user_id: Option<u64>,
-}
-
-#[derive(Deserialize)]
-struct GitLabMetadata {
-    version: Option<String>,
-    enterprise: Option<bool>,
 }
 
 pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
@@ -60,36 +54,33 @@ pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
 }
 
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
-    let api_url = Url::parse(DEFAULT_GITLAB_API).expect("valid GitLab API URL");
-    let client = Client::builder()
-        .user_agent(GLOBAL_USER_AGENT.as_str())
-        .build()
-        .context("Failed to build GitLab HTTP client")?;
+    let mut builder = GitlabBuilder::new(DEFAULT_GITLAB_HOST, token);
+    builder.user_agent(GLOBAL_USER_AGENT.as_str());
+    let client = builder.build_async().await.context("Failed to authenticate GitLab client")?;
 
-    let token_info = fetch_token_info(&client, &api_url, token).await;
-    let identity_label = token_info
-        .as_ref()
-        .and_then(|info| info.name.clone())
-        .or_else(|| {
-            token_info
-                .as_ref()
-                .and_then(|info| info.user_id)
-                .map(|user_id| format!("gitlab_user_{user_id}"))
-        })
-        .unwrap_or_else(|| "gitlab_token".to_string());
+    // GitLab REST API: current user and membership-project listings.
+    // https://docs.gitlab.com/api/users/#retrieve-the-current-user
+    // https://docs.gitlab.com/api/projects/#list-all-projects
+    // The full authenticated project representation is intentional: simple=true omits the
+    // permissions object used to report direct and inherited access.
+    let user = fetch_current_user(&client).await?;
 
     let identity = AccessSummary {
-        id: identity_label,
-        access_type: "token".into(),
+        id: user.username.clone(),
+        access_type: "user_token".into(),
         project: None,
         tenant: None,
-        account_id: None,
+        account_id: Some(user.id.to_string()),
     };
 
-    let scopes = token_info.as_ref().and_then(|info| info.scopes.clone());
-    let projects = list_accessible_projects(&client, &api_url, token).await?;
-    let metadata = fetch_instance_metadata(&client, &api_url, token).await;
     let mut risk_notes = Vec::new();
+    let projects = match list_accessible_projects(&client).await {
+        Ok(projects) => projects,
+        Err(err) => {
+            risk_notes.push(format!("Project enumeration failed: {err}"));
+            Vec::new()
+        }
+    };
     let mut resources = Vec::new();
     let mut permissions = PermissionSummary::default();
 
@@ -122,24 +113,16 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
 
     let severity = derive_severity(&projects);
 
-    let mut roles = Vec::new();
-    if let Some(ref scopes) = scopes
-        && !scopes.is_empty()
-    {
-        roles.push(RoleBinding {
-            name: "token_scopes".into(),
-            source: "gitlab".into(),
-            permissions: scopes.clone(),
-        });
-    }
+    let roles = vec![RoleBinding {
+        name: "gitlab_user".into(),
+        source: "users/current".into(),
+        permissions: vec!["projects:membership:list".into()],
+    }];
 
     if projects.is_empty() {
         resources.push(ResourceExposure {
             resource_type: "account".into(),
-            name: token_info
-                .as_ref()
-                .and_then(|info| info.name.clone())
-                .unwrap_or_else(|| identity.id.clone()),
+            name: identity.id.clone(),
             permissions: Vec::new(),
             risk: severity_to_str(Severity::Low).to_string(),
             reason: "GitLab account associated with the token".into(),
@@ -147,24 +130,20 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
         risk_notes.push("Token did not enumerate any projects".into());
     }
 
-    if roles.is_empty() {
-        risk_notes.push("GitLab did not report token scopes".into());
-    }
-
-    let token_details = token_info.as_ref().map(|info| AccessTokenDetails {
-        name: info.name.clone(),
-        username: None,
+    let token_details = Some(AccessTokenDetails {
+        name: Some(user.name),
+        username: Some(user.username),
         account_type: None,
         company: None,
         location: None,
-        email: None,
+        email: user.email,
         url: None,
-        token_type: None,
-        created_at: info.created_at.clone(),
-        last_used_at: info.last_used_at.clone(),
-        expires_at: info.expires_at.clone(),
-        user_id: info.user_id.map(|user_id| user_id.to_string()),
-        scopes: scopes.clone().unwrap_or_default(),
+        token_type: Some("gitlab_user_token".into()),
+        created_at: None,
+        last_used_at: None,
+        expires_at: None,
+        user_id: Some(user.id.to_string()),
+        scopes: Vec::new(),
     });
 
     Ok(AccessMapResult {
@@ -177,95 +156,28 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
         recommendations: build_recommendations(severity),
         risk_notes,
         token_details,
-        provider_metadata: metadata
-            .map(|info| ProviderMetadata { version: info.version, enterprise: info.enterprise }),
+        provider_metadata: None,
         fingerprint: None,
     })
 }
 
-async fn fetch_token_info(client: &Client, api_url: &Url, token: &str) -> Option<GitLabTokenInfo> {
-    let resp = client
-        .get(api_url.join("personal_access_tokens/self").ok()?)
-        .header("PRIVATE-TOKEN", token)
-        .header(header::ACCEPT, "application/json")
-        .send()
-        .await
-        .ok()?;
-
-    if !resp.status().is_success() {
-        return None;
-    }
-
-    resp.json().await.ok()
+async fn fetch_current_user(client: &AsyncGitlab) -> Result<GitLabUser> {
+    let endpoint = CurrentUser::builder()
+        .build()
+        .context("GitLab access-map: failed to build current-user query")?;
+    endpoint.query_async(client).await.context("GitLab access-map: failed to resolve current user")
 }
 
-async fn fetch_instance_metadata(
-    client: &Client,
-    api_url: &Url,
-    token: &str,
-) -> Option<GitLabMetadata> {
-    let resp = client
-        .get(api_url.join("metadata").ok()?)
-        .header("PRIVATE-TOKEN", token)
-        .header(header::ACCEPT, "application/json")
-        .send()
+async fn list_accessible_projects(client: &AsyncGitlab) -> Result<Vec<GitLabProject>> {
+    let endpoint = Projects::builder()
+        .membership(true)
+        .simple(false)
+        .build()
+        .context("GitLab access-map: failed to build project query")?;
+    api::paged(endpoint, Pagination::All)
+        .query_async(client)
         .await
-        .ok()?;
-
-    if !resp.status().is_success() {
-        return None;
-    }
-
-    resp.json().await.ok()
-}
-
-async fn list_accessible_projects(
-    client: &Client,
-    api_url: &Url,
-    token: &str,
-) -> Result<Vec<GitLabProject>> {
-    let mut projects = Vec::new();
-    let mut page = 1u32;
-    let per_page = 100u32;
-
-    loop {
-        let mut url = api_url.join("projects")?;
-        url.query_pairs_mut()
-            .append_pair("min_access_level", "10")
-            .append_pair("per_page", &per_page.to_string())
-            .append_pair("page", &page.to_string());
-
-        let resp = client
-            .get(url)
-            .header("PRIVATE-TOKEN", token)
-            .header(header::ACCEPT, "application/json")
-            .send()
-            .await
-            .context("GitLab access-map: failed to list projects")?;
-
-        if !resp.status().is_success() {
-            warn!("GitLab access-map: project enumeration failed with HTTP {}", resp.status());
-            break;
-        }
-
-        let next_page = resp
-            .headers()
-            .get("x-next-page")
-            .and_then(|value| value.to_str().ok())
-            .and_then(|value| value.parse::<u32>().ok());
-
-        let mut page_projects: Vec<GitLabProject> =
-            resp.json().await.context("GitLab access-map: invalid project JSON")?;
-        let count = page_projects.len();
-        projects.append(&mut page_projects);
-
-        if count < per_page as usize || next_page.is_none() {
-            break;
-        }
-        page = next_page.unwrap_or(page + 1);
-    }
-
-    Ok(projects)
+        .context("GitLab access-map: failed to list projects")
 }
 
 fn effective_access_level(perms: &GitLabProjectPermissions) -> u32 {
@@ -306,5 +218,20 @@ fn severity_to_str(severity: Severity) -> &'static str {
         Severity::Medium => "medium",
         Severity::High => "high",
         Severity::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_group_access_contributes_to_effective_level() {
+        let permissions = GitLabProjectPermissions {
+            project_access: Some(GitLabAccess { access_level: 20 }),
+            group_access: Some(GitLabAccess { access_level: 40 }),
+        };
+        assert_eq!(effective_access_level(&permissions), 40);
+        assert_eq!(access_level_to_risk(40).0, "project:maintainer");
     }
 }

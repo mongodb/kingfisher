@@ -217,7 +217,7 @@ mod tests {
             active: 1,
             inactive: 0,
             unknown: 0,
-            by_rule: vec![("kingfisher.aws.1".into(), 1)],
+            by_rule: vec![("betterleaks.aws-access-token".into(), 1)],
             kingfisher_version: "test".to_string(),
             target: None,
             report_url: None,
@@ -246,12 +246,12 @@ mod tests {
         let mut s = empty_summary();
         s.detail = crate::alerts::AlertDetail::Summary;
         s.total = 50;
-        let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-123");
+        let rec = crate::alerts::make_test_record("betterleaks.aws-access-token", "fp-123");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();
         // Per-finding rule id must NOT appear in summary mode.
         assert!(
-            !serialized.contains("kingfisher.aws.1"),
+            !serialized.contains("betterleaks.aws-access-token"),
             "summary mode must not render the per-finding rule id"
         );
         // The suppression notice must appear so the operator knows why.
@@ -263,7 +263,7 @@ mod tests {
     fn detail_mode_includes_fingerprint() {
         let mut s = empty_summary();
         s.total = 1;
-        let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-abc-123");
+        let rec = crate::alerts::make_test_record("betterleaks.aws-access-token", "fp-abc-123");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();
         assert!(serialized.contains("fp:`fp-abc-123`"), "fingerprint must appear in detail block");

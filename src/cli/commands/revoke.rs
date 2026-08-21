@@ -4,8 +4,8 @@ use std::path::PathBuf;
 /// Directly revoke a known secret against a rule's revocation config
 #[derive(Args, Debug, Clone)]
 pub struct RevokeArgs {
-    /// Rule ID or prefix to use for revocation (e.g., slack, github, or kingfisher.github.1).
-    /// The `kingfisher.` prefix is optional for built-in rules.
+    /// Rule ID or prefix to use for revocation (for example, a custom legacy rule ID).
+    /// The `betterleaks.` prefix is optional for built-in rules.
     #[arg(long, required = true)]
     pub rule: String,
 

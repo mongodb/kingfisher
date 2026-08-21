@@ -16,14 +16,14 @@
 //!   redact: false
 //! rules:
 //!   enabled: ["all"]
-//!   disabled: ["kingfisher.aws.1"]
+//!   disabled: ["betterleaks.aws-access-token"]
 //!   load_builtins: true
 //!   cache: true
 //!   cache_dir: ./.kingfisher-cache
 //! validation:
 //!   timeout: 10
 //!   rps_per_rule:
-//!     kingfisher.aws: 1.0
+//!     betterleaks.aws: 1.0
 //! filters:
 //!   max_file_size_mb: 256.0
 //!   exclude: ["vendor/", "node_modules/"]
@@ -527,7 +527,7 @@ scan:
   git_repo_timeout: 600
 rules:
   enabled: ["all", "default"]
-  disabled: ["kingfisher.github.1", "kingfisher.github.2"]
+  disabled: ["betterleaks.github-pat", "betterleaks.github-fine-grained-pat"]
   paths: ["./custom-rules"]
   load_builtins: true
   cache: true
@@ -537,8 +537,8 @@ validation:
   retries: 2
   rps: 5.0
   rps_per_rule:
-    kingfisher.aws: 1.0
-    kingfisher.gcp: 0.5
+    betterleaks.aws: 1.0
+    betterleaks.gcp: 0.5
   full_response: false
   max_response_length: 4096
 filters:
@@ -583,7 +583,10 @@ git:
         assert_eq!(cfg.scan.redact, Some(true));
         assert_eq!(cfg.scan.jobs, Some(8));
         assert_eq!(cfg.rules.enabled, vec!["all", "default"]);
-        assert_eq!(cfg.rules.disabled, vec!["kingfisher.github.1", "kingfisher.github.2"]);
+        assert_eq!(
+            cfg.rules.disabled,
+            vec!["betterleaks.github-pat", "betterleaks.github-fine-grained-pat"]
+        );
         assert_eq!(cfg.rules.paths.len(), 1);
         assert_eq!(cfg.rules.cache, Some(true));
         assert_eq!(
@@ -654,11 +657,11 @@ git:
 
     #[test]
     fn parse_rules_disabled_aliases() {
-        let cfg = parse_str("rules:\n  exclude: [kingfisher.github.1]\n").unwrap();
-        assert_eq!(cfg.rules.disabled, vec!["kingfisher.github.1"]);
+        let cfg = parse_str("rules:\n  exclude: [betterleaks.github-pat]\n").unwrap();
+        assert_eq!(cfg.rules.disabled, vec!["betterleaks.github-pat"]);
 
-        let cfg = parse_str("rules:\n  excluded: [kingfisher.openai]\n").unwrap();
-        assert_eq!(cfg.rules.disabled, vec!["kingfisher.openai"]);
+        let cfg = parse_str("rules:\n  excluded: [betterleaks.openai]\n").unwrap();
+        assert_eq!(cfg.rules.disabled, vec!["betterleaks.openai"]);
     }
 
     #[test]
@@ -768,7 +771,7 @@ git: {}
     #[test]
     fn validation_rps_per_rule_negative_is_rejected() {
         let err =
-            parse_str("validation:\n  rps_per_rule:\n    kingfisher.aws: -1.0\n").unwrap_err();
+            parse_str("validation:\n  rps_per_rule:\n    betterleaks.aws: -1.0\n").unwrap_err();
         assert!(format!("{err:#}").contains("rps_per_rule"));
     }
 

@@ -7,6 +7,7 @@ pub mod access_map;
 pub mod alerts;
 pub mod azure;
 pub mod baseline;
+mod betterleaks_validation;
 pub mod binary;
 pub mod bitbucket;
 pub mod blob;

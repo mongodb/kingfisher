@@ -252,19 +252,19 @@ mod tests {
     fn summary_mode_emits_suppression_notice() {
         let mut s = summary(60, 0);
         s.detail = crate::alerts::AlertDetail::Summary;
-        let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-z");
+        let rec = crate::alerts::make_test_record("betterleaks.aws-access-token", "fp-z");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();
         assert!(serialized.contains("per-finding detail suppressed"));
-        // Rule id present in HTML-encoded form like <b>kingfisher.aws.1</b>
+        // Rule id present in HTML-encoded form like <b>betterleaks.aws-access-token</b>
         // would mean detail mode leaked through; assert absence.
-        assert!(!serialized.contains("kingfisher.aws.1"));
+        assert!(!serialized.contains("betterleaks.aws-access-token"));
     }
 
     #[test]
     fn detail_mode_includes_fingerprint() {
         let s = summary(1, 1);
-        let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-gc-13");
+        let rec = crate::alerts::make_test_record("betterleaks.aws-access-token", "fp-gc-13");
         let p = build_payload(&s, &[&rec], false);
         let serialized = serde_json::to_string(&p).unwrap();
         assert!(serialized.contains("fp-gc-13"));

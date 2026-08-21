@@ -1,0 +1,548 @@
+# Kingfisher operational capabilities for imported Betterleaks and Veles detectors.
+#
+# This is deliberately not a detection-rule catalog. Regexes, components, and confidence come
+# from upstream at build time. Entries bind an unqualified upstream rule/plugin ID to
+# Kingfisher-specific validation, access-map, revocation, confidence, or filtering behavior.
+version: 1
+betterleaks:
+  # These detector formats are live-validated by selected Veles adapters. Keep Betterleaks as the
+  # catalog source for the remaining formats while suppressing only exact overlapping findings.
+  cloudflare-api-key:
+    filter_override: 'matchesAny(finding["line"], [`(?i)["'']?\b(?:CLOUDFLARE_API_TOKEN|CLOUDFLARE_API_KEY|CF_API_TOKEN|CF_API_KEY|CLOUDFLARE_TOKEN|CF_TOKEN|CLOUDFLARE_AUTH_KEY|CF_ACCOUNT_ID)\b["'']?\s*[=:].{0,20}?\b[A-Za-z0-9_-]{40}\b`])'
+  digitalocean-pat:
+    filter_override: 'true'
+  generic-credential-uri:
+    filter_override: 'matchesAny(attributes["path"], [`(?i)(?:\.git[/\\]config|(?:^|[/\\])\.git-credentials|_history)$`]) && ((finding["captures"]["host"].endsWith("bitbucket.org") && finding["captures"]["uri"].endsWith(".git")) || finding["captures"]["host"].contains("codecatalyst.aws") || (finding["captures"]["host"].startsWith("git-codecommit.") && finding["captures"]["host"].endsWith(".amazonaws.com")))'
+  heroku-api-key-v2:
+    filter_override: 'true'
+  npm-access-token:
+    filter_override: 'finding["secret"].startsWith("npm_")'
+  openrouter-api-key:
+    filter_override: 'true'
+  postman-api-token:
+    filter_override: 'true'
+  private-key:
+    validation: Assumed
+  sendgrid-api-token:
+    filter_override: 'matchesAny(finding["secret"], [`^SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$`])'
+  slack-app-token:
+    filter_override: 'matchesAny(finding["secret"], [`^xapp-[0-9]{1,10}-[A-Za-z0-9]{11}-[0-9]{13}-[A-Fa-f0-9]{64}$`])'
+  slack-config-access-token:
+    filter_override: 'matchesAny(finding["secret"], [`^xoxe\.xoxp-[0-9]{1,10}-[A-Za-z0-9]{166}$`])'
+  slack-config-refresh-token:
+    filter_override: 'matchesAny(finding["line"], [`xoxe-[0-9]{1,10}-[A-Za-z0-9]{147}`])'
+  xai-api-key:
+    filter_override: 'matchesAny(finding["secret"], [`^xai-[A-Za-z0-9]{80}$`])'
+
+  aws-access-token:
+    access_map:
+      handler: aws
+      inputs:
+        secret: components.aws-secret-access-key
+    revocation:
+      type: AWS
+    revocation_bindings:
+      secret: components.aws-secret-access-key
+      variables:
+        AKID: finding.secret
+
+  gcp-application-default-credentials:
+    access_map:
+      handler: gcp
+  gcp-service-account:
+    access_map:
+      handler: gcp
+    revocation:
+      type: GCP
+
+  azure-ad-client-secret:
+    access_map:
+      handler: azure_client_secret
+      inputs:
+        tenant_id: components.azure-tenant-id
+        client_id: components.azure-client-id
+  azure-storage-account-key:
+    access_map:
+      handler: azure_storage
+      inputs:
+        account: components.azure-storage-account-name
+  algolia-api-key:
+    access_map:
+      handler: algolia
+      inputs:
+        app_id: components.algolia-application-id
+  alibaba-secret-key:
+    access_map:
+      handler: alibaba
+      inputs:
+        access_key: components.alibaba-access-key-id
+  alibaba-sts-access-key-secret:
+    access_map:
+      handler: alibaba
+      inputs:
+        access_key: components.alibaba-sts-access-key-id
+        session_token: components.alibaba-sts-security-token
+  artifactory-api-key:
+    access_map:
+      handler: artifactory
+      inputs:
+        host: components.artifactory-jfrog-url
+  artifactory-reference-token:
+    access_map:
+      handler: artifactory
+      inputs:
+        host: components.artifactory-jfrog-url
+
+  salesforce-access-token.1:
+    access_map:
+      handler: salesforce
+      inputs:
+        instance: components.salesforce-instance-url.1
+
+  airtable-oauth-token:
+    access_map: { handler: airtable }
+  airtable-personnal-access-token:
+    access_map: { handler: airtable }
+  anthropic-admin-api-key:
+    access_map: { handler: anthropic }
+  anthropic-api-key:
+    access_map: { handler: anthropic }
+  buildkite-user-access-token:
+    access_map: { handler: buildkite }
+    revocation:
+      type: Http
+      content:
+        request:
+          method: DELETE
+          url: https://api.buildkite.com/v2/access-token
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [204]
+  circleci-personal-token:
+    access_map: { handler: circleci }
+  circleci-project-token:
+    access_map: { handler: circleci }
+  fastly-api-token:
+    access_map: { handler: fastly }
+  harness-api-key:
+    access_map: { handler: harness }
+  huggingface-access-token:
+    access_map: { handler: huggingface }
+    revocation: &huggingface_revoke
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://huggingface.co/api/credentials/revoke
+          headers:
+            Content-Type: application/json
+          body: '{"credentials":["{{ TOKEN }}"]}'
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [202]
+  huggingface-organization-api-token:
+    access_map: { handler: huggingface }
+    revocation: *huggingface_revoke
+  ibm-cloud-user-api-key:
+    access_map: { handler: ibm_cloud }
+  openai-api-key:
+    access_map: { handler: openai }
+  pinecone-api-key.1:
+    access_map: { handler: pinecone }
+  pinecone-api-key.2:
+    access_map: { handler: pinecone }
+  sendinblue-api-token:
+    access_map: { handler: sendinblue }
+  stripe-access-token:
+    access_map: { handler: stripe }
+    # Stripe test-mode keys are intentionally non-production credentials and should not be
+    # reported as active credentials by Kingfisher.
+    filter_override: 'finding["secret"].startsWith("sk_test_")'
+  weights-and-biases-api-key:
+    access_map: { handler: weights_and_biases }
+  weights-and-biases-api-key-v1:
+    access_map: { handler: weights_and_biases }
+
+  github-app-token:
+    access_map: { handler: github }
+  github-fine-grained-pat:
+    access_map: { handler: github }
+    revocation: &github_credential_revoke
+      type: Http
+      content:
+        request:
+          method: POST
+          url: "{{ GITHUB_API_BASE_URL }}/credentials/revoke"
+          headers:
+            Accept: application/vnd.github+json
+            X-GitHub-Api-Version: 2026-03-10
+            Content-Type: application/json
+          body: '{"credentials":["{{ TOKEN }}"]}'
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [202]
+  github-oauth:
+    access_map: { handler: github }
+    revocation: *github_credential_revoke
+  github-pat:
+    access_map: { handler: github }
+    revocation: *github_credential_revoke
+  github-refresh-token:
+    access_map: { handler: github }
+    revocation: *github_credential_revoke
+
+  jwt:
+    validation: JWT
+    # Self-hosted IdPs (Keycloak, ADFS, internal Auth0-alikes) commonly serve
+    # JWKS from a private CA. Honored only under `--tls-mode lax`.
+    tls_mode: lax
+
+  mongodb-connection-string:
+    validation: MongoDB
+    # Atlas is publicly trusted, but self-managed clusters and RDS-style
+    # deployments routinely use self-signed or private-CA certificates.
+    # Honored only under `--tls-mode lax`.
+    tls_mode: lax
+
+  polymarket-private-key:
+    validation:
+      type: Ethereum
+      content: private_key
+
+  gitlab-cicd-job-token:
+    access_map: &gitlab_access_map
+      handler: gitlab
+      reachable_2xx: true
+  gitlab-deploy-token:
+    access_map: *gitlab_access_map
+  gitlab-pat:
+    access_map: *gitlab_access_map
+    revocation: &gitlab_pat_revoke
+      type: Http
+      content:
+        request:
+          method: DELETE
+          url: "{{ GITLAB_API_BASE_URL }}/personal_access_tokens/self"
+          headers:
+            PRIVATE-TOKEN: "{{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [204]
+  gitlab-pat-routable:
+    access_map: *gitlab_access_map
+    revocation: *gitlab_pat_revoke
+  gitlab-pat-routable-versioned:
+    access_map: *gitlab_access_map
+    revocation: *gitlab_pat_revoke
+  gitlab-ptt:
+    access_map: *gitlab_access_map
+  gitlab-rrt:
+    access_map: *gitlab_access_map
+  gitlab-runner-authentication-token:
+    access_map: *gitlab_access_map
+  gitlab-runner-authentication-token-routable:
+    access_map: *gitlab_access_map
+
+  doppler-api-token:
+    revocation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://api.doppler.com/v3/auth/revoke
+          headers:
+            Accept: application/json
+            Content-Type: application/json
+          body: '{"token":{{ TOKEN | json_escape }}}'
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+  crates-io-api-key:
+    revocation:
+      type: Http
+      content:
+        request:
+          method: DELETE
+          url: https://crates.io/api/v1/tokens/current
+          headers:
+            Authorization: "{{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [204]
+  digitalocean-access-token:
+    revocation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://cloud.digitalocean.com/v1/oauth/revoke
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Content-Type: application/x-www-form-urlencoded
+          body: "token={{ TOKEN | url_encode }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+  heroku-api-key:
+    revocation: &heroku_revoke
+      type: HttpMultiStep
+      content:
+        steps:
+          - name: lookup_oauth_token_id
+            request:
+              method: GET
+              url: https://api.heroku.com/oauth/authorizations
+              headers:
+                Accept: application/vnd.heroku+json; version=3
+                Authorization: "Bearer {{ TOKEN }}"
+                Range: "id ..; max=1000;"
+              response_matcher:
+                - type: StatusMatch
+                  status: [200, 206]
+                - type: JsonValid
+            extract:
+              OAUTH_TOKEN_ID:
+                type: Regex
+                pattern: '(?s)"access_token"\s*:\s*\{[^{}]*"id"\s*:\s*"([^"]+)"[^{}]*"token"\s*:\s*"{{ TOKEN }}"'
+          - name: revoke_oauth_token
+            request:
+              method: DELETE
+              url: https://api.heroku.com/oauth/tokens/{{ OAUTH_TOKEN_ID }}
+              headers:
+                Accept: application/vnd.heroku+json; version=3
+                Authorization: "Bearer {{ TOKEN }}"
+              response_matcher:
+                - report_response: true
+                - type: StatusMatch
+                  status: [200]
+  heroku-api-key-v2:
+    revocation: *heroku_revoke
+  slack-app-token:
+    revocation: &slack_revoke
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://slack.com/api/auth.revoke
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Content-Type: application/x-www-form-urlencoded
+          body: "token={{ TOKEN | url_encode }}"
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words: ['"ok":true', '"revoked":true']
+              match_all_words: true
+  slack-bot-token:
+    revocation: *slack_revoke
+  slack-legacy-bot-token:
+    revocation: *slack_revoke
+  slack-legacy-workspace-token:
+    revocation: *slack_revoke
+  slack-legacy-token:
+    revocation: *slack_revoke
+  slack-user-token:
+    revocation: *slack_revoke
+  twitch-api-token:
+    revocation:
+      type: HttpMultiStep
+      content:
+        steps:
+          - name: lookup_client_id
+            request:
+              method: GET
+              url: https://id.twitch.tv/oauth2/validate
+              headers:
+                Authorization: "OAuth {{ TOKEN }}"
+                Accept: application/json
+              response_matcher:
+                - type: StatusMatch
+                  status: [200]
+                - type: JsonValid
+            extract:
+              CLIENT_ID:
+                type: JsonPath
+                path: $.client_id
+          - name: revoke_token
+            request:
+              method: POST
+              url: https://id.twitch.tv/oauth2/revoke
+              headers:
+                Content-Type: application/x-www-form-urlencoded
+              body: "client_id={{ CLIENT_ID | url_encode }}&token={{ TOKEN | url_encode }}"
+              response_matcher:
+                - report_response: true
+                - type: StatusMatch
+                  status: [200]
+  vercel-api-token:
+    revocation: &vercel_self_revoke
+      type: Http
+      content:
+        request:
+          method: DELETE
+          url: https://api.vercel.com/v3/user/tokens/current
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200, 204]
+  vercel-integration-token:
+    revocation: *vercel_self_revoke
+  vercel-personal-access-token:
+    revocation: *vercel_self_revoke
+  vercel-app-access-token:
+    revocation: &vercel_oauth_revoke
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://api.vercel.com/login/oauth/token/revoke
+          headers:
+            Authorization: "Basic {{ NEXT_PUBLIC_VERCEL_APP_CLIENT_ID | default: VERCEL_APP_CLIENT_ID | append: ':' | append: VERCEL_APP_CLIENT_SECRET | b64enc }}"
+            Content-Type: application/x-www-form-urlencoded
+          body: "token={{ TOKEN | url_encode }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200, 204]
+  vercel-app-refresh-token:
+    revocation: *vercel_oauth_revoke
+
+veles:
+  secrets/cloudflareapitoken:
+    revocation: &cloudflare_revoke
+      type: HttpMultiStep
+      content:
+        steps:
+          - name: lookup_token_id
+            request:
+              method: GET
+              url: https://api.cloudflare.com/client/v4/user/tokens/verify
+              headers:
+                Authorization: "Bearer {{ TOKEN }}"
+                Accept: application/json
+              response_matcher:
+                - type: StatusMatch
+                  status: [200]
+                - type: JsonValid
+            extract:
+              TOKEN_ID:
+                type: JsonPath
+                path: $.result.id
+          - name: revoke_token
+            request:
+              method: DELETE
+              url: "https://api.cloudflare.com/client/v4/user/tokens/{{ TOKEN_ID }}"
+              headers:
+                Authorization: "Bearer {{ TOKEN }}"
+                Accept: application/json
+              response_matcher:
+                - report_response: true
+                - type: StatusMatch
+                  status: [200]
+                - type: WordMatch
+                  words: ['"success":true']
+                  match_all_words: true
+  secrets/digitaloceanapikey:
+    revocation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://cloud.digitalocean.com/v1/oauth/revoke
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Content-Type: application/x-www-form-urlencoded
+          body: "token={{ TOKEN | url_encode }}"
+          response_matcher:
+            - report_response: true
+            - type: StatusMatch
+              status: [200]
+  secrets/herokuplatformkey:
+    revocation:
+      type: HttpMultiStep
+      content:
+        steps:
+          - name: lookup_oauth_token_id
+            request:
+              method: GET
+              url: https://api.heroku.com/oauth/authorizations
+              headers:
+                Accept: application/vnd.heroku+json; version=3
+                Authorization: "Bearer {{ TOKEN }}"
+                Range: "id ..; max=1000;"
+              response_matcher:
+                - type: StatusMatch
+                  status: [200, 206]
+                - type: JsonValid
+            extract:
+              OAUTH_TOKEN_ID:
+                type: Regex
+                pattern: '(?s)"access_token"\s*:\s*\{[^{}]*"id"\s*:\s*"([^"]+)"[^{}]*"token"\s*:\s*"{{ TOKEN }}"'
+          - name: revoke_oauth_token
+            request:
+              method: DELETE
+              url: https://api.heroku.com/oauth/tokens/{{ OAUTH_TOKEN_ID }}
+              headers:
+                Accept: application/vnd.heroku+json; version=3
+                Authorization: "Bearer {{ TOKEN }}"
+              response_matcher:
+                - report_response: true
+                - type: StatusMatch
+                  status: [200]
+  secrets/npmjsaccesstoken:
+    revocation:
+      type: HttpMultiStep
+      content:
+        steps:
+          - name: lookup_token_id
+            request:
+              method: GET
+              url: https://registry.npmjs.org/-/npm/v1/tokens
+              headers:
+                Authorization: "Bearer {{ TOKEN }}"
+                Accept: application/json
+              response_matcher:
+                - type: StatusMatch
+                  status: [200]
+                - type: JsonValid
+            extract:
+              TOKEN_KEY:
+                type: Regex
+                pattern: '"key":"([^"]+)","token":"{{ TOKEN | prefix: 8 }}\.\.\.{{ TOKEN | suffix: 4 }}"'
+          - name: revoke_token
+            request:
+              method: DELETE
+              url: https://registry.npmjs.org/-/npm/v1/tokens/token/{{ TOKEN_KEY }}
+              headers:
+                Authorization: "Bearer {{ TOKEN }}"
+              response_matcher:
+                - report_response: true
+                - type: StatusMatch
+                  status: [200, 204]
+  secrets/slackappleveltoken:
+    revocation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://slack.com/api/auth.revoke
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+            Content-Type: application/x-www-form-urlencoded
+          body: "token={{ TOKEN | url_encode }}"
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words: ['"ok":true', '"revoked":true']
+              match_all_words: true

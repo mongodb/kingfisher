@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.0.0]
+- Removed the Veles Paystack, PyPI, and Square OAuth application-secret adapters. PyPI upload-token and Square access-token detection remain covered by Betterleaks; Paystack and Square OAuth application-secret built-in coverage are no longer included.
+- **Security:** the MongoDB, MySQL, Postgres, and JDBC validators now enforce the same SSRF gate as the HTTP/gRPC/JWT validators. Previously they only rejected loopback/unspecified hosts, so a crafted connection string in scanned content could make Kingfisher open TCP connections to RFC1918, link-local (including `169.254.169.254`), CGNAT, and other non-public addresses, turning the scan report into an internal-network reachability oracle. Every host in a Postgres multi-host URL and every MongoDB seed — including hosts resolved via `mongodb+srv://` SRV records — is now checked, and blocked targets report a constant message instead of the driver's connection error. Use `--allow-internal-ips` to opt back in.
+- **Breaking (library):** `validate_mongodb`, `validate_mysql`, `validate_postgres`, and `validate_jdbc` take an additional `allow_internal_ips: bool` argument.
+- Restored per-rule `tls_mode` for built-in rules. The imported-rule capability overlay now accepts `tls_mode: strict | lax | off`, and `betterleaks.mongodb-connection-string` and `betterleaks.jwt` declare `lax` so self-managed clusters and self-hosted IdPs presenting private-CA or self-signed certificates validate again. This remains opt-in on both sides: it takes effect only when the operator also runs `--tls-mode lax` (or `--tls-mode off`). The build rejects an unknown `tls_mode` value, or a `tls_mode` on a rule with no validator.
+- Kingfisher 1.x rule selectors keep working. `--rule`, `--exclude-rule`, and `rules.disabled` entries naming `kingfisher.*` IDs now resolve to their 2.x replacements through a new alias table, with a one-time deprecation warning naming the selector to migrate to, instead of failing the scan. Exact `kingfisher.*` IDs still win when the 1.x catalog is loaded via `--rules-path`, and an unknown `kingfisher.*` selector is still an error.
+- Added a rule-coverage drift guard. `crates/kingfisher-rules/data/legacy-rule-aliases.yml` maps every Kingfisher 1.x provider family to its 2.x selectors, and a test asserts each one still resolves against the built-in catalog, so an upstream release that drops a provider fails the build instead of silently reducing detection coverage.
+- Restored scan-time access mapping for validated Veles rules (Slack app-level/config tokens, DigitalOcean, SendGrid), which previously reached the rule-ID dispatch and matched nothing.
+- **Breaking:** moved the default detection catalog to the Betterleaks rule format, giving the community a well-designed shared format and a common place to develop generally useful rules.
+- Kingfisher now fetches and parses the upstream Betterleaks catalog at build time; the Kingfisher 1.x YAML custom-rule format remains supported for custom rules.
+- Preserved Kingfisher's engine capabilities around validation, blast-radius mapping, and credential revocation while allowing us to focus investment on scan performance, integrations, and analysis workflows.
+- All rules now use Vectorscan candidate detection, eliminating unconditional whole-blob regex fallbacks for Betterleaks' large generic credential patterns; Betterleaks path and finding-filter regex helpers are also compiled once with Vectorscan instead of being rebuilt per path or finding.
+
 ## [v1.113.0]
 - Added repository-aware v2 baselines with safe multi-repository updates, atomic writes, and automatic migration while retaining legacy baseline compatibility.
 - Added configurable webhook finding filters, empty-alert suppression, dry-run previews, and access-map impact summaries.

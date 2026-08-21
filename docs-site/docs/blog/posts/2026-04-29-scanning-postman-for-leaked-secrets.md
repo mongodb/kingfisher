@@ -164,7 +164,7 @@ and you're looking at the exact collection or environment that needs
 remediation:
 
 ```
-GITHUB PERSONAL ACCESS TOKEN => [KINGFISHER.GITHUB.2]
+GITHUB PERSONAL ACCESS TOKEN => [BETTERLEAKS.GITHUB-PAT]
  |Finding.......: ghp_EZopZDMW...
  |Confidence....: medium
  |Validation....: Active
@@ -192,12 +192,16 @@ jq '.findings
     | map(select(.access_map != null))' \
    postman-findings.json > urgent.json
 
-# 3. Revoke the most urgent ones in place — by rule
-kingfisher revoke --rule github "$LEAKED_GITHUB_TOKEN"
-kingfisher revoke --rule slack "$LEAKED_SLACK_TOKEN"
+# 3. Revoke through a mapped Betterleaks capability or organization-specific custom rule
+kingfisher revoke --rule github-pat "$LEAKED_TOKEN"
+
+kingfisher revoke --rules-path ./custom-rules.yml \
+  --rule custom.provider.token "$LEAKED_TOKEN"
 ```
 
-Find → prioritize → revoke, all without leaving the terminal.
+Find → prioritize → revoke, all without leaving the terminal. Kingfisher's capability overlay or a
+custom rule supplies the provider-approved revocation action; Betterleaks itself does not currently
+publish one.
 
 ## Self-hosted and enterprise
 

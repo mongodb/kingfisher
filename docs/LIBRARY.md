@@ -9,7 +9,7 @@ Kingfisher's functionality is available as a set of Rust library crates that can
 | Crate | Description |
 | ----- | ----------- |
 | `kingfisher-core` | Core types: `Blob`, `BlobId`, `Location`, `Origin`, `ValidationOutcome`, entropy calculation |
-| `kingfisher-rules` | Rule definitions, YAML parsing, compiled rule database, builtin rules |
+| `kingfisher-rules` | Betterleaks import model, Kingfisher 1.x custom-YAML parsing, and compiled rule database |
 | `kingfisher-scanner` | High-level scanning API with `Scanner` and `Finding` types |
 
 ### Crate Relationships
@@ -62,18 +62,15 @@ kingfisher-scanner = { git = "https://github.com/mongodb/kingfisher" }
 ```rust
 use std::sync::Arc;
 use kingfisher_core::Blob;
-use kingfisher_rules::{get_builtin_rules, RulesDatabase, Rule};
+use kingfisher_rules::{get_builtin_rules, RulesDatabase};
 use kingfisher_scanner::Scanner;
 
 fn main() -> anyhow::Result<()> {
     // 1. Load the builtin rules
     let rules = get_builtin_rules(None)?;
     
-    // 2. Convert to Rule objects and compile into a database
-    let rule_vec: Vec<Rule> = rules.iter_rules()
-        .map(|syntax| Rule::new(syntax.clone()))
-        .collect();
-    let rules_db = Arc::new(RulesDatabase::from_rules(rule_vec)?);
+    // 2. Compile the collection, preserving Betterleaks database metadata
+    let rules_db = Arc::new(RulesDatabase::from_rule_collection(rules)?);
     
     // 3. Create a scanner
     let scanner = Scanner::new(rules_db);
@@ -97,15 +94,12 @@ fn main() -> anyhow::Result<()> {
 
 ```rust
 use std::sync::Arc;
-use kingfisher_rules::{get_builtin_rules, RulesDatabase, Rule};
+use kingfisher_rules::{get_builtin_rules, RulesDatabase};
 use kingfisher_scanner::Scanner;
 
 fn scan_content(content: &[u8]) -> anyhow::Result<()> {
     let rules = get_builtin_rules(None)?;
-    let rule_vec: Vec<Rule> = rules.iter_rules()
-        .map(|syntax| Rule::new(syntax.clone()))
-        .collect();
-    let rules_db = Arc::new(RulesDatabase::from_rules(rule_vec)?);
+    let rules_db = Arc::new(RulesDatabase::from_rule_collection(rules)?);
     
     let scanner = Scanner::new(rules_db);
     
@@ -238,7 +232,7 @@ let origin = Origin::GitRepo(GitRepoOrigin {
 
 ## kingfisher-rules
 
-Rule definitions, YAML parsing, and the compiled rule database.
+Betterleaks-derived defaults, Kingfisher 1.x custom-YAML parsing, and the compiled rule database.
 
 ### Rules Structure
 
@@ -260,13 +254,13 @@ flowchart TD
     RuleMod --> Syntax[Rule and RuleSyntax]
     RulesMod --> Collections[Rules collection and loading]
     Db --> Compiled[Compiled RulesDatabase]
-    Defaults --> Builtins[Builtin rules]
+    Defaults --> Builtins[Betterleaks-derived defaults]
     Liquid --> Filters[Template filters]
 ```
 
-### Loading Builtin Rules
+### Loading Betterleaks-Derived Rules
 
-Kingfisher currently ships with 1,089 built-in rules for common secret types:
+Kingfisher's built-in rules are generated from the Betterleaks catalog at build time:
 
 ```rust
 use kingfisher_rules::{get_builtin_rules, Confidence};
@@ -293,13 +287,13 @@ let rules = Rules::from_paths(&["my-rules.yml"], Confidence::Medium)?;
 // From a directory (recursively finds .yml files)
 let rules = Rules::from_paths(&["rules/"], Confidence::Medium)?;
 
-// Merge multiple sources
+// Merge multiple Kingfisher 1.x custom sources
 let mut rules = Rules::new();
-rules.update(Rules::from_paths(&["builtin/"], Confidence::Medium)?);
-rules.update(Rules::from_paths(&["custom/"], Confidence::Medium)?);
+rules.update(Rules::from_paths(&["team-rules/"], Confidence::Medium)?);
+rules.update(Rules::from_paths(&["local-rules/"], Confidence::Medium)?);
 ```
 
-### Rule Syntax YAML Format
+### Kingfisher 1.x Custom-Rule YAML Format
 
 ```yaml
 rules:
@@ -332,23 +326,18 @@ The `RulesDatabase` compiles rules for efficient multi-pattern matching:
 
 ```rust
 use std::sync::Arc;
-use kingfisher_rules::{get_builtin_rules, RulesDatabase, Rule};
+use kingfisher_rules::{get_builtin_rules, RulesDatabase};
 
 let rules = get_builtin_rules(None)?;
 
-// Convert RuleSyntax to Rule objects
-let rule_vec: Vec<Rule> = rules.iter_rules()
-    .map(|syntax| Rule::new(syntax.clone()))
-    .collect();
-
 // Compile into a database (uses Vectorscan for fast matching)
-let db = Arc::new(RulesDatabase::from_rules(rule_vec)?);
+let db = Arc::new(RulesDatabase::from_rule_collection(rules)?);
 
 // Access compiled rules
 println!("Compiled {} rules", db.num_rules());
 
 // Look up rules by ID
-if let Some(rule) = db.get_rule_by_text_id("kingfisher.aws.1") {
+if let Some(rule) = db.get_rule_by_text_id("betterleaks.github-pat") {
     println!("Found rule: {}", rule.name());
 }
 ```
@@ -433,14 +422,11 @@ flowchart TD
 
 ```rust
 use std::sync::Arc;
-use kingfisher_rules::{get_builtin_rules, RulesDatabase, Rule};
+use kingfisher_rules::{get_builtin_rules, RulesDatabase};
 use kingfisher_scanner::{Scanner, ScannerConfig};
 
 let rules = get_builtin_rules(None)?;
-let rule_vec: Vec<Rule> = rules.iter_rules()
-    .map(|syntax| Rule::new(syntax.clone()))
-    .collect();
-let rules_db = Arc::new(RulesDatabase::from_rules(rule_vec)?);
+let rules_db = Arc::new(RulesDatabase::from_rule_collection(rules)?);
 
 // Default configuration
 let scanner = Scanner::new(Arc::clone(&rules_db));
@@ -528,7 +514,7 @@ use std::path::Path;
 use walkdir::WalkDir;
 use clap::Parser;
 
-use kingfisher_rules::{get_builtin_rules, RulesDatabase, Rule, Confidence};
+use kingfisher_rules::{get_builtin_rules, RulesDatabase, Confidence};
 use kingfisher_scanner::{Scanner, ScannerConfig};
 
 #[derive(Parser)]
@@ -571,12 +557,8 @@ fn main() -> anyhow::Result<()> {
     let rules = get_builtin_rules(Some(confidence))?;
     println!("Loaded {} rules", rules.num_rules());
 
-    // Convert to Rule objects and compile into a database
-    let rule_vec: Vec<Rule> = rules
-        .iter_rules()
-        .map(|syntax| Rule::new(syntax.clone()))
-        .collect();
-    let rules_db = Arc::new(RulesDatabase::from_rules(rule_vec)?);
+    // Compile while preserving Betterleaks' database-level source prefilter
+    let rules_db = Arc::new(RulesDatabase::from_rule_collection(rules)?);
 
     // Configure scanner
     let config = ScannerConfig {

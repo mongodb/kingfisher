@@ -11,17 +11,38 @@ MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7a7kN8LymUu8Z
 -----END PRIVATE KEY-----
 "#;
 
+const LEGACY_CUSTOM_RULES: &str = r#"
+rules:
+  - name: Custom Private Key
+    id: custom.private-key
+    pattern: '(?xims)(-----BEGIN[[:space:]]+(?:RSA[[:space:]]+)?PRIVATE[[:space:]]+KEY-----[a-z0-9 /+=\r\n]{32,}?-----END[[:space:]]+(?:RSA[[:space:]]+)?PRIVATE[[:space:]]+KEY-----)'
+    min_entropy: 0.0
+    validation:
+      type: Assumed
+  - name: Custom PEM Private Key
+    id: custom.pem
+    pattern: '(?xims)(-----BEGIN[[:space:]]+PRIVATE[[:space:]]+KEY-----[a-z0-9 /+=\r\n]{32,}?-----END[[:space:]]+PRIVATE[[:space:]]+KEY-----)'
+    min_entropy: 0.0
+    validation:
+      type: Assumed
+"#;
+
 fn scan_private_key(rule: &str, filter_args: &[&str]) -> Result<Value> {
     let temp = tempdir()?;
     let input = temp.path().join("private-key.pem");
     let report = temp.path().join("report.json");
+    let rules = temp.path().join("rules.yml");
     fs::write(&input, PRIVATE_KEY)?;
+    fs::write(&rules, LEGACY_CUSTOM_RULES)?;
 
     let mut args = vec![
         "scan",
         input.to_str().unwrap(),
         "--rule",
         rule,
+        "--rules-path",
+        rules.to_str().unwrap(),
+        "--load-builtins=false",
         "--format",
         "json",
         "--output",
@@ -38,11 +59,11 @@ fn scan_private_key(rule: &str, filter_args: &[&str]) -> Result<Value> {
 
 #[test]
 fn actionable_filter_includes_assumed_private_keys() -> Result<()> {
-    let report = scan_private_key("kingfisher.privkey.2", &["--validation-filter", "actionable"])?;
+    let report = scan_private_key("custom.private-key", &["--validation-filter", "actionable"])?;
     let findings = report["findings"].as_array().unwrap();
 
     assert_eq!(findings.len(), 1);
-    assert_eq!(findings[0]["rule"]["id"], "kingfisher.privkey.2");
+    assert_eq!(findings[0]["rule"]["id"], "custom.private-key");
     assert_eq!(findings[0]["finding"]["validation"]["outcome"], "assumed");
     assert_eq!(
         findings[0]["finding"]["validation"]["status"],
@@ -56,7 +77,7 @@ fn actionable_filter_includes_assumed_private_keys() -> Result<()> {
 
 #[test]
 fn only_valid_remains_strictly_verified_active() -> Result<()> {
-    let report = scan_private_key("kingfisher.privkey.2", &["--only-valid"])?;
+    let report = scan_private_key("custom.private-key", &["--only-valid"])?;
     assert!(report["findings"].as_array().unwrap().is_empty());
     assert_eq!(report["metadata"]["summary"]["successful_validations"], 0);
     assert_eq!(report["metadata"]["summary"]["skipped_validations"], 1);
@@ -66,11 +87,11 @@ fn only_valid_remains_strictly_verified_active() -> Result<()> {
 
 #[test]
 fn actionable_filter_includes_assumed_pem_keys() -> Result<()> {
-    let report = scan_private_key("kingfisher.pem.1", &["--validation-filter", "actionable"])?;
+    let report = scan_private_key("custom.pem", &["--validation-filter", "actionable"])?;
     let findings = report["findings"].as_array().unwrap();
 
     assert_eq!(findings.len(), 1);
-    assert_eq!(findings[0]["rule"]["id"], "kingfisher.pem.1");
+    assert_eq!(findings[0]["rule"]["id"], "custom.pem");
     assert_eq!(findings[0]["finding"]["validation"]["outcome"], "assumed");
     assert_eq!(
         findings[0]["finding"]["validation"]["status"],
@@ -99,7 +120,7 @@ fn only_valid_conflicts_with_explicit_validation_filter() {
 
 #[test]
 fn assumed_findings_count_as_skipped_without_actionable_filter() -> Result<()> {
-    let report = scan_private_key("kingfisher.privkey.2", &[])?;
+    let report = scan_private_key("custom.private-key", &[])?;
 
     assert_eq!(report["findings"].as_array().unwrap().len(), 1);
     assert_eq!(report["metadata"]["summary"]["successful_validations"], 0);

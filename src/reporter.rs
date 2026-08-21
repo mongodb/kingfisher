@@ -54,6 +54,18 @@ fn escape_for_shell(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+fn display_rule_id(rule_id: &str) -> String {
+    rule_id
+        .strip_prefix("betterleaks.")
+        .or_else(|| rule_id.strip_prefix("veles."))
+        .unwrap_or(rule_id)
+        .to_string()
+}
+
+fn finding_title(rule_id: &str) -> String {
+    format!("{} => [{}]", display_rule_id(rule_id).to_uppercase(), rule_id.to_uppercase())
+}
+
 fn required_vars_for_validation(validation: &crate::rules::Validation) -> BTreeSet<String> {
     use crate::rules::Validation;
     let mut vars = BTreeSet::new();
@@ -82,6 +94,10 @@ fn required_vars_for_validation(validation: &crate::rules::Validation) -> BTreeS
             if let Some(body) = &grpc.request.body {
                 vars.extend(extract_template_vars(body));
             }
+        }
+        Validation::Betterleaks(validation) => {
+            vars.insert("TOKEN".to_string());
+            vars.extend(validation.components.values().cloned());
         }
         Validation::AWS => {
             vars.insert("AKID".to_string());
@@ -301,7 +317,11 @@ fn build_revoke_command(
         Revocation::AWS => {
             // AWS needs the access key ID (AKID) in addition to the secret
             // Try to get it from captures first, then from validation response body
-            let akid = akid_from_captures.or(akid_from_validation_body)?;
+            let akid = dependent_captures
+                .get("AKID")
+                .map(String::as_str)
+                .or(akid_from_captures)
+                .or(akid_from_validation_body)?;
             if akid.is_empty() {
                 return None;
             }
@@ -342,6 +362,20 @@ fn build_revoke_command(
     }
 }
 
+fn resolve_betterleaks_capability_source<'a>(
+    source: &str,
+    finding_secret: &'a str,
+    validation: &crate::rules::BetterleaksValidation,
+    dependent_captures: &'a BTreeMap<String, String>,
+) -> Option<&'a str> {
+    if source == "finding.secret" {
+        return Some(finding_secret);
+    }
+    let component_id = source.strip_prefix("components.")?;
+    let variable = validation.components.get(component_id)?;
+    dependent_captures.get(variable).map(String::as_str)
+}
+
 /// Generate a kingfisher validate command for a finding.
 ///
 /// Returns `None` if the rule doesn't have validation configured or required data is missing.
@@ -356,7 +390,9 @@ fn build_validate_command(
     use crate::rules::Validation;
 
     let mut required_vars = required_vars_for_validation(validation);
-    if matches!(validation, Validation::AWS) && rule_id == "kingfisher.aws.4" {
+    let is_aws_session_token = matches!(validation, Validation::AWS)
+        && dependent_captures.contains_key("AWS_SECRET_ACCESS_KEY");
+    if is_aws_session_token {
         required_vars.insert("AWS_SECRET_ACCESS_KEY".to_string());
     }
 
@@ -375,9 +411,7 @@ fn build_validate_command(
             if akid.is_empty() {
                 return None;
             }
-            if rule_id == "kingfisher.aws.4"
-                && !dependent_captures.contains_key("AWS_SECRET_ACCESS_KEY")
-            {
+            if is_aws_session_token && !dependent_captures.contains_key("AWS_SECRET_ACCESS_KEY") {
                 return None;
             }
             Some(format!(
@@ -396,6 +430,12 @@ fn build_validate_command(
                 escape_for_shell(snippet)
             ))
         }
+        Validation::Betterleaks(_) => Some(format!(
+            "kingfisher validate --rule {} {}{}",
+            rule_id,
+            var_args,
+            escape_for_shell(snippet)
+        )),
         Validation::Http(_) => {
             // HTTP-based validation with dependent variables
             Some(format!(
@@ -808,30 +848,44 @@ impl DetailsReporter {
             .iter()
             .filter(|msg| {
                 let (_origin, _blob_metadata, match_item) = &***msg;
+                let outcome = if !match_item.rule.syntax().is_authoritative() {
+                    kingfisher_core::ValidationOutcome::NotAttempted
+                } else {
+                    match_item.validation_outcome
+                };
                 let outcome_matches = match validation_filter {
                     cli::commands::scan::ValidationFilter::All => true,
-                    cli::commands::scan::ValidationFilter::Active => {
-                        match_item.validation_outcome.is_verified_active()
-                    }
-                    cli::commands::scan::ValidationFilter::Actionable => {
-                        match_item.validation_outcome.is_actionable()
-                    }
+                    cli::commands::scan::ValidationFilter::Active => outcome.is_verified_active(),
+                    cli::commands::scan::ValidationFilter::Actionable => outcome.is_actionable(),
                 };
                 outcome_matches && (!filter_visible || match_item.visible)
             })
             .map(|msg| {
                 let (origin, blob_metadata, match_item) = &**msg;
+                let non_authoritative = !match_item.rule.syntax().is_authoritative();
+                let mut sanitized_match = match_item.clone();
+                if non_authoritative {
+                    sanitized_match.validation_response_body = None;
+                    sanitized_match.validation_response_status = 100;
+                    sanitized_match.validation_success = false;
+                    sanitized_match.validation_outcome =
+                        kingfisher_core::ValidationOutcome::NotAttempted;
+                }
+                let sanitized_validation_body = sanitized_match.validation_response_body.clone();
+                let sanitized_validation_status = sanitized_match.validation_response_status;
+                let sanitized_validation_success = sanitized_match.validation_success;
+                let sanitized_validation_outcome = sanitized_match.validation_outcome;
                 ReportMatch {
                     origin: (**origin).clone(),
                     blob_metadata: (**blob_metadata).clone(),
-                    m: match_item.clone(),
+                    m: sanitized_match,
                     comment: None,
                     visible: match_item.visible,
                     match_confidence: match_item.rule.confidence(),
-                    validation_response_body: match_item.validation_response_body.clone(),
-                    validation_response_status: match_item.validation_response_status,
-                    validation_success: match_item.validation_success,
-                    validation_outcome: match_item.validation_outcome,
+                    validation_response_body: sanitized_validation_body,
+                    validation_response_status: sanitized_validation_status,
+                    validation_success: sanitized_validation_success,
+                    validation_outcome: sanitized_validation_outcome,
                 }
             })
             .collect())
@@ -1066,14 +1120,47 @@ impl DetailsReporter {
                             .entry(name.to_uppercase())
                             .or_insert_with(|| cap.raw_value().to_string());
                     }
-                    build_revoke_command(
-                        rm.m.rule.id(),
-                        revocation,
-                        &raw_snippet,
-                        &merged_vars,
-                        akid_from_captures.as_deref(),
-                        akid_from_body.as_deref(),
-                    )
+                    let mut revoke_secret = raw_snippet.clone();
+                    let mut bindings_complete = true;
+                    if let Some(crate::rules::Validation::Betterleaks(validation)) =
+                        &rm.m.rule.syntax().validation
+                        && let Some(bindings) = &validation.capabilities.revocation_bindings
+                    {
+                        if let Some(value) = resolve_betterleaks_capability_source(
+                            &bindings.secret,
+                            &raw_snippet,
+                            validation,
+                            &merged_vars,
+                        ) {
+                            revoke_secret = value.to_string();
+                        } else {
+                            bindings_complete = false;
+                        }
+                        for (name, source) in &bindings.variables {
+                            let Some(value) = resolve_betterleaks_capability_source(
+                                source,
+                                &raw_snippet,
+                                validation,
+                                &merged_vars,
+                            ) else {
+                                bindings_complete = false;
+                                break;
+                            };
+                            merged_vars.insert(name.to_ascii_uppercase(), value.to_string());
+                        }
+                    }
+                    bindings_complete
+                        .then(|| {
+                            build_revoke_command(
+                                rm.m.rule.id(),
+                                revocation,
+                                &revoke_secret,
+                                &merged_vars,
+                                akid_from_captures.as_deref(),
+                                akid_from_body.as_deref(),
+                            )
+                        })
+                        .flatten()
                 } else {
                     None
                 }
@@ -1086,8 +1173,10 @@ impl DetailsReporter {
 
         FindingReporterRecord {
             rule: RuleMetadata {
-                name: rm.m.rule.name().to_string(),
+                name: display_rule_id(rm.m.rule.id()),
                 id: rm.m.rule.id().to_string(),
+                description: rm.m.rule.name().to_string(),
+                title: finding_title(rm.m.rule.id()),
             },
             finding: FindingRecordData {
                 snippet,
@@ -1275,6 +1364,12 @@ impl DetailsReporter {
         }
 
         let ds = self.datastore.lock().unwrap();
+        let non_authoritative_fingerprints: BTreeSet<String> = ds
+            .get_matches()
+            .iter()
+            .filter(|message| !message.2.rule.syntax().is_authoritative())
+            .map(|message| message.2.finding_fingerprint.to_string())
+            .collect();
         let raw_results = ds.access_map_results();
 
         if raw_results.is_empty() {
@@ -1282,7 +1377,12 @@ impl DetailsReporter {
         }
 
         let mut entries = Vec::new();
-        for mapped in raw_results {
+        for mapped in raw_results.iter().filter(|mapped| {
+            !mapped
+                .finding_fingerprints
+                .iter()
+                .any(|fingerprint| non_authoritative_fingerprints.contains(fingerprint))
+        }) {
             let result = &mapped.result;
             let account = summarize_account(&result.identity);
             let mut grouped: BTreeMap<Vec<String>, Vec<String>> = BTreeMap::new();
@@ -1323,7 +1423,7 @@ impl DetailsReporter {
             });
         }
 
-        Some(entries)
+        (!entries.is_empty()).then_some(entries)
     }
 
     #[doc(hidden)]
@@ -1336,8 +1436,20 @@ impl DetailsReporter {
         }
 
         let ds = self.datastore.lock().unwrap();
+        let non_authoritative_fingerprints: BTreeSet<String> = ds
+            .get_matches()
+            .iter()
+            .filter(|message| !message.2.rule.syntax().is_authoritative())
+            .map(|message| message.2.finding_fingerprint.to_string())
+            .collect();
         ds.access_map_results()
             .iter()
+            .filter(|mapped| {
+                !mapped
+                    .finding_fingerprints
+                    .iter()
+                    .any(|fingerprint| non_authoritative_fingerprints.contains(fingerprint))
+            })
             .map(|mapped| AlertAccessMapEntry {
                 finding_fingerprints: mapped.finding_fingerprints.clone(),
                 // Report output represents a mapped identity as one resource when the provider
@@ -1667,8 +1779,14 @@ pub struct ScanReportSummary {
 
 #[derive(Serialize, JsonSchema, Clone, Debug)]
 pub struct RuleMetadata {
+    /// The display title combining the short and fully qualified rule IDs.
+    pub title: String,
+    /// The short display ID, with a built-in rule namespace removed.
     pub name: String,
+    /// The globally unique rule identifier.
     pub id: String,
+    /// The human-readable description declared by the rule.
+    pub description: String,
 }
 
 #[derive(Serialize, JsonSchema, Clone, Debug)]
@@ -1766,7 +1884,7 @@ mod tests {
         ]);
 
         let cmd = build_validate_command(
-            "kingfisher.vercel.1",
+            "custom.vercel.token",
             &validation,
             "vcp_testtoken",
             &dependent,
@@ -1781,7 +1899,7 @@ mod tests {
             "command should not include CHECKSUM var: {}",
             cmd
         );
-        assert!(cmd.contains("kingfisher validate --rule kingfisher.vercel.1"));
+        assert!(cmd.contains("kingfisher validate --rule custom.vercel.token"));
     }
 
     #[test]
@@ -1792,7 +1910,7 @@ mod tests {
         )]);
 
         let cmd = build_validate_command(
-            "kingfisher.aws.4",
+            "custom.aws.session-token",
             &crate::rules::Validation::AWS,
             "session-token",
             &dependent,
@@ -1837,7 +1955,7 @@ mod tests {
         });
 
         let cmd = build_revoke_command(
-            "kingfisher.example.1",
+            "custom.example.token",
             &revocation,
             "secret",
             &BTreeMap::new(),
@@ -1846,8 +1964,56 @@ mod tests {
         );
 
         let cmd = cmd.expect("command should still be emitted when vars are missing");
-        assert!(cmd.contains("kingfisher revoke --rule kingfisher.example.1"));
+        assert!(cmd.contains("kingfisher revoke --rule custom.example.token"));
         assert!(cmd.contains("'secret'"));
+    }
+
+    #[test]
+    fn betterleaks_aws_revocation_binding_uses_component_as_secret() {
+        let mut rules = crate::defaults::get_builtin_rules(Some(Confidence::Low)).unwrap();
+        let syntax = rules.rules.remove("betterleaks.aws-access-token").unwrap();
+        let Some(crate::rules::Validation::Betterleaks(validation)) = &syntax.validation else {
+            panic!("AWS should use Betterleaks validation");
+        };
+        let bindings = validation.capabilities.revocation_bindings.as_ref().unwrap();
+        let component_variable = validation.components["aws-secret-access-key"].clone();
+        let mut variables = BTreeMap::from([(
+            component_variable,
+            "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
+        )]);
+        let finding_secret = "AKIAIOSFODNN7EXAMPLE";
+        let revocation_secret = resolve_betterleaks_capability_source(
+            &bindings.secret,
+            finding_secret,
+            validation,
+            &variables,
+        )
+        .unwrap()
+        .to_string();
+        for (name, source) in &bindings.variables {
+            let value = resolve_betterleaks_capability_source(
+                source,
+                finding_secret,
+                validation,
+                &variables,
+            )
+            .unwrap()
+            .to_string();
+            variables.insert(name.clone(), value);
+        }
+
+        let cmd = build_revoke_command(
+            &syntax.id,
+            syntax.revocation.as_ref().unwrap(),
+            &revocation_secret,
+            &variables,
+            None,
+            None,
+        )
+        .unwrap();
+
+        assert!(cmd.contains("--var AKID='AKIAIOSFODNN7EXAMPLE'"), "{cmd}");
+        assert!(cmd.ends_with("'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'"), "{cmd}");
     }
 
     fn sample_scan_args() -> ScanArgs {
@@ -2027,6 +2193,11 @@ mod tests {
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         }));
 
         let blob_id = BlobId::new(b"blob-data");
@@ -2154,6 +2325,58 @@ mod tests {
         let actionable = reporter.get_filtered_matches(false).unwrap();
         assert_eq!(actionable.len(), 3);
         assert!(actionable.iter().all(|finding| finding.validation_outcome.is_actionable()));
+    }
+
+    #[test]
+    fn report_preserves_declared_custom_yaml_rule_name() {
+        let temp = tempdir().unwrap();
+        let reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
+                temp.path().to_path_buf(),
+            ))),
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+        let (mut report_match, _) = sample_report_match("", StatusCode::OK.as_u16(), false);
+        let rule = Arc::get_mut(&mut report_match.m.rule).expect("sample rule should be unique");
+        rule.syntax.name = "Legacy Custom YAML Rule Name".to_string();
+        rule.syntax.id = "private.legacy-rule.1234".to_string();
+
+        let record = reporter.build_finding_record(&report_match, &sample_scan_args());
+
+        assert_eq!(record.rule.name, "private.legacy-rule.1234");
+        assert_eq!(record.rule.id, "private.legacy-rule.1234");
+        assert_eq!(record.rule.description, "Legacy Custom YAML Rule Name");
+    }
+
+    #[test]
+    fn report_titles_strip_builtin_rule_namespaces() {
+        assert_eq!(display_rule_id("betterleaks.gcp-api-key"), "gcp-api-key");
+        assert_eq!(display_rule_id("veles.secrets/npmjsaccesstoken"), "secrets/npmjsaccesstoken");
+        assert_eq!(display_rule_id("custom.gcp-api-key"), "custom.gcp-api-key");
+    }
+
+    #[test]
+    fn report_uses_rule_id_title_and_rule_name_description_for_veles() {
+        let temp = tempdir().unwrap();
+        let reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
+                temp.path().to_path_buf(),
+            ))),
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+        let (mut report_match, _) = sample_report_match("", StatusCode::OK.as_u16(), false);
+        let rule = Arc::get_mut(&mut report_match.m.rule).expect("sample rule should be unique");
+        rule.syntax.name = "npm Access Token".to_string();
+        rule.syntax.id = "veles.secrets/npmjsaccesstoken".to_string();
+
+        let record = reporter.build_finding_record(&report_match, &sample_scan_args());
+
+        assert_eq!(record.rule.name, "secrets/npmjsaccesstoken");
+        assert_eq!(record.rule.description, "npm Access Token");
     }
 
     #[test]
@@ -2441,17 +2664,29 @@ mod tests {
 
 impl From<finding_data::FindingDataEntry> for ReportMatch {
     fn from(e: finding_data::FindingDataEntry) -> Self {
+        let mut match_val = e.match_val;
+        let non_authoritative = !match_val.rule.syntax().is_authoritative();
+        if non_authoritative {
+            match_val.validation_response_body = None;
+            match_val.validation_response_status = 100;
+            match_val.validation_success = false;
+            match_val.validation_outcome = kingfisher_core::ValidationOutcome::NotAttempted;
+        }
+        let validation_response_body = match_val.validation_response_body.clone();
+        let validation_response_status = match_val.validation_response_status;
+        let validation_success = match_val.validation_success;
+        let validation_outcome = match_val.validation_outcome;
         ReportMatch {
             origin: e.origin,
             blob_metadata: e.blob_metadata,
-            m: e.match_val,
+            m: match_val,
             comment: e.match_comment,
             visible: e.visible,
             match_confidence: e.match_confidence,
-            validation_response_body: e.validation_response_body.clone(),
-            validation_response_status: e.validation_response_status,
-            validation_success: e.validation_success,
-            validation_outcome: e.validation_outcome,
+            validation_response_body,
+            validation_response_status,
+            validation_success,
+            validation_outcome,
         }
     }
 }

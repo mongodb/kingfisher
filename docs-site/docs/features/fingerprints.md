@@ -9,7 +9,7 @@ Every reported finding carries a **64-bit fingerprint** that acts as a stable, p
 It lets the scanner **deduplicate** repeated hits of the *same logical issue* while still treating different locations as distinct.
 
 ```bash
-🔓 AWS SECRET ACCESS KEY => [KINGFISHER.AWS.2]
+🔓 AWS ACCESS TOKEN => [BETTERLEAKS.AWS-ACCESS-TOKEN]
  |Finding.......: 4HKmwiS1GzI[...]2TF6zYz7
  |Fingerprint...: 14085685380484734428
  |Confidence....: medium

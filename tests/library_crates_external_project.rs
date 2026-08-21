@@ -116,5 +116,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or(0);
     assert!(rules_count > 0, "expected builtin rules to load\nstdout:\n{stdout}");
 
+    let findings_count = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("findings="))
+        .and_then(|v| v.parse::<usize>().ok())
+        .unwrap_or(0);
+    assert!(
+        findings_count > 0,
+        "expected embedded Betterleaks rules to find the token\nstdout:\n{stdout}"
+    );
+
     Ok(())
 }

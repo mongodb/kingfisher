@@ -593,7 +593,12 @@ pub(crate) fn make_test_record(
 ) -> crate::reporter::FindingReporterRecord {
     use crate::reporter::{FindingRecordData, FindingReporterRecord, RuleMetadata, ValidationInfo};
     FindingReporterRecord {
-        rule: RuleMetadata { name: rule_id.to_string(), id: rule_id.to_string() },
+        rule: RuleMetadata {
+            title: format!("{} => [{}]", rule_id.to_uppercase(), rule_id.to_uppercase()),
+            name: rule_id.to_string(),
+            id: rule_id.to_string(),
+            description: rule_id.to_string(),
+        },
         finding: FindingRecordData {
             snippet: "AKIAEXAMPLE_REDACTED_TOKEN_12345".to_string(),
             fingerprint: fingerprint.to_string(),
@@ -833,7 +838,12 @@ mod tests {
             FindingRecordData, FindingReporterRecord, RuleMetadata, ValidationInfo,
         };
         FindingReporterRecord {
-            rule: RuleMetadata { name: rule_id.to_string(), id: rule_id.to_string() },
+            rule: RuleMetadata {
+                title: format!("{} => [{}]", rule_id.to_uppercase(), rule_id.to_uppercase()),
+                name: rule_id.to_string(),
+                id: rule_id.to_string(),
+                description: rule_id.to_string(),
+            },
             finding: FindingRecordData {
                 snippet: "AKIAEXAMPLE_REDACTED_TOKEN_12345".to_string(),
                 fingerprint: fingerprint.to_string(),
@@ -890,7 +900,8 @@ mod tests {
     fn dry_run_payload_stays_redacted_when_sink_includes_secrets() {
         let mut sink = test_sink("https://example.com/webhook");
         sink.include_secret = true;
-        let finding = record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive);
+        let finding =
+            record_with("betterleaks.aws-access-token", "fp1", "High", VO::VerifiedActive);
         let findings = vec![&finding];
         let summary = AlertSummary::from_filtered_findings(&findings, None, &HashMap::new());
 
@@ -916,7 +927,8 @@ mod tests {
             access_map_entry(&["fp-mapped"], &["queue-a"], true),
         ];
         let impact = build_access_map_impact(&access_map);
-        let finding = record_with("kingfisher.aws.1", "fp-mapped", "High", VO::VerifiedActive);
+        let finding =
+            record_with("betterleaks.aws-access-token", "fp-mapped", "High", VO::VerifiedActive);
         let summary = AlertSummary::from_filtered_findings(&[&finding], None, &impact);
 
         assert_eq!(summary.impacted_resources, 3);
@@ -939,8 +951,12 @@ mod tests {
             sink.min_confidence = ConfidenceLevel::High;
             sink.prevent_empty = true;
 
-            let findings =
-                vec![record_with("kingfisher.aws.1", "fp1", "Medium", VO::VerifiedActive)];
+            let findings = vec![record_with(
+                "betterleaks.aws-access-token",
+                "fp1",
+                "Medium",
+                VO::VerifiedActive,
+            )];
             dispatch_with_context(&[sink], &findings, &[], None, false).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
@@ -958,8 +974,12 @@ mod tests {
             sink.min_confidence = ConfidenceLevel::High;
             sink.prevent_empty = false;
 
-            let findings =
-                vec![record_with("kingfisher.aws.1", "fp1", "Medium", VO::VerifiedActive)];
+            let findings = vec![record_with(
+                "betterleaks.aws-access-token",
+                "fp1",
+                "Medium",
+                VO::VerifiedActive,
+            )];
             dispatch_with_context(&[sink], &findings, &[], None, false).await;
 
             let requests = server.received_requests().await.unwrap();
@@ -1005,8 +1025,12 @@ mod tests {
             sink.prevent_empty = true;
             sink.finding_filter = AlertFindingFilter::OnlyActive;
 
-            let findings =
-                vec![record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedInactive)];
+            let findings = vec![record_with(
+                "betterleaks.aws-access-token",
+                "fp1",
+                "High",
+                VO::VerifiedInactive,
+            )];
             dispatch_with_context(&[sink], &findings, &[], None, false).await;
 
             let requests = server.received_requests().await.unwrap();
@@ -1028,8 +1052,18 @@ mod tests {
             sink.finding_filter = AlertFindingFilter::AccessMapOnly;
             sink.min_confidence = ConfidenceLevel::Low;
 
-            let mapped = record_with("kingfisher.aws.1", "fp-mapped", "High", VO::VerifiedActive);
-            let unmapped = record_with("kingfisher.aws.2", "fp-other", "High", VO::VerifiedActive);
+            let mapped = record_with(
+                "betterleaks.aws-access-token",
+                "fp-mapped",
+                "High",
+                VO::VerifiedActive,
+            );
+            let unmapped = record_with(
+                "betterleaks.aws-secret-access-key",
+                "fp-other",
+                "High",
+                VO::VerifiedActive,
+            );
             let access_map = vec![access_map_entry(
                 &["fp-mapped"],
                 &["arn:aws:s3:::bucket-a", "arn:aws:s3:::bucket-b"],
@@ -1064,7 +1098,7 @@ mod tests {
             sink.prevent_empty = true;
 
             let inactive_but_mapped =
-                record_with("kingfisher.gitlab.1", "fp-gitlab", "High", VO::VerifiedInactive);
+                record_with("betterleaks.gitlab-pat", "fp-gitlab", "High", VO::VerifiedInactive);
             let access_map = vec![access_map_entry(&["fp-gitlab"], &["group/project"], true)];
 
             dispatch_with_context(&[sink], &[inactive_but_mapped], &access_map, None, false).await;
@@ -1084,7 +1118,12 @@ mod tests {
             sink.finding_filter = AlertFindingFilter::AccessMapOnly;
             sink.prevent_empty = true;
 
-            let finding = record_with("kingfisher.aws.1", "fp-mapped", "High", VO::VerifiedActive);
+            let finding = record_with(
+                "betterleaks.aws-access-token",
+                "fp-mapped",
+                "High",
+                VO::VerifiedActive,
+            );
             let access_map = vec![access_map_entry(&["fp-mapped"], &["mapping failed"], false)];
 
             dispatch_with_context(&[sink], &[finding], &access_map, None, false).await;
@@ -1104,8 +1143,13 @@ mod tests {
             sink.finding_filter = AlertFindingFilter::AccessMapOnly;
 
             let findings = vec![
-                record_with("kingfisher.aws.1", "fp-first", "High", VO::VerifiedActive),
-                record_with("kingfisher.aws.1", "fp-second", "High", VO::VerifiedActive),
+                record_with("betterleaks.aws-access-token", "fp-first", "High", VO::VerifiedActive),
+                record_with(
+                    "betterleaks.aws-access-token",
+                    "fp-second",
+                    "High",
+                    VO::VerifiedActive,
+                ),
             ];
             let access_map = vec![access_map_entry(
                 &["fp-first", "fp-second"],
@@ -1134,7 +1178,12 @@ mod tests {
             sink.finding_filter = AlertFindingFilter::AccessMapOnly;
             sink.prevent_empty = true;
 
-            let findings = vec![record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive)];
+            let findings = vec![record_with(
+                "betterleaks.aws-access-token",
+                "fp1",
+                "High",
+                VO::VerifiedActive,
+            )];
             dispatch_with_context(&[sink], &findings, &[], None, false).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
@@ -1149,7 +1198,12 @@ mod tests {
                 .await;
 
             let sink = test_sink(&server.uri());
-            let findings = vec![record_with("kingfisher.aws.1", "fp1", "High", VO::VerifiedActive)];
+            let findings = vec![record_with(
+                "betterleaks.aws-access-token",
+                "fp1",
+                "High",
+                VO::VerifiedActive,
+            )];
             dispatch_with_context(&[sink], &findings, &[], None, true).await;
 
             assert_eq!(server.received_requests().await.unwrap().len(), 0);
@@ -1167,8 +1221,18 @@ mod tests {
             sink.finding_filter = AlertFindingFilter::OnlyActive;
 
             let findings = vec![
-                record_with("kingfisher.aws.1", "fp-active", "High", VO::VerifiedActive),
-                record_with("kingfisher.aws.2", "fp-inactive", "High", VO::VerifiedInactive),
+                record_with(
+                    "betterleaks.aws-access-token",
+                    "fp-active",
+                    "High",
+                    VO::VerifiedActive,
+                ),
+                record_with(
+                    "betterleaks.aws-secret-access-key",
+                    "fp-inactive",
+                    "High",
+                    VO::VerifiedInactive,
+                ),
             ];
             dispatch_with_context(&[sink], &findings, &[], None, false).await;
 

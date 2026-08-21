@@ -498,6 +498,7 @@ fn build_access_map(
         provider_metadata: Some(ProviderMetadata {
             version: Some(api_version.to_string()),
             enterprise: None,
+            authorization_evidence: None,
         }),
         fingerprint: None,
     }

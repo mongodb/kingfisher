@@ -13,9 +13,29 @@ use crate::{
     validation_body::{self, ValidationResponseBody},
 };
 
-use super::{BlobMatch, captures::SerializableCaptures};
+use super::{
+    BlobMatch,
+    captures::{SerializableCapture, SerializableCaptures},
+};
 
 use kingfisher_scanner::primitives::compute_finding_fingerprint;
+
+/// Select the capture used by externally persisted finding fingerprints.
+///
+/// Imported Betterleaks rules serialize their selected secret as `TOKEN`. Rules without
+/// Betterleaks capture metadata retain the historical second-entry fallback.
+fn external_fingerprint_value(rule: &Rule, captures: &SerializableCaptures) -> &'static str {
+    let capture = if rule.betterleaks_secret_group().is_some() {
+        captures
+            .captures
+            .iter()
+            .find(|capture| capture.name.is_some_and(|name| name.eq_ignore_ascii_case("TOKEN")))
+            .or_else(|| captures.captures.first())
+    } else {
+        captures.captures.get(1).or_else(|| captures.captures.first())
+    };
+    capture.map_or("", SerializableCapture::raw_value)
+}
 
 // -------------------------------------------------------------------------------------------------
 // OwnedBlobMatch
@@ -43,6 +63,11 @@ pub struct OwnedBlobMatch {
 impl OwnedBlobMatch {
     /// Refresh the semantic outcome after legacy validation fields change.
     pub fn refresh_validation_outcome(&mut self) {
+        if !self.rule.syntax().is_authoritative() {
+            self.validation_success = false;
+            self.validation_outcome = ValidationOutcome::NotAttempted;
+            return;
+        }
         if matches!(
             self.validation_outcome,
             ValidationOutcome::LocallyDerived | ValidationOutcome::InvalidMaterial
@@ -80,22 +105,7 @@ impl OwnedBlobMatch {
     }
 
     pub fn from_blob_match(blob_match: BlobMatch) -> Self {
-        // EXTERNAL FINGERPRINT: Use get(1).or_else(get(0)) for backward compatibility.
-        //
-        // This indexing is intentionally different from the internal `validation_dedup_key()`
-        // (which uses get(0)) to maintain stable external fingerprints. Changing this would break:
-        // - Historical baselines that rely on fingerprint matching
-        // - Dedup entries stored in external systems
-        //
-        // For rules with nested captures like (?<REGEX>...(ABC)...), this may pick up
-        // the inner group, but that behavior is now established and must be preserved.
-        let matching_finding = blob_match
-            .captures
-            .captures
-            .get(1)
-            .or_else(|| blob_match.captures.captures.first())
-            .map(|capture| capture.raw_value().as_bytes().to_vec())
-            .unwrap_or_default();
+        let finding_value = external_fingerprint_value(&blob_match.rule, &blob_match.captures);
 
         let mut owned_blob_match = OwnedBlobMatch {
             rule: blob_match.rule,
@@ -109,11 +119,9 @@ impl OwnedBlobMatch {
             calculated_entropy: blob_match.calculated_entropy,
             finding_fingerprint: 0, //default
             is_base64: blob_match.is_base64,
-            dependent_captures: std::collections::BTreeMap::new(),
+            dependent_captures: blob_match.dependent_captures,
         };
 
-        // Convert matching_finding to a &str (using lossy conversion if needed)
-        let finding_value = std::str::from_utf8(&matching_finding).unwrap_or("");
         // Use blob_id as the file/commit identifier
         let file_or_commit = &blob_match.blob_id.to_string();
 
@@ -186,6 +194,11 @@ pub struct Match {
 impl Match {
     /// Refresh the semantic outcome after applying a cached validation result.
     pub fn refresh_validation_outcome(&mut self) {
+        if !self.rule.syntax().is_authoritative() {
+            self.validation_success = false;
+            self.validation_outcome = ValidationOutcome::NotAttempted;
+            return;
+        }
         if matches!(
             self.validation_outcome,
             ValidationOutcome::LocallyDerived | ValidationOutcome::InvalidMaterial
@@ -210,18 +223,8 @@ impl Match {
         origin_type: &'a str,
     ) -> Self {
         let offset_span = owned_blob_match.matching_input_offset_span;
-        // EXTERNAL FINGERPRINT: Use get(1).or_else(get(0)) for backward compatibility.
-        // See comment in from_blob_match() for why this differs from validation_dedup_key().
-        let matching_finding_bytes = owned_blob_match
-            .captures
-            .captures
-            .get(1)
-            .or_else(|| owned_blob_match.captures.captures.first())
-            .map(|capture| capture.raw_value().as_bytes())
-            .unwrap_or_default();
-
-        // The fingerprint will be based on the content of the secret.
-        let finding_value_for_fp = std::str::from_utf8(matching_finding_bytes).unwrap_or("");
+        let finding_value_for_fp =
+            external_fingerprint_value(&owned_blob_match.rule, &owned_blob_match.captures);
 
         let source_span =
             loc_mapping.map(|lm| lm.get_source_span(&offset_span)).unwrap_or(SourceSpan {
@@ -294,5 +297,129 @@ impl MatcherStats {
         self.blobs_scanned += other.blobs_scanned;
         self.bytes_seen += other.bytes_seen;
         self.bytes_scanned += other.bytes_scanned;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use kingfisher_core::ValidationOutcome;
+
+    use super::*;
+    use crate::{
+        blob::Blob,
+        rules::rule::{Confidence, RuleSyntax},
+    };
+
+    const APP_CONFIG_PATTERN: &str = r#"(?i)Endpoint=(?P<azure_appconfig_endpoint>https://[a-z0-9-]+\.azconfig\.io);Id=(?P<azure_appconfig_id>[^;\s'"]{4,80});Secret=([A-Za-z0-9+/]{36,100}={0,2})"#;
+
+    fn app_config_rule(secret_group: Option<usize>) -> Arc<Rule> {
+        Arc::new(Rule::new(RuleSyntax {
+            name: "Azure App Configuration".into(),
+            id: "test.azure-app-configuration".into(),
+            pattern: APP_CONFIG_PATTERN.into(),
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: secret_group,
+            authoritative: true,
+            vectorscan_compatible: true,
+            min_entropy: 0.0,
+            confidence: Confidence::High,
+            visible: true,
+            examples: vec![],
+            negative_examples: vec![],
+            references: vec![],
+            validation: None,
+            revocation: None,
+            depends_on_rule: vec![],
+            pattern_requirements: None,
+            tls_mode: None,
+        }))
+    }
+
+    fn app_config_captures(rule: &Rule, secret: &str) -> SerializableCaptures {
+        let input = format!("Endpoint=https://demo.azconfig.io;Id=shared-id;Secret={secret}");
+        let regex = rule.syntax().as_regex().unwrap();
+        let captures = regex.captures(input.as_bytes()).unwrap();
+        SerializableCaptures::from_captures_with_secret_group(
+            &captures,
+            input.as_bytes(),
+            &regex,
+            rule.betterleaks_secret_group(),
+        )
+    }
+
+    fn owned_from_captures(
+        rule: Arc<Rule>,
+        blob: &Blob,
+        captures: SerializableCaptures,
+    ) -> OwnedBlobMatch {
+        OwnedBlobMatch::from_blob_match(BlobMatch {
+            rule,
+            blob_id: blob.id_ref(),
+            matching_input: b"",
+            matching_input_offset_span: OffsetSpan::from_range(50..90),
+            association_offset_span: OffsetSpan::from_range(50..90),
+            captures,
+            validation_response_body: None,
+            validation_response_status: StatusCode::CONTINUE,
+            validation_success: false,
+            validation_outcome: ValidationOutcome::NotAttempted,
+            calculated_entropy: 0.0,
+            is_base64: false,
+            dependent_captures: std::collections::BTreeMap::new(),
+        })
+    }
+
+    #[test]
+    fn explicit_secret_group_fingerprints_selected_secret_in_both_conversions() {
+        const SECRET_A: &str = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        const SECRET_B: &str = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+
+        let rule = app_config_rule(Some(3));
+        let blob = Blob::from_bytes(b"stable blob identity".to_vec());
+        let owned_a1 =
+            owned_from_captures(Arc::clone(&rule), &blob, app_config_captures(&rule, SECRET_A));
+        let owned_a2 =
+            owned_from_captures(Arc::clone(&rule), &blob, app_config_captures(&rule, SECRET_A));
+        let owned_b =
+            owned_from_captures(Arc::clone(&rule), &blob, app_config_captures(&rule, SECRET_B));
+
+        assert_eq!(
+            owned_a1.finding_fingerprint,
+            compute_finding_fingerprint(SECRET_A, &blob.id().to_string(), 50, 90)
+        );
+        assert_eq!(owned_a1.finding_fingerprint, owned_a2.finding_fingerprint);
+        assert_ne!(owned_a1.finding_fingerprint, owned_b.finding_fingerprint);
+
+        let converted_a1 = Match::convert_owned_blobmatch_to_match(None, &owned_a1, "file");
+        let converted_a2 = Match::convert_owned_blobmatch_to_match(None, &owned_a2, "file");
+        let converted_b = Match::convert_owned_blobmatch_to_match(None, &owned_b, "file");
+        assert_eq!(
+            converted_a1.finding_fingerprint,
+            compute_finding_fingerprint(SECRET_A, "file", 50, 90)
+        );
+        assert_eq!(converted_a1.finding_fingerprint, converted_a2.finding_fingerprint);
+        assert_ne!(converted_a1.finding_fingerprint, converted_b.finding_fingerprint);
+    }
+
+    #[test]
+    fn custom_rule_fingerprints_keep_legacy_second_capture() {
+        let rule = app_config_rule(None);
+        let blob = Blob::from_bytes(b"stable custom blob identity".to_vec());
+        let owned = owned_from_captures(
+            Arc::clone(&rule),
+            &blob,
+            app_config_captures(&rule, "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"),
+        );
+
+        assert_eq!(
+            owned.finding_fingerprint,
+            compute_finding_fingerprint("shared-id", &blob.id().to_string(), 50, 90)
+        );
+        let converted = Match::convert_owned_blobmatch_to_match(None, &owned, "file");
+        assert_eq!(
+            converted.finding_fingerprint,
+            compute_finding_fingerprint("shared-id", "file", 50, 90)
+        );
     }
 }

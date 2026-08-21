@@ -20,6 +20,8 @@ use tokio_postgres::{
 use tokio_postgres_rustls::MakeRustlsConnect;
 use tracing::debug;
 
+use super::http_validation::{SSRF_BLOCKED_MESSAGE, check_host_resolvable};
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 static INIT_PROVIDER: OnceLock<()> = OnceLock::new();
@@ -89,12 +91,25 @@ pub fn parse_postgres_url(postgres_url: &str) -> Result<Config> {
 }
 
 /// Validate a Postgres connection URL.
-pub async fn validate_postgres(postgres_url: &str, lax_tls: bool) -> Result<(bool, Vec<String>)> {
+pub async fn validate_postgres(
+    postgres_url: &str,
+    lax_tls: bool,
+    allow_internal_ips: bool,
+) -> Result<(bool, Vec<String>)> {
     let mut cfg = parse_postgres_url(postgres_url)?;
 
     if has_any_local_host(&cfg) {
         debug!("Skipping Postgres validation: host is localhost/loopback or unix socket");
         return Ok((false, vec!["skipped localhost/loopback host".into()]));
+    }
+
+    // SSRF gate: the host list comes from scanned (untrusted) content, so every
+    // host must clear the same public-IP check the HTTP/gRPC/JWT validators use
+    // before we dial it. `tokio_postgres::Config` allows multiple hosts, so all
+    // of them are checked.
+    if let Err(e) = check_config_hosts(&cfg, allow_internal_ips).await {
+        debug!("Skipping Postgres validation: {e}");
+        return Ok((false, vec![SSRF_BLOCKED_MESSAGE.into()]));
     }
 
     let original_mode = cfg.get_ssl_mode();
@@ -103,6 +118,35 @@ pub async fn validate_postgres(postgres_url: &str, lax_tls: bool) -> Result<(boo
     }
 
     check_postgres_db_connection(cfg, original_mode, lax_tls).await
+}
+
+/// Run the shared SSRF gate over every host/port pair the driver would dial.
+///
+/// Fails closed: an empty host list is refused rather than silently allowed.
+async fn check_config_hosts(cfg: &Config, allow_internal_ips: bool) -> Result<(), String> {
+    let hosts = cfg.get_hosts();
+    if hosts.is_empty() {
+        return Err("Postgres URL resolved to no hosts".to_string());
+    }
+
+    let ports = cfg.get_ports();
+    for (idx, host) in hosts.iter().enumerate() {
+        // `tokio_postgres` allows either one port for all hosts or one per host.
+        let port = ports.get(idx).or_else(|| ports.first()).copied().unwrap_or(5432);
+        match host {
+            #[cfg(unix)]
+            Host::Unix(path) => {
+                return Err(format!("refusing unix-socket Postgres target: {}", path.display()));
+            }
+            Host::Tcp(host) => {
+                check_host_resolvable(host, port, allow_internal_ips)
+                    .await
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn has_any_local_host(cfg: &Config) -> bool {
@@ -245,4 +289,53 @@ fn server_requires_encryption(err_msg: &str) -> bool {
 
 fn missing_cluster_identifier(err_msg: &str) -> bool {
     err_msg.contains("missing cluster identifier")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rejects_private_ipv4_host() {
+        let (valid, meta) =
+            validate_postgres("postgres://user:pass@10.0.0.1:5432/app", false, false)
+                .await
+                .unwrap();
+        assert!(!valid);
+        assert_eq!(meta, vec![SSRF_BLOCKED_MESSAGE.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn rejects_rfc1918_172_16_host() {
+        let (valid, meta) =
+            validate_postgres("postgres://user:pass@172.17.0.1:5432/app", false, false)
+                .await
+                .unwrap();
+        assert!(!valid);
+        assert_eq!(meta, vec![SSRF_BLOCKED_MESSAGE.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn rejects_when_any_host_in_a_multi_host_url_is_internal() {
+        // The gate must consider every host, not just the first one.
+        let (valid, meta) = validate_postgres(
+            "postgres://user:pass@8.8.8.8:5432,192.168.1.5:5432/app",
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(!valid);
+        assert_eq!(meta, vec![SSRF_BLOCKED_MESSAGE.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn still_skips_loopback_with_the_dedicated_message() {
+        let (valid, meta) =
+            validate_postgres("postgres://user:pass@127.0.0.1:5432/app", false, false)
+                .await
+                .unwrap();
+        assert!(!valid);
+        assert_eq!(meta, vec!["skipped localhost/loopback host".to_string()]);
+    }
 }

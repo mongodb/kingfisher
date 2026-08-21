@@ -3,7 +3,7 @@
     {
       "rule": {
         "name": "Alibaba Access Key Secret",
-        "id": "kingfisher.alibabacloud.2"
+        "id": "betterleaks.alibaba-secret-key"
       },
       "finding": {
         "snippet": "m0qx7h2v4n8c9t3b6p1r5w0kzsdjf",
@@ -24,7 +24,7 @@
     {
       "rule": {
         "name": "Alibaba Access Key Secret",
-        "id": "kingfisher.alibabacloud.2"
+        "id": "betterleaks.alibaba-secret-key"
       },
       "finding": {
         "snippet": "z91trw6fap8kq2xmd4s7h3b0vnclpf",
@@ -33,7 +33,7 @@
         "entropy": "4.44",
         "validation": {
           "status": "Inactive Credential",
-          "response": "Validation skipped - missing dependent rules: kingfisher.alibabacloud.1, kingfisher.alibabacloud.1"
+          "response": "Validation skipped - missing dependent rules: betterleaks.alibaba-access-key-id"
         },
         "language": "Unknown",
         "line": 8,
@@ -44,8 +44,8 @@
     },
     {
       "rule": {
-        "name": "AWS Secret Access Key",
-        "id": "kingfisher.aws.2"
+        "name": "AWS Access Token",
+        "id": "betterleaks.aws-access-token"
       },
       "finding": {
         "snippet": "dB9PyxlN/qa8sF0tJ4uM2qZr7eVw6TgHkC0nBpZq",
@@ -80,6 +80,57 @@
         "risky": ["s3:GetObject"],
         "read_only": ["s3:ListBucket"]
       },
+      "provider_metadata": {
+        "version": null,
+        "enterprise": null,
+        "authorization_evidence": {
+          "principal": {
+            "id": "arn:aws:iam::123456789012:user/deploy-bot",
+            "kind": "user",
+            "canonical_id": "arn:aws:iam::123456789012:user/deploy-bot",
+            "name": "deploy-bot",
+            "groups": ["deployers"],
+            "tags": { "owner": "platform" },
+            "attributes": { "iam_id": "AIDAEXAMPLE" }
+          },
+          "policies": [
+            {
+              "id": "arn:aws:iam::123456789012:policy/Deploy:v3:arn:aws:iam::123456789012:group/deployers",
+              "name": "Deploy",
+              "kind": "managed",
+              "attached_to": "arn:aws:iam::123456789012:group/deployers",
+              "attached_via": "arn:aws:iam::123456789012:user/deploy-bot",
+              "version": "v3",
+              "statements": [
+                {
+                  "id": "deploy#assume",
+                  "sid": "AssumeAdmin",
+                  "effect": "Allow",
+                  "actions": ["sts:AssumeRole"],
+                  "resources": ["arn:aws:iam::123456789012:role/Admin"]
+                }
+              ]
+            }
+          ],
+          "paths": [
+            {
+              "direction": "outbound",
+              "status": "potential",
+              "hops": [
+                {
+                  "from": "arn:aws:iam::123456789012:user/deploy-bot",
+                  "to": "arn:aws:iam::123456789012:role/Admin",
+                  "relationship": "can_assume_role"
+                }
+              ],
+              "evidence": ["deploy#assume", "trust:Admin#deployers"]
+            }
+          ],
+          "limitations": [
+            "Role paths are inferred from visible IAM policies; Kingfisher does not assume discovered roles."
+          ]
+        }
+      },
       "groups": [
         {
           "resources": ["arn:aws:s3:::prod-bucket", "arn:aws:s3:::prod-logs"],
@@ -101,6 +152,58 @@
         "privilege_escalation": [],
         "risky": ["compute.instances.get"],
         "read_only": ["compute.instances.list"]
+      },
+      "provider_metadata": {
+        "version": null,
+        "enterprise": null,
+        "authorization_evidence": {
+          "principal": {
+            "id": "scanner@test-project.iam.gserviceaccount.com",
+            "kind": "service_account",
+            "canonical_id": "projects/-/serviceAccounts/scanner@test-project.iam.gserviceaccount.com",
+            "attributes": { "project_id": "test-project", "disabled": "false" }
+          },
+          "policies": [
+            {
+              "id": "gcp:folders/456:roles/compute.viewer:0",
+              "name": "roles/compute.viewer",
+              "kind": "iam_binding",
+              "attached_to": "scanner@test-project.iam.gserviceaccount.com",
+              "scope": "folders/456",
+              "statements": [
+                {
+                  "id": "gcp:folders/456:roles/compute.viewer:0#0",
+                  "effect": "Allow",
+                  "actions": ["compute.instances.get", "compute.instances.list"],
+                  "resources": ["folders/456"],
+                  "principals": ["serviceAccount:scanner@test-project.iam.gserviceaccount.com"]
+                }
+              ]
+            }
+          ],
+          "paths": [
+            {
+              "direction": "outbound",
+              "status": "potential",
+              "hops": [
+                {
+                  "from": "scanner@test-project.iam.gserviceaccount.com",
+                  "to": "deployer@test-project.iam.gserviceaccount.com",
+                  "relationship": "can_mint_access_token"
+                }
+              ],
+              "evidence": ["iam.serviceAccounts.getAccessToken"]
+            }
+          ],
+          "hierarchy": [
+            { "kind": "project", "id": "projects/test-project" },
+            { "kind": "folder", "id": "folders/456" },
+            { "kind": "organization", "id": "organizations/123" }
+          ],
+          "limitations": [
+            "Resource inventory is limited to the project associated with the credential."
+          ]
+        }
       },
       "groups": [
         {

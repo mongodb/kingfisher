@@ -148,7 +148,7 @@ Kingfisher's blast-radius feature transforms secret detection from a simple aler
 * Visualize the Blast Radius: See exactly which resources (S3 buckets, EC2 instances, projects, storage containers) are exposed and at risk.
  
 
-Add `--access-map` to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with blast-radius data in the `access_map` field, including the resources and permissions the key can access (grouped when identical).
+Add `--access-map` to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with blast-radius data in the `access_map` field, including the resources and permissions the key can access (grouped when identical). AWS and GCP entries can also include policy provenance, hierarchy context, principal attributes, and potential identity paths under `provider_metadata.authorization_evidence`.
 - If you validated cloud credentials without `--access-map`, Kingfisher will remind you on stderr to rerun with the flag so blast-radius results appear in the output.
 - Run `kingfisher view ./kingfisher.json` to explore a report locally in a local web UI (opens your browser automatically when a report is provided).
 - Or use `kingfisher scan --view-report ...` to generate a JSON report, start the viewer at `http://127.0.0.1:7890`, and open it in your browser.
@@ -246,20 +246,20 @@ This is useful for:
 - Checking if a credential is still active before rotation
 - Validating secrets from external sources (password managers, ticketing systems, etc.)
 
-> **Note:** The `kingfisher.` prefix is optional for built-in rules. You can use `--rule aws` instead of `--rule kingfisher.aws`.
+> **Note:** Built-in rules use the `betterleaks.` namespace. The prefix is optional for short selectors: `--rule github-pat` is equivalent to `--rule betterleaks.github-pat`.
 
 To reduce API pressure during validation, you can limit request rate:
 
 - `--validation-rps <RPS>` applies a global rate limit to network validators.
 - `--validation-rps-rule <RULE_SELECTOR=RPS>` applies a rule-scoped override and can be repeated.
 
-Rule selectors use the same prefix behavior as `--rule`: `github=2` targets `kingfisher.github.*`.
+Rule selectors use the same prefix behavior as `--rule`: `github=2` targets the `betterleaks.github-*` family.
 
 ```bash
 # Global limit for all validation requests
 kingfisher scan ./repo --validation-rps 5
 
-# Per-rule overrides (prefix match, kingfisher. prefix optional)
+# Per-rule overrides (prefix match, betterleaks. prefix optional)
 kingfisher scan ./repo \
   --validation-rps 10 \
   --validation-rps-rule github=2 \
@@ -271,34 +271,20 @@ kingfisher validate --rule github "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
 ```
 
 ```bash
-# Validate an OpsGenie API key (using rule prefix matching)
-kingfisher validate --rule opsgenie "12345678-9abc-def0-1234-56789abcdef0"
-
-# Validate an Atlassian Admin API key against the Organizations API
-kingfisher validate --rule kingfisher.atlassian.3 "AT..."
+# Validate a GitHub PAT (using a short Betterleaks selector)
+kingfisher validate --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 # Validate from stdin
 echo "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" | kingfisher validate --rule github -
 
 # TOON output for LLMs and agent tooling
-kingfisher validate --rule slack "xoxb-..." --format toon
+kingfisher validate --rule github-pat "ghp_..." --format toon
 
 # JSON output for scripting
-kingfisher validate --rule slack "xoxb-..." --format json
-
-# AWS credentials - use --arg to auto-assign additional values
-kingfisher validate --rule aws --arg AKIAIOSFODNN7EXAMPLE \
-  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-
-# Or use --var if you know the variable name (explicit rule ID still works)
-kingfisher validate --rule kingfisher.aws.2 --var AKID=AKIAIOSFODNN7EXAMPLE \
-  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-
-# GCP service account (pass JSON as secret)
-kingfisher validate --rule gcp "$(cat service-account.json)"
+kingfisher validate --rule github-pat "ghp_..." --format json
 
 # MongoDB connection string
-kingfisher validate --rule mongodb.3 \
+kingfisher validate --rule mongodb-connection-string \
   "mongodb+srv://user:password@cluster.mongodb.net/db"
 
 # PostgreSQL connection
@@ -310,23 +296,22 @@ kingfisher validate --rule jwt \
   "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
 ```
 
-**Supported validators:** HTTP, Grpc, AWS, GCP, MongoDB, MySQL, Postgres, JDBC, JWT, Azure Storage, and Coinbase.
+**Supported validators:** Betterleaks validation expressions are imported by default, including HTTP and supported cloud helpers. Kingfisher 1.x custom rules can also use HTTP, Grpc, AWS, GCP, MongoDB, MySQL, Postgres, JDBC, JWT, Azure Storage, Coinbase, raw validators, and local Ethereum validation.
 
 **Exit codes:** Returns `0` if any matching rule validates the secret as valid, `1` if all are invalid or an error occurred.
 
 **Passing additional values (`--arg` and `--var`):**
 
-Some validators need more than just the secret. For example, AWS needs both an access key ID and the secret key (see the rule for `dependent_rule` section):
+Some validators need more than just the secret. Betterleaks component rules normally supply these values during scans; direct validation can supply them explicitly:
 
 - `--arg VALUE` — Auto-assigns values to template variables (in alphabetical order). Use when you don't know the exact variable name.
 - `--var NAME=VALUE` — Explicitly sets a variable. Use when you know the exact name, or to override `--arg`.
 
 ```bash
-# --arg auto-assigns to AKID (the only non-TOKEN variable for AWS)
-kingfisher validate --rule aws --arg AKIAEXAMPLE "secret_key"
-
-# --var for explicit assignment
-kingfisher validate --rule aws --var AKID=AKIAEXAMPLE "secret_key"
+# The AWS access-token validator needs its secret-key component
+kingfisher validate --rule aws-access-token \
+  --var AWS_SECRET_ACCESS_KEY="secret_key" \
+  "AKIAEXAMPLE000000000"
 ```
 
 **Provider endpoint overrides (`--endpoint` and `--endpoint-config`):**
@@ -353,8 +338,8 @@ kingfisher validate --rule github \
   --endpoint github=https://ghe.corp.example.com \
   "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# Revoke a self-managed GitLab PAT
-kingfisher revoke --rule gitlab \
+# A Kingfisher 1.x custom GitLab rule can use the same endpoint override
+kingfisher revoke --rules-path ./custom-rules.yml --rule custom.gitlab.pat \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "glpat-xxxxxxxxxxxxxxxxxxxx"
 
@@ -380,11 +365,11 @@ endpoints:
 kingfisher scan ./repo --endpoint-config ./kingfisher-endpoints.yml --allow-internal-ips
 ```
 
-**Rule prefix matching:** Use partial rule IDs like `opsgenie` instead of the full `kingfisher.opsgenie.1`. If the prefix matches multiple rules, **all matching rules with compatible variables are tried**:
+**Rule prefix matching:** Use short IDs such as `github-pat` instead of `betterleaks.github-pat`. If a prefix matches multiple rules, **all matching rules with compatible variables are tried**:
 
 ```bash
-$ kingfisher validate --rule aws --arg AKIAEXAMPLE "secret_key"
-Rule:     AWS Secret Access Key (kingfisher.aws.2)
+$ kingfisher validate --rule github-pat "ghp_..."
+Rule:     GitHub Personal Access Token (betterleaks.github-pat)
 Result:   ✓ VALID
 Response: arn:aws:iam::123456789012:user/example
 ```
@@ -393,16 +378,15 @@ For scans, repeat `--rule` and `--exclude-rule` as needed:
 
 ```bash
 kingfisher scan ./repo \
-  --rule kingfisher.github.1 \
-  --rule kingfisher.github.2 \
-  --exclude-rule kingfisher.openai.1 \
-  --exclude-rule kingfisher.openai.2
+  --rule betterleaks.github-pat \
+  --rule betterleaks.github-fine-grained-pat \
+  --exclude-rule betterleaks.openai-api-key
 ```
 
 You can also use family prefixes on the CLI:
 
 ```bash
-kingfisher scan ./repo --rule kingfisher.github --exclude-rule kingfisher.openai
+kingfisher scan ./repo --rule betterleaks.github --exclude-rule betterleaks.openai
 ```
 
 The same selectors also work in `kingfisher.yaml` under `rules.enabled` and
@@ -411,20 +395,23 @@ The same selectors also work in `kingfisher.yaml` under `rules.enabled` and
 ```yaml
 rules:
   enabled:
-    - kingfisher.github.1   # include exact rule IDs
-    - kingfisher.github.2
+    - betterleaks.github-pat
+    - betterleaks.github-fine-grained-pat
   disabled:
-    - kingfisher.openai.1   # exclude exact rule IDs
-    - kingfisher.openai.2
+    - betterleaks.openai-api-key
 ```
 
-Use a prefix like `kingfisher.github` if you want to include or exclude an
-entire family instead of single rules. Wildcards like `kingfisher.g*` are not
+Use a prefix like `betterleaks.github` if you want to include or exclude an
+entire family instead of single rules. Wildcards like `betterleaks.g*` are not
 supported.
 
 ### Direct secret revocation with `kingfisher revoke`
 
-When you need to invalidate a known token immediately, use `kingfisher revoke` to call the rule's `revocation` configuration without scanning files. Revocation requests use the same Liquid templating and response matchers as `validation`.
+Use `kingfisher revoke` to invoke either a mapped Betterleaks revocation capability or a Kingfisher
+1.x custom rule's `revocation` configuration without scanning files. Betterleaks does not currently
+provide revocation metadata, so built-in actions are maintained as a detection-free capability
+overlay and joined to upstream rule IDs at build time. HTTP actions use the same Liquid templating
+and response matchers as Kingfisher 1.x `validation`.
 
 This is useful for:
 - Responding to a leaked credential quickly
@@ -432,31 +419,25 @@ This is useful for:
 - Automating cleanup after rotation
 
 ```bash
-# Revoke a Slack token
-kingfisher revoke --rule slack "xoxb-..."
+# Revoke a mapped Betterleaks GitHub PAT
+kingfisher revoke --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# Revoke a GitHub PAT
-kingfisher revoke --rule github "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# AWS expects the secret access key positionally and the access-key ID as AKID
+kingfisher revoke --rule aws-access-token \
+  --var AKID=AKIAIOSFODNN7EXAMPLE \
+  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 
-# Revoke a GitLab personal access token (self revoke)
-kingfisher revoke --rule gitlab "glpat-xxxxxxxxxxxxxxxxxxxx"
-
-# Revoke an Atlassian API token (requires account_id, tokenId, admin access token)
-kingfisher revoke --rule atlassian --arg "<account_id>" --arg "<token_id>" "<admin_access_token>"
-
-# Revoke AWS credentials (sets access key to Inactive)
-kingfisher revoke --rule aws --arg "AKIAIOSFODNN7EXAMPLE" "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-
-# Revoke a GCP service account key (JSON key file)
-kingfisher revoke --rule gcp '{"type":"service_account","project_id":"example","private_key_id":"abcd1234","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n","client_email":"example@project.iam.gserviceaccount.com","token_uri":"https://oauth2.googleapis.com/token"}'
-
-kingfisher revoke --rule gcp "$(cat service-account.json)"
+# Revoke with a custom rule that defines `revocation:`
+kingfisher revoke \
+  --rules-path ./custom-rules.yml \
+  --rule custom.provider.token \
+  "secret"
 
 # JSON output for scripting
-kingfisher revoke --rule slack "xoxb-..." --format json
+kingfisher revoke --rules-path ./custom-rules.yml --rule custom.provider.token "secret" --format json
 
 # TOON output for LLMs and agent tooling
-kingfisher revoke --rule slack "xoxb-..." --format toon
+kingfisher revoke --rules-path ./custom-rules.yml --rule custom.provider.token "secret" --format toon
 ```
 
 **Exit codes:** Returns `0` if any matching rule reports a successful revocation, `1` if all are failures or an error occurred.
@@ -474,11 +455,11 @@ kingfisher scan /some/file --max-file-size 500
 
 ### Scan using a rule _family_ with one flag
 
-_(prefix matching: `--rule kingfisher.aws` loads `kingfisher.aws.*`)_
+_(prefix matching: `--rule betterleaks.aws` loads the Betterleaks AWS family)_
 
 ```bash
-# Only apply AWS-related rules (kingfisher.aws.1 + kingfisher.aws.2)
-kingfisher scan /path/to/repo --rule kingfisher.aws
+# Only apply Betterleaks AWS-related rules
+kingfisher scan /path/to/repo --rule betterleaks.aws
 ```
 
 ### Display rule performance statistics
@@ -914,8 +895,8 @@ kingfisher validate --rule github \
   --endpoint github=https://ghe.corp.example.com \
   "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# 6. Revoke (delete) a confirmed-leaked PAT against GHE
-kingfisher revoke --rule github \
+# 6. Revoke through a Kingfisher 1.x custom rule that defines revocation
+kingfisher revoke --rules-path ./custom-rules.yml --rule custom.github.pat \
   --endpoint github=https://ghe.corp.example.com \
   "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
@@ -1037,8 +1018,8 @@ kingfisher validate --rule gitlab \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "glpat-xxxxxxxxxxxxxxxxxxxx"
 
-# 6. Revoke (delete) a confirmed-leaked PAT against self-hosted GitLab
-kingfisher revoke --rule gitlab \
+# 6. Revoke through a Kingfisher 1.x custom rule that defines revocation
+kingfisher revoke --rules-path ./custom-rules.yml --rule custom.gitlab.pat \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "glpat-xxxxxxxxxxxxxxxxxxxx"
 ```
@@ -1529,7 +1510,7 @@ kingfisher scan --allow-internal-ips ./repo
 # Also works with direct validation against a self-hosted endpoint
 kingfisher validate --allow-internal-ips \
   --endpoint artifactory=http://localhost:8071 \
-  --rule kingfisher.artifactory.1 \
+  --rule betterleaks.artifactory-api-key \
   "AKCp..."
 ```
 

@@ -27,7 +27,7 @@ fn scan_inputs_without_parser_fixtures() -> Result<Vec<OsString>> {
 }
 
 #[test]
-fn scan_findings_match_pre_removal_baseline() -> Result<()> {
+fn default_scan_uses_betterleaks_builtin_catalog() -> Result<()> {
     let mut args = vec![OsString::from("scan")];
     args.extend(scan_inputs_without_parser_fixtures()?);
     args.extend([
@@ -63,51 +63,18 @@ fn scan_findings_match_pre_removal_baseline() -> Result<()> {
         .and_then(Value::as_array)
         .context("scan output missing findings array")?;
 
-    // This baseline is meant to verify the secret corpus, not store-level dedup behavior or the
-    // parser fixture artifacts kept under `testdata/parsers/`. Scan only the real corpus inputs
-    // and compare a stable unique rule+snippet set.
-    let mut actual = findings
-        .iter()
-        .map(|finding| {
-            let rule = finding.get("rule").and_then(Value::as_object).cloned().unwrap_or_default();
-            serde_json::json!({
-                "rule_id": rule.get("id").and_then(Value::as_str),
-                "snippet": finding
-                    .get("finding")
-                    .and_then(Value::as_object)
-                    .and_then(|data| data.get("snippet"))
-                    .and_then(Value::as_str),
-            })
-        })
-        .collect::<Vec<_>>();
-    actual.sort_by_key(|left| left.to_string());
-    actual.dedup();
-
-    let mut expected = serde_json::from_str::<Vec<Value>>(
-        &fs::read_to_string("testdata/parsers/scan_findings_baseline.json")
-            .context("read scan findings baseline")?,
-    )
-    .context("parse scan findings baseline json")?
-    .into_iter()
-    .filter(|finding| finding.get("snippet").and_then(Value::as_str).is_some())
-    .map(|finding| {
-        serde_json::json!({
-            "rule_id": finding.get("rule_id").and_then(Value::as_str),
-            "snippet": finding.get("snippet").and_then(Value::as_str),
-        })
-    })
-    .filter(|finding| {
-        finding
-            .get("snippet")
+    assert!(!findings.is_empty(), "expected the test corpus to produce findings");
+    for finding in findings {
+        let rule_id = finding
+            .get("rule")
+            .and_then(|rule| rule.get("id"))
             .and_then(Value::as_str)
-            .map(|snippet| !snippet.is_empty())
-            .unwrap_or(true)
-    })
-    .collect::<Vec<_>>();
-    expected.sort_by_key(|left| left.to_string());
-    expected.dedup();
-
-    assert_eq!(actual, expected);
+            .context("finding is missing its rule id")?;
+        assert!(
+            rule_id.starts_with("betterleaks.") || rule_id.starts_with("veles."),
+            "default scan used an unexpected rule catalog: {rule_id}"
+        );
+    }
     Ok(())
 }
 

@@ -57,7 +57,7 @@ async fn validates_mysql_secret_against_testcontainer() -> Result<()> {
     wait_for_port(HOST_ALIAS, port).await?;
 
     let uri = format!("mysql://root:secret@{HOST_ALIAS}:{port}/app");
-    let (is_valid, metadata) = validate_mysql(&uri, false).await?;
+    let (is_valid, metadata) = validate_mysql(&uri, false, true).await?;
 
     assert!(is_valid, "expected MySQL validation to succeed, got {metadata:?}");
     assert!(
@@ -87,7 +87,7 @@ async fn validates_postgres_secret_against_testcontainer() -> Result<()> {
     wait_for_port(HOST_ALIAS, port).await?;
 
     let uri = format!("postgres://postgres:secret@{HOST_ALIAS}:{port}/postgres");
-    let (is_valid, metadata) = validate_postgres(&uri, false).await?;
+    let (is_valid, metadata) = validate_postgres(&uri, false, true).await?;
 
     assert!(is_valid, "expected Postgres validation to succeed");
     assert!(metadata.is_empty(), "expected no metadata but found {metadata:?}");

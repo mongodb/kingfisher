@@ -14,137 +14,18 @@ Source repository: https://github.com/mongodb/kingfisher
 
 
 --------------------------------------------------------------------
-Upstream notices
+Nosey Parker
 --------------------------------------------------------------------
-Certain detection rules and validation definitions are adapted from the
-Veles secret detectors in OSV-SCALIBR:
-
-    https://github.com/google/osv-scalibr
-
-The adapted definitions were translated to Kingfisher YAML, modified for
-Vectorscan compatibility, and integrated with Kingfisher's validation model.
-The affected rule and implementation files are:
- * crates/kingfisher-rules/data/rules/anthropic.yml
- * crates/kingfisher-rules/data/rules/bitbucket.yml
- * crates/kingfisher-rules/data/rules/bitwarden.yml
- * crates/kingfisher-rules/data/rules/circleci.yml
- * crates/kingfisher-rules/data/rules/cloudflare.yml
- * crates/kingfisher-rules/data/rules/cursor.yml
- * crates/kingfisher-rules/data/rules/databricks.yml
- * crates/kingfisher-rules/data/rules/deno.yml
- * crates/kingfisher-rules/data/rules/discord.yml
- * crates/kingfisher-rules/data/rules/elastic.yml
- * crates/kingfisher-rules/data/rules/gcp.yml
- * crates/kingfisher-rules/data/rules/hcp.yml
- * crates/kingfisher-rules/data/rules/hashicorp.yml
- * crates/kingfisher-rules/data/rules/heroku.yml
- * crates/kingfisher-rules/data/rules/huggingface.yml
- * crates/kingfisher-rules/data/rules/onepassword.yml
- * crates/kingfisher-rules/data/rules/packagist.yml
- * crates/kingfisher-rules/data/rules/paystack.yml
- * crates/kingfisher-rules/data/rules/postman.yml
- * crates/kingfisher-rules/data/rules/pyx.yml
- * crates/kingfisher-rules/data/rules/rubygems.yml
- * crates/kingfisher-rules/data/rules/salesforce.yml
- * crates/kingfisher-rules/data/rules/sendgrid.yml
- * crates/kingfisher-rules/data/rules/square.yml
- * crates/kingfisher-rules/data/rules/stripe.yml
- * crates/kingfisher-rules/data/rules/supabase.yml
- * crates/kingfisher-rules/data/rules/tink.yml
-
-OSV-SCALIBR
-Copyright 2025-2026 Google LLC
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
---------------------------------------------------------------------
-
 Copyright 2022 Praetorian Security, Inc <https://praetorian.com>.
 
-This product includes software from the Nosey Parker project developed
-by Praetorian Security, Inc:
+This product includes software derived from the Nosey Parker project
+developed by Praetorian Security, Inc:
 
     https://github.com/praetorian-inc/noseyparker
 
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software
-distributed under the License is distributed on an "AS IS" BASIS,
-WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-See the License for the specific language governing permissions and
-limitations under the License.
-
---------------------------------------------------------------------
-
-Certain detection rules:
- * crates/kingfisher-rules/data/rules/redis.yml
- * crates/kingfisher-rules/data/rules/branchio.yml
- * crates/kingfisher-rules/data/rules/browserstack.yml
- * crates/kingfisher-rules/data/rules/cypress.yml
- * crates/kingfisher-rules/data/rules/keenio.yml
- * crates/kingfisher-rules/data/rules/wpengine.yml
- * crates/kingfisher-rules/data/rules/appcenter.yml
- * crates/kingfisher-rules/data/rules/calendly.yml
- * crates/kingfisher-rules/data/rules/delighted.yml
- * crates/kingfisher-rules/data/rules/deviantart.yml
- * crates/kingfisher-rules/data/rules/instagram.yml
- * crates/kingfisher-rules/data/rules/iterable.yml
- * crates/kingfisher-rules/data/rules/lokalise.yml
- * crates/kingfisher-rules/data/rules/azure-notification-hub.yml
- * crates/kingfisher-rules/data/rules/firebase.yml
- * crates/kingfisher-rules/data/rules/helpscout.yml
- * crates/kingfisher-rules/data/rules/kubernetes.yml
- * crates/kingfisher-rules/data/rules/pendo.yml
- * crates/kingfisher-rules/data/rules/razorpay.yml
- * crates/kingfisher-rules/data/rules/spotify.yml
- * crates/kingfisher-rules/data/rules/wakatime.yml
- * crates/kingfisher-rules/data/rules/zapier.yml
- * crates/kingfisher-rules/data/rules/zendesk.yml
- * crates/kingfisher-rules/data/rules/ansible.yml
- * crates/kingfisher-rules/data/rules/html.yml
- * crates/kingfisher-rules/data/rules/jamf.yml
- * crates/kingfisher-rules/data/rules/azureopenai.yml
- * crates/kingfisher-rules/data/rules/cisco.yml
- * crates/kingfisher-rules/data/rules/datadog.yml
- * crates/kingfisher-rules/data/rules/dbconn.yml
- * crates/kingfisher-rules/data/rules/dotnet-connstring.yml
- * crates/kingfisher-rules/data/rules/gpp.yml
- * crates/kingfisher-rules/data/rules/intra42.yml
- * crates/kingfisher-rules/data/rules/launchdarkly.yml
- * crates/kingfisher-rules/data/rules/mattermost.yml
- * crates/kingfisher-rules/data/rules/maven.yml
- * crates/kingfisher-rules/data/rules/posthog.yml
- * crates/kingfisher-rules/data/rules/powershell.yml
- * crates/kingfisher-rules/data/rules/rdp.yml
- * crates/kingfisher-rules/data/rules/s3uri.yml
- * crates/kingfisher-rules/data/rules/sentry.yml
- * crates/kingfisher-rules/data/rules/sqlddl.yml
- * crates/kingfisher-rules/data/rules/unattend.yml
- * crates/kingfisher-rules/data/rules/viewstate.yml
- * crates/kingfisher-rules/data/rules/wincmd.yml
-
-are derived in part from Titus (https://github.com/praetorian-inc/titus),
-which is licensed under the Apache License, Version 2.0.
-
-Titus
-Copyright 2026 Praetorian Security, Inc.
-
-This product includes software developed at Praetorian Security, Inc.
-(https://www.praetorian.com/).
+Kingfisher's scanning engine and architecture derive from Nosey Parker.
+Nosey Parker no longer supplies Kingfisher's detection rules; all built-in
+rules are now sourced from the Betterleaks project (see below).
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -159,80 +40,22 @@ See the License for the specific language governing permissions and
 limitations under the License.
 
 --------------------------------------------------------------------
+Built-in rules
+--------------------------------------------------------------------
+Kingfisher's built-in detection rules are sourced primarily from Betterleaks,
+with a small set adapted from Veles in OSV-SCALIBR. Upstream rule sources are
+fetched at build time and are not vendored in this repository.
 
-Certain detection rules:
- * crates/kingfisher-rules/data/rules/airtable.yml
- * crates/kingfisher-rules/data/rules/civo.yml
- * crates/kingfisher-rules/data/rules/exoscale.yml
- * crates/kingfisher-rules/data/rules/greptile.yml
- * crates/kingfisher-rules/data/rules/infomaniak.yml
- * crates/kingfisher-rules/data/rules/jwt.yml
- * crates/kingfisher-rules/data/rules/kimi.yml
- * crates/kingfisher-rules/data/rules/lighton.yml
- * crates/kingfisher-rules/data/rules/linear.yml
- * crates/kingfisher-rules/data/rules/mailgun.yml
- * crates/kingfisher-rules/data/rules/messagebird.yml
- * crates/kingfisher-rules/data/rules/newrelic.yml
- * crates/kingfisher-rules/data/rules/octopusdeploy.yml
- * crates/kingfisher-rules/data/rules/openshift.yml
- * crates/kingfisher-rules/data/rules/ovh.yml
- * crates/kingfisher-rules/data/rules/planetscale.yml
- * crates/kingfisher-rules/data/rules/polymarket.yml
- * crates/kingfisher-rules/data/rules/privateai.yml
- * crates/kingfisher-rules/data/rules/settlemint.yml
- * crates/kingfisher-rules/data/rules/sidekiq.yml
- * crates/kingfisher-rules/data/rules/slack.yml
- * crates/kingfisher-rules/data/rules/twitter.yml
- * crates/kingfisher-rules/data/rules/upstage.yml
- * crates/kingfisher-rules/data/rules/yandex.yml
-
-are derived in part from Betterleaks
-(https://github.com/betterleaks/betterleaks), which is licensed under the MIT
-License.
+Veles / OSV-SCALIBR
+https://github.com/google/osv-scalibr
+Copyright 2025-2026 Google LLC
+Licensed under the Apache License, Version 2.0; see LICENSE.
 
 Betterleaks
+https://github.com/betterleaks/betterleaks
 Copyright (c) 2026 Zachary Rice
 
-Permission is hereby granted, free of charge, to any person obtaining a copy
-of this software and associated documentation files (the "Software"), to deal
-in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
-copies of the Software, and to permit persons to whom the Software is
-furnished to do so, subject to the following conditions:
-
-The above copyright notice and this permission notice shall be included in all
-copies or substantial portions of the Software.
-
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
-LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
-SOFTWARE.
-
---------------------------------------------------------------------
-
-Certain detection rules:
- * crates/kingfisher-rules/data/rules/anthropic.yml
- * crates/kingfisher-rules/data/rules/cielo.yml
- * crates/kingfisher-rules/data/rules/etsy.yml
- * crates/kingfisher-rules/data/rules/flutterwave.yml
- * crates/kingfisher-rules/data/rules/freemius.yml
- * crates/kingfisher-rules/data/rules/gcp.yml
- * crates/kingfisher-rules/data/rules/google.yml
- * crates/kingfisher-rules/data/rules/jfrog.yml
- * crates/kingfisher-rules/data/rules/kraken.yml
- * crates/kingfisher-rules/data/rules/kucoin.yml
- * crates/kingfisher-rules/data/rules/pinecone.yml
- * crates/kingfisher-rules/data/rules/resend.yml
- * crates/kingfisher-rules/data/rules/trello.yml
-
-are derived in part from Gitleaks (https://github.com/gitleaks/gitleaks),
-which is licensed under the MIT License.
-
-Gitleaks
-Copyright (c) 2019 Zachary Rice
+MIT License
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

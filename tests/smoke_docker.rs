@@ -85,7 +85,7 @@ fn smoke_scan_docker_archive() -> anyhow::Result<()> {
             "--format",
             "json",
             "--rule",
-            "kingfisher.github.2",
+            "betterleaks.github-pat",
             "--no-validate",
             "--no-update-check",
         ])

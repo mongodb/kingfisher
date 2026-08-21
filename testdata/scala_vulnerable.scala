@@ -287,6 +287,7 @@ final class PathResolver(settings: Settings) {
   var password = "this_is_my_secrt" //NOKINGFISHER
   var i = 42        // mutable
   var password = "qwerty123"
+  val aws_access_key = "AKIA6ODU5DHT7VPXGCE4"
 
   val p = new Person("Joel Fleischman")
   var q = new Person("Joel Fleischman")

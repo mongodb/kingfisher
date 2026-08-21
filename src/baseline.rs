@@ -536,6 +536,11 @@ mod tests {
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         }))
     }
 

@@ -79,8 +79,8 @@ DOC_MAP = {
     ),
     "RULES.md": (
         "rules/overview.md",
-        "Writing Custom Rules",
-        "Write custom YAML-based detection rules with regex patterns, entropy thresholds, validation, revocation, and checksum intelligence.",
+        "Kingfisher 1.x Custom Rules",
+        "Write private Kingfisher 1.x YAML custom rules with regex patterns, validation, revocation, and checksums; contribute general rules to Betterleaks.",
     ),
     "ARCHITECTURE.md": (
         "reference/architecture.md",

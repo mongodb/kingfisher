@@ -76,6 +76,18 @@ flowchart TD
 
 Blast-radius mapping only runs for credential types Kingfisher knows how to authenticate with and enumerate. In the codebase, these map to `AccessMapRequest` variants recorded from validated findings (see `src/scanner/validation.rs`).
 
+### Authorization evidence output
+
+AWS and GCP results may populate `provider_metadata.authorization_evidence` in standalone and scan-time output. Its provider-neutral fields are:
+
+- `principal`: canonical identity, groups, tag-key presence, and provider attributes;
+- `policies`: policy or binding provenance and normalized statements;
+- `paths`: ordered identity hops with `outbound`/`inbound` direction and `potential`, `conditional`, or provider-specific status;
+- `hierarchy`: visible project, folder, or organization scopes; and
+- `limitations`: incomplete reads, traversal caps, and policy-evaluation constraints.
+
+Structured JSON, JSONL, BSON, TOON, and SARIF reports preserve the complete evidence payload. Pretty output summarizes paths, scan HTML summarizes evidence counts, and the standalone HTML report and interactive report viewer expose policy and path details without storing condition values.
+
 ## Providers and supported credential formats
 
 ### GitHub (`github`)
@@ -101,8 +113,7 @@ kingfisher access-map github ./github.token --format json > github.access-map.js
 ### GitLab (`gitlab`)
 
 - **Credential**: a single GitLab token string (read from a file for `kingfisher access-map gitlab <FILE>`).
-- **Token types supported**: any token accepted by GitLab’s `PRIVATE-TOKEN` header (PATs like `glpat-...`, plus other GitLab token types that work with that header).  
-  When available, Kingfisher also queries the token-self endpoint for metadata; some token types may not expose token details there.
+- **Token types supported**: any token accepted by GitLab’s `PRIVATE-TOKEN` header (PATs like `glpat-...`, plus other GitLab token types that work with that header).
 
 #### Standalone example (GitLab)
 
@@ -114,6 +125,10 @@ kingfisher access-map gitlab ./gitlab.token --format json > gitlab.access-map.js
 #### Notes (GitLab)
 
 - Blast-radius mapping currently uses `https://gitlab.com/api/v4/` as the API base.
+- Implementation provenance: identity and membership enumeration follow GitLab's vendor REST API
+  documentation for [the current user](https://docs.gitlab.com/api/users/#retrieve-the-current-user)
+  and [project listing](https://docs.gitlab.com/api/projects/#list-all-projects). Requests and
+  pagination use the MIT/Apache-2.0-licensed Rust `gitlab` client.
 
 ### Slack (`slack`)
 
@@ -168,6 +183,16 @@ kingfisher access-map aws ./aws.env --format json > aws.access-map.json
 
 Kingfisher performs read-only enumeration for the IAM principal and, when allowed by the credential, visible resources in several common AWS services including S3, EC2, IAM, Lambda, DynamoDB, KMS, Secrets Manager, SQS, SNS, RDS, ECR, and SSM Parameter Store. Enumeration follows paginated API responses, and IAM users include permissions inherited from IAM groups.
 
+When IAM read access is available, the result also includes `provider_metadata.authorization_evidence`:
+
+- canonical IAM identity metadata, user group membership, and principal tag-key presence;
+- managed and inline policy statements with attachment provenance, including group inheritance;
+- role trust-policy statements;
+- potential direct and one-additional-hop role-assumption paths; and
+- explicit coverage limits when IAM reads are denied or safety caps are reached.
+
+Role paths are derived passively. Kingfisher does not call `sts:AssumeRole` or mint credentials for a discovered role. A path marked `potential`, `conditional`, or `trust_only` is evidence for investigation, not proof that every request will succeed. Permissions boundaries, session policies, organization policies, resource control policies, resource policies, and request context can further restrict access. Condition values are used only for local evaluation and are not retained in reports; reports contain condition operator and key names.
+
 IAM policy summaries are intentionally conservative: explicit denies, `NotAction`, resource scoping, and conditions are called out in risk notes because a flat action list cannot fully reproduce AWS policy evaluation. Global services are mapped account-wide; regional services use the region selected by the AWS SDK configuration.
 
 ### Alibaba Cloud (`alibaba` / `aliyun`)
@@ -218,6 +243,10 @@ Kingfisher resolves the Alibaba Cloud caller identity with `sts:GetCallerIdentit
 ```bash
 kingfisher access-map gcp ./service-account.json --format json > gcp.access-map.json
 ```
+
+Kingfisher resolves the service account and reads visible project, folder, and organization IAM policies. Authorization evidence records the scope that contributed each role binding, expands roles into permissions, and records both inbound and outbound authorization-capability paths involving visible service accounts. Relationships distinguish access-token creation, OpenID-token creation, `actAs`, signing, and delegation permissions. The mapper also enumerates visible resources in the key's project across services including Cloud Storage, BigQuery, Secret Manager, Compute Engine, Cloud SQL, Pub/Sub, Cloud Run, Artifact Registry, GKE, Cloud KMS, Cloud Functions, Firestore, and Spanner.
+
+GCP analysis is best effort. Conditional bindings and deny policies are not fully evaluated, Google group membership is not resolved, service-account inventory is limited to its first API response, and resource enumeration is limited to the project associated with the credential even when an inherited folder or organization role can apply to other descendants. Outbound service-account paths are permission-based candidates; Kingfisher does not exhaustively read each target service account's IAM policy. These limits are included in `provider_metadata.authorization_evidence.limitations`.
 
 ### Microsoft Azure, Entra ID, and Microsoft Graph (`azure`)
 
@@ -326,6 +355,18 @@ printf '%s' 'postgres://user:pass@db.example.com:5432/mydb' > ./postgres.uri
 kingfisher access-map postgres ./postgres.uri --format json > postgres.access-map.json
 ```
 
+Kingfisher derives role attributes and memberships from PostgreSQL's documented
+[`pg_roles`](https://www.postgresql.org/docs/current/view-pg-roles.html) and
+[`pg_auth_members`](https://www.postgresql.org/docs/current/catalog-pg-auth-members.html) catalogs.
+Database checks use PostgreSQL's
+[`has_database_privilege`](https://www.postgresql.org/docs/current/functions-info.html) function;
+effective table privileges come from
+[`pg_catalog.pg_tables`](https://www.postgresql.org/docs/current/view-pg-tables.html) combined with
+[`has_table_privilege`](https://www.postgresql.org/docs/current/functions-info.html), so inherited
+role and `PUBLIC` privileges are included.
+The PostgreSQL source and documentation carrying these interfaces use the permissive PostgreSQL
+License.
+
 ### MongoDB (`mongodb` / `mongo`)
 
 - **Credential**: a single MongoDB connection URI string (read from a file), including `mongodb+srv://...` URIs.
@@ -345,9 +386,9 @@ kingfisher access-map mongodb ./mongodb.uri --format json > mongodb.access-map.j
   - Organization API tokens (commonly `api_org_...`)
 
 Kingfisher queries the `/api/whoami-v2` endpoint to resolve the token identity,
-role, and organization memberships. It uses Hugging Face's unified repository
-storage listing when available, with best-effort fallback enumeration, to map
-visible models, datasets, Spaces, and storage buckets. Resource visibility
+role, and organization memberships. It uses Hugging Face's vendor-documented unified repository
+storage listings for the user and each organization to map visible models, datasets, Spaces, and
+storage buckets. Resource visibility
 (`public`, `private`, or protected Spaces) and storage usage are included when
 reported by the API.
 
@@ -369,6 +410,10 @@ kingfisher access-map huggingface ./huggingface.token --format json > huggingfac
 - Organization roles (`no_access`, `read`, `contributor`, `write`, and `admin`)
   are recorded separately from the token role because effective access is the
   intersection of both.
+- Implementation provenance: the response fields and repository inventory routes are defined in
+  Hugging Face's [Hub OpenAPI schema](https://huggingface.co/.well-known/openapi.json). Identity and
+  token-role handling also follows the Apache-2.0
+  [`huggingface_hub` v0.24.3 SDK](https://github.com/huggingface/huggingface_hub/tree/v0.24.3).
 
 ### Gitea (`gitea`)
 
@@ -455,11 +500,13 @@ kingfisher access-map harness ./harness.token --format json > harness.access-map
 - **Credential**: a single OpenAI API key string (read from a file for `kingfisher access-map openai <FILE>`).
 - **Token types supported**: OpenAI keys accepted by `Authorization: Bearer <TOKEN>` (for example `sk-...`, `sk-proj-...`, `sk-svcacct-...`).
 
-Kingfisher performs read-only scope probing and best-effort resource enumeration via:
+Kingfisher performs only documented read-only inventory requests. It does not send synthetic write
+requests or infer access to one endpoint from another endpoint's response. Current inventory uses:
 
 - `GET https://api.openai.com/v1/models` to verify Models API read access and enumerate visible models.
-- `GET https://api.openai.com/v1/me` for token identity metadata when available.
 - `GET https://api.openai.com/v1/organization/projects` for project visibility when the key has permission.
+- For organization admin keys, documented GET-only project administration inventory: API keys,
+  service accounts, users, model policies, hosted-tool settings, and model rate limits.
 - `GET https://api.openai.com/v1/files` to enumerate visible uploaded files when the key has file-list access.
 - `GET https://api.openai.com/v1/assistants` to enumerate visible assistants when the key has assistant read access.
 - `GET https://api.openai.com/v1/fine_tuning/jobs` to enumerate visible fine-tuning jobs when the key has fine-tuning read access.
@@ -474,6 +521,15 @@ kingfisher access-map openai ./openai.token --format json > openai.access-map.js
 #### Notes (OpenAI)
 
 - Blast-radius mapping uses `https://api.openai.com/v1` as the API base.
+- Access is reported only when a list endpoint returns data successfully; no write permission or
+  inference capability is claimed from these read-only requests.
+- OpenAI does not expose a stable public identity endpoint for every API-key family, so the mapper
+  identifies the credential by key family and observed inventory rather than reusing an
+  undocumented identity response schema.
+- Endpoint selection follows OpenAI's vendor API reference for models, files, assistants,
+  fine-tuning jobs, and organization administration. Supported endpoints use the MIT-licensed Rust
+  `async-openai` client generated from OpenAI's
+  [OpenAPI specification](https://github.com/openai/openai-openapi/blob/master/openapi.yaml).
 
 ### Anthropic (`anthropic`)
 
@@ -607,7 +663,8 @@ kingfisher access-map monday ./monday.token --format json > monday.access-map.js
 - Blast-radius mapping currently uses `https://api.monday.com/v2` (GraphQL v2) as the API base.
 - monday.com API tokens do not carry granular scopes; permissions follow the underlying user's role (admin/member/viewer/guest).
 - `provider_metadata.version` carries the monday.com plan tier when exposed by the account.
-- Recorded during `scan --access-map` for validated `kingfisher.monday.1` findings.
+- The standalone provider remains available. The current Betterleaks catalog does not expose a
+  compatible validated monday.com rule for automatic `scan --access-map` collection.
 
 ### Asana (`asana`)
 
@@ -636,7 +693,8 @@ kingfisher access-map asana ./asana.token --format json > asana.access-map.json
 
 - Asana access tokens do not expose granular scopes. Access follows the underlying user's membership in each workspace, organization, and team.
 - `token_details.token_type` is classified from the token prefix (`personal_access_token_v2`, `personal_access_token_v1`, `oauth_or_legacy_pat`, or generic `asana_token`).
-- Recorded during `scan --access-map` for validated `kingfisher.asana.3`, `kingfisher.asana.4`, and `kingfisher.asana.5` findings only. `kingfisher.asana.1` is a client ID and `kingfisher.asana.2` is a client secret (requiring the client ID for an OAuth exchange), so neither is used on its own to enumerate user-level resources.
+- The standalone provider remains available. The current Betterleaks catalog does not expose a
+  compatible validated Asana rule for automatic `scan --access-map` collection.
 
 ### Pinecone (`pinecone`)
 
@@ -663,10 +721,18 @@ The `kingfisher blast-radius` and `kingfisher blast_radius` aliases also work fo
 
 - Pinecone API keys do not carry granular scopes; access follows the API key's project-level permissions, which include read and write (upsert/delete) against any index in the project.
 - Indexes with `deletion_protection: enabled` are flagged in the resource record but still accessible for read/write.
-- Recorded during `scan --access-map` (or the `--blast-radius` alias) for validated `kingfisher.pinecone.1` findings.
+- Recorded during `scan --access-map` (or the `--blast-radius` alias) for validated
+  `betterleaks.pinecone-api-key.1` and `betterleaks.pinecone-api-key.2` findings.
 
 ## Notes on blast-radius generation during `scan --access-map`
 
-- Blast-radius entries are only recorded for **validated** findings.
+- Blast-radius entries are recorded for **validated** findings. A capability may explicitly allow
+  a reachable 2xx result when that provider's validator cannot classify it more precisely (the
+  current GitLab mappings use this behavior).
 - Some providers require extra context that Kingfisher infers from the finding context or validation response (for example, Azure DevOps organization name).
-- Validated Hugging Face, Gitea, Bitbucket, Buildkite, Harness, OpenAI, Anthropic, Salesforce, Weights & Biases, Microsoft Teams, monday.com, Asana, and Pinecone credentials discovered during scans with `--access-map` (or the `--blast-radius` alias) are automatically collected and mapped, matching the existing behavior for other platforms.
+- Automatic collection is driven by successfully validated Betterleaks credential shapes with an
+  explicit Kingfisher access-map handler. Standalone providers remain usable even when Betterleaks
+  has no compatible validation rule.
+- Betterleaks ID-to-handler and component bindings live in
+  `crates/kingfisher-rules/data/imported-rules-capabilities.yml`. The build verifies those bindings
+  against the downloaded Betterleaks catalog; access-map Rust code does not match rule IDs.

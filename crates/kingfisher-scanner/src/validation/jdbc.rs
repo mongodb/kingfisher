@@ -19,7 +19,11 @@ pub fn generate_jdbc_cache_key(raw: &str) -> String {
 }
 
 /// Validate a JDBC connection string by dispatching to the supported backend validators.
-pub async fn validate_jdbc(jdbc_conn: &str, lax_tls: bool) -> Result<JdbcValidationOutcome> {
+pub async fn validate_jdbc(
+    jdbc_conn: &str,
+    lax_tls: bool,
+    allow_internal_ips: bool,
+) -> Result<JdbcValidationOutcome> {
     let trimmed = jdbc_conn.trim();
     if !trimmed.to_ascii_lowercase().starts_with("jdbc:") {
         return Err(anyhow!("JDBC connection string must start with `jdbc:`"));
@@ -33,9 +37,11 @@ pub async fn validate_jdbc(jdbc_conn: &str, lax_tls: bool) -> Result<JdbcValidat
     let subprotocol_lower = subprotocol.to_ascii_lowercase();
 
     match subprotocol_lower.as_str() {
-        "postgres" | "postgresql" | "postgis" => validate_postgres_jdbc(subname, lax_tls)
-            .await
-            .context("Postgres JDBC validation failed"),
+        "postgres" | "postgresql" | "postgis" => {
+            validate_postgres_jdbc(subname, lax_tls, allow_internal_ips)
+                .await
+                .context("Postgres JDBC validation failed")
+        }
         other => {
             debug!("Unsupported JDBC subprotocol encountered: {}", other);
             Ok(JdbcValidationOutcome {
@@ -50,9 +56,13 @@ pub async fn validate_jdbc(jdbc_conn: &str, lax_tls: bool) -> Result<JdbcValidat
     }
 }
 
-async fn validate_postgres_jdbc(subname: &str, lax_tls: bool) -> Result<JdbcValidationOutcome> {
+async fn validate_postgres_jdbc(
+    subname: &str,
+    lax_tls: bool,
+    allow_internal_ips: bool,
+) -> Result<JdbcValidationOutcome> {
     let normalized = normalize_postgres_url(subname)?;
-    let (ok, meta) = postgres::validate_postgres(&normalized, lax_tls).await?;
+    let (ok, meta) = postgres::validate_postgres(&normalized, lax_tls, allow_internal_ips).await?;
 
     let mut message = if ok {
         "JDBC Postgres connection is valid.".to_string()
@@ -71,7 +81,10 @@ async fn validate_postgres_jdbc(subname: &str, lax_tls: bool) -> Result<JdbcVali
 
     let status = if ok {
         StatusCode::OK
-    } else if meta.iter().any(|m| m.to_ascii_lowercase().contains("skip")) {
+    } else if meta.iter().any(|m| {
+        let lower = m.to_ascii_lowercase();
+        lower.contains("skip") || lower.contains("ssrf")
+    }) {
         StatusCode::CONTINUE
     } else {
         StatusCode::UNAUTHORIZED
@@ -122,4 +135,57 @@ fn normalize_postgres_url(subname: &str) -> Result<String> {
     }
 
     Ok(url.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rejects_private_ipv4_host() {
+        let outcome =
+            validate_jdbc("jdbc:postgresql://10.0.0.1:5432/app?user=u&password=p", false, false)
+                .await
+                .unwrap();
+        assert!(!outcome.valid);
+        assert_eq!(outcome.status, StatusCode::CONTINUE);
+        assert!(
+            outcome.message.contains("SSRF protection"),
+            "unexpected message: {}",
+            outcome.message
+        );
+    }
+
+    #[tokio::test]
+    async fn rejects_link_local_metadata_host() {
+        // 169.254.0.0/16 is additionally caught by the Postgres validator's own
+        // legacy link-local check, so only assert that it is refused — not which
+        // of the two gates refused it.
+        let outcome = validate_jdbc(
+            "jdbc:postgresql://169.254.169.254:5432/app?user=u&password=p",
+            false,
+            false,
+        )
+        .await
+        .unwrap();
+        assert!(!outcome.valid);
+        assert_eq!(outcome.status, StatusCode::CONTINUE);
+    }
+
+    #[tokio::test]
+    async fn rejects_rfc1918_host_that_the_legacy_check_missed() {
+        // 192.168.0.0/16 is not loopback, not unspecified, and not link-local,
+        // so before the SSRF gate this connection string was dialed for real.
+        let outcome =
+            validate_jdbc("jdbc:postgresql://192.168.1.5:5432/app?user=u&password=p", false, false)
+                .await
+                .unwrap();
+        assert!(!outcome.valid);
+        assert_eq!(outcome.status, StatusCode::CONTINUE);
+        assert!(
+            outcome.message.contains("SSRF protection"),
+            "unexpected message: {}",
+            outcome.message
+        );
+    }
 }

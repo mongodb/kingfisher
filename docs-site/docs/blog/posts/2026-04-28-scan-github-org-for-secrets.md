@@ -150,14 +150,13 @@ HTML report (`kingfisher view ./report.json` or `kingfisher scan /path/to/code -
 
 ## Revoke from the CLI
 
-For supported providers, you do not need to pivot into the provider console.
-Kingfisher can revoke directly:
+Kingfisher 1.x custom rules can define direct revocation when the provider API supports it:
 
 ```bash
-kingfisher revoke --rule kingfisher.aws.access_key.1 AKIAEXAMPLE...
+kingfisher revoke --rules-path ./custom-rules.yml --rule custom.aws.access-key SECRET
 ```
 
-Each rule that supports revocation declares the API call in its YAML. See
+The custom rule declares the API call in its YAML. See
 [`docs/RULES.md`](https://github.com/mongodb/kingfisher/blob/main/docs/RULES.md)
 for the schema and the current approach.
 

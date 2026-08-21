@@ -24,8 +24,10 @@ struct ToonScanMetadata {
 
 #[derive(Serialize)]
 struct ToonFindingRecord {
+    title: String,
     rule_id: String,
     rule_name: String,
+    description: String,
     validation_status: String,
     validation_outcome: kingfisher_core::ValidationOutcome,
     path: String,
@@ -52,8 +54,10 @@ impl ToonFindingRecord {
         let git = record.finding.git_metadata.as_ref();
 
         Self {
+            title: record.rule.title.clone(),
             rule_id: record.rule.id.clone(),
             rule_name: record.rule.name.clone(),
+            description: record.rule.description.clone(),
             validation_status: record.finding.validation.status.clone(),
             validation_outcome: record.finding.validation.outcome,
             path: record.finding.path.clone(),

@@ -40,7 +40,7 @@ fn scan_fails_for_bad_rule_yaml() {
 fn scan_fails_for_unsupported_http_method() {
     let tmp = TempDir::new().unwrap();
 
-    // Minimal rule with bogus HTTP verb “BREW”
+    // Minimal rule with an invalid HTTP method containing whitespace.
     fs::write(
         tmp.path().join("bad_method.yml"),
         r#"
@@ -52,7 +52,7 @@ rules:
       type: Http
       content:
         request:
-          method: BREW
+          method: "BREW SPACE"
           url: "https://example.com/"
           response_matcher:
             - report_response: true
@@ -79,8 +79,5 @@ rules:
         .assert()
         .failure() // CLI exits 0
         .code(200)
-        .stdout(
-            contains("BAD HTTP VERB") // finding header
-                .and(contains("Inactive Credential")),
-        ); // validation failed
+        .stdout(contains("Invalid HTTP method: BREW SPACE").and(contains("Inactive Credential"))); // validation failed
 }

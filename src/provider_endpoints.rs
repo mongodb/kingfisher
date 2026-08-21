@@ -9,6 +9,7 @@ use url::Url;
 use crate::cli::global::GlobalArgs;
 
 const GITHUB_API_BASE_URL: &str = "GITHUB_API_BASE_URL";
+const GITHUB_BASE_URL: &str = "GITHUB_BASE_URL";
 const GITHUB_WEB_BASE_URL: &str = "GITHUB_WEB_BASE_URL";
 const GITLAB_API_BASE_URL: &str = "GITLAB_API_BASE_URL";
 const GITEA_API_BASE_URL: &str = "GITEA_API_BASE_URL";
@@ -90,6 +91,7 @@ impl EndpointVars {
             match normalized.as_str() {
                 "github" => {
                     let github = normalize_github_endpoint(&endpoint)?;
+                    values.insert(GITHUB_BASE_URL.to_string(), github.api_base_url.clone());
                     values.insert(GITHUB_API_BASE_URL.to_string(), github.api_base_url);
                     values.insert(GITHUB_WEB_BASE_URL.to_string(), github.web_base_url);
                 }
@@ -144,19 +146,18 @@ struct GitHubEndpoint {
     web_base_url: String,
 }
 
-pub fn hydrate_endpoint_globals_for_rule(rule_id: &str, globals: &mut Object) {
+pub fn hydrate_endpoint_globals_for_rule(_rule_id: &str, globals: &mut Object) {
     hydrate_github_globals(globals);
     hydrate_artifactory_globals(globals);
     hydrate_confluence_globals(globals);
     hydrate_jira_dc_globals(globals);
-    if rule_id == "kingfisher.jira.2" {
-        hydrate_jira_cloud_globals(globals);
-    }
+    hydrate_jira_cloud_globals(globals);
 }
 
 pub fn endpoint_var_names() -> &'static [&'static str] {
     &[
         GITHUB_API_BASE_URL,
+        GITHUB_BASE_URL,
         GITHUB_WEB_BASE_URL,
         GITLAB_API_BASE_URL,
         GITEA_API_BASE_URL,
@@ -236,6 +237,7 @@ fn string_var(globals: &Object, name: &str) -> Option<String> {
 fn apply_builtin_defaults(globals: &mut Object) {
     for (name, value) in [
         (GITHUB_API_BASE_URL, "https://api.github.com"),
+        (GITHUB_BASE_URL, "https://api.github.com"),
         (GITHUB_WEB_BASE_URL, "https://github.com"),
         (GITLAB_API_BASE_URL, "https://gitlab.com/api/v4"),
         (GITEA_API_BASE_URL, "https://gitea.com/api/v1"),
@@ -389,7 +391,7 @@ mod tests {
     fn jira_cloud_hydrates_from_legacy_domain() {
         let mut globals = Object::new();
         globals.insert("DOMAIN".into(), Value::scalar("example.atlassian.net"));
-        hydrate_endpoint_globals_for_rule("kingfisher.jira.2", &mut globals);
+        hydrate_endpoint_globals_for_rule("custom.jira.token", &mut globals);
         assert_eq!(
             string_var(&globals, JIRA_CLOUD_BASE_URL).as_deref(),
             Some("https://example.atlassian.net")
@@ -400,7 +402,7 @@ mod tests {
     fn artifactory_hydrates_from_legacy_host() {
         let mut globals = Object::new();
         globals.insert("JFROGURL".into(), Value::scalar("repo.example.com"));
-        hydrate_endpoint_globals_for_rule("kingfisher.artifactory.1", &mut globals);
+        hydrate_endpoint_globals_for_rule("custom.artifactory.token", &mut globals);
         assert_eq!(
             string_var(&globals, ARTIFACTORY_BASE_URL).as_deref(),
             Some("https://repo.example.com")

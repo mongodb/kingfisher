@@ -267,6 +267,11 @@ mod tests {
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         };
         let rule = Arc::new(Rule::new(syntax));
         Match {
@@ -364,7 +369,10 @@ mod tests {
             json_output.get("findings").and_then(|v| v.as_array()).cloned().unwrap_or_default();
         assert!(!findings.is_empty(), "JSON output should not be empty");
         let first = &findings[0];
-        assert_eq!(first["rule"]["name"], "MockRule");
+        assert_eq!(first["rule"]["name"], "mock_rule_1");
+        assert_eq!(first["rule"]["description"], "MockRule");
+        assert_eq!(first["rule"]["id"], "mock_rule_1");
+        assert_eq!(first["rule"]["title"], "MOCK_RULE_1 => [MOCK_RULE_1]");
         assert_eq!(first["finding"]["language"], "Rust");
         Ok(())
     }

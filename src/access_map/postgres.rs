@@ -91,6 +91,15 @@ pub async fn map_access_from_uri(pg_url: &str) -> Result<AccessMapResult> {
     let server_version =
         query_scalar(&client, "SELECT version()").await.unwrap_or_else(|_| "unknown".into());
 
+    // PostgreSQL documents role attributes in pg_roles and effective memberships in
+    // pg_auth_members:
+    // https://www.postgresql.org/docs/current/view-pg-roles.html
+    // https://www.postgresql.org/docs/current/catalog-pg-auth-members.html
+    // Database/table checks below use the documented privilege inquiry functions and
+    // information_schema.role_table_grants:
+    // https://www.postgresql.org/docs/current/functions-info.html
+    // https://www.postgresql.org/docs/current/infoschema-role-table-grants.html
+
     // ── 2. Role attributes ───────────────────────────────────────────────────
     let role_attrs = query_role_attributes(&client, &current_user).await.unwrap_or_else(|e| {
         warn!("Postgres access-map: failed to query role attributes: {e}");
@@ -205,11 +214,7 @@ pub async fn map_access_from_uri(pg_url: &str) -> Result<AccessMapResult> {
             name: format!("{}.{}.{}", tp.database, tp.schema, tp.table),
             permissions: tp.privileges.clone(),
             risk: risk.into(),
-            reason: if let Some(ref size) = tp.estimated_size {
-                format!("Table with estimated size {size}")
-            } else {
-                "Table accessible by user".into()
-            },
+            reason: "Table privilege reported by information_schema.role_table_grants".into(),
         });
     }
 
@@ -248,6 +253,7 @@ pub async fn map_access_from_uri(pg_url: &str) -> Result<AccessMapResult> {
         provider_metadata: Some(super::ProviderMetadata {
             version: Some(server_version),
             enterprise: None,
+            authorization_evidence: None,
         }),
         fingerprint: None,
     })
@@ -308,7 +314,6 @@ struct TablePrivilege {
     schema: String,
     table: String,
     privileges: Vec<String>,
-    estimated_size: Option<String>,
 }
 
 async fn connect(pg_url: &str) -> Result<Client> {
@@ -485,48 +490,57 @@ async fn query_database_privileges(
 async fn query_table_privileges(client: &Client, username: &str) -> Result<Vec<TablePrivilege>> {
     let current_db = query_scalar(client, "SELECT current_database()").await?;
 
-    // Use information_schema to find tables the user has any privilege on.
+    // Enumerate ordinary user tables, then ask PostgreSQL's effective-privilege function for the
+    // complete table permission set. This includes privileges inherited through roles and PUBLIC,
+    // unlike role_table_grants, which reports direct grants only.
     let rows = client
         .query(
-            "SELECT table_schema, table_name, \
-                    array_agg(DISTINCT privilege_type ORDER BY privilege_type) as privileges \
-             FROM information_schema.role_table_grants \
-             WHERE grantee = $1 \
-               AND table_schema NOT IN ('pg_catalog', 'information_schema') \
-             GROUP BY table_schema, table_name \
-             ORDER BY table_schema, table_name",
-            &[&username],
+            "SELECT schemaname, tablename \
+             FROM pg_catalog.pg_tables \
+             WHERE schemaname NOT IN ('pg_catalog', 'information_schema') \
+             ORDER BY schemaname, tablename",
+            &[],
         )
         .await
-        .context("Failed to query role_table_grants")?;
+        .context("Failed to query pg_tables")?;
 
     let mut results = Vec::new();
     for row in &rows {
         let schema: String = row.get(0);
         let table: String = row.get(1);
-        let privileges: Vec<String> = row.get(2);
+        let qualified = quote_qualified_identifier(&schema, &table);
+        let mut privileges = Vec::new();
+        for privilege in
+            ["SELECT", "INSERT", "UPDATE", "DELETE", "TRUNCATE", "REFERENCES", "TRIGGER"]
+        {
+            let has = client
+                .query_one(
+                    "SELECT has_table_privilege($1, $2, $3)",
+                    &[&username, &qualified, &privilege],
+                )
+                .await
+                .with_context(|| format!("Failed to check {privilege} on {qualified}"))?
+                .get::<_, bool>(0);
+            if has {
+                privileges.push(privilege.to_string());
+            }
+        }
 
-        // Estimate table size (best-effort, read-only)
-        let size_query = format!(
-            "SELECT pg_size_pretty(pg_total_relation_size('{}.{}'))",
-            schema.replace('\'', "''"),
-            table.replace('\'', "''")
-        );
-        let estimated_size = match client.query_one(&size_query, &[]).await {
-            Ok(r) => Some(r.get::<_, String>(0)),
-            Err(_) => None,
-        };
-
-        results.push(TablePrivilege {
-            database: current_db.clone(),
-            schema,
-            table,
-            privileges,
-            estimated_size,
-        });
+        if !privileges.is_empty() {
+            results.push(TablePrivilege {
+                database: current_db.clone(),
+                schema,
+                table,
+                privileges,
+            });
+        }
     }
 
     Ok(results)
+}
+
+fn quote_qualified_identifier(schema: &str, table: &str) -> String {
+    format!("\"{}\".\"{}\"", schema.replace('"', "\"\""), table.replace('"', "\"\""))
 }
 
 fn derive_severity(attrs: &RoleAttributes, permissions: &PermissionSummary) -> Severity {
@@ -539,5 +553,35 @@ fn derive_severity(attrs: &RoleAttributes, permissions: &PermissionSummary) -> S
         Severity::Medium
     } else {
         Severity::Low
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn role_attributes_map_to_postgres_role_keywords() {
+        let attributes = RoleAttributes {
+            superuser: true,
+            create_role: true,
+            create_db: false,
+            login: true,
+            replication: false,
+            bypass_rls: false,
+            inherit: true,
+        };
+        assert_eq!(
+            attributes.to_permission_list(),
+            vec!["SUPERUSER", "CREATEROLE", "LOGIN", "INHERIT"]
+        );
+    }
+
+    #[test]
+    fn qualified_identifiers_escape_embedded_quotes() {
+        assert_eq!(
+            quote_qualified_identifier("tenant", "odd\"table"),
+            "\"tenant\".\"odd\"\"table\""
+        );
     }
 }

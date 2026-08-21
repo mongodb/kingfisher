@@ -130,17 +130,29 @@ pub fn format_response_body_for_display(body: &str, max_len: usize, strip_html: 
 /// Return (NAME, value, start, end) for the captures we care about.
 ///
 /// * Named captures keep their (upper-cased) name
-/// * Among unnamed captures, keep **only the first one** and call it "TOKEN"
+/// * Keep only the first named `TOKEN` capture
+/// * If there is no named `TOKEN`, call the first unnamed capture `TOKEN`
 pub fn process_captures(captures: &SerializableCaptures) -> Vec<(String, String, usize, usize)> {
     let mut saw_unnamed = false;
+    let mut saw_token = false;
+    let has_named_token = captures
+        .captures
+        .iter()
+        .any(|capture| capture.name.is_some_and(|name| name.eq_ignore_ascii_case("TOKEN")));
 
     captures
         .captures
         .iter()
         .filter_map(|cap| {
             if let Some(name) = &cap.name {
+                if name.eq_ignore_ascii_case("TOKEN") {
+                    if saw_token {
+                        return None;
+                    }
+                    saw_token = true;
+                }
                 Some((name.to_uppercase(), cap.raw_value().to_string(), cap.start, cap.end))
-            } else if !saw_unnamed {
+            } else if !has_named_token && !saw_unnamed {
                 saw_unnamed = true;
                 Some(("TOKEN".to_string(), cap.raw_value().to_string(), cap.start, cap.end))
             } else {
@@ -255,6 +267,27 @@ mod tests {
         };
         let result = process_captures(&captures);
         assert_eq!(result, vec![("TOKEN".to_string(), "abc".to_string(), 1usize, 4usize)]);
+    }
+
+    #[test]
+    fn named_token_suppresses_unnamed_token_fallback() {
+        let captures = SerializableCaptures {
+            captures: smallvec![
+                SerializableCapture {
+                    name: Some("TOKEN"),
+                    match_number: 2,
+                    start: 2,
+                    end: 4,
+                    value: "cd",
+                },
+                SerializableCapture { name: None, match_number: 1, start: 0, end: 2, value: "ab" },
+            ],
+        };
+
+        assert_eq!(
+            process_captures(&captures),
+            vec![("TOKEN".to_string(), "cd".to_string(), 2usize, 4usize)]
+        );
     }
     #[test]
     fn includes_whole_match_when_multiple() {

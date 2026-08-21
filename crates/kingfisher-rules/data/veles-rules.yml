@@ -1,0 +1,29 @@
+# Veles detectors are Go source, not a declarative rule catalog. This allowlist pins upstream and
+# selects validated detector families for which Betterleaks v1.8.0 lacks equivalent live
+# validation. Narrow capability filters give Veles precedence where detector formats overlap.
+# Every ID requires an explicit, fail-closed adapter in build_support/veles.rs.
+version: 1
+revision: e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845
+rules:
+  - secrets/bitbucketcredentials
+  - secrets/bitwardenoauth2access
+  - secrets/circleciproject
+  - secrets/cloudflareapitoken
+  - secrets/codecatalystcredentials
+  - secrets/codecommitcredentials
+  - secrets/denopatorg
+  - secrets/digitaloceanapikey
+  - secrets/grokxaiapikey
+  - secrets/hcpclientcredentials
+  - secrets/herokuplatformkey
+  - secrets/npmjsaccesstoken
+  - secrets/openrouter
+  - secrets/packagistorgreadtoken
+  - secrets/packagistorgupdatetoken
+  - secrets/packagistsecret
+  - secrets/postmanapikey
+  - secrets/postmancollectiontoken
+  - secrets/sendgrid
+  - secrets/slackappconfigaccesstoken
+  - secrets/slackappconfigrefreshtoken
+  - secrets/slackappleveltoken

@@ -107,24 +107,6 @@ impl GcpValidator {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn service_account_validation_allows_only_google_token_endpoints() {
-        assert_eq!(
-            allowed_token_uri("https://oauth2.googleapis.com/token").unwrap(),
-            "https://oauth2.googleapis.com/token"
-        );
-        assert_eq!(
-            allowed_token_uri("https://accounts.google.com/o/oauth2/token").unwrap(),
-            "https://accounts.google.com/o/oauth2/token"
-        );
-        assert!(allowed_token_uri("https://attacker.example/token").is_err());
-    }
-}
-
 /// Revoke a GCP service account key using the IAM API.
 pub async fn revoke_gcp_service_account_key(
     gcp_json: &str,
@@ -245,5 +227,23 @@ impl GcpValidator {
             .map_err(|_| anyhow!("Failed to sign JWT"))?;
         let signature_encoded = URL_SAFE_NO_PAD.encode(&signature);
         Ok(format!("{}.{}.{}", header, claims_encoded, signature_encoded))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn service_account_validation_allows_only_google_token_endpoints() {
+        assert_eq!(
+            allowed_token_uri("https://oauth2.googleapis.com/token").unwrap(),
+            "https://oauth2.googleapis.com/token"
+        );
+        assert_eq!(
+            allowed_token_uri("https://accounts.google.com/o/oauth2/token").unwrap(),
+            "https://accounts.google.com/o/oauth2/token"
+        );
+        assert!(allowed_token_uri("https://attacker.example/token").is_err());
     }
 }

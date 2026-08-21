@@ -79,7 +79,7 @@ repositories:
   findings:
   - path: src/config.rs
     fingerprint: '389162583612032034'
-    rule_id: kingfisher.github.1
+    rule_id: betterleaks.github-pat
     line: 52
     first_seen_at: 2026-08-11T17:17:42.123456Z
     last_updated_at: 2026-08-11T17:17:42.123456Z
@@ -87,7 +87,7 @@ repositories:
   findings:
   - path: deploy/production.env
     fingerprint: '14862156687550263216'
-    rule_id: kingfisher.aws.1
+    rule_id: betterleaks.aws-access-token
     line: 19
     first_seen_at: 2026-08-11T17:17:42.123456Z
     last_updated_at: 2026-08-11T17:17:42.123456Z

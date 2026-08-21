@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
@@ -23,9 +23,25 @@ struct Ancestor {
     id: String,
 }
 
+const MAX_IMPERSONATION_ROLE_EXPANSIONS: usize = 64;
+const MAX_AUTHORIZATION_PATHS: usize = 256;
+
+#[derive(Debug, Clone)]
+struct GcpIamBinding {
+    id: String,
+    role: String,
+    members: Vec<String>,
+    scope: String,
+    kind: String,
+    version: Option<String>,
+    condition_keys: Vec<String>,
+}
+
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
-    RoleBinding, Severity, build_default_resource, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, AuthorizationEvidence, AuthorizationHop,
+    AuthorizationPath, AuthorizationStatement, HierarchyScope, PermissionSummary, PolicyEvidence,
+    PrincipalEvidence, ProviderMetadata, ResourceExposure, RoleBinding, Severity,
+    build_default_resource, build_recommendations,
 };
 
 pub async fn map_access(credential_path: Option<&Path>) -> Result<AccessMapResult> {
@@ -62,10 +78,63 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
 
     let mut roles = Vec::new();
     let mut role_entries: Vec<(String, String)> = Vec::new();
+    let mut iam_bindings = Vec::new();
+    let mut role_permissions: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut principal_attributes = BTreeMap::new();
+    if let Some(unique_id) = sa_metadata.unique_id.as_ref() {
+        principal_attributes.insert("unique_id".into(), unique_id.clone());
+    }
+    if let Some(project) = project_id.as_ref() {
+        principal_attributes.insert("project_id".into(), project.clone());
+    }
+    if let Some(disabled) = sa_metadata.is_disabled {
+        principal_attributes.insert("disabled".into(), disabled.to_string());
+    }
+    let mut authorization_evidence = AuthorizationEvidence {
+        principal: Some(PrincipalEvidence {
+            id: client_email.clone(),
+            kind: "service_account".into(),
+            canonical_id: Some(match project_id.as_deref() {
+                Some(project) => format!("projects/{project}/serviceAccounts/{client_email}"),
+                None => format!("projects/-/serviceAccounts/{client_email}"),
+            }),
+            name: sa_metadata.display_name.clone(),
+            groups: Vec::new(),
+            tags: Default::default(),
+            attributes: principal_attributes,
+        }),
+        limitations: vec![
+            "Conditional IAM bindings and deny policies are retained as limitations rather than fully evaluated.".into(),
+            "Resource inventory is limited to the project associated with the credential; inherited roles may apply to additional descendant projects.".into(),
+            "Google group membership is not resolved, so group-based service-account grants may be absent.".into(),
+            "Outbound service-account paths are permission-based candidates; target service-account IAM policies are not exhaustively inspected.".into(),
+            "Service-account inventory is limited to the first API response and at most 128 targets are considered for outbound paths.".into(),
+        ],
+        ..AuthorizationEvidence::default()
+    };
 
+    if let Some(project) = project_id.as_deref() {
+        authorization_evidence
+            .hierarchy
+            .push(HierarchyScope { kind: "project".into(), id: format!("projects/{project}") });
+    }
     let policy = fetch_project_policy(&http_client, &access_token, project_id.as_deref()).await?;
     if let Some(policy) = policy.as_ref() {
-        collect_roles(policy, &client_email, "project", &mut role_entries);
+        let scope = project_id
+            .as_deref()
+            .map(|project| format!("projects/{project}"))
+            .unwrap_or_else(|| "project".into());
+        collect_roles(
+            policy,
+            &client_email,
+            "project",
+            &scope,
+            &mut role_entries,
+            &mut authorization_evidence,
+        );
+        collect_iam_bindings(policy, &scope, "iam_binding", &mut iam_bindings);
+    } else {
+        authorization_evidence.limitations.push("The project IAM policy could not be read.".into());
     }
 
     if let Some(project) = project_id.as_deref() {
@@ -73,10 +142,20 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
             .await
             .unwrap_or_else(|e| {
                 verbose_warn!("GCP access-map: failed to fetch project ancestry: {e}");
+                authorization_evidence
+                    .limitations
+                    .push("Project ancestry could not be completely enumerated.".into());
                 Vec::new()
             });
 
         for ancestor in ancestors {
+            if ancestor.kind == "project" && ancestor.id == project {
+                continue;
+            }
+            let scope = format!("{}s/{}", ancestor.kind, ancestor.id);
+            authorization_evidence
+                .hierarchy
+                .push(HierarchyScope { kind: ancestor.kind.clone(), id: scope.clone() });
             if let Some(policy) =
                 fetch_ancestor_policy(&http_client, &access_token, &ancestor).await?
             {
@@ -85,7 +164,20 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
                     "folder" => format!("folder:{}", ancestor.id),
                     _ => ancestor.kind.clone(),
                 };
-                collect_roles(&policy, &client_email, &source, &mut role_entries);
+                collect_roles(
+                    &policy,
+                    &client_email,
+                    &source,
+                    &scope,
+                    &mut role_entries,
+                    &mut authorization_evidence,
+                );
+                collect_iam_bindings(&policy, &scope, "iam_binding", &mut iam_bindings);
+            } else {
+                authorization_evidence.limitations.push(format!(
+                    "The {} IAM policy for {} could not be read.",
+                    ancestor.kind, scope
+                ));
             }
         }
     }
@@ -96,12 +188,38 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
             continue;
         }
 
-        let permissions = fetch_role_permissions(&http_client, &access_token, &role_name)
-            .await
-            .unwrap_or_else(|e| {
-                verbose_warn!("Failed to expand permissions for {role_name}: {e}");
-                Vec::new()
-            });
+        let (permissions, disabled) = if let Some(permissions) = role_permissions.get(&role_name) {
+            (permissions.clone(), false)
+        } else {
+            let permissions = fetch_role_permissions(&http_client, &access_token, &role_name)
+                .await
+                .unwrap_or_else(|e| {
+                    verbose_warn!("Failed to expand permissions for {role_name}: {e}");
+                    authorization_evidence.limitations.push(format!(
+                        "Permissions for IAM role {role_name} could not be expanded."
+                    ));
+                    RolePermissions { permissions: Vec::new(), disabled: false }
+                });
+            let disabled = permissions.disabled;
+            if !disabled {
+                role_permissions.insert(role_name.clone(), permissions.permissions.clone());
+            }
+            (permissions.permissions, disabled)
+        };
+        if disabled {
+            authorization_evidence
+                .limitations
+                .push(format!("IAM role {role_name} is disabled or deleted and was ignored."));
+            continue;
+        }
+
+        for policy in authorization_evidence.policies.iter_mut().filter(|policy| {
+            policy.kind == "iam_binding" && policy.name.as_deref() == Some(&role_name)
+        }) {
+            if let Some(statement) = policy.statements.first_mut() {
+                statement.actions = permissions.clone();
+            }
+        }
 
         roles.push(RoleBinding { name: role_name, source, permissions });
     }
@@ -116,6 +234,8 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
                 Vec::new()
             });
 
+        let mut probe_scope = format!("projects/{project}");
+        let mut probe_source = "project_testIamPermissions";
         if tested_permissions.is_empty() {
             tested_permissions = test_service_account_permissions(
                 &http_client,
@@ -130,31 +250,71 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
                 );
                 Vec::new()
             });
+            probe_scope = format!("projects/{project}/serviceAccounts/{client_email}");
+            probe_source = "service_account_testIamPermissions";
         }
 
         if !tested_permissions.is_empty() {
+            authorization_evidence.policies.push(PolicyEvidence {
+                id: format!("gcp:testIamPermissions:{probe_scope}"),
+                name: Some("testIamPermissions".into()),
+                kind: "permission_probe".into(),
+                attached_to: client_email.clone(),
+                attached_via: None,
+                scope: Some(probe_scope.clone()),
+                version: None,
+                statements: vec![AuthorizationStatement {
+                    id: format!("gcp:testIamPermissions:{probe_scope}#0"),
+                    sid: None,
+                    effect: "Observed".into(),
+                    actions: tested_permissions.clone(),
+                    not_actions: Vec::new(),
+                    resources: vec![probe_scope],
+                    not_resources: Vec::new(),
+                    principals: vec![format!("serviceAccount:{client_email}")],
+                    not_principals: Vec::new(),
+                    condition_keys: Vec::new(),
+                }],
+            });
             roles.push(RoleBinding {
                 name: "testIamPermissions".into(),
-                source: "project".into(),
+                source: probe_source.into(),
                 permissions: tested_permissions,
             });
         }
     }
 
-    let impersonation_notes = if let Some(project) = project_id.as_deref() {
+    if let Some(project) = project_id.as_deref() {
         match fetch_service_account_iam_policy(&http_client, &access_token, project, &client_email)
             .await
         {
-            Ok(Some(policy)) => extract_impersonation_notes(&policy),
-            Ok(None) => Vec::new(),
+            Ok(Some(policy)) => collect_iam_bindings(
+                &policy,
+                &format!("projects/{project}/serviceAccounts/{client_email}"),
+                "service_account_binding",
+                &mut iam_bindings,
+            ),
+            Ok(None) => authorization_evidence
+                .limitations
+                .push("The credential service account IAM policy could not be read.".into()),
             Err(err) => {
                 verbose_warn!("GCP access-map: failed to fetch service account IAM policy: {err}");
-                Vec::new()
+                authorization_evidence
+                    .limitations
+                    .push("The credential service account IAM policy could not be read.".into());
             }
         }
-    } else {
-        Vec::new()
-    };
+    }
+    iam_bindings.sort_by_key(|binding| binding.kind != "service_account_binding");
+    let impersonation_notes = add_incoming_impersonation_evidence(
+        &http_client,
+        &access_token,
+        &client_email,
+        &iam_bindings,
+        &mut role_permissions,
+        &mut authorization_evidence,
+    )
+    .await;
 
     let permissions = classify_permissions(&roles);
     let severity = derive_severity(&permissions);
@@ -170,6 +330,7 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
                 });
         resources.append(&mut enumerated);
     }
+    add_outgoing_impersonation_paths(&client_email, &resources, &mut authorization_evidence);
 
     if resources.is_empty() {
         resources.push(build_default_resource(project_id.as_deref(), severity));
@@ -185,7 +346,7 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
 
     let mut risk_notes = derive_risk_notes(&roles, &permissions);
     risk_notes.extend(impersonation_notes);
-    if sa_metadata.is_disabled {
+    if sa_metadata.is_disabled == Some(true) {
         risk_notes.push("Service account is disabled but key is still valid".into());
     }
 
@@ -210,7 +371,11 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
         recommendations,
         risk_notes,
         token_details,
-        provider_metadata: None,
+        provider_metadata: Some(ProviderMetadata {
+            version: None,
+            enterprise: None,
+            authorization_evidence: Some(authorization_evidence),
+        }),
         fingerprint: None,
     })
 }
@@ -423,7 +588,7 @@ struct ServiceAccountMetadata {
     project_id: Option<String>,
     display_name: Option<String>,
     unique_id: Option<String>,
-    is_disabled: bool,
+    is_disabled: Option<bool>,
 }
 
 async fn fetch_service_account_metadata(
@@ -463,42 +628,114 @@ async fn fetch_service_account_metadata(
         project_id: json.get("projectId").and_then(|p| p.as_str()).map(|s| s.to_string()),
         display_name: json.get("displayName").and_then(|d| d.as_str()).map(|s| s.to_string()),
         unique_id: json.get("uniqueId").and_then(|u| u.as_str()).map(|s| s.to_string()),
-        is_disabled: json.get("disabled").and_then(|d| d.as_bool()).unwrap_or(false),
+        is_disabled: json.get("disabled").and_then(Value::as_bool),
     })
 }
 
-fn extract_roles(policy: &Value, client_email: &str) -> Vec<String> {
-    let email_member = format!("serviceAccount:{client_email}");
-    let mut role_bindings = Vec::new();
-    if let Some(bindings) = policy["bindings"].as_array() {
-        for binding in bindings {
-            if let Some(role_name) = binding["role"].as_str()
-                && let Some(members) = binding["members"].as_array()
-                && members.iter().any(|m| m.as_str() == Some(&email_member))
-            {
-                role_bindings.push(role_name.to_string());
-            }
+fn collect_iam_bindings(policy: &Value, scope: &str, kind: &str, out: &mut Vec<GcpIamBinding>) {
+    let Some(bindings) = policy.get("bindings").and_then(Value::as_array) else {
+        return;
+    };
+    for (index, binding) in bindings.iter().enumerate() {
+        let Some(role) = binding.get("role").and_then(Value::as_str) else {
+            continue;
+        };
+        let members: Vec<String> = binding
+            .get("members")
+            .and_then(Value::as_array)
+            .map(|members| members.iter().filter_map(Value::as_str).map(str::to_string).collect())
+            .unwrap_or_default();
+        if members.is_empty() {
+            continue;
         }
+        let condition_keys = binding
+            .get("condition")
+            .and_then(Value::as_object)
+            .map(|condition| {
+                let mut keys: Vec<String> = condition.keys().cloned().collect();
+                keys.sort();
+                keys
+            })
+            .unwrap_or_default();
+        out.push(GcpIamBinding {
+            id: format!("gcp:{scope}:{role}:{index}"),
+            role: role.into(),
+            members,
+            scope: scope.into(),
+            kind: kind.into(),
+            version: policy.get("version").and_then(Value::as_i64).map(|v| v.to_string()),
+            condition_keys,
+        });
     }
-    role_bindings
 }
 
 fn collect_roles(
     policy: &Value,
     client_email: &str,
     source: &str,
+    scope: &str,
     out: &mut Vec<(String, String)>,
+    evidence: &mut AuthorizationEvidence,
 ) {
-    for role in extract_roles(policy, client_email) {
-        out.push((role, source.to_string()));
+    let member = format!("serviceAccount:{client_email}");
+    if let Some(bindings) = policy.get("bindings").and_then(Value::as_array) {
+        for (index, binding) in bindings.iter().enumerate() {
+            let Some(role) = binding.get("role").and_then(Value::as_str) else {
+                continue;
+            };
+            let applies = binding
+                .get("members")
+                .and_then(Value::as_array)
+                .is_some_and(|members| members.iter().any(|value| value.as_str() == Some(&member)));
+            if !applies {
+                continue;
+            }
+            out.push((role.to_string(), source.to_string()));
+            let condition_keys = binding
+                .get("condition")
+                .and_then(Value::as_object)
+                .map(|condition| {
+                    let mut keys: Vec<String> = condition.keys().cloned().collect();
+                    keys.sort();
+                    keys
+                })
+                .unwrap_or_default();
+            let policy_id = format!("gcp:{scope}:{role}:{index}");
+            evidence.policies.push(PolicyEvidence {
+                id: policy_id.clone(),
+                name: Some(role.to_string()),
+                kind: "iam_binding".into(),
+                attached_to: scope.into(),
+                attached_via: None,
+                scope: Some(scope.into()),
+                version: policy.get("version").and_then(Value::as_i64).map(|v| v.to_string()),
+                statements: vec![AuthorizationStatement {
+                    id: format!("{policy_id}#0"),
+                    sid: None,
+                    effect: "Allow".into(),
+                    actions: vec![role.to_string()],
+                    not_actions: Vec::new(),
+                    resources: vec![scope.into()],
+                    not_resources: Vec::new(),
+                    principals: vec![member.clone()],
+                    not_principals: Vec::new(),
+                    condition_keys,
+                }],
+            });
+        }
     }
+}
+
+struct RolePermissions {
+    permissions: Vec<String>,
+    disabled: bool,
 }
 
 async fn fetch_role_permissions(
     client: &Client,
     token: &str,
     role_name: &str,
-) -> Result<Vec<String>> {
+) -> Result<RolePermissions> {
     let url = if role_name.starts_with("roles/")
         || role_name.starts_with("projects/")
         || role_name.starts_with("organizations/")
@@ -514,7 +751,7 @@ async fn fetch_role_permissions(
 
     if let Some(disabled) = service_disabled_message(&body)? {
         verbose_warn!("GCP access-map: IAM API disabled while expanding {role_name}: {disabled}");
-        return Ok(Vec::new());
+        return Ok(RolePermissions { permissions: Vec::new(), disabled: false });
     }
 
     if !status.is_success() {
@@ -531,7 +768,9 @@ async fn fetch_role_permissions(
         .and_then(|p| p.as_array())
         .map(|arr| arr.iter().filter_map(|p| p.as_str().map(|s| s.to_string())).collect())
         .unwrap_or_default();
-    Ok(permissions)
+    let stage = json.get("stage").and_then(Value::as_str).unwrap_or_default();
+    let deleted = json.get("deleted").and_then(Value::as_bool).unwrap_or(false);
+    Ok(RolePermissions { permissions, disabled: deleted || stage.eq_ignore_ascii_case("DISABLED") })
 }
 
 fn classify_permissions(roles: &[RoleBinding]) -> PermissionSummary {
@@ -1284,9 +1523,10 @@ async fn enumerate_resources(
             let json: Value = serde_json::from_slice(&body)?;
             if let Some(accounts) = json.get("accounts").and_then(|a| a.as_array()) {
                 let can_impersonate = perm_set.iter().any(|p| {
-                    p.contains("serviceAccounts.actAs")
-                        || p.contains("serviceAccounts.getAccessToken")
+                    p.contains("serviceAccounts.getAccessToken")
+                        || p.contains("serviceAccounts.getOpenIdToken")
                 });
+                let can_attach = perm_set.iter().any(|p| p.contains("serviceAccounts.actAs"));
 
                 for sa in accounts {
                     if let Some(email) = sa.get("email").and_then(|e| e.as_str()) {
@@ -1297,9 +1537,15 @@ async fn enumerate_resources(
                                 &perm_set,
                                 &["iam.serviceAccounts.", "iam.serviceAccountKeys."],
                             ),
-                            risk: if can_impersonate { "high".into() } else { "medium".into() },
+                            risk: if can_impersonate || can_attach {
+                                "high".into()
+                            } else {
+                                "medium".into()
+                            },
                             reason: if can_impersonate {
-                                "Service account visible and potentially impersonatable".into()
+                                "Service account visible and token creation may be authorized".into()
+                            } else if can_attach {
+                                "Service account visible and may be attachable to a workload when additional workload permissions are present".into()
                             } else {
                                 "Service account visible in the project".into()
                             },
@@ -1458,28 +1704,211 @@ async fn fetch_service_account_iam_policy(
     Ok(Some(policy))
 }
 
-fn extract_impersonation_notes(policy: &Value) -> Vec<String> {
+async fn add_incoming_impersonation_evidence(
+    client: &Client,
+    token: &str,
+    service_account: &str,
+    bindings: &[GcpIamBinding],
+    role_permissions: &mut BTreeMap<String, Vec<String>>,
+    evidence: &mut AuthorizationEvidence,
+) -> Vec<String> {
     let mut notes = Vec::new();
-    if let Some(bindings) = policy.get("bindings").and_then(|b| b.as_array()) {
-        for binding in bindings {
-            let role = binding.get("role").and_then(|r| r.as_str()).unwrap_or("");
-            if !(role.contains("serviceAccountTokenCreator")
-                || role.contains("serviceAccountUser")
-                || role.contains("ServiceAccountUser"))
-            {
+    let mut expanded = 0usize;
+    for binding in bindings {
+        let permissions = if let Some(permissions) = role_permissions.get(&binding.role) {
+            permissions.clone()
+        } else if expanded < MAX_IMPERSONATION_ROLE_EXPANSIONS {
+            expanded += 1;
+            let permissions =
+                fetch_role_permissions(client, token, &binding.role).await.unwrap_or_else(|err| {
+                    verbose_warn!(
+                        "GCP access-map: failed to expand impersonation role {}: {err}",
+                        binding.role
+                    );
+                    RolePermissions { permissions: Vec::new(), disabled: false }
+                });
+            if permissions.disabled {
+                evidence.limitations.push(format!(
+                    "IAM role {} is disabled or deleted and was ignored.",
+                    binding.role
+                ));
                 continue;
             }
-
-            if let Some(members) = binding.get("members").and_then(|m| m.as_array()) {
-                for member in members {
-                    if let Some(m) = member.as_str() {
-                        notes.push(format!("{m} can impersonate this service account via {role}"));
-                    }
+            role_permissions.insert(binding.role.clone(), permissions.permissions.clone());
+            permissions.permissions
+        } else {
+            continue;
+        };
+        let capabilities = impersonation_capabilities(&permissions);
+        if capabilities.is_empty() {
+            continue;
+        }
+        let statement_id = format!("{}#0", binding.id);
+        upsert_binding_policy(evidence, binding, &permissions);
+        for member in &binding.members {
+            if member == &format!("serviceAccount:{service_account}") {
+                continue;
+            }
+            for (permission, relationship) in &capabilities {
+                if evidence.paths.len() >= MAX_AUTHORIZATION_PATHS {
+                    record_gcp_path_cap(evidence);
+                    return notes;
                 }
+                notes.push(format!(
+                    "{member} has {permission} on this service account through {}",
+                    binding.role
+                ));
+                evidence.paths.push(AuthorizationPath {
+                    direction: Some("inbound".into()),
+                    status: if binding.condition_keys.is_empty() {
+                        "potential".into()
+                    } else {
+                        "conditional".into()
+                    },
+                    hops: vec![AuthorizationHop {
+                        from: member.clone(),
+                        to: service_account.into(),
+                        relationship: (*relationship).into(),
+                    }],
+                    evidence: vec![statement_id.clone()],
+                    conditions: binding.condition_keys.clone(),
+                });
             }
         }
     }
+    if expanded >= MAX_IMPERSONATION_ROLE_EXPANSIONS {
+        evidence.limitations.push(format!(
+            "Impersonation analysis expanded at most {MAX_IMPERSONATION_ROLE_EXPANSIONS} additional IAM roles."
+        ));
+    }
     notes
+}
+
+fn add_outgoing_impersonation_paths(
+    source: &str,
+    resources: &[ResourceExposure],
+    evidence: &mut AuthorizationEvidence,
+) {
+    let candidates: Vec<(String, Vec<String>, Vec<String>, String)> = evidence
+        .policies
+        .iter()
+        .filter(|policy| {
+            policy.kind == "iam_binding"
+                && policy.statements.iter().any(|statement| {
+                    statement
+                        .principals
+                        .iter()
+                        .any(|principal| principal == &format!("serviceAccount:{source}"))
+                })
+        })
+        .flat_map(|policy| {
+            policy.statements.iter().filter_map(|statement| {
+                let capabilities = impersonation_capabilities(&statement.actions);
+                (!capabilities.is_empty()).then(|| {
+                    (
+                        statement.id.clone(),
+                        statement.condition_keys.clone(),
+                        capabilities
+                            .iter()
+                            .map(|(permission, _)| (*permission).to_string())
+                            .collect(),
+                        policy.scope.clone().unwrap_or_default(),
+                    )
+                })
+            })
+        })
+        .collect();
+    for (statement_id, conditions, permissions, _scope) in candidates {
+        for (permission, relationship) in impersonation_capabilities(&permissions) {
+            for resource in resources
+                .iter()
+                .filter(|resource| resource.resource_type == "service_account")
+                .take(128)
+            {
+                if evidence.paths.len() >= MAX_AUTHORIZATION_PATHS {
+                    record_gcp_path_cap(evidence);
+                    return;
+                }
+                let target = resource.name.rsplit('/').next().unwrap_or(&resource.name);
+                if target == source {
+                    continue;
+                }
+                evidence.paths.push(AuthorizationPath {
+                    direction: Some("outbound".into()),
+                    status: if conditions.is_empty() {
+                        "potential".into()
+                    } else {
+                        "conditional".into()
+                    },
+                    hops: vec![AuthorizationHop {
+                        from: source.into(),
+                        to: target.into(),
+                        relationship: relationship.into(),
+                    }],
+                    evidence: vec![statement_id.clone(), permission.into()],
+                    conditions: conditions.clone(),
+                });
+            }
+        }
+    }
+}
+
+fn record_gcp_path_cap(evidence: &mut AuthorizationEvidence) {
+    let note =
+        format!("Authorization path evidence was limited to {MAX_AUTHORIZATION_PATHS} paths.");
+    if !evidence.limitations.contains(&note) {
+        evidence.limitations.push(note);
+    }
+}
+
+fn impersonation_capabilities(permissions: &[String]) -> Vec<(&str, &'static str)> {
+    let mappings = [
+        ("iam.serviceAccounts.getAccessToken", "can_mint_access_token"),
+        ("iam.serviceAccounts.getOpenIdToken", "can_mint_openid_token"),
+        ("iam.serviceAccounts.actAs", "can_act_as"),
+        ("iam.serviceAccounts.signJwt", "can_sign_jwt"),
+        ("iam.serviceAccounts.signBlob", "can_sign_blob"),
+        ("iam.serviceAccounts.implicitDelegation", "can_delegate"),
+    ];
+    mappings
+        .into_iter()
+        .filter(|(permission, _)| permissions.iter().any(|candidate| candidate == permission))
+        .collect()
+}
+
+fn upsert_binding_policy(
+    evidence: &mut AuthorizationEvidence,
+    binding: &GcpIamBinding,
+    permissions: &[String],
+) {
+    if let Some(policy) = evidence.policies.iter_mut().find(|policy| policy.id == binding.id) {
+        if let Some(statement) = policy.statements.first_mut() {
+            statement.actions = permissions.to_vec();
+            statement.principals = binding.members.clone();
+        }
+        return;
+    }
+    evidence.policies.push(PolicyEvidence {
+        id: binding.id.clone(),
+        name: Some(binding.role.clone()),
+        kind: binding.kind.clone(),
+        attached_to: binding.scope.clone(),
+        attached_via: None,
+        scope: Some(binding.scope.clone()),
+        version: binding.version.clone(),
+        statements: vec![AuthorizationStatement {
+            id: format!("{}#0", binding.id),
+            sid: None,
+            effect: "Allow".into(),
+            actions: permissions.to_vec(),
+            not_actions: Vec::new(),
+            resources: vec![binding.scope.clone()],
+            not_resources: Vec::new(),
+            principals: binding.members.clone(),
+            not_principals: Vec::new(),
+            condition_keys: binding.condition_keys.clone(),
+        }],
+    });
 }
 
 fn derive_risk_notes(roles: &[RoleBinding], permissions: &PermissionSummary) -> Vec<String> {
@@ -1496,7 +1925,9 @@ fn derive_risk_notes(roles: &[RoleBinding], permissions: &PermissionSummary) -> 
 
     let perm_set = collect_permission_set(roles);
     if perm_set.iter().any(|p| p.contains("serviceAccounts.actAs")) {
-        notes.push("Can impersonate other service accounts (iam.serviceAccounts.actAs)".into());
+        notes.push(
+            "Can attach other service accounts to workloads when the required workload permissions are also present (iam.serviceAccounts.actAs)".into(),
+        );
     }
     if perm_set.iter().any(|p| p.contains("resourcemanager.projects.setIamPolicy")) {
         notes.push("Can modify project IAM policies".into());
@@ -1618,6 +2049,8 @@ async fn test_service_account_permissions(
         "iam.serviceAccounts.get",
         "iam.serviceAccounts.getIamPolicy",
         "iam.serviceAccounts.actAs",
+        "iam.serviceAccounts.getAccessToken",
+        "iam.serviceAccounts.getOpenIdToken",
         "iam.serviceAccounts.signBlob",
         "iam.serviceAccounts.signJwt",
         "iam.serviceAccounts.implicitDelegation",
@@ -1687,4 +2120,174 @@ fn service_disabled_message(body: &[u8]) -> Result<Option<String>> {
     }
 
     Ok(None)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inherited_binding_retains_scope_role_and_condition_names() {
+        let policy = serde_json::json!({
+            "version": 3,
+            "bindings": [{
+                "role": "roles/storage.objectAdmin",
+                "members": ["serviceAccount:scanner@example.iam.gserviceaccount.com"],
+                "condition": {
+                    "title": "temporary",
+                    "expression": "request.time < timestamp('2030-01-01T00:00:00Z')"
+                }
+            }]
+        });
+        let mut roles = Vec::new();
+        let mut evidence = AuthorizationEvidence::default();
+
+        collect_roles(
+            &policy,
+            "scanner@example.iam.gserviceaccount.com",
+            "folder:456",
+            "folders/456",
+            &mut roles,
+            &mut evidence,
+        );
+
+        assert_eq!(roles, [("roles/storage.objectAdmin".into(), "folder:456".into())]);
+        assert_eq!(evidence.policies.len(), 1);
+        assert_eq!(evidence.policies[0].scope.as_deref(), Some("folders/456"));
+        assert_eq!(evidence.policies[0].version.as_deref(), Some("3"));
+        assert_eq!(evidence.policies[0].statements[0].condition_keys, ["expression", "title"]);
+        let serialized = serde_json::to_string(&evidence).unwrap();
+        assert!(!serialized.contains("2030-01-01"));
+    }
+
+    #[tokio::test]
+    async fn service_account_policy_creates_conditional_incoming_path() {
+        let policy = serde_json::json!({
+            "bindings": [{
+                "role": "roles/iam.serviceAccountTokenCreator",
+                "members": ["serviceAccount:caller@example.iam.gserviceaccount.com"],
+                "condition": {"expression": "resource.name.startsWith('projects/example')"}
+            }]
+        });
+        let mut bindings = Vec::new();
+        collect_iam_bindings(
+            &policy,
+            "projects/example/serviceAccounts/target@example.iam.gserviceaccount.com",
+            "service_account_binding",
+            &mut bindings,
+        );
+        let mut role_permissions = BTreeMap::from([(
+            "roles/iam.serviceAccountTokenCreator".into(),
+            vec!["iam.serviceAccounts.getAccessToken".into()],
+        )]);
+        let mut evidence = AuthorizationEvidence::default();
+
+        let notes = add_incoming_impersonation_evidence(
+            &Client::new(),
+            "unused",
+            "target@example.iam.gserviceaccount.com",
+            &bindings,
+            &mut role_permissions,
+            &mut evidence,
+        )
+        .await;
+
+        assert_eq!(notes.len(), 1);
+        assert_eq!(evidence.paths.len(), 1);
+        assert_eq!(evidence.paths[0].direction.as_deref(), Some("inbound"));
+        assert_eq!(evidence.paths[0].status, "conditional");
+        assert_eq!(evidence.paths[0].hops[0].relationship, "can_mint_access_token");
+        assert_eq!(evidence.paths[0].conditions, ["expression"]);
+    }
+
+    #[test]
+    fn token_creation_permission_links_visible_service_accounts() {
+        let resources = vec![ResourceExposure {
+            resource_type: "service_account".into(),
+            name: "projects/example/serviceAccounts/target@example.iam.gserviceaccount.com".into(),
+            permissions: Vec::new(),
+            risk: "high".into(),
+            reason: "visible".into(),
+        }];
+        let mut evidence = AuthorizationEvidence {
+            policies: vec![PolicyEvidence {
+                id: "binding".into(),
+                name: Some("roles/iam.serviceAccountTokenCreator".into()),
+                kind: "iam_binding".into(),
+                attached_to: "source@example.iam.gserviceaccount.com".into(),
+                scope: Some("projects/example".into()),
+                statements: vec![AuthorizationStatement {
+                    id: "binding#0".into(),
+                    effect: "Allow".into(),
+                    actions: vec!["iam.serviceAccounts.getAccessToken".into()],
+                    principals: vec![
+                        "serviceAccount:source@example.iam.gserviceaccount.com".into(),
+                    ],
+                    condition_keys: vec!["expression".into()],
+                    ..AuthorizationStatement::default()
+                }],
+                ..PolicyEvidence::default()
+            }],
+            ..AuthorizationEvidence::default()
+        };
+
+        add_outgoing_impersonation_paths(
+            "source@example.iam.gserviceaccount.com",
+            &resources,
+            &mut evidence,
+        );
+
+        assert_eq!(evidence.paths.len(), 1);
+        assert_eq!(evidence.paths[0].direction.as_deref(), Some("outbound"));
+        assert_eq!(evidence.paths[0].status, "conditional");
+        assert_eq!(evidence.paths[0].hops[0].relationship, "can_mint_access_token");
+        assert_eq!(evidence.paths[0].hops[0].to, "target@example.iam.gserviceaccount.com");
+        assert_eq!(evidence.paths[0].conditions, ["expression"]);
+    }
+
+    #[test]
+    fn outgoing_paths_are_capped() {
+        let resources = (0..(MAX_AUTHORIZATION_PATHS + 10))
+            .map(|index| ResourceExposure {
+                resource_type: "service_account".into(),
+                name: format!(
+                    "projects/example/serviceAccounts/target-{index}@example.iam.gserviceaccount.com"
+                ),
+                permissions: Vec::new(),
+                risk: "high".into(),
+                reason: "visible".into(),
+            })
+            .collect::<Vec<_>>();
+        let mut evidence = AuthorizationEvidence {
+            policies: vec![PolicyEvidence {
+                id: "binding".into(),
+                kind: "iam_binding".into(),
+                attached_to: "projects/example".into(),
+                statements: vec![AuthorizationStatement {
+                    id: "binding#0".into(),
+                    effect: "Allow".into(),
+                    actions: vec![
+                        "iam.serviceAccounts.getAccessToken".into(),
+                        "iam.serviceAccounts.actAs".into(),
+                        "iam.serviceAccounts.signJwt".into(),
+                    ],
+                    principals: vec![
+                        "serviceAccount:source@example.iam.gserviceaccount.com".into(),
+                    ],
+                    ..AuthorizationStatement::default()
+                }],
+                ..PolicyEvidence::default()
+            }],
+            ..AuthorizationEvidence::default()
+        };
+
+        add_outgoing_impersonation_paths(
+            "source@example.iam.gserviceaccount.com",
+            &resources,
+            &mut evidence,
+        );
+
+        assert!(evidence.paths.len() <= MAX_AUTHORIZATION_PATHS);
+        assert!(evidence.limitations.iter().any(|note| note.contains("limited")));
+    }
 }

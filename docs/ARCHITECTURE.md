@@ -113,14 +113,32 @@ flowchart LR
 - `src/direct_validate.rs`: direct validation of a known secret without going through pattern matching. Supports HTTP, gRPC, plus schema-level typed validators such as AWS, AzureStorage, GCP, JDBC, MongoDB, MySQL, PostgreSQL, JWT, and Coinbase, and delegates ad-hoc `Raw` validators to `crates/kingfisher-scanner/src/validation/raw.rs`.
 - `src/direct_revoke.rs`: direct revocation of a known secret without going through the scan pipeline. Uses Liquid templates for revocation configurations and supports multi-step HTTP revocation flows.
 - `src/access_map.rs` and `src/access_map/*`: standalone blast-radius mapping with 24 provider implementations including AWS, Azure, GCP, GitHub, GitLab, Slack, Bitbucket, Gitea, Hugging Face, Buildkite, Anthropic, OpenAI, and more.
+- `crates/kingfisher-rules/build.rs` and `build_support/betterleaks.rs`: download and translate
+  Betterleaks' canonical TOML into the embedded default rule database. No built-in rule catalog is
+  stored in the repository.
+- `crates/kingfisher-rules/data/imported-rules-capabilities.yml`: Kingfisher-only operational bindings
+  and selected safe revocation actions keyed by upstream Betterleaks ID. It contains no detection
+  rules; the build rejects stale IDs and component references.
 
 ## Notes And Boundaries
 
 - The main CLI scan path is implemented primarily in the application modules under `src/`, not in `kingfisher-scanner`.
 - `kingfisher-scanner` is still important: it provides the embeddable scanner API plus shared validation and primitive functionality reused by the application.
-- The shared validation layer in `crates/kingfisher-scanner/src/validation/` contains both reusable typed validator families and the `Raw` exception-path validators used by rule YAML.
+- The shared validation layer in `crates/kingfisher-scanner/src/validation/` contains reusable typed
+  validator families and the `Raw` exception-path validators retained for Kingfisher 1.x custom YAML.
 - Direct `validate`, `revoke`, and standalone `access-map` are sibling command paths. They are not downstream stages of `FindingsStore`.
 - Reporting is downstream from the datastore, which lets Kingfisher emit multiple output formats and drive the local viewer from the same finding set.
-- The matching layer is intentionally hybrid: vectorscan provides high-throughput SIMD-accelerated pattern detection, while regex helpers, Base64 support, and parser-based context verification improve accuracy and reduce false positives.
+- Every rule uses Vectorscan's high-throughput SIMD-accelerated database for candidate detection. The exact Rust regex then confirms captures before Betterleaks filters, Base64 handling, and parser-based context verification improve accuracy and reduce false positives. No rule performs an unconditional whole-blob regex scan.
+- Betterleaks' top-level source prefilter is compiled once into a separate Vectorscan database and
+  evaluated per source path before content matching. Keyword hints are not imported because
+  Vectorscan already supplies content-candidate selection. Only the global finding filter and
+  per-rule finding filter are combined.
+- Regex helpers inside the combined Betterleaks finding filters are also compiled once into shared
+  Vectorscan databases. `findMatch` uses start-of-match tracking; boolean helpers use normal block
+  matching.
 - `FindingsStore` uses an in-memory store with a Bloom filter for deduplication, replacing the earlier SQLite-based storage model.
-- Validation and revocation templates are rendered via Liquid, allowing rule authors to define HTTP request sequences, variable extraction, and multi-step flows in YAML without touching Rust code.
+- Betterleaks validation expressions run through a portable Rust AST evaluator. Kingfisher 1.x custom-rule
+  validation and revocation templates use Liquid for HTTP request sequences, variable extraction,
+  and multi-step flows.
+- Betterleaks access-map and revocation behavior is capability-driven. Runtime dispatch uses typed
+  handlers and declarative finding/component bindings, never old `kingfisher.*` rule IDs.

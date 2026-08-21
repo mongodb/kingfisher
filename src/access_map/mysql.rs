@@ -203,6 +203,7 @@ pub async fn map_access_from_uri(uri: &str) -> Result<AccessMapResult> {
         provider_metadata: Some(super::ProviderMetadata {
             version: Some(server_version),
             enterprise: None,
+            authorization_evidence: None,
         }),
         fingerprint: None,
     })

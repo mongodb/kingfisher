@@ -167,7 +167,7 @@ red if any active. Facts list active/inactive/unknown counts and the top rules.
     "unknown": 1,
     "impacted_resources": 4,
     "unfiltered_total": 3,
-    "by_rule": [{"rule_id": "kingfisher.aws.1", "count": 2}],
+    "by_rule": [{"rule_id": "betterleaks.aws-access-token", "count": 2}],
     "target": "./repo"
   },
   "findings": [ /* array of FindingReporterRecord, capped at 200 */ ],

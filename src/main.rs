@@ -1358,7 +1358,8 @@ pub fn determine_exit_code(datastore: &Arc<Mutex<findings_store::FindingsStore>>
             .iter()
             .filter(|msg| {
                 let (_, _, match_item) = &****msg;
-                match_item.validation_outcome.is_verified_active()
+                match_item.rule.syntax().is_authoritative()
+                    && match_item.validation_outcome.is_verified_active()
             })
             .count();
         if validated_matches > 0 {
@@ -1907,12 +1908,16 @@ pub fn run_rules_compile_cache(args: &RulesCompileCacheArgs) -> Result<()> {
 
     let loader = RuleLoader::from_rule_specifiers(&args.rules);
     let loaded = loader.load(&scan_args).context("Failed to load rules")?;
-    let resolved = loaded.resolve_enabled_rules().context("Failed to resolve rules")?;
+    let resolved = loaded.resolve_enabled_rules_owned().context("Failed to resolve rules")?;
+    let betterleaks_prefilter = loaded.betterleaks_prefilter_for(&resolved);
     let cache = RuleCacheConfig::from_dir_or_env(args.cache.rule_cache_dir.clone());
     info!(cache_dir = %cache.cache_dir().display(), "Using Vectorscan rule cache");
-    let rules_db =
-        RulesDatabase::from_rules_with_cache(resolved.into_iter().cloned().collect(), &cache)
-            .context("Failed to compile rules with Vectorscan cache")?;
+    let rules_db = RulesDatabase::from_rules_with_cache_and_betterleaks_prefilter(
+        resolved,
+        &cache,
+        betterleaks_prefilter,
+    )
+    .context("Failed to compile rules with Vectorscan cache")?;
 
     println!("Rule cache ready: {} rules in {}", rules_db.num_rules(), cache.cache_dir().display());
     Ok(())
@@ -1953,8 +1958,10 @@ pub fn run_rules_check(args: &RulesCheckArgs) -> Result<()> {
     // Load and check rules
     let loader = RuleLoader::from_rule_specifiers(&args.rules);
     let loaded = loader.load(&create_default_scan_args())?;
-    let resolved = loaded.resolve_enabled_rules()?;
-    let rules_db = RulesDatabase::from_rules(resolved.into_iter().cloned().collect())?;
+    let resolved = loaded.resolve_enabled_rules_owned()?;
+    let betterleaks_prefilter = loaded.betterleaks_prefilter_for(&resolved);
+    let rules_db =
+        RulesDatabase::from_rules_with_betterleaks_prefilter(resolved, betterleaks_prefilter)?;
 
     // Check each rule
     for (rule_index, rule) in rules_db.rules().iter().enumerate() {
@@ -1969,8 +1976,13 @@ pub fn run_rules_check(args: &RulesCheckArgs) -> Result<()> {
             num_warnings += 1;
         }
         if rule.syntax().examples.is_empty() {
-            warn!("Rule '{}' has no examples", rule.name());
-            num_warnings += 1;
+            // Betterleaks' generated catalog does not carry example strings. The upstream
+            // configuration is parsed and operation-checked by our build adapter, so retain this
+            // legacy-authoring warning only for custom Kingfisher YAML rules.
+            if !rule.id().starts_with("betterleaks.") {
+                warn!("Rule '{}' has no examples", rule.name());
+                num_warnings += 1;
+            }
             continue;
         }
         // Check regex compilation
@@ -2117,6 +2129,10 @@ pub fn run_rules_list(args: &RulesListArgs) -> Result<()> {
     let loaded = loader.load(&create_default_scan_args())?;
     let resolved = loaded.resolve_enabled_rules()?;
     let mut writer = args.output_args.get_writer()?;
+    #[cfg(debug_assertions)]
+    let show_validation = args.show_validation;
+    #[cfg(not(debug_assertions))]
+    let show_validation = false;
     match args.output_args.format {
         RulesListOutputFormat::Pretty => {
             // Determine terminal width if possible, otherwise use default
@@ -2181,6 +2197,16 @@ pub fn run_rules_list(args: &RulesListArgs) -> Result<()> {
                     id_width = max_id_width,
                     conf_width = max_conf_width
                 )?;
+                if show_validation && let Some(validation) = &rule.syntax().validation {
+                    match validation {
+                        kingfisher::rules::Validation::Betterleaks(validation) => {
+                            #[cfg(debug_assertions)]
+                            writeln!(writer, "  Validation: {}", validation.source)?;
+                            writeln!(writer, "  Validation AST: {:?}", validation.expression)?;
+                        }
+                        validation => writeln!(writer, "  Validation: {validation:?}")?,
+                    }
+                }
             }
             writeln!(writer)?;
         }
@@ -2189,14 +2215,19 @@ pub fn run_rules_list(args: &RulesListArgs) -> Result<()> {
             let rules_json: Vec<_> = resolved
                 .iter()
                 .map(|rule| {
-                    json!({
+                    let mut value = json!({
                         "name": rule.name(),
                         "id": rule.id(),
                         "pattern": rule.syntax().pattern,
                         "confidence": rule.confidence(),
                         "examples": rule.syntax().examples,
                         "visible": rule.visible(),
-                    })
+                    });
+                    if show_validation {
+                        value["validation"] = serde_json::to_value(&rule.syntax().validation)
+                            .expect("validation serialization should succeed");
+                    }
+                    value
                 })
                 .collect();
             serde_json::to_writer_pretty(&mut writer, &rules_json)?;
@@ -2406,11 +2437,11 @@ rules:
     fn rules_disabled_is_concatenated_with_cli_exclusions() {
         let yaml = r#"
 rules:
-  disabled: ["kingfisher.github.1"]
+  disabled: ["betterleaks.github-pat"]
 "#;
         let cfg = parse_str(yaml).unwrap();
         let (args, matches) =
-            parse(&["kingfisher", "scan", "--exclude-rule", "kingfisher.openai.1", "."]);
+            parse(&["kingfisher", "scan", "--exclude-rule", "betterleaks.openai-api-key", "."]);
         let mut global_args = args.global_args.clone();
         let mut scan_args = into_scan(args);
         super::apply_config(
@@ -2422,7 +2453,7 @@ rules:
 
         assert_eq!(
             scan_args.rules.exclude_rule,
-            vec!["kingfisher.openai.1".to_string(), "kingfisher.github.1".to_string()]
+            vec!["betterleaks.openai-api-key".to_string(), "betterleaks.github-pat".to_string()]
         );
     }
 
@@ -2432,13 +2463,13 @@ rules:
             "kingfisher",
             "scan",
             "--rule",
-            "kingfisher.github.1",
+            "betterleaks.github-pat",
             "--rule",
-            "kingfisher.github.2",
+            "betterleaks.github-fine-grained-pat",
             "--exclude-rule",
-            "kingfisher.openai.1",
+            "betterleaks.openai-api-key",
             "--exclude-rule",
-            "kingfisher.openai.2",
+            "custom.openai.secondary",
             ".",
         ]);
         let mut global_args = args.global_args.clone();
@@ -2452,11 +2483,14 @@ rules:
 
         assert_eq!(
             scan_args.rules.rule,
-            vec!["kingfisher.github.1".to_string(), "kingfisher.github.2".to_string()]
+            vec![
+                "betterleaks.github-pat".to_string(),
+                "betterleaks.github-fine-grained-pat".to_string(),
+            ]
         );
         assert_eq!(
             scan_args.rules.exclude_rule,
-            vec!["kingfisher.openai.1".to_string(), "kingfisher.openai.2".to_string()]
+            vec!["betterleaks.openai-api-key".to_string(), "custom.openai.secondary".to_string()]
         );
     }
 
@@ -2522,11 +2556,11 @@ rules:
         let yaml = r#"
 validation:
   rps_per_rule:
-    kingfisher.aws: 1.5
+    betterleaks.aws: 1.5
 "#;
         let cfg = parse_str(yaml).unwrap();
         let (args, matches) =
-            parse(&["kingfisher", "scan", "--validation-rps-rule", "kingfisher.gcp=2.0", "."]);
+            parse(&["kingfisher", "scan", "--validation-rps-rule", "betterleaks.gcp=2.0", "."]);
         let mut global_args = args.global_args.clone();
         let mut scan_args = into_scan(args);
         super::apply_config(
@@ -2535,8 +2569,8 @@ validation:
             &cfg,
             matches.subcommand_matches("scan"),
         );
-        assert!(scan_args.validation_rps_rule.contains(&"kingfisher.gcp=2.0".to_string()));
-        assert!(scan_args.validation_rps_rule.contains(&"kingfisher.aws=1.5".to_string()));
+        assert!(scan_args.validation_rps_rule.contains(&"betterleaks.gcp=2.0".to_string()));
+        assert!(scan_args.validation_rps_rule.contains(&"betterleaks.aws=1.5".to_string()));
     }
 
     #[test]
@@ -2623,7 +2657,7 @@ alerts:
             "--skip-word",
             "EXAMPLE",
             "--exclude-rule",
-            "kingfisher.github.1",
+            "betterleaks.github-pat",
             "--format",
             "toon",
             "--alert-min-confidence",
@@ -2662,7 +2696,7 @@ alerts:
         assert_eq!(cfg.filters.exclude, vec!["vendor/".to_string()]);
         assert_eq!(cfg.filters.skip_words, vec!["EXAMPLE".to_string()]);
         assert!(cfg.filters.max_file_size_mb.is_none(), "should not emit unset filters");
-        assert_eq!(cfg.rules.disabled, vec!["kingfisher.github.1".to_string()]);
+        assert_eq!(cfg.rules.disabled, vec!["betterleaks.github-pat".to_string()]);
 
         assert!(matches!(cfg.output.format, Some(ConfigReportFormat::Toon)));
         assert!(cfg.output.path.is_none());

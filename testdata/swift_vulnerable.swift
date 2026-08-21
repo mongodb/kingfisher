@@ -12,6 +12,7 @@ let NotAnything = "12i7128931238912739712893" // not mached
 let PleaseNoFalsePostive = "joe123"
 let another_password: String = "blink182" // TP NOKINGFISHER
 let backup_password = "letmein123" // TP
+let aws_access_key = "AKIA6ODU5DHT7VPXGCE4"
 
 
 var secrets: [String : String] = [
@@ -57,4 +58,3 @@ var optionalString: String? = "Hello"
 let nickname: String? = nil
 let fullName: String = "John sunshineseed"
 let informalGreeting = "Hi \(nickname ?? fullName)"
-

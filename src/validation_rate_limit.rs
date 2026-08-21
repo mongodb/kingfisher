@@ -94,15 +94,7 @@ pub fn normalize_rule_selector(input: &str) -> Result<String> {
         bail!("Rule selector cannot be empty");
     }
 
-    if selector.starts_with("kingfisher.") {
-        return Ok(selector.to_string());
-    }
-
-    if selector == "kingfisher" {
-        return Ok("kingfisher".to_string());
-    }
-
-    Ok(format!("kingfisher.{selector}"))
+    Ok(selector.to_string())
 }
 
 fn validate_rps(value: f64) -> Result<f64> {
@@ -113,8 +105,17 @@ fn validate_rps(value: f64) -> Result<f64> {
 }
 
 fn selector_matches(rule_id: &str, selector: &str) -> bool {
-    rule_id == selector
-        || rule_id.strip_prefix(selector).is_some_and(|suffix| suffix.starts_with('.'))
+    let matches_prefix = |id: &str| {
+        id == selector
+            || id.strip_prefix(selector).is_some_and(|suffix| suffix.starts_with(['.', '-']))
+    };
+
+    matches_prefix(rule_id)
+        || (!selector.starts_with("betterleaks.")
+            && !selector.starts_with("kingfisher.")
+            && ["betterleaks.", "kingfisher."]
+                .into_iter()
+                .any(|namespace| rule_id.strip_prefix(namespace).is_some_and(&matches_prefix)))
 }
 
 pub fn should_rate_limit_validation(validation: &Validation) -> bool {
@@ -127,14 +128,14 @@ mod tests {
 
     #[test]
     fn normalize_rule_selector_allows_short_names() {
-        assert_eq!(normalize_rule_selector("github").unwrap(), "kingfisher.github");
-        assert_eq!(normalize_rule_selector(" kingfisher.github ").unwrap(), "kingfisher.github");
+        assert_eq!(normalize_rule_selector("github").unwrap(), "github");
+        assert_eq!(normalize_rule_selector(" custom.github ").unwrap(), "custom.github");
     }
 
     #[test]
     fn parse_rule_rps_mapping_parses_rule_and_rate() {
         let (selector, rps) = parse_rule_rps_mapping("github=2.5").unwrap();
-        assert_eq!(selector, "kingfisher.github");
+        assert_eq!(selector, "github");
         assert_eq!(rps, 2.5);
     }
 
@@ -142,24 +143,29 @@ mod tests {
     fn effective_rps_uses_longest_prefix_match() {
         let limiter = ValidationRateLimiter::from_cli(
             Some(10.0),
-            &["github=2".to_string(), "kingfisher.github.1=1".to_string()],
+            &[
+                "github=2".to_string(),
+                "github.1=0.5".to_string(),
+                "betterleaks.github-pat=1".to_string(),
+            ],
         )
         .unwrap()
         .unwrap();
 
-        assert_eq!(limiter.effective_rps("kingfisher.github.1"), Some(1.0));
-        assert_eq!(limiter.effective_rps("kingfisher.github.9"), Some(2.0));
-        assert_eq!(limiter.effective_rps("kingfisher.gitlab.1"), Some(10.0));
+        assert_eq!(limiter.effective_rps("betterleaks.github-pat"), Some(1.0));
+        assert_eq!(limiter.effective_rps("betterleaks.github-oauth"), Some(2.0));
+        assert_eq!(limiter.effective_rps("kingfisher.github.1"), Some(0.5));
+        assert_eq!(limiter.effective_rps("betterleaks.gitlab-pat"), Some(10.0));
     }
 
     #[tokio::test]
     async fn wait_for_rule_spaces_requests_for_same_bucket() {
         let limiter = ValidationRateLimiter::from_cli(Some(50.0), &[]).unwrap().unwrap();
 
-        limiter.wait_for_rule("kingfisher.github.1").await;
+        limiter.wait_for_rule("betterleaks.github-pat").await;
 
         let start = std::time::Instant::now();
-        limiter.wait_for_rule("kingfisher.github.2").await;
+        limiter.wait_for_rule("betterleaks.github-oauth").await;
 
         // Allow timing jitter from runtime scheduling while still asserting spacing happened.
         assert!(start.elapsed() >= Duration::from_millis(15));

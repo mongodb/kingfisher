@@ -47,11 +47,13 @@ hex = "0.4"
 rustc-hash = "2.1"
 http = "1.4"
 zeroize = "1.8"
+tiktoken-rs = "0.12"
+thread_local = "1.1.9"
 
 
 [package]
 name = "kingfisher"
-version = "1.113.0"
+version = "2.0.0"
 description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -139,6 +141,16 @@ reqwest = { version = "0.13", default-features = false, features = [
     "blocking",
     "multipart",
 ] }
+async-openai = { version = "0.41.3", default-features = false, features = [
+    "administration",
+    "assistant",
+    "byot",
+    "file",
+    "finetuning",
+    "model",
+    "rustls",
+] }
+gitlab = { version = "0.1902.0", default-features = false, features = ["client_api"] }
 # gouqi 0.20 exposes reqwest 0.12's Client in its public async constructor.
 reqwest_0_12 = { package = "reqwest", version = "0.12.28", default-features = false, features = [
     "json",
@@ -558,6 +570,12 @@ opt-level = "z"
 opt-level = "z"
 
 [profile.release.package.ipnet]
+opt-level = "z"
+
+[profile.release.package.async-openai]
+opt-level = "z"
+
+[profile.release.package.gitlab]
 opt-level = "z"
 
 # ── Web framework (view command / Slack integration only) ───────────

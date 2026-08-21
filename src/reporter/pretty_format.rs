@@ -46,12 +46,7 @@ impl DetailsReporter {
         } else {
             ""
         };
-        let formatted_heading = format!(
-            "{}{} => [{}]",
-            lock_icon,
-            record.rule.name.to_uppercase(),
-            record.rule.id.to_uppercase()
-        );
+        let formatted_heading = format!("{}{}", lock_icon, record.rule.title);
         if is_actionable {
             writeln!(writer, "{}", self.style_finding_active_heading(formatted_heading))?;
         } else {
@@ -82,6 +77,36 @@ impl DetailsReporter {
                 }
                 if !group.permissions.is_empty() {
                     writeln!(writer, " |____permission..: {}", group.permissions.join(","))?;
+                }
+            }
+            if let Some(evidence) = entry
+                .provider_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.authorization_evidence.as_ref())
+            {
+                writeln!(writer, " |__policies....: {}", evidence.policies.len())?;
+                writeln!(writer, " |__paths.......: {}", evidence.paths.len())?;
+                for path in evidence.paths.iter().take(25) {
+                    let hops = path
+                        .hops
+                        .iter()
+                        .map(|hop| format!("{} --{}--> {}", hop.from, hop.relationship, hop.to))
+                        .collect::<Vec<_>>()
+                        .join("; ");
+                    writeln!(
+                        writer,
+                        " |____path.......: [{} {}] {}",
+                        path.direction.as_deref().unwrap_or("unknown"),
+                        path.status,
+                        hops
+                    )?;
+                }
+                if evidence.paths.len() > 25 {
+                    writeln!(
+                        writer,
+                        " |____path.......: {} additional paths in structured output",
+                        evidence.paths.len() - 25
+                    )?;
                 }
             }
 
@@ -152,6 +177,7 @@ impl<'a> Display for PrettyFindingRecord<'a> {
         };
         let finding = &record.finding;
         writeln!(f, " |Finding.......: {}", style_fn(&finding.snippet))?;
+        writeln!(f, " |Description...: {}", record.rule.description)?;
         if let Some(enc) = &finding.encoding {
             writeln!(f, " |Encoding......: {}", enc)?;
         }
@@ -204,8 +230,10 @@ mod tests {
         };
         let record = FindingReporterRecord {
             rule: RuleMetadata {
-                name: "PEM-encoded private key".to_string(),
-                id: "kingfisher.pem.1".to_string(),
+                title: "PEM => [CUSTOM.PEM]".to_string(),
+                name: "pem".to_string(),
+                id: "custom.pem".to_string(),
+                description: "PEM private key".to_string(),
             },
             finding: FindingRecordData {
                 snippet: "secret".to_string(),
@@ -228,11 +256,8 @@ mod tests {
                 revoke_command: None,
             },
         };
-        let expected_heading = reporter
-            .style_finding_active_heading(
-                "🔒 PEM-ENCODED PRIVATE KEY => [KINGFISHER.PEM.1]".to_string(),
-            )
-            .to_string();
+        let expected_heading =
+            reporter.style_finding_active_heading("🔒 PEM => [CUSTOM.PEM]".to_string()).to_string();
         let expected_snippet = reporter.style_active_creds("secret").to_string();
         let expected_status =
             reporter.style_finding_active_heading("Assumed Valid (Not Live-Validated)").to_string();
@@ -243,6 +268,7 @@ mod tests {
 
         assert!(output.contains(&expected_heading));
         assert!(output.contains(&format!(" |Finding.......: {expected_snippet}")));
+        assert!(output.contains(" |Description...: PEM private key"));
         assert!(output.contains(&format!(" |Validation....: {expected_status}")));
     }
 }

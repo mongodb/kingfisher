@@ -56,6 +56,9 @@ int main() {
     string secret_pass = "my voice is my passport";
     cout << "secret_pass is: " << secret_pass << endl;
 
+    string aws_access_key = "AKIA6ODU5DHT7VPXGCE4";
+    cout << "aws access key is: " << aws_access_key << endl;
+
     string temp_password = "short line for testing";
     cout << "temp_password is: " << temp_password << endl;
 

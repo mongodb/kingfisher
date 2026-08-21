@@ -6,6 +6,8 @@ use tokio::time::{error::Elapsed, timeout};
 use tracing::debug;
 use url::Url;
 
+use super::http_validation::{SSRF_BLOCKED_MESSAGE, check_host_resolvable};
+
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub fn parse_mysql_url(mysql_url: &str) -> Result<Opts> {
@@ -95,12 +97,26 @@ fn targets_localhost(opts: &Opts) -> bool {
 }
 
 /// Validate a MySQL connection URL.
-pub async fn validate_mysql(mysql_url: &str, lax_tls: bool) -> Result<(bool, Vec<String>)> {
+pub async fn validate_mysql(
+    mysql_url: &str,
+    lax_tls: bool,
+    allow_internal_ips: bool,
+) -> Result<(bool, Vec<String>)> {
     let opts = parse_mysql_url(mysql_url)?;
 
     if targets_localhost(&opts) {
         debug!("Skipping MySQL validation: host is localhost/loopback or unix socket");
         return Ok((false, vec!["skipped localhost/loopback host".into()]));
+    }
+
+    // SSRF gate: the connection target comes from scanned (untrusted) content,
+    // so it must clear the same public-IP check the HTTP/gRPC/JWT validators
+    // use before we open a TCP connection and start a protocol handshake.
+    if let Err(e) =
+        check_host_resolvable(opts.ip_or_hostname(), opts.tcp_port(), allow_internal_ips).await
+    {
+        debug!("Skipping MySQL validation: {e}");
+        return Ok((false, vec![SSRF_BLOCKED_MESSAGE.into()]));
     }
 
     let mut builder = OptsBuilder::from_opts(opts).stmt_cache_size(Some(0));
@@ -132,5 +148,44 @@ pub async fn validate_mysql(mysql_url: &str, lax_tls: bool) -> Result<(bool, Vec
         )),
         Ok(Err(e)) => Err(anyhow!("MySQL connection failed: {e}")),
         Err(_) => Err(anyhow!("MySQL connection timed out after {CONNECT_TIMEOUT:?}")),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn rejects_private_ipv4_host() {
+        let (valid, meta) =
+            validate_mysql("mysql://user:pass@10.0.0.1:3306/app", false, false).await.unwrap();
+        assert!(!valid);
+        assert_eq!(meta, vec![SSRF_BLOCKED_MESSAGE.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn rejects_link_local_metadata_host() {
+        let (valid, meta) =
+            validate_mysql("mysql://user:pass@169.254.169.254:3306/app", false, false)
+                .await
+                .unwrap();
+        assert!(!valid);
+        assert_eq!(meta, vec![SSRF_BLOCKED_MESSAGE.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn rejects_ipv6_unique_local_host() {
+        let (valid, meta) =
+            validate_mysql("mysql://user:pass@[fd00::1]:3306/app", false, false).await.unwrap();
+        assert!(!valid);
+        assert_eq!(meta, vec![SSRF_BLOCKED_MESSAGE.to_string()]);
+    }
+
+    #[tokio::test]
+    async fn still_skips_loopback_with_the_dedicated_message() {
+        let (valid, meta) =
+            validate_mysql("mysql://user:pass@127.0.0.1:3306/app", false, false).await.unwrap();
+        assert!(!valid);
+        assert_eq!(meta, vec!["skipped localhost/loopback host".to_string()]);
     }
 }

@@ -64,7 +64,7 @@ function initRulesFilter() {
     if (headers[index] && headers[index].textContent.trim().toLowerCase() === "confidence") {
       return (confidenceOrder[av] || 0) - (confidenceOrder[bv] || 0);
     }
-    // Yes/empty columns — Yes first
+    // Capability columns — supported rules first.
     const aYes = av === "yes" ? 1 : 0;
     const bYes = bv === "yes" ? 1 : 0;
     if (aYes !== bYes) return bYes - aYes;

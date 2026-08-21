@@ -18,6 +18,7 @@ kingfisher-core = { path = "../kingfisher-core" }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
+toml = "0.8"
 schemars.workspace = true
 
 # Error handling
@@ -51,9 +52,11 @@ zeroize.workspace = true
 
 # Vectorscan for pattern matching
 vectorscan-rs.workspace = true
+thread_local.workspace = true
 
 # Logging
 tracing.workspace = true
+tiktoken-rs.workspace = true
 
 # File walking
 walkdir.workspace = true
@@ -63,7 +66,13 @@ ignore.workspace = true
 flate2 = "1.1"
 
 [build-dependencies]
+anyhow.workspace = true
 flate2 = "1.1"
+regex.workspace = true
+serde.workspace = true
+serde_yaml = "0.9"
+toml = "0.8"
+ureq = "3.1"
 
 [dev-dependencies]
 pretty_assertions = "1.4"

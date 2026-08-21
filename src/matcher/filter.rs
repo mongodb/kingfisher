@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use http::StatusCode;
 use regex::bytes::Regex;
@@ -24,7 +24,8 @@ use super::{
 };
 
 // Re-use the canonical secret capture selection from kingfisher-scanner.
-use kingfisher_scanner::primitives::find_secret_capture;
+use kingfisher_rules::{RulesDatabase, betterleaks_filter::BetterleaksFilterContext};
+use kingfisher_scanner::primitives::find_secret_capture_with_group;
 
 // -------------------------------------------------------------------------------------------------
 // Entropy and safe-list check
@@ -163,6 +164,7 @@ fn check_uri_validation(rule: &Rule, matching_input_bytes: &[u8]) -> bool {
 
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn filter_match<'b>(
+    rules_db: &RulesDatabase,
     blob: &'b Blob,
     rule: Arc<Rule>,
     re: &Regex,
@@ -181,7 +183,12 @@ pub(crate) fn filter_match<'b>(
     profiler: Option<&Arc<ConcurrentRuleProfiler>>,
     respect_ignore_if_contains: bool,
     inline_ignore_config: &InlineIgnoreConfig,
-) {
+    bounded_confirmation: bool,
+) -> bool {
+    if !rule.matches_path(filename) {
+        return false;
+    }
+
     let mut timer =
         profiler.map(|p| RuleTimer::new(p, rule.id(), rule.name(), &rule.syntax.pattern, filename));
     let mut full_matches = full_matches;
@@ -191,9 +198,16 @@ pub(crate) fn filter_match<'b>(
     let blob_bytes = blob.bytes();
     let default_slice = &blob_bytes[start..end];
     let haystack = ts_match.unwrap_or(default_slice);
+    let mut confirmed = false;
 
     for captures in re.captures_iter(haystack) {
         let full_capture = captures.get(0).unwrap();
+        if bounded_confirmation
+            && ((start > 0 && full_capture.start() == 0) || full_capture.end() != haystack.len())
+        {
+            continue;
+        }
+        confirmed = true;
         let full_capture_offset_span =
             OffsetSpan::from_range((start + full_capture.start())..(start + full_capture.end()));
         if let Some(full_matches) = full_matches.as_deref_mut()
@@ -201,7 +215,8 @@ pub(crate) fn filter_match<'b>(
         {
             continue;
         }
-        let matching_input_for_entropy = find_secret_capture(re, &captures);
+        let matching_input_for_entropy =
+            find_secret_capture_with_group(re, &captures, rule.betterleaks_secret_group());
 
         let min_entropy = rule.min_entropy();
         let entropy_bytes = matching_input_for_entropy.as_bytes();
@@ -223,6 +238,62 @@ pub(crate) fn filter_match<'b>(
             entropy_bytes,
             respect_ignore_if_contains,
         ) {
+            continue;
+        }
+
+        let filter_outcome = rule.betterleaks_filter().and_then(|expression| {
+            let match_start_idx = full_capture.start();
+            let match_end_idx = full_capture.end();
+            let match_line_start_idx = haystack[..match_start_idx]
+                .iter()
+                .rposition(|byte| *byte == b'\n')
+                .map_or(0, |position| position + 1);
+            let match_line_end_idx = haystack[match_end_idx..]
+                .iter()
+                .position(|byte| *byte == b'\n')
+                .map_or(haystack.len(), |position| match_end_idx + position);
+            let line = String::from_utf8_lossy(&haystack[match_line_start_idx..match_line_end_idx]);
+            let captures = re
+                .capture_names()
+                .flatten()
+                .filter_map(|name| {
+                    captures.name(name).map(|capture| {
+                        (name.to_string(), String::from_utf8_lossy(capture.as_bytes()).into_owned())
+                    })
+                })
+                .collect::<BTreeMap<_, _>>();
+            let secret = String::from_utf8_lossy(entropy_bytes);
+            let full_match = String::from_utf8_lossy(full_bytes);
+            let fragment_raw = String::from_utf8_lossy(haystack);
+            let context = BetterleaksFilterContext {
+                path: filename,
+                secret: &secret,
+                full_match: &full_match,
+                line: &line,
+                fragment_raw: &fragment_raw,
+                match_start_idx,
+                match_end_idx,
+                match_line_start_idx,
+                match_line_end_idx,
+                rule_id: rule.id(),
+                description: rule.name(),
+                captures,
+            };
+            match rules_db.evaluate_betterleaks_filter(expression, &context) {
+                Ok(outcome) => Some(outcome),
+                Err(error) => {
+                    debug!(rule_id = rule.id(), %error, "Betterleaks filter evaluation failed");
+                    None
+                }
+            }
+        });
+        if filter_outcome.is_some_and(|outcome| outcome.discard) {
+            continue;
+        }
+        let effective_confidence = filter_outcome
+            .and_then(|outcome| outcome.confidence)
+            .unwrap_or_else(|| rule.confidence());
+        if !rule.accepts_effective_confidence(effective_confidence) {
             continue;
         }
 
@@ -261,13 +332,31 @@ pub(crate) fn filter_match<'b>(
             &blob.bytes()[matching_input_offset_span.start..matching_input_offset_span.end];
 
         // Pass the *full* capture object to from_captures
-        let groups = SerializableCaptures::from_captures(&captures, haystack, re);
+        let groups = SerializableCaptures::from_captures_with_secret_group(
+            &captures,
+            haystack,
+            re,
+            rule.betterleaks_secret_group(),
+        );
 
+        let suppress_helper_reporting = rule.is_runtime_dependency_helper()
+            && !rule.reports_effective_confidence(effective_confidence);
+        let match_rule = if effective_confidence != rule.confidence() || suppress_helper_reporting {
+            let mut effective_rule = rule.as_ref().clone();
+            effective_rule.syntax.confidence = effective_confidence;
+            if suppress_helper_reporting {
+                effective_rule.suppress_runtime_reporting();
+            }
+            Arc::new(effective_rule)
+        } else {
+            Arc::clone(&rule)
+        };
         matches.push(BlobMatch {
-            rule: Arc::clone(&rule),
+            rule: match_rule,
             blob_id: blob.id_ref(),
             matching_input: only_matching_input,
             matching_input_offset_span,
+            association_offset_span: full_capture_offset_span,
             captures: groups,
             validation_response_body: None,
             validation_response_status: StatusCode::from_u16(0).unwrap_or(StatusCode::CONTINUE),
@@ -278,10 +367,12 @@ pub(crate) fn filter_match<'b>(
             },
             calculated_entropy,
             is_base64,
+            dependent_captures: std::collections::BTreeMap::new(),
         });
     }
     if let Some(t) = timer.take() {
         let new_count = (matches.len() - initial_len) as u64;
         t.end(new_count > 0, new_count, 0);
     }
+    confirmed
 }

@@ -21,7 +21,7 @@ Kingfisher is a Rust secret scanner, live credential validator, revocation helpe
 - `src/access_map/`: blast-radius and permission mapping.
 - `crates/kingfisher-core/`: shared core types.
 - `crates/kingfisher-rules/`: rule schema, rule loading, and bundled rule data.
-- `crates/kingfisher-rules/data/rules/`: YAML detection rules.
+- `crates/kingfisher-rules/build_support/`: Betterleaks TOML import and expression parsing.
 - `crates/kingfisher-scanner/`: embeddable scanning API and shared validators.
 - `tests/` and `testdata/`: integration tests and fixtures.
 - `docs/`, `docs/viewer/`, `docs-site/`: docs, report viewer assets, and generated MkDocs site.
@@ -58,7 +58,13 @@ Kingfisher is a Rust secret scanner, live credential validator, revocation helpe
 
 ## Architecture Notes
 
-- Detection rules are YAML-driven and loaded from `crates/kingfisher-rules/data/rules/`.
+- Built-in detection rules are generated at build time from pinned upstream Betterleaks and Veles
+  sources. Keep `crates/kingfisher-rules/build.rs` pinned to a Betterleaks release rather than
+  `main`, keep the Veles commit pinned, and update matching documentation and release-dependent
+  tests when either source changes. Clean builds intentionally require network access.
+- Betterleaks TOML is supported both for the built-in catalog and for custom rules passed through
+  `--rules-path`. Custom Betterleaks rules are imported under the `custom.` namespace.
+- Kingfisher 1.x YAML rules remain supported for custom, typically private rules.
 - Allocator feature flags live in root `Cargo.toml`: `use-mimalloc` default, `use-jemalloc`, and `system-alloc`.
 - Optional validator feature sets live in `crates/kingfisher-scanner/Cargo.toml`.
 - Validation modules live primarily in `crates/kingfisher-scanner/src/validation/` and `src/validation.rs`.
@@ -74,33 +80,46 @@ Kingfisher is a Rust secret scanner, live credential validator, revocation helpe
 
 ## Rule Authoring
 
-Use this when creating or updating rules in `crates/kingfisher-rules/data/rules/`.
+New generally useful rules should be contributed to the Betterleaks repository first. Use
+Betterleaks TOML for shared/custom rules; use the Kingfisher 1.x YAML format for private
+organization-specific rules and the fixtures that exercise that format.
 
 1. Read `docs/RULES.md` before non-trivial rule/schema work.
-2. Start from a nearby provider-family rule and preserve the existing YAML style.
-3. Use a stable `kingfisher.<provider>...` rule id and set `confidence: medium`.
+2. Use Betterleaks TOML for shared rules and custom TOML rules; use the Kingfisher 1.x YAML schema for private organization-specific rules.
+3. Use an organization-specific custom rule ID; custom Betterleaks TOML IDs are automatically imported under `custom.`.
 4. Write a valid Hyperscan/Vectorscan regex. Lookahead and lookbehind are not supported.
-5. Start `pattern` with `(?x)`, use one unnamed capture around the secret for `{{ TOKEN }}`, and use non-capturing groups for structure.
+5. Put the reported secret in one unnamed capture for `{{ TOKEN }}` and use non-capturing groups for structure.
 6. Prefer specific token formats and provider context; avoid broad generic patterns.
-7. Use `min_entropy`, `pattern_requirements`, `ignore_if_contains`, and checksum requirements when format constraints are known.
-8. Include `examples` that must match.
-9. Use `depends_on_rule` for multi-part credentials; consider `visible: false` for helper rules.
-10. Add YAML validation and revocation only when reliable and safe.
+7. Use entropy, pattern requirements, filters, and checksum requirements when format constraints are known.
+8. Include examples that must match and negative examples when nearby formats are false positives.
+9. Use components/`depends_on_rule` for multi-part credentials; mark helper rules invisible.
+10. Add HTTP/gRPC validation and revocation only when the provider response is a reliable and safe signal.
+
+## Rule Pipeline
+
+- The default catalog is downloaded from pinned upstream sources during the `kingfisher-rules`
+  build, converted, and embedded in the binary. The upstream rule source is not checked in.
+- `--rules-path` accepts Betterleaks `.toml` and Kingfisher 1.x `.yml`/`.yaml` files. Betterleaks TOML is translated through the same importer used for built-ins, while custom TOML gets the `custom.` namespace.
+- A rule's regex produces candidate matches. The selected capture becomes the reported secret; entropy, pattern requirements, and filters remove candidates before reporting.
+- Components attach nearby supporting values to a primary rule. They can be required or optional and are made available to validation as named variables.
+- Validation checks credentials live through Betterleaks expressions, Kingfisher 1.x YAML HTTP/gRPC definitions, or Kingfisher's typed/raw validator families. A successful response is not proof unless the provider-specific matcher or expression makes it so.
+- Revocation, access-map metadata, and narrow false-positive filters are operational capabilities kept separate from the Betterleaks detection catalog.
 
 ## Rule Verification
 
 - Rule crate: `cargo test -p kingfisher-rules`
-- Rule syntax/check path: `kingfisher rules check --rules-path crates/kingfisher-rules/data/rules/<file>.yml --load-builtins=false --no-update-check`
+- Rule syntax/check path: `kingfisher rules check --rules-path <custom-rule.yml> --load-builtins=false --no-update-check`
 - Scan fixture/corpus: `kingfisher scan ./testdata --rule <rule-family-or-id> --rule-stats`
 - Validator check: `kingfisher validate --rule <rule-id> <token-or-secret>`
 - Broad regression when practical: `cargo test --workspace --all-targets`
 
 ## Common Tasks
 
-- Add a detection rule: follow the rule authoring and verification sections above.
+- Add a detection rule: contribute it to Betterleaks first; use Betterleaks TOML for shared rules and the Kingfisher 1.x YAML format only for private custom rules.
 - Add a CLI command: implement under `src/cli/commands/` and register it in CLI wiring.
 - Add a validator: prefer YAML first; if Rust is required, use `raw.rs` and the narrowest feature/dependency wiring.
-- Update docs-site rule counts: run `uv run '/Users/mickg/src/kingfisher/data/default/rule_cleanup/count_rules.py'`, update `docs-site/overrides/` and `docs-site/mkdocs.yml`, then rebuild the docs site when practical.
+- Update Betterleaks import behavior in `crates/kingfisher-rules/build_support/`; do not add a second
+  generated or hand-authored built-in catalog.
 
 ## Docs Pointers
 
