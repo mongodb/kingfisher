@@ -72,5 +72,6 @@ let price = 25000;
 let password = "qwertyuiop456";
 let secret_key = "my voice is still my passport. verify me.";
 let aws_access_key = "AKIA6ODU5DHT7VPXGCE4";
+let githubToken = "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";
 
 export default App;

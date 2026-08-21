@@ -16,13 +16,12 @@ use tempfile::{TempDir, tempdir};
 
 const GITHUB_TOKEN_VALUE: &str = "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";
 const AWS_ACCESS_KEY_VALUE: &str = "AKIAX24QKKOLDJMZ5Y2T";
-const GCP_PRIVATE_KEY_VALUE: &str = "c4c474d61701fd6fd4191883b8fea9a8411bf771";
+const GCP_API_KEY_VALUE: &str = "AIzaSyBUPHAjZl3n8Eza66ka6B78iVyPteC5MgM";
 const SLACK_TOKEN_VALUE: &str = "xoxb-123465789012-0987654321123-AbDcEfGhIjKlMnOpQrStUvWx";
 const STRIPE_SECRET_VALUE: &str = "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";
 
 const GITHUB_TOKEN_LINE: &str = "GITHUB_TOKEN = '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'";
-const GCP_PRIVATE_KEY_LINE: &str =
-    "GCP_PRIVATE_KEY_ID = 'c4c474d61701fd6fd4191883b8fea9a8411bf771'";
+const GCP_API_KEY_LINE: &str = "GCP_API_KEY = 'AIzaSyBUPHAjZl3n8Eza66ka6B78iVyPteC5MgM'";
 const SLACK_TOKEN_LINE: &str =
     "SLACK_BOT_TOKEN = 'xoxb-123465789012-0987654321123-AbDcEfGhIjKlMnOpQrStUvWx'";
 const STRIPE_SECRET_LINE: &str = concat!(
@@ -43,7 +42,7 @@ fn scan_by_commit_and_branch_diff() -> anyhow::Result<()> {
     let config_path = repo_dir.join("config.py");
     let config_contents = r"# test configuration with multiple secrets
 GITHUB_TOKEN = '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'
-GCP_PRIVATE_KEY_ID = 'c4c474d61701fd6fd4191883b8fea9a8411bf771'
+GCP_API_KEY = 'AIzaSyBUPHAjZl3n8Eza66ka6B78iVyPteC5MgM'
 GOOGLE_API_KEY = 'AIzaSyBUPHAjZl3n8Eza66ka6B78iVyPteC5MgM'
 ";
     fs::create_dir_all(config_path.parent().unwrap())?;
@@ -166,7 +165,7 @@ fn setup_linear_repo_with_secrets() -> Result<(TempDir, std::path::PathBuf, Vec<
 
     // Remaining commits mirror the shell script example.
     let additions = [
-        ("Add GCP private key id", GCP_PRIVATE_KEY_LINE),
+        ("Add GCP API key", GCP_API_KEY_LINE),
         ("Add Slack bot token", SLACK_TOKEN_LINE),
         ("Add Stripe API key", STRIPE_SECRET_LINE),
     ];
@@ -212,7 +211,7 @@ fn scan_specific_commit_reports_only_that_commit() -> Result<()> {
             // Must contain the first token, but none of the later secrets.
             contains("GITHUB-PAT")
                 .and(contains(GITHUB_TOKEN_VALUE))
-                .and(contains(GCP_PRIVATE_KEY_VALUE).not())
+                .and(contains(GCP_API_KEY_VALUE).not())
                 .and(contains(SLACK_TOKEN_VALUE).not())
                 .and(contains(STRIPE_SECRET_VALUE).not()),
         );
@@ -241,7 +240,7 @@ fn scan_with_branch_root_includes_descendants() -> Result<()> {
         .stdout(
             contains("GITHUB-PAT")
                 .and(contains(GITHUB_TOKEN_VALUE))
-                .and(contains(GCP_PRIVATE_KEY_VALUE))
+                .and(contains(GCP_API_KEY_VALUE))
                 .and(contains(SLACK_TOKEN_VALUE))
                 .and(contains(STRIPE_SECRET_VALUE)),
         );
@@ -273,7 +272,7 @@ fn scan_branch_tip_with_branch_root_commit() -> Result<()> {
         .stdout(
             contains("GITHUB-PAT")
                 .and(contains(GITHUB_TOKEN_VALUE))
-                .and(contains(GCP_PRIVATE_KEY_VALUE))
+                .and(contains(GCP_API_KEY_VALUE))
                 .and(contains(SLACK_TOKEN_VALUE))
                 .and(contains(STRIPE_SECRET_VALUE))
                 .and(contains(latest_commit_hex.as_str())),

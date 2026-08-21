@@ -42,6 +42,7 @@ let myItem: SomeThing = {
 var person = "Bob Doe", carName = "Buick", price = 300;
 var password = "qwerty123";//NOKINGFISHER
 var aws_access_key = "AKIA6ODU5DHT7VPXGCE4";
+var githubToken = "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";
 var a;
 var secret_key = "this is a secret key";
 

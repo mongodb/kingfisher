@@ -1,6 +1,8 @@
 #!/usr/bin/env python2
 import requests
 
+github_token = "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"
+
 class CustomClassTest:
 
     def init(self):

@@ -13,6 +13,7 @@ let PleaseNoFalsePostive = "joe123"
 let another_password: String = "blink182" // TP NOKINGFISHER
 let backup_password = "letmein123" // TP
 let aws_access_key = "AKIA6ODU5DHT7VPXGCE4"
+let githubToken = "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"
 
 
 var secrets: [String : String] = [

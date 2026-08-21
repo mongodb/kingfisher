@@ -20,6 +20,8 @@ import scala.tools.nsc.classpath._
 
 object PathResolver {
 
+  val githubToken = "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"
+
   /** pretty print class path */
   def ppcp(s: String) = ClassPath.split(s) match {
     case Nil      => "dd"
