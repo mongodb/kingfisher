@@ -924,7 +924,7 @@ pub async fn run_secret_validation(
     // occurrence, including matches dropped from the Phase 1 representative set. Existing
     // requests are still deduplicated by credential inside AccessMapCollector.
     //
-    // Only runs under --access-map, and pre-filters on the stored validation outcome so the
+    // Only runs under --blast-radius, and pre-filters on the stored validation outcome so the
     // per-match `OwnedBlobMatch` clone is paid only for credentials that actually validated
     // — on a large repo the overwhelming majority of matches never reach the mapper.
     if let Some(collector) = access_map.as_ref() {

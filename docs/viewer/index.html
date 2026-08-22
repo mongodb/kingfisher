@@ -2546,7 +2546,7 @@
                   <button class="btn" id="copy-access-map" type="button">Copy JSON</button>
                 </div>
               </div>
-              <div id="am-empty-notice" class="am-empty-hint hidden">No Blast Radius entries in this report. Run a scan with <code>--access-map</code> to map credential blast radius.</div>
+              <div id="am-empty-notice" class="am-empty-hint hidden">No Blast Radius entries in this report. Run a scan with <code>--blast-radius</code> to map credential blast radius.</div>
               <div class="am-container" id="am-container">
                 <div id="am-stats-bar" class="am-stats hidden"></div>
                 <div class="am-toolbar" style="display:flex; gap:10px; align-items:center;">
@@ -3963,8 +3963,8 @@
         .filter(Boolean);
       const firstEntry = entries.find((item) => item && typeof item === "object") || {};
       const notes = toolName === "TruffleHog"
-        ? ["Imported from the open-source TruffleHog JSON output. Only findings marked verified are shown as Active; others are Not Attempted. Re-scan with Kingfisher --access-map for validation, revoke commands, and blast radius. Not affiliated with Truffle Security Co."]
-        : ["Imported from the open-source Gitleaks JSON output. No validation, revoke commands, or blast-radius data. Re-scan with Kingfisher --access-map for full enrichment. Not affiliated with the Gitleaks project."];
+        ? ["Imported from the open-source TruffleHog JSON output. Only findings marked verified are shown as Active; others are Not Attempted. Re-scan with Kingfisher --blast-radius for validation, revoke commands, and blast radius. Not affiliated with Truffle Security Co."]
+        : ["Imported from the open-source Gitleaks JSON output. No validation, revoke commands, or blast-radius data. Re-scan with Kingfisher --blast-radius for full enrichment. Not affiliated with the Gitleaks project."];
       const target = String(firstNonEmpty(
         firstEntry.SourceName,
         firstEntry.sourceName,
@@ -4602,9 +4602,9 @@
 
     function getAccessMapEmptyMessage() {
       if (scanMetadata.imported && (!scanMetadata.capabilities || !scanMetadata.capabilities.accessMapSupported)) {
-        return "Imported reports do not include Kingfisher blast-radius data. Re-scan with <code>kingfisher scan --access-map</code> for blast-radius mapping.";
+        return "Imported reports do not include Kingfisher blast-radius data. Re-scan with <code>kingfisher scan --blast-radius</code> for blast-radius mapping.";
       }
-      return "No Blast Radius entries in this report. Run a scan with <code>--access-map</code> to map credential blast radius.";
+      return "No Blast Radius entries in this report. Run a scan with <code>--blast-radius</code> to map credential blast radius.";
     }
 
     function getImportNoticeHtml(importNotes) {
@@ -5940,7 +5940,7 @@
 
     function generateAccessMapReport() {
       if (!Array.isArray(accessMap) || accessMap.length === 0) {
-        alert("No Blast Radius entries are available. Run a scan with --access-map first.");
+        alert("No Blast Radius entries are available. Run a scan with --blast-radius first.");
         return;
       }
 
@@ -6510,7 +6510,7 @@
         if (importInfo && scanMetadata.imported && (!scanMetadata.capabilities || !scanMetadata.capabilities.accessMapSupported)) {
           return {
             level: isActive ? "low" : "none",
-            text: `This finding was imported from ${escapeHtml(importInfo.source_tool || "an external tool")}. Imported reports do not carry Kingfisher blast-radius data, so blast radius cannot be derived here. Re-scan with <code>kingfisher scan --access-map</code> for native mapping.`,
+            text: `This finding was imported from ${escapeHtml(importInfo.source_tool || "an external tool")}. Imported reports do not carry Kingfisher blast-radius data, so blast radius cannot be derived here. Re-scan with <code>kingfisher scan --blast-radius</code> for native mapping.`,
           };
         }
         if (isActive) {
@@ -6521,7 +6521,7 @@
         }
         return {
           level: "none",
-          text: "No blast-radius data is linked to this finding. Run a scan with --access-map to map the blast radius of validated credentials.",
+          text: "No blast-radius data is linked to this finding. Run a scan with --blast-radius to map the blast radius of validated credentials.",
         };
       }
 
@@ -6844,7 +6844,7 @@
   ${accessHtml}
   ` : `
   <h2>Blast Radius</h2>
-  <p style="color:#6b7280;">No blast-radius data available. Run with <code>--access-map</code> to map credential blast radius.</p>
+  <p style="color:#6b7280;">No blast-radius data available. Run with <code>--blast-radius</code> to map credential blast radius.</p>
   `}
 
   <div class="no-print" style="margin-top:24px;text-align:center;">
@@ -7115,6 +7115,45 @@
         : [identity.provider || "unknown", identity.account || "unknown", index].join(":");
     }
 
+    function getMongoDatabasePermissions(entry) {
+      const permissionsByDatabase = new Map();
+      const sourceGroups = entry.identity && Array.isArray(entry.identity.groups)
+        ? entry.identity.groups
+        : entry.groups || [];
+      sourceGroups.forEach((group) => {
+        (group.resources || []).forEach((resource) => {
+          const label = String(resource);
+          if (!label.toLowerCase().startsWith("database:")) return;
+          const database = label.slice(label.indexOf(":") + 1).toLowerCase();
+          if (!permissionsByDatabase.has(database)) permissionsByDatabase.set(database, new Set());
+          (group.permissions || []).forEach((permission) => {
+            permissionsByDatabase.get(database).add(permission);
+          });
+        });
+      });
+      return permissionsByDatabase;
+    }
+
+    function getEffectiveGraphPermissions(entry, resourceName, directPermissions) {
+      const effective = new Set(directPermissions || []);
+      if (String(entry.identity.provider || "").toLowerCase() !== "mongodb") {
+        return [...effective];
+      }
+
+      const label = String(resourceName);
+      if (!label.toLowerCase().startsWith("collection:")) return [...effective];
+      const qualifiedName = label.slice(label.indexOf(":") + 1);
+      const separator = qualifiedName.indexOf(".");
+      if (separator < 1) return [...effective];
+
+      // Older reports listed database-scoped MongoDB actions only on the
+      // database resource even though those actions apply to its collections.
+      const database = qualifiedName.slice(0, separator).toLowerCase();
+      const inherited = getMongoDatabasePermissions(entry).get(database);
+      if (inherited) inherited.forEach((permission) => effective.add(permission));
+      return [...effective].sort();
+    }
+
     function getGraphResources(entry) {
       const resources = new Map();
       (entry.groups || []).forEach((group) => {
@@ -7129,7 +7168,7 @@
       });
       return [...resources.entries()].map(([name, permissions]) => ({
         name,
-        permissions: [...permissions],
+        permissions: getEffectiveGraphPermissions(entry, name, [...permissions]),
       }));
     }
 

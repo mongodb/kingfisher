@@ -439,7 +439,7 @@ docker run --rm \
   -v "$PWD":/src \
   -p 7890:7890 \
   ghcr.io/mongodb/kingfisher:latest \
-  scan /src --access-map --view-report --view-report-address 0.0.0.0
+  scan /src --blast-radius --view-report --view-report-address 0.0.0.0
 # Then open http://localhost:7890 in your browser
 ```
 

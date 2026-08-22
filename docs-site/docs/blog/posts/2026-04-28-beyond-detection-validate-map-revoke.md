@@ -79,13 +79,13 @@ A leaked AWS key bound to a single read-only S3 bucket and a leaked AWS key
 bound to organization-wide `AdministratorAccess` are not the same incident.
 The first is a ticket. The second is a war room.
 
-Add `--access-map` to a scan and Kingfisher authenticates each live
+Add `--blast-radius` (alias `--access-map`) to a scan and Kingfisher authenticates each live
 credential, enumerates what it can do, and writes the result alongside
 the finding:
 
 ```bash
 kingfisher scan github --organization my-org \
-  --access-map \
+  --blast-radius \
   --format json \
   --output findings.json
 ```
@@ -156,7 +156,7 @@ In practice, these three capabilities collapse into one response workflow:
 ```bash
 # 1. Scan + validate + map blast radius in one call
 kingfisher scan github --organization my-org \
-  --access-map \
+  --blast-radius \
   --format json \
   --output findings.json
 

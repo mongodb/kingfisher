@@ -1510,7 +1510,7 @@ fn maybe_hint_access_map(datastore: &Arc<Mutex<FindingsStore>>, args: &scan::Sca
 
     if has_mappable_identities {
         info!(
-            "Blast radius mapping not requested. Rerun with --access-map to include resource-level permissions, if authorized."
+            "Blast radius mapping not requested. Rerun with --blast-radius to include resource-level permissions, if authorized."
         );
     }
 }

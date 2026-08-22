@@ -401,7 +401,7 @@ overrides are exposed to Betterleaks validation environment variables.
 The source prefilter applies only to Betterleaks rules. Custom and Veles rules still run on paths
 that Betterleaks excludes.
 
-`--access-map` (alias `--blast-radius`) works for validated Betterleaks findings when Kingfisher has
+`--blast-radius` (alias `--access-map`) works for validated Betterleaks findings when Kingfisher has
 an access-map handler for the credential shape. Because Betterleaks currently has no revocation or
 checksum metadata, Kingfisher maintains a checked-in capability overlay for access-map bindings and
 selected safe revocation actions. It contains no detection patterns and is validated against the

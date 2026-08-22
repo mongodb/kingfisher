@@ -56,7 +56,7 @@ Best for security teams scanning many repositories or data sources from a contro
 - Run Kingfisher from a dedicated automation host, container job, or scheduled workflow.
 - Store platform credentials in your existing secret manager and inject them at runtime.
 - Prefer structured outputs like JSON, SARIF, or HTML for downstream ingestion and review.
-- Use `--access-map` when you are authorized to assess blast radius for validated credentials.
+- Use `--blast-radius` when you are authorized to assess blast radius for validated credentials.
 
 Typical centralized inputs:
 
@@ -94,7 +94,7 @@ See:
 - Start with self-serve or CI deployment before building centralized automation.
 - Prefer scoped credentials for integrations and validation.
 - Use structured output formats when results are consumed by other systems.
-- Treat `--access-map`, validation, and revocation as privileged operations and run them only where authorized.
+- Treat `--blast-radius`, validation, and revocation as privileged operations and run them only where authorized.
 - Keep rules and binaries updated together so documentation, features, and provider coverage stay aligned.
 
 ## Related Documentation

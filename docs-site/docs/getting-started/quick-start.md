@@ -81,7 +81,7 @@ kingfisher scan /path/to/code --validation-filter actionable
 See exactly what resources a leaked credential can access:
 
 ```bash
-kingfisher scan /path/to/code --access-map --view-report
+kingfisher scan /path/to/code --blast-radius --view-report
 ```
 
 ## 6. Revoke a Compromised Secret

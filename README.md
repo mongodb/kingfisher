@@ -55,7 +55,7 @@ Kingfisher is a high-performance, open source secret detection tool for source c
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
 - **Extensible rules**: Betterleaks is the main catalog, with selected Veles detectors filling gaps; custom Betterleaks TOML and Kingfisher 1.x YAML rules are supported ([docs/ADVANCED.md](/docs/ADVANCED.md#default-betterleaks-rules), [docs/RULES.md](/docs/RULES.md))
 - **Validation and revocation**: validate discovered credentials live and revoke supported credentials from the CLI ([docs/USAGE.md](/docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
-- **Blast Radius Mapping**: use `--access-map` (alias `--blast-radius`) to map supported credentials to their effective identities, permissions, and reachable resources ([docs/ACCESS_MAP.md](docs/ACCESS_MAP.md))
+- **Blast Radius Mapping**: use `--blast-radius` (alias `--access-map`) to map supported credentials to their effective identities, permissions, and reachable resources ([docs/ACCESS_MAP.md](docs/ACCESS_MAP.md))
 - **Broad provider coverage**: detect and validate credentials across cloud, AI, developer tooling, databases, SaaS, messaging, identity, and cryptographic systems through the Betterleaks-based built-in catalog
 - **Compressed Files**: Supports extracting and scanning compressed files for secrets, including `tar.gz`/`bz2`/`xz`, ZIP-family containers (`zip`, `jar`, `docx`, `xlsx`, `pptx`, `odt`, `epub`, `hwpx`, and more), `asar`, HWP (Hancom OLE2/CFBF binary with DEFLATE/zlib stream decoding), and EGG (ALZip; raw-byte scanning)
 - **SQLite Database Scanning**: Automatically extracts and scans SQLite database contents for secrets stored in table rows
@@ -297,7 +297,7 @@ docker run --rm \
   -p 7890:7890 \
   ghcr.io/mongodb/kingfisher:latest \
   scan https://github.com/leaktk/fake-leaks \
-  --access-map \
+  --blast-radius \
   --view-report \
   --view-report-address 0.0.0.0
 ```
@@ -310,7 +310,7 @@ docker run --rm \
   -p 7891:7891 \
   ghcr.io/mongodb/kingfisher:latest \
   scan https://github.com/leaktk/fake-leaks \
-  --access-map \
+  --blast-radius \
   --view-report \
   --view-report-port 7891 \
   --view-report-address 0.0.0.0
@@ -327,7 +327,7 @@ kingfisher scan /path/to/code --format json --output findings.json
 ### 21: Map blast radius of discovered credentials
 
 ```bash
-kingfisher scan /path/to/code --access-map --view-report
+kingfisher scan /path/to/code --blast-radius --view-report
 ```
 
 ## Installation
@@ -416,7 +416,7 @@ Raw JSON and SARIF from Kingfisher, Gitleaks, or TruffleHog are great for machin
 - **Prioritize real, validated secrets** — validated Kingfisher findings and TruffleHog-verified findings float to the top so you act on live credentials first.
 - **Drop duplicates** — repeated imports and overlapping scans are deduplicated by fingerprint/secret identity so you don't open the same key five times. Per-tool "duplicates removed" cards on the dashboard show how much noise each tool contributed, and an upload-time **Deduplicate findings** toggle (on by default) lets you inspect raw rows when you need to.
 - **Cross-tool enrichment** — when a Gitleaks or TruffleHog finding lines up with a Kingfisher finding at the same commit, file, and line, the imported row picks up Kingfisher's validation verdict and validate / revoke commands. This is useful when a team already has a Gitleaks or TruffleHog pipeline in CI and wants to layer Kingfisher's validation and remediation data on top of the reports they already produce, without replacing their existing tooling.
-- **See blast radius** — for Kingfisher reports generated with `--access-map`, the viewer renders the identity, permissions, and resources a leaked credential can reach, so you can tell a dev token apart from a production admin key.
+- **See blast radius** — for Kingfisher reports generated with `--blast-radius`, the viewer renders the identity, permissions, and resources a leaked credential can reach, so you can tell a dev token apart from a production admin key.
 - **Export triage decisions** — filter down to what matters and export a cleaned-up subset for a ticket, a rotation runbook, or an audit reviewer.
 
 Gitleaks and TruffleHog are both widely used open-source secret scanners with their own strengths; Kingfisher's viewer reads their standard JSON output plus SARIF so teams that already run other tooling can pull those findings into the same triage workflow. Kingfisher is not affiliated with or endorsed by the Gitleaks project or Truffle Security Co.; TruffleHog and Gitleaks are trademarks of their respective owners.
@@ -430,7 +430,7 @@ Serving blast-radius viewer at http://127.0.0.1:7890 (Ctrl+C to stop)
 
 **Usage:**
 ```bash
-kingfisher scan /path/to/scan --access-map --view-report
+kingfisher scan /path/to/scan --blast-radius --view-report
 ```
 
 ![Kingfisher blast radius and report viewer demo](docs/kingfisher-usage-access-map-01.gif)
@@ -535,7 +535,7 @@ Kingfisher's blast-radius feature transforms secret detection from a simple aler
 
 ```bash
 # Generate blast-radius results during scan
-kingfisher scan /path/to/code --access-map --view-report
+kingfisher scan /path/to/code --blast-radius --view-report
 
 # View blast-radius reports locally
 kingfisher view kingfisher.json

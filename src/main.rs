@@ -1322,7 +1322,7 @@ fn warn_on_alert_misconfiguration(scan_args: &cli::commands::scan::ScanArgs) {
             && !scan_args.access_map
         {
             warn!(
-                "alert sink {} uses access-map-only filtering but --access-map was not enabled; \
+                "alert sink {} uses access-map-only filtering but --blast-radius was not enabled; \
                  this sink will not include findings (use --alert-prevent-empty to suppress \
                  empty filtered alerts)",
                 kingfisher::alerts::redact_webhook(&sink.url)

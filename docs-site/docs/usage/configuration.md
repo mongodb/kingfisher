@@ -171,7 +171,7 @@ scan:
   no_dedup: false               # bool                           (--no-dedup)
   turbo: false                  # bool                           (--turbo)
   no_base64: false              # bool                           (--no-base64)
-  access_map: false             # bool                           (--access-map)
+  access_map: false             # bool                           (--blast-radius; alias --access-map)
   rule_stats: false             # bool                           (--rule-stats)
   jobs: 8                       # int                            (--jobs)
   git_repo_timeout: 1800        # seconds                        (--git-repo-timeout)

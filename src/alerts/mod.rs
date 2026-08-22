@@ -138,7 +138,7 @@ pub enum AlertFindingFilter {
     /// Keep only `VerifiedActive` findings. Note this excludes `Assumed`, which
     /// was never live-validated.
     OnlyActive,
-    /// Keep only findings with a matching successful `--access-map` result
+    /// Keep only findings with a matching successful `--blast-radius` result
     /// (implies active, since access-mapping only runs on validated credentials).
     AccessMapOnly,
 }
@@ -198,7 +198,7 @@ pub struct AlertSummary {
     pub report_url: Option<String>,
     /// Resolved detail level (`Summary` or `Detail`, never `Auto`).
     pub detail: AlertDetail,
-    /// Sum of impacted-resource counts (from `--access-map`) across findings
+    /// Sum of impacted-resource counts (from `--blast-radius`) across findings
     /// in this summary. `0` when access-map wasn't run or none of this sink's
     /// findings have a matching access-map result.
     pub impacted_resources: usize,
@@ -384,7 +384,7 @@ pub async fn dispatch(
 
 /// Dispatch alerts with scan-only access-map correlation and dry-run context.
 ///
-/// `access_map` is the (possibly empty) set of `--access-map` results for this scan; it is used
+/// `access_map` is the (possibly empty) set of `--blast-radius` results for this scan; it is used
 /// both for `AlertFindingFilter::AccessMapOnly` filtering and to populate
 /// `AlertSummary::impacted_resources`. `dry_run` builds and logs each sink's resolved payload
 /// instead of POSTing it.

@@ -4,7 +4,7 @@ Kingfisher’s **blast-radius mapping** (aka the access map) determines the *eff
 
 There are two ways to produce blast-radius results:
 
-- **During scanning**: `kingfisher scan ... --access-map`  
+- **During scanning**: `kingfisher scan ... --blast-radius`
   Kingfisher validates detected secrets and automatically generates blast-radius entries for supported credential types.
 - **Standalone**: `kingfisher access-map <provider> [credential_file]`  
   This reads a credential artifact from disk and maps it directly.
@@ -39,7 +39,7 @@ flowchart LR
 
 ```mermaid
 flowchart LR
-    Scan[kingfisher scan --access-map] --> Detect[Detect findings]
+    Scan[kingfisher scan --blast-radius] --> Detect[Detect findings]
     Detect --> Validate[Validate supported credentials]
     Validate --> Collect[AccessMapCollector]
     Collect --> Requests[AccessMapRequest values]
@@ -333,9 +333,9 @@ endpoints. Keep all three values aligned with the target cloud.
 
 During scanning, validated Entra client secrets detected with their tenant and
 client IDs, plus Azure-context OAuth2 JWTs, can automatically feed
-`scan --access-map`.
+`scan --blast-radius`.
 
-### Azure DevOps (scan `--access-map` only)
+### Azure DevOps (scan `--blast-radius` only)
 
 Azure DevOps blast-radius mapping is supported when a **validated Azure DevOps PAT** is discovered during scanning (the `access_map` record includes both the PAT and the organization). At the moment, there is **no standalone** `kingfisher access-map azure-devops ...` provider flag.
 
@@ -659,7 +659,7 @@ kingfisher access-map monday ./monday.token --format json > monday.access-map.js
 - monday.com API tokens do not carry granular scopes; permissions follow the underlying user's role (admin/member/viewer/guest).
 - `provider_metadata.version` carries the monday.com plan tier when exposed by the account.
 - The standalone provider remains available. The validated `betterleaks.monday-api-token.1` rule
-  also supports automatic `scan --access-map` collection.
+  also supports automatic `scan --blast-radius` collection.
 
 ### Asana (`asana`)
 
@@ -689,7 +689,7 @@ kingfisher access-map asana ./asana.token --format json > asana.access-map.json
 - Asana access tokens do not expose granular scopes. Access follows the underlying user's membership in each workspace, organization, and team.
 - `token_details.token_type` is classified from the token prefix (`personal_access_token_v2`, `personal_access_token_v1`, `oauth_or_legacy_pat`, or generic `asana_token`).
 - The standalone provider remains available. The current Betterleaks catalog does not expose a
-  compatible validated Asana rule for automatic `scan --access-map` collection.
+  compatible validated Asana rule for automatic `scan --blast-radius` collection.
 
 ### Pinecone (`pinecone`)
 
@@ -716,10 +716,10 @@ The `kingfisher blast-radius` and `kingfisher blast_radius` aliases also work fo
 
 - Pinecone API keys do not carry granular scopes; access follows the API key's project-level permissions, which include read and write (upsert/delete) against any index in the project.
 - Indexes with `deletion_protection: enabled` are flagged in the resource record but still accessible for read/write.
-- Recorded during `scan --access-map` (or the `--blast-radius` alias) for validated
+- Recorded during `scan --blast-radius` (or the `--access-map` alias) for validated
   `betterleaks.pinecone-api-key.1` and `betterleaks.pinecone-api-key.2` findings.
 
-## Notes on blast-radius generation during `scan --access-map`
+## Notes on blast-radius generation during `scan --blast-radius`
 
 - Blast-radius entries are recorded for **validated** findings. A capability may explicitly allow
   a reachable 2xx result when that provider's validator cannot classify it more precisely (the

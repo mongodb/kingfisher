@@ -27,7 +27,7 @@ Gitleaks and TruffleHog are great at emitting candidate matches; Kingfisher goes
 - **Cross-tool triage in one place** — import a Gitleaks scan, a TruffleHog scan, and a Kingfisher scan of the same codebase and look at them side-by-side with deduplication, rather than reconciling three different schemas by hand.
 - **Rotate real secrets first** — validated Kingfisher findings and TruffleHog-verified findings are surfaced as active credentials; unverified/static matches are marked as not attempted.
 - **Dedup automatically** — the same secret appearing across multiple reports, directories, or scan runs collapses to one entry by fingerprint / secret identity.
-- **See blast radius** — when a Kingfisher report was generated with `--access-map`, the viewer opens an interactive blast-radius graph with a side inspector and details view, so you can trace the identity, resources, and permissions without digging through nested JSON.
+- **See blast radius** — when a Kingfisher report was generated with `--blast-radius`, the viewer opens an interactive blast-radius graph with a side inspector and details view, so you can trace the identity, resources, and permissions without digging through nested JSON.
 - **Share and archive** — export filtered subsets for tickets, rotation runbooks, or audit reviewers.
 
 Tools like Gitleaks and TruffleHog surface candidates. Kingfisher's viewer helps you decide which ones matter — and it works with their output, not just its own.
@@ -94,6 +94,6 @@ You can test the hosted page with a bundled sample report:
 - Kingfisher-produced SARIF can restore compatible validation status, command, fingerprint, and `access_map` properties when present.
 - Fingerprints on imported findings use the report's native fingerprint when available; otherwise the viewer synthesizes one from rule, location, and snippet data.
 - TruffleHog findings marked as verified are shown as active credentials; all other imported findings are treated as not attempted rather than inactive.
-- For full validation and blast-radius mapping, re-scan the source with Kingfisher and (when authorized) add `--access-map`.
+- For full validation and blast-radius mapping, re-scan the source with Kingfisher and (when authorized) add `--blast-radius`.
 
 Gitleaks and TruffleHog are both widely used open-source secret scanners with their own strengths; Kingfisher's viewer reads their standard JSON output plus SARIF so teams that already run other tooling can pull those findings into the same triage workflow. Kingfisher is not affiliated with or endorsed by the Gitleaks project or Truffle Security Co.; TruffleHog and Gitleaks are trademarks of their respective owners.

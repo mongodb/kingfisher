@@ -182,7 +182,7 @@ you have a complete incident workflow:
 ```bash
 # 1. Scan + validate + map blast radius across every workspace
 KF_POSTMAN_TOKEN="PMAK-..." kingfisher scan postman --all \
-  --access-map \
+  --blast-radius \
   --format json \
   --output postman-findings.json
 

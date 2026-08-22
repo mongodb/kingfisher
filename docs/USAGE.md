@@ -143,8 +143,8 @@ Kingfisher's blast-radius feature transforms secret detection from a simple aler
 * Visualize the Blast Radius: See exactly which resources (S3 buckets, EC2 instances, projects, storage containers) are exposed and at risk.
  
 
-Add `--access-map` to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with blast-radius data in the `access_map` field, including the resources and permissions the key can access (grouped when identical). AWS and GCP entries can also include policy provenance, hierarchy context, principal attributes, and potential identity paths under `provider_metadata.authorization_evidence`.
-- If you validated cloud credentials without `--access-map`, Kingfisher will remind you on stderr to rerun with the flag so blast-radius results appear in the output.
+Add `--blast-radius` (alias `--access-map`) to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with blast-radius data in the `access_map` field, including the resources and permissions the key can access (grouped when identical). AWS and GCP entries can also include policy provenance, hierarchy context, principal attributes, and potential identity paths under `provider_metadata.authorization_evidence`.
+- If you validated cloud credentials without `--blast-radius`, Kingfisher will remind you on stderr to rerun with the flag so blast-radius results appear in the output.
 - Run `kingfisher view ./kingfisher.json` to explore a report locally in a local web UI (opens your browser automatically when a report is provided).
 - Or use `kingfisher scan --view-report ...` to generate a JSON report, start the viewer at `http://127.0.0.1:7890`, and open it in your browser.
 
@@ -210,14 +210,14 @@ Raw JSON and SARIF output from Kingfisher, Gitleaks, and TruffleHog are excellen
 - **Cross-tool triage in one UI** — import a Gitleaks scan, a TruffleHog scan, and a Kingfisher scan of the same codebase into the same session and look at them side-by-side with deduplication, instead of reconciling three different schemas.
 - **Clear "this is live" signals** — validated Kingfisher findings and TruffleHog-verified findings are surfaced as `Active Credential` so you rotate proven-live keys first; high-confidence static findings are explicitly marked `Assumed Valid (Not Live-Validated)`, while other findings without a live result are marked `Not Attempted`.
 - **Fingerprint-aware deduplication** — the same secret appearing across multiple reports, directories, or scan runs collapses to one entry.
-- **Blast-radius context** — when a Kingfisher report was produced with `--access-map`, the viewer opens an interactive blast-radius graph and inspector so you can trace the identity, reachable resources, and permission mix without digging through nested JSON.
+- **Blast-radius context** — when a Kingfisher report was produced with `--blast-radius`, the viewer opens an interactive blast-radius graph and inspector so you can trace the identity, reachable resources, and permission mix without digging through nested JSON.
 - **A shareable, offline-friendly workbench** — runs locally via `kingfisher view` or via the hosted static page; nothing about the report is exfiltrated.
 
 Gitleaks and TruffleHog are great at surfacing candidate matches. Kingfisher's viewer turns their candidates (and its own) into a triageable workflow without changing the scanner you already use.
 
 #### Caveats for imported reports
 
-Imported Gitleaks, TruffleHog, and generic SARIF reports are display-oriented. Kingfisher-produced SARIF can restore compatible validation status, command, fingerprint, and `access_map` properties when present, but generic SARIF does not carry Kingfisher-native `access_map` data and cannot be driven by `kingfisher validate` / `revoke`. Imported fingerprints use the report's native fingerprint when available, otherwise the viewer synthesizes one from rule, location, and snippet data. TruffleHog findings marked as verified are shown as verified-active credentials; all other imported findings are treated as not attempted rather than inactive. For full validation context and blast-radius mapping, re-scan with Kingfisher and add `--access-map` when appropriate.
+Imported Gitleaks, TruffleHog, and generic SARIF reports are display-oriented. Kingfisher-produced SARIF can restore compatible validation status, command, fingerprint, and `access_map` properties when present, but generic SARIF does not carry Kingfisher-native `access_map` data and cannot be driven by `kingfisher validate` / `revoke`. Imported fingerprints use the report's native fingerprint when available, otherwise the viewer synthesizes one from rule, location, and snippet data. TruffleHog findings marked as verified are shown as verified-active credentials; all other imported findings are treated as not attempted rather than inactive. For full validation context and blast-radius mapping, re-scan with Kingfisher and add `--blast-radius` when appropriate.
 
 ### Pipe any text directly into Kingfisher by passing `-`
 
