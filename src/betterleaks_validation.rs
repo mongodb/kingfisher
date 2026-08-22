@@ -1216,8 +1216,9 @@ mod tests {
             panic!("expected Betterleaks validation");
         };
 
-        assert!(validation.source.contains("/identity/v1/oauth2/token/introspect"));
-        assert!(validation.source.contains("token=betterleaks-validation-token"));
+        let expression = serde_json::to_string(&validation.expression).unwrap();
+        assert!(expression.contains("/identity/v1/oauth2/token/introspect"));
+        assert!(expression.contains("token=betterleaks-validation-token"));
     }
 
     #[test]
