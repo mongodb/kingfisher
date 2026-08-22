@@ -1383,7 +1383,7 @@ fn record_rule_id_access_map(
 ///
 /// * `veles.secrets/bitbucketcredentials` — the secret is a git URL with
 ///   embedded basic-auth credentials, not an API token.
-/// Returns `true` when the rule was handled.
+///   Returns `true` when the rule was handled.
 fn record_veles_access_map(
     om: &OwnedBlobMatch,
     collector: &AccessMapCollector,
@@ -1953,6 +1953,76 @@ mod tests {
             }
             other => panic!("unexpected request: {other:?}"),
         }
+    }
+
+    fn betterleaks_match(
+        syntax: RuleSyntax,
+        token: &str,
+        dependencies: &[(&str, &str)],
+    ) -> OwnedBlobMatch {
+        let mut matched = make_owned_blob_match();
+        matched.rule = Arc::new(Rule::new(syntax));
+        matched.captures = SerializableCaptures {
+            captures: smallvec![SerializableCapture {
+                name: Some(intern("TOKEN")),
+                match_number: 1,
+                start: 0,
+                end: token.len(),
+                value: intern(token),
+            }],
+        };
+        matched.validation_success = true;
+        matched
+            .dependent_captures
+            .extend(dependencies.iter().map(|(name, value)| (name.to_string(), value.to_string())));
+        matched
+    }
+
+    #[test]
+    fn new_betterleaks_rules_route_to_existing_access_map_handlers() {
+        let mut rules = kingfisher_rules::get_betterleaks_rules(Some(Confidence::Low)).unwrap();
+        let cases: [(&str, &str, &[(&str, &str)]); 3] = [
+            (
+                "betterleaks.auth0-client-secret.1",
+                "auth0-client-secret",
+                &[("AUTH0_CLIENT_ID_1", "auth0-client-id"), ("AUTH0_DOMAIN_1", "tenant.auth0.com")],
+            ),
+            ("betterleaks.monday-api-token.1", "monday-api-token", &[]),
+            (
+                "betterleaks.paypal-client-secret.1",
+                "paypal-client-secret",
+                &[("PAYPAL_CLIENT_ID_1", "paypal-client-id")],
+            ),
+        ];
+        let collector = AccessMapCollector::default();
+
+        for (id, token, dependencies) in cases {
+            let syntax = rules.rules.remove(id).expect("generated rule should exist");
+            let Some(Validation::Betterleaks(validation)) = syntax.validation.clone() else {
+                panic!("{id} should use Betterleaks validation");
+            };
+            let matched = betterleaks_match(syntax, token, dependencies);
+            let captures = utils::process_captures(&matched.captures);
+            record_betterleaks_access_map(&matched, &validation, &collector, &captures, id);
+        }
+
+        let requests = collector.into_requests();
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            AccessMapRequest::Auth0 { client_id, client_secret, domain, .. }
+                if client_id == "auth0-client-id"
+                    && client_secret == "auth0-client-secret"
+                    && domain == "tenant.auth0.com"
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            AccessMapRequest::Monday { token, .. } if token == "monday-api-token"
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            AccessMapRequest::PayPal { client_id, client_secret, .. }
+                if client_id == "paypal-client-id" && client_secret == "paypal-client-secret"
+        )));
     }
 
     fn legacy_match(id: &str, token: &str, dependencies: &[(&str, &str)]) -> OwnedBlobMatch {

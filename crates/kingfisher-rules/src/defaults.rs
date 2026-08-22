@@ -224,6 +224,44 @@ mod test {
         assert_eq!(bindings.secret, "components.aws-secret-access-key");
         assert_eq!(bindings.variables["AKID"], "finding.secret");
 
+        for (id, handler) in [
+            ("betterleaks.auth0-client-secret.1", BetterleaksAccessMapHandler::Auth0),
+            ("betterleaks.monday-api-token.1", BetterleaksAccessMapHandler::Monday),
+            ("betterleaks.paypal-client-secret.1", BetterleaksAccessMapHandler::Paypal),
+        ] {
+            let rule = rules.rules.get(id).expect("generated Betterleaks rule should exist");
+            let Some(Validation::Betterleaks(validation)) = &rule.validation else {
+                panic!("{id} should use Betterleaks validation");
+            };
+            let mapping = validation
+                .capabilities
+                .access_map
+                .as_ref()
+                .unwrap_or_else(|| panic!("{id} should have access-map capabilities"));
+            assert_eq!(mapping.handler, handler);
+        }
+
+        let auth0 = rules.rules["betterleaks.auth0-client-secret.1"]
+            .validation
+            .as_ref()
+            .and_then(|validation| match validation {
+                Validation::Betterleaks(validation) => validation.capabilities.access_map.as_ref(),
+                _ => None,
+            })
+            .expect("Auth0 access-map capabilities should exist");
+        assert_eq!(auth0.inputs["client_id"], "components.auth0-client-id.1");
+        assert_eq!(auth0.inputs["domain"], "components.auth0-domain.1");
+
+        let paypal = rules.rules["betterleaks.paypal-client-secret.1"]
+            .validation
+            .as_ref()
+            .and_then(|validation| match validation {
+                Validation::Betterleaks(validation) => validation.capabilities.access_map.as_ref(),
+                _ => None,
+            })
+            .expect("PayPal access-map capabilities should exist");
+        assert_eq!(paypal.inputs["client_id"], "components.paypal-client-id.1");
+
         let gcp = rules.rules.get("betterleaks.gcp-service-account").unwrap();
         assert!(matches!(gcp.revocation, Some(Revocation::GCP)));
 
