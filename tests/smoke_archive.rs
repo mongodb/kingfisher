@@ -64,3 +64,66 @@ fn smoke_scan_tar_gz_archive() -> anyhow::Result<()> {
     dir.close()?;
     Ok(())
 }
+
+#[test]
+fn smoke_scan_zip_inside_zip_archive() -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::process::Command;
+
+    use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+    let dir = tempfile::tempdir()?;
+    let outer_zip = dir.path().join("outer.zip");
+    let github_pat = "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";
+    let options = SimpleFileOptions::default()
+        .compression_method(CompressionMethod::Deflated)
+        .unix_permissions(0o644);
+
+    let mut inner = std::io::Cursor::new(Vec::new());
+    {
+        let mut zip = ZipWriter::new(&mut inner);
+        zip.start_file("secret.txt", options)?;
+        zip.write_all(format!("token={github_pat}\n").as_bytes())?;
+        zip.finish()?;
+    }
+
+    {
+        let file = std::fs::File::create(&outer_zip)?;
+        let mut zip = ZipWriter::new(file);
+        zip.start_file("inner.zip", options)?;
+        zip.write_all(inner.get_ref())?;
+        zip.finish()?;
+    }
+
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .args([
+            "scan",
+            outer_zip.to_str().unwrap(),
+            "--confidence=low",
+            "--format",
+            "json",
+            "--no-update-check",
+            "--no-validate",
+        ])
+        .assert()
+        .code(200)
+        .stdout(predicates::str::contains(github_pat))
+        .stdout(predicates::str::contains("!inner.zip!secret.txt"));
+
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .args([
+            "scan",
+            outer_zip.to_str().unwrap(),
+            "--confidence=low",
+            "--format",
+            "json",
+            "--extraction-depth=1",
+            "--no-update-check",
+            "--no-validate",
+        ])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains(github_pat).not());
+
+    Ok(())
+}

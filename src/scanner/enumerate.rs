@@ -162,6 +162,7 @@ pub fn enumerate_filesystem_inputs(
         exclude_globset: exclude_globset.clone(),
         git_diff: diff_config.clone(),
         extract_archives: !args.content_filtering_args.no_extract_archives,
+        extraction_depth: args.content_filtering_args.extraction_depth as usize,
     };
     let (send_ds, recv_ds) = create_datastore_channel(args.num_jobs);
     let datastore_writer_thread =
@@ -444,7 +445,7 @@ impl ParallelBlobIterator for FileResult {
                     }
 
                     // Multi‑file archive (in‑memory).
-                    CompressedContent::Archive(ref files) => {
+                    CompressedContent::Archive(files) => {
                         if max_extraction_depth == 0 {
                             debug!(
                                 "Skipping nested archive (max depth reached): {}",
@@ -452,23 +453,17 @@ impl ParallelBlobIterator for FileResult {
                             );
                             return Ok(None);
                         }
-                        let items = files
-                            .iter()
-                            .map(|(filename, data)| {
-                                let full_path = PathBuf::from(filename);
-                                let nested_origin =
-                                    OriginSet::new(Origin::from_file(full_path), vec![]);
-                                // Construct a FileResult for deeper extraction if needed (not used
-                                // directly here)
-                                let _ = FileResult {
-                                    path: self.path.join(filename),
-                                    num_bytes: data.len() as u64,
-                                    extract_archives: self.extract_archives,
-                                    extraction_depth: max_extraction_depth - 1,
-                                };
-                                (nested_origin, Blob::from_bytes(data.to_vec()))
-                            })
-                            .collect();
+                        let items = recursively_expand_archive_entries(
+                            files,
+                            max_extraction_depth.saturating_sub(1),
+                        )?
+                        .into_iter()
+                        .map(|(filename, data)| {
+                            let origin =
+                                OriginSet::new(Origin::from_file(PathBuf::from(filename)), vec![]);
+                            (origin, Blob::from_bytes(data))
+                        })
+                        .collect();
                         Ok(Some(FileResultIter {
                             iter_kind: FileResultIterKind::Archive(items),
                             _marker: PhantomData,
@@ -476,7 +471,7 @@ impl ParallelBlobIterator for FileResult {
                     }
 
                     // Multi‑file archive (files on disk).
-                    CompressedContent::ArchiveFiles(ref entries) => {
+                    CompressedContent::ArchiveFiles(entries) => {
                         if max_extraction_depth == 0 {
                             debug!(
                                 "Skipping nested archive (max depth reached): {}",
@@ -484,10 +479,35 @@ impl ParallelBlobIterator for FileResult {
                             );
                             return Ok(None);
                         }
-                        // Read each extracted file from disk and create a Blob.
+                        // Read each extracted file from disk and create a Blob. Archive entries
+                        // that contain another archive are flattened before they reach the
+                        // matcher; ordinary entries stay file-backed to avoid an extra copy.
                         let mut items = Vec::new();
                         for (filename, disk_path) in entries {
-                            let blob = match Blob::from_file(disk_path) {
+                            if max_extraction_depth > 1
+                                && (is_compressed_file(Path::new(&filename))
+                                    || file_header_looks_like_zip(&disk_path))
+                                && let Ok(data) = std::fs::read(&disk_path)
+                            {
+                                let nested = recursively_expand_archive_entries(
+                                    vec![(filename.clone(), data)],
+                                    max_extraction_depth - 1,
+                                )?;
+                                // A successful nested extraction replaces the archive entry
+                                // with its contents. Invalid or empty archives are returned as
+                                // the original entry by the helper and remain scanable below.
+                                if nested.len() != 1 || nested[0].0 != filename {
+                                    for (logical, data) in nested {
+                                        let origin = OriginSet::new(
+                                            Origin::from_file(PathBuf::from(logical)),
+                                            vec![],
+                                        );
+                                        items.push((origin, Blob::from_bytes(data)));
+                                    }
+                                    continue;
+                                }
+                            }
+                            let blob = match Blob::from_file(&disk_path) {
                                 Ok(b) => b,
                                 Err(e) => {
                                     debug!(
@@ -502,14 +522,6 @@ impl ParallelBlobIterator for FileResult {
                             let nested_origin =
                                 OriginSet::new(Origin::from_file(full_path), vec![]);
 
-                            // Construct a FileResult for deeper extraction if needed (not used
-                            // directly here)
-                            let _ = FileResult {
-                                path: self.path.join(filename),
-                                num_bytes: blob.len() as u64,
-                                extract_archives: self.extract_archives,
-                                extraction_depth: max_extraction_depth - 1,
-                            };
                             items.push((nested_origin, blob));
                         }
                         Ok(Some(FileResultIter {
@@ -548,160 +560,101 @@ impl FileResult {
     }
 }
 
-/// Extract an archive blob loaded from a git ODB.
-///
-/// `blob_path` is the in-tree path the blob was first seen at (used both to
-/// pick an extension and to label the resulting per-entry origins so reports
-/// look like `aws_leak.apk!classes4.dex`). `data` is the raw blob bytes.
-///
-/// Returns `Ok(None)` when the path is not a recognized archive format —
-/// the caller should fall back to scanning the blob's raw bytes. Returns
-/// `Ok(Some(entries))` with one element per extracted entry on success.
-/// Returns `Err` only on infrastructure failures (failed to write temp
-/// file, etc.); decompression errors return `Ok(None)` so the caller can
-/// still scan the raw blob.
-#[allow(clippy::type_complexity)]
-fn try_extract_git_blob_archive(
-    blob_path: &str,
-    data: &[u8],
-) -> Result<Option<Vec<(String, Vec<u8>)>>> {
-    let pb = PathBuf::from(blob_path);
-    // A blob qualifies for extraction when its name matches a known archive
-    // format, or its bytes are a ZIP regardless of name (e.g. a `tfplan`).
+type OwnedArchiveEntry = (String, Vec<u8>);
+
+// Bound the bytes retained while expanding one archive tree. The individual extractors enforce
+// their own per-entry limits; this cap also covers the final fan-out from each archive layer.
+const MAX_RECURSIVE_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
+
+fn archive_staged_name(logical: &str) -> String {
+    let entry = logical.rsplit_once('!').map_or(logical, |(_, entry)| entry);
+    Path::new(entry)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty() && *name != "." && *name != "..")
+        .unwrap_or("archive")
+        .to_string()
+}
+
+/// Extract one archive layer from bytes, returning paths rooted at `logical`.
+/// Decompression failures deliberately return `None` so callers can still scan the original entry
+/// as raw content.
+fn extract_archive_bytes(logical: &str, data: &[u8]) -> Result<Option<Vec<OwnedArchiveEntry>>> {
+    let path = Path::new(logical);
     let is_zip_body = looks_like_zip(data);
-    if !is_compressed_file(&pb) && !is_zip_body {
+    if !is_compressed_file(path) && !is_zip_body {
         return Ok(None);
     }
 
-    // Use the repo-relative path in reports while staging the blob under its basename so the
-    // decompressor still dispatches on the original extension.
-    let archive_label = blob_path.to_string();
-    let staged_name = pb.file_name().and_then(|s| s.to_str()).unwrap_or("blob").to_string();
-
-    // ── fast path: ZIP-based archives extract entirely in memory ──
-    //
-    // For monorepos with many committed `.jar`/`.zip`/`.apk`/`.aar`
-    // artifacts, the disk-staging path below imposes substantial
-    // overhead per blob (mkdir + stage write + per-entry tempfile +
-    // re-read into memory). Since the blob bytes are already in memory
-    // here, we skip the round-trip entirely for ZIP-based formats —
-    // this is the dominant archive type committed to git in practice.
-    //
-    // Memory bound: archives larger than `MAX_INMEM_ZIP_ARCHIVE_BYTES`
-    // (64 MB) fall through to the disk-streaming path so a single
-    // worker never holds the archive bytes AND every decompressed
-    // entry resident at once. The fast path additionally caps total
-    // decompressed bytes per archive (see
-    // `MAX_INMEM_ZIP_DECOMPRESSED_BYTES` in `decompress.rs`).
-    let zip_based_ext = pb
+    let zip_based_ext = path
         .extension()
-        .and_then(|s| s.to_str())
-        .map(|s| s.to_ascii_lowercase())
+        .and_then(|ext| ext.to_str())
+        .map(|ext| ext.to_ascii_lowercase())
         .filter(|ext| ZIP_BASED_FORMATS.iter().any(|z| z == ext));
 
+    // ZIP blobs are common in git repositories and are already resident in memory. Avoid a
+    // staging round-trip unless the archive is too large for the bounded in-memory extractor.
     if zip_based_ext.is_some() || is_zip_body {
-        // A ZIP-based extension with non-ZIP bytes (truncated download, stub
-        // file, accidental rename) is skipped so the caller scans raw bytes.
         if !is_zip_body {
             return Ok(None);
         }
         if data.len() <= MAX_INMEM_ZIP_ARCHIVE_BYTES {
-            return match extract_zip_archive_in_memory(data, &archive_label) {
-                // No entries (e.g. an empty ZIP): let the caller scan raw bytes.
-                Ok(entries) if entries.is_empty() => Ok(None),
-                Ok(entries) => Ok(Some(entries)),
+            return match extract_zip_archive_in_memory(data, logical) {
+                Ok(entries) if !entries.is_empty() => Ok(Some(entries)),
+                Ok(_) => Ok(None),
                 Err(e) => {
                     debug!(
-                        "in-memory zip extract failed for {archive_label}: {e:#}; falling back to raw scan"
+                        "in-memory zip extract failed for {logical}: {e:#}; falling back to raw scan"
                     );
                     Ok(None)
                 }
             };
         }
         debug!(
-            "{archive_label} is {} bytes (> {} MB cap); falling back to disk streaming extractor",
+            "{logical} is {} bytes (> {} MB cap); falling back to disk streaming extractor",
             data.len(),
             MAX_INMEM_ZIP_ARCHIVE_BYTES / (1024 * 1024)
         );
-        // fall through to the disk-streaming path below
     }
 
-    // ── slow path: tar/gz/bz2/xz/zlib/asar/hwp/egg etc. via tempfile,
-    //               and large ZIP-based archives that exceeded the
-    //               in-memory cap above. ──
-    let staging = tempfile::tempdir().context("Failed to create staging tempdir for git blob")?;
-    let staged_path = staging.path().join(&staged_name);
+    let staging = tempfile::tempdir().context("Failed to create staging tempdir for archive")?;
+    let staged_path = staging.path().join(archive_staged_name(logical));
     std::fs::write(&staged_path, data)
-        .with_context(|| format!("Failed to stage blob to {}", staged_path.display()))?;
+        .with_context(|| format!("Failed to stage archive to {}", staged_path.display()))?;
 
-    let (content, _td) = match decompress_file_to_temp(&staged_path) {
-        Ok(c) => c,
+    let (content, _temp_dir) = match decompress_file_to_temp(&staged_path) {
+        Ok(content) => content,
         Err(e) => {
             debug!("decompress_file_to_temp({}) failed: {e:#}", staged_path.display());
             return Ok(None);
         }
     };
 
-    use crate::decompress::CompressedContent;
-    let strip_logical_prefix = |logical: String| -> String {
-        // decompress_file_to_temp builds logicals as
-        // `<staged_path>!<entry>`. Replace the staged-path prefix with the
-        // real repo-relative archive path so report paths look like
-        // `dir/aws_leak.apk!res/values/strings.xml`.
-        match logical.split_once('!') {
-            Some((_, entry)) => format!("{}!{}", archive_label, entry),
-            None => format!("{}!{}", archive_label, logical),
-        }
+    let remap_logical = |extracted: String| match extracted.split_once('!') {
+        Some((_, entry)) => format!("{logical}!{entry}"),
+        None => format!("{logical}!{extracted}"),
     };
 
-    // Aggregate cap on bytes accumulated by this wrapper. The on-disk
-    // entries themselves were already bounded during decompression by
-    // per-entry caps; this cap bounds the size of the final
-    // `Vec<(String, Vec<u8>)>` we hand back. Without it, a JAR with N
-    // medium-sized entries could push num_jobs * N * entry_size bytes
-    // resident across the rayon pool.
-    const MAX_DISK_PATH_AGGREGATE_BYTES: u64 = 256 * 1024 * 1024;
+    let mut total = 0u64;
+    let mut entries = Vec::new();
 
-    let entries = match content {
+    match content {
         CompressedContent::Archive(files) => {
-            let mut out = Vec::with_capacity(files.len());
-            let mut total: u64 = 0;
-            for (logical, bytes) in files {
-                if total >= MAX_DISK_PATH_AGGREGATE_BYTES {
-                    debug!(
-                        "{archive_label} disk-archive aggregate cap of {MAX_DISK_PATH_AGGREGATE_BYTES} bytes reached; truncating remaining entries"
-                    );
+            for (entry_logical, bytes) in files {
+                push_archive_bytes(&mut entries, &mut total, remap_logical(entry_logical), bytes);
+                if total >= MAX_RECURSIVE_ARCHIVE_BYTES {
                     break;
                 }
-                let remaining = MAX_DISK_PATH_AGGREGATE_BYTES - total;
-                if bytes.len() as u64 > remaining {
-                    debug!(
-                        "{archive_label} disk-archive aggregate cap reached while reading {}; truncating entry",
-                        logical
-                    );
-                    let take = remaining as usize;
-                    out.push((strip_logical_prefix(logical), bytes[..take].to_vec()));
-                    break;
-                }
-                total += bytes.len() as u64;
-                out.push((strip_logical_prefix(logical), bytes));
             }
-            out
         }
-
-        CompressedContent::ArchiveFiles(disk_entries) => {
-            let mut out = Vec::with_capacity(disk_entries.len());
-            let mut total: u64 = 0;
-            for (logical, disk_path) in disk_entries {
-                if total >= MAX_DISK_PATH_AGGREGATE_BYTES {
-                    debug!(
-                        "{archive_label} disk-archive aggregate cap of {MAX_DISK_PATH_AGGREGATE_BYTES} bytes reached; truncating remaining entries"
-                    );
+        CompressedContent::ArchiveFiles(files) => {
+            for (entry_logical, disk_path) in files {
+                if total >= MAX_RECURSIVE_ARCHIVE_BYTES {
                     break;
                 }
-                let remaining = MAX_DISK_PATH_AGGREGATE_BYTES - total;
+                let remaining = MAX_RECURSIVE_ARCHIVE_BYTES - total;
                 let entry_len = match std::fs::metadata(&disk_path) {
-                    Ok(md) => md.len(),
+                    Ok(metadata) => metadata.len(),
                     Err(e) => {
                         debug!("Failed to stat extracted entry {}: {e}", disk_path.display());
                         continue;
@@ -714,42 +667,23 @@ fn try_extract_git_blob_archive(
                         continue;
                     }
                 };
-                let to_read = entry_len.min(remaining);
-                let mut bytes = Vec::with_capacity(to_read as usize);
-                match file.take(to_read).read_to_end(&mut bytes) {
-                    Ok(_) => {
-                        total += bytes.len() as u64;
-                        out.push((strip_logical_prefix(logical), bytes));
-                        if entry_len > remaining {
-                            debug!(
-                                "{archive_label} disk-archive aggregate cap reached while reading {}; truncating entry",
-                                disk_path.display()
-                            );
-                            break;
-                        }
-                    }
-                    Err(e) => {
-                        debug!("Failed to read extracted entry {}: {e}", disk_path.display());
-                    }
+                let mut bytes = Vec::with_capacity(entry_len.min(remaining) as usize);
+                if let Err(e) = file.take(entry_len.min(remaining)).read_to_end(&mut bytes) {
+                    debug!("Failed to read extracted entry {}: {e}", disk_path.display());
+                    continue;
                 }
+                push_archive_bytes(&mut entries, &mut total, remap_logical(entry_logical), bytes);
             }
-            out
         }
-
-        // Single-stream decompression (gz/bz2/xz/zlib) gives one logical
-        // payload; cap it just like aggregate archive-entry reads.
         CompressedContent::Raw(mut bytes) => {
-            if bytes.len() as u64 > MAX_DISK_PATH_AGGREGATE_BYTES {
-                debug!(
-                    "{archive_label} single-stream payload exceeded {MAX_DISK_PATH_AGGREGATE_BYTES} byte cap; truncating"
-                );
-                bytes.truncate(MAX_DISK_PATH_AGGREGATE_BYTES as usize);
+            if bytes.len() as u64 > MAX_RECURSIVE_ARCHIVE_BYTES {
+                bytes.truncate(MAX_RECURSIVE_ARCHIVE_BYTES as usize);
             }
-            vec![(format!("{}!content", archive_label), bytes)]
+            push_archive_bytes(&mut entries, &mut total, format!("{logical}!content"), bytes);
         }
         CompressedContent::RawFile(path) => {
             let payload_len = match std::fs::metadata(&path) {
-                Ok(md) => md.len(),
+                Ok(metadata) => metadata.len(),
                 Err(e) => {
                     debug!("Failed to stat decompressed payload {}: {e}", path.display());
                     return Ok(None);
@@ -762,22 +696,103 @@ fn try_extract_git_blob_archive(
                     return Ok(None);
                 }
             };
-            let to_read = payload_len.min(MAX_DISK_PATH_AGGREGATE_BYTES);
-            let mut bytes = Vec::with_capacity(to_read as usize);
-            if let Err(e) = file.take(to_read).read_to_end(&mut bytes) {
+            let mut bytes =
+                Vec::with_capacity(payload_len.min(MAX_RECURSIVE_ARCHIVE_BYTES) as usize);
+            if let Err(e) =
+                file.take(payload_len.min(MAX_RECURSIVE_ARCHIVE_BYTES)).read_to_end(&mut bytes)
+            {
                 debug!("Failed to read decompressed payload {}: {e}", path.display());
                 return Ok(None);
             }
-            if payload_len > MAX_DISK_PATH_AGGREGATE_BYTES {
-                debug!(
-                    "{archive_label} single-stream payload exceeded {MAX_DISK_PATH_AGGREGATE_BYTES} byte cap; truncating"
-                );
-            }
-            vec![(format!("{}!content", archive_label), bytes)]
+            push_archive_bytes(&mut entries, &mut total, format!("{logical}!content"), bytes);
         }
-    };
+    }
 
     if entries.is_empty() { Ok(None) } else { Ok(Some(entries)) }
+}
+
+fn push_archive_bytes(
+    entries: &mut Vec<OwnedArchiveEntry>,
+    total: &mut u64,
+    logical: String,
+    mut bytes: Vec<u8>,
+) -> bool {
+    let remaining = MAX_RECURSIVE_ARCHIVE_BYTES.saturating_sub(*total);
+    if remaining == 0 {
+        return false;
+    }
+    if bytes.len() as u64 > remaining {
+        bytes.truncate(remaining as usize);
+    }
+    *total += bytes.len() as u64;
+    entries.push((logical, bytes));
+    true
+}
+
+fn recursively_expand_archive_entry(
+    logical: String,
+    data: Vec<u8>,
+    remaining_depth: usize,
+) -> Result<Vec<OwnedArchiveEntry>> {
+    if remaining_depth == 0 {
+        return Ok(vec![(logical, data)]);
+    }
+
+    let Some(entries) = extract_archive_bytes(&logical, &data)? else {
+        return Ok(vec![(logical, data)]);
+    };
+
+    let mut expanded = Vec::new();
+    let mut total = 0;
+    for (entry_logical, entry_data) in entries {
+        let nested = recursively_expand_archive_entry(
+            entry_logical,
+            entry_data,
+            remaining_depth.saturating_sub(1),
+        )?;
+        for (nested_logical, nested_data) in nested {
+            if !push_archive_bytes(&mut expanded, &mut total, nested_logical, nested_data) {
+                break;
+            }
+        }
+        if total >= MAX_RECURSIVE_ARCHIVE_BYTES {
+            break;
+        }
+    }
+    Ok(expanded)
+}
+
+fn recursively_expand_archive_entries(
+    entries: impl IntoIterator<Item = OwnedArchiveEntry>,
+    remaining_depth: usize,
+) -> Result<Vec<OwnedArchiveEntry>> {
+    let mut expanded = Vec::new();
+    let mut total = 0;
+    for (logical, data) in entries {
+        let nested = recursively_expand_archive_entry(logical, data, remaining_depth)?;
+        for (nested_logical, nested_data) in nested {
+            if !push_archive_bytes(&mut expanded, &mut total, nested_logical, nested_data) {
+                return Ok(expanded);
+            }
+        }
+    }
+    Ok(expanded)
+}
+
+fn recursively_extract_archive_entries(
+    archive_label: &str,
+    data: &[u8],
+    extraction_depth: usize,
+) -> Result<Option<Vec<OwnedArchiveEntry>>> {
+    if extraction_depth == 0 {
+        return Ok(None);
+    }
+    let Some(entries) = extract_archive_bytes(archive_label, data)? else {
+        return Ok(None);
+    };
+
+    let expanded = recursively_expand_archive_entries(entries, extraction_depth.saturating_sub(1))?;
+    if expanded.is_empty() { Ok(None) } else { Ok(Some(expanded)) }
 }
 
 fn archive_entry_suffix<'a>(entry_logical: &'a str, archive_path: &str) -> Option<&'a str> {
@@ -795,6 +810,8 @@ struct GitRepoResultIter<'a> {
     /// inside the archive can be matched. When false, archive blobs are
     /// scanned as raw compressed bytes (legacy behavior).
     extract_archives: bool,
+    /// Maximum number of archive layers to extract from each git blob.
+    extraction_depth: usize,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -810,6 +827,7 @@ impl ParallelBlobIterator for GitRepoResult {
             deadline: Instant::now() + PLACEHOLDER,
             // Default to enabled; the dispatch site overrides from CLI args.
             extract_archives: true,
+            extraction_depth: 1,
             _marker: std::marker::PhantomData,
         }))
     }
@@ -828,12 +846,13 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
         let deadline = self.deadline;
         let flag = Arc::new(AtomicBool::new(false)); // first-timeout gate
         let extract_archives = self.extract_archives;
+        let extraction_depth = self.extraction_depth;
 
         // Loads one git blob and returns one *or more* `(OriginSet, Blob)`
         // tuples: a single tuple for normal blobs, multiple tuples for
         // archive blobs (zip/jar/apk/...) whose entries get unpacked into
         // synthetic per-entry blobs so pattern matchers can see the
-        // contents. See `try_extract_git_blob_archive` below.
+        // contents. See `recursively_extract_archive_entries` below.
         let load_blob = {
             let repo_path = Arc::clone(&repo_path);
             let flag = Arc::clone(&flag);
@@ -855,7 +874,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 // name with no archive extension (e.g. a committed `tfplan`).
                 // We don't need to keep the raw archive bytes around — its
                 // compressed contents won't produce useful matches anyway.
-                if extract_archives {
+                if extract_archives && extraction_depth > 0 {
                     // Prefer an appearance whose name is a recognized archive so
                     // report paths stay stable; fall back to the first appearance
                     // only when the bytes are a ZIP with no archive extension.
@@ -875,7 +894,11 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                         });
 
                     if let Some(archive_path) = archive_path {
-                        match try_extract_git_blob_archive(&archive_path, &data) {
+                        match recursively_extract_archive_entries(
+                            &archive_path,
+                            data.as_slice(),
+                            extraction_depth,
+                        ) {
                             Ok(Some(entries)) => {
                                 let mut out = Vec::with_capacity(entries.len());
                                 for (entry_logical, entry_bytes) in entries {
@@ -1185,6 +1208,7 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                                 iter.map(|mut gri| {
                                     gri.deadline = Instant::now() + timeout;
                                     gri.extract_archives = extract_archives;
+                                    gri.extraction_depth = cfg.extraction_depth;
                                     FoundInputIter::GitRepo(gri)
                                 })
                             })
@@ -1532,13 +1556,13 @@ fn reference_candidates(reference: &str) -> Vec<String> {
 mod tests {
     use std::{fs, io::Write};
     use std::{
-        path::Path,
+        path::{Path, PathBuf},
         time::{Duration, Instant},
     };
 
     use super::{
         FileResult, GitBlobSource, GitDiffConfig, ParallelBlobIterator, enumerate_git_diff_repo,
-        reference_candidates, try_extract_git_blob_archive,
+        recursively_extract_archive_entries, reference_candidates,
     };
     use anyhow::Result;
     use bstr::ByteSlice;
@@ -1673,12 +1697,54 @@ mod tests {
             zip.finish()?;
         }
 
-        let entries = try_extract_git_blob_archive("dir/payload.zip", &cursor.into_inner())?
-            .expect("zip blob should extract");
+        let entries =
+            recursively_extract_archive_entries("dir/payload.zip", &cursor.into_inner(), 1)?
+                .expect("zip blob should extract");
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "dir/payload.zip!nested/secret.txt");
         assert_eq!(entries[0].1, b"token=not-a-real-secret");
+        Ok(())
+    }
+
+    #[test]
+    fn git_blob_nested_archive_extraction_respects_depth() -> Result<()> {
+        let mut inner_cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = ZipWriter::new(&mut inner_cursor);
+            let options = SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .unix_permissions(0o644);
+            zip.start_file("nested/secret.txt", options)?;
+            zip.write_all(b"nested archive content")?;
+            zip.finish()?;
+        }
+        let inner_bytes = inner_cursor.into_inner();
+
+        let mut outer_cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = ZipWriter::new(&mut outer_cursor);
+            let options = SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .unix_permissions(0o644);
+            zip.start_file("inner.zip", options)?;
+            zip.write_all(&inner_bytes)?;
+            zip.finish()?;
+        }
+        let outer_bytes = outer_cursor.into_inner();
+
+        let shallow = recursively_extract_archive_entries("dir/outer.zip", &outer_bytes, 1)?
+            .expect("outer ZIP should extract");
+        assert_eq!(shallow.len(), 1);
+        assert_eq!(shallow[0].0, "dir/outer.zip!inner.zip");
+        assert_eq!(shallow[0].1, inner_bytes);
+
+        let deep = recursively_extract_archive_entries("dir/outer.zip", &outer_bytes, 2)?
+            .expect("nested ZIP should extract");
+        assert_eq!(deep.len(), 1);
+        assert_eq!(deep[0].0, "dir/outer.zip!inner.zip!nested/secret.txt");
+        assert_eq!(deep[0].1, b"nested archive content");
+
         Ok(())
     }
 
@@ -1714,6 +1780,60 @@ mod tests {
         assert_eq!(blobs.len(), 1);
         assert_eq!(blobs[0].0, path);
         assert_eq!(blobs[0].1, expected);
+        Ok(())
+    }
+
+    #[test]
+    fn nested_archive_entries_are_extracted_to_configured_depth() -> Result<()> {
+        let dir = tempdir()?;
+        let outer_path = dir.path().join("outer.zip");
+
+        let mut inner_cursor = std::io::Cursor::new(Vec::new());
+        {
+            let mut zip = ZipWriter::new(&mut inner_cursor);
+            let options = SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .unix_permissions(0o644);
+            zip.start_file("nested/secret.txt", options)?;
+            zip.write_all(b"nested archive content")?;
+            zip.finish()?;
+        }
+        let inner_bytes = inner_cursor.into_inner();
+
+        {
+            let file = fs::File::create(&outer_path)?;
+            let mut zip = ZipWriter::new(file);
+            let options = SimpleFileOptions::default()
+                .compression_method(CompressionMethod::Deflated)
+                .unix_permissions(0o644);
+            zip.start_file("inner.zip", options)?;
+            zip.write_all(&inner_bytes)?;
+            zip.finish()?;
+        }
+
+        let shallow = collect_file_bytes(FileResult {
+            path: outer_path.clone(),
+            num_bytes: fs::metadata(&outer_path)?.len(),
+            extract_archives: true,
+            extraction_depth: 1,
+        })?;
+        assert_eq!(shallow.len(), 1);
+        assert_eq!(shallow[0].0, PathBuf::from(format!("{}!inner.zip", outer_path.display())));
+        assert_eq!(shallow[0].1, inner_bytes);
+
+        let deep = collect_file_bytes(FileResult {
+            path: outer_path.clone(),
+            num_bytes: fs::metadata(&outer_path)?.len(),
+            extract_archives: true,
+            extraction_depth: 2,
+        })?;
+        assert_eq!(deep.len(), 1);
+        assert_eq!(
+            deep[0].0,
+            PathBuf::from(format!("{}!inner.zip!nested/secret.txt", outer_path.display()))
+        );
+        assert_eq!(deep[0].1, b"nested archive content");
+
         Ok(())
     }
 
