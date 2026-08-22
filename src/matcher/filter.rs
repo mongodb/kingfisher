@@ -14,7 +14,10 @@ use crate::{
     rule_profiling::{ConcurrentRuleProfiler, RuleTimer},
     rules::rule::{PatternRequirementContext, PatternValidationResult, Rule, Validation},
     safe_list::{is_safe_match_reason, is_user_match},
-    validation::{is_parseable_mongodb_uri, is_parseable_mysql_uri, is_parseable_postgres_uri},
+    validation::{
+        is_parseable_credential_uri, is_parseable_mongodb_uri, is_parseable_mysql_uri,
+        is_parseable_postgres_uri,
+    },
 };
 
 use super::{
@@ -117,7 +120,12 @@ fn check_pattern_requirements(
 
 /// Returns `true` if the match passes URI validation (for database rules), `false` if it should
 /// be skipped.
-fn check_uri_validation(rule: &Rule, matching_input_bytes: &[u8]) -> bool {
+fn check_uri_validation(
+    rule: &Rule,
+    re: &Regex,
+    captures: &regex::bytes::Captures,
+    matching_input_bytes: &[u8],
+) -> bool {
     let Some(validation) = rule.syntax.validation.as_ref() else {
         return true;
     };
@@ -150,6 +158,29 @@ fn check_uri_validation(rule: &Rule, matching_input_bytes: &[u8]) -> bool {
             };
             if !is_parseable_mysql_uri(uri) {
                 debug!("Skipping match for rule {} due to invalid MySQL URI", rule.id());
+                return false;
+            }
+        }
+        Validation::CredentialUri => {
+            let named_capture = |expected: &str| {
+                re.capture_names().enumerate().find_map(|(index, name)| {
+                    name.filter(|name| name.eq_ignore_ascii_case(expected))
+                        .and_then(|_| captures.get(index))
+                })
+            };
+            let uri_bytes = named_capture("URI")
+                .map(|capture| capture.as_bytes())
+                .unwrap_or(matching_input_bytes);
+            let (Ok(uri), scheme) = (
+                std::str::from_utf8(uri_bytes),
+                named_capture("SCHEME")
+                    .and_then(|capture| std::str::from_utf8(capture.as_bytes()).ok()),
+            ) else {
+                debug!("Skipping match for rule {} due to a non-UTF8 credential URI", rule.id());
+                return false;
+            };
+            if !is_parseable_credential_uri(uri, scheme) {
+                debug!("Skipping match for rule {} due to an invalid credential URI", rule.id());
                 return false;
             }
         }
@@ -310,8 +341,8 @@ pub(crate) fn filter_match<'b>(
             continue;
         }
 
-        // Check URI validation (MongoDB, Postgres, MySQL)
-        if !check_uri_validation(&rule, matching_input.as_bytes()) {
+        // Check URI validation (MongoDB, Postgres, MySQL, and dynamic credential URIs)
+        if !check_uri_validation(&rule, re, &captures, matching_input.as_bytes()) {
             continue;
         }
 

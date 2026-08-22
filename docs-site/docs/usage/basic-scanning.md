@@ -296,7 +296,7 @@ kingfisher validate --rule jwt \
   "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
 ```
 
-**Supported validators:** Betterleaks validation expressions are imported by default, including HTTP and supported cloud helpers. Kingfisher 1.x custom rules can also use HTTP, Grpc, AWS, GCP, MongoDB, MySQL, Postgres, JDBC, JWT, Azure Storage, Coinbase, raw validators, and local Ethereum validation.
+**Supported validators:** Betterleaks validation expressions are imported by default, including HTTP and supported cloud helpers. Kingfisher also uses `CredentialUri` to route imported credential-bearing PostgreSQL, MySQL/MariaDB, MongoDB, and supported JDBC inputs to database validators. Kingfisher 1.x custom rules can use HTTP, Grpc, AWS, GCP, MongoDB, MySQL, Postgres, JDBC, CredentialUri, JWT, Azure Storage, Coinbase, raw validators, and local Ethereum validation.
 
 **Exit codes:** Returns `0` if any matching rule validates the secret as valid, `1` if all are invalid or an error occurred.
 

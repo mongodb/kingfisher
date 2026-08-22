@@ -3,6 +3,12 @@
 All notable changes to this project will be documented in this file.
 
 ## [v2.0.0]
+- Added Kingfisher-side typed validation for Betterleaks' `generic-credential-uri` rule without
+  changing its detector: PostgreSQL, MySQL/MariaDB, and MongoDB URI captures now use the
+  corresponding live validator and feed validated credentials into blast-radius mapping, while
+  unsupported URI schemes remain detected with validation not attempted. JDBC strings containing
+  a credential-bearing PostgreSQL/MySQL URI are handled through that inner URI, and direct
+  `CredentialUri` validation also dispatches supported `jdbc:` inputs.
 - Removed the Veles Paystack, PyPI, and Square OAuth application-secret adapters. PyPI upload-token and Square access-token detection remain covered by Betterleaks; Paystack and Square OAuth application-secret built-in coverage are no longer included.
 - **Security:** the MongoDB, MySQL, Postgres, and JDBC validators now enforce the same SSRF gate as the HTTP/gRPC/JWT validators. Previously they only rejected loopback/unspecified hosts, so a crafted connection string in scanned content could make Kingfisher open TCP connections to RFC1918, link-local (including `169.254.169.254`), CGNAT, and other non-public addresses, turning the scan report into an internal-network reachability oracle. Every host in a Postgres multi-host URL and every MongoDB seed — including hosts resolved via `mongodb+srv://` SRV records — is now checked, and blocked targets report a constant message instead of the driver's connection error. Use `--allow-internal-ips` to opt back in.
 - **Breaking (library):** `validate_mongodb`, `validate_mysql`, `validate_postgres`, and `validate_jdbc` take an additional `allow_internal_ips: bool` argument.

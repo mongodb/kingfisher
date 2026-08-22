@@ -42,8 +42,8 @@ fail-closed adapter in `build_support/veles.rs`.
   correctly. Do not replace it merely because a similarly named Kingfisher validator exists.
 - Add typed validation only when the detector's reported secret and components exactly match the
   validator's input contract and the typed family adds reusable semantics.
-- The overlay currently accepts scalar `Assumed`, `JWT`, and `MongoDB` validation plus configured
-  `Ethereum` validation with `private_key`, `public_key`, or `mnemonic` content.
+- The overlay currently accepts scalar `Assumed`, `JWT`, `MongoDB`, and `CredentialUri` validation
+  plus configured `Ethereum` validation with `private_key`, `public_key`, or `mnemonic` content.
 - Typed validation cannot be combined with an upstream `validate` expression or
   `validation_override`. The importer rejects this combination.
 - Access-map and `revocation_bindings` metadata currently require Betterleaks expression

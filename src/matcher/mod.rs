@@ -557,6 +557,7 @@ impl<'a> Matcher<'a> {
             &match_rule_indices,
         );
         associate_betterleaks_components(blob.bytes(), &mut matches);
+        suppress_credential_uri_fallbacks(&mut matches);
         deduplicate_imported_catalog_matches(&mut matches);
 
         // Finalize
@@ -582,6 +583,45 @@ impl<'a> Matcher<'a> {
 
         Ok(ScanResult::New(matches))
     }
+}
+
+fn suppress_credential_uri_fallbacks(matches: &mut Vec<BlobMatch<'_>>) {
+    let mut keep = vec![true; matches.len()];
+    for (fallback_index, fallback) in matches.iter().enumerate() {
+        if !fallback.rule.visible()
+            || !fallback.rule.id().starts_with("betterleaks.")
+            || !matches!(
+                &fallback.rule.syntax().validation,
+                Some(crate::rules::Validation::CredentialUri)
+            )
+            || fallback.matching_input.is_empty()
+        {
+            continue;
+        }
+
+        let has_specific_finding = matches.iter().enumerate().any(|(specific_index, specific)| {
+            specific_index != fallback_index
+                && specific.rule.visible()
+                && specific.rule.id().starts_with("betterleaks.")
+                && specific.rule.id() != fallback.rule.id()
+                && specific.association_offset_span.start < fallback.association_offset_span.end
+                && fallback.association_offset_span.start < specific.association_offset_span.end
+                && specific
+                    .matching_input
+                    .windows(fallback.matching_input.len())
+                    .any(|window| window == fallback.matching_input)
+        });
+        if has_specific_finding {
+            keep[fallback_index] = false;
+        }
+    }
+
+    let mut index = 0;
+    matches.retain(|_| {
+        let retain = keep[index];
+        index += 1;
+        retain
+    });
 }
 
 fn deduplicate_imported_catalog_matches(matches: &mut Vec<BlobMatch<'_>>) {

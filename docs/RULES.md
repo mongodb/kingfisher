@@ -204,7 +204,7 @@ Kingfisher supports these validation types:
 
 1. `Assumed`: a rule-level marker for secret material accepted with high confidence without live validation. It produces the `Assumed Valid (Not Live-Validated)` finding status and is included by the `actionable` filter, but not by the strict `active` filter. In colorized pretty output it uses the same bright color as an active credential but with a locked icon. It counts as skipped validation by default and as successful validation with the `actionable` filter.
 2. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
-3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `Ethereum`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`. `Ethereum` is deterministic and network-free; it validates key material and derives an address without claiming the address is active.
+3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `CredentialUri`, `Ethereum`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`. `CredentialUri` dispatches a named `URI` capture (falling back to `TOKEN`) to a supported database validator while leaving unsupported schemes unvalidated. `Ethereum` is deterministic and network-free; it validates key material and derives an address without claiming the address is active.
 4. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
 
 Rules without a `validation` block produce `Not Attempted` findings. They are not treated as

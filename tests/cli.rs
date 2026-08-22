@@ -290,6 +290,38 @@ confidence = "high"
     }
 
     #[test]
+    fn generic_credential_uri_yields_to_provider_specific_betterleaks_rule() {
+        let temp = tempdir().expect("tempdir should be created");
+        let input = temp.path().join("mongodb.env");
+        let output = temp.path().join("findings.json");
+        fs::write(&input, "MONGO_URL=mongodb://svc_reader:q9V7nB2K4xL8@mongo.internal:27017/app")
+            .unwrap();
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "scan",
+                input.to_str().unwrap(),
+                "--rule",
+                "betterleaks.mongodb-connection-string",
+                "--rule",
+                "betterleaks.generic-credential-uri",
+                "--no-validate",
+                "--format",
+                "json",
+                "--output",
+                output.to_str().unwrap(),
+                "--no-update-check",
+            ])
+            .assert()
+            .code(200);
+
+        let report: Value = serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
+        let findings = report["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0]["rule"]["id"], "betterleaks.mongodb-connection-string");
+    }
+
+    #[test]
     fn cli_scan_can_disable_betterleaks_defaults_for_custom_only_scans() {
         let temp = tempdir().expect("tempdir should be created");
         let rules_dir = temp.path().join("rules");

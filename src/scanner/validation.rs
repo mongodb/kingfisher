@@ -29,7 +29,8 @@ use crate::{
     provider_endpoints::ProviderEndpointOverrides,
     rules::rule::{BetterleaksAccessMapHandler, Rule, Validation},
     validation::{
-        CachedResponse, collect_variables_and_dependencies, utils, validate_single_match,
+        CachedResponse, CredentialUriTarget, classify_credential_uri,
+        collect_variables_and_dependencies, utils, validate_single_match,
     },
     validation_body,
     validation_rate_limit::ValidationRateLimiter,
@@ -567,7 +568,8 @@ pub async fn run_secret_validation(
         let mut representatives: FxHashMap<String, Arc<FindingsStoreMessage>> =
             FxHashMap::default();
         for arc_msg in simple_matches {
-            // VALIDATION DEDUP: Use get(0) to get the first/primary capture for grouping.
+            // VALIDATION DEDUP: Use the first/primary capture for grouping, except that a
+            // CredentialUri rule uses its full URI capture rather than the reported password.
             //
             // This differs from fingerprint/reporting code (which uses get(1).or_else(get(0)))
             // for backward compatibility reasons - changing fingerprint calculation would break
@@ -578,7 +580,7 @@ pub async fn run_secret_validation(
             // incorrectly pick up inner unnamed groups when patterns have nested captures
             // like (?<REGEX>...(ABC|DEF)...), causing all matches to share the same
             // validation result.
-            let secret = arc_msg.2.groups.captures.first().map_or("", |c| c.raw_value());
+            let secret = validation_input(&arc_msg.2.rule, &arc_msg.2.groups);
             let group_key = validation_group_key(arc_msg.2.rule.id(), secret);
             trace!(
                 rule_id = %arc_msg.2.rule.id(),
@@ -635,9 +637,10 @@ pub async fn run_secret_validation(
             let empty_inflight = empty_inflight.clone();
 
             async move {
-                // VALIDATION DEDUP: Use get(0) for the primary secret value.
+                // VALIDATION DEDUP: Use the primary validation input (the full URI for
+                // CredentialUri, otherwise the first capture).
                 // See comment above for why this differs from fingerprint/reporting code.
-                let secret = rep_arc.2.groups.captures.first().map_or("", |c| c.raw_value());
+                let secret = validation_input(&rep_arc.2.rule, &rep_arc.2.groups);
                 let key = validation_group_key(rep_arc.2.rule.id(), secret);
 
                 match val_res.entry(key.clone()) {
@@ -708,7 +711,7 @@ pub async fn run_secret_validation(
                 if !match_arc.2.rule.syntax().depends_on_rule.is_empty() {
                     continue;
                 }
-                let secret = match_arc.2.groups.captures.first().map_or("", |c| c.raw_value());
+                let secret = validation_input(&match_arc.2.rule, &match_arc.2.groups);
                 let key = validation_group_key(match_arc.2.rule.id(), secret);
                 if let Some(cr) = validation_results.get(&key) {
                     let (_, _, existing) = Arc::make_mut(match_arc);
@@ -1180,13 +1183,28 @@ where
     }
 }
 
+fn validation_input<'a>(
+    rule: &Rule,
+    captures: &'a crate::matcher::SerializableCaptures,
+) -> &'a str {
+    if matches!(&rule.syntax().validation, Some(Validation::CredentialUri)) {
+        return captures
+            .captures
+            .iter()
+            .find(|capture| capture.name.is_some_and(|name| name.eq_ignore_ascii_case("URI")))
+            .or_else(|| captures.captures.first())
+            .map_or("", |capture| capture.raw_value());
+    }
+    captures.captures.first().map_or("", |capture| capture.raw_value())
+}
+
 // Helper to compute the cache key for an OwnedBlobMatch.
 fn build_cache_key(om: &OwnedBlobMatch) -> String {
-    let capture0 = om.captures.captures.first().map_or("", |c| c.raw_value());
+    let validation_input = validation_input(&om.rule, &om.captures);
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"kingfisher.validation-cache.v1\0");
     hash_cache_key_part(&mut hasher, om.rule.id().as_bytes());
-    hash_cache_key_part(&mut hasher, capture0.as_bytes());
+    hash_cache_key_part(&mut hasher, validation_input.as_bytes());
 
     let has_context_dependency = om
         .rule
@@ -1341,6 +1359,24 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                 && !value.is_empty()
             {
                 collector.record_mysql(value, fp.clone());
+            }
+        }
+        Some(Validation::CredentialUri) => {
+            let uri = captures
+                .iter()
+                .find(|(name, ..)| name.eq_ignore_ascii_case("URI"))
+                .or_else(|| captures.iter().find(|(name, ..)| name.eq_ignore_ascii_case("TOKEN")))
+                .map(|(_, value, ..)| value.as_str())
+                .unwrap_or_default();
+            let scheme = captures
+                .iter()
+                .find(|(name, ..)| name.eq_ignore_ascii_case("SCHEME"))
+                .map(|(_, value, ..)| value.as_str());
+            match classify_credential_uri(uri, scheme) {
+                CredentialUriTarget::Postgres(uri) => collector.record_postgres(&uri, fp.clone()),
+                CredentialUriTarget::MongoDB(uri) => collector.record_mongodb(&uri, fp.clone()),
+                CredentialUriTarget::MySQL(uri) => collector.record_mysql(&uri, fp.clone()),
+                CredentialUriTarget::Jdbc(_) | CredentialUriTarget::Unsupported(_) => {}
             }
         }
         Some(Validation::Betterleaks(validation)) => {
@@ -1877,6 +1913,79 @@ mod tests {
     }
 
     #[test]
+    fn credential_uri_cache_key_uses_the_full_validator_input() {
+        let mut first = make_owned_blob_match();
+        Arc::make_mut(&mut first.rule).syntax.validation = Some(Validation::CredentialUri);
+        first.captures = SerializableCaptures {
+            captures: smallvec![
+                SerializableCapture {
+                    name: Some("TOKEN"),
+                    match_number: 4,
+                    start: 20,
+                    end: 27,
+                    value: intern("hunter2"),
+                },
+                SerializableCapture {
+                    name: Some("URI"),
+                    match_number: 1,
+                    start: 0,
+                    end: 45,
+                    value: intern("postgresql://alice:hunter2@one.internal/app"),
+                }
+            ],
+        };
+        let mut second = first.clone();
+        second.captures.captures[1].value = intern("postgresql://alice:hunter2@two.internal/app");
+
+        assert_ne!(build_cache_key(&first), build_cache_key(&second));
+    }
+
+    #[test]
+    fn validated_credential_uri_routes_to_postgres_access_map() {
+        let mut finding = make_owned_blob_match();
+        Arc::make_mut(&mut finding.rule).syntax.validation = Some(Validation::CredentialUri);
+        finding.validation_success = true;
+        finding.validation_response_status = StatusCode::OK;
+        finding.captures = SerializableCaptures {
+            captures: smallvec![
+                SerializableCapture {
+                    name: Some("TOKEN"),
+                    match_number: 4,
+                    start: 20,
+                    end: 27,
+                    value: intern("hunter2"),
+                },
+                SerializableCapture {
+                    name: Some("URI"),
+                    match_number: 1,
+                    start: 0,
+                    end: 45,
+                    value: intern("POSTGRESQL://alice:hunter2@db.internal/app"),
+                },
+                SerializableCapture {
+                    name: Some("SCHEME"),
+                    match_number: 2,
+                    start: 0,
+                    end: 10,
+                    value: intern("POSTGRESQL"),
+                }
+            ],
+        };
+        let collector = AccessMapCollector::default();
+
+        maybe_record_access_map(&finding, Some(&collector));
+
+        let requests = collector.into_collected_requests();
+        assert_eq!(requests.len(), 1);
+        match &requests[0].request {
+            AccessMapRequest::Postgres { uri, .. } => {
+                assert_eq!(uri, "postgresql://alice:hunter2@db.internal/app");
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
     fn access_map_collector_dedupes_monday_and_asana_tokens() {
         let collector = AccessMapCollector::default();
         collector.record_monday("monday-token-1", "fp-2".into());
@@ -1980,8 +2089,10 @@ mod tests {
 
     #[test]
     fn new_betterleaks_rules_route_to_existing_access_map_handlers() {
+        type AccessMapCase<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
         let mut rules = kingfisher_rules::get_betterleaks_rules(Some(Confidence::Low)).unwrap();
-        let cases: [(&str, &str, &[(&str, &str)]); 3] = [
+        let cases: [AccessMapCase<'_>; 3] = [
             (
                 "betterleaks.auth0-client-secret.1",
                 "auth0-client-secret",

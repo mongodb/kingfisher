@@ -12,7 +12,7 @@ betterleaks:
   upstream-rule-id:
     confidence: low | medium | high
     authoritative: true | false
-    validation: Assumed | JWT | MongoDB | { type: Ethereum, content: private_key | public_key | mnemonic }
+    validation: Assumed | JWT | MongoDB | CredentialUri | { type: Ethereum, content: private_key | public_key | mnemonic }
     validation_override: 'Betterleaks validation expression'
     filter_override: 'Betterleaks filter expression'
     tls_mode: strict | lax | off
@@ -40,8 +40,10 @@ veles:
 - `authoritative` controls whether successful validation may classify a finding as an active
   credential. It defaults to `true`. Set it to `false` for broad detection rules whose matches
   must never be reported as active or valid credentials.
-- `validation` attaches a Kingfisher validator. It supports `Assumed`, `JWT`, `MongoDB`, and
-  configured `Ethereum` validation for `private_key`, `public_key`, or `mnemonic` material.
+- `validation` attaches a Kingfisher validator. It supports `Assumed`, `JWT`, `MongoDB`,
+  `CredentialUri`, and configured `Ethereum` validation for `private_key`, `public_key`, or
+  `mnemonic` material. `CredentialUri` uses a named `URI` capture, dispatches supported database
+  schemes to their typed validators, and leaves unsupported URI schemes unvalidated.
 - `validation_override` replaces an upstream Betterleaks validation expression.
 - `filter_override` adds a filter to the upstream Betterleaks filter expression. A filter returning
   true discards the finding.

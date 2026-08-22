@@ -83,6 +83,8 @@ enum NamedTypedValidation {
     Jwt,
     #[serde(rename = "MongoDB")]
     MongoDb,
+    #[serde(rename = "CredentialUri")]
+    CredentialUri,
 }
 
 #[derive(Clone, Deserialize)]
@@ -135,6 +137,7 @@ enum Validation {
     #[serde(rename = "JWT")]
     Jwt,
     MongoDB,
+    CredentialUri,
     Ethereum(EthereumValidation),
 }
 
@@ -453,6 +456,9 @@ fn import_config_with_namespace(
                 TypedValidation::Named(NamedTypedValidation::Assumed) => Validation::Assumed,
                 TypedValidation::Named(NamedTypedValidation::Jwt) => Validation::Jwt,
                 TypedValidation::Named(NamedTypedValidation::MongoDb) => Validation::MongoDB,
+                TypedValidation::Named(NamedTypedValidation::CredentialUri) => {
+                    Validation::CredentialUri
+                }
                 TypedValidation::Configured(ConfiguredTypedValidation::Ethereum(kind)) => {
                     Validation::Ethereum(kind)
                 }
@@ -1789,6 +1795,12 @@ description = "JWT"
 regex = '''(ey[a-z]+)'''
 
 [[rules]]
+id = "generic-credential-uri"
+description = "Credential URI"
+regex = '''(?P<uri>(?P<scheme>postgresql)://user:(?P<password>[^@]+)@host)'''
+secretGroup = 3
+
+[[rules]]
 id = "polymarket-private-key"
 description = "Polymarket private key"
 regex = '''(0x[a-fA-F0-9]{64})'''
@@ -1803,6 +1815,8 @@ rules:
     validation: MongoDB
   jwt:
     validation: JWT
+  generic-credential-uri:
+    validation: CredentialUri
   polymarket-private-key:
     validation:
       type: Ethereum
@@ -1824,6 +1838,7 @@ rules:
         assert!(validations["betterleaks.private-key"].contains("type: Assumed"));
         assert!(validations["betterleaks.mongodb-connection-string"].contains("type: MongoDB"));
         assert!(validations["betterleaks.jwt"].contains("type: JWT"));
+        assert!(validations["betterleaks.generic-credential-uri"].contains("type: CredentialUri"));
         assert!(validations["betterleaks.polymarket-private-key"].contains("type: Ethereum"));
         assert!(validations["betterleaks.polymarket-private-key"].contains("private_key"));
     }

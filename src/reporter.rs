@@ -110,6 +110,7 @@ fn required_vars_for_validation(validation: &crate::rules::Validation) -> BTreeS
         | Validation::MySQL
         | Validation::Postgres
         | Validation::Jdbc
+        | Validation::CredentialUri
         | Validation::JWT => {
             vars.insert("TOKEN".to_string());
         }
@@ -452,6 +453,19 @@ fn build_validate_command(
                 rule_id,
                 var_args,
                 escape_for_shell(snippet)
+            ))
+        }
+        Validation::CredentialUri => {
+            let uri = dependent_captures
+                .get("URI")
+                .map(String::as_str)
+                .filter(|uri| !uri.is_empty())
+                .unwrap_or(snippet);
+            Some(format!(
+                "kingfisher validate --rule {} {}{}",
+                rule_id,
+                var_args,
+                escape_for_shell(uri)
             ))
         }
         Validation::MongoDB
@@ -1900,6 +1914,25 @@ mod tests {
             cmd
         );
         assert!(cmd.contains("kingfisher validate --rule custom.vercel.token"));
+    }
+
+    #[test]
+    fn credential_uri_validate_command_uses_uri_instead_of_reported_password() {
+        let uri = "postgresql://alice:hunter2@db.internal/app";
+        let dependent = BTreeMap::from([("URI".to_string(), uri.to_string())]);
+
+        let command = build_validate_command(
+            "betterleaks.generic-credential-uri",
+            &crate::rules::Validation::CredentialUri,
+            "hunter2",
+            &dependent,
+            None,
+            None,
+        )
+        .expect("validate command should be generated");
+
+        assert!(command.contains(uri));
+        assert!(!command.ends_with("'hunter2'"));
     }
 
     #[test]

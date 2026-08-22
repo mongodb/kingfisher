@@ -13,6 +13,10 @@ betterleaks:
     filter_override: 'true'
   generic-credential-uri:
     filter_override: 'matchesAny(attributes["path"], [`(?i)(?:\.git[/\\]config|(?:^|[/\\])\.git-credentials|_history)$`]) && ((finding["captures"]["host"].endsWith("bitbucket.org") && finding["captures"]["uri"].endsWith(".git")) || finding["captures"]["host"].contains("codecatalyst.aws") || (finding["captures"]["host"].startsWith("git-codecommit.") && finding["captures"]["host"].endsWith(".amazonaws.com")))'
+    validation: CredentialUri
+    # Database endpoints commonly use private-CA or self-signed certificates. Honored only when
+    # the operator also passes `--tls-mode lax`; non-database URI schemes are not live-validated.
+    tls_mode: lax
   heroku-api-key-v2:
     filter_override: 'true'
   npm-access-token:

@@ -129,3 +129,30 @@ fn filters_invalid_mysql_uri_even_without_validation() -> anyhow::Result<()> {
     dir.close()?;
     Ok(())
 }
+
+#[test]
+fn generic_credential_uri_dispatch_filters_invalid_database_uri() -> anyhow::Result<()> {
+    let dir = tempdir()?;
+    let file_path = dir.path().join("database.env");
+    let valid = "postgresql://svc_reader:hunter2x@db.internal:5432/app";
+    let invalid = "postgresql://svc_reader:badsecret9@db.internal:70000/app";
+    fs::write(&file_path, format!("{valid}\n{invalid}\n"))?;
+
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .args(["scan", file_path.to_str().unwrap()])
+        .args([
+            "--rule",
+            "betterleaks.generic-credential-uri",
+            "--format",
+            "json",
+            "--no-validate",
+            "--no-update-check",
+        ])
+        .assert()
+        .code(200)
+        .stdout(predicate::str::contains("hunter2x"))
+        .stdout(predicate::str::contains("badsecret9").not());
+
+    dir.close()?;
+    Ok(())
+}

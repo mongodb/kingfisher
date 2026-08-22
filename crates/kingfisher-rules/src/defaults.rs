@@ -410,6 +410,8 @@ mod test {
         ));
 
         let uri = &rules.rules["betterleaks.generic-credential-uri"];
+        assert!(matches!(uri.validation, Some(Validation::CredentialUri)));
+        assert_eq!(uri.tls_mode, Some(TlsMode::Lax));
         let git_uri = "https://user:password@bitbucket.org/team/repo.git";
         let uri_captures = [("uri", git_uri), ("host", "bitbucket.org"), ("password", "password")];
         assert!(filter_discards(uri, "project/.git/config", "password", git_uri, &uri_captures,));

@@ -27,8 +27,9 @@ use crate::{
     rules::{HttpValidation, Validation, rule::Rule},
     template_vars::extract_template_vars,
     validation::{
-        GLOBAL_USER_AGENT,
+        CredentialUriTarget, GLOBAL_USER_AGENT,
         azure::validate_azure_storage_credentials,
+        classify_credential_uri,
         coinbase::validate_cdp_api_key,
         gcp::GcpValidator,
         httpvalidation::is_auto_provided_request_var,
@@ -62,6 +63,130 @@ fn preview_body_for_display(body: &str, max_bytes: usize) -> String {
 
 fn outcome_from_validator_result(is_valid: bool) -> ValidationOutcome {
     if is_valid { ValidationOutcome::VerifiedActive } else { ValidationOutcome::VerifiedInactive }
+}
+
+async fn validate_credential_uri_direct(
+    uri: &str,
+    use_lax_tls: bool,
+    allow_internal_ips: bool,
+) -> DirectValidationResult {
+    let target = classify_credential_uri(uri, None);
+    if !target.is_parseable() {
+        return DirectValidationResult {
+            rule_id: String::new(),
+            rule_name: String::new(),
+            is_valid: false,
+            validation_outcome: ValidationOutcome::VerifiedInactive,
+            status_code: Some(400),
+            message: format!("Invalid {} credential URI.", target.scheme()),
+        };
+    }
+
+    match target {
+        CredentialUriTarget::MongoDB(uri) => {
+            match validate_mongodb(&uri, use_lax_tls, allow_internal_ips).await {
+                Ok((is_valid, message)) => DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid,
+                    validation_outcome: outcome_from_validator_result(is_valid),
+                    status_code: None,
+                    message,
+                },
+                Err(error) => DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid: false,
+                    validation_outcome: ValidationOutcome::Unavailable,
+                    status_code: None,
+                    message: format!("MongoDB validation error: {error}"),
+                },
+            }
+        }
+        CredentialUriTarget::MySQL(uri) => {
+            match validate_mysql(&uri, use_lax_tls, allow_internal_ips).await {
+                Ok((is_valid, metadata)) => DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid,
+                    validation_outcome: outcome_from_validator_result(is_valid),
+                    status_code: None,
+                    message: if metadata.is_empty() {
+                        "MySQL validation completed".to_string()
+                    } else {
+                        metadata.join(", ")
+                    },
+                },
+                Err(error) => DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid: false,
+                    validation_outcome: ValidationOutcome::Unavailable,
+                    status_code: None,
+                    message: format!("MySQL validation error: {error}"),
+                },
+            }
+        }
+        CredentialUriTarget::Postgres(uri) => {
+            match validate_postgres(&uri, use_lax_tls, allow_internal_ips).await {
+                Ok((is_valid, metadata)) => DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid,
+                    validation_outcome: outcome_from_validator_result(is_valid),
+                    status_code: None,
+                    message: if metadata.is_empty() {
+                        "Postgres validation completed".to_string()
+                    } else {
+                        metadata.join(", ")
+                    },
+                },
+                Err(error) => DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid: false,
+                    validation_outcome: ValidationOutcome::Unavailable,
+                    status_code: None,
+                    message: format!("Postgres validation error: {error}"),
+                },
+            }
+        }
+        CredentialUriTarget::Jdbc(uri) => {
+            match validate_jdbc(&uri, use_lax_tls, allow_internal_ips).await {
+                Ok(outcome) => DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid: outcome.valid,
+                    validation_outcome: ValidationOutcome::from_legacy(
+                        false,
+                        outcome.valid,
+                        outcome.status.as_u16(),
+                    ),
+                    status_code: Some(outcome.status.as_u16()),
+                    message: outcome.message,
+                },
+                Err(error) => DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid: false,
+                    validation_outcome: ValidationOutcome::Unavailable,
+                    status_code: None,
+                    message: format!("JDBC validation error: {error}"),
+                },
+            }
+        }
+        CredentialUriTarget::Unsupported(scheme) => DirectValidationResult {
+            rule_id: String::new(),
+            rule_name: String::new(),
+            is_valid: false,
+            validation_outcome: ValidationOutcome::NotAttempted,
+            status_code: None,
+            message: format!(
+                "No live validator is available for {} credential URIs.",
+                if scheme.is_empty() { "this" } else { scheme.as_str() }
+            ),
+        },
+    }
 }
 
 /// Result of a direct validation attempt.
@@ -190,6 +315,9 @@ fn extract_validation_vars(validation: &Validation) -> BTreeSet<String> {
             vars.insert("TOKEN".to_string());
         }
         Validation::Jdbc => {
+            vars.insert("TOKEN".to_string());
+        }
+        Validation::CredentialUri => {
             vars.insert("TOKEN".to_string());
         }
         Validation::JWT => {
@@ -905,6 +1033,11 @@ pub async fn run_direct_validation(
                         message: format!("JDBC validation error: {}", e),
                     },
                 }
+            }
+
+            Validation::CredentialUri => {
+                validate_credential_uri_direct(&secret, use_lax_tls, global_args.allow_internal_ips)
+                    .await
             }
 
             Validation::JWT => {

@@ -75,6 +75,12 @@ pub enum Validation {
     MySQL,
     Postgres,
     Jdbc,
+    /// Dispatch a captured credential URI to the matching database validator.
+    ///
+    /// Scan rules can provide a named `URI` capture; otherwise `TOKEN` is used. Keeping `TOKEN`
+    /// separate lets broad URI detectors report only the embedded password while validation uses
+    /// the complete connection string.
+    CredentialUri,
     JWT,
     /// Deterministic, network-free Ethereum key-material validation.
     Ethereum(EthereumValidation),

@@ -128,3 +128,33 @@ fn assumed_findings_count_as_skipped_without_actionable_filter() -> Result<()> {
     assert!(report["metadata"]["summary"].get("high_confidence_secrets").is_none());
     Ok(())
 }
+
+#[test]
+fn unsupported_generic_credential_uri_scheme_remains_not_attempted() -> Result<()> {
+    let temp = tempdir()?;
+    let input = temp.path().join("service.env");
+    let report_path = temp.path().join("report.json");
+    fs::write(&input, "SERVICE_URL=https://svc_reader:hunter2x@service.internal/api")?;
+
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .args([
+            "scan",
+            input.to_str().unwrap(),
+            "--rule",
+            "betterleaks.generic-credential-uri",
+            "--format",
+            "json",
+            "--output",
+            report_path.to_str().unwrap(),
+            "--no-update-check",
+        ])
+        .assert()
+        .code(200);
+
+    let report: Value = serde_json::from_str(&fs::read_to_string(report_path)?)?;
+    let findings = report["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["finding"]["validation"]["outcome"], "not_attempted");
+    assert_eq!(findings[0]["finding"]["validation"]["status"], "Not Attempted");
+    Ok(())
+}
