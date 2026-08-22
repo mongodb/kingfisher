@@ -7,12 +7,13 @@ second rule source.
 ## Source and reproducibility
 
 - Kingfisher does not check in or distribute the upstream rule source. Clean builds intentionally
-  require outbound HTTPS access and download Betterleaks `v1.8.0` plus selected Veles files from a
-  pinned OSV-SCALIBR commit before converting and embedding them.
-- The source pins keep normal builds on released/committed upstream content rather than `main`.
-  Release build provenance should record the fetched source digests when reproducibility is needed.
+  require outbound HTTPS access and download Betterleaks' development catalog from its
+  [source permalink](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml),
+  plus selected Veles files from a pinned OSV-SCALIBR commit, before converting and embedding them.
+- The pinned Betterleaks commit was selected from `main` for importer and detector development.
+  Release build provenance should record the fetched source digest when reproducibility is needed.
 - `KINGFISHER_BETTERLEAKS_CONFIG` may supply a local TOML file for controlled importer development;
-  normal builds fetch the pinned upstream sources.
+  normal builds fetch the configured upstream sources.
 
 ## Detection and filtering
 

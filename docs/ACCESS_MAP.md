@@ -658,8 +658,8 @@ kingfisher access-map monday ./monday.token --format json > monday.access-map.js
 - Blast-radius mapping currently uses `https://api.monday.com/v2` (GraphQL v2) as the API base.
 - monday.com API tokens do not carry granular scopes; permissions follow the underlying user's role (admin/member/viewer/guest).
 - `provider_metadata.version` carries the monday.com plan tier when exposed by the account.
-- The standalone provider remains available. The current Betterleaks catalog does not expose a
-  compatible validated monday.com rule for automatic `scan --access-map` collection.
+- The standalone provider remains available. The validated `betterleaks.monday-api-token.1` rule
+  also supports automatic `scan --access-map` collection.
 
 ### Asana (`asana`)
 

@@ -384,11 +384,12 @@ cost. Use a targeted custom TOML or YAML rule when your organization needs gener
 detection for a known naming convention.
 
 Kingfisher does not vendor the upstream rule catalogs. Clean source builds require outbound HTTPS
-access: the build downloads Betterleaks `v1.8.0` from its pinned release URL and selected Veles
-source files from the full OSV-SCALIBR commit in `crates/kingfisher-rules/data/veles-rules.yml`, then
-converts and embeds the generated database. `KINGFISHER_BETTERLEAKS_CONFIG` may point to a local TOML
-file for controlled importer development; normal builds fetch pinned upstream sources. Veles import
-is not available through `--rules-path`.
+access: the build downloads Betterleaks' development catalog from its
+[source permalink](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml) and
+selected Veles source files from the full OSV-SCALIBR commit in
+`crates/kingfisher-rules/data/veles-rules.yml`, then converts and embeds the generated database.
+`KINGFISHER_BETTERLEAKS_CONFIG` may point to a local TOML file for controlled importer development.
+Veles import is not available through `--rules-path`.
 
 Detection regexes, path constraints, confidence changes, component dependencies, and Betterleaks
 validation expressions are translated into Kingfisher's runtime model. The top-level Betterleaks

@@ -1078,7 +1078,7 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
             rules
                 .rules
                 .remove("betterleaks.stripe-access-token")
-                .expect("pinned Betterleaks catalog should contain Stripe access tokens"),
+                .expect("Betterleaks catalog should contain Stripe access tokens"),
         );
         let database = Arc::new(RulesDatabase::from_rules(vec![stripe]).unwrap());
         let scanner = Scanner::new(database);

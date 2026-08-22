@@ -93,6 +93,13 @@ betterleaks:
       inputs:
         host: components.artifactory-jfrog-url
 
+  auth0-client-secret.1:
+    access_map:
+      handler: auth0
+      inputs:
+        client_id: components.auth0-client-id.1
+        domain: components.auth0-domain.1
+
   salesforce-access-token.1:
     access_map:
       handler: salesforce
@@ -149,8 +156,15 @@ betterleaks:
     revocation: *huggingface_revoke
   ibm-cloud-user-api-key:
     access_map: { handler: ibm_cloud }
+  monday-api-token.1:
+    access_map: { handler: monday }
   openai-api-key:
     access_map: { handler: openai }
+  paypal-client-secret.1:
+    access_map:
+      handler: paypal
+      inputs:
+        client_id: components.paypal-client-id.1
   pinecone-api-key.1:
     access_map: { handler: pinecone }
   pinecone-api-key.2:

@@ -7,10 +7,10 @@ description: "Write private Kingfisher 1.x YAML custom rules with regex patterns
 
 Kingfisher uses the [Betterleaks catalog](https://github.com/betterleaks/betterleaks) for its main
 built-in catalog. A small allowlist of validated
-[Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors fills gaps in the pinned
-Betterleaks release. New generally useful detectors and validation improvements should still be
+[Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors fills gaps in the current
+Betterleaks catalog. New generally useful detectors and validation improvements should still be
 contributed to Betterleaks first.
-When a pinned Betterleaks release covers a Veles detector, the Betterleaks detector is preferred and
+When the Betterleaks catalog covers a Veles detector, the Betterleaks detector is preferred and
 the overlapping Veles detector is not bundled.
 
 The Betterleaks TOML format is supported for custom rules as well as for Kingfisher's built-in

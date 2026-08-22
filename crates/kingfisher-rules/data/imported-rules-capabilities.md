@@ -1,8 +1,8 @@
 # Imported Rule Capabilities
 
-`imported-rules-capabilities.yml` is Kingfisher's operational overlay for pinned Betterleaks and
-Veles rules. Detection patterns and upstream validation remain owned by their source projects; this
-file adds Kingfisher-specific behavior without creating another detector catalog.
+`imported-rules-capabilities.yml` is Kingfisher's operational overlay for Betterleaks and Veles rules.
+Detection patterns and upstream validation remain owned by their source projects; this file adds
+Kingfisher-specific behavior without creating another detector catalog.
 
 ## Format
 

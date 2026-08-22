@@ -462,7 +462,7 @@ For payload shapes, per-webhook overrides, and config-file examples, see [docs/A
 
 # Detection Rules
 
-Kingfisher's built-in detection catalog is based on the [Betterleaks rule catalog](https://github.com/betterleaks/betterleaks/blob/main/config/betterleaks.toml), with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors filling gaps. Betterleaks filters, dependencies, and validation expressions are resolved when Kingfisher is built; built-in rules use the `betterleaks.` and `veles.` namespaces.
+Kingfisher's built-in detection catalog is based on the [Betterleaks rule catalog](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml), with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors filling gaps. Betterleaks filters, dependencies, and validation expressions are resolved when Kingfisher is built; built-in rules use the `betterleaks.` and `veles.` namespaces.
 
 See the [Betterleaks catalog](https://github.com/betterleaks/betterleaks) for current detection coverage and contribute generally useful detectors there first. Custom Betterleaks TOML rules and Kingfisher's 1.x YAML format are also supported; use YAML for private, organization-specific rules. See [Moving to Kingfisher v2.0.x](docs/V2_MIGRATION.md), [Default Betterleaks Rules](docs/ADVANCED.md#default-betterleaks-rules), and [Kingfisher 1.x Custom Rules](docs/RULES.md).
 

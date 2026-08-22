@@ -192,6 +192,7 @@ enum BetterleaksAccessMapHandler {
     Salesforce,
     Airtable,
     Anthropic,
+    Auth0,
     Buildkite,
     Circleci,
     Fastly,
@@ -200,7 +201,9 @@ enum BetterleaksAccessMapHandler {
     Harness,
     Huggingface,
     IbmCloud,
+    Monday,
     Openai,
+    Paypal,
     Pinecone,
     Sendinblue,
     Stripe,
@@ -553,7 +556,7 @@ fn import_config_with_namespace(
     let yaml =
         serde_yaml::to_string(&Snapshot { betterleaks_prefilter: prefilter, rules: imported })?;
     Ok(format!(
-        "# Generated from pinned source {source}; do not edit.\n\
+        "# Generated from source {source}; do not edit.\n\
          # Imported {} of {source_count} Betterleaks rules. Omitted low-value generic rules: {}.\n\
          # Path-only rules not representable as content detectors were skipped: {}.\n{yaml}",
         source_count - skipped_path_only.len() - omitted_low_value.len(),

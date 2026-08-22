@@ -10,13 +10,13 @@ This crate provides:
 
 Use this crate with `kingfisher-core` and `kingfisher-scanner` to build reusable scanning workflows.
 
-Building this crate requires outbound HTTPS access. The build downloads Betterleaks `v1.8.0`'s
-canonical `config/betterleaks.toml` and the Veles source files selected by the pinned commit in
-`data/veles-rules.yml`, converts them, and embeds the generated database in the binary. Kingfisher
-does not check in or distribute the upstream rule source. Betterleaks takes precedence when its
-pinned catalog covers a Veles detector.
+Building this crate requires outbound HTTPS access. The build downloads Betterleaks' development
+`config/betterleaks.toml` from its [source permalink](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml)
+and the Veles source files selected by the pinned commit in `data/veles-rules.yml`, converts them,
+and embeds the generated database in the binary. Kingfisher does not check in or distribute the
+upstream rule source. Betterleaks takes precedence when its catalog covers a Veles detector.
 
 `KINGFISHER_BETTERLEAKS_CONFIG` may point to a local TOML file for controlled importer development;
-normal builds fetch the pinned upstream sources. The build also regenerates
+normal builds fetch the configured upstream sources. The build also regenerates
 `docs-site/docs/rules/builtin-rules.md` from the generated catalog. Kingfisher-only operational
 metadata for both imports lives in `data/imported-rules-capabilities.yml`.

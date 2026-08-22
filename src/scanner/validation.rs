@@ -1729,6 +1729,13 @@ fn record_betterleaks_access_map(
         }
         BetterleaksAccessMapHandler::Airtable => collector.record_airtable(token, fp()),
         BetterleaksAccessMapHandler::Anthropic => collector.record_anthropic(token, fp()),
+        BetterleaksAccessMapHandler::Auth0 => {
+            let client_id = value("client_id");
+            let domain = value("domain");
+            if !client_id.is_empty() && !domain.is_empty() {
+                collector.record_auth0(client_id, token, domain, fp());
+            }
+        }
         BetterleaksAccessMapHandler::Buildkite => collector.record_buildkite(token, fp()),
         BetterleaksAccessMapHandler::Circleci => collector.record_circleci(token, fp()),
         BetterleaksAccessMapHandler::Fastly => collector.record_fastly(token, fp()),
@@ -1737,7 +1744,14 @@ fn record_betterleaks_access_map(
         BetterleaksAccessMapHandler::Harness => collector.record_harness(token, fp()),
         BetterleaksAccessMapHandler::Huggingface => collector.record_huggingface(token, fp()),
         BetterleaksAccessMapHandler::IbmCloud => collector.record_ibm_cloud(token, fp()),
+        BetterleaksAccessMapHandler::Monday => collector.record_monday(token, fp()),
         BetterleaksAccessMapHandler::Openai => collector.record_openai(token, fp()),
+        BetterleaksAccessMapHandler::Paypal => {
+            let client_id = value("client_id");
+            if !client_id.is_empty() {
+                collector.record_paypal(client_id, token, fp());
+            }
+        }
         BetterleaksAccessMapHandler::Pinecone => collector.record_pinecone(token, fp()),
         BetterleaksAccessMapHandler::Sendinblue => collector.record_sendinblue(token, fp()),
         BetterleaksAccessMapHandler::Stripe => collector.record_stripe(token, fp()),

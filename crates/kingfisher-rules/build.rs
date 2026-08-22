@@ -16,8 +16,8 @@ use std::{
 use anyhow::{Context, Result};
 use flate2::{Compression, write::GzEncoder};
 
-const BETTERLEAKS_CONFIG_URL: &str =
-    "https://raw.githubusercontent.com/betterleaks/betterleaks/v1.8.0/config/betterleaks.toml";
+// Source permalink: https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml
+const BETTERLEAKS_CONFIG_URL: &str = "https://raw.githubusercontent.com/betterleaks/betterleaks/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml";
 const BUNDLE_MAGIC: &[u8] = b"KFRULES\x01";
 const CAPABILITY_OVERLAY: &str = "data/imported-rules-capabilities.yml";
 const VELES_CONFIG: &str = "data/veles-rules.yml";

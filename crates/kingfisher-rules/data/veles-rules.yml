@@ -1,5 +1,5 @@
 # Veles detectors are Go source, not a declarative rule catalog. This allowlist pins upstream and
-# selects validated detector families for which Betterleaks v1.8.0 lacks equivalent live
+# selects validated detector families for which Betterleaks lacks equivalent live
 # validation. Narrow capability filters give Veles precedence where detector formats overlap.
 # Every ID requires an explicit, fail-closed adapter in build_support/veles.rs.
 version: 1
