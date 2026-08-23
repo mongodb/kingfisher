@@ -384,7 +384,7 @@ table.rules-table tbody tr:nth-child(even) td code {
   background: var(--md-default-bg-color);
 }
 
-/* First column (Provider) — emphasized */
+/* First column (Catalog) — emphasized */
 .md-typeset table.rules-table tbody td:first-child,
 table.rules-table tbody td:first-child {
   font-weight: 600;
@@ -397,7 +397,7 @@ table.rules-table td:nth-child(4) {
   font-weight: 500;
 }
 
-/* Validates / Revokes columns — center */
+/* Validation / Revocation columns — center */
 .md-typeset table.rules-table td:nth-child(5),
 .md-typeset table.rules-table td:nth-child(6),
 .md-typeset table.rules-table th:nth-child(5),

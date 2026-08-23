@@ -130,4 +130,55 @@ impl SerializableCaptures {
 
         SerializableCaptures { captures: serialized_captures }
     }
+
+    /// Serialize captures and make the Betterleaks-selected secret the canonical `TOKEN` entry.
+    ///
+    /// The original capture remains available under its upstream name, so validation expressions
+    /// can use both `finding["secret"]` and Betterleaks named captures without rewriting the regex.
+    pub fn from_captures_with_secret_group(
+        captures: &regex::bytes::Captures,
+        input: &[u8],
+        re: &Regex,
+        betterleaks_secret_group: Option<usize>,
+    ) -> Self {
+        let mut serialized = Self::from_captures(captures, input, re);
+        let Some(configured_group) = betterleaks_secret_group else {
+            return serialized;
+        };
+
+        let selected_group = if configured_group > 0 {
+            configured_group
+        } else {
+            (1..captures.len())
+                .find(|index| {
+                    captures.get(*index).is_some_and(|value| !value.as_bytes().is_empty())
+                })
+                .unwrap_or(0)
+        };
+        let Some(secret) = captures.get(selected_group) else {
+            return serialized;
+        };
+
+        if let Some(position) = serialized.captures.iter().position(|capture| {
+            capture.match_number == i32::try_from(selected_group).unwrap_or(-1)
+                && capture.name.is_some_and(|name| name.eq_ignore_ascii_case("TOKEN"))
+        }) {
+            let token = serialized.captures.remove(position);
+            serialized.captures.insert(0, token);
+            return serialized;
+        }
+
+        let value = String::from_utf8_lossy(secret.as_bytes());
+        serialized.captures.insert(
+            0,
+            SerializableCapture {
+                name: Some(intern("TOKEN")),
+                match_number: i32::try_from(selected_group).unwrap_or(-1),
+                start: secret.start(),
+                end: secret.end(),
+                value: intern(value.as_ref()),
+            },
+        );
+        serialized
+    }
 }

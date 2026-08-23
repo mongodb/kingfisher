@@ -1,4 +1,5 @@
 use std::{
+    cell::RefCell,
     env, fs,
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
@@ -9,11 +10,19 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
-use tracing::{debug, debug_span, error};
-use vectorscan_rs::{BlockDatabase, Flag, Pattern};
+use thread_local::ThreadLocal;
+use tracing::{debug, debug_span, error, warn};
+use vectorscan_rs::{BlockDatabase, BlockScanner, Error as VectorscanError, Flag, Pattern, Scan};
 use xxhash_rust::xxh3::xxh3_128;
 
-use crate::rule::{RULE_COMMENTS_PATTERN, Rule};
+use crate::{
+    betterleaks_filter::{
+        BetterleaksFilterContext, BetterleaksFilterEngine, BetterleaksFilterOutcome,
+        evaluate_filter_with_engine,
+    },
+    rule::{BetterleaksExpr, RULE_COMMENTS_PATTERN, Rule},
+    rules::Rules,
+};
 
 pub struct RulesDatabase {
     // pub(crate) rules: Vec<Rule,>,
@@ -21,6 +30,105 @@ pub struct RulesDatabase {
     pub(crate) anchored_regexes: Vec<Regex>,
     pub(crate) self_identifying_flags: Vec<bool>,
     pub(crate) vsdb: BlockDatabase,
+    vectorscan_prefilter_flags: Vec<bool>,
+    betterleaks_rule_flags: Vec<bool>,
+    has_non_betterleaks_rules: bool,
+    betterleaks_prefilter: Option<BetterleaksPathPrefilter>,
+    betterleaks_filter_engine: BetterleaksFilterEngine,
+}
+
+/// The Betterleaks source-path prefilter compiled once into its own Vectorscan database.
+///
+/// Scanners retain one Vectorscan scratch arena per worker thread. This keeps the prefilter ahead
+/// of the main content database without recompiling its regex list for every source path.
+struct BetterleaksPathPrefilter {
+    expression: BetterleaksExpr,
+    database: Arc<BlockDatabase>,
+    scanners: ThreadLocal<RefCell<BlockScanner<'static>>>,
+}
+
+impl BetterleaksPathPrefilter {
+    fn compile(expression: BetterleaksExpr) -> Result<Self> {
+        let patterns = extract_path_prefilter_patterns(&expression)?
+            .into_iter()
+            .enumerate()
+            .map(|(id, pattern)| {
+                Ok(Pattern::new(pattern.into_bytes(), Flag::default(), Some(id.try_into()?)))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        if patterns.is_empty() {
+            bail!("Betterleaks path prefilter contains no patterns");
+        }
+        let database = Arc::new(
+            BlockDatabase::new(patterns)
+                .context("compile the Betterleaks path prefilter with Vectorscan")?,
+        );
+        Ok(Self { expression, database, scanners: ThreadLocal::new() })
+    }
+
+    #[inline]
+    fn is_match(&self, path: &str) -> Result<bool> {
+        let scanner = self.scanners.get_or(|| {
+            // The Arc owns the database for at least as long as every thread-local scanner. This
+            // is the same lifetime extension used by the content ScannerPool.
+            let database = unsafe { &*(self.database.as_ref() as *const BlockDatabase) };
+            RefCell::new(
+                BlockScanner::new(database).expect("Vectorscan path-prefilter scratch allocation"),
+            )
+        });
+        let mut matched = false;
+        scanner.borrow_mut().scan(path.as_bytes(), |_id, _from, _to, _flags| {
+            matched = true;
+            Scan::Terminate
+        })?;
+        Ok(matched)
+    }
+}
+
+fn extract_path_prefilter_patterns(expression: &BetterleaksExpr) -> Result<Vec<String>> {
+    let expression = match expression {
+        BetterleaksExpr::Chain { node } | BetterleaksExpr::Predicate { node } => node.as_ref(),
+        expression => expression,
+    };
+    let BetterleaksExpr::Call { callee, arguments } = expression else {
+        bail!("Betterleaks path prefilter must be a matchesAny call");
+    };
+    let name = betterleaks_expression_name(callee)
+        .ok_or_else(|| anyhow!("Betterleaks path prefilter uses a dynamic function call"))?;
+    if !matches!(name.as_str(), "matchesAny" | "filter.matchesAny") {
+        bail!("unsupported Betterleaks path prefilter function {name:?}");
+    }
+    let [input, patterns] = arguments.as_slice() else {
+        bail!("Betterleaks path prefilter matchesAny call must have two arguments");
+    };
+    if betterleaks_expression_name(input).as_deref() != Some("attributes.path") {
+        bail!("Betterleaks path prefilter must match attributes.path");
+    }
+    let BetterleaksExpr::Array { nodes } = patterns else {
+        bail!("Betterleaks path prefilter patterns must be a literal array");
+    };
+    nodes
+        .iter()
+        .map(|node| match node {
+            BetterleaksExpr::String { value } => Ok(value.clone()),
+            _ => bail!("Betterleaks path prefilter patterns must be string literals"),
+        })
+        .collect()
+}
+
+fn betterleaks_expression_name(expression: &BetterleaksExpr) -> Option<String> {
+    match expression {
+        BetterleaksExpr::Identifier { value } => Some(value.clone()),
+        BetterleaksExpr::Member { node, property, .. } => {
+            let parent = betterleaks_expression_name(node)?;
+            let BetterleaksExpr::String { value } = property.as_ref() else {
+                return None;
+            };
+            Some(format!("{parent}.{value}"))
+        }
+        BetterleaksExpr::Chain { node } => betterleaks_expression_name(node),
+        _ => None,
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -43,7 +151,7 @@ impl RuleCacheConfig {
 }
 
 const CACHE_MAGIC: &[u8] = b"KFRULEDB";
-const CACHE_FORMAT_VERSION: u32 = 1;
+const CACHE_FORMAT_VERSION: u32 = 4;
 pub const DEFAULT_RULE_CACHE_MAX_ENTRIES: usize = 10;
 pub const DEFAULT_RULE_CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
@@ -55,6 +163,8 @@ struct CacheHeader {
     vectorscan_version: String,
     target: String,
     database_kind: String,
+    #[serde(default)]
+    prefilter_rule_indices: Vec<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -105,6 +215,56 @@ pub fn compute_rule_cache_key(rules: &[Rule]) -> String {
     compute_cache_key_from_rules(rules.iter())
 }
 
+/// Compile every rule exactly when possible. If one expression exceeds a Vectorscan compiler
+/// limit, retry only that expression in candidate-prefilter mode. Confidence is reporting
+/// metadata and must not select a slower matching engine.
+fn compile_vectorscan_database(rules: &[Arc<Rule>]) -> Result<(BlockDatabase, Vec<bool>)> {
+    let mut prefilter_flags = vec![false; rules.len()];
+
+    loop {
+        let patterns = rules
+            .iter()
+            .enumerate()
+            .map(|(id, rule)| {
+                let flags = if prefilter_flags[id] { Flag::PREFILTER } else { Flag::default() };
+                Pattern::new(
+                    rule.syntax().pattern.clone().into_bytes(),
+                    flags,
+                    Some(id.try_into().expect("rule count fits in u32")),
+                )
+            })
+            .collect();
+
+        match BlockDatabase::new(patterns) {
+            Ok(database) => return Ok((database, prefilter_flags)),
+            Err(VectorscanError::HyperscanCompile(message, expression)) if expression >= 0 => {
+                let index = expression as usize;
+                let Some(rule) = rules.get(index) else {
+                    bail!(
+                        "Vectorscan reported an out-of-range failing expression {expression}: \
+                         {message}"
+                    );
+                };
+                if prefilter_flags[index] {
+                    bail!(
+                        "Vectorscan could not compile rule {} even in candidate-prefilter mode: \
+                         {message}",
+                        rule.id()
+                    );
+                }
+                warn!(
+                    rule_id = rule.id(),
+                    %message,
+                    "Exact Vectorscan compilation exceeded an engine limit; retrying this rule \
+                     in candidate-prefilter mode"
+                );
+                prefilter_flags[index] = true;
+            }
+            Err(error) => return Err(error).context("compile rules with Vectorscan"),
+        }
+    }
+}
+
 pub fn prune_rule_cache(
     cache: &RuleCacheConfig,
     config: &RuleCachePruneConfig,
@@ -143,52 +303,100 @@ impl RulesDatabase {
     }
 
     pub fn from_rules(rules: Vec<Rule>) -> Result<Self> {
+        Self::from_rules_with_betterleaks_prefilter(rules, None)
+    }
+
+    /// Compile a loaded rule collection while preserving its database-level metadata.
+    pub fn from_rule_collection(rules: Rules) -> Result<Self> {
+        let Rules { rules, betterleaks_prefilter } = rules;
+        Self::from_rules_with_betterleaks_prefilter(
+            rules.into_values().map(Rule::new).collect(),
+            betterleaks_prefilter,
+        )
+    }
+
+    pub fn from_rules_with_betterleaks_prefilter(
+        rules: Vec<Rule>,
+        betterleaks_prefilter: Option<BetterleaksExpr>,
+    ) -> Result<Self> {
         let rules: Vec<Arc<Rule>> = rules.into_iter().map(Arc::new).collect();
-        Self::from_arc_rules(rules)
+        let betterleaks_prefilter =
+            betterleaks_prefilter.map(BetterleaksPathPrefilter::compile).transpose()?;
+        let betterleaks_filter_engine = BetterleaksFilterEngine::compile(
+            rules.iter().filter_map(|rule| rule.betterleaks_filter()),
+        )?;
+        Self::from_arc_rules(rules, betterleaks_prefilter, betterleaks_filter_engine)
     }
 
     pub fn from_rules_with_cache(rules: Vec<Rule>, cache: &RuleCacheConfig) -> Result<Self> {
-        let rules: Vec<Arc<Rule>> = rules.into_iter().map(Arc::new).collect();
-        Self::from_arc_rules_with_cache(rules, cache)
+        Self::from_rules_with_cache_and_betterleaks_prefilter(rules, cache, None)
     }
 
-    fn from_arc_rules(rules: Vec<Arc<Rule>>) -> Result<Self> {
+    /// Compile and cache a loaded rule collection while preserving database-level metadata.
+    pub fn from_rule_collection_with_cache(rules: Rules, cache: &RuleCacheConfig) -> Result<Self> {
+        let Rules { rules, betterleaks_prefilter } = rules;
+        Self::from_rules_with_cache_and_betterleaks_prefilter(
+            rules.into_values().map(Rule::new).collect(),
+            cache,
+            betterleaks_prefilter,
+        )
+    }
+
+    pub fn from_rules_with_cache_and_betterleaks_prefilter(
+        rules: Vec<Rule>,
+        cache: &RuleCacheConfig,
+        betterleaks_prefilter: Option<BetterleaksExpr>,
+    ) -> Result<Self> {
+        let rules: Vec<Arc<Rule>> = rules.into_iter().map(Arc::new).collect();
+        let betterleaks_prefilter =
+            betterleaks_prefilter.map(BetterleaksPathPrefilter::compile).transpose()?;
+        let betterleaks_filter_engine = BetterleaksFilterEngine::compile(
+            rules.iter().filter_map(|rule| rule.betterleaks_filter()),
+        )?;
+        Self::from_arc_rules_with_cache(
+            rules,
+            cache,
+            betterleaks_prefilter,
+            betterleaks_filter_engine,
+        )
+    }
+
+    fn from_arc_rules(
+        rules: Vec<Arc<Rule>>,
+        betterleaks_prefilter: Option<BetterleaksPathPrefilter>,
+        betterleaks_filter_engine: BetterleaksFilterEngine,
+    ) -> Result<Self> {
         let _span = debug_span!("RulesDatabase::from_rules").entered();
         if rules.is_empty() {
             bail!("No rules to compile");
         }
-        let patterns: Vec<Pattern> = rules
-            .iter()
-            .enumerate()
-            .map(|(id, rule)| {
-                Pattern::new(
-                    rule.syntax().pattern.clone().into_bytes(),
-                    Flag::default(),
-                    Some(id.try_into().unwrap()),
-                )
-            })
-            .collect();
         let t1 = Instant::now();
-        match BlockDatabase::new(patterns) {
-            Ok(vsdb) => {
-                let d1 = t1.elapsed().as_secs_f64();
-                let (anchored_regexes, d2) = Self::compile_regexes(&rules)?;
-                let self_identifying_flags = Self::build_self_identifying_flags(&rules);
-                debug!("Compiled {} rules: vectorscan {}s; regex {}s", rules.len(), d1, d2);
-                Ok(RulesDatabase { rules, vsdb, anchored_regexes, self_identifying_flags })
-            }
-            Err(e) => {
-                error!(
-                    "Failed to create BlockDatabase: {}. Attempting to compile rules individually.",
-                    e
-                );
-                Self::compile_rules_individually(rules)
-                    .map_err(|err| anyhow!("Failed to compile rules: {}\n{}", e, err))
-            }
-        }
+        let (vsdb, vectorscan_prefilter_flags) = compile_vectorscan_database(&rules)?;
+        let d1 = t1.elapsed().as_secs_f64();
+        let (anchored_regexes, d2) = Self::compile_regexes(&rules)?;
+        let self_identifying_flags = Self::build_self_identifying_flags(&rules);
+        let betterleaks_rule_flags = Self::build_betterleaks_rule_flags(&rules);
+        let has_non_betterleaks_rules = betterleaks_rule_flags.contains(&false);
+        debug!("Compiled {} rules: vectorscan {}s; regex {}s", rules.len(), d1, d2);
+        Ok(RulesDatabase {
+            rules,
+            vsdb,
+            anchored_regexes,
+            self_identifying_flags,
+            vectorscan_prefilter_flags,
+            betterleaks_rule_flags,
+            has_non_betterleaks_rules,
+            betterleaks_prefilter,
+            betterleaks_filter_engine,
+        })
     }
 
-    fn from_arc_rules_with_cache(rules: Vec<Arc<Rule>>, cache: &RuleCacheConfig) -> Result<Self> {
+    fn from_arc_rules_with_cache(
+        rules: Vec<Arc<Rule>>,
+        cache: &RuleCacheConfig,
+        betterleaks_prefilter: Option<BetterleaksPathPrefilter>,
+        betterleaks_filter_engine: BetterleaksFilterEngine,
+    ) -> Result<Self> {
         let _span = debug_span!("RulesDatabase::from_rules_with_cache").entered();
         if rules.is_empty() {
             bail!("No rules to compile");
@@ -196,13 +404,14 @@ impl RulesDatabase {
 
         let cache_key = compute_cache_key(&rules);
         let cache_path = cache.cache_dir.join(format!("{cache_key}.vscdb"));
-        let header = CacheHeader {
+        let mut header = CacheHeader {
             format_version: CACHE_FORMAT_VERSION,
             cache_key,
             rule_count: rules.len(),
             vectorscan_version: vectorscan_rs::version(),
             target: cache_target(),
             database_kind: "block".to_string(),
+            prefilter_rule_indices: Vec::new(),
         };
 
         debug!(
@@ -213,90 +422,50 @@ impl RulesDatabase {
             "Using Vectorscan rule cache"
         );
         let t1 = Instant::now();
-        if let Some(vsdb) = load_cached_vectorscan_db(&cache_path, &header) {
+        if let Some((vsdb, cached_header)) = load_cached_vectorscan_db(&cache_path, &header) {
             let d1 = t1.elapsed().as_secs_f64();
             let (anchored_regexes, d2) = Self::compile_regexes(&rules)?;
             let self_identifying_flags = Self::build_self_identifying_flags(&rules);
+            let betterleaks_rule_flags = Self::build_betterleaks_rule_flags(&rules);
+            let has_non_betterleaks_rules = betterleaks_rule_flags.contains(&false);
+            let mut vectorscan_prefilter_flags = vec![false; rules.len()];
+            for index in cached_header.prefilter_rule_indices {
+                let Some(flag) = vectorscan_prefilter_flags.get_mut(index) else {
+                    bail!("Vectorscan cache contains out-of-range prefilter rule index {index}");
+                };
+                *flag = true;
+            }
             debug!(
                 "Loaded {} rules from Vectorscan cache: cache {}s; regex {}s",
                 rules.len(),
                 d1,
                 d2
             );
-            return Ok(RulesDatabase { rules, vsdb, anchored_regexes, self_identifying_flags });
+            return Ok(RulesDatabase {
+                rules,
+                vsdb,
+                anchored_regexes,
+                self_identifying_flags,
+                vectorscan_prefilter_flags,
+                betterleaks_rule_flags,
+                has_non_betterleaks_rules,
+                betterleaks_prefilter,
+                betterleaks_filter_engine,
+            });
         }
 
-        let db = Self::from_arc_rules(rules)?;
+        let db = Self::from_arc_rules(rules, betterleaks_prefilter, betterleaks_filter_engine)?;
+        header.prefilter_rule_indices = db
+            .vectorscan_prefilter_flags
+            .iter()
+            .enumerate()
+            .filter_map(|(index, enabled)| enabled.then_some(index))
+            .collect();
         store_cached_vectorscan_db(&cache_path, &header, db.vectorscan_db());
         Ok(db)
     }
 
-    fn compile_rules_individually(rules: Vec<Arc<Rule>>) -> Result<Self> {
-        // NOTE: This function only used when attempting to determine which rule failed
-        // to compile
-        let mut compiled_rules = Vec::new();
-        let mut compiled_patterns = Vec::new();
-        let mut compiled_regexes = Vec::new();
-        let mut error_messages = Vec::new();
-        for (id, rule) in rules.into_iter().enumerate() {
-            let pattern = Pattern::new(
-                rule.syntax().pattern.clone().into_bytes(),
-                Flag::default(),
-                Some(id.try_into().unwrap()),
-            );
-            match BlockDatabase::new(vec![pattern]) {
-                Ok(_) => {
-                    // Recreate the pattern for the final compilation
-                    let final_pattern = Pattern::new(
-                        rule.syntax().pattern.clone().into_bytes(),
-                        Flag::default(),
-                        Some(id.try_into().unwrap()),
-                    );
-                    compiled_patterns.push(final_pattern);
-                    match rule.syntax().as_regex() {
-                        Ok(regex) => {
-                            compiled_regexes.push(regex);
-                            compiled_rules.push(rule);
-                        }
-                        Err(e) => {
-                            error_messages.push(format!(
-                                "Failed to compile Regex for rule '{}' (ID: {}): {}",
-                                rule.name(),
-                                rule.id(),
-                                e
-                            ));
-                        }
-                    }
-                }
-                Err(e) => {
-                    error_messages.push(format!(
-                        "Failed to compile vectorscan pattern for rule '{}' (ID: {}): {}",
-                        rule.name(),
-                        rule.id(),
-                        e
-                    ));
-                }
-            }
-        }
-        if !error_messages.is_empty() {
-            error!(
-                "Errors occurred while compiling rules individually:\n{}",
-                error_messages.join("\n")
-            );
-            bail!("Failed to compile the following rules:\n{}", error_messages.join("\n"));
-        }
-        let vsdb = BlockDatabase::new(compiled_patterns)?;
-        let self_identifying_flags = Self::build_self_identifying_flags(&compiled_rules);
-        Ok(RulesDatabase {
-            rules: compiled_rules,
-            vsdb,
-            anchored_regexes: compiled_regexes,
-            self_identifying_flags,
-        })
-    }
-
     fn compile_regexes(rules: &[Arc<Rule>]) -> Result<(Vec<Regex>, f64)> {
-        // fn compile_regexes(rules: &[Rule],) -> Result<(Vec<Regex,>, f64,),> {
         let t2 = Instant::now();
         let mut anchored_regexes = Vec::with_capacity(rules.len());
         for rule in rules {
@@ -342,10 +511,52 @@ impl RulesDatabase {
         &self.vsdb
     }
 
+    /// Return whether Vectorscan uses an approximate candidate expression for this rule.
+    ///
+    /// Exact Rust-regex confirmation is required for these candidates because their complete
+    /// expression exceeds Vectorscan's exact state limit.
+    #[inline]
+    pub fn uses_vectorscan_prefilter(&self, index: usize) -> bool {
+        self.vectorscan_prefilter_flags.get(index).copied().unwrap_or(false)
+    }
+
     /// Returns a slice of the anchored regexes.
     #[inline]
     pub fn anchored_regexes(&self) -> &[Regex] {
         &self.anchored_regexes
+    }
+
+    /// Return true when Betterleaks' database-level source prefilter excludes this path.
+    #[inline]
+    pub fn is_path_prefiltered(&self, path: &str) -> Result<bool> {
+        self.betterleaks_prefilter.as_ref().map_or(Ok(false), |prefilter| prefilter.is_match(path))
+    }
+
+    /// Return whether the rule at `index` was imported from Betterleaks.
+    #[inline]
+    pub fn is_betterleaks_rule(&self, index: usize) -> bool {
+        self.betterleaks_rule_flags.get(index).copied().unwrap_or(false)
+    }
+
+    /// Return whether this database contains rules not governed by the Betterleaks path prefilter.
+    #[inline]
+    pub fn has_non_betterleaks_rules(&self) -> bool {
+        self.has_non_betterleaks_rules
+    }
+
+    /// The build-parsed Betterleaks source prefilter, if Betterleaks rules are active.
+    pub fn betterleaks_prefilter(&self) -> Option<&BetterleaksExpr> {
+        self.betterleaks_prefilter.as_ref().map(|prefilter| &prefilter.expression)
+    }
+
+    /// Evaluate an imported Betterleaks finding filter with the database's precompiled
+    /// Vectorscan helper patterns.
+    pub fn evaluate_betterleaks_filter(
+        &self,
+        expression: &BetterleaksExpr,
+        context: &BetterleaksFilterContext<'_>,
+    ) -> Result<BetterleaksFilterOutcome> {
+        evaluate_filter_with_engine(expression, context, &self.betterleaks_filter_engine)
     }
 
     /// Returns true when the rule at `index` is recognised as
@@ -367,6 +578,10 @@ impl RulesDatabase {
                 )
             })
             .collect()
+    }
+
+    fn build_betterleaks_rule_flags(rules: &[Arc<Rule>]) -> Vec<bool> {
+        rules.iter().map(|rule| rule.id().starts_with("betterleaks.")).collect()
     }
 }
 
@@ -547,16 +762,19 @@ fn cache_target() -> String {
     )
 }
 
-fn load_cached_vectorscan_db(path: &Path, expected_header: &CacheHeader) -> Option<BlockDatabase> {
+fn load_cached_vectorscan_db(
+    path: &Path,
+    expected_header: &CacheHeader,
+) -> Option<(BlockDatabase, CacheHeader)> {
     if !path.exists() {
         debug!(path = %path.display(), "No Vectorscan rule cache entry found");
         return None;
     }
 
     match load_cached_vectorscan_db_inner(path, expected_header) {
-        Ok(vsdb) => {
+        Ok(cached) => {
             debug!(path = %path.display(), "Loaded Vectorscan rule cache entry");
-            Some(vsdb)
+            Some(cached)
         }
         Err(err) => {
             debug!(
@@ -572,7 +790,7 @@ fn load_cached_vectorscan_db(path: &Path, expected_header: &CacheHeader) -> Opti
 fn load_cached_vectorscan_db_inner(
     path: &Path,
     expected_header: &CacheHeader,
-) -> Result<BlockDatabase> {
+) -> Result<(BlockDatabase, CacheHeader)> {
     let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
     let Some(rest) = bytes.strip_prefix(CACHE_MAGIC) else {
         bail!("invalid cache magic");
@@ -594,11 +812,19 @@ fn load_cached_vectorscan_db_inner(
 
     let header: CacheHeader = serde_json::from_slice(&rest[header_start..header_end])
         .context("parse Vectorscan cache header")?;
-    if &header != expected_header {
+    if header.format_version != expected_header.format_version
+        || header.cache_key != expected_header.cache_key
+        || header.rule_count != expected_header.rule_count
+        || header.vectorscan_version != expected_header.vectorscan_version
+        || header.target != expected_header.target
+        || header.database_kind != expected_header.database_kind
+    {
         bail!("cache metadata mismatch");
     }
 
-    BlockDatabase::deserialize(&rest[header_end..]).context("deserialize Vectorscan database")
+    let database = BlockDatabase::deserialize(&rest[header_end..])
+        .context("deserialize Vectorscan database")?;
+    Ok((database, header))
 }
 
 fn read_cached_vectorscan_header(path: &Path) -> Result<CacheHeader> {
@@ -782,10 +1008,12 @@ rules:
 
         let db = RulesDatabase::from_rules_with_cache(rule_vec.clone(), &cache)?;
         assert_eq!(db.num_rules(), 1);
+        assert!(!db.uses_vectorscan_prefilter(0));
         let entries = fs::read_dir(&cache_dir)?.count();
         assert_eq!(entries, 1);
 
         let cached_db = RulesDatabase::from_rules_with_cache(rule_vec, &cache)?;
+        assert!(!cached_db.uses_vectorscan_prefilter(0));
         let mut scanner = BlockScanner::new(cached_db.vectorscan_db())?;
         let mut matches = Vec::new();
         scanner.scan(b"token demo_1234", |id, _from, to, _flags| {
@@ -795,6 +1023,79 @@ rules:
 
         fs::remove_dir_all(cache_dir).ok();
         assert_eq!(matches, vec![(0, 15)]);
+        Ok(())
+    }
+
+    #[test]
+    fn low_confidence_does_not_force_vectorscan_prefilter_mode() -> Result<()> {
+        let yaml = br#"
+rules:
+  - id: demo.generic
+    name: Generic rule
+    pattern: "(?i)(?:key|secret|token)[ \\t]{0,8}[:=][ \\t]{0,4}([a-z0-9]{10,150})"
+    confidence: low
+"#;
+        let rules = Rules::from_paths_and_contents(
+            [(Path::new("generic.yml"), yaml.as_slice())],
+            Confidence::Low,
+        )?;
+        let database = RulesDatabase::from_rules(rules.into_iter().map(Rule::new).collect())?;
+
+        assert!(!database.uses_vectorscan_prefilter(0));
+        Ok(())
+    }
+
+    #[test]
+    fn cached_database_preserves_betterleaks_path_prefilter() -> Result<()> {
+        let expression = BetterleaksExpr::Call {
+            callee: Box::new(BetterleaksExpr::Identifier { value: "matchesAny".to_string() }),
+            arguments: vec![
+                BetterleaksExpr::Member {
+                    node: Box::new(BetterleaksExpr::Identifier { value: "attributes".to_string() }),
+                    property: Box::new(BetterleaksExpr::String { value: "path".to_string() }),
+                    optional: false,
+                    method: false,
+                },
+                BetterleaksExpr::Array {
+                    nodes: vec![BetterleaksExpr::String {
+                        value: r"(?:^|/)node_modules(?:/.*)?$".to_string(),
+                    }],
+                },
+            ],
+        };
+        let yaml = br#"
+rules:
+  - id: demo.secret
+    name: Demo Secret
+    pattern: "demo_[0-9]{4}"
+    confidence: medium
+"#;
+        let rules = Rules::from_paths_and_contents(
+            [(Path::new("demo.yml"), yaml.as_slice())],
+            Confidence::Medium,
+        )?;
+        let rule_vec: Vec<Rule> = rules.into_iter().map(Rule::new).collect();
+        let cache_dir =
+            env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
+        let cache = RuleCacheConfig::new(&cache_dir);
+
+        let db = RulesDatabase::from_rules_with_cache_and_betterleaks_prefilter(
+            rule_vec.clone(),
+            &cache,
+            Some(expression.clone()),
+        )?;
+        assert!(db.is_path_prefiltered("repo/node_modules/package.js")?);
+        assert!(!db.is_path_prefiltered("src/main.rs")?);
+
+        let cached_db = RulesDatabase::from_rules_with_cache_and_betterleaks_prefilter(
+            rule_vec,
+            &cache,
+            Some(expression),
+        )?;
+        assert!(cached_db.is_path_prefiltered("repo/node_modules/package.js")?);
+        assert!(!cached_db.is_path_prefiltered("src/main.rs")?);
+
+        fs::remove_dir_all(cache_dir).ok();
         Ok(())
     }
 
@@ -888,6 +1189,61 @@ rules:
         Ok(())
     }
 
+    #[test]
+    fn legacy_matching_engine_hint_does_not_change_cache_key() -> Result<()> {
+        fn rule_for(vectorscan_compatible: bool) -> Result<Rule> {
+            let yaml = format!(
+                r#"
+rules:
+  - id: demo.secret
+    name: Demo Secret
+    pattern: "demo_[0-9]{{4}}"
+    confidence: low
+    vectorscan_compatible: {vectorscan_compatible}
+"#
+            );
+            let rules = Rules::from_paths_and_contents(
+                [(Path::new("demo.yml"), yaml.as_bytes())],
+                Confidence::Low,
+            )?;
+            Ok(Rule::new(rules.into_iter().next().expect("test rule should load")))
+        }
+
+        let vectorscan = rule_for(true)?;
+        let direct_regex = rule_for(false)?;
+        assert_eq!(compute_rule_cache_key(&[vectorscan]), compute_rule_cache_key(&[direct_regex]));
+        Ok(())
+    }
+
+    #[test]
+    fn betterleaks_path_prefilter_is_precompiled_with_vectorscan() -> Result<()> {
+        let expression = BetterleaksExpr::Call {
+            callee: Box::new(BetterleaksExpr::Identifier { value: "matchesAny".to_string() }),
+            arguments: vec![
+                BetterleaksExpr::Member {
+                    node: Box::new(BetterleaksExpr::Identifier { value: "attributes".to_string() }),
+                    property: Box::new(BetterleaksExpr::String { value: "path".to_string() }),
+                    optional: false,
+                    method: false,
+                },
+                BetterleaksExpr::Array {
+                    nodes: vec![
+                        BetterleaksExpr::String {
+                            value: r"(?:^|/)node_modules(?:/.*)?$".to_string(),
+                        },
+                        BetterleaksExpr::String { value: r"(?i)\.png$".to_string() },
+                    ],
+                },
+            ],
+        };
+        let prefilter = BetterleaksPathPrefilter::compile(expression)?;
+
+        assert!(prefilter.is_match("repo/node_modules/package/index.js")?);
+        assert!(prefilter.is_match("assets/LOGO.PNG")?);
+        assert!(!prefilter.is_match("src/lib.rs")?);
+        Ok(())
+    }
+
     fn write_fake_cache_entry(cache_dir: &Path, cache_key: &str) -> Result<PathBuf> {
         let path = cache_dir.join(format!("{cache_key}.vscdb"));
         let header = CacheHeader {
@@ -897,6 +1253,7 @@ rules:
             vectorscan_version: vectorscan_rs::version(),
             target: cache_target(),
             database_kind: "block".to_string(),
+            prefilter_rule_indices: Vec::new(),
         };
         let header_bytes = serde_json::to_vec(&header)?;
         let mut bytes = Vec::new();

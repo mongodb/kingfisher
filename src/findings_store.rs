@@ -562,24 +562,33 @@ mod tests {
             depends_on_rule,
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         }))
     }
 
     #[test]
     fn visible_dependency_rules_keep_global_content_deduplication() {
-        let helper = rule("kingfisher.test.helper", false, Vec::new());
-        let visible_secret = rule("kingfisher.test.secret", true, Vec::new());
+        let helper = rule("custom.test.helper", false, Vec::new());
+        let visible_secret = rule("custom.test.secret", true, Vec::new());
         let consumer = rule(
-            "kingfisher.test.consumer",
+            "custom.test.consumer",
             true,
             vec![
                 Some(DependsOnRule {
                     rule_id: helper.id().to_owned(),
                     variable: "HELPER".to_owned(),
+                    optional: false,
+                    within: None,
                 }),
                 Some(DependsOnRule {
                     rule_id: visible_secret.id().to_owned(),
                     variable: "SECRET".to_owned(),
+                    optional: false,
+                    within: None,
                 }),
             ],
         );
@@ -587,8 +596,8 @@ mod tests {
         let mut store = FindingsStore::new(std::env::temp_dir());
         store.record_rules(&[helper, visible_secret, consumer]);
 
-        assert!(store.blob_scoped_dependency_rule_ids.contains("KINGFISHER.TEST.HELPER"));
-        assert!(!store.blob_scoped_dependency_rule_ids.contains("KINGFISHER.TEST.SECRET"));
+        assert!(store.blob_scoped_dependency_rule_ids.contains("CUSTOM.TEST.HELPER"));
+        assert!(!store.blob_scoped_dependency_rule_ids.contains("CUSTOM.TEST.SECRET"));
     }
 
     #[test]

@@ -28,12 +28,12 @@ pub struct RuleSpecifierArgs {
 
     /// Exclude the rule or ruleset with the given ID from the selected rules
     ///
-    /// Applied after `--rule`, so `--rule all --exclude-rule kingfisher.aws.1`
+    /// Applied after `--rule`, so `--rule all --exclude-rule betterleaks.aws-access-token`
     /// enables everything except that rule.
     #[arg(global = true, long = "exclude-rule", value_name = "RULE")]
     pub exclude_rule: Vec<String>,
 
-    /// Load built-in rules
+    /// Load the built-in Betterleaks rules
     #[arg(global = true, long, default_value_t=true, action=ArgAction::Set)]
     pub load_builtins: bool,
 }
@@ -187,6 +187,11 @@ pub struct RulesListArgs {
 
     #[command(flatten)]
     pub output_args: OutputArgs<RulesListOutputFormat>,
+
+    /// Include full validation definitions (development builds only)
+    #[cfg(debug_assertions)]
+    #[arg(long)]
+    pub show_validation: bool,
 }
 
 #[derive(Args, Debug)]

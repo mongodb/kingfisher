@@ -6,10 +6,6 @@
   <a href="https://opensource.org/licenses/Apache-2.0">
     <img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License" style="height: 24px;" />
   </a>
-  <a href="https://github.com/mongodb/kingfisher">
-    <img src="https://img.shields.io/badge/Detection%20Rules-1089-2ea043.svg" alt="Detection Rules" style="height: 24px;" />
-  </a>
-  <br>
   <a href="https://github.com/mongodb/kingfisher/pkgs/container/kingfisher">
     <img src="https://ghcr-badge.elias.eu.org/shield/mongodb/kingfisher/kingfisher" alt="ghcr downloads" />
   </a>
@@ -20,7 +16,7 @@
 
 Kingfisher is an open source secret scanner and **live secret validation** tool built in Rust.
 
-It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale, and ships with [1,089 built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/) to detect, **validate**, and triage leaked API keys, tokens, and credentials before they ever reach production.
+It combines Intel's SIMD-accelerated regex engine ( Vectorscan ) with language-aware parsing to achieve high accuracy at massive scale. Kingfisher's candidate detector catalog is sourced from [Betterleaks](https://github.com/betterleaks/betterleaks) and selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors.
 
 Kingfisher also ships a **browser-based report viewer** that visualizes and triages findings from Kingfisher, SARIF, Gitleaks, and TruffleHog reports — so you can import scans from other tools and triage them in the same UI. A [hosted copy of the viewer](https://mongodb.github.io/kingfisher/viewer/) is published on the Kingfisher docs site [or run locally](#3-scan-and-view-results-in-browser)
 
@@ -55,18 +51,17 @@ Kingfisher is a high-performance, open source secret detection tool for source c
 
 </div>
 
-### Performance, Accuracy, and 1,089 Rules
+### Performance, Accuracy, and Extensible Rules
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
-- **Extensible rules**: 1,089 built-in rules plus YAML-defined custom rules ([docs/RULES.md](/docs/RULES.md))
-- **Validate & Revoke**: live validation of discovered secrets, plus direct revocation for supported platforms (GitHub, GitLab, Slack, AWS, GCP, and more) ([docs/USAGE.md](/docs/USAGE.md))
-- **Revocation support matrix**: current built-in revocation coverage across providers and rule IDs ([docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
-- **Blast Radius Mapping**: instantly map leaked keys to their effective cloud identities and exposed resources with `--access-map` (alias `--blast-radius`). Supports 43 providers (see table below).
-- **Broad AI SaaS coverage**: finds and validates tokens for OpenAI, Anthropic, Google Gemini, Cohere, AWS Bedrock, Voyage AI, Mistral, Stability AI, Replicate, xAI (Grok), Ollama, Langchain, Perplexity, Weights & Biases, Cerebras, Friendli, Fireworks.ai, NVIDIA NIM, Together.ai, Zhipu, and many more
+- **Extensible rules**: Betterleaks is the main catalog, with selected Veles detectors filling gaps; custom Betterleaks TOML and Kingfisher 1.x YAML rules are supported ([docs/ADVANCED.md](/docs/ADVANCED.md#default-betterleaks-rules), [docs/RULES.md](/docs/RULES.md))
+- **Validation and revocation**: validate discovered credentials live and revoke supported credentials from the CLI ([docs/USAGE.md](/docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
+- **Blast Radius Mapping**: use `--blast-radius` (alias `--access-map`) to map supported credentials to their effective identities, permissions, and reachable resources ([docs/ACCESS_MAP.md](docs/ACCESS_MAP.md))
+- **Broad provider coverage**: detect and validate credentials across cloud, AI, developer tooling, databases, SaaS, messaging, identity, and cryptographic systems through the Betterleaks- and Veles-based candidate catalog
 - **Compressed Files**: Supports extracting and scanning compressed files for secrets, including `tar.gz`/`bz2`/`xz`, ZIP-family containers (`zip`, `jar`, `docx`, `xlsx`, `pptx`, `odt`, `epub`, `hwpx`, and more), `asar`, HWP (Hancom OLE2/CFBF binary with DEFLATE/zlib stream decoding), and EGG (ALZip; raw-byte scanning)
 - **SQLite Database Scanning**: Automatically extracts and scans SQLite database contents for secrets stored in table rows
 - **Python Bytecode (.pyc) Scanning**: Extracts and scans string constants from compiled Python (`.pyc`, `.pyo`) files
 - **Baseline management**: generate and track baselines to suppress known secrets ([docs/BASELINE.md](/docs/BASELINE.md))
-- **Checksum-aware detection**: verifies tokens with built-in checksums (e.g., GitHub, Confluent, Zuplo) — no API calls required
+- **Checksum-aware custom detection**: Kingfisher 1.x custom rules can verify token checksums offline before validation
 - **Report Viewer (local + hosted)**: Visualize and triage Kingfisher, **SARIF, Gitleaks, and TruffleHog** output locally with `kingfisher view ./report.json` or online with the [hosted viewer](https://mongodb.github.io/kingfisher/viewer/). Multiple files, directories, and imported third-party reports are merged and deduplicated. See [docs/USAGE.md](/docs/USAGE.md#report-viewer-local-and-hosted).
 - **Audit reporting**: Generate compliance-oriented HTML reports with scan metadata and validation ordering
 - **Library crates**: Embed Kingfisher's scanning engine in your own Rust applications ([docs/LIBRARY.md](docs/LIBRARY.md))
@@ -89,6 +84,7 @@ NOTE: Replay has been slowed down for demo
 # Table of Contents
 
 - [What Is Kingfisher?](#what-is-kingfisher)
+- [Why Choose Kingfisher?](#why-choose-kingfisher)
 - [Key Features](#key-features)
 - [Report Viewer (local and hosted)](#report-viewer-local-and-hosted)
 - [Alert Webhooks](#alert-webhooks)
@@ -116,6 +112,9 @@ NOTE: Replay has been slowed down for demo
 ```bash
 # Homebrew (Linux/macOS)
 brew install kingfisher
+
+# Or install with mise
+mise use --global github:mongodb/kingfisher
 
 # Or install from PyPI with uv
 uv tool install kingfisher-bin
@@ -193,13 +192,20 @@ successful validations with `--validation-filter actionable`.
 
 ### 5: Revoke a discovered secret
 
-```bash
-# Revoke a GitHub token
-kingfisher revoke --rule github "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+Kingfisher adds selected provider revocation actions alongside its imported detection and validation
+capabilities. For example:
 
-# Revoke AWS credentials (sets access key to Inactive)
-kingfisher revoke --rule aws --arg "AKIAIOSFODNN7EXAMPLE" "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+```bash
+# Revoke a GitHub PAT using the built-in Betterleaks detector capability
+kingfisher revoke --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+# Disable an AWS access key; the positional secret is the secret access key
+kingfisher revoke --rule aws-access-token \
+  --var AKID=AKIAIOSFODNN7EXAMPLE \
+  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 ```
+
+Kingfisher 1.x custom YAML rules can still define their own `revocation:` blocks.
 
 ### 6: Scan a GitHub organization ([INTEGRATIONS.md](docs/INTEGRATIONS.md))
 
@@ -294,7 +300,7 @@ docker run --rm \
   -p 7890:7890 \
   ghcr.io/mongodb/kingfisher:latest \
   scan https://github.com/leaktk/fake-leaks \
-  --access-map \
+  --blast-radius \
   --view-report \
   --view-report-address 0.0.0.0
 ```
@@ -307,7 +313,7 @@ docker run --rm \
   -p 7891:7891 \
   ghcr.io/mongodb/kingfisher:latest \
   scan https://github.com/leaktk/fake-leaks \
-  --access-map \
+  --blast-radius \
   --view-report \
   --view-report-port 7891 \
   --view-report-address 0.0.0.0
@@ -324,7 +330,7 @@ kingfisher scan /path/to/code --format json --output findings.json
 ### 21: Map blast radius of discovered credentials
 
 ```bash
-kingfisher scan /path/to/code --access-map --view-report
+kingfisher scan /path/to/code --blast-radius --view-report
 ```
 
 ## Installation
@@ -332,6 +338,7 @@ kingfisher scan /path/to/code --access-map --view-report
 Kingfisher supports multiple installation methods:
 
 - **Homebrew**: `brew install kingfisher` ![Homebrew Formula Version](https://img.shields.io/homebrew/v/kingfisher)
+- **mise**: `mise use --global github:mongodb/kingfisher`
 - **PyPI with uv**: `uv tool install kingfisher-bin`
 - **Pre-built releases**: Download from [GitHub Releases](https://github.com/mongodb/kingfisher/releases)
 - **Install scripts**: One-line installers for Linux, macOS, and Windows - [INSTALLATION.md](docs/INSTALLATION.md)
@@ -413,7 +420,7 @@ Raw JSON and SARIF from Kingfisher, Gitleaks, or TruffleHog are great for machin
 - **Prioritize real, validated secrets** — validated Kingfisher findings and TruffleHog-verified findings float to the top so you act on live credentials first.
 - **Drop duplicates** — repeated imports and overlapping scans are deduplicated by fingerprint/secret identity so you don't open the same key five times. Per-tool "duplicates removed" cards on the dashboard show how much noise each tool contributed, and an upload-time **Deduplicate findings** toggle (on by default) lets you inspect raw rows when you need to.
 - **Cross-tool enrichment** — when a Gitleaks or TruffleHog finding lines up with a Kingfisher finding at the same commit, file, and line, the imported row picks up Kingfisher's validation verdict and validate / revoke commands. This is useful when a team already has a Gitleaks or TruffleHog pipeline in CI and wants to layer Kingfisher's validation and remediation data on top of the reports they already produce, without replacing their existing tooling.
-- **See blast radius** — for Kingfisher reports generated with `--access-map`, the viewer renders the identity, permissions, and resources a leaked credential can reach, so you can tell a dev token apart from a production admin key.
+- **See blast radius** — for Kingfisher reports generated with `--blast-radius`, the viewer renders the identity, permissions, and resources a leaked credential can reach, so you can tell a dev token apart from a production admin key.
 - **Export triage decisions** — filter down to what matters and export a cleaned-up subset for a ticket, a rotation runbook, or an audit reviewer.
 
 Gitleaks and TruffleHog are both widely used open-source secret scanners with their own strengths; Kingfisher's viewer reads their standard JSON output plus SARIF so teams that already run other tooling can pull those findings into the same triage workflow. Kingfisher is not affiliated with or endorsed by the Gitleaks project or Truffle Security Co.; TruffleHog and Gitleaks are trademarks of their respective owners.
@@ -427,7 +434,7 @@ Serving blast-radius viewer at http://127.0.0.1:7890 (Ctrl+C to stop)
 
 **Usage:**
 ```bash
-kingfisher scan /path/to/scan --access-map --view-report
+kingfisher scan /path/to/scan --blast-radius --view-report
 ```
 
 ![Kingfisher blast radius and report viewer demo](docs/kingfisher-usage-access-map-01.gif)
@@ -459,26 +466,13 @@ For payload shapes, per-webhook overrides, and config-file examples, see [docs/A
 
 # Detection Rules
 
-Kingfisher ships with [1,089 built-in rules](crates/kingfisher-rules/data/rules/) covering cloud keys, AI tokens, CI/CD secrets, database credentials, and SaaS API keys. Below is an overview — see the full list in [crates/kingfisher-rules/data/rules/](crates/kingfisher-rules/data/rules/):
+Kingfisher's candidate detector catalog is sourced from the [Betterleaks rule catalog](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml), with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors filling gaps. Upstream detector definitions are translated at build time; Kingfisher's importer, matching engine, filters, validation, and operational capabilities also determine effective behavior. Built-in rules use the `betterleaks.` and `veles.` namespaces.
 
-| Category | What we catch |
-|----------|---------------|
-| **Cloud Providers** | AWS, GCP, Azure (Storage, DevOps, OpenAI, Speech, Translator), Alibaba Cloud, DigitalOcean, IBM Cloud, Cloudflare, Heroku, Fly.io, Railway, Render, Temporal Cloud, Civo, Exoscale, OVHcloud, Infomaniak, and more |
-| **AI & ML** | OpenAI, Anthropic, Google Gemini, Azure OpenAI, Cohere, Mistral, DeepSeek, Groq, xAI (Grok), Stability AI, Replicate, ElevenLabs, Ollama, Langchain, Perplexity, Weights & Biases, NVIDIA NIM, Fireworks.ai, Together.ai, Cerebras, Friendli, Hugging Face, Pinecone, Cursor, Zhipu, Kimi (Moonshot AI), LightOn Paradigm, Upstage, and more |
-| **Dev & CI/CD** | GitHub, GitLab, Bitbucket, Buildkite, CircleCI, TravisCI, TeamCity, Jenkins, Drone CI, Harness, Docker Hub, npm, PyPI, RubyGems, Crates.io, NuGet, Vercel, Netlify, Browserbase, Nango, Pulumi, Terraform, Greptile, and more |
-| **Databases** | PostgreSQL, MySQL, MongoDB, Redis, PlanetScale, Supabase, Neon, Turso, ClickHouse, DataStax Astra, Firebase, JDBC, ODBC, and more |
-| **Messaging & Email** | Slack, Discord, Microsoft Teams, Telegram, Twilio, SendGrid, Mailgun, Mailchimp, Mailjet, Postmark, Brevo (Sendinblue), Resend, Novu, and more |
-| **Observability** | Datadog, Grafana, New Relic, Sentry, Dynatrace, Honeycomb, PagerDuty, OpsGenie, Sumo Logic, Better Stack, and more |
-| **Payments & Fintech** | Stripe, PayPal, Square, GoCardless, Flutterwave, Razorpay, Plaid, Coinbase, Cielo, Mercado Pago, PagSeguro/PagBank, and more |
-| **Security & Identity** | Snyk, Auth0, Okta, Clerk, LaunchDarkly, 1Password, JFrog Artifactory/Xray, SonarCloud, Endor Labs, Dependency-Track, StackHawk, and more |
-| **CRM & Business SaaS** | Salesforce, HubSpot, Jira, Confluence, Asana, Linear, Monday.com, Zendesk, Intercom, Shopify, Airbyte, and more |
-| **Crypto Material** | Private keys (PEM, PGP/GPG, SSH), JWTs, age encryption keys, WireGuard keys, and more |
+See the [Betterleaks catalog](https://github.com/betterleaks/betterleaks) for current detection coverage and contribute generally useful detectors there first. Custom Betterleaks TOML rules and Kingfisher's 1.x YAML format are also supported; use YAML for private, organization-specific rules. See [Moving to Kingfisher v2.0.x](docs/V2_MIGRATION.md), [Default Betterleaks Rules](docs/ADVANCED.md#default-betterleaks-rules), and [Kingfisher 1.x Custom Rules](docs/RULES.md).
 
 ## Write Custom Rules
 
-Kingfisher ships with 1,089 built-in rules.
-
-However, you may want to add your own custom rules, or modify a detection to better suit your needs / environment.
+New generally applicable rules belong in Betterleaks. Use Kingfisher's 1.x YAML format only for private or environment-specific custom rules that cannot be contributed upstream.
 
 **For complete rule documentation, see [docs/RULES.md](docs/RULES.md).**
 
@@ -486,7 +480,7 @@ However, you may want to add your own custom rules, or modify a detection to bet
 
 Modern API tokens increasingly include **built-in checksums**, short internal digests that make each credential self-verifiable. (For background, see [GitHub's write-up on their newer token formats](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/) and why checksums slash false positives.)
 
-Kingfisher supports **checksum-aware matching** in rules, enabling **offline structural verification** of credentials *without* calling third-party APIs.
+Kingfisher's 1.x custom-rule format supports **checksum-aware matching**, enabling **offline structural verification** of credentials *without* calling third-party APIs.
 
 By validating each token's internal checksum (for tokens that support checksums), Kingfisher eliminates nearly all false positives—automatically skipping structurally invalid or fake tokens before validation ever runs.
 
@@ -545,7 +539,7 @@ Kingfisher's blast-radius feature transforms secret detection from a simple aler
 
 ```bash
 # Generate blast-radius results during scan
-kingfisher scan /path/to/code --access-map --view-report
+kingfisher scan /path/to/code --blast-radius --view-report
 
 # View blast-radius reports locally
 kingfisher view kingfisher.json
@@ -597,26 +591,23 @@ The viewer can import SARIF, Gitleaks JSON, and TruffleHog JSON/JSONL in additio
 
 ```bash
 # Validate a known secret without scanning
-kingfisher validate --rule opsgenie "12345678-9abc-def0-1234-56789abcdef0"
-
-# Validate an Atlassian Admin API key against the Organizations API
-kingfisher validate --rule kingfisher.atlassian.3 "AT..."
+kingfisher validate --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 # Validate from stdin
 echo "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" | kingfisher validate --rule github -
 
-# Revoke a Slack token
-kingfisher revoke --rule slack "xoxb-..."
+# Revoke a supported Betterleaks credential
+kingfisher revoke --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# Revoke a GitHub PAT
-kingfisher revoke --rule github "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+# Kingfisher 1.x custom rules may also define `revocation:`
+kingfisher revoke --rules-path ./custom-rules.yml --rule custom.provider.token "secret"
 ```
 
 Validation throttling is also available for direct validation:
 
 - `--validation-rps <RPS>` sets a global request rate.
 - `--validation-rps-rule <RULE_SELECTOR=RPS>` sets per-rule overrides (repeatable).
-- Rule selectors accept short names, so `github=2` matches `kingfisher.github.*`.
+- Rule selectors accept short names, so `github=2` matches the `betterleaks.github-*` family.
 
 ```bash
 # Limit direct validation to 1 req/sec for GitHub rules
@@ -659,7 +650,7 @@ kingfisher scan /some/file --max-file-size 500
 kingfisher scan /path/to/repo --turbo
 
 # Scan using a rule family
-kingfisher scan /path/to/repo --rule kingfisher.aws
+kingfisher scan /path/to/repo --rule betterleaks.aws
 
 # Display rule performance statistics
 kingfisher scan /path/to/repo --rule-stats
@@ -869,12 +860,12 @@ kingfisher scan /tmp/repo --branch feature-1 \
 | [INSTALLATION.md](docs/INSTALLATION.md) | Complete installation guide including pre-commit hooks setup for git, pre-commit framework, and Husky |
 | [INTEGRATIONS.md](docs/INTEGRATIONS.md) | Platform-specific scanning guide (GitHub, GitLab, AWS S3, Docker, Jira, Confluence, Slack, etc.) |
 | [ALERTS.md](docs/ALERTS.md) | Alert webhooks for Slack, Teams, Discord, Mattermost, Google Chat, and generic HTTPS endpoints |
-| [ACCESS_MAP.md](docs/ACCESS_MAP.md) | Blast radius: supported tokens and credential formats (43 providers including AWS, GCP, Azure, Alibaba Cloud, Stripe, Jira, monday.com, Asana, Pinecone, and more) |
+| [ACCESS_MAP.md](docs/ACCESS_MAP.md) | Blast radius: supported credentials and provider workflows |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | High-level Mermaid architecture diagram of the CLI, scanner pipeline, validation, blast-radius mapping, and outputs |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment models for self-serve CLI use, CI/pre-commit enforcement, centralized scanning, and embedded library integrations |
 | [ADVANCED.md](docs/ADVANCED.md) | Advanced features: baselines, confidence levels, validation tuning, CI scanning, and more |
 | [RULES.md](docs/RULES.md) | Writing custom detection rules, pattern requirements, and checksum intelligence |
-| [REVOCATION_PROVIDERS.md](docs/REVOCATION_PROVIDERS.md) | Built-in revocation coverage by provider and rule ID |
+| [REVOCATION_PROVIDERS.md](docs/REVOCATION_PROVIDERS.md) | Built-in imported-detector capability mappings and Kingfisher 1.x custom-rule revocation |
 | [BASELINE.md](docs/BASELINE.md) | Baseline management for tracking known secrets and detecting new ones |
 | [LIBRARY.md](docs/LIBRARY.md) | Using Kingfisher as a Rust library in your own applications |
 | [FINGERPRINT.md](docs/FINGERPRINT.md) | Understanding finding fingerprints and deduplication |
@@ -900,13 +891,13 @@ kingfisher scan /tmp/repo --branch feature-1 \
 
 Kingfisher began as an internal fork of [Nosey Parker](https://github.com/praetorian-inc/noseyparker), used as a high-performance foundation for secret detection. 
 
-Since then it has evolved far beyond that starting point, introducing live validation, hundreds of new rules, additional scan targets, and major architectural changes across nearly every subsystem.
+Since then it has evolved far beyond that starting point, adding live validation, broader detection coverage, additional scan targets, and major architectural changes across nearly every subsystem.
 
 **Key areas of evolution**
 - **Live validation** of detected secrets directly within rules  
-- **Hundreds of new built-in rules** and an expanded YAML rule schema  
+- **Betterleaks- and Veles-based candidate detector coverage**, plus a supported Kingfisher 1.x custom YAML schema
 - **Baseline management** to suppress known findings over time  
-- **Parser-based context verification** layered on Hyperscan for language-aware detection  
+- **Parser-based context verification** layered on Vectorscan for language-aware detection  
 - **More scan targets** (GitLab, Bitbucket, Gitea, Jira, Confluence, Slack, Microsoft Teams, Postman, S3, GCS, Docker, Hugging Face, etc.)  
 - **Compressed Files**, **SQLite database**, and **Python bytecode (.pyc)** scanning support
 - **New storage model** (in-memory + Bloom filter, replacing SQLite)  
@@ -915,7 +906,7 @@ Since then it has evolved far beyond that starting point, introducing live valid
 
 # Roadmap
 
-- More rules
+- More upstream Betterleaks rule coverage
 - More targets
 - Please file a [feature request](https://github.com/mongodb/kingfisher/issues), or open a PR, if you have features you'd like added
 

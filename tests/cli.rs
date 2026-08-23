@@ -33,7 +33,7 @@ mod test {
             .args(["rules", "list", "--format", "pretty", "--no-update-check"])
             .assert()
             .success()
-            .stdout(contains("kingfisher.aws.").and(contains("Pattern")));
+            .stdout(contains("betterleaks.aws-access-token").and(contains("Pattern")));
     }
     #[test]
     fn cli_lists_rules_json() {
@@ -41,7 +41,30 @@ mod test {
             .args(["rules", "list", "--format", "json", "--no-update-check"])
             .assert()
             .success()
-            .stdout(contains("kingfisher.aws.").and(contains("pattern")));
+            .stdout(contains("betterleaks.aws-access-token").and(contains("pattern")));
+    }
+
+    #[cfg(debug_assertions)]
+    #[test]
+    fn cli_can_show_imported_betterleaks_validation() {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "rules",
+                "list",
+                "--rule",
+                "ebay-client-secret",
+                "--show-validation",
+                "--format",
+                "json",
+                "--no-update-check",
+            ])
+            .assert()
+            .success()
+            .stdout(
+                contains("token=betterleaks-validation-token")
+                    .and(contains("validation"))
+                    .and(contains("/identity/v1/oauth2/token/introspect")),
+            );
     }
 
     #[test]
@@ -71,7 +94,7 @@ mod test {
                 "--output",
                 output_html.to_str().unwrap(),
                 "--rule",
-                "kingfisher.aws.1",
+                "betterleaks.aws-access-token",
                 "--no-validate",
                 "--no-update-check",
             ])
@@ -96,7 +119,7 @@ mod test {
             rules_dir.join("demo.yml"),
             r#"
 rules:
-  - id: kingfisher.demo.1
+  - id: custom.demo.1
     name: Demo secret
     pattern: '(demo_secret_[0-9]{4})'
     confidence: medium
@@ -127,9 +150,225 @@ rules:
         let decoded: Value = toon_format::decode_default(&toon).expect("toon should decode");
         assert_eq!(decoded["schema"], "kingfisher.toon.v1");
         assert_eq!(decoded["scan"]["summary"]["findings"], 1);
-        assert_eq!(decoded["findings"][0]["rule_id"], "kingfisher.demo.1");
+        assert_eq!(decoded["findings"][0]["rule_id"], "custom.demo.1");
         assert_eq!(decoded["findings"][0]["validation_status"], "Not Attempted");
         assert_eq!(decoded["findings"][0]["validation_outcome"], "not_attempted");
+    }
+
+    #[test]
+    fn cli_scan_adds_custom_rules_to_betterleaks_defaults() {
+        let temp = tempdir().expect("tempdir should be created");
+        let rules_dir = temp.path().join("rules");
+        let input_dir = temp.path().join("repo");
+        let output_toon = temp.path().join("findings.toon");
+
+        fs::create_dir_all(&rules_dir).expect("rules directory should be created");
+        fs::create_dir_all(&input_dir).expect("input directory should be created");
+        fs::write(
+            rules_dir.join("demo.yml"),
+            r#"
+rules:
+  - id: custom.additive.1
+    name: Additive demo secret
+    pattern: '(demo_secret_1234)'
+    confidence: medium
+"#,
+        )
+        .expect("rule should be written");
+        fs::write(
+            input_dir.join("README.txt"),
+            "aws_key = AKIA6ODU5DHT7VPXGCE4\n\
+             aws_secret_access_key = wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY\n\
+             demo_secret_1234\n",
+        )
+        .expect("seed file should be written");
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "scan",
+                input_dir.to_str().unwrap(),
+                "--format",
+                "toon",
+                "--output",
+                output_toon.to_str().unwrap(),
+                "--rules-path",
+                rules_dir.to_str().unwrap(),
+                "--no-validate",
+                "--no-update-check",
+            ])
+            .assert()
+            .code(200);
+
+        let toon = fs::read_to_string(&output_toon).expect("toon report should be written");
+        let decoded: Value = toon_format::decode_default(&toon).expect("toon should decode");
+        let findings = decoded["findings"].as_array().expect("findings should be an array");
+        let rule_ids: Vec<_> =
+            findings.iter().filter_map(|finding| finding["rule_id"].as_str()).collect();
+        assert!(rule_ids.contains(&"betterleaks.aws-access-token"), "{rule_ids:?}");
+        assert!(rule_ids.contains(&"custom.additive.1"), "{rule_ids:?}");
+    }
+
+    #[test]
+    fn cli_scan_loads_betterleaks_toml_custom_rules() {
+        let temp = tempdir().expect("tempdir should be created");
+        let rules_path = temp.path().join("rules");
+        let input_path = temp.path().join("input.txt");
+        let output_path = temp.path().join("findings.json");
+
+        fs::create_dir_all(&rules_path).expect("rules directory should be created");
+        fs::write(
+            rules_path.join("custom.toml"),
+            r#"
+[[rules]]
+id = "demo-token"
+description = "Demo Betterleaks token"
+regex = '''(demo_secret_[0-9]{4})'''
+secretGroup = 1
+confidence = "high"
+"#,
+        )
+        .expect("Betterleaks TOML should be written");
+        fs::write(&input_path, "token=demo_secret_1234").expect("input should be written");
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "scan",
+                input_path.to_str().unwrap(),
+                "--rules-path",
+                rules_path.to_str().unwrap(),
+                "--load-builtins=false",
+                "--no-validate",
+                "--format",
+                "json",
+                "--output",
+                output_path.to_str().unwrap(),
+                "--no-update-check",
+            ])
+            .assert()
+            .code(200);
+
+        let report: Value = serde_json::from_str(
+            &fs::read_to_string(output_path).expect("JSON report should be written"),
+        )
+        .expect("JSON report should parse");
+        assert_eq!(report["findings"][0]["rule"]["id"], "custom.demo-token");
+    }
+
+    #[test]
+    fn overlapping_imported_rules_prefer_the_validated_catalog_rule() {
+        let temp = tempdir().expect("tempdir should be created");
+        let input = temp.path().join("slack.txt");
+        let output = temp.path().join("findings.json");
+        fs::write(
+            &input,
+            "xapp-1-A01C259PH2A-1440755929120-7d5241948a2cc1b464add85df8a8e75f9040ae2869f6599926ed0b9dcafdb32b",
+        )
+        .unwrap();
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "scan",
+                input.to_str().unwrap(),
+                "--rule",
+                "betterleaks.slack-app-token",
+                "--rule",
+                "veles.secrets/slackappleveltoken",
+                "--no-validate",
+                "--format",
+                "json",
+                "--output",
+                output.to_str().unwrap(),
+                "--no-update-check",
+            ])
+            .assert()
+            .code(200);
+
+        let report: Value = serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
+        let findings = report["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0]["rule"]["id"], "veles.secrets/slackappleveltoken");
+    }
+
+    #[test]
+    fn generic_credential_uri_yields_to_provider_specific_betterleaks_rule() {
+        let temp = tempdir().expect("tempdir should be created");
+        let input = temp.path().join("mongodb.env");
+        let output = temp.path().join("findings.json");
+        fs::write(&input, "MONGO_URL=mongodb://svc_reader:q9V7nB2K4xL8@mongo.internal:27017/app")
+            .unwrap();
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "scan",
+                input.to_str().unwrap(),
+                "--rule",
+                "betterleaks.mongodb-connection-string",
+                "--rule",
+                "betterleaks.generic-credential-uri",
+                "--no-validate",
+                "--format",
+                "json",
+                "--output",
+                output.to_str().unwrap(),
+                "--no-update-check",
+            ])
+            .assert()
+            .code(200);
+
+        let report: Value = serde_json::from_str(&fs::read_to_string(output).unwrap()).unwrap();
+        let findings = report["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0]["rule"]["id"], "betterleaks.mongodb-connection-string");
+    }
+
+    #[test]
+    fn cli_scan_can_disable_betterleaks_defaults_for_custom_only_scans() {
+        let temp = tempdir().expect("tempdir should be created");
+        let rules_dir = temp.path().join("rules");
+        let input_dir = temp.path().join("repo");
+        let output_toon = temp.path().join("findings.toon");
+
+        fs::create_dir_all(&rules_dir).expect("rules directory should be created");
+        fs::create_dir_all(&input_dir).expect("input directory should be created");
+        fs::write(
+            rules_dir.join("demo.yml"),
+            r#"
+rules:
+  - id: custom.only.1
+    name: Custom-only demo secret
+    pattern: '(demo_secret_1234)'
+    confidence: medium
+"#,
+        )
+        .expect("rule should be written");
+        fs::write(
+            input_dir.join("README.txt"),
+            "aws_key = AKIA6ODU5DHT7VPXGCE4\ndemo_secret_1234\n",
+        )
+        .expect("seed file should be written");
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "scan",
+                input_dir.to_str().unwrap(),
+                "--format",
+                "toon",
+                "--output",
+                output_toon.to_str().unwrap(),
+                "--rules-path",
+                rules_dir.to_str().unwrap(),
+                "--load-builtins=false",
+                "--no-validate",
+                "--no-update-check",
+            ])
+            .assert()
+            .code(200);
+
+        let toon = fs::read_to_string(&output_toon).expect("toon report should be written");
+        let decoded: Value = toon_format::decode_default(&toon).expect("toon should decode");
+        let findings = decoded["findings"].as_array().expect("findings should be an array");
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0]["rule_id"], "custom.only.1");
     }
 
     #[test]
@@ -145,15 +384,15 @@ rules:
             rules_dir.join("demo.yml"),
             r#"
 rules:
-  - id: kingfisher.demo.1
+  - id: custom.demo.1
     name: Demo secret 1
     pattern: '(demo_secret_1234)'
     confidence: medium
-  - id: kingfisher.demo.2
+  - id: custom.demo.2
     name: Demo secret 2
     pattern: '(demo_secret_5678)'
     confidence: medium
-  - id: kingfisher.other.1
+  - id: custom.other.1
     name: Other secret
     pattern: '(other_secret_abcd)'
     confidence: medium
@@ -178,13 +417,13 @@ rules:
                 rules_dir.to_str().unwrap(),
                 "--load-builtins=false",
                 "--rule",
-                "kingfisher.demo",
+                "custom.demo",
                 "--rule",
-                "kingfisher.other.1",
+                "custom.other.1",
                 "--exclude-rule",
-                "kingfisher.demo.2",
+                "custom.demo.2",
                 "--exclude-rule",
-                "kingfisher.other.1",
+                "custom.other.1",
                 "--no-validate",
                 "--no-update-check",
             ])
@@ -194,7 +433,7 @@ rules:
         let toon = fs::read_to_string(&output_toon).expect("toon report should be written");
         let decoded: Value = toon_format::decode_default(&toon).expect("toon should decode");
         assert_eq!(decoded["scan"]["summary"]["findings"], 1);
-        assert_eq!(decoded["findings"][0]["rule_id"], "kingfisher.demo.1");
+        assert_eq!(decoded["findings"][0]["rule_id"], "custom.demo.1");
     }
 
     #[test]
@@ -216,7 +455,7 @@ rules:
             &rule_file,
             r#"
 rules:
-  - id: kingfisher.demo.1
+  - id: custom.demo.1
     name: Demo secret
     pattern: '(demo_secret_[0-9]{4})'
     confidence: medium
@@ -254,7 +493,7 @@ rules:
             &rule_file,
             r#"
 rules:
-  - id: kingfisher.demo.1
+  - id: custom.demo.1
     name: Demo secret
     pattern: '(demo_secret_[a-z]{4})'
     confidence: medium
@@ -336,7 +575,7 @@ rules:
             rules_dir.join("demo.yml"),
             r#"
 rules:
-  - id: kingfisher.demo.1
+  - id: custom.demo.1
     name: Demo secret
     pattern: '(demo_secret_[0-9]{4})'
     confidence: medium

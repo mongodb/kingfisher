@@ -74,6 +74,7 @@ impl CommandLineArgs {
 }
 
 /// Top-level subcommands
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand, Debug)]
 pub enum Command {
     /// Scan content for secrets and sensitive information

@@ -125,7 +125,7 @@ kingfisher scan /path/to/repo \
 Findings tied to a skip-listed account report `Validation: Canary Token (Skipped)` and note in the `Response:` that the entry came from the skip list:
 
 ```bash
-AWS SECRET ACCESS KEY => [KINGFISHER.AWS.2]
+AWS ACCESS TOKEN => [BETTERLEAKS.AWS-ACCESS-TOKEN]
  |Finding.......: <REDACTED>
  |Fingerprint...: 2141074333616819500
  |Confidence....: medium
@@ -362,11 +362,67 @@ kingfisher rules prune-cache \
 
 By default, Kingfisher logs the cache directory in use. Pass `--debug` or `-v` to see cache hit/miss details and when new entries are written.
 
-The cache key includes the resolved rule order, rule patterns, platform, cache format, and Vectorscan runtime version. This works with built-in rules and custom rules loaded through `--rules-path`. When built-in rules, custom rule patterns, or the Vectorscan runtime version change, Kingfisher uses a new cache entry automatically. If a cache entry is missing, corrupt, or incompatible with the current platform, Kingfisher falls back to compiling normally and refreshes the cache.
+The cache key includes the resolved rule order, rule patterns, platform, cache format, and Vectorscan runtime version. This works with the default Betterleaks catalog and custom rules loaded through `--rules-path`. When any loaded rule pattern or the Vectorscan runtime version changes, Kingfisher uses a new cache entry automatically. If a cache entry is missing, corrupt, or incompatible with the current platform, Kingfisher falls back to compiling normally and refreshes the cache.
+
+## Default Betterleaks Rules
+
+[Betterleaks](https://github.com/betterleaks/betterleaks) supplies Kingfisher's main candidate
+detector catalog, with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles)
+detectors filling gaps. They load automatically and use the `betterleaks.` and `veles.` namespaces:
+
+```bash
+kingfisher scan --rule betterleaks.openai-api-key /path/to/repo
+kingfisher validate --rule betterleaks.github-pat TOKEN
+```
+
+The `betterleaks.` prefix is optional for short selectors such as `--rule github-pat`. Custom rules
+loaded through `--rules-path` are additive by default. Use `--load-builtins=false` for a custom-only
+scan, or `--no-builtins` with `validate` and `revoke`.
+
+Kingfisher omits Betterleaks' `generic-api-key`, `generic-password`, and `generic-username` rules
+from the built-in catalog because their broad patterns provide low signal at disproportionate scan
+cost. Use a targeted custom TOML or YAML rule when your organization needs generic credential
+detection for a known naming convention.
+
+Kingfisher does not vendor the upstream rule catalogs. Clean source builds require outbound HTTPS
+access: the build downloads the pinned Betterleaks catalog snapshot from its
+[source permalink](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml) and
+selected Veles source files from the full OSV-SCALIBR commit in
+`crates/kingfisher-rules/data/veles-rules.yml`, then converts and embeds the generated database.
+A Betterleaks release is preferred; the current immutable post-release commit is pinned because
+the latest release predates detectors that Kingfisher ships.
+`KINGFISHER_BETTERLEAKS_CONFIG` may point to a local TOML file for controlled importer development.
+Veles import is not available through `--rules-path`.
+
+Detection regexes, path constraints, confidence changes, component dependencies, and Betterleaks
+validation expressions are translated into Kingfisher's runtime model. The top-level Betterleaks
+`prefilter` is stored once on the compiled rule database, compiled into its own Vectorscan
+database, and evaluated once per source path before content matching. The top-level finding
+`filter` and each rule's `filter` are combined and evaluated only after a candidate match; their
+regex helpers are likewise compiled once into shared Vectorscan databases. Betterleaks `keywords`
+are intentionally ignored because Vectorscan already performs candidate selection. Production
+validation runs in Rust; Go and Betterleaks itself are not runtime dependencies. Provider endpoint
+overrides are exposed to Betterleaks validation environment variables.
+
+The source prefilter applies only to Betterleaks rules. Custom and Veles rules still run on paths
+that Betterleaks excludes.
+
+`--blast-radius` (alias `--access-map`) works for validated Betterleaks findings when Kingfisher has
+an access-map handler for the credential shape. Because Betterleaks currently has no revocation or
+checksum metadata, Kingfisher maintains a checked-in capability overlay for access-map bindings and
+selected safe revocation actions. It contains no candidate detector regexes, but may add narrow
+operational filters and capability metadata; it is validated against the downloaded imported-detector IDs
+and components during the build. Checksum templates remain available to
+Kingfisher 1.x custom rules; Betterleaks detectors rely on their upstream regex/filter behavior until the
+upstream schema exposes checksum metadata.
+
+New generally useful rules and validation improvements must be contributed to the
+[Betterleaks repository](https://github.com/betterleaks/betterleaks) first. Do not add a new
+Kingfisher-owned built-in YAML catalog.
 
 ## Custom Rules
 
-Kingfisher currently ships with 1,089 built-in rules, but you may want to add your own custom rules or modify existing detection to better suit your needs.
+Kingfisher's 1.x YAML format remains supported for private, organization-specific custom rules.
 
 First, review [RULES.md](../rules/overview.md) to learn how to create custom Kingfisher rules.
 
@@ -392,6 +448,24 @@ kingfisher scan \
   ~/path/to/project-dir/
 ```
 
+### Scan a custom rules directory
+
+`--rules-path` accepts a directory of `.yml`/`.yaml` rule files, not just a single file. Point it at any rules directory to load every rule file it contains.
+
+**Custom-only** (no built‑ins loaded):
+
+```bash
+kingfisher scan --load-builtins=false --rules-path path/to/rules/ <target>
+```
+
+**Additive** (your rules run alongside the Betterleaks built‑ins):
+
+```bash
+kingfisher scan --rules-path path/to/rules/ <target>
+```
+
+Note that a custom-only scan (`--load-builtins=false`) has no Betterleaks source prefilter, so paths that the built-in catalog would otherwise exclude are scanned by your rules. See [Default Betterleaks Rules](#default-betterleaks-rules) above.
+
 ### Check custom rules
 
 ```bash
@@ -404,11 +478,11 @@ kingfisher rules list
 
 ### Scan using a rule family
 
-_(prefix matching: `--rule kingfisher.aws` loads `kingfisher.aws.*`)_
+_(prefix matching: `--rule betterleaks.aws` loads the Betterleaks AWS family)_
 
 ```bash
-# Only apply AWS-related rules (kingfisher.aws.1 + kingfisher.aws.2)
-kingfisher scan /path/to/repo --rule kingfisher.aws
+# Only apply Betterleaks AWS-related rules
+kingfisher scan /path/to/repo --rule betterleaks.aws
 ```
 
 ## Rule Performance Profiling

@@ -32,6 +32,11 @@ fn make_rule(
         depends_on_rule,
         pattern_requirements: None,
         tls_mode: None,
+        path: None,
+        betterleaks_filter: None,
+        betterleaks_secret_group: None,
+        authoritative: true,
+        vectorscan_compatible: true,
     }))
 }
 
@@ -84,6 +89,8 @@ fn dedup_preserves_dependency_provider_matches_per_blob() -> Result<()> {
         vec![Some(DependsOnRule {
             rule_id: "RULE.PROVIDER".to_string(),
             variable: "TOKEN".into(),
+            optional: false,
+            within: None,
         })],
     );
 

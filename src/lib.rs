@@ -7,6 +7,7 @@ pub mod access_map;
 pub mod alerts;
 pub mod azure;
 pub mod baseline;
+mod betterleaks_validation;
 pub mod binary;
 pub mod bitbucket;
 pub mod blob;
@@ -106,6 +107,8 @@ struct EnumeratorConfig {
     /// Whether archive blobs encountered during git scanning should be
     /// transparently extracted before pattern matching.
     extract_archives: bool,
+    /// Maximum number of archive layers to extract while scanning git blobs.
+    extraction_depth: usize,
 }
 
 pub enum FoundInput {

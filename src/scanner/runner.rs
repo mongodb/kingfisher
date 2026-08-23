@@ -1497,16 +1497,20 @@ fn maybe_hint_access_map(datastore: &Arc<Mutex<FindingsStore>>, args: &scan::Sca
         let ds = datastore.lock().unwrap();
         ds.get_matches().iter().any(|entry| {
             let rule = &entry.2.rule;
-            entry.2.validation_outcome.is_verified_active()
+            rule.syntax().is_authoritative()
+                && entry.2.validation_outcome.is_verified_active()
                 && (matches!(rule.syntax().validation, Some(Validation::AWS | Validation::GCP))
-                    || rule.id().starts_with("kingfisher.github.")
-                    || rule.id().starts_with("kingfisher.gitlab."))
+                    || matches!(
+                        &rule.syntax().validation,
+                        Some(Validation::Betterleaks(validation))
+                            if validation.capabilities.access_map.is_some()
+                    ))
         })
     };
 
     if has_mappable_identities {
         info!(
-            "Blast radius mapping not requested. Rerun with --access-map to include resource-level permissions, if authorized."
+            "Blast radius mapping not requested. Rerun with --blast-radius to include resource-level permissions, if authorized."
         );
     }
 }
@@ -1631,11 +1635,11 @@ pub fn load_and_record_rules(
         let loaded = RuleLoader::from_rule_specifiers(&args.rules)
             .load(args)
             .context("Failed to load rules")?;
-        let resolved = loaded.resolve_enabled_rules().context("Failed to resolve rules")?;
+        let resolved = loaded.resolve_enabled_rules_owned().context("Failed to resolve rules")?;
+        let betterleaks_prefilter = loaded.betterleaks_prefilter_for(&resolved);
         // Apply min_entropy override if specified
         let rules: Vec<_> = resolved
             .into_iter()
-            .cloned()
             .map(|mut rule| {
                 if let Some(min_entropy) = args.min_entropy {
                     let _ = rule.set_entropy(min_entropy);
@@ -1667,10 +1671,15 @@ pub fn load_and_record_rules(
                     "Pruned Vectorscan rule cache"
                 );
             }
-            RulesDatabase::from_rules_with_cache(rules, &cache)
-                .context("Failed to compile rules with Vectorscan cache")?
+            RulesDatabase::from_rules_with_cache_and_betterleaks_prefilter(
+                rules,
+                &cache,
+                betterleaks_prefilter,
+            )
+            .context("Failed to compile rules with Vectorscan cache")?
         } else {
-            RulesDatabase::from_rules(rules).context("Failed to compile rules")?
+            RulesDatabase::from_rules_with_betterleaks_prefilter(rules, betterleaks_prefilter)
+                .context("Failed to compile rules")?
         }
     };
     init_progress.set_message("Recording rules...");

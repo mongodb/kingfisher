@@ -8,6 +8,7 @@ This guide covers all installation methods for Kingfisher, including pre-commit 
 
 - [Pre-built Releases](#pre-built-releases)
 - [Homebrew](#homebrew)
+- [mise](#mise)
 - [Linux and macOS](#linux-and-macos)
 - [Windows](#windows)
 - [Pre-commit Hooks](#pre-commit-hooks)
@@ -29,6 +30,21 @@ Pre-built binaries are available from the [Releases](https://github.com/mongodb/
 
 ```bash
 brew install kingfisher
+```
+
+## mise
+
+Install the latest release globally with the
+[mise GitHub backend](https://mise.jdx.dev/dev-tools/backends/github.html):
+
+```bash
+mise use --global github:mongodb/kingfisher
+```
+
+Append a version to install a specific release:
+
+```bash
+mise use --global github:mongodb/kingfisher@1.113.0
 ```
 
 ## Linux and macOS
@@ -336,6 +352,12 @@ kingfisher scan . --staged --quiet --no-update-check
 
 ## Compile from Source
 
+Source builds require outbound HTTPS access. During compilation, Kingfisher downloads the pinned
+Betterleaks catalog snapshot and selected Veles source files, converts them, and embeds the
+generated rule database. A Betterleaks release is preferred; the current immutable post-release
+commit is pinned because the latest release predates detectors that Kingfisher ships. The upstream
+rule source is intentionally not vendored in this repository.
+
 You may compile for your platform via `make`:
 
 ```bash
@@ -435,7 +457,7 @@ docker run --rm \
   -v "$PWD":/src \
   -p 7890:7890 \
   ghcr.io/mongodb/kingfisher:latest \
-  scan /src --access-map --view-report --view-report-address 0.0.0.0
+  scan /src --blast-radius --view-report --view-report-address 0.0.0.0
 # Then open http://localhost:7890 in your browser
 ```
 

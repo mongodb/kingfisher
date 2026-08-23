@@ -75,12 +75,197 @@ pub enum Validation {
     MySQL,
     Postgres,
     Jdbc,
+    /// Dispatch a captured credential URI to the matching database validator.
+    ///
+    /// Scan rules can provide a named `URI` capture; otherwise `TOKEN` is used. Keeping `TOKEN`
+    /// separate lets broad URI detectors report only the embedded password while validation uses
+    /// the complete connection string.
+    CredentialUri,
     JWT,
     /// Deterministic, network-free Ethereum key-material validation.
     Ethereum(EthereumValidation),
     Raw(String),
+    /// A pre-parsed Betterleaks validation expression. The Expr parser is used only by the
+    /// snapshot generator; production builds evaluate this portable AST directly.
+    Betterleaks(BetterleaksValidation),
     Http(HttpValidation),
     Grpc(GrpcValidation),
+}
+
+/// A Betterleaks validation expression parsed at snapshot-generation time.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub struct BetterleaksValidation {
+    /// Original Betterleaks expression retained for development-time inspection.
+    #[cfg(debug_assertions)]
+    #[serde(default)]
+    pub source: String,
+    pub expression: BetterleaksExpr,
+    /// Betterleaks component rule ID to the Kingfisher dependency variable populated at runtime.
+    #[serde(default)]
+    pub components: BTreeMap<String, String>,
+    /// Kingfisher-only operational capabilities joined to this Betterleaks detector at build time.
+    #[serde(default)]
+    pub capabilities: BetterleaksCapabilities,
+}
+
+/// Operational metadata that is intentionally kept separate from Betterleaks detection rules.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Default)]
+pub struct BetterleaksCapabilities {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub access_map: Option<BetterleaksAccessMap>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revocation_bindings: Option<BetterleaksRevocationBindings>,
+}
+
+/// Access-map collector selected for a Betterleaks detector.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub struct BetterleaksAccessMap {
+    pub handler: BetterleaksAccessMapHandler,
+    /// Handler input name to `finding.secret` or `components.<betterleaks-rule-id>`.
+    #[serde(default)]
+    pub inputs: BTreeMap<String, String>,
+    /// Permit access mapping for a reachable 2xx validation response even if it was inconclusive.
+    #[serde(default)]
+    pub reachable_2xx: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum BetterleaksAccessMapHandler {
+    Aws,
+    Gcp,
+    AzureClientSecret,
+    AzureStorage,
+    Algolia,
+    Alibaba,
+    Artifactory,
+    Salesforce,
+    Airtable,
+    Anthropic,
+    Auth0,
+    Buildkite,
+    Circleci,
+    Fastly,
+    Github,
+    Gitlab,
+    Harness,
+    Huggingface,
+    IbmCloud,
+    Monday,
+    Openai,
+    Paypal,
+    Pinecone,
+    Sendinblue,
+    Stripe,
+    WeightsAndBiases,
+}
+
+/// Remaps a Betterleaks finding and its components into an existing revocation action.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+pub struct BetterleaksRevocationBindings {
+    /// Value passed as the positional secret to `kingfisher revoke`.
+    #[serde(default = "default_finding_secret_source")]
+    pub secret: String,
+    /// Revocation template variable to a Betterleaks finding/component source.
+    #[serde(default)]
+    pub variables: BTreeMap<String, String>,
+}
+
+fn default_finding_secret_source() -> String {
+    "finding.secret".to_string()
+}
+
+/// Portable subset of expr-lang's AST used by Betterleaks validation rules.
+///
+/// Keeping the parsed representation in the generated rule snapshot means neither Go nor the
+/// expr parser is present in a production Kingfisher build.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BetterleaksExpr {
+    Nil,
+    Identifier {
+        value: String,
+    },
+    Integer {
+        value: i64,
+    },
+    Float {
+        /// Decimal spelling retained from the source to keep this type Eq/Ord/Hash.
+        value: String,
+    },
+    Bool {
+        value: bool,
+    },
+    String {
+        value: String,
+    },
+    Unary {
+        operator: String,
+        node: Box<BetterleaksExpr>,
+    },
+    Binary {
+        operator: String,
+        left: Box<BetterleaksExpr>,
+        right: Box<BetterleaksExpr>,
+    },
+    Chain {
+        node: Box<BetterleaksExpr>,
+    },
+    Member {
+        node: Box<BetterleaksExpr>,
+        property: Box<BetterleaksExpr>,
+        #[serde(default)]
+        optional: bool,
+        #[serde(default)]
+        method: bool,
+    },
+    Slice {
+        node: Box<BetterleaksExpr>,
+        from: Box<BetterleaksExpr>,
+        to: Box<BetterleaksExpr>,
+    },
+    Call {
+        callee: Box<BetterleaksExpr>,
+        #[serde(default)]
+        arguments: Vec<BetterleaksExpr>,
+    },
+    Builtin {
+        name: String,
+        #[serde(default)]
+        arguments: Vec<BetterleaksExpr>,
+    },
+    Conditional {
+        cond: Box<BetterleaksExpr>,
+        exp1: Box<BetterleaksExpr>,
+        exp2: Box<BetterleaksExpr>,
+    },
+    VariableDeclarator {
+        name: String,
+        value: Box<BetterleaksExpr>,
+        expr: Box<BetterleaksExpr>,
+    },
+    Sequence {
+        #[serde(default)]
+        nodes: Vec<BetterleaksExpr>,
+    },
+    Array {
+        #[serde(default)]
+        nodes: Vec<BetterleaksExpr>,
+    },
+    Map {
+        #[serde(default)]
+        pairs: Vec<BetterleaksExpr>,
+    },
+    Pair {
+        key: Box<BetterleaksExpr>,
+        value: Box<BetterleaksExpr>,
+    },
+    Predicate {
+        node: Box<BetterleaksExpr>,
+    },
+    Pointer {
+        name: String,
+    },
 }
 
 /// Ethereum key material that can be validated and mapped to a public address locally.
@@ -161,6 +346,12 @@ pub enum ResponseExtractor {
 pub struct DependsOnRule {
     pub rule_id: String,
     pub variable: String,
+    /// Whether the dependency may be absent without preventing validation.
+    #[serde(default)]
+    pub optional: bool,
+    /// Betterleaks proximity expression retained for association and parity diagnostics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub within: Option<String>,
 }
 
 /// Specifies character type requirements for matched secrets.
@@ -602,6 +793,28 @@ pub struct RuleSyntax {
     pub id: String,
     /// The regex pattern used by the rule.
     pub pattern: String,
+    /// Optional source-path predicate. The content pattern is evaluated only for matching paths.
+    #[serde(default)]
+    pub path: Option<String>,
+    /// Betterleaks expression that returns true when a candidate should be discarded.
+    #[serde(default)]
+    pub betterleaks_filter: Option<BetterleaksExpr>,
+    /// Betterleaks capture-selection semantics.
+    ///
+    /// `Some(0)` selects the first non-empty capture, while `Some(n)` selects capture `n`.
+    /// `None` preserves the legacy Kingfisher custom-rule behavior.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub betterleaks_secret_group: Option<usize>,
+    /// Whether a successful validator may establish that this finding is an active credential.
+    #[serde(default = "default_true")]
+    pub authoritative: bool,
+    /// Legacy v1 matching-engine hint.
+    ///
+    /// Kingfisher v2 retains this field for custom-rule deserialization compatibility but ignores
+    /// its value: every rule uses Vectorscan for candidate detection and is then confirmed by the
+    /// exact Rust regex for capture extraction.
+    #[serde(default = "default_true")]
+    pub vectorscan_compatible: bool,
     /// Minimum Shannon entropy required.
     #[serde(default)]
     pub min_entropy: f32,
@@ -672,6 +885,33 @@ impl RuleSyntax {
         Self::build_regex(&self.uncommented_pattern())
     }
 
+    /// Return whether this rule is eligible for the supplied source path.
+    pub fn matches_path(&self, path: &str) -> bool {
+        self.path
+            .as_deref()
+            .is_none_or(|pattern| Regex::new(pattern).is_ok_and(|regex| regex.is_match(path)))
+    }
+
+    /// Return the imported Betterleaks filter expression, if present.
+    pub fn betterleaks_filter(&self) -> Option<&BetterleaksExpr> {
+        self.betterleaks_filter.as_ref()
+    }
+
+    /// Return the Betterleaks capture selector, if this is an imported Betterleaks rule.
+    pub fn betterleaks_secret_group(&self) -> Option<usize> {
+        self.betterleaks_secret_group
+    }
+
+    /// Whether validation may authoritatively classify this rule as active.
+    pub fn is_authoritative(&self) -> bool {
+        self.authoritative
+    }
+
+    /// Return whether Vectorscan is used as the rule's candidate prefilter.
+    pub fn vectorscan_compatible(&self) -> bool {
+        true
+    }
+
     /// Compile the rule pattern into an anchored regex (matching end-of-input).
     ///
     /// # Example
@@ -682,6 +922,10 @@ impl RuleSyntax {
     ///     name: "Test rule".to_string(),
     ///     id: "test.1".to_string(),
     ///     pattern: r"hello\s*world".to_string(),
+    ///     path: None,
+    ///     betterleaks_filter: None,
+    ///     betterleaks_secret_group: None,
+    ///     vectorscan_compatible: true,
     ///     examples: vec![],
     ///     negative_examples: vec![],
     ///     references: vec![],
@@ -693,6 +937,7 @@ impl RuleSyntax {
     ///     depends_on_rule: vec![],
     ///     pattern_requirements: None,
     ///     tls_mode: None,
+    ///     authoritative: true,
     /// };
     /// assert_eq!(r.as_anchored_regex().unwrap().as_str(), r"hello\s*world$");
     /// ```
@@ -744,6 +989,14 @@ pub struct Rule {
     finding_sha1_fingerprint: String,
     min_entropy: f32,
     visible: bool,
+    #[serde(skip, default = "default_runtime_minimum_confidence")]
+    runtime_minimum_confidence: Confidence,
+    #[serde(skip)]
+    runtime_dependency_helper: bool,
+}
+
+fn default_runtime_minimum_confidence() -> Confidence {
+    Confidence::Low
 }
 
 impl Rule {
@@ -753,6 +1006,8 @@ impl Rule {
             finding_sha1_fingerprint: syntax.finding_sha1_fingerprint(),
             min_entropy: syntax.min_entropy,
             visible: syntax.visible,
+            runtime_minimum_confidence: Confidence::Low,
+            runtime_dependency_helper: false,
             syntax,
         }
     }
@@ -809,9 +1064,65 @@ impl Rule {
         self.syntax.confidence
     }
 
+    /// Configure scan-time confidence filtering after rule selection has resolved helpers.
+    pub fn set_runtime_confidence_filter(
+        &mut self,
+        minimum_confidence: Confidence,
+        dependency_helper: bool,
+    ) {
+        self.runtime_minimum_confidence = minimum_confidence;
+        self.runtime_dependency_helper = dependency_helper;
+    }
+
+    /// Return whether this effective confidence should be retained for matching.
+    pub fn accepts_effective_confidence(&self, confidence: Confidence) -> bool {
+        self.runtime_dependency_helper || self.reports_effective_confidence(confidence)
+    }
+
+    /// Return whether this effective confidence meets the user's reporting threshold.
+    pub fn reports_effective_confidence(&self, confidence: Confidence) -> bool {
+        confidence.is_at_least(&self.runtime_minimum_confidence)
+    }
+
+    /// Return whether this rule was included to support another selected rule.
+    pub fn is_runtime_dependency_helper(&self) -> bool {
+        self.runtime_dependency_helper
+    }
+
+    /// Return the scan-time minimum confidence configured by the rule loader.
+    pub fn runtime_minimum_confidence(&self) -> Confidence {
+        self.runtime_minimum_confidence
+    }
+
+    /// Keep a dependency match available for association without reporting it as a finding.
+    pub fn suppress_runtime_reporting(&mut self) {
+        self.visible = false;
+        self.syntax.visible = false;
+    }
+
     /// Returns the character requirements for this rule, if any.
     pub fn pattern_requirements(&self) -> Option<&PatternRequirements> {
         self.syntax.pattern_requirements.as_ref()
+    }
+
+    /// Return whether this rule is eligible for the supplied source path.
+    pub fn matches_path(&self, path: &str) -> bool {
+        self.syntax.matches_path(path)
+    }
+
+    /// Return the imported Betterleaks filter expression, if present.
+    pub fn betterleaks_filter(&self) -> Option<&BetterleaksExpr> {
+        self.syntax.betterleaks_filter()
+    }
+
+    /// Return the Betterleaks capture selector, if this is an imported Betterleaks rule.
+    pub fn betterleaks_secret_group(&self) -> Option<usize> {
+        self.syntax.betterleaks_secret_group()
+    }
+
+    /// Return whether Vectorscan is used as the rule's candidate prefilter.
+    pub fn vectorscan_compatible(&self) -> bool {
+        self.syntax.vectorscan_compatible()
     }
 
     /// Returns the TLS mode for this rule, if specified.

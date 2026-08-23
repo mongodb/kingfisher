@@ -6,7 +6,6 @@ on:
     paths:
       - 'docs-site/**'
       - 'docs/**'
-      - 'crates/kingfisher-rules/data/rules/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -36,9 +35,6 @@ jobs:
 
       - name: Prepare documentation
         run: python3 docs-site/scripts/prepare-docs.py
-
-      - name: Generate rules page
-        run: python3 docs-site/scripts/generate-rules-page.py
 
       - name: Build site
         run: cd docs-site && mkdocs build --strict

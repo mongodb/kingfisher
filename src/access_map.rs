@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::future::Future;
 use std::io::Write;
 use std::pin::Pin;
@@ -455,6 +456,113 @@ pub struct AccessTokenDetails {
 pub struct ProviderMetadata {
     pub version: Option<String>,
     pub enterprise: Option<bool>,
+    /// Read-only evidence explaining how permissions and identity paths were derived.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub authorization_evidence: Option<AuthorizationEvidence>,
+}
+
+/// Provider-neutral evidence retained alongside a blast-radius result.
+#[derive(Debug, Serialize, Clone, Default, JsonSchema)]
+pub struct AuthorizationEvidence {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub principal: Option<PrincipalEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub policies: Vec<PolicyEvidence>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub paths: Vec<AuthorizationPath>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hierarchy: Vec<HierarchyScope>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub limitations: Vec<String>,
+}
+
+/// Metadata resolved for the credential's effective principal.
+#[derive(Debug, Serialize, Clone, Default, JsonSchema)]
+pub struct PrincipalEvidence {
+    pub id: String,
+    pub kind: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub canonical_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub tags: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attributes: BTreeMap<String, String>,
+}
+
+/// One policy document or binding and the entity through which it applies.
+#[derive(Debug, Serialize, Clone, Default, JsonSchema)]
+pub struct PolicyEvidence {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    pub kind: String,
+    pub attached_to: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub attached_via: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub scope: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub statements: Vec<AuthorizationStatement>,
+}
+
+/// A normalized, redacted authorization-policy statement.
+#[derive(Debug, Serialize, Clone, Default, JsonSchema)]
+pub struct AuthorizationStatement {
+    pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sid: Option<String>,
+    pub effect: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_actions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_resources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub principals: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub not_principals: Vec<String>,
+    /// Condition operator and key names. Values are intentionally not retained in reports.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub condition_keys: Vec<String>,
+}
+
+/// An inbound or outbound authorization-capability path involving the credential identity.
+#[derive(Debug, Serialize, Clone, Default, JsonSchema)]
+pub struct AuthorizationPath {
+    /// Direction relative to the credential identity: `outbound` or `inbound`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub direction: Option<String>,
+    pub status: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub hops: Vec<AuthorizationHop>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub conditions: Vec<String>,
+}
+
+/// One relationship in an authorization path.
+#[derive(Debug, Serialize, Clone, Default, JsonSchema)]
+pub struct AuthorizationHop {
+    pub from: String,
+    pub to: String,
+    pub relationship: String,
+}
+
+/// One visible scope in a provider's resource hierarchy.
+#[derive(Debug, Serialize, Clone, Default, JsonSchema)]
+pub struct HierarchyScope {
+    pub kind: String,
+    pub id: String,
 }
 
 /// Map a batch of credentials to their effective identities.
@@ -1179,6 +1287,53 @@ pub(crate) fn build_recommendations(severity: Severity) -> Vec<String> {
     }
 
     recs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn provider_metadata_omits_empty_authorization_evidence() {
+        let metadata = ProviderMetadata::default();
+        let json = serde_json::to_value(metadata).unwrap();
+
+        assert!(json.get("authorization_evidence").is_none());
+    }
+
+    #[test]
+    fn authorization_evidence_serializes_ordered_identity_path() {
+        let metadata = ProviderMetadata {
+            version: None,
+            enterprise: None,
+            authorization_evidence: Some(AuthorizationEvidence {
+                paths: vec![AuthorizationPath {
+                    direction: Some("outbound".into()),
+                    status: "potential".into(),
+                    hops: vec![
+                        AuthorizationHop {
+                            from: "source".into(),
+                            to: "intermediate".into(),
+                            relationship: "can_assume_role".into(),
+                        },
+                        AuthorizationHop {
+                            from: "intermediate".into(),
+                            to: "target".into(),
+                            relationship: "can_assume_role".into(),
+                        },
+                    ],
+                    evidence: vec!["policy#allow".into()],
+                    conditions: Vec::new(),
+                }],
+                ..AuthorizationEvidence::default()
+            }),
+        };
+
+        let json = serde_json::to_value(metadata).unwrap();
+        let hops = json["authorization_evidence"]["paths"][0]["hops"].as_array().unwrap();
+        assert_eq!(hops[0]["from"], "source");
+        assert_eq!(hops[1]["to"], "target");
+    }
 }
 
 // /// Fallback handler for unsupported providers.

@@ -11,8 +11,10 @@ pub mod rule {
 pub use kingfisher_rules::rule::Revocation;
 pub use kingfisher_rules::rules::{Rules, RulesError};
 pub use kingfisher_rules::{
-    ChecksumActual, ChecksumRequirement, Confidence, DependsOnRule, GrpcRequest, GrpcValidation,
-    HttpRequest, HttpValidation, MultipartConfig, MultipartPart, PatternRequirementContext,
-    PatternRequirements, PatternValidationResult, RULE_COMMENTS_PATTERN, ReportResponseData,
-    ResponseMatcher, Rule, RuleSyntax, Validation,
+    BetterleaksAccessMap, BetterleaksAccessMapHandler, BetterleaksCapabilities, BetterleaksExpr,
+    BetterleaksRevocationBindings, BetterleaksValidation, ChecksumActual, ChecksumRequirement,
+    Confidence, DependsOnRule, GrpcRequest, GrpcValidation, HttpRequest, HttpValidation,
+    MultipartConfig, MultipartPart, PatternRequirementContext, PatternRequirements,
+    PatternValidationResult, RULE_COMMENTS_PATTERN, ReportResponseData, ResponseMatcher, Rule,
+    RuleSyntax, Validation,
 };

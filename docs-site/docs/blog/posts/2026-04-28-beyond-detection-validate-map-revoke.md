@@ -79,13 +79,13 @@ A leaked AWS key bound to a single read-only S3 bucket and a leaked AWS key
 bound to organization-wide `AdministratorAccess` are not the same incident.
 The first is a ticket. The second is a war room.
 
-Add `--access-map` to a scan and Kingfisher authenticates each live
+Add `--blast-radius` (alias `--access-map`) to a scan and Kingfisher authenticates each live
 credential, enumerates what it can do, and writes the result alongside
 the finding:
 
 ```bash
 kingfisher scan github --organization my-org \
-  --access-map \
+  --blast-radius \
   --format json \
   --output findings.json
 ```
@@ -120,31 +120,22 @@ manager than pasting IAM JSON into chat.
 Validation tells you a credential is live. Blast radius tells you why it's
 urgent. Revocation closes the loop.
 
-For every rule whose provider exposes a safe revocation API, Kingfisher
-ships the revocation call as part of the rule definition:
+The current Betterleaks schema does not publish revocation metadata. Kingfisher binds selected
+detectors to reviewed provider actions through a detection-free capability overlay; its Kingfisher
+1.x custom YAML format also supports HTTP, multi-step HTTP, AWS, and GCP revocation:
 
 ```bash
-# Revoke a GitHub PAT
-kingfisher revoke --rule github "$GITHUB_TOKEN"
+kingfisher revoke --rule github-pat "$LEAKED_TOKEN"
 
-# Revoke a GitLab token
-kingfisher revoke --rule gitlab "$GITLAB_TOKEN"
-
-# Revoke a Slack bot token
-kingfisher revoke --rule slack "$SLACK_TOKEN"
-
-# Deactivate an AWS access key
-kingfisher revoke --rule aws \
-  --arg "$AWS_ACCESS_KEY_ID" \
-  "$AWS_SECRET_ACCESS_KEY"
-
-# Disable a GCP service account key
-kingfisher revoke --rule gcp "$(cat service-account.json)"
+kingfisher revoke \
+  --rules-path ./custom-rules.yml \
+  --no-builtins \
+  --rule custom.provider.token \
+  "$LEAKED_TOKEN"
 ```
 
-The same Liquid templating that powers validation also powers revocation,
-including multi-step flows for providers that require a lookup before
-disabling the credential. See
+Liquid templating powers these custom revocation flows, including multi-step operations for
+providers that require a lookup before disabling the credential. See
 [`docs/RULES.md`](https://github.com/mongodb/kingfisher/blob/main/docs/RULES.md#multi-step-revocation)
 for the schema.
 
@@ -165,7 +156,7 @@ In practice, these three capabilities collapse into one response workflow:
 ```bash
 # 1. Scan + validate + map blast radius in one call
 kingfisher scan github --organization my-org \
-  --access-map \
+  --blast-radius \
   --format json \
   --output findings.json
 

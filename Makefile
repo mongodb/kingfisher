@@ -831,8 +831,6 @@ docs-build:
 	@echo "📝 Preparing documentation…"
 	@uv run --with-requirements $(DOCS_REQUIREMENTS) \
 		python3 docs-site/scripts/prepare-docs.py
-	@uv run --with-requirements $(DOCS_REQUIREMENTS) \
-		python3 docs-site/scripts/generate-rules-page.py
 	@echo "🔨 Building site…"
 	@cd docs-site && uv run --with-requirements requirements.txt \
 		mkdocs build
@@ -842,8 +840,6 @@ docs-serve:
 	@echo "📝 Preparing documentation…"
 	@uv run --with-requirements $(DOCS_REQUIREMENTS) \
 		python3 docs-site/scripts/prepare-docs.py
-	@uv run --with-requirements $(DOCS_REQUIREMENTS) \
-		python3 docs-site/scripts/generate-rules-page.py
 	@echo "🌐 Starting dev server at http://127.0.0.1:8000/"
 	@cd docs-site && uv run --with-requirements requirements.txt \
 		mkdocs serve
@@ -865,15 +861,15 @@ notices:
 	@cargo bundle-licenses --format yaml --output THIRD_PARTY_NOTICES
 
 yaml-fmt:
-	@echo "📝 Formatting YAML rule files…"
+	@echo "📝 Formatting legacy custom-rule fixtures…"
 	@if command -v prettier >/dev/null 2>&1; then \
 	    prettier --tab-width 2 --no-editorconfig --write \
-	      'crates/kingfisher-rules/data/rules/*.yml'; \
+	      'tests/fixtures/*.yml'; \
 	elif command -v npx >/dev/null 2>&1; then \
 	    npx --yes prettier --tab-width 2 --no-editorconfig --write \
-	      'crates/kingfisher-rules/data/rules/*.yml'; \
+	      'tests/fixtures/*.yml'; \
 	else \
 	    echo "❌ prettier not found. Install it via \`npm install -g prettier\` or \`brew install prettier\`."; \
 	    exit 1; \
 	fi
-	@echo "✅ YAML rule files formatted"
+	@echo "✅ Legacy custom-rule fixtures formatted"

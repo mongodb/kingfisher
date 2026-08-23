@@ -46,7 +46,12 @@ async fn wait_for_port(host: &str, port: u16) -> Result<()> {
 async fn validates_mysql_secret_against_testcontainer() -> Result<()> {
     let container = GenericImage::new("mysql", "8.4")
         .with_exposed_port(3306.tcp())
-        .with_wait_for(WaitFor::message_on_stdout("MySQL init process done. Ready for start up."))
+        .with_wait_for(WaitFor::log(
+            testcontainers::core::wait::LogWaitStrategy::stdout_or_stderr(
+                "mysqld: ready for connections",
+            )
+            .with_times(2),
+        ))
         .with_env_var("MYSQL_ROOT_PASSWORD", "secret")
         .with_env_var("MYSQL_DATABASE", "app")
         .with_env_var("MYSQL_ROOT_HOST", "%")
@@ -57,7 +62,7 @@ async fn validates_mysql_secret_against_testcontainer() -> Result<()> {
     wait_for_port(HOST_ALIAS, port).await?;
 
     let uri = format!("mysql://root:secret@{HOST_ALIAS}:{port}/app");
-    let (is_valid, metadata) = validate_mysql(&uri, false).await?;
+    let (is_valid, metadata) = validate_mysql(&uri, false, true).await?;
 
     assert!(is_valid, "expected MySQL validation to succeed, got {metadata:?}");
     assert!(
@@ -78,7 +83,12 @@ async fn validates_mysql_secret_against_testcontainer() -> Result<()> {
 async fn validates_postgres_secret_against_testcontainer() -> Result<()> {
     let container = GenericImage::new("postgres", "15")
         .with_exposed_port(5432.tcp())
-        .with_wait_for(WaitFor::message_on_stdout("database system is ready to accept connections"))
+        .with_wait_for(WaitFor::log(
+            testcontainers::core::wait::LogWaitStrategy::stdout_or_stderr(
+                "database system is ready to accept connections",
+            )
+            .with_times(2),
+        ))
         .with_env_var("POSTGRES_PASSWORD", "secret")
         .start()
         .await?;
@@ -87,7 +97,7 @@ async fn validates_postgres_secret_against_testcontainer() -> Result<()> {
     wait_for_port(HOST_ALIAS, port).await?;
 
     let uri = format!("postgres://postgres:secret@{HOST_ALIAS}:{port}/postgres");
-    let (is_valid, metadata) = validate_postgres(&uri, false).await?;
+    let (is_valid, metadata) = validate_postgres(&uri, false, true).await?;
 
     assert!(is_valid, "expected Postgres validation to succeed");
     assert!(metadata.is_empty(), "expected no metadata but found {metadata:?}");

@@ -775,6 +775,7 @@ async fn map_enterprise_access(config: EnterpriseCredential) -> Result<AccessMap
                 .tenant_id
                 .as_deref()
                 .map(|tenant_id| tenant_id != MICROSOFT_ACCOUNT_TENANT_ID),
+            authorization_evidence: None,
         }),
         fingerprint: None,
     })

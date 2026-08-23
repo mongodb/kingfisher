@@ -72,9 +72,10 @@ pub use validation_body::{ValidationResponseBody, as_str, clone_as_string, from_
 
 #[cfg(feature = "validation-http")]
 pub use http_validation::{
-    SsrfBlockedError, build_request_builder, check_url_resolvable, generate_http_cache_key_parts,
-    is_ssrf_safe_ip, parse_http_method, process_headers, retry_multipart_request, retry_request,
-    validate_response, with_request_template_globals,
+    SSRF_BLOCKED_MESSAGE, SsrfBlockedError, build_request_builder, check_host_resolvable,
+    check_url_resolvable, generate_http_cache_key_parts, is_ssrf_safe_ip, parse_http_method,
+    process_headers, retry_multipart_request, retry_request, validate_response,
+    with_request_template_globals,
 };
 
 #[cfg(feature = "validation-raw")]

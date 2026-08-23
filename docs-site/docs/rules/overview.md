@@ -1,19 +1,42 @@
 ---
-title: "Writing Custom Rules"
-description: "Write custom YAML-based detection rules with regex patterns, entropy thresholds, validation, revocation, and checksum intelligence."
+title: "Kingfisher 1.x Custom Rules"
+description: "Write private Kingfisher 1.x YAML custom rules with regex patterns, validation, revocation, and checksums; contribute general rules to Betterleaks."
 ---
 
-# Writing Custom Rules for Kingfisher
+# Custom Rules for Kingfisher
 
-A _rule_ in Kingfisher is a YAML document that describes how to detect and (optionally) validate or revoke secrets in your codebase. With custom rules you can:
+Kingfisher's candidate detector catalog is sourced from the [Betterleaks catalog](https://github.com/betterleaks/betterleaks)
+and selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors. New generally
+useful detectors and validation improvements should still be contributed to Betterleaks first.
+When the Betterleaks catalog covers a Veles detector, the Betterleaks detector is preferred and
+the overlapping Veles detector is not bundled.
+
+The Betterleaks TOML format is supported for custom rules as well as for Kingfisher's built-in
+catalog. Use it for generally useful detectors that should be developed and shared through
+Betterleaks. Custom Betterleaks TOML rules are automatically placed in the `custom.` namespace.
+
+The YAML format documented here is the supported **Kingfisher 1.x custom-rule format**. It is
+intended for private, organization-specific detections that cannot be contributed upstream. It is
+not used for Kingfisher's built-in catalog and no Kingfisher YAML rules are bundled with the
+project.
+
+A Kingfisher 1.x custom rule is a YAML document that describes how to detect and optionally validate
+or revoke secrets. With custom rules you can:
 
 - **Extend** Kingfisher without touching Rust code  
 - **Tune** sensitivity via entropy and confidence  
 - **Plug in** live checks against external services  
 
-This document explains how to write custom rules for Kingfisher using a YAML-based rule system. The rules define regular expressions to detect secrets in source code and other textual data, and they can include validation or revocation steps to confirm or invalidate the secret. By using a rules-based system, Kingfisher is highly extensible—new rules can be added or existing ones modified without changing the core code.
+Load `.toml`, `.yml`, or `.yaml` custom rules with `--rules-path`. They are additive to Betterleaks
+defaults; pass `--load-builtins=false` for a custom-only scan.
 
-Kingfisher currently bundles 1,089 rules: 948 standalone detectors and 141 dependent rules. Of the standalone detectors, 527 support live validation.
+Kingfisher's `imported-rules-capabilities.yml` is not another rule format. Its source-specific
+sections may bind existing imported detectors to operational validation, access-map, revocation,
+confidence, authority, or narrow filter behavior, but must not contain detector regexes.
+
+Veles support is built-in-only. `crates/kingfisher-rules/data/veles-rules.yml` pins an
+OSV-SCALIBR commit and selects upstream Veles plugin IDs that have explicit build-time adapters;
+`--rules-path` does not accept Veles source or configuration.
 
 ## 1. Rule Schema
 
@@ -22,7 +45,7 @@ Each rule file defines one or more entries under a top‑level `rules:` list. Ev
 ```yaml
 rules:
   - name:           # (string) Human-friendly rule name
-    id:             # (string) Unique identifier (e.g. kingfisher.aws.1)
+    id:             # (string) Unique identifier (e.g. custom.aws.secret-key)
 
     pattern: |      # (multi-line regex) Detection pattern
       (?xi)
@@ -42,7 +65,7 @@ rules:
     visible: true                   # (bool) hide helper matches when false
 
     depends_on_rule:                # (optional) capture chaining
-      - rule_id: kingfisher.aws.id
+      - rule_id: custom.aws.access-key-id
         variable: AKID              # referenced as {{ AKID }}
 
     pattern_requirements:         # (optional) character/word requirements
@@ -182,7 +205,7 @@ Kingfisher supports these validation types:
 
 1. `Assumed`: a rule-level marker for secret material accepted with high confidence without live validation. It produces the `Assumed Valid (Not Live-Validated)` finding status and is included by the `actionable` filter, but not by the strict `active` filter. In colorized pretty output it uses the same bright color as an active credential but with a locked icon. It counts as skipped validation by default and as successful validation with the `actionable` filter.
 2. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
-3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `Ethereum`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`. `Ethereum` is deterministic and network-free; it validates key material and derives an address without claiming the address is active.
+3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `CredentialUri`, `Ethereum`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`. `CredentialUri` dispatches a named `URI` capture (falling back to `TOKEN`) to a supported database validator while leaving unsupported schemes unvalidated. `Ethereum` is deterministic and network-free; it validates key material and derives an address without claiming the address is active.
 4. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
 
 Rules without a `validation` block produce `Not Attempted` findings. They are not treated as
@@ -195,9 +218,8 @@ validation:
   type: Assumed
 ```
 
-The bundled private-key rules use this marker because their high-signal formats can be accepted
-without a provider request; their findings are reported as
-`Assumed Valid (Not Live-Validated)`.
+A Kingfisher 1.x custom private-key rule can use this marker when its high-signal format can be accepted
+without a provider request; its findings are reported as `Assumed Valid (Not Live-Validated)`.
 
 Raw validation looks like this:
 
@@ -327,7 +349,7 @@ This example shows a service that requires looking up a token's ID before deleti
 ```yaml
 rules:
   - name: Example Service Token
-    id: kingfisher.example.1
+    id: custom.example.token
     pattern: |
       (?xi)
       example_token_
@@ -569,7 +591,7 @@ Authorization: Basic {{ "api:" | append: TOKEN | b64enc }}
 
 ```yaml
 depends_on_rule:
-  - rule_id: kingfisher.algolia.app_id   # must match first
+  - rule_id: custom.algolia.app-id   # must match first
     variable: APPID                     # captured as {{ APPID }}
 ```
 
@@ -583,7 +605,7 @@ Consider this example rule for an Algolia Application ID and Admin Key combinati
 ```yaml
 rules:
   - name: Algolia Admin API Key
-    id: kingfisher.algolia.1
+    id: custom.algolia.admin-key
     pattern: |
       (?xi)
       algolia
@@ -612,11 +634,11 @@ rules:
               type: StatusMatch
           url: https://{{ APPID }}-dsn.algolia.net/1/keys
     depends_on_rule:
-      - rule_id: "kingfisher.algolia.2"
+      - rule_id: "custom.algolia.app-id"
         variable: APPID
   
   - name: Algolia Application ID
-    id: kingfisher.algolia.2
+    id: custom.algolia.app-id
     pattern: |
       (?xi)
       algolia
@@ -636,11 +658,11 @@ rules:
 
 ### How It Works:
 
-* Algolia Application ID Rule (kingfisher.algolia.2):
+* Algolia Application ID Rule (`custom.algolia.app-id`):
 
   This rule scans for an Algolia Application ID—a 10-character alphanumeric string. It is marked with visible: false so that even if it matches, the finding is not directly reported. Its primary role is to provide a supporting value for other rules rather than to be flagged as a secret by itself.
 
-* Algolia Admin API Key Rule (kingfisher.algolia.1):
+* Algolia Admin API Key Rule (`custom.algolia.admin-key`):
   This rule detects the Algolia Admin API Key using a regex pattern. It includes a depends_on_rule property that specifies a dependency on the Algolia Application ID rule.
 
   * The dependency declares that the rule requires the output of the Algolia Application ID rule, and the captured value is assigned to the variable APPID.
@@ -721,7 +743,7 @@ Notes:
 
 The `pattern_requirements` field allows you to specify data type requirements for matched secrets. This is particularly useful when:
 
-- Your regex pattern must be permissive (due to Hyperscan limitations)
+- Your regex pattern must be permissive (due to Vectorscan limitations)
 - You want to enforce password complexity requirements
 - You need to filter out low-quality matches that lack certain character types
 
@@ -840,7 +862,7 @@ rules:
 
 ### How It Works
 
-1. Hyperscan regex matches a pattern in the input
+1. Vectorscan regex matches a pattern in the input
 2. Entropy check filters low-complexity matches (if `min_entropy` is set)
 3. **Character requirements check filters matches that don't meet the criteria**
 4. Validation checks verify the secret is live (if `validation` is configured)
@@ -867,7 +889,7 @@ Below are some examples to guide you in writing custom rules
 ```yaml
 rules:
   - name: Anthropic API Key
-    id: kingfisher.anthropic.1
+    id: custom.anthropic.api-key
     pattern: |
       (?xi)                    
       \b                       
@@ -918,7 +940,7 @@ rules:
 ```yaml
 rules:
   - name: FileIO Secret Key
-    id: kingfisher.fileio.1
+    id: custom.fileio.api-key
     pattern: |
       (?xi)
       \b
@@ -965,7 +987,7 @@ This advanced example uses the liquid-rs filters included with Kingfisher to sig
 ```yaml
 rules:
   - name: Alibaba Access Key ID
-    id: kingfisher.alibabacloud.1
+    id: custom.alibabacloud.access-key-id
     pattern: |
       (?x)
       \b
@@ -984,7 +1006,7 @@ rules:
       - LTAI8x2NiGqfyJGx7eLDhp12
       - LTAI5GqyJGhp12ad31L5hpix
   - name: Alibaba Access Key Secret
-    id: kingfisher.alibabacloud.2
+    id: custom.alibabacloud.secret-key
     pattern: |
       (?x)
       \b
@@ -1045,10 +1067,10 @@ rules:
             - type: WordMatch
               words: ['"Arn"']
     depends_on_rule:
-      - rule_id: kingfisher.alibabacloud.1
+      - rule_id: custom.alibabacloud.access-key-id
         variable: AKID
   - name: Alibaba STS Access Key ID
-    id: kingfisher.alibabacloud.3
+    id: custom.alibabacloud.session-access-key-id
     pattern: |
       (?x)
       \b
@@ -1063,7 +1085,7 @@ rules:
       - STS.NTKaenSkmLhG4HpM576UV
       - STS.FJ6EMcS1JLZgAcBJSTDG1Z4CE
   - name: Alibaba STS Security Token
-    id: kingfisher.alibabacloud.4
+    id: custom.alibabacloud.session-secret-key
     pattern: |
       (?xi)
       \b
@@ -1087,7 +1109,7 @@ rules:
       - securityToken = "CAISuwJ1q6Ft5B2yu9Kiaa5E0VnVJ8q2o3P4r5S6t7U8v9W0xYz"
       - ALIBABA_CLOUD_SECURITY_TOKEN=CAIS/gF1q6Ft5B2yfSjIr5eDA9xjJCcl57eKC7A3ThnJA
   - name: Alibaba STS Access Key Secret
-    id: kingfisher.alibabacloud.5
+    id: custom.alibabacloud.session-token
     pattern: |
       (?x)
       \b
@@ -1147,8 +1169,8 @@ rules:
             - type: WordMatch
               words: ['"Arn"']
     depends_on_rule:
-      - rule_id: kingfisher.alibabacloud.3
+      - rule_id: custom.alibabacloud.session-access-key-id
         variable: STS_AKID
-      - rule_id: kingfisher.alibabacloud.4
+      - rule_id: custom.alibabacloud.session-secret-key
         variable: SECURITY_TOKEN
 ```

@@ -27,9 +27,10 @@ use crate::{
     location::OffsetSpan,
     matcher::OwnedBlobMatch,
     provider_endpoints::ProviderEndpointOverrides,
-    rules::rule::Validation,
+    rules::rule::{BetterleaksAccessMapHandler, Rule, Validation},
     validation::{
-        CachedResponse, collect_variables_and_dependencies, utils, validate_single_match,
+        CachedResponse, CredentialUriTarget, classify_credential_uri,
+        collect_variables_and_dependencies, utils, validate_single_match,
     },
     validation_body,
     validation_rate_limit::ValidationRateLimiter,
@@ -41,6 +42,7 @@ pub struct AccessMapCollector {
     finding_fingerprints: Arc<DashMap<u64, FxHashSet<String>>>,
 }
 
+#[allow(dead_code)] // Retained for standalone providers awaiting compatible Betterleaks validators.
 impl AccessMapCollector {
     fn record_request(&self, key: u64, request: AccessMapRequest) {
         self.finding_fingerprints
@@ -566,7 +568,8 @@ pub async fn run_secret_validation(
         let mut representatives: FxHashMap<String, Arc<FindingsStoreMessage>> =
             FxHashMap::default();
         for arc_msg in simple_matches {
-            // VALIDATION DEDUP: Use get(0) to get the first/primary capture for grouping.
+            // VALIDATION DEDUP: Use the first/primary capture for grouping, except that a
+            // CredentialUri rule uses its full URI capture rather than the reported password.
             //
             // This differs from fingerprint/reporting code (which uses get(1).or_else(get(0)))
             // for backward compatibility reasons - changing fingerprint calculation would break
@@ -577,7 +580,7 @@ pub async fn run_secret_validation(
             // incorrectly pick up inner unnamed groups when patterns have nested captures
             // like (?<REGEX>...(ABC|DEF)...), causing all matches to share the same
             // validation result.
-            let secret = arc_msg.2.groups.captures.first().map_or("", |c| c.raw_value());
+            let secret = validation_input(&arc_msg.2.rule, &arc_msg.2.groups);
             let group_key = validation_group_key(arc_msg.2.rule.id(), secret);
             trace!(
                 rule_id = %arc_msg.2.rule.id(),
@@ -634,9 +637,10 @@ pub async fn run_secret_validation(
             let empty_inflight = empty_inflight.clone();
 
             async move {
-                // VALIDATION DEDUP: Use get(0) for the primary secret value.
+                // VALIDATION DEDUP: Use the primary validation input (the full URI for
+                // CredentialUri, otherwise the first capture).
                 // See comment above for why this differs from fingerprint/reporting code.
-                let secret = rep_arc.2.groups.captures.first().map_or("", |c| c.raw_value());
+                let secret = validation_input(&rep_arc.2.rule, &rep_arc.2.groups);
                 let key = validation_group_key(rep_arc.2.rule.id(), secret);
 
                 match val_res.entry(key.clone()) {
@@ -707,7 +711,7 @@ pub async fn run_secret_validation(
                 if !match_arc.2.rule.syntax().depends_on_rule.is_empty() {
                     continue;
                 }
-                let secret = match_arc.2.groups.captures.first().map_or("", |c| c.raw_value());
+                let secret = validation_input(&match_arc.2.rule, &match_arc.2.groups);
                 let key = validation_group_key(match_arc.2.rule.id(), secret);
                 if let Some(cr) = validation_results.get(&key) {
                     let (_, _, existing) = Arc::make_mut(match_arc);
@@ -923,7 +927,7 @@ pub async fn run_secret_validation(
     // occurrence, including matches dropped from the Phase 1 representative set. Existing
     // requests are still deduplicated by credential inside AccessMapCollector.
     //
-    // Only runs under --access-map, and pre-filters on the stored validation outcome so the
+    // Only runs under --blast-radius, and pre-filters on the stored validation outcome so the
     // per-match `OwnedBlobMatch` clone is paid only for credentials that actually validated
     // — on a large repo the overwhelming majority of matches never reach the mapper.
     if let Some(collector) = access_map.as_ref() {
@@ -933,7 +937,7 @@ pub async fn run_secret_validation(
         for message in slice {
             let stored = &message.2;
             if !is_access_map_candidate(
-                stored.rule.id(),
+                &stored.rule,
                 stored.validation_success,
                 stored.validation_response_status,
             ) {
@@ -973,6 +977,14 @@ async fn validate_single(
     validation_retries: u32,
     max_body_len: usize,
 ) {
+    if !om.rule.syntax().is_authoritative() {
+        om.validation_success = false;
+        om.validation_response_body = None;
+        om.validation_response_status = StatusCode::CONTINUE;
+        om.validation_outcome = ValidationOutcome::NotAttempted;
+        return;
+    }
+
     let cache_key = build_cache_key(om);
     // Check cache first
     if let Some(cached) = cache.get(&cache_key) {
@@ -1171,13 +1183,28 @@ where
     }
 }
 
+fn validation_input<'a>(
+    rule: &Rule,
+    captures: &'a crate::matcher::SerializableCaptures,
+) -> &'a str {
+    if matches!(&rule.syntax().validation, Some(Validation::CredentialUri)) {
+        return captures
+            .captures
+            .iter()
+            .find(|capture| capture.name.is_some_and(|name| name.eq_ignore_ascii_case("URI")))
+            .or_else(|| captures.captures.first())
+            .map_or("", |capture| capture.raw_value());
+    }
+    captures.captures.first().map_or("", |capture| capture.raw_value())
+}
+
 // Helper to compute the cache key for an OwnedBlobMatch.
 fn build_cache_key(om: &OwnedBlobMatch) -> String {
-    let capture0 = om.captures.captures.first().map_or("", |c| c.raw_value());
+    let validation_input = validation_input(&om.rule, &om.captures);
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"kingfisher.validation-cache.v1\0");
     hash_cache_key_part(&mut hasher, om.rule.id().as_bytes());
-    hash_cache_key_part(&mut hasher, capture0.as_bytes());
+    hash_cache_key_part(&mut hasher, validation_input.as_bytes());
 
     let has_context_dependency = om
         .rule
@@ -1214,20 +1241,30 @@ fn hash_cache_key_part(hasher: &mut blake3::Hasher, part: &[u8]) {
 /// the same gate to a stored `Match` *before* paying for an `OwnedBlobMatch`
 /// conversion, which clones the match's captures and blob metadata.
 fn is_access_map_candidate(
-    rule_id: &str,
+    rule: &Rule,
     validation_success: bool,
     validation_response_status: u16,
 ) -> bool {
-    // GitLab rules treat a bare 2xx as reachable-but-unverified, which is still
-    // enough to enumerate the token's scopes.
+    if !rule.syntax().is_authoritative() {
+        return false;
+    }
     validation_success
-        || (rule_id.starts_with("kingfisher.gitlab.")
+        || (matches!(
+            &rule.syntax().validation,
+            Some(Validation::Betterleaks(validation))
+                if validation
+                    .capabilities
+                    .access_map
+                    .as_ref()
+                    .is_some_and(|mapping| mapping.reachable_2xx)
+        ) && (200..300).contains(&validation_response_status))
+        || (rule.id().starts_with("kingfisher.gitlab.")
             && (200..300).contains(&validation_response_status))
 }
 
 fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapCollector>) {
     let validation_ok = is_access_map_candidate(
-        om.rule.id(),
+        &om.rule,
         om.validation_success,
         om.validation_response_status.as_u16(),
     );
@@ -1239,14 +1276,14 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
     let captures = utils::process_captures(&om.captures);
     let fp = om.finding_fingerprint.to_string();
 
-    match om.rule.syntax().validation {
+    match &om.rule.syntax().validation {
         Some(Validation::AWS) => {
             let token = captures
                 .iter()
                 .find(|(name, ..)| name == "TOKEN")
                 .map(|(_, value, ..)| value.clone())
                 .unwrap_or_default();
-            let is_session_token_rule = om.rule.id() == "kingfisher.aws.4";
+            let is_session_token_rule = crate::validation::is_aws_session_token_rule(&om.rule);
             let secret = if is_session_token_rule {
                 om.dependent_captures.get("AWS_SECRET_ACCESS_KEY").cloned().unwrap_or_default()
             } else {
@@ -1301,13 +1338,7 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
             }
         }
         Some(Validation::JWT) => {
-            if om.rule.id() == "kingfisher.azure.10"
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                let creds_json = serde_json::json!({ "access_token": value }).to_string();
-                collector.record_azure(&creds_json, None, fp.clone());
-            }
+            record_rule_id_access_map(om, collector, &captures, &fp);
         }
         Some(Validation::Postgres) => {
             if let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
@@ -1330,436 +1361,438 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                 collector.record_mysql(value, fp.clone());
             }
         }
-        _ => {
-            if om.rule.id().starts_with("kingfisher.github.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_github(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.azure.devops.") {
-                let token = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let mut organization = utils::find_closest_variable(
-                    &captures,
-                    token.as_str(),
-                    "TOKEN",
-                    "AZURE_DEVOPS_ORG",
-                )
+        Some(Validation::CredentialUri) => {
+            let uri = captures
+                .iter()
+                .find(|(name, ..)| name.eq_ignore_ascii_case("URI"))
+                .or_else(|| captures.iter().find(|(name, ..)| name.eq_ignore_ascii_case("TOKEN")))
+                .map(|(_, value, ..)| value.as_str())
                 .unwrap_or_default();
-                if organization.is_empty() {
-                    organization = extract_azure_devops_org_from_body(&om.validation_response_body)
-                        .unwrap_or_default();
-                }
+            let scheme = captures
+                .iter()
+                .find(|(name, ..)| name.eq_ignore_ascii_case("SCHEME"))
+                .map(|(_, value, ..)| value.as_str());
+            match classify_credential_uri(uri, scheme) {
+                CredentialUriTarget::Postgres(uri) => collector.record_postgres(&uri, fp.clone()),
+                CredentialUriTarget::MongoDB(uri) => collector.record_mongodb(&uri, fp.clone()),
+                CredentialUriTarget::MySQL(uri) => collector.record_mysql(&uri, fp.clone()),
+                CredentialUriTarget::Jdbc(_) | CredentialUriTarget::Unsupported(_) => {}
+            }
+        }
+        Some(Validation::Betterleaks(validation)) => {
+            record_betterleaks_access_map(om, validation, collector, &captures, &fp);
+        }
+        _ => record_rule_id_access_map(om, collector, &captures, &fp),
+    }
+}
 
-                if !token.is_empty() && !organization.is_empty() {
-                    collector.record_azure_devops(&token, &organization, fp.clone());
-                }
-            }
-            if matches!(om.rule.id(), "kingfisher.azure.6" | "kingfisher.azure.9") {
-                let client_secret = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let tenant_id = utils::find_closest_variable(
-                    &captures,
-                    client_secret.as_str(),
-                    "TOKEN",
-                    "AZURE_TENANT_ID",
-                )
-                .or_else(|| om.dependent_captures.get("AZURE_TENANT_ID").cloned())
-                .unwrap_or_default();
-                let client_id = utils::find_closest_variable(
-                    &captures,
-                    client_secret.as_str(),
-                    "TOKEN",
-                    "AZURE_CLIENT_ID",
-                )
-                .or_else(|| om.dependent_captures.get("AZURE_CLIENT_ID").cloned())
-                .unwrap_or_default();
+/// Access-map dispatch for rules that do not carry a Betterleaks `access_map`
+/// capability, keyed on rule ID.
+///
+/// Two populations reach here:
+///
+/// * **Veles rules** (`veles.*`), which use `Validation::Http` and so never hit
+///   the Betterleaks handler dispatch.
+/// * **Kingfisher 1.x rules** (`kingfisher.*`), which are still loadable via
+///   `--rules-path` even though the built-in 2.x catalog no longer contains
+///   them.
+fn record_rule_id_access_map(
+    om: &OwnedBlobMatch,
+    collector: &AccessMapCollector,
+    captures: &[(String, String, usize, usize)],
+    fingerprint: &str,
+) {
+    if record_veles_access_map(om, collector, captures, fingerprint) {
+        return;
+    }
+    record_legacy_access_map(om, collector, captures, fingerprint);
+}
 
-                if !tenant_id.is_empty() && !client_id.is_empty() && !client_secret.is_empty() {
-                    let creds_json = serde_json::json!({
-                        "tenant_id": tenant_id,
-                        "client_id": client_id,
-                        "client_secret": client_secret,
-                    })
-                    .to_string();
-                    collector.record_azure(&creds_json, None, fp.clone());
-                }
-            }
-            if om.rule.id() == "kingfisher.alibabacloud.2" {
-                let secret_key = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let access_key =
-                    utils::find_closest_variable(&captures, secret_key.as_str(), "TOKEN", "AKID")
-                        .or_else(|| om.dependent_captures.get("AKID").cloned())
-                        .unwrap_or_default();
+/// Access-map dispatch for validated Veles rules.
+///
+/// Veles detectors validate through `Validation::Http`, so without this they
+/// would fall through to the `kingfisher.*` chain and match nothing, silently
+/// dropping access mapping for providers Kingfisher still fully supports.
+///
+/// Only rules whose reported secret is directly usable as a bearer credential
+/// against the provider API are wired up. Deliberately excluded:
+///
+/// * `veles.secrets/bitbucketcredentials` — the secret is a git URL with
+///   embedded basic-auth credentials, not an API token.
+///   Returns `true` when the rule was handled.
+fn record_veles_access_map(
+    om: &OwnedBlobMatch,
+    collector: &AccessMapCollector,
+    captures: &[(String, String, usize, usize)],
+    fingerprint: &str,
+) -> bool {
+    let id = om.rule.id();
+    if !id.starts_with("veles.") {
+        return false;
+    }
 
-                if !access_key.is_empty() && !secret_key.is_empty() {
-                    collector.record_alibaba(&access_key, &secret_key, None, fp.clone());
-                }
-            }
-            if om.rule.id() == "kingfisher.alibabacloud.5" {
-                let secret_key = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let access_key = utils::find_closest_variable(
-                    &captures,
-                    secret_key.as_str(),
-                    "TOKEN",
-                    "STS_AKID",
-                )
-                .or_else(|| om.dependent_captures.get("STS_AKID").cloned())
+    let token = captures
+        .iter()
+        .find(|(name, ..)| name == "TOKEN")
+        .map(|(_, value, ..)| value.as_str())
+        .unwrap_or_default();
+    if token.is_empty() {
+        return false;
+    }
+    let fp = || fingerprint.to_string();
+
+    match id {
+        "veles.secrets/slackappleveltoken"
+        | "veles.secrets/slackappconfigaccesstoken"
+        | "veles.secrets/slackappconfigrefreshtoken" => {
+            collector.record_slack(token, fp());
+            true
+        }
+        "veles.secrets/digitaloceanapikey" => {
+            collector.record_digitalocean(token, fp());
+            true
+        }
+        "veles.secrets/sendgrid" => {
+            collector.record_sendgrid(token, fp());
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Access-map dispatch for Kingfisher 1.x (`kingfisher.*`) rules.
+///
+/// **This is live code, not dead code.** The built-in 2.x catalog contains no
+/// `kingfisher.*` IDs, so none of these arms fire on a default scan — but the
+/// 1.x YAML catalog is still a supported input via `--rules-path`, and these
+/// arms are the only way those rules reach the access-map collectors. Removing
+/// them would silently break blast-radius mapping for every operator who kept
+/// the legacy catalog.
+///
+/// See `crates/kingfisher-rules/data/legacy-rule-aliases.yml` for the 1.x → 2.x
+/// provider mapping.
+fn record_legacy_access_map(
+    om: &OwnedBlobMatch,
+    collector: &AccessMapCollector,
+    captures: &[(String, String, usize, usize)],
+    fingerprint: &str,
+) {
+    let id = om.rule.id();
+    let capture = |names: &[&str]| {
+        captures
+            .iter()
+            .find(|(name, ..)| names.contains(&name.as_str()))
+            .map(|(_, value, ..)| value.clone())
+            .unwrap_or_default()
+    };
+    let capture_or_dependency = |names: &[&str], dependency: &str| {
+        let value = capture(names);
+        if value.is_empty() {
+            om.dependent_captures.get(dependency).cloned().unwrap_or_default()
+        } else {
+            value
+        }
+    };
+    let token = capture(&["TOKEN"]);
+    let fp = || fingerprint.to_string();
+
+    if id == "kingfisher.azure.10" && matches!(&om.rule.syntax().validation, Some(Validation::JWT))
+    {
+        if !token.is_empty() {
+            let credentials = serde_json::json!({ "access_token": token });
+            collector.record_azure(&credentials.to_string(), None, fp());
+        }
+        return;
+    }
+
+    if id.starts_with("kingfisher.github.") && !token.is_empty() {
+        collector.record_github(&token, fp());
+    } else if id.starts_with("kingfisher.gitlab.") && !token.is_empty() {
+        collector.record_gitlab(&token, fp());
+    } else if id.starts_with("kingfisher.slack.") && !token.is_empty() {
+        collector.record_slack(&token, fp());
+    } else if id.starts_with("kingfisher.huggingface.") && !token.is_empty() {
+        collector.record_huggingface(&token, fp());
+    } else if id.starts_with("kingfisher.gitea.") && !token.is_empty() {
+        collector.record_gitea(&token, fp());
+    } else if id.starts_with("kingfisher.bitbucket.") && !token.is_empty() {
+        collector.record_bitbucket(&token, fp());
+    } else if id.starts_with("kingfisher.buildkite.") && !token.is_empty() {
+        collector.record_buildkite(&token, fp());
+    } else if id.starts_with("kingfisher.harness.") && !token.is_empty() {
+        collector.record_harness(&token, fp());
+    } else if id.starts_with("kingfisher.openai.") && !token.is_empty() {
+        collector.record_openai(&token, fp());
+    } else if id.starts_with("kingfisher.anthropic.") && !token.is_empty() {
+        collector.record_anthropic(&token, fp());
+    } else if id.starts_with("kingfisher.wandb.") && !token.is_empty() {
+        collector.record_weightsandbiases(&token, fp());
+    } else if (id.starts_with("kingfisher.msteams.")
+        || id.starts_with("kingfisher.microsoftteamswebhook."))
+        && !token.is_empty()
+    {
+        collector.record_microsoft_teams(&token, fp());
+    } else if id.starts_with("kingfisher.airtable.") && !token.is_empty() {
+        collector.record_airtable(&token, fp());
+    } else if id.starts_with("kingfisher.circleci.") && !token.is_empty() {
+        collector.record_circleci(&token, fp());
+    } else if id.starts_with("kingfisher.digitalocean.") && !token.is_empty() {
+        collector.record_digitalocean(&token, fp());
+    } else if id.starts_with("kingfisher.fastly.") && !token.is_empty() {
+        collector.record_fastly(&token, fp());
+    } else if id.starts_with("kingfisher.hubspot.") && !token.is_empty() {
+        collector.record_hubspot(&token, fp());
+    } else if id.starts_with("kingfisher.ibm.") && !token.is_empty() {
+        collector.record_ibm_cloud(&token, fp());
+    } else if id.starts_with("kingfisher.sendgrid.") && !token.is_empty() {
+        collector.record_sendgrid(&token, fp());
+    } else if (id.starts_with("kingfisher.sendinblue.") || id.starts_with("kingfisher.brevo."))
+        && !token.is_empty()
+    {
+        collector.record_sendinblue(&token, fp());
+    } else if id.starts_with("kingfisher.square.") && !token.is_empty() {
+        collector.record_square(&token, fp());
+    } else if id.starts_with("kingfisher.stripe.") && !token.is_empty() {
+        collector.record_stripe(&token, fp());
+    } else if id.starts_with("kingfisher.terraform.") && !token.is_empty() {
+        collector.record_terraform(&token, fp());
+    } else if id.starts_with("kingfisher.monday.") && !token.is_empty() {
+        collector.record_monday(&token, fp());
+    } else if matches!(id, "kingfisher.asana.3" | "kingfisher.asana.4" | "kingfisher.asana.5")
+        && !token.is_empty()
+    {
+        collector.record_asana(&token, fp());
+    } else if id == "kingfisher.pinecone.1" && !token.is_empty() {
+        collector.record_pinecone(&token, fp());
+    } else if id.starts_with("kingfisher.azure.devops.") {
+        let mut organization =
+            utils::find_closest_variable(captures, &token, "TOKEN", "AZURE_DEVOPS_ORG")
                 .unwrap_or_default();
-                let session_token = utils::find_closest_variable(
-                    &captures,
-                    secret_key.as_str(),
-                    "TOKEN",
-                    "SECURITY_TOKEN",
-                )
+        if organization.is_empty() {
+            organization = extract_azure_devops_org_from_body(&om.validation_response_body)
+                .unwrap_or_default();
+        }
+        if !token.is_empty() && !organization.is_empty() {
+            collector.record_azure_devops(&token, &organization, fp());
+        }
+    } else if matches!(id, "kingfisher.azure.6" | "kingfisher.azure.9") {
+        let tenant_id = utils::find_closest_variable(captures, &token, "TOKEN", "AZURE_TENANT_ID")
+            .or_else(|| om.dependent_captures.get("AZURE_TENANT_ID").cloned())
+            .unwrap_or_default();
+        let client_id = utils::find_closest_variable(captures, &token, "TOKEN", "AZURE_CLIENT_ID")
+            .or_else(|| om.dependent_captures.get("AZURE_CLIENT_ID").cloned())
+            .unwrap_or_default();
+        if !tenant_id.is_empty() && !client_id.is_empty() && !token.is_empty() {
+            let credentials = serde_json::json!({
+                "tenant_id": tenant_id,
+                "client_id": client_id,
+                "client_secret": token,
+            });
+            collector.record_azure(&credentials.to_string(), None, fp());
+        }
+    } else if id == "kingfisher.alibabacloud.2" {
+        let access_key = utils::find_closest_variable(captures, &token, "TOKEN", "AKID")
+            .or_else(|| om.dependent_captures.get("AKID").cloned())
+            .unwrap_or_default();
+        if !access_key.is_empty() && !token.is_empty() {
+            collector.record_alibaba(&access_key, &token, None, fp());
+        }
+    } else if id == "kingfisher.alibabacloud.5" {
+        let access_key = utils::find_closest_variable(captures, &token, "TOKEN", "STS_AKID")
+            .or_else(|| om.dependent_captures.get("STS_AKID").cloned())
+            .unwrap_or_default();
+        let session_token =
+            utils::find_closest_variable(captures, &token, "TOKEN", "SECURITY_TOKEN")
                 .or_else(|| om.dependent_captures.get("SECURITY_TOKEN").cloned())
                 .unwrap_or_default();
+        if !access_key.is_empty() && !token.is_empty() && !session_token.is_empty() {
+            collector.record_alibaba(&access_key, &token, Some(&session_token), fp());
+        }
+    } else if id.starts_with("kingfisher.salesforce.") {
+        let instance = capture_or_dependency(&["INSTANCE"], "INSTANCE");
+        if !token.is_empty() && !instance.is_empty() {
+            collector.record_salesforce(&token, &instance, fp());
+        }
+    } else if id.starts_with("kingfisher.algolia.") {
+        let app_id = capture_or_dependency(&["APPID"], "APPID");
+        if !token.is_empty() && !app_id.is_empty() {
+            collector.record_algolia(&app_id, &token, fp());
+        }
+    } else if id.starts_with("kingfisher.artifactory.") && !token.is_empty() {
+        let host = capture_or_dependency(&["HOST", "URL"], "HOST");
+        collector.record_artifactory(&token, (!host.is_empty()).then_some(host.as_str()), fp());
+    } else if id.starts_with("kingfisher.auth0.") {
+        let client_id = capture_or_dependency(&["CLIENTID"], "CLIENTID");
+        let domain = capture_or_dependency(&["DOMAIN"], "DOMAIN");
+        if !token.is_empty() && !client_id.is_empty() && !domain.is_empty() {
+            collector.record_auth0(&client_id, &token, &domain, fp());
+        }
+    } else if id.starts_with("kingfisher.jira.") {
+        let domain = capture_or_dependency(&["DOMAIN", "URL"], "DOMAIN");
+        if !token.is_empty() && !domain.is_empty() {
+            let base_url =
+                if domain.starts_with("http") { domain } else { format!("https://{domain}") };
+            collector.record_jira(&token, &base_url, fp());
+        }
+    } else if id.starts_with("kingfisher.paypal.") {
+        let client_id = capture_or_dependency(&["CLIENTID"], "CLIENTID");
+        if !token.is_empty() && !client_id.is_empty() {
+            collector.record_paypal(&client_id, &token, fp());
+        }
+    } else if id.starts_with("kingfisher.plaid.") {
+        let client_id = capture_or_dependency(&["CLIENTID"], "CLIENTID");
+        if !token.is_empty() && !client_id.is_empty() {
+            collector.record_plaid(&client_id, &token, fp());
+        }
+    } else if id.starts_with("kingfisher.shopify.") {
+        let subdomain = capture_or_dependency(&["DOMAIN", "SUBDOMAIN"], "DOMAIN");
+        if !token.is_empty() && !subdomain.is_empty() {
+            collector.record_shopify(&token, &subdomain, fp());
+        }
+    } else if id.starts_with("kingfisher.jfrog.") || id.starts_with("kingfisher.xray.") {
+        if !token.is_empty() {
+            let host = capture_or_dependency(&["HOST", "URL"], "HOST");
+            collector.record_xray(&token, (!host.is_empty()).then_some(host.as_str()), fp());
+        }
+    } else if id.starts_with("kingfisher.zendesk.") {
+        let subdomain = capture_or_dependency(&["SUBDOMAIN", "DOMAIN"], "SUBDOMAIN");
+        if !token.is_empty() && !subdomain.is_empty() {
+            collector.record_zendesk(&token, &subdomain, fp());
+        }
+    }
+}
 
-                if !access_key.is_empty() && !secret_key.is_empty() && !session_token.is_empty() {
-                    collector.record_alibaba(
-                        &access_key,
-                        &secret_key,
-                        Some(&session_token),
-                        fp.clone(),
-                    );
-                }
-            }
-            if om.rule.id().starts_with("kingfisher.gitlab.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_gitlab(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.slack.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_slack(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.huggingface.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_huggingface(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.gitea.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_gitea(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.bitbucket.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_bitbucket(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.buildkite.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_buildkite(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.harness.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_harness(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.openai.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_openai(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.anthropic.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_anthropic(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.salesforce.") {
-                let token = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let instance = captures
-                    .iter()
-                    .find(|(name, ..)| name == "INSTANCE")
-                    .map(|(_, value, ..)| value.clone())
-                    .or_else(|| om.dependent_captures.get("INSTANCE").cloned())
-                    .unwrap_or_default();
+fn record_betterleaks_access_map(
+    om: &OwnedBlobMatch,
+    validation: &kingfisher_rules::rule::BetterleaksValidation,
+    collector: &AccessMapCollector,
+    captures: &[(String, String, usize, usize)],
+    fingerprint: &str,
+) {
+    let Some(mapping) = validation.capabilities.access_map.as_ref() else {
+        return;
+    };
+    let token = captures
+        .iter()
+        .find(|(name, ..)| name == "TOKEN")
+        .map(|(_, value, ..)| value.as_str())
+        .unwrap_or_default();
+    if token.is_empty() {
+        return;
+    }
+    let value = |input: &str| {
+        let Some(source) = mapping.inputs.get(input).map(String::as_str) else {
+            return "";
+        };
+        if source == "finding.secret" {
+            return token;
+        }
+        source
+            .strip_prefix("components.")
+            .and_then(|id| validation.components.get(id))
+            .and_then(|variable| om.dependent_captures.get(variable))
+            .map(String::as_str)
+            .unwrap_or_default()
+    };
+    let fp = || fingerprint.to_string();
 
-                if !token.is_empty() && !instance.is_empty() {
-                    collector.record_salesforce(&token, &instance, fp.clone());
-                }
+    match mapping.handler {
+        BetterleaksAccessMapHandler::Aws => {
+            let secret = value("secret");
+            if !secret.is_empty() {
+                collector.record_aws(token, secret, None, fp());
             }
-            if om.rule.id().starts_with("kingfisher.wandb.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_weightsandbiases(value, fp.clone());
+        }
+        BetterleaksAccessMapHandler::Gcp => {
+            collector.record_gcp(token, fp());
+        }
+        BetterleaksAccessMapHandler::AzureClientSecret => {
+            let tenant_id = value("tenant_id");
+            let client_id = value("client_id");
+            if !tenant_id.is_empty() && !client_id.is_empty() {
+                let credentials = serde_json::json!({
+                    "tenant_id": tenant_id,
+                    "client_id": client_id,
+                    "client_secret": token,
+                });
+                collector.record_azure(&credentials.to_string(), None, fp());
             }
-            if (om.rule.id().starts_with("kingfisher.msteams.")
-                || om.rule.id().starts_with("kingfisher.microsoftteamswebhook."))
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_microsoft_teams(value, fp.clone());
+        }
+        BetterleaksAccessMapHandler::AzureStorage => {
+            let account = value("account");
+            if !account.is_empty() {
+                let credentials = serde_json::json!({
+                    "storage_account": account,
+                    "storage_key": token,
+                });
+                collector.record_azure(&credentials.to_string(), None, fp());
             }
-            // --- New providers ---
-            if om.rule.id().starts_with("kingfisher.airtable.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_airtable(value, fp.clone());
+        }
+        BetterleaksAccessMapHandler::Algolia => {
+            let app_id = value("app_id");
+            if !app_id.is_empty() {
+                collector.record_algolia(app_id, token, fp());
             }
-            if om.rule.id().starts_with("kingfisher.algolia.") {
-                let api_key = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let app_id = captures
-                    .iter()
-                    .find(|(name, ..)| name == "APPID")
-                    .map(|(_, value, ..)| value.clone())
-                    .or_else(|| om.dependent_captures.get("APPID").cloned())
-                    .unwrap_or_default();
-                if !api_key.is_empty() && !app_id.is_empty() {
-                    collector.record_algolia(&app_id, &api_key, fp.clone());
-                }
+        }
+        BetterleaksAccessMapHandler::Alibaba => {
+            let access_key = value("access_key");
+            if !access_key.is_empty() {
+                let session_token = value("session_token");
+                collector.record_alibaba(
+                    access_key,
+                    token,
+                    (!session_token.is_empty()).then_some(session_token),
+                    fp(),
+                );
             }
-            if om.rule.id().starts_with("kingfisher.artifactory.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                let base_url = captures
-                    .iter()
-                    .find(|(name, ..)| name == "HOST" || name == "URL")
-                    .map(|(_, value, ..)| value.clone())
-                    .or_else(|| om.dependent_captures.get("HOST").cloned());
-                collector.record_artifactory(value, base_url.as_deref(), fp.clone());
+        }
+        BetterleaksAccessMapHandler::Artifactory => {
+            let host = value("host");
+            let base_url = if host.is_empty() {
+                None
+            } else if host.starts_with("http") {
+                Some(host.to_string())
+            } else {
+                Some(format!("https://{host}"))
+            };
+            collector.record_artifactory(token, base_url.as_deref(), fp());
+        }
+        BetterleaksAccessMapHandler::Salesforce => {
+            let instance = value("instance");
+            if !instance.is_empty() {
+                collector.record_salesforce(token, instance, fp());
             }
-            if om.rule.id().starts_with("kingfisher.auth0.") {
-                let client_secret = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let client_id = captures
-                    .iter()
-                    .find(|(name, ..)| name == "CLIENTID")
-                    .map(|(_, value, ..)| value.clone())
-                    .or_else(|| om.dependent_captures.get("CLIENTID").cloned())
-                    .unwrap_or_default();
-                let domain = captures
-                    .iter()
-                    .find(|(name, ..)| name == "DOMAIN")
-                    .map(|(_, value, ..)| value.clone())
-                    .or_else(|| om.dependent_captures.get("DOMAIN").cloned())
-                    .unwrap_or_default();
-                if !client_secret.is_empty() && !client_id.is_empty() && !domain.is_empty() {
-                    collector.record_auth0(&client_id, &client_secret, &domain, fp.clone());
-                }
+        }
+        BetterleaksAccessMapHandler::Airtable => collector.record_airtable(token, fp()),
+        BetterleaksAccessMapHandler::Anthropic => collector.record_anthropic(token, fp()),
+        BetterleaksAccessMapHandler::Auth0 => {
+            let client_id = value("client_id");
+            let domain = value("domain");
+            if !client_id.is_empty() && !domain.is_empty() {
+                collector.record_auth0(client_id, token, domain, fp());
             }
-            if om.rule.id().starts_with("kingfisher.circleci.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_circleci(value, fp.clone());
+        }
+        BetterleaksAccessMapHandler::Buildkite => collector.record_buildkite(token, fp()),
+        BetterleaksAccessMapHandler::Circleci => collector.record_circleci(token, fp()),
+        BetterleaksAccessMapHandler::Fastly => collector.record_fastly(token, fp()),
+        BetterleaksAccessMapHandler::Github => collector.record_github(token, fp()),
+        BetterleaksAccessMapHandler::Gitlab => collector.record_gitlab(token, fp()),
+        BetterleaksAccessMapHandler::Harness => collector.record_harness(token, fp()),
+        BetterleaksAccessMapHandler::Huggingface => collector.record_huggingface(token, fp()),
+        BetterleaksAccessMapHandler::IbmCloud => collector.record_ibm_cloud(token, fp()),
+        BetterleaksAccessMapHandler::Monday => collector.record_monday(token, fp()),
+        BetterleaksAccessMapHandler::Openai => collector.record_openai(token, fp()),
+        BetterleaksAccessMapHandler::Paypal => {
+            let client_id = value("client_id");
+            if !client_id.is_empty() {
+                collector.record_paypal(client_id, token, fp());
             }
-            if om.rule.id().starts_with("kingfisher.digitalocean.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_digitalocean(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.fastly.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_fastly(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.hubspot.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_hubspot(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.ibm.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_ibm_cloud(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.jira.") {
-                let token = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let base_url = captures
-                    .iter()
-                    .find(|(name, ..)| name == "DOMAIN" || name == "URL")
-                    .map(|(_, value, ..)| value.clone())
-                    .or_else(|| om.dependent_captures.get("DOMAIN").cloned())
-                    .unwrap_or_default();
-                if !token.is_empty() && !base_url.is_empty() {
-                    let url = if base_url.starts_with("http") {
-                        base_url
-                    } else {
-                        format!("https://{base_url}")
-                    };
-                    collector.record_jira(&token, &url, fp.clone());
-                }
-            }
-            if om.rule.id().starts_with("kingfisher.paypal.") {
-                let client_secret = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let client_id = captures
-                    .iter()
-                    .find(|(name, ..)| name == "CLIENTID")
-                    .map(|(_, value, ..)| value.clone())
-                    .or_else(|| om.dependent_captures.get("CLIENTID").cloned())
-                    .unwrap_or_default();
-                if !client_secret.is_empty() && !client_id.is_empty() {
-                    collector.record_paypal(&client_id, &client_secret, fp.clone());
-                }
-            }
-            if om.rule.id().starts_with("kingfisher.plaid.") {
-                let secret = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let client_id = captures
-                    .iter()
-                    .find(|(name, ..)| name == "CLIENTID")
-                    .map(|(_, value, ..)| value.clone())
-                    .or_else(|| om.dependent_captures.get("CLIENTID").cloned())
-                    .unwrap_or_default();
-                if !secret.is_empty() && !client_id.is_empty() {
-                    collector.record_plaid(&client_id, &secret, fp.clone());
-                }
-            }
-            if om.rule.id().starts_with("kingfisher.sendgrid.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_sendgrid(value, fp.clone());
-            }
-            if (om.rule.id().starts_with("kingfisher.sendinblue.")
-                || om.rule.id().starts_with("kingfisher.brevo."))
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_sendinblue(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.shopify.") {
-                let token = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let subdomain = captures
-                    .iter()
-                    .find(|(name, ..)| name == "DOMAIN" || name == "SUBDOMAIN")
-                    .map(|(_, value, ..)| value.clone())
-                    .or_else(|| om.dependent_captures.get("DOMAIN").cloned())
-                    .unwrap_or_default();
-                if !token.is_empty() && !subdomain.is_empty() {
-                    collector.record_shopify(&token, &subdomain, fp.clone());
-                }
-            }
-            if om.rule.id().starts_with("kingfisher.square.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_square(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.stripe.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_stripe(value, fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.terraform.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_terraform(value, fp.clone());
-            }
-            if (om.rule.id().starts_with("kingfisher.jfrog.")
-                || om.rule.id().starts_with("kingfisher.xray."))
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                let base_url = captures
-                    .iter()
-                    .find(|(name, ..)| name == "HOST" || name == "URL")
-                    .map(|(_, value, ..)| value.clone())
-                    .or_else(|| om.dependent_captures.get("HOST").cloned());
-                collector.record_xray(value, base_url.as_deref(), fp.clone());
-            }
-            if om.rule.id().starts_with("kingfisher.zendesk.") {
-                let token = captures
-                    .iter()
-                    .find(|(name, ..)| name == "TOKEN")
-                    .map(|(_, value, ..)| value.clone())
-                    .unwrap_or_default();
-                let subdomain = captures
-                    .iter()
-                    .find(|(name, ..)| name == "SUBDOMAIN" || name == "DOMAIN")
-                    .map(|(_, value, ..)| value.clone())
-                    .or_else(|| om.dependent_captures.get("SUBDOMAIN").cloned())
-                    .unwrap_or_default();
-                if !token.is_empty() && !subdomain.is_empty() {
-                    collector.record_zendesk(&token, &subdomain, fp.clone());
-                }
-            }
-            if om.rule.id().starts_with("kingfisher.monday.")
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_monday(value, fp.clone());
-            }
-            // Only Asana rules whose TOKEN capture is a standalone access/PAT:
-            // .3 (legacy 0/...), .4 (V1 1/...), .5 (V2 2/...). Rule .1 is a client ID
-            // and .2 is a client secret that cannot be used alone to enumerate resources.
-            if matches!(
-                om.rule.id(),
-                "kingfisher.asana.3" | "kingfisher.asana.4" | "kingfisher.asana.5"
-            ) && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_asana(value, fp.clone());
-            }
-            if om.rule.id() == "kingfisher.pinecone.1"
-                && let Some((_, value, ..)) = captures.iter().find(|(name, ..)| name == "TOKEN")
-                && !value.is_empty()
-            {
-                collector.record_pinecone(value, fp.clone());
-            }
+        }
+        BetterleaksAccessMapHandler::Pinecone => collector.record_pinecone(token, fp()),
+        BetterleaksAccessMapHandler::Sendinblue => collector.record_sendinblue(token, fp()),
+        BetterleaksAccessMapHandler::Stripe => collector.record_stripe(token, fp()),
+        BetterleaksAccessMapHandler::WeightsAndBiases => {
+            collector.record_weightsandbiases(token, fp());
         }
     }
 }
@@ -1801,6 +1834,7 @@ fn extract_azure_storage_containers_from_body(
     serde_json::from_str::<Vec<String>>(&capture).ok()
 }
 
+#[allow(dead_code)] // Retained with the Azure DevOps access-map collector above.
 fn extract_azure_devops_org_from_body(
     body: &validation_body::ValidationResponseBody,
 ) -> Option<String> {
@@ -1842,6 +1876,11 @@ mod tests {
                 depends_on_rule: vec![],
                 pattern_requirements: None,
                 tls_mode: None,
+                path: None,
+                betterleaks_filter: None,
+                betterleaks_secret_group: None,
+                authoritative: true,
+                vectorscan_compatible: true,
             })),
             blob_id: BlobId::new(b"panic-test-blob"),
             finding_fingerprint: 1,
@@ -1871,6 +1910,79 @@ mod tests {
         assert!(!is_counted_validation_status(StatusCode::PRECONDITION_REQUIRED));
         assert!(is_counted_validation_status(StatusCode::OK));
         assert!(is_counted_validation_status(StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn credential_uri_cache_key_uses_the_full_validator_input() {
+        let mut first = make_owned_blob_match();
+        Arc::make_mut(&mut first.rule).syntax.validation = Some(Validation::CredentialUri);
+        first.captures = SerializableCaptures {
+            captures: smallvec![
+                SerializableCapture {
+                    name: Some("TOKEN"),
+                    match_number: 4,
+                    start: 20,
+                    end: 27,
+                    value: intern("hunter2"),
+                },
+                SerializableCapture {
+                    name: Some("URI"),
+                    match_number: 1,
+                    start: 0,
+                    end: 45,
+                    value: intern("postgresql://alice:hunter2@one.internal/app"),
+                }
+            ],
+        };
+        let mut second = first.clone();
+        second.captures.captures[1].value = intern("postgresql://alice:hunter2@two.internal/app");
+
+        assert_ne!(build_cache_key(&first), build_cache_key(&second));
+    }
+
+    #[test]
+    fn validated_credential_uri_routes_to_postgres_access_map() {
+        let mut finding = make_owned_blob_match();
+        Arc::make_mut(&mut finding.rule).syntax.validation = Some(Validation::CredentialUri);
+        finding.validation_success = true;
+        finding.validation_response_status = StatusCode::OK;
+        finding.captures = SerializableCaptures {
+            captures: smallvec![
+                SerializableCapture {
+                    name: Some("TOKEN"),
+                    match_number: 4,
+                    start: 20,
+                    end: 27,
+                    value: intern("hunter2"),
+                },
+                SerializableCapture {
+                    name: Some("URI"),
+                    match_number: 1,
+                    start: 0,
+                    end: 45,
+                    value: intern("POSTGRESQL://alice:hunter2@db.internal/app"),
+                },
+                SerializableCapture {
+                    name: Some("SCHEME"),
+                    match_number: 2,
+                    start: 0,
+                    end: 10,
+                    value: intern("POSTGRESQL"),
+                }
+            ],
+        };
+        let collector = AccessMapCollector::default();
+
+        maybe_record_access_map(&finding, Some(&collector));
+
+        let requests = collector.into_collected_requests();
+        assert_eq!(requests.len(), 1);
+        match &requests[0].request {
+            AccessMapRequest::Postgres { uri, .. } => {
+                assert_eq!(uri, "postgresql://alice:hunter2@db.internal/app");
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
     }
 
     #[test]
@@ -1911,6 +2023,228 @@ mod tests {
             }
             other => panic!("unexpected request: {other:?}"),
         }
+    }
+
+    #[test]
+    fn betterleaks_composite_aws_validation_feeds_access_map() {
+        let mut rules = kingfisher_rules::get_betterleaks_rules(Some(Confidence::Low)).unwrap();
+        let syntax = rules.rules.remove("betterleaks.aws-access-token").unwrap();
+        let Some(Validation::Betterleaks(validation)) = syntax.validation.clone() else {
+            panic!("expected Betterleaks validation");
+        };
+        let secret_variable = validation.components["aws-secret-access-key"].clone();
+        let access_key = "AKIAIOSFODNN7EXAMPLE";
+        let mut matched = make_owned_blob_match();
+        matched.rule = Arc::new(Rule::new(syntax));
+        matched.captures = SerializableCaptures {
+            captures: smallvec![SerializableCapture {
+                name: Some(intern("TOKEN")),
+                match_number: 1,
+                start: 0,
+                end: access_key.len(),
+                value: intern(access_key),
+            }],
+        };
+        matched.dependent_captures.insert(secret_variable, "secret-access-key".to_string());
+        let captures = utils::process_captures(&matched.captures);
+        let collector = AccessMapCollector::default();
+
+        record_betterleaks_access_map(&matched, &validation, &collector, &captures, "fp-aws");
+
+        let requests = collector.into_requests();
+        assert_eq!(requests.len(), 1);
+        match &requests[0] {
+            AccessMapRequest::Aws { access_key, secret_key, session_token, fingerprint } => {
+                assert_eq!(access_key, "AKIAIOSFODNN7EXAMPLE");
+                assert_eq!(secret_key, "secret-access-key");
+                assert!(session_token.is_none());
+                assert_eq!(fingerprint, "fp-aws");
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    fn betterleaks_match(
+        syntax: RuleSyntax,
+        token: &str,
+        dependencies: &[(&str, &str)],
+    ) -> OwnedBlobMatch {
+        let mut matched = make_owned_blob_match();
+        matched.rule = Arc::new(Rule::new(syntax));
+        matched.captures = SerializableCaptures {
+            captures: smallvec![SerializableCapture {
+                name: Some(intern("TOKEN")),
+                match_number: 1,
+                start: 0,
+                end: token.len(),
+                value: intern(token),
+            }],
+        };
+        matched.validation_success = true;
+        matched
+            .dependent_captures
+            .extend(dependencies.iter().map(|(name, value)| (name.to_string(), value.to_string())));
+        matched
+    }
+
+    #[test]
+    fn new_betterleaks_rules_route_to_existing_access_map_handlers() {
+        type AccessMapCase<'a> = (&'a str, &'a str, &'a [(&'a str, &'a str)]);
+
+        let mut rules = kingfisher_rules::get_betterleaks_rules(Some(Confidence::Low)).unwrap();
+        let cases: [AccessMapCase<'_>; 3] = [
+            (
+                "betterleaks.auth0-client-secret.1",
+                "auth0-client-secret",
+                &[("AUTH0_CLIENT_ID_1", "auth0-client-id"), ("AUTH0_DOMAIN_1", "tenant.auth0.com")],
+            ),
+            ("betterleaks.monday-api-token.1", "monday-api-token", &[]),
+            (
+                "betterleaks.paypal-client-secret.1",
+                "paypal-client-secret",
+                &[("PAYPAL_CLIENT_ID_1", "paypal-client-id")],
+            ),
+        ];
+        let collector = AccessMapCollector::default();
+
+        for (id, token, dependencies) in cases {
+            let syntax = rules.rules.remove(id).expect("generated rule should exist");
+            let Some(Validation::Betterleaks(validation)) = syntax.validation.clone() else {
+                panic!("{id} should use Betterleaks validation");
+            };
+            let matched = betterleaks_match(syntax, token, dependencies);
+            let captures = utils::process_captures(&matched.captures);
+            record_betterleaks_access_map(&matched, &validation, &collector, &captures, id);
+        }
+
+        let requests = collector.into_requests();
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            AccessMapRequest::Auth0 { client_id, client_secret, domain, .. }
+                if client_id == "auth0-client-id"
+                    && client_secret == "auth0-client-secret"
+                    && domain == "tenant.auth0.com"
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            AccessMapRequest::Monday { token, .. } if token == "monday-api-token"
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            AccessMapRequest::PayPal { client_id, client_secret, .. }
+                if client_id == "paypal-client-id" && client_secret == "paypal-client-secret"
+        )));
+    }
+
+    fn legacy_match(id: &str, token: &str, dependencies: &[(&str, &str)]) -> OwnedBlobMatch {
+        let mut matched = make_owned_blob_match();
+        let mut syntax = matched.rule.syntax().clone();
+        syntax.id = id.to_string();
+        syntax.name = id.to_string();
+        matched.rule = Arc::new(Rule::new(syntax));
+        matched.captures = SerializableCaptures {
+            captures: smallvec![SerializableCapture {
+                name: Some(intern("TOKEN")),
+                match_number: 1,
+                start: 0,
+                end: token.len(),
+                value: intern(token),
+            }],
+        };
+        matched.validation_success = true;
+        matched
+            .dependent_captures
+            .extend(dependencies.iter().map(|(name, value)| (name.to_string(), value.to_string())));
+        matched
+    }
+
+    #[test]
+    fn legacy_ids_route_to_token_access_map_handlers() {
+        let collector = AccessMapCollector::default();
+
+        for (id, token) in [
+            ("kingfisher.github.2", "github-token"),
+            ("kingfisher.slack.1", "slack-token"),
+            ("kingfisher.bitbucket.1", "bitbucket-token"),
+        ] {
+            maybe_record_access_map(&legacy_match(id, token, &[]), Some(&collector));
+        }
+
+        let requests = collector.into_requests();
+        assert!(requests.iter().any(
+            |request| matches!(request, AccessMapRequest::Github { token, .. } if token == "github-token")
+        ));
+        assert!(requests.iter().any(
+            |request| matches!(request, AccessMapRequest::Slack { token, .. } if token == "slack-token")
+        ));
+        assert!(requests.iter().any(
+            |request| matches!(request, AccessMapRequest::Bitbucket { token, .. } if token == "bitbucket-token")
+        ));
+    }
+
+    #[test]
+    fn veles_ids_route_to_token_access_map_handlers() {
+        // Veles rules validate through `Validation::Http`, so they reach the
+        // rule-ID dispatch rather than the Betterleaks handler dispatch. Without
+        // an explicit arm they match nothing and access mapping is silently lost.
+        let collector = AccessMapCollector::default();
+
+        for (id, token) in [
+            ("veles.secrets/slackappleveltoken", "xapp-token"),
+            ("veles.secrets/digitaloceanapikey", "dop_v1_token"),
+            ("veles.secrets/sendgrid", "SG.token"),
+        ] {
+            maybe_record_access_map(&legacy_match(id, token, &[]), Some(&collector));
+        }
+
+        let requests = collector.into_requests();
+        assert!(requests.iter().any(
+            |request| matches!(request, AccessMapRequest::Slack { token, .. } if token == "xapp-token")
+        ));
+        assert!(requests.iter().any(
+            |request| matches!(request, AccessMapRequest::DigitalOcean { token, .. } if token == "dop_v1_token")
+        ));
+        assert!(requests.iter().any(
+            |request| matches!(request, AccessMapRequest::SendGrid { token, .. } if token == "SG.token")
+        ));
+    }
+
+    #[test]
+    fn veles_rules_without_a_bearer_credential_are_not_access_mapped() {
+        // The reported secret is a git URL, not an API bearer token.
+        let collector = AccessMapCollector::default();
+
+        maybe_record_access_map(
+            &legacy_match(
+                "veles.secrets/bitbucketcredentials",
+                "https://u:p@bitbucket.org/t/r.git",
+                &[],
+            ),
+            Some(&collector),
+        );
+
+        assert!(collector.into_requests().is_empty());
+    }
+
+    #[test]
+    fn legacy_auth0_id_routes_multipart_credentials() {
+        let collector = AccessMapCollector::default();
+        let matched = legacy_match(
+            "kingfisher.auth0.1",
+            "client-secret",
+            &[("CLIENTID", "client-id"), ("DOMAIN", "tenant.auth0.com")],
+        );
+
+        maybe_record_access_map(&matched, Some(&collector));
+
+        let requests = collector.into_requests();
+        assert!(matches!(
+            requests.as_slice(),
+            [AccessMapRequest::Auth0 { client_id, client_secret, domain, .. }]
+                if client_id == "client-id"
+                    && client_secret == "client-secret"
+                    && domain == "tenant.auth0.com"
+        ));
     }
 
     #[test]

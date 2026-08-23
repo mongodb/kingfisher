@@ -170,19 +170,15 @@ pub async fn map_access_from_uri(uri: &str) -> Result<AccessMapResult> {
     }
 
     for coll in &collection_resources {
-        let has_write = auth_privileges.iter().any(|p| {
-            (p.resource_db.as_deref() == Some(&coll.database)
-                || p.resource_db.as_deref() == Some(""))
-                && (p.resource_collection.as_deref() == Some(&coll.name)
-                    || p.resource_collection.as_deref() == Some(""))
-                && p.actions.iter().any(|a| is_write_action(a))
-        });
+        let collection_actions =
+            effective_collection_actions(&auth_privileges, &coll.database, &coll.name);
+        let has_write = collection_actions.iter().any(|action| is_write_action(action));
         let risk = if has_write { "medium" } else { "low" };
 
         resources.push(ResourceExposure {
             resource_type: "collection".into(),
             name: format!("{}.{}", coll.database, coll.name),
-            permissions: Vec::new(),
+            permissions: collection_actions,
             risk: risk.into(),
             reason: if let Some(size) = coll.size_bytes {
                 format!("{} collection (size: {size} bytes)", coll.collection_type)
@@ -230,6 +226,7 @@ pub async fn map_access_from_uri(uri: &str) -> Result<AccessMapResult> {
         provider_metadata: Some(ProviderMetadata {
             version: Some(server_version),
             enterprise: None,
+            authorization_evidence: None,
         }),
         fingerprint: None,
     })
@@ -350,6 +347,28 @@ fn parse_connection_status(
         .collect();
 
     (username, auth_db, roles, privileges)
+}
+
+fn effective_collection_actions(
+    privileges: &[MongoPrivilege],
+    database: &str,
+    collection: &str,
+) -> Vec<String> {
+    let mut actions: Vec<String> = privileges
+        .iter()
+        .filter(|privilege| {
+            matches!(privilege.resource_db.as_deref(), Some(""))
+                || privilege.resource_db.as_deref() == Some(database)
+        })
+        .filter(|privilege| {
+            matches!(privilege.resource_collection.as_deref(), None | Some(""))
+                || privilege.resource_collection.as_deref() == Some(collection)
+        })
+        .flat_map(|privilege| privilege.actions.iter().cloned())
+        .collect();
+    actions.sort();
+    actions.dedup();
+    actions
 }
 
 fn parse_database_list(doc: &Document) -> Vec<DatabaseInfo> {
@@ -490,5 +509,41 @@ fn derive_severity(permissions: &PermissionSummary) -> Severity {
         Severity::Medium
     } else {
         Severity::Low
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{MongoPrivilege, effective_collection_actions};
+
+    #[test]
+    fn collection_permissions_include_database_and_matching_collection_scopes() {
+        let privileges = vec![
+            MongoPrivilege {
+                resource_db: Some("inventory".into()),
+                resource_collection: Some("".into()),
+                actions: vec!["find".into(), "insert".into()],
+            },
+            MongoPrivilege {
+                resource_db: Some("inventory".into()),
+                resource_collection: Some("orders".into()),
+                actions: vec!["update".into()],
+            },
+            MongoPrivilege {
+                resource_db: Some("inventory".into()),
+                resource_collection: Some("customers".into()),
+                actions: vec!["remove".into()],
+            },
+            MongoPrivilege {
+                resource_db: Some("".into()),
+                resource_collection: Some("".into()),
+                actions: vec!["find".into(), "listIndexes".into()],
+            },
+        ];
+
+        assert_eq!(
+            effective_collection_actions(&privileges, "inventory", "orders"),
+            vec!["find", "insert", "listIndexes", "update"]
+        );
     }
 }

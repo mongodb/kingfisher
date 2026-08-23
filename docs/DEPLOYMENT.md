@@ -10,7 +10,7 @@ This guide summarizes practical ways to deploy Kingfisher in teams, CI systems, 
 
 Best for developers, security engineers, and incident responders who want a local tool.
 
-- Install via Homebrew, PyPI, Docker, or release binaries.
+- Install via Homebrew, mise, PyPI, Docker, or release binaries.
 - Run scans directly against local repositories, remote git hosts, cloud storage, chat exports, and other supported inputs.
 - Use `--format toon`, `json`, `sarif`, or `html` depending on whether the consumer is a human, CI system, or another tool.
 
@@ -53,7 +53,7 @@ Best for security teams scanning many repositories or data sources from a contro
 - Run Kingfisher from a dedicated automation host, container job, or scheduled workflow.
 - Store platform credentials in your existing secret manager and inject them at runtime.
 - Prefer structured outputs like JSON, SARIF, or HTML for downstream ingestion and review.
-- Use `--access-map` when you are authorized to assess blast radius for validated credentials.
+- Use `--blast-radius` when you are authorized to assess blast radius for validated credentials.
 
 Typical centralized inputs:
 
@@ -91,7 +91,7 @@ See:
 - Start with self-serve or CI deployment before building centralized automation.
 - Prefer scoped credentials for integrations and validation.
 - Use structured output formats when results are consumed by other systems.
-- Treat `--access-map`, validation, and revocation as privileged operations and run them only where authorized.
+- Treat `--blast-radius`, validation, and revocation as privileged operations and run them only where authorized.
 - Keep rules and binaries updated together so documentation, features, and provider coverage stay aligned.
 
 ## Related Documentation

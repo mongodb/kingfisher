@@ -56,9 +56,7 @@ fn tls_mode_appears_in_help() {
 fn rules_list_works_with_tls_mode() {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
     cmd.arg("--tls-mode=lax").arg("rules").arg("list");
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("postgres").or(predicate::str::contains("Postgres")));
+    cmd.assert().success().stdout(predicate::str::contains("betterleaks.github-pat"));
 }
 
 /// Test that a scan with `--tls-mode=strict` runs successfully.
@@ -99,102 +97,22 @@ mod rule_tls_mode_tests {
         rules: Vec<RuleSyntax>,
     }
 
-    /// Test that the postgres rule has tls_mode: lax.
     #[test]
-    fn postgres_rule_has_lax_tls_mode() {
-        let yaml = include_str!("../crates/kingfisher-rules/data/rules/postgres.yml");
-        let raw: RawRules = serde_yaml::from_str(yaml).expect("postgres rules should parse");
+    fn legacy_custom_rules_preserve_tls_mode() {
+        let yaml = r#"
+rules:
+  - name: Custom database credential
+    id: custom.database.1
+    pattern: '(?P<TOKEN>postgres://[^ ]+)'
+    validation: { type: Postgres }
+    tls_mode: lax
+  - name: Custom SaaS token
+    id: custom.saas.1
+    pattern: '(?P<TOKEN>saas_[A-Za-z0-9]+)'
+"#;
+        let raw: RawRules = serde_yaml::from_str(yaml).expect("custom legacy rules should parse");
 
-        let postgres_rule = raw.rules.iter().find(|r| r.id == "kingfisher.postgres.1");
-        assert!(postgres_rule.is_some(), "postgres rule should exist");
-        assert_eq!(
-            postgres_rule.unwrap().tls_mode,
-            Some(TlsMode::Lax),
-            "postgres rule should have tls_mode: lax"
-        );
-    }
-
-    /// Test that the mysql rule has tls_mode: lax.
-    #[test]
-    fn mysql_rule_has_lax_tls_mode() {
-        let yaml = include_str!("../crates/kingfisher-rules/data/rules/mysql.yml");
-        let raw: RawRules = serde_yaml::from_str(yaml).expect("mysql rules should parse");
-
-        let mysql_rule = raw.rules.iter().find(|r| r.id == "kingfisher.mysql.1");
-        assert!(mysql_rule.is_some(), "mysql rule should exist");
-        assert_eq!(
-            mysql_rule.unwrap().tls_mode,
-            Some(TlsMode::Lax),
-            "mysql rule should have tls_mode: lax"
-        );
-    }
-
-    /// Test that the mongodb URI rule has tls_mode: lax.
-    #[test]
-    fn mongodb_uri_rule_has_lax_tls_mode() {
-        let yaml = include_str!("../crates/kingfisher-rules/data/rules/mongodb.yml");
-        let raw: RawRules = serde_yaml::from_str(yaml).expect("mongodb rules should parse");
-
-        let mongodb_rule = raw.rules.iter().find(|r| r.id == "kingfisher.mongodb.3");
-        assert!(mongodb_rule.is_some(), "mongodb.3 rule should exist");
-        assert_eq!(
-            mongodb_rule.unwrap().tls_mode,
-            Some(TlsMode::Lax),
-            "mongodb.3 rule should have tls_mode: lax"
-        );
-    }
-
-    /// Test that the jdbc rule has tls_mode: lax.
-    #[test]
-    fn jdbc_rule_has_lax_tls_mode() {
-        let yaml = include_str!("../crates/kingfisher-rules/data/rules/jdbc.yml");
-        let raw: RawRules = serde_yaml::from_str(yaml).expect("jdbc rules should parse");
-
-        let jdbc_rule = raw.rules.iter().find(|r| r.id == "kingfisher.jdbc.1");
-        assert!(jdbc_rule.is_some(), "jdbc rule should exist");
-        assert_eq!(
-            jdbc_rule.unwrap().tls_mode,
-            Some(TlsMode::Lax),
-            "jdbc rule should have tls_mode: lax"
-        );
-    }
-
-    /// Test that the jwt rule has tls_mode: lax.
-    #[test]
-    fn jwt_rule_has_lax_tls_mode() {
-        let yaml = include_str!("../crates/kingfisher-rules/data/rules/jwt.yml");
-        let raw: RawRules = serde_yaml::from_str(yaml).expect("jwt rules should parse");
-
-        let jwt_rule = raw.rules.iter().find(|r| r.id == "kingfisher.jwt.1");
-        assert!(jwt_rule.is_some(), "jwt rule should exist");
-        assert_eq!(
-            jwt_rule.unwrap().tls_mode,
-            Some(TlsMode::Lax),
-            "jwt rule should have tls_mode: lax"
-        );
-    }
-
-    /// Test that rules without tls_mode (e.g., SaaS APIs) have None.
-    #[test]
-    fn github_rule_has_no_tls_mode() {
-        let yaml = include_str!("../crates/kingfisher-rules/data/rules/github.yml");
-        let raw: RawRules = serde_yaml::from_str(yaml).expect("github rules should parse");
-
-        // GitHub rules should not have tls_mode set (SaaS API, always strict)
-        for rule in &raw.rules {
-            assert_eq!(rule.tls_mode, None, "github rule {} should not have tls_mode set", rule.id);
-        }
-    }
-
-    /// Test that rules without tls_mode (e.g., SaaS APIs) have None.
-    #[test]
-    fn aws_rule_has_no_tls_mode() {
-        let yaml = include_str!("../crates/kingfisher-rules/data/rules/aws.yml");
-        let raw: RawRules = serde_yaml::from_str(yaml).expect("aws rules should parse");
-
-        // AWS rules should not have tls_mode set (SaaS API, always strict)
-        for rule in &raw.rules {
-            assert_eq!(rule.tls_mode, None, "aws rule {} should not have tls_mode set", rule.id);
-        }
+        assert_eq!(raw.rules[0].tls_mode, Some(TlsMode::Lax));
+        assert_eq!(raw.rules[1].tls_mode, None);
     }
 }

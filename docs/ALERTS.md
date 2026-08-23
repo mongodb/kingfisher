@@ -79,8 +79,8 @@ independent of confidence:
   never confirmed against the provider — use `exclude-inactive` if you want
   assumed-valid findings to page you too.
 - **`access-map-only`** — keep only findings that have a successful, matching
-  `--access-map` result. Failed mapping attempts do not qualify. This requires
-  `--access-map` to also be passed; without it, the filter matches nothing and
+  `--blast-radius` result. Failed mapping attempts do not qualify. This requires
+  `--blast-radius` to also be passed; without it, the filter matches nothing and
   a `WARN` is logged before the scan starts. Add `--alert-prevent-empty` if the sink should
   skip delivery when no findings match. Since access-mapping only ever runs on
   validated, active credentials, this is the strictest tier — a subset of
@@ -94,7 +94,7 @@ didn't list.
 
 ```bash
 # Page only on findings with confirmed cloud impact.
-kingfisher scan ./repo --access-map \
+kingfisher scan ./repo --blast-radius \
   --alert-webhook "$SLACK_SECURITY_WEBHOOK" \
   --alert-finding-filter access-map-only \
   --alert-prevent-empty
@@ -167,7 +167,7 @@ red if any active. Facts list active/inactive/unknown counts and the top rules.
     "unknown": 1,
     "impacted_resources": 4,
     "unfiltered_total": 3,
-    "by_rule": [{"rule_id": "kingfisher.aws.1", "count": 2}],
+    "by_rule": [{"rule_id": "betterleaks.aws-access-token", "count": 2}],
     "target": "./repo"
   },
   "findings": [ /* array of FindingReporterRecord, capped at 200 */ ],
@@ -182,7 +182,7 @@ Every count in `summary` describes this sink's own filtered result set, with
 one exception: `unfiltered_total` is the whole-scan finding count, present so a
 consumer can tell a genuinely clean scan (`unfiltered_total == 0`) from a sink
 whose filters excluded everything (`total == 0 && unfiltered_total > 0`).
-`impacted_resources` is the number of resources `--access-map` attributed to
+`impacted_resources` is the number of resources `--blast-radius` attributed to
 this sink's findings, and is `0` when access-map wasn't run.
 
 > **Breaking change (v1.113.0):** `summary.filtered_total` was removed. It
@@ -250,7 +250,7 @@ alerts:
     - url: https://hooks.slack.com/services/T0/B0/CCC
       format: slack
       on: findings
-      finding_filter: access-map-only   # requires --access-map on the scan
+      finding_filter: access-map-only   # requires --blast-radius on the scan
       prevent_empty: true               # skip this sink when the filter leaves nothing to report
 ```
 

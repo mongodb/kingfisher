@@ -1,55 +1,50 @@
-# Revocation Support Matrix
+# Secret Revocation
 
-Kingfisher supports direct secret revocation through rule-level `revocation:` blocks.
+Kingfisher supports direct secret revocation for selected built-in imported detectors and
+through a rule-level `revocation:` block in the Kingfisher 1.x custom-rule format.
 
-Current coverage in built-in rules:
-- `36` provider families
-- `60` revocation-enabled rules
+Betterleaks does not currently define revocation metadata. Kingfisher therefore keeps operational
+revocation actions in `crates/kingfisher-rules/data/imported-rules-capabilities.yml`. This file is not a
+detection catalog: it contains no regexes or filters, and every entry is joined to the downloaded
+imported-detector catalog by upstream ID at build time.
 
-Use `kingfisher revoke --rule <rule-id> <secret>` to invoke these flows. See [USAGE.md](USAGE.md#direct-secret-revocation-with-kingfisher-revoke) for command details.
+Current built-in coverage includes:
 
-## Supported Providers
+- AWS access keys and GCP service-account keys
+- GitHub PAT, fine-grained PAT, OAuth, and refresh credentials
+- GitLab PAT formats
+- Buildkite user tokens, Cloudflare API tokens, crates.io keys, and DigitalOcean access tokens
+- Hugging Face credentials and selected Slack and Vercel token formats
 
-| Provider | Revocation Rule Count | Rule IDs |
-|---|---:|---|
-| `aws` | 1 | `kingfisher.aws.2` |
-| `browserstack` | 1 | `kingfisher.browserstack.1` |
-| `buildkite` | 1 | `kingfisher.buildkite.1` |
-| `cloudflare` | 1 | `kingfisher.cloudflare.1` |
-| `confluent` | 2 | `kingfisher.confluent.2`, `kingfisher.confluent.3` |
-| `cratesio` | 1 | `kingfisher.cratesio.1` |
-| `deviantart` | 1 | `kingfisher.deviantart.1` |
-| `digitalocean` | 1 | `kingfisher.digitalocean.1` |
-| `discord` | 1 | `kingfisher.discord.1` |
-| `doppler` | 6 | `kingfisher.doppler.1`, `kingfisher.doppler.2`, `kingfisher.doppler.3`, `kingfisher.doppler.4`, `kingfisher.doppler.5`, `kingfisher.doppler.6` |
-| `falai` | 1 | `kingfisher.falai.1` |
-| `gcp` | 1 | `kingfisher.gcp.1` |
-| `github` | 7 | `kingfisher.github.1`, `kingfisher.github.2`, `kingfisher.github.3`, `kingfisher.github.4`, `kingfisher.github.5`, `kingfisher.github.6`, `kingfisher.github.9` |
-| `gitlab` | 2 | `kingfisher.gitlab.1`, `kingfisher.gitlab.4` |
-| `google` | 1 | `kingfisher.google.4` |
-| `harness` | 1 | `kingfisher.harness.pat.1` |
-| `heroku` | 2 | `kingfisher.heroku.1`, `kingfisher.heroku.2` |
-| `jira` | 1 | `kingfisher.jira.3` |
-| `launchdarkly` | 1 | `kingfisher.launchdarkly.1` |
-| `linode` | 1 | `kingfisher.linode.1` |
-| `mapbox` | 1 | `kingfisher.mapbox.2` |
-| `mongodb` | 1 | `kingfisher.mongodb.1` |
-| `netlify` | 2 | `kingfisher.netlify.1`, `kingfisher.netlify.2` |
-| `npm` | 2 | `kingfisher.npm.1`, `kingfisher.npm.2` |
-| `particleio` | 2 | `kingfisher.particleio.1`, `kingfisher.particleio.2` |
-| `resend` | 1 | `kingfisher.resend.api_key.1` |
-| `sendgrid` | 1 | `kingfisher.sendgrid.1` |
-| `slack` | 4 | `kingfisher.slack.1`, `kingfisher.slack.2`, `kingfisher.slack.7`, `kingfisher.slack.8` |
-| `sumologic` | 1 | `kingfisher.sumologic.2` |
-| `tailscale` | 1 | `kingfisher.tailscale.1` |
-| `twilio` | 1 | `kingfisher.twilio.2` |
-| `twitch` | 1 | `kingfisher.twitch.1` |
-| `unkey` | 1 | `kingfisher.unkey.2` |
-| `vercel` | 5 | `kingfisher.vercel.1`, `kingfisher.vercel.2`, `kingfisher.vercel.3`, `kingfisher.vercel.4`, `kingfisher.vercel.5` |
-| `vonage` | 1 | `kingfisher.vonage.2` |
-| `vultr` | 1 | `kingfisher.vultr.1` |
+The capability file is the authoritative exact-ID list. Kingfisher intentionally omits actions
+when an upstream detector combines credential types with different revocation APIs, when required
+context cannot be bound safely, or when a provider lookup cannot identify the exact credential.
 
-## Notes
+Examples:
 
-- Coverage above is derived from built-in YAML rules under `crates/kingfisher-rules/data/rules/` that currently define a `revocation:` block.
-- A provider may have additional detection/validation rules that do not yet support revocation.
+```bash
+kingfisher revoke --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+
+kingfisher revoke --rule aws-access-token \
+  --var AKID=AKIAIOSFODNN7EXAMPLE \
+  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+```
+
+Kingfisher 1.x custom rules may define these revocation types:
+
+- `Http` for a single provider API request
+- `HttpMultiStep` for lookup-then-delete workflows
+- `AWS` for IAM access-key revocation
+- `GCP` for service-account key revocation
+
+Invoke a Kingfisher 1.x custom revocation rule with:
+
+```bash
+kingfisher revoke \
+  --rules-path ./custom-rules.yml \
+  --rule custom.provider.token \
+  "secret"
+```
+
+See [USAGE.md](USAGE.md#direct-secret-revocation-with-kingfisher-revoke) for the command and
+[RULES.md](RULES.md) for the Kingfisher 1.x custom-rule schema.

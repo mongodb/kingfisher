@@ -1,0 +1,57 @@
+rules:
+  - name: Custom Slack Token
+    id: slack.custom
+    pattern: '(xoxb-[a-z0-9-]+)'
+    revocation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: "{{ REVOCATION_URL }}"
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+
+  - name: Custom AWS Access Key
+    id: aws.custom
+    pattern: '(AKIA[0-9A-Z]{16})'
+    revocation:
+      type: AWS
+
+  - name: Custom GCP Service Account
+    id: gcp.custom
+    pattern: '(service_account)'
+    revocation:
+      type: GCP
+
+  - name: Custom GitHub Token
+    id: github.custom
+    pattern: '(ghp_[a-zA-Z0-9]+)'
+    revocation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: "{{ REVOCATION_URL }}"
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+
+  - name: Custom GitLab Token
+    id: gitlab.custom
+    pattern: '(glpat-[a-zA-Z0-9]+)'
+    revocation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: "{{ REVOCATION_URL }}"
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - type: StatusMatch
+              status: [200]

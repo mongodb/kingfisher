@@ -174,14 +174,16 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
             "<tr>\
                 <td>{}</td>\
                 <td>{}</td>\
+                <td>{}</td>\
                 <td><code>{}</code></td>\
                 <td>{}</td>\
                 <td><span class=\"status {}\">{}</span></td>\
                 <td>{}</td>\
                 <td>{}</td>\
              </tr>",
-            escape_html(&record.rule.name),
+            escape_html(&record.rule.title),
             escape_html(&record.rule.id),
+            escape_html(&record.rule.description),
             escape_html(&record.finding.path),
             git_url_html,
             status_class,
@@ -197,6 +199,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
             <tr>
               <th>Rule</th>
               <th>Rule ID</th>
+              <th>Description</th>
               <th>Path</th>
               <th>Git URL</th>
               <th>Validation</th>
@@ -220,11 +223,24 @@ fn render_access_map(access_map: Option<&Vec<AccessMapEntry>>) -> String {
     let mut items = String::new();
     for entry in entries {
         let account = entry.account.clone().unwrap_or_else(|| "(identity)".to_string());
+        let evidence_counts = entry
+            .provider_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.authorization_evidence.as_ref())
+            .map(|evidence| {
+                format!(
+                    ", {} policies, {} identity paths",
+                    evidence.policies.len(),
+                    evidence.paths.len()
+                )
+            })
+            .unwrap_or_default();
         items.push_str(&format!(
-            "<li><strong>{}</strong> <span>{}</span> ({} groups)</li>",
+            "<li><strong>{}</strong> <span>{}</span> ({} groups{})</li>",
             escape_html(&account),
             escape_html(&entry.provider.to_uppercase()),
-            entry.groups.len()
+            entry.groups.len(),
+            evidence_counts
         ));
     }
     format!(

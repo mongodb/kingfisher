@@ -267,17 +267,17 @@ mod tests {
     fn summary_mode_emits_suppression_notice() {
         let mut s = summary(50, 5);
         s.detail = crate::alerts::AlertDetail::Summary;
-        let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-x");
+        let rec = crate::alerts::make_test_record("betterleaks.aws-access-token", "fp-x");
         let p = build_payload(&s, &[&rec], false);
         let desc = p["embeds"][0]["description"].as_str().unwrap();
         assert!(desc.contains("per-finding detail suppressed"));
-        assert!(!desc.contains("kingfisher.aws.1"));
+        assert!(!desc.contains("betterleaks.aws-access-token"));
     }
 
     #[test]
     fn detail_mode_includes_fingerprint() {
         let s = summary(1, 1);
-        let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-d-99");
+        let rec = crate::alerts::make_test_record("betterleaks.aws-access-token", "fp-d-99");
         let p = build_payload(&s, &[&rec], false);
         let desc = p["embeds"][0]["description"].as_str().unwrap();
         assert!(desc.contains("fp:`fp-d-99`"));

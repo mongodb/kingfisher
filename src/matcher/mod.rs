@@ -32,13 +32,13 @@ use crate::{
     scanner_pool::ScannerPool,
     validation_body::ValidationResponseBody,
 };
-use kingfisher_scanner::primitives::find_secret_capture;
+use kingfisher_scanner::primitives::find_secret_capture_with_group;
 
 use self::{base64_decode::get_base64_strings as get_b64_strings, filter::filter_match};
 
 const MAX_CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8 MiB per scan segment
 const CHUNK_OVERLAP: usize = 64 * 1024; // 64 KiB overlap to catch boundary matches
-const RAW_MATCH_LOOKBACK: usize = 4 * 1024; // Re-scan a bounded suffix ending at the raw match.
+const RAW_MATCH_LOOKBACK: usize = 4 * 1024; // Initial exact-confirmation suffix.
 const BASE64_SCAN_LIMIT: usize = 64 * 1024 * 1024; // skip expensive Base64 pass on huge blobs
 // The old tree-sitter limit was 128 KiB due to full-AST parsing cost.
 // The lightweight regex-based lexer is O(n) line-by-line, so we can afford
@@ -87,6 +87,9 @@ pub struct BlobMatch<'a> {
     /// The location of the matching input in `blob.input`
     pub matching_input_offset_span: OffsetSpan,
 
+    /// Full regex-match span used for Betterleaks component proximity.
+    pub association_offset_span: OffsetSpan,
+
     /// The capture groups from the match
     pub captures: SerializableCaptures,
 
@@ -97,6 +100,7 @@ pub struct BlobMatch<'a> {
     pub validation_outcome: ValidationOutcome,
     pub calculated_entropy: f32,
     pub is_base64: bool,
+    pub dependent_captures: std::collections::BTreeMap<String, String>,
 }
 
 #[derive(Clone)]
@@ -224,11 +228,13 @@ impl<'a> Matcher<'a> {
             let base = offset as u64;
             self.scanner_pool.with(|scanner| {
                 scanner.scan(slice, |rule_id, from, to, _flags| {
-                    self.user_data.raw_matches_scratch.push(RawMatch {
-                        rule_id,
-                        start_idx: from + base,
-                        end_idx: to + base,
-                    });
+                    if (rule_id as usize) < self.rules_db.num_rules() {
+                        self.user_data.raw_matches_scratch.push(RawMatch {
+                            rule_id,
+                            start_idx: from + base,
+                            end_idx: to + base,
+                        });
+                    }
                     vectorscan_rs::Scan::Continue
                 })
             })?;
@@ -253,6 +259,7 @@ impl<'a> Matcher<'a> {
         previous_matches: &mut FxHashMap<usize, Vec<OffsetSpan>>,
         seen_matches: &mut FxHashSet<u64>,
         match_rule_indices: &mut Vec<usize>,
+        betterleaks_path_prefiltered: bool,
     ) -> Result<()>
     where
         'a: 'b,
@@ -275,6 +282,7 @@ impl<'a> Matcher<'a> {
         }
 
         let mut seen_raw_match_ends: FxHashSet<(usize, usize)> = FxHashSet::default();
+        let mut seen_prefilter_rules: FxHashSet<usize> = FxHashSet::default();
         let mut previous_full_matches: FxHashMap<usize, Vec<OffsetSpan>> = FxHashMap::default();
 
         for range in ranges.into_iter().rev() {
@@ -282,11 +290,13 @@ impl<'a> Matcher<'a> {
             let base = range.start as u64;
             self.scanner_pool.with(|scanner| {
                 scanner.scan(&input[range], |rule_id, from, to, _flags| {
-                    self.user_data.raw_matches_scratch.push(RawMatch {
-                        rule_id,
-                        start_idx: from + base,
-                        end_idx: to + base,
-                    });
+                    if (rule_id as usize) < self.rules_db.num_rules() {
+                        self.user_data.raw_matches_scratch.push(RawMatch {
+                            rule_id,
+                            start_idx: from + base,
+                            end_idx: to + base,
+                        });
+                    }
                     vectorscan_rs::Scan::Continue
                 })
             })?;
@@ -300,7 +310,9 @@ impl<'a> Matcher<'a> {
                 previous_matches,
                 seen_matches,
                 match_rule_indices,
+                betterleaks_path_prefiltered,
                 &mut seen_raw_match_ends,
+                &mut seen_prefilter_rules,
                 &mut previous_full_matches,
             );
         }
@@ -319,7 +331,9 @@ impl<'a> Matcher<'a> {
         previous_matches: &mut FxHashMap<usize, Vec<OffsetSpan>>,
         seen_matches: &mut FxHashSet<u64>,
         match_rule_indices: &mut Vec<usize>,
+        betterleaks_path_prefiltered: bool,
         seen_raw_match_ends: &mut FxHashSet<(usize, usize)>,
+        seen_prefilter_rules: &mut FxHashSet<usize>,
         previous_full_matches: &mut FxHashMap<usize, Vec<OffsetSpan>>,
     ) where
         'a: 'b,
@@ -329,36 +343,67 @@ impl<'a> Matcher<'a> {
             self.user_data.raw_matches_scratch.iter().rev()
         {
             let rule_id_usize: usize = rule_id as usize;
+            if betterleaks_path_prefiltered && rules_db.is_betterleaks_rule(rule_id_usize) {
+                continue;
+            }
             let rule = Arc::clone(&rules_db.rules()[rule_id_usize]);
             let re = &rules_db.anchored_regexes()[rule_id_usize];
             let end_idx_usize = end_idx as usize;
             let _ = start_idx; // Vectorscan block mode does not provide a reliable start offset.
-            if !seen_raw_match_ends.insert((rule_id_usize, end_idx_usize)) {
+            let (mut scan_start, scan_end) = if rules_db.uses_vectorscan_prefilter(rule_id_usize) {
+                if !seen_prefilter_rules.insert(rule_id_usize) {
+                    continue;
+                }
+                // Vectorscan PREFILTER guarantees candidate coverage but not exact end offsets.
+                // Confirm the rule once against the complete blob after its first candidate.
+                (0, blob.len())
+            } else {
+                if !seen_raw_match_ends.insert((rule_id_usize, end_idx_usize)) {
+                    continue;
+                }
+                if previous_full_matches.get(&rule_id_usize).is_some_and(|spans| {
+                    spans.iter().any(|span| span.start < end_idx_usize && end_idx_usize <= span.end)
+                }) {
+                    continue;
+                }
+                (end_idx_usize.saturating_sub(RAW_MATCH_LOOKBACK), end_idx_usize)
+            };
+            if !rule.matches_path(filename) {
                 continue;
             }
-
-            let scan_start = end_idx_usize.saturating_sub(RAW_MATCH_LOOKBACK);
             let before_len = matches.len();
-            filter_match(
-                blob,
-                rule,
-                re,
-                scan_start,
-                end_idx_usize,
-                matches,
-                Some(&mut *previous_full_matches),
-                previous_matches,
-                rule_id_usize,
-                seen_matches,
-                origin,
-                None,
-                false,
-                redact,
-                filename,
-                self.profiler.as_ref(),
-                self.respect_ignore_if_contains,
-                &self.inline_ignore_config,
-            );
+            loop {
+                let confirmed = filter_match(
+                    rules_db,
+                    blob,
+                    Arc::clone(&rule),
+                    re,
+                    scan_start,
+                    scan_end,
+                    matches,
+                    Some(&mut *previous_full_matches),
+                    previous_matches,
+                    rule_id_usize,
+                    seen_matches,
+                    origin,
+                    None,
+                    false,
+                    redact,
+                    filename,
+                    self.profiler.as_ref(),
+                    self.respect_ignore_if_contains,
+                    &self.inline_ignore_config,
+                    !rules_db.uses_vectorscan_prefilter(rule_id_usize),
+                );
+                if confirmed || scan_start == 0 {
+                    break;
+                }
+
+                // Ordinary candidates keep the bounded confirmation path. Only a failed exact
+                // scan widens toward the start of the blob, so matches have no lookback limit.
+                let lookback = scan_end - scan_start;
+                scan_start = scan_end.saturating_sub(lookback.saturating_mul(2));
+            }
             match_rule_indices
                 .extend(std::iter::repeat_n(rule_id_usize, matches.len() - before_len));
         }
@@ -379,17 +424,34 @@ impl<'a> Matcher<'a> {
         // Update local stats
         self.local_stats.blobs_seen += 1;
         self.local_stats.bytes_seen += blob.bytes().len() as u64;
+
+        // Preserve the complete source path for path expressions and filters. A deduplicated blob
+        // may have several origins; Betterleaks candidates survive when any path survives its
+        // global source prefilter, while rules from other sources are never governed by it.
+        let mut filename = None;
+        let mut saw_path = false;
+        let mut betterleaks_path_prefiltered = true;
+        for candidate in origin.iter().filter_map(|item| item.blob_path()) {
+            saw_path = true;
+            let candidate = candidate.to_string_lossy().into_owned();
+            if filename.is_none() {
+                filename = Some(candidate.clone());
+            }
+            if !self.rules_db.is_path_prefiltered(&candidate)? {
+                filename = Some(candidate);
+                betterleaks_path_prefiltered = false;
+                break;
+            }
+        }
+        let filename = filename.unwrap_or_else(|| "unknown_file".to_string());
+        if !saw_path {
+            betterleaks_path_prefiltered = self.rules_db.is_path_prefiltered(&filename)?;
+        }
+        if betterleaks_path_prefiltered && !self.rules_db.has_non_betterleaks_rules() {
+            return Ok(ScanResult::New(Vec::new()));
+        }
         self.local_stats.blobs_scanned += 1;
         self.local_stats.bytes_scanned += blob.bytes().len() as u64;
-
-        // Extract filename from origin
-        let filename = origin
-            .first()
-            .blob_path()
-            .and_then(|path| path.file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("unknown_file")
-            .to_string();
         // Opportunistically look for standalone Base64 blobs. If neither
         // the raw scan nor this check yields anything, we can return early
         // before doing any heavier work.
@@ -415,8 +477,8 @@ impl<'a> Matcher<'a> {
             &mut previous_matches,
             &mut seen_matches,
             &mut match_rule_indices,
+            betterleaks_path_prefiltered,
         )?;
-
         if matches.is_empty() && b64_items.is_empty() {
             return Ok(ScanResult::New(Vec::new()));
         }
@@ -428,10 +490,26 @@ impl<'a> Matcher<'a> {
             let mut b64_stack: Vec<(DecodedData, usize)> =
                 b64_items.drain(..).map(|d| (d, 0)).collect();
             while let Some((item, depth)) = b64_stack.pop() {
-                for (rule_id_usize, rule) in rules_db.rules().iter().enumerate() {
+                let mut candidate_rule_ids = Vec::new();
+                let mut seen_candidate_rules = FxHashSet::default();
+                self.scanner_pool.with(|scanner| {
+                    scanner.scan(&item.decoded, |rule_id, _from, _to, _flags| {
+                        let rule_id = rule_id as usize;
+                        if rule_id < rules_db.num_rules() && seen_candidate_rules.insert(rule_id) {
+                            candidate_rule_ids.push(rule_id);
+                        }
+                        vectorscan_rs::Scan::Continue
+                    })
+                })?;
+                for rule_id_usize in candidate_rule_ids {
+                    if betterleaks_path_prefiltered && rules_db.is_betterleaks_rule(rule_id_usize) {
+                        continue;
+                    }
+                    let rule = &rules_db.rules()[rule_id_usize];
                     let re = &rules_db.anchored_regexes()[rule_id_usize];
                     let before_len = matches.len();
                     filter_match(
+                        rules_db,
                         blob,
                         rule.clone(),
                         re,
@@ -450,6 +528,7 @@ impl<'a> Matcher<'a> {
                         self.profiler.as_ref(),
                         self.respect_ignore_if_contains,
                         &self.inline_ignore_config,
+                        false,
                     );
                     match_rule_indices
                         .extend(std::iter::repeat_n(rule_id_usize, matches.len() - before_len));
@@ -477,6 +556,9 @@ impl<'a> Matcher<'a> {
             &mut matches,
             &match_rule_indices,
         );
+        associate_betterleaks_components(blob.bytes(), &mut matches);
+        suppress_credential_uri_fallbacks(&mut matches);
+        deduplicate_imported_catalog_matches(&mut matches);
 
         // Finalize
         if !no_dedup && !matches.is_empty() {
@@ -501,6 +583,288 @@ impl<'a> Matcher<'a> {
 
         Ok(ScanResult::New(matches))
     }
+}
+
+fn suppress_credential_uri_fallbacks(matches: &mut Vec<BlobMatch<'_>>) {
+    let mut keep = vec![true; matches.len()];
+    for (fallback_index, fallback) in matches.iter().enumerate() {
+        if !fallback.rule.visible()
+            || !fallback.rule.id().starts_with("betterleaks.")
+            || !matches!(
+                &fallback.rule.syntax().validation,
+                Some(crate::rules::Validation::CredentialUri)
+            )
+            || fallback.matching_input.is_empty()
+        {
+            continue;
+        }
+
+        let has_specific_finding = matches.iter().enumerate().any(|(specific_index, specific)| {
+            specific_index != fallback_index
+                && specific.rule.visible()
+                && specific.rule.id().starts_with("betterleaks.")
+                && specific.rule.id() != fallback.rule.id()
+                && specific.association_offset_span.start < fallback.association_offset_span.end
+                && fallback.association_offset_span.start < specific.association_offset_span.end
+                && specific
+                    .matching_input
+                    .windows(fallback.matching_input.len())
+                    .any(|window| window == fallback.matching_input)
+        });
+        if has_specific_finding {
+            keep[fallback_index] = false;
+        }
+    }
+
+    let mut index = 0;
+    matches.retain(|_| {
+        let retain = keep[index];
+        index += 1;
+        retain
+    });
+}
+
+fn deduplicate_imported_catalog_matches(matches: &mut Vec<BlobMatch<'_>>) {
+    let mut keep = vec![true; matches.len()];
+    for left in 0..matches.len() {
+        if !keep[left] || !matches[left].rule.visible() {
+            continue;
+        }
+        let left_catalog = imported_catalog(matches[left].rule.id());
+        let Some(left_catalog) = left_catalog else { continue };
+        for right in (left + 1)..matches.len() {
+            if !keep[right]
+                || !matches[right].rule.visible()
+                || matches[left].matching_input_offset_span
+                    != matches[right].matching_input_offset_span
+            {
+                continue;
+            }
+            let Some(right_catalog) = imported_catalog(matches[right].rule.id()) else {
+                continue;
+            };
+            if left_catalog == right_catalog {
+                continue;
+            }
+            let left_rank = imported_rule_rank(matches[left].rule.as_ref());
+            let right_rank = imported_rule_rank(matches[right].rule.as_ref());
+            if right_rank > left_rank {
+                keep[left] = false;
+                break;
+            }
+            keep[right] = false;
+        }
+    }
+    let mut index = 0;
+    matches.retain(|_| {
+        let retain = keep[index];
+        index += 1;
+        retain
+    });
+}
+
+fn imported_catalog(rule_id: &str) -> Option<bool> {
+    if rule_id.starts_with("betterleaks.") {
+        Some(true)
+    } else if rule_id.starts_with("veles.") {
+        Some(false)
+    } else {
+        None
+    }
+}
+
+fn imported_rule_rank(rule: &Rule) -> (bool, bool) {
+    (rule.syntax().validation.is_some(), rule.id().starts_with("betterleaks."))
+}
+
+#[derive(Clone, Copy, Default)]
+struct ComponentWindow {
+    cols_before: usize,
+    cols_after: usize,
+    lines_before: usize,
+    lines_after: usize,
+    has_lines: bool,
+}
+
+fn parse_component_window(value: &str) -> Option<ComponentWindow> {
+    let value = value.trim();
+    if value.is_empty() || value == "0" {
+        return Some(ComponentWindow::default());
+    }
+
+    let mut window = ComponentWindow::default();
+    for token in value.split(',').map(str::trim) {
+        let (direction, amount_and_unit) = match token.as_bytes().first() {
+            Some(b'+' | b'-') => (token.as_bytes()[0], &token[1..]),
+            _ => (b' ', token),
+        };
+        let (amount, is_lines) = match amount_and_unit.as_bytes().last() {
+            Some(b'L' | b'l') => (&amount_and_unit[..amount_and_unit.len() - 1], true),
+            Some(b'C' | b'c') => (&amount_and_unit[..amount_and_unit.len() - 1], false),
+            _ => (amount_and_unit, false),
+        };
+        let mut amount = amount.parse::<usize>().ok()?;
+        if is_lines {
+            amount = amount.saturating_sub(1);
+            window.has_lines = true;
+            if direction != b'+' {
+                window.lines_before = window.lines_before.max(amount);
+            }
+            if direction != b'-' {
+                window.lines_after = window.lines_after.max(amount);
+            }
+        } else {
+            if direction != b'+' {
+                window.cols_before = window.cols_before.max(amount);
+            }
+            if direction != b'-' {
+                window.cols_after = window.cols_after.max(amount);
+            }
+        }
+    }
+    Some(window)
+}
+
+fn component_is_within(
+    bytes: &[u8],
+    line_starts: &[usize],
+    primary: OffsetSpan,
+    component: OffsetSpan,
+    within: &str,
+) -> bool {
+    let Some(window) = parse_component_window(within) else {
+        return false;
+    };
+    if within.trim().is_empty() || within.trim() == "0" {
+        return true;
+    }
+
+    if !window.has_lines {
+        return component.start >= primary.start.saturating_sub(window.cols_before)
+            && component.start < primary.end.saturating_add(window.cols_after).min(bytes.len());
+    }
+
+    let line =
+        |offset: usize| line_starts.partition_point(|start| *start <= offset).saturating_sub(1);
+    let primary_start_line = line(primary.start);
+    let primary_end_line = line(primary.end);
+    let component_line = line(component.start);
+    if component_line < primary_start_line.saturating_sub(window.lines_before)
+        || component_line > primary_end_line.saturating_add(window.lines_after)
+    {
+        return false;
+    }
+    if primary_start_line == primary_end_line && (window.cols_before > 0 || window.cols_after > 0) {
+        let column = |offset: usize| {
+            let line = line(offset);
+            offset.saturating_sub(line_starts.get(line).copied().unwrap_or_default())
+        };
+        let component_column = column(component.start);
+        return component_column >= column(primary.start).saturating_sub(window.cols_before)
+            && component_column < column(primary.end).saturating_add(window.cols_after);
+    }
+    true
+}
+
+fn span_distance(left: OffsetSpan, right: OffsetSpan) -> usize {
+    if left.end <= right.start {
+        right.start - left.end
+    } else if right.end <= left.start {
+        left.start.saturating_sub(right.end)
+    } else {
+        0
+    }
+}
+
+fn associate_betterleaks_components<'a>(bytes: &[u8], matches: &mut Vec<BlobMatch<'a>>) {
+    if !matches.iter().any(|finding| {
+        finding.rule.syntax().depends_on_rule.iter().flatten().any(|dep| dep.within.is_some())
+    }) {
+        return;
+    }
+    let mut line_starts = vec![0];
+    line_starts.extend(
+        bytes.iter().enumerate().filter(|(_, byte)| **byte == b'\n').map(|(index, _)| index + 1),
+    );
+
+    let mut keep = vec![true; matches.len()];
+    loop {
+        let mut changed = false;
+        for (primary_index, primary) in matches.iter().enumerate() {
+            if !keep[primary_index] {
+                continue;
+            }
+            for dependency in primary.rule.syntax().depends_on_rule.iter().flatten() {
+                let Some(within) = dependency.within.as_deref() else {
+                    continue;
+                };
+                let found = matches.iter().enumerate().any(|(candidate_index, candidate)| {
+                    keep[candidate_index]
+                        && candidate.rule.id() == dependency.rule_id
+                        && component_is_within(
+                            bytes,
+                            &line_starts,
+                            primary.association_offset_span,
+                            candidate.association_offset_span,
+                            within,
+                        )
+                });
+                if !found && !dependency.optional {
+                    keep[primary_index] = false;
+                    changed = true;
+                    break;
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+
+    let mut associated = vec![std::collections::BTreeMap::new(); matches.len()];
+    for (primary_index, primary) in matches.iter().enumerate().filter(|(index, _)| keep[*index]) {
+        for dependency in primary.rule.syntax().depends_on_rule.iter().flatten() {
+            let Some(within) = dependency.within.as_deref() else {
+                continue;
+            };
+            if let Some(component) = matches
+                .iter()
+                .enumerate()
+                .filter(|(index, candidate)| {
+                    keep[*index]
+                        && candidate.rule.id() == dependency.rule_id
+                        && component_is_within(
+                            bytes,
+                            &line_starts,
+                            primary.association_offset_span,
+                            candidate.association_offset_span,
+                            within,
+                        )
+                })
+                .map(|(_, candidate)| candidate)
+                .min_by_key(|candidate| {
+                    span_distance(
+                        primary.association_offset_span,
+                        candidate.association_offset_span,
+                    )
+                })
+            {
+                let value = component.captures.captures.first().map_or_else(
+                    || String::from_utf8_lossy(component.matching_input).into_owned(),
+                    |capture| capture.raw_value().to_string(),
+                );
+                associated[primary_index].insert(dependency.variable.to_uppercase(), value);
+            }
+        }
+    }
+
+    let mut index = 0;
+    matches.retain_mut(|finding| {
+        finding.dependent_captures.append(&mut associated[index]);
+        let retain = keep[index];
+        index += 1;
+        retain
+    });
 }
 
 /// Apply parser-based context verification only for HTML and CSS blobs.
@@ -565,9 +929,17 @@ fn maybe_apply_markup_context_gate<'a>(
             let Some(rule_idx) = match_rule_indices.get(*idx).copied() else {
                 return false;
             };
+            let Some(rule) = rules_db.get_rule(rule_idx) else {
+                return false;
+            };
             let re = &rules_db.anchored_regexes()[rule_idx];
             let expected_secret = matches[*idx].matching_input;
-            !verify_match_in_context_text(re, expected_secret, text.as_bytes())
+            !verify_match_in_context_text(
+                re,
+                expected_secret,
+                text.as_bytes(),
+                rule.betterleaks_secret_group(),
+            )
         });
         !remaining.is_empty()
     });
@@ -598,9 +970,12 @@ fn verify_match_in_context_text(
     re: &regex::bytes::Regex,
     expected_secret: &[u8],
     text: &[u8],
+    betterleaks_secret_group: Option<usize>,
 ) -> bool {
-    re.captures_iter(text)
-        .any(|captures| find_secret_capture(re, &captures).as_bytes() == expected_secret)
+    re.captures_iter(text).any(|captures| {
+        find_secret_capture_with_group(re, &captures, betterleaks_secret_group).as_bytes()
+            == expected_secret
+    })
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -622,9 +997,201 @@ mod test {
         entropy::calculate_shannon_entropy,
         origin::{Origin, OriginSet},
         rules::rule::{
-            DependsOnRule, HttpRequest, HttpValidation, PatternRequirements, RuleSyntax, Validation,
+            Confidence, DependsOnRule, HttpRequest, HttpValidation, PatternRequirements,
+            RuleSyntax, Validation,
         },
     };
+
+    type TestFinding = (String, Confidence, Option<String>, bool);
+
+    fn scan_test_rules(rules: Vec<Rule>, input: &[u8]) -> Result<Vec<TestFinding>> {
+        let rules_db = RulesDatabase::from_rules(rules)?;
+        let seen = BlobIdMap::new();
+        let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let mut matcher =
+            Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
+        let blob = Blob::from_bytes(input.to_vec());
+        let origin = OriginSet::from(Origin::from_file(PathBuf::from("compatibility.txt")));
+        let ScanResult::New(matches) =
+            matcher.scan_blob(&blob, &origin, None, false, true, true)?
+        else {
+            panic!("deduplication is disabled");
+        };
+        Ok(matches
+            .iter()
+            .map(|finding| {
+                (
+                    finding.rule.id().to_string(),
+                    finding.rule.confidence(),
+                    finding.dependent_captures.get("COMPONENT").cloned(),
+                    finding.rule.visible(),
+                )
+            })
+            .collect())
+    }
+
+    fn compatibility_rule(
+        id: &str,
+        pattern: &str,
+        confidence: Confidence,
+        filter: Option<crate::rules::BetterleaksExpr>,
+        dependencies: Vec<DependsOnRule>,
+        visible: bool,
+    ) -> Rule {
+        Rule::new(RuleSyntax {
+            id: id.into(),
+            name: id.into(),
+            pattern: pattern.into(),
+            confidence,
+            min_entropy: 0.0,
+            visible,
+            examples: vec![],
+            negative_examples: vec![],
+            references: vec![],
+            validation: None,
+            revocation: None,
+            depends_on_rule: dependencies.into_iter().map(Some).collect(),
+            pattern_requirements: None,
+            tls_mode: None,
+            path: None,
+            betterleaks_filter: filter,
+            betterleaks_secret_group: Some(1),
+            authoritative: true,
+            vectorscan_compatible: true,
+        })
+    }
+
+    fn set_confidence_filter(confidence: &str) -> crate::rules::BetterleaksExpr {
+        crate::rules::BetterleaksExpr::Sequence {
+            nodes: vec![
+                crate::rules::BetterleaksExpr::Call {
+                    callee: Box::new(crate::rules::BetterleaksExpr::Identifier {
+                        value: "setConfidence".into(),
+                    }),
+                    arguments: vec![crate::rules::BetterleaksExpr::String {
+                        value: confidence.into(),
+                    }],
+                },
+                crate::rules::BetterleaksExpr::Bool { value: false },
+            ],
+        }
+    }
+
+    #[test]
+    fn dynamic_confidence_is_filtered_after_promotion_or_demotion() -> Result<()> {
+        let mut promoted = compatibility_rule(
+            "betterleaks.promoted",
+            r"(PROMOTE_[A-Z0-9]{12})",
+            Confidence::Low,
+            Some(set_confidence_filter("high")),
+            vec![],
+            true,
+        );
+        promoted.set_runtime_confidence_filter(Confidence::Medium, false);
+        let mut demoted = compatibility_rule(
+            "betterleaks.demoted",
+            r"(DEMOTE_[A-Z0-9]{12})",
+            Confidence::Medium,
+            Some(set_confidence_filter("low")),
+            vec![],
+            true,
+        );
+        demoted.set_runtime_confidence_filter(Confidence::Medium, false);
+
+        let findings =
+            scan_test_rules(vec![promoted, demoted], b"PROMOTE_123456ABCDEF DEMOTE_123456ABCDEF")?;
+        assert_eq!(findings, [("betterleaks.promoted".to_string(), Confidence::High, None, true)]);
+        Ok(())
+    }
+
+    #[test]
+    fn required_betterleaks_components_enforce_line_and_byte_windows() -> Result<()> {
+        let helper = compatibility_rule(
+            "betterleaks.component",
+            r"(COMP_[A-Z0-9]{8})",
+            Confidence::Medium,
+            None,
+            vec![],
+            false,
+        );
+        let primary = compatibility_rule(
+            "betterleaks.primary",
+            r"(PRIMARY_[A-Z0-9]{8})",
+            Confidence::High,
+            None,
+            vec![DependsOnRule {
+                rule_id: "betterleaks.component".into(),
+                variable: "COMPONENT".into(),
+                optional: false,
+                within: Some("5L".into()),
+            }],
+            true,
+        );
+
+        let near = scan_test_rules(
+            vec![helper.clone(), primary.clone()],
+            b"COMP_FAR00000\none\ntwo\nthree\nfour\nPRIMARY_ABCDEFGH\nCOMP_NEAR0000",
+        )?;
+        assert!(near.iter().any(|(id, _, associated, _)| {
+            id == "betterleaks.primary" && associated.as_deref() == Some("COMP_NEAR0000")
+        }));
+        assert!(
+            near.iter().any(|(id, _, _, visible)| { id == "betterleaks.component" && !visible })
+        );
+
+        let far = scan_test_rules(
+            vec![helper.clone(), primary],
+            b"COMP_12345678\none\ntwo\nthree\nfour\nPRIMARY_ABCDEFGH",
+        )?;
+        assert!(!far.iter().any(|(id, _, _, _)| id == "betterleaks.primary"));
+
+        let byte_primary = compatibility_rule(
+            "betterleaks.byte-primary",
+            r"(BYTEPRIMARY_[A-Z0-9]{8})",
+            Confidence::High,
+            None,
+            vec![DependsOnRule {
+                rule_id: "betterleaks.component".into(),
+                variable: "COMPONENT".into(),
+                optional: false,
+                within: Some("8C".into()),
+            }],
+            true,
+        );
+        let near = scan_test_rules(
+            vec![helper.clone(), byte_primary.clone()],
+            b"BYTEPRIMARY_ABCDEFGH COMP_12345678",
+        )?;
+        assert!(near.iter().any(|(id, _, associated, _)| {
+            id == "betterleaks.byte-primary" && associated.as_deref() == Some("COMP_12345678")
+        }));
+        let far = scan_test_rules(
+            vec![helper, byte_primary],
+            b"BYTEPRIMARY_ABCDEFGH -------- COMP_12345678",
+        )?;
+        assert!(!far.iter().any(|(id, _, _, _)| id == "betterleaks.byte-primary"));
+        Ok(())
+    }
+
+    #[test]
+    fn old_yaml_dependency_without_within_does_not_suppress_primary() -> Result<()> {
+        let primary = compatibility_rule(
+            "custom.legacy-primary",
+            r"(LEGACY_[A-Z0-9]{8})",
+            Confidence::High,
+            None,
+            vec![DependsOnRule {
+                rule_id: "custom.missing".into(),
+                variable: "COMPONENT".into(),
+                optional: false,
+                within: None,
+            }],
+            true,
+        );
+        let findings = scan_test_rules(vec![primary], b"LEGACY_12345678")?;
+        assert_eq!(findings.len(), 1);
+        Ok(())
+    }
 
     proptest! {
         #[test]
@@ -661,6 +1228,11 @@ mod test {
                 depends_on_rule: vec![],
                 pattern_requirements: None,
                 tls_mode: None,
+                path: None,
+                betterleaks_filter: None,
+                betterleaks_secret_group: None,
+                authoritative: true,
+                vectorscan_compatible: true,
             });
 
             let rules_db  = RulesDatabase::from_rules(vec![rule]).unwrap();
@@ -728,14 +1300,23 @@ mod test {
                 Some(DependsOnRule {
                     rule_id: "d8f3c34b-015f-4cd6-b411-b1366493104c".to_string(),
                     variable: "email".to_string(),
+                    optional: false,
+                    within: None,
                 }),
                 Some(DependsOnRule {
                     rule_id: "8910f364-7718-4a27-a435-d2da13e6ba9e".to_string(),
                     variable: "domain".to_string(),
+                    optional: false,
+                    within: None,
                 }),
             ],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         })];
         let rules_db = RulesDatabase::from_rules(rules)?;
         let input = "some test data for vectorscan";
@@ -786,6 +1367,11 @@ mod test {
                 checksum: None,
             }),
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         })];
 
         let rules_db = RulesDatabase::from_rules(rules)?;
@@ -855,6 +1441,11 @@ mod test {
                 checksum: None,
             }),
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         })];
 
         let rules_db = RulesDatabase::from_rules(rules)?;
@@ -897,6 +1488,129 @@ mod test {
     // ---------------------------------------------------------------------
     // additional deterministic unit-tests
     // ---------------------------------------------------------------------
+
+    #[test]
+    fn betterleaks_path_rules_receive_the_complete_source_path() -> Result<()> {
+        let rule = Rule::new(RuleSyntax {
+            id: "custom.path-aware".into(),
+            name: "path-aware test".into(),
+            pattern: r"(secret_[a-z0-9]{8})".into(),
+            path: Some(r"(?:^|/)src/nested/config\.txt$".into()),
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
+            confidence: Confidence::High,
+            min_entropy: 0.0,
+            visible: true,
+            examples: vec![],
+            negative_examples: vec![],
+            references: vec![],
+            validation: None,
+            revocation: None,
+            depends_on_rule: vec![],
+            pattern_requirements: None,
+            tls_mode: None,
+        });
+        let rules_db = RulesDatabase::from_rules(vec![rule])?;
+        let seen_blobs = BlobIdMap::new();
+        let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let mut matcher = Matcher::new(
+            &rules_db,
+            scanner_pool,
+            &seen_blobs,
+            None,
+            false,
+            None,
+            &[],
+            false,
+            true,
+        )?;
+        let blob = Blob::from_bytes(b"secret_abcd1234".to_vec());
+        let origin = OriginSet::from(Origin::from_file(PathBuf::from("src/nested/config.txt")));
+
+        let ScanResult::New(matches) =
+            matcher.scan_blob(&blob, &origin, None, false, false, false)?
+        else {
+            panic!("fresh blob should return a new scan result");
+        };
+        assert_eq!(matches.len(), 1);
+        Ok(())
+    }
+
+    #[test]
+    fn betterleaks_source_prefilter_only_gates_betterleaks_rules() -> Result<()> {
+        let prefilter = crate::defaults::get_builtin_rules(None)?.betterleaks_prefilter;
+        let rule = |id: &str, pattern: &str| {
+            Rule::new(RuleSyntax {
+                id: id.into(),
+                name: format!("Rule {id}"),
+                pattern: pattern.into(),
+                path: None,
+                betterleaks_filter: None,
+                betterleaks_secret_group: None,
+                authoritative: true,
+                vectorscan_compatible: true,
+                confidence: Confidence::High,
+                min_entropy: 0.0,
+                visible: true,
+                examples: vec![],
+                negative_examples: vec![],
+                references: vec![],
+                validation: None,
+                revocation: None,
+                depends_on_rule: vec![],
+                pattern_requirements: None,
+                tls_mode: None,
+            })
+        };
+        let rules_db = RulesDatabase::from_rules_with_betterleaks_prefilter(
+            vec![
+                rule("betterleaks.path-prefilter-test", r"(betterleaks_[A-Za-z0-9]{16})"),
+                rule("custom.path-prefilter-test", r"(toml_[A-Za-z0-9]{16})"),
+                rule("private.path-prefilter-test", r"(yaml_[A-Za-z0-9]{16})"),
+                rule("veles.test/pathprefilter", r"(veles_[A-Za-z0-9]{16})"),
+            ],
+            prefilter,
+        )?;
+        let seen = BlobIdMap::new();
+        let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let mut matcher =
+            Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
+        let blob = Blob::from_bytes(
+            b"betterleaks_Q7mZ2pL9xR4vN8kT\ntoml_Q7mZ2pL9xR4vN8kT\n\
+yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
+                .to_vec(),
+        );
+
+        let source = OriginSet::from(Origin::from_file(PathBuf::from("src/config.rs")));
+        let ScanResult::New(source_matches) =
+            matcher.scan_blob(&blob, &source, None, false, true, true)?
+        else {
+            panic!("fresh blob should return a new scan result");
+        };
+        assert_eq!(source_matches.len(), 4);
+
+        let excluded =
+            OriginSet::from(Origin::from_file(PathBuf::from("node_modules/package/README.md")));
+        let ScanResult::New(excluded_matches) =
+            matcher.scan_blob(&blob, &excluded, None, false, true, true)?
+        else {
+            panic!("deduplication is disabled");
+        };
+        let mut excluded_ids =
+            excluded_matches.iter().map(|item| item.rule.id()).collect::<Vec<_>>();
+        excluded_ids.sort_unstable();
+        assert_eq!(
+            excluded_ids,
+            vec![
+                "custom.path-prefilter-test",
+                "private.path-prefilter-test",
+                "veles.test/pathprefilter",
+            ]
+        );
+        Ok(())
+    }
 
     /// `get_base64_strings` should recognise a well-formed token, decode it,
     /// and report correct byte-offsets.
@@ -972,6 +1686,11 @@ mod test {
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -997,7 +1716,7 @@ mod test {
     }
 
     #[test]
-    fn scan_blob_preserves_matches_and_order_across_chunk_boundary() -> Result<()> {
+    fn scan_blob_finds_matches_across_chunk_boundary() -> Result<()> {
         const TOKEN: &[u8] = b"chunk_boundary_token_7f3a9c";
 
         let rule = Rule::new(RuleSyntax {
@@ -1015,6 +1734,11 @@ mod test {
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -1043,8 +1767,94 @@ mod test {
             ),
         };
 
-        let starts: Vec<_> = found.iter().map(|m| m.matching_input_offset_span.start).collect();
-        assert_eq!(starts, vec![later_start, boundary_start]);
+        let mut starts: Vec<_> = found.iter().map(|m| m.matching_input_offset_span.start).collect();
+        starts.sort_unstable();
+        assert_eq!(starts, vec![boundary_start, later_start]);
+        Ok(())
+    }
+
+    #[test]
+    fn scan_blob_confirms_exact_matches_longer_than_initial_lookback() -> Result<()> {
+        let token_rule = Rule::new(RuleSyntax {
+            id: "betterleaks.1password-service-account-token-test".into(),
+            name: "1Password service account token".into(),
+            pattern: r"ops_eyJ[A-Za-z0-9+/]{250,}={0,3}".into(),
+            confidence: Confidence::High,
+            min_entropy: 0.0,
+            visible: true,
+            examples: vec![],
+            negative_examples: vec![],
+            references: vec![],
+            validation: None,
+            revocation: None,
+            depends_on_rule: vec![],
+            pattern_requirements: None,
+            tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: Some(0),
+            authoritative: true,
+            vectorscan_compatible: true,
+        });
+        let private_key_rule = Rule::new(RuleSyntax {
+            id: "test.long-private-key".into(),
+            name: "Long private key".into(),
+            pattern: r"(-----BEGIN PRIVATE KEY-----\n[A-Za-z0-9+/\n]+\n-----END PRIVATE KEY-----)"
+                .into(),
+            confidence: Confidence::High,
+            min_entropy: 0.0,
+            visible: true,
+            examples: vec![],
+            negative_examples: vec![],
+            references: vec![],
+            validation: None,
+            revocation: None,
+            depends_on_rule: vec![],
+            pattern_requirements: None,
+            tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
+        });
+        let rules_db = RulesDatabase::from_rules(vec![token_rule, private_key_rule])?;
+        assert!(!rules_db.uses_vectorscan_prefilter(0));
+        assert!(!rules_db.uses_vectorscan_prefilter(1));
+
+        const ALPHABET: &[u8] = b"A1b2C3d4E5f6G7h8I9j0K+L/MnOpQrStUvWxYz";
+        let mut token = b"ops_eyJ".to_vec();
+        token.extend(ALPHABET.iter().copied().cycle().take(6 * 1024));
+
+        let key_body: Vec<u8> = ALPHABET
+            .iter()
+            .copied()
+            .chain(std::iter::once(b'\n'))
+            .cycle()
+            .take(70 * 1024)
+            .collect();
+        let mut private_key = b"-----BEGIN PRIVATE KEY-----\n".to_vec();
+        private_key.extend_from_slice(&key_body);
+        private_key.extend_from_slice(b"\n-----END PRIVATE KEY-----");
+
+        let mut input = token.clone();
+        input.push(b' ');
+        input.extend_from_slice(&private_key);
+        let blob = Blob::from_bytes(input);
+        let origin = OriginSet::from(Origin::from_file(PathBuf::from("long-secrets.txt")));
+        let seen = BlobIdMap::new();
+        let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let mut matcher =
+            Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
+
+        let ScanResult::New(matches) =
+            matcher.scan_blob(&blob, &origin, None, false, false, true)?
+        else {
+            panic!("fresh blob should return new matches");
+        };
+        assert_eq!(matches.len(), 2);
+        assert!(matches.iter().any(|matched| matched.matching_input == token));
+        assert!(matches.iter().any(|matched| matched.matching_input == private_key));
         Ok(())
     }
 
@@ -1065,6 +1875,11 @@ mod test {
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
         let seen = BlobIdMap::new();
@@ -1100,6 +1915,11 @@ mod test {
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
         let seen = BlobIdMap::new();
@@ -1143,6 +1963,11 @@ line2
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
 
@@ -1193,10 +2018,25 @@ line2
     }
 
     #[test]
+    fn serializes_betterleaks_secret_without_losing_named_capture() {
+        use regex::bytes::Regex;
+
+        let re = Regex::new(r"(?:(?P<optional>a)|b)(?P<secret>c)").unwrap();
+        let caps = re.captures(b"bc").expect("expected captures");
+        let serialized =
+            SerializableCaptures::from_captures_with_secret_group(&caps, b"bc", &re, Some(0));
+        let entries: Vec<(Option<&str>, i32, &str)> =
+            serialized.captures.iter().map(|cap| (cap.name, cap.match_number, cap.value)).collect();
+
+        assert_eq!(entries[0], (Some("TOKEN"), 2, "c"));
+        assert_eq!(entries[1], (Some("secret"), 2, "c"));
+    }
+
+    #[test]
     fn parser_second_pass_keeps_verified_contextual_match() -> Result<()> {
         let token = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
         let rule = Rule::new(RuleSyntax {
-            id: "kingfisher.auth0.2".into(),
+            id: "custom.auth0.secret".into(),
             name: "auth0 secret".into(),
             pattern: "(?xi)\\bauth0(?:.|[\\n\\r]){0,16}?(?:secret|token)(?:.|[\\n\\r]){0,64}?\\b([a-z0-9_-]{64,})\\b".into(),
             confidence: crate::rules::rule::Confidence::Medium,
@@ -1210,6 +2050,11 @@ line2
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -1242,7 +2087,7 @@ line2
     fn parser_second_pass_suppresses_unverified_contextual_match() -> Result<()> {
         let token = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
         let rule = Rule::new(RuleSyntax {
-            id: "kingfisher.auth0.2".into(),
+            id: "custom.auth0.secret".into(),
             name: "auth0 secret".into(),
             pattern: "(?xi)\\bauth0(?:.|[\\n\\r]){0,16}?(?:secret|token)(?:.|[\\n\\r]){0,64}?\\b([a-z0-9_-]{64,})\\b".into(),
             confidence: crate::rules::rule::Confidence::Medium,
@@ -1256,6 +2101,11 @@ line2
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -1292,7 +2142,7 @@ line2
     fn strict_context_rule_survives_without_classifier_gating() -> Result<()> {
         let token = "abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234abcd1234";
         let rule = Rule::new(RuleSyntax {
-            id: "kingfisher.auth0.2".into(),
+            id: "custom.auth0.secret".into(),
             name: "auth0 secret".into(),
             pattern: "(?xi)\\bauth0(?:.|[\\n\\r]){0,16}?(?:secret|token)(?:.|[\\n\\r]){0,64}?\\b([a-z0-9_-]{64,})\\b".into(),
             confidence: crate::rules::rule::Confidence::Medium,
@@ -1306,6 +2156,11 @@ line2
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -1335,7 +2190,7 @@ line2
     -> Result<()> {
         let token = "xcexacEQFtULkSTDCXejdWy5ew8NyU9QJoip5a97TE7A";
         let rule = Rule::new(RuleSyntax {
-            id: "kingfisher.livekit.2".into(),
+            id: "custom.livekit.secret".into(),
             name: "livekit api secret".into(),
             pattern: "(?xi)\\b(?:LIVEKIT_API_SECRET|livekit_api_secret|livekit[-_]?secret|livekitSecret)\\s*[:=]\\s*['\"]?([A-Za-z0-9]{43,44})['\"]?\\b".into(),
             confidence: crate::rules::rule::Confidence::Medium,
@@ -1349,6 +2204,11 @@ line2
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -1379,7 +2239,7 @@ line2
 
         let token = "xcexacEQFtULkSTDCXejdWy5ew8NyU9QJoip5a97TE7A";
         let rule = Rule::new(RuleSyntax {
-            id: "kingfisher.livekit.2".into(),
+            id: "custom.livekit.secret".into(),
             name: "livekit api secret".into(),
             pattern: "(?xi)\\b(?:LIVEKIT_API_SECRET|livekit_api_secret|livekit[-_]?secret|livekitSecret)\\s*[:=]\\s*['\"]?([A-Za-z0-9]{43,44})['\"]?\\b".into(),
             confidence: crate::rules::rule::Confidence::Medium,
@@ -1391,11 +2251,18 @@ line2
             validation: None::<Validation>,
             revocation: None,
             depends_on_rule: vec![Some(DependsOnRule {
-                rule_id: "kingfisher.livekit.1".into(),
+                rule_id: "custom.livekit.url".into(),
                 variable: "API_KEY".into(),
+                optional: false,
+                within: None,
             })],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -1423,7 +2290,7 @@ line2
     fn self_identifying_rule_remains_hyperscan_only() -> Result<()> {
         let token = "CCIPAT_FERZRjTN451xnDCy1y9gWn_79fb6ca4d0e5f833612eee17de397a9dca0a9e9f";
         let rule = Rule::new(RuleSyntax {
-            id: "kingfisher.circleci.1".into(),
+            id: "custom.circleci.token".into(),
             name: "circleci pat".into(),
             pattern: "(?x)\\b(CCIPAT_[A-Za-z0-9]{22}_[a-z0-9]{40})\\b".into(),
             confidence: crate::rules::rule::Confidence::Medium,
@@ -1437,6 +2304,11 @@ line2
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -1460,7 +2332,7 @@ line2
     fn self_identifying_charclass_prefix_rule_remains_hyperscan_only() -> Result<()> {
         let token = "xoxb-730191371696-1413868247813-IG7Z6nYevC2hdviE3aJhb5kY";
         let rule = Rule::new(RuleSyntax {
-            id: "kingfisher.slack.2".into(),
+            id: "custom.slack.token".into(),
             name: "slack token".into(),
             pattern:
                 "(?xi)\\b(xox[pbarose][-0-9]{0,3}-[0-9a-z]{6,15}-[0-9a-z]{6,15}-[-0-9a-z]{6,66})\\b"
@@ -1476,6 +2348,11 @@ line2
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -1501,7 +2378,7 @@ line2
 
     fn generic_auth0_rule() -> Rule {
         Rule::new(RuleSyntax {
-            id: "kingfisher.auth0.2".into(),
+            id: "custom.auth0.secret".into(),
             name: "auth0 secret".into(),
             pattern: "(?xi)\\bauth0(?:.|[\\n\\r]){0,16}?(?:secret|token)(?:.|[\\n\\r]){0,64}?\\b([a-z0-9_-]{64,})\\b".into(),
             confidence: crate::rules::rule::Confidence::Medium,
@@ -1515,6 +2392,11 @@ line2
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         })
     }
 
@@ -1586,7 +2468,7 @@ line2
     #[test]
     fn html_gate_does_not_affect_self_identifying_rule_in_prose() -> Result<()> {
         let rule = Rule::new(RuleSyntax {
-            id: "kingfisher.google.7".into(),
+            id: "custom.google.token".into(),
             name: "google api key".into(),
             pattern: "(?xi)\\b(AIzaSy[A-Za-z0-9_-]{33})".into(),
             confidence: crate::rules::rule::Confidence::Medium,
@@ -1600,6 +2482,11 @@ line2
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         });
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
         let seen = BlobIdMap::new();

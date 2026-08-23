@@ -6,7 +6,7 @@ Set TypingSpeed 60ms
 Set Framerate 60
 Set PlaybackSpeed 1.3
 
-Type "kingfisher scan https://github.com/leaktk/fake-leaks.git --access-map --view-report"
+Type "kingfisher scan https://github.com/leaktk/fake-leaks.git --blast-radius --view-report"
 Enter
 
 Wait+Screen@30s /(report|findings|summary|kingfisher)/

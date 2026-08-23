@@ -107,7 +107,7 @@ mod tests {
     fn summary_mode_drops_findings_array() {
         let mut s = empty_summary();
         s.detail = crate::alerts::AlertDetail::Summary;
-        let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-abc");
+        let rec = crate::alerts::make_test_record("betterleaks.aws-access-token", "fp-abc");
         let p = build_payload(&s, &[&rec, &rec, &rec], false);
         // In summary mode the findings array is empty, but findings_omitted
         // accurately reflects what was dropped so SIEMs still see the count.
@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn fingerprint_round_trips_in_detail_mode() {
         let s = empty_summary();
-        let rec = crate::alerts::make_test_record("kingfisher.aws.1", "fp-roundtrip");
+        let rec = crate::alerts::make_test_record("betterleaks.aws-access-token", "fp-roundtrip");
         let p = build_payload(&s, &[&rec], false);
         assert_eq!(p["findings"][0]["finding"]["fingerprint"], "fp-roundtrip");
     }

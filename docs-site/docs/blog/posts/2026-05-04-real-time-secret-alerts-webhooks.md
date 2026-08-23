@@ -152,7 +152,7 @@ payload carries a stable `fingerprint` — the same one Kingfisher emits in
 its baseline file and SARIF report. Concretely:
 
 ```
-• kingfisher.aws.1 at src/foo.rs:42 — <redacted> (validation: Active Credential) — fp:1635470773610661884
+• betterleaks.aws-access-token at src/foo.rs:42 — <redacted> (validation: Active Credential) — fp:1635470773610661884
 ```
 
 That ID is deterministic across runs. Hook it up to your dedupe layer of

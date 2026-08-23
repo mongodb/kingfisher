@@ -29,6 +29,15 @@ impl std::fmt::Display for SsrfBlockedError {
 
 impl std::error::Error for SsrfBlockedError {}
 
+/// Operator-facing text recorded on a finding when a validation target was
+/// refused by the SSRF gate.
+///
+/// Deliberately constant: the connection outcome must not leak whether the
+/// blocked host/port was open, closed, or filtered, otherwise the scan report
+/// becomes an internal-network port-scanning oracle.
+pub const SSRF_BLOCKED_MESSAGE: &str =
+    "skipped non-public host (SSRF protection; use --allow-internal-ips to permit)";
+
 use super::GLOBAL_USER_AGENT;
 use kingfisher_rules::ResponseMatcher;
 
@@ -567,6 +576,34 @@ pub async fn check_url_resolvable(
     allow_internal_ips: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let host = url.host_str().ok_or("No host in URL")?;
+    let port = url.port().unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
+    check_host_resolvable(host, port, allow_internal_ips).await
+}
+
+/// Apply the same SSRF gate as [`check_url_resolvable`] to a bare `host` /
+/// `port` pair.
+///
+/// This exists for non-HTTP validators (MongoDB, MySQL, Postgres, JDBC, …)
+/// whose connection targets are not expressible as an [`Url`] — for example
+/// comma-separated MongoDB seed lists or multi-host Postgres configs. Callers
+/// must invoke this for **every** host they are about to dial, because a single
+/// unchecked host is enough to turn the scanner into an SSRF primitive.
+///
+/// The TOCTOU caveat documented on [`check_url_resolvable`] applies here too.
+pub async fn check_host_resolvable(
+    host: &str,
+    port: u16,
+    allow_internal_ips: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
+    // Tolerate bracketed IPv6 literals (`[::1]`) and a stray trailing dot on
+    // fully-qualified names (`example.com.`).
+    let host = host.trim();
+    let host = host.strip_prefix('[').and_then(|h| h.strip_suffix(']')).unwrap_or(host);
+    let host = host.strip_suffix('.').unwrap_or(host);
+
+    if host.is_empty() {
+        return Err("No host to resolve".into());
+    }
 
     // If the host is already an IP literal, check it directly without DNS.
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
@@ -582,7 +619,6 @@ pub async fn check_url_resolvable(
     }
 
     // Hostname — resolve via DNS and check each resolved address.
-    let port = url.port().unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
     let addr = format!("{}:{}", host, port);
     let mut resolved_any = false;
     for socket_addr in lookup_host(&addr).await? {
@@ -871,5 +907,39 @@ mod tests {
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();
         assert!(err.contains("SSRF protection"), "expected SSRF error, got: {}", err);
+    }
+
+    #[tokio::test]
+    async fn check_host_resolvable_rejects_rfc1918_literals() {
+        for host in ["10.0.0.1", "172.17.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1"] {
+            let result = check_host_resolvable(host, 3306, false).await;
+            assert!(result.is_err(), "expected {host} to be blocked");
+            let err = result.unwrap_err().to_string();
+            assert!(err.contains("SSRF protection"), "expected SSRF error for {host}, got: {err}");
+        }
+    }
+
+    #[tokio::test]
+    async fn check_host_resolvable_allows_public_literals() {
+        assert!(check_host_resolvable("8.8.8.8", 27017, false).await.is_ok());
+        assert!(check_host_resolvable("2606:4700::1111", 27017, false).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn check_host_resolvable_handles_bracketed_ipv6_and_trailing_dot() {
+        // Database connection strings hand us hosts in shapes `Url` never produces.
+        assert!(check_host_resolvable("[fd00::1]", 27017, false).await.is_err());
+        assert!(check_host_resolvable("[2606:4700::1111]", 27017, false).await.is_ok());
+        assert!(check_host_resolvable("localhost.", 5432, false).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn check_host_resolvable_honors_opt_in() {
+        assert!(check_host_resolvable("10.0.0.1", 3306, true).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn check_host_resolvable_rejects_empty_host() {
+        assert!(check_host_resolvable("   ", 3306, false).await.is_err());
     }
 }

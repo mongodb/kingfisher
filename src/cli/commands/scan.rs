@@ -143,7 +143,7 @@ pub struct ScanArgs {
     /// Map validated cloud credentials to their effective identities and blast radius; use only when
     /// authorized for the target account because this triggers additional network
     /// requests to determine granted access
-    #[arg(global = true, long, alias = "blast-radius", default_value_t = false)]
+    #[arg(global = true, long = "blast-radius", alias = "access-map", default_value_t = false)]
     pub access_map: bool,
 
     // /// Optional path to write a consolidated access-map HTML report
@@ -300,7 +300,7 @@ pub struct ScanArgs {
     /// `--alert-min-confidence`. `exclude-inactive` drops "Inactive
     /// Credential" findings; `only-active` keeps only "Active Credential"
     /// findings; `access-map-only` keeps only findings with a successful,
-    /// matching `--access-map` result (requires `--access-map` to be set, otherwise
+    /// matching `--blast-radius` result (requires `--blast-radius` to be set, otherwise
     /// this filter matches nothing).
     #[arg(
         global = true,
@@ -823,7 +823,7 @@ impl ScanCommandArgs {
         }
 
         if self.scan_args.access_map && self.scan_args.no_validate {
-            bail!("--access-map cannot be used with --no-validate");
+            bail!("--blast-radius cannot be used with --no-validate");
         }
 
         Ok(ScanOperation::Scan(self.scan_args))

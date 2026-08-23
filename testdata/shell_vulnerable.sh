@@ -11,5 +11,6 @@ PRIVATE_KEY="ja4wALsaho20af21dS"
 another_password="blink182" #this is some comment NOKINGFISHER
 backup_password="letmein123" #
 export API_KEY=932ljaSKl32Fde
+GITHUB_TOKEN="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"
 
 echo $PWD

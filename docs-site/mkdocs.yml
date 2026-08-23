@@ -93,6 +93,7 @@ nav:
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quick-start.md
+    - Moving to v2.0.x: getting-started/v2-migration.md
   - Usage:
     - Basic Scanning: usage/basic-scanning.md
     - Platform Integrations: usage/integrations.md
@@ -108,8 +109,8 @@ nav:
     - Finding Fingerprints: features/fingerprints.md
     - LLM & Agent Integration: features/agents.md
   - Rules:
-    - Built-in Rules List: rules/builtin-rules.md
-    - Writing Custom Rules: rules/overview.md
+    - Built-in Rules: rules/builtin-rules.md
+    - Kingfisher 1.x Custom Rules: rules/overview.md
   - Reference:
     - Architecture: reference/architecture.md
     - Rust Library Crates: reference/library.md

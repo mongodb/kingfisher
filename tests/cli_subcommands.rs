@@ -423,7 +423,7 @@ mod gitlab {
                 "--include-subgroups",
                 "--list-only",
                 "--quiet",
-                "--access-map",
+                "--blast-radius",
                 "--no-update-check",
                 "--user-agent-suffix",
                 "cli-test",

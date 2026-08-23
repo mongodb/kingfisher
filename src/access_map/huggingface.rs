@@ -2,7 +2,6 @@ use anyhow::{Context, Result, anyhow};
 use reqwest::{Client, Url, header};
 use serde::Deserialize;
 use std::collections::BTreeSet;
-use tracing::warn;
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
@@ -12,7 +11,6 @@ use super::{
 };
 
 const HUGGINGFACE_API: &str = "https://huggingface.co/api";
-const MAX_HF_RESOURCES_PER_KIND: usize = 100;
 
 #[derive(Deserialize)]
 struct HfWhoAmI {
@@ -56,42 +54,6 @@ struct HfAccessTokenInfo {
     created_at: Option<String>,
 }
 
-#[derive(Deserialize)]
-struct HfModel {
-    #[serde(default, rename = "modelId")]
-    model_id: Option<String>,
-    #[serde(default, rename = "id")]
-    id: Option<String>,
-    #[serde(default)]
-    private: bool,
-}
-
-#[derive(Deserialize)]
-struct HfDataset {
-    #[serde(default, rename = "id")]
-    id: Option<String>,
-    #[serde(default)]
-    private: bool,
-}
-
-#[derive(Deserialize)]
-struct HfSpace {
-    #[serde(default, rename = "id")]
-    id: Option<String>,
-    #[serde(default)]
-    private: bool,
-}
-
-#[derive(Deserialize)]
-struct HfBucket {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    private: bool,
-    #[serde(default)]
-    size: Option<u64>,
-}
-
 #[derive(Clone, Deserialize)]
 struct HfStorageResource {
     id: String,
@@ -131,6 +93,10 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
         .build()
         .context("Failed to build Hugging Face HTTP client")?;
 
+    // Hugging Face documents this identity/token-role schema in its Hub OpenAPI document and in
+    // the Apache-2.0 huggingface_hub SDK:
+    // https://huggingface.co/.well-known/openapi.json
+    // https://github.com/huggingface/huggingface_hub/blob/v0.24.3/src/huggingface_hub/hf_api.py
     let whoami_resp = client
         .get(format!("{HUGGINGFACE_API}/whoami-v2"))
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
@@ -238,29 +204,21 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
         });
     }
 
-    let mut authors = BTreeSet::new();
-    authors.insert(username.clone());
-    for org in &whoami.orgs {
-        if let Some(org_name) = org.name.as_ref().filter(|name| !name.is_empty()) {
-            authors.insert(org_name.clone());
-        }
-    }
-
+    // The unified user and organization repository inventory endpoints are specified by the
+    // vendor OpenAPI schema above. Unlike author-filtered public searches, these settings APIs
+    // return the authenticated token's actual visible models, datasets, Spaces, and buckets.
     let mut discovered_resources = Vec::new();
-    let mut used_fallback_enumeration = false;
-    for author in &authors {
-        let is_user = author == &username;
-        match list_storage_resources(&client, token, if is_user { None } else { Some(author) })
-            .await
-        {
-            Ok(mut author_resources) => discovered_resources.append(&mut author_resources),
-            Err(err) => {
-                used_fallback_enumeration = true;
-                warn!(
-                    "Hugging Face access-map: unified resource enumeration failed for {author}: {err}; falling back to public resource APIs"
-                );
-                let mut fallback = list_resources_fallback(&client, token, author).await;
-                discovered_resources.append(&mut fallback);
+    match list_storage_resources(&client, token, None).await {
+        Ok(mut user_resources) => discovered_resources.append(&mut user_resources),
+        Err(err) => risk_notes.push(format!("User repository inventory failed: {err}")),
+    }
+    for org in &whoami.orgs {
+        if let Some(org_name) = org.name.as_deref().filter(|name| !name.is_empty()) {
+            match list_storage_resources(&client, token, Some(org_name)).await {
+                Ok(mut org_resources) => discovered_resources.append(&mut org_resources),
+                Err(err) => risk_notes.push(format!(
+                    "Organization repository inventory failed for {org_name}: {err}"
+                )),
             }
         }
     }
@@ -328,13 +286,6 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
                 .into(),
         );
     }
-    if used_fallback_enumeration {
-        risk_notes.push(
-            "The unified Hugging Face resource listing was unavailable for at least one namespace; fallback enumeration may omit restricted resources"
-                .into(),
-        );
-    }
-
     Ok(AccessMapResult {
         cloud: "huggingface".into(),
         identity,
@@ -364,94 +315,15 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     })
 }
 
-async fn list_models_by_author(client: &Client, token: &str, author: &str) -> Result<Vec<HfModel>> {
-    let mut models = Vec::new();
-    let limit = MAX_HF_RESOURCES_PER_KIND;
-
-    let resp = client
-        .get(format!("{HUGGINGFACE_API}/models"))
-        .query(&[("author", author), ("limit", &limit.to_string())])
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .send()
-        .await
-        .context("Hugging Face access-map: failed to list models")?;
-
-    if !resp.status().is_success() {
-        warn!("Hugging Face access-map: model enumeration failed with HTTP {}", resp.status());
-        return Ok(models);
-    }
-
-    let page_models: Vec<HfModel> =
-        resp.json().await.context("Hugging Face access-map: invalid model JSON")?;
-    models.extend(page_models);
-
-    Ok(models)
-}
-
-async fn list_datasets_by_author(
-    client: &Client,
-    token: &str,
-    author: &str,
-) -> Result<Vec<HfDataset>> {
-    let resp = client
-        .get(format!("{HUGGINGFACE_API}/datasets"))
-        .query(&[("author", author), ("limit", &MAX_HF_RESOURCES_PER_KIND.to_string())])
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .send()
-        .await
-        .context("Hugging Face access-map: failed to list datasets")?;
-
-    if !resp.status().is_success() {
-        warn!("Hugging Face access-map: dataset enumeration failed with HTTP {}", resp.status());
-        return Ok(Vec::new());
-    }
-
-    resp.json().await.context("Hugging Face access-map: invalid dataset JSON")
-}
-
-async fn list_spaces_by_author(client: &Client, token: &str, author: &str) -> Result<Vec<HfSpace>> {
-    let resp = client
-        .get(format!("{HUGGINGFACE_API}/spaces"))
-        .query(&[("author", author), ("limit", &MAX_HF_RESOURCES_PER_KIND.to_string())])
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .send()
-        .await
-        .context("Hugging Face access-map: failed to list Spaces")?;
-
-    if !resp.status().is_success() {
-        warn!("Hugging Face access-map: Space enumeration failed with HTTP {}", resp.status());
-        return Ok(Vec::new());
-    }
-
-    resp.json().await.context("Hugging Face access-map: invalid Space JSON")
-}
-
-async fn list_buckets_by_author(
-    client: &Client,
-    token: &str,
-    author: &str,
-) -> Result<Vec<HfBucket>> {
-    let resp = client
-        .get(format!("{HUGGINGFACE_API}/buckets/{author}"))
-        .query(&[("limit", &MAX_HF_RESOURCES_PER_KIND.to_string())])
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .send()
-        .await
-        .context("Hugging Face access-map: failed to list buckets")?;
-
-    if !resp.status().is_success() {
-        warn!("Hugging Face access-map: bucket enumeration failed with HTTP {}", resp.status());
-        return Ok(Vec::new());
-    }
-
-    resp.json().await.context("Hugging Face access-map: invalid bucket JSON")
-}
-
 async fn list_storage_resources(
     client: &Client,
     token: &str,
     organization: Option<&str>,
 ) -> Result<Vec<HfResource>> {
+    // Vendor OpenAPI operations:
+    // GET /api/settings/repositories
+    // GET /api/organizations/{name}/settings/repositories
+    // https://huggingface.co/.well-known/openapi.json
     let mut url = match organization {
         Some(org) => {
             Url::parse(&format!("{HUGGINGFACE_API}/organizations/{org}/settings/repositories"))?
@@ -497,62 +369,6 @@ async fn list_storage_resources(
     }
 
     Ok(resources)
-}
-
-async fn list_resources_fallback(client: &Client, token: &str, author: &str) -> Vec<HfResource> {
-    let mut resources = Vec::new();
-
-    match list_models_by_author(client, token, author).await {
-        Ok(models) => resources.extend(models.into_iter().filter_map(|model| {
-            model.model_id.or(model.id).map(|id| HfResource {
-                id,
-                resource_type: "model".into(),
-                visibility: if model.private { "private" } else { "public" }.into(),
-                storage: None,
-            })
-        })),
-        Err(err) => warn!("Hugging Face access-map: model enumeration failed for {author}: {err}"),
-    }
-
-    match list_datasets_by_author(client, token, author).await {
-        Ok(datasets) => resources.extend(datasets.into_iter().filter_map(|dataset| {
-            dataset.id.map(|id| HfResource {
-                id,
-                resource_type: "dataset".into(),
-                visibility: if dataset.private { "private" } else { "public" }.into(),
-                storage: None,
-            })
-        })),
-        Err(err) => {
-            warn!("Hugging Face access-map: dataset enumeration failed for {author}: {err}")
-        }
-    }
-
-    match list_spaces_by_author(client, token, author).await {
-        Ok(spaces) => resources.extend(spaces.into_iter().filter_map(|space| {
-            space.id.map(|id| HfResource {
-                id,
-                resource_type: "space".into(),
-                visibility: if space.private { "private" } else { "public" }.into(),
-                storage: None,
-            })
-        })),
-        Err(err) => warn!("Hugging Face access-map: Space enumeration failed for {author}: {err}"),
-    }
-
-    match list_buckets_by_author(client, token, author).await {
-        Ok(buckets) => resources.extend(buckets.into_iter().filter_map(|bucket| {
-            bucket.id.map(|id| HfResource {
-                id,
-                resource_type: "bucket".into(),
-                visibility: if bucket.private { "private" } else { "public" }.into(),
-                storage: bucket.size,
-            })
-        })),
-        Err(err) => warn!("Hugging Face access-map: bucket enumeration failed for {author}: {err}"),
-    }
-
-    resources
 }
 
 fn parse_next_link(value: &str) -> Option<Url> {

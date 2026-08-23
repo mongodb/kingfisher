@@ -23,8 +23,8 @@ contributions.
   possible.
 - Propose features or usability improvements through GitHub issues.
 - Improve documentation in `README.md`, `docs/`, or `docs-site/`.
-- Add or refine detection rules under
-  `crates/kingfisher-rules/data/rules/`.
+- Add or refine generally useful detection rules in the
+  [Betterleaks repository](https://github.com/betterleaks/betterleaks).
 - Improve validation, revocation, scanning performance, output formats, or
   integrations.
 
@@ -41,8 +41,7 @@ Use the repository issue templates when they fit your case.
 
 ## Development Setup
 
-Kingfisher is a Rust workspace. The workspace minimum Rust version is `1.94`,
-and CI currently uses Rust `1.94.1`.
+Kingfisher is a Rust workspace. The workspace minimum Rust version is `1.96`.
 
 Helpful commands:
 
@@ -86,10 +85,13 @@ Use clearly fake placeholders or provider-documented example values only.
 
 ### Rule contributions
 
-If you are adding or updating a rule:
+If you are adding or updating a generally useful rule, contribute it to Betterleaks first. The
+Kingfisher 1.x YAML schema remains supported for private custom rules, not as a built-in catalog.
+
+For Kingfisher 1.x custom rules:
 
 - Follow the schema and authoring guidance in [docs/RULES.md](docs/RULES.md).
-- Prefer YAML-defined validation and revocation when the provider API supports
+- Prefer YAML-defined validation and revocation when the private provider API supports
   it.
 - Keep patterns specific and efficient.
 - Add realistic examples and relevant tests.

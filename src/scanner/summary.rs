@@ -78,7 +78,9 @@ pub fn compute_scan_totals(
             if !args.include_hidden_findings && !match_item.visible {
                 return count;
             }
-            if match_item.validation_outcome.is_verified_active() {
+            if match_item.rule.syntax().is_authoritative()
+                && match_item.validation_outcome.is_verified_active()
+            {
                 count + origin_set.len()
             } else {
                 count + 1
@@ -97,7 +99,12 @@ pub fn compute_scan_totals(
                 return (success, fail, skipped);
             }
             let increment = if args.no_dedup { origin_set.len() } else { 1 };
-            match match_item.validation_outcome {
+            let outcome = if !match_item.rule.syntax().is_authoritative() {
+                kingfisher_core::ValidationOutcome::NotAttempted
+            } else {
+                match_item.validation_outcome
+            };
+            match outcome {
                 kingfisher_core::ValidationOutcome::VerifiedActive => {
                     (success + increment, fail, skipped)
                 }

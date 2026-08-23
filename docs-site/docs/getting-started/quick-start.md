@@ -81,18 +81,19 @@ kingfisher scan /path/to/code --validation-filter actionable
 See exactly what resources a leaked credential can access:
 
 ```bash
-kingfisher scan /path/to/code --access-map --view-report
+kingfisher scan /path/to/code --blast-radius --view-report
 ```
 
 ## 6. Revoke a Compromised Secret
 
-```bash
-# Revoke a GitHub token
-kingfisher revoke --rule github "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+Kingfisher joins selected imported detectors to safe revocation actions in a build-validated
+capability overlay:
 
-# Revoke AWS credentials
-kingfisher revoke --rule aws --arg "AKIAIOSFODNN7EXAMPLE" "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+```bash
+kingfisher revoke --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
+
+Kingfisher 1.x custom YAML rules may also define `revocation:`.
 
 ## 7. Scan a GitHub Organization
 
@@ -110,6 +111,6 @@ kingfisher scan /path/to/code --format json --output findings.json
 
 - [Basic Scanning](../usage/basic-scanning.md) — full scanning guide with all options
 - [Platform Integrations](../usage/integrations.md) — GitHub, GitLab, S3, Docker, Slack, and more
-- [Writing Custom Rules](../rules/overview.md) — create detection rules for your own patterns
+- [Kingfisher 1.x Custom Rules](../rules/overview.md) — create private, organization-specific detections
 - [Blast Radius (aka Access Map)](../features/access-map.md) — blast radius mapping for 43 providers
 - [Report Viewer & Triager](../features/report-viewer.md) — local and hosted viewer for Kingfisher, Gitleaks, and TruffleHog JSON reports

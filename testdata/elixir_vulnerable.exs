@@ -1,5 +1,7 @@
 defmodule HelloWorld do
   def main do
+    github_token = "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"
+
     # Immutable variable assignment
     ip_address = "8.8.8.8"
     password = "s3cr3tp@ssw0rd"

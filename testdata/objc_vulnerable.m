@@ -88,6 +88,7 @@ int main () {
    NSString *joinedFromLiterals = @"ONE " @"MILLION " @"YEARS " @"DUNGEON!!!";
    NSString *aws_key_id = @"AKIA6ODU5DHT7VPXGCE4";
    NSString *aws_secret = @"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";
+   NSString *github_token = @"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";
 
 
    /* book 1 specification */

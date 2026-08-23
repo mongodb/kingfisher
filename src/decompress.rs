@@ -127,7 +127,6 @@ fn handle_tar_archive_streaming_with_limits(
 ) -> Result<CompressedContent> {
     let mut archive = Archive::new(file);
     let mut entries_on_disk = Vec::new();
-    let mut entries_seen = 0;
     let mut total_decompressed = 0;
     let mut truncated = false;
 
@@ -139,8 +138,8 @@ fn handle_tar_archive_streaming_with_limits(
         }
     };
 
-    for entry in entries {
-        if entries_seen >= limits.max_entries {
+    for (index, entry) in entries.enumerate() {
+        if index >= limits.max_entries {
             tracing::debug!(
                 "tar archive {} exceeded {} entry cap; truncating",
                 archive_path.display(),
@@ -149,8 +148,6 @@ fn handle_tar_archive_streaming_with_limits(
             truncated = true;
             break;
         }
-        entries_seen += 1;
-
         let mut entry = match entry {
             Ok(entry) => entry,
             Err(e) => {

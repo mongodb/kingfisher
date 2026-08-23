@@ -57,20 +57,17 @@ fn find_rules_by_selector<'a>(
 ) -> Result<Vec<&'a Rule>> {
     let mut matches: Vec<&Rule> = Vec::new();
 
-    let selectors_to_try: Vec<std::borrow::Cow<'_, str>> = if selector.starts_with("kingfisher.") {
-        vec![std::borrow::Cow::Borrowed(selector)]
-    } else {
-        vec![
-            std::borrow::Cow::Borrowed(selector),
-            std::borrow::Cow::Owned(format!("kingfisher.{}", selector)),
-        ]
-    };
+    let mut selectors_to_try = vec![std::borrow::Cow::Borrowed(selector)];
+    if !selector.starts_with("betterleaks.") && !selector.starts_with("kingfisher.") {
+        selectors_to_try.push(std::borrow::Cow::Owned(format!("betterleaks.{selector}")));
+        selectors_to_try.push(std::borrow::Cow::Owned(format!("kingfisher.{selector}")));
+    }
 
     for try_selector in &selectors_to_try {
         for (id, rule) in rules {
             if id == try_selector.as_ref()
                 || (id.starts_with(try_selector.as_ref())
-                    && id.as_bytes().get(try_selector.len()) == Some(&b'.'))
+                    && matches!(id.as_bytes().get(try_selector.len()), Some(b'.' | b'-')))
             {
                 matches.push(rule);
             }
@@ -841,7 +838,7 @@ mod tests {
 
     #[test]
     fn jsonpath_root_array_index_field() {
-        // Used by kingfisher.jira.3 revocation: GET /rest/pat/latest/tokens
+        // Used by custom.jira.3 revocation: GET /rest/pat/latest/tokens
         // returns a JSON array at the document root, and the rule extracts
         // JIRA_TOKEN_ID with path "$[0].id".
         let ext = ResponseExtractor::JsonPath { path: "$[0].id".into() };
@@ -1067,7 +1064,7 @@ mod tests {
     fn build_globals_sets_token() {
         let template_vars = BTreeSet::from(["TOKEN".to_string()]);
         let globals = build_globals(
-            "kingfisher.test.1",
+            "custom.test.1",
             "my-secret",
             &[],
             &[],
@@ -1084,7 +1081,7 @@ mod tests {
             BTreeSet::from(["TOKEN".to_string(), "AKID".to_string(), "REGION".to_string()]);
         let args = vec!["my-akid".to_string(), "us-east-1".to_string()];
         let globals = build_globals(
-            "kingfisher.test.1",
+            "custom.test.1",
             "secret",
             &args,
             &[],
@@ -1103,7 +1100,7 @@ mod tests {
         let template_vars = BTreeSet::from(["TOKEN".to_string(), "AKID".to_string()]);
         let vars = vec!["AKID=explicit-value".to_string()];
         let globals = build_globals(
-            "kingfisher.test.1",
+            "custom.test.1",
             "secret",
             &[],
             &vars,
@@ -1120,7 +1117,7 @@ mod tests {
         let template_vars = BTreeSet::new();
         let vars = vec!["NO_EQUALS_SIGN".to_string()];
         let result = build_globals(
-            "kingfisher.test.1",
+            "custom.test.1",
             "secret",
             &[],
             &vars,
@@ -1136,7 +1133,7 @@ mod tests {
         let template_vars = BTreeSet::new();
         let vars = vec!["=value".to_string()];
         let result = build_globals(
-            "kingfisher.test.1",
+            "custom.test.1",
             "secret",
             &[],
             &vars,
@@ -1244,56 +1241,58 @@ mod tests {
             depends_on_rule: vec![],
             pattern_requirements: None,
             tls_mode: None,
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
         })
     }
 
     #[test]
     fn find_rules_exact_match() {
         let mut rules = BTreeMap::new();
-        rules.insert(
-            "kingfisher.github.1".into(),
-            make_test_rule("kingfisher.github.1", "GitHub Token"),
-        );
-        rules.insert(
-            "kingfisher.gitlab.1".into(),
-            make_test_rule("kingfisher.gitlab.1", "GitLab Token"),
-        );
+        rules.insert("custom.github.1".into(), make_test_rule("custom.github.1", "GitHub Token"));
+        rules.insert("custom.gitlab.1".into(), make_test_rule("custom.gitlab.1", "GitLab Token"));
 
-        let matched = find_rules_by_selector("kingfisher.github.1", &rules).unwrap();
+        let matched = find_rules_by_selector("custom.github.1", &rules).unwrap();
         assert_eq!(matched.len(), 1);
-        assert_eq!(matched[0].id(), "kingfisher.github.1");
+        assert_eq!(matched[0].id(), "custom.github.1");
     }
 
     #[test]
     fn find_rules_prefix_match() {
         let mut rules = BTreeMap::new();
-        rules.insert(
-            "kingfisher.github.1".into(),
-            make_test_rule("kingfisher.github.1", "GitHub PAT"),
-        );
-        rules.insert(
-            "kingfisher.github.2".into(),
-            make_test_rule("kingfisher.github.2", "GitHub App"),
-        );
-        rules.insert(
-            "kingfisher.gitlab.1".into(),
-            make_test_rule("kingfisher.gitlab.1", "GitLab Token"),
-        );
+        rules.insert("custom.github.1".into(), make_test_rule("custom.github.1", "GitHub PAT"));
+        rules.insert("custom.github.2".into(), make_test_rule("custom.github.2", "GitHub App"));
+        rules.insert("custom.gitlab.1".into(), make_test_rule("custom.gitlab.1", "GitLab Token"));
 
-        let matched = find_rules_by_selector("kingfisher.github", &rules).unwrap();
+        let matched = find_rules_by_selector("custom.github", &rules).unwrap();
         assert_eq!(matched.len(), 2);
     }
 
     #[test]
-    fn find_rules_auto_prefix_kingfisher() {
+    fn find_rules_auto_prefix_betterleaks() {
         let mut rules = BTreeMap::new();
         rules.insert(
-            "kingfisher.github.1".into(),
-            make_test_rule("kingfisher.github.1", "GitHub Token"),
+            "betterleaks.github-pat".into(),
+            make_test_rule("betterleaks.github-pat", "GitHub Token"),
         );
 
-        // Searching without "kingfisher." prefix should still find the rule
+        let matched = find_rules_by_selector("github-pat", &rules).unwrap();
+        assert_eq!(matched.len(), 1);
+        assert_eq!(matched[0].id(), "betterleaks.github-pat");
+    }
+
+    #[test]
+    fn find_rules_auto_prefix_legacy_kingfisher() {
+        let rules = BTreeMap::from_iter([(
+            "kingfisher.github.1".to_string(),
+            make_test_rule("kingfisher.github.1", "GitHub Token"),
+        )]);
+
         let matched = find_rules_by_selector("github.1", &rules).unwrap();
+
         assert_eq!(matched.len(), 1);
         assert_eq!(matched[0].id(), "kingfisher.github.1");
     }
@@ -1301,10 +1300,7 @@ mod tests {
     #[test]
     fn find_rules_no_match() {
         let mut rules = BTreeMap::new();
-        rules.insert(
-            "kingfisher.github.1".into(),
-            make_test_rule("kingfisher.github.1", "GitHub Token"),
-        );
+        rules.insert("custom.github.1".into(), make_test_rule("custom.github.1", "GitHub Token"));
 
         let result = find_rules_by_selector("nonexistent", &rules);
         assert!(result.is_err());
@@ -1313,16 +1309,13 @@ mod tests {
 
     #[test]
     fn find_rules_prefix_boundary() {
-        // "kingfisher.git" should NOT match "kingfisher.github.1" because
+        // "custom.git" should NOT match "custom.github.1" because
         // "github" does not start after a '.' boundary following "git"
         let mut rules = BTreeMap::new();
-        rules.insert(
-            "kingfisher.github.1".into(),
-            make_test_rule("kingfisher.github.1", "GitHub Token"),
-        );
+        rules.insert("custom.github.1".into(), make_test_rule("custom.github.1", "GitHub Token"));
 
-        let result = find_rules_by_selector("kingfisher.git", &rules);
-        assert!(result.is_err(), "Prefix 'kingfisher.git' should not match 'kingfisher.github.1'");
+        let result = find_rules_by_selector("custom.git", &rules);
+        assert!(result.is_err(), "Prefix 'custom.git' should not match 'custom.github.1'");
     }
 
     // ---- render_extractor ----
@@ -1364,8 +1357,11 @@ mod tests {
             Value::scalar("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".to_string()),
         );
 
+        // Match both ends exposed by npm's truncated token response.
         let extractor = ResponseExtractor::Regex {
-            pattern: r#""key":"([^"]+)","token":"{{ TOKEN | prefix: 8 }}"#.to_string(),
+            pattern:
+                r#""key":"([^"]+)","token":"{{ TOKEN | prefix: 8 }}\.\.\.{{ TOKEN | suffix: 4 }}""#
+                    .to_string(),
         };
         let rendered = render_extractor(&extractor, &parser, &globals).unwrap();
 
@@ -1376,7 +1372,7 @@ mod tests {
             extract_value_from_response(&rendered, body, &HeaderMap::new(), &StatusCode::OK)
                 .unwrap();
 
-        // Should extract the key for the token matching prefix "npm_rmll", NOT the first one
+        // Should extract the key for the token matching both ends, not merely the first prefix.
         assert_eq!(result, "43c14e2d-8b5d-4f8b-91cd-280a7afead0c");
     }
 

@@ -23,10 +23,10 @@ class Cellphone {
 private:
     string password;
     string my_api_key;
-    string github_key;
+    string github_token;
 
 public:
-    Cellphone() : password("thisisabadpassword"), my_api_key("FAKEgqnZYzH945UBWnauBuKXKLEhq5Le"), github_key("88df97769ab3185f2c0b2a73fdae1b27d89409ca") {}
+    Cellphone() : password("thisisabadpassword"), my_api_key("FAKEgqnZYzH945UBWnauBuKXKLEhq5Le"), github_token("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") {}
     void details();
 };
 
@@ -55,6 +55,9 @@ int main() {
 
     string secret_pass = "my voice is my passport";
     cout << "secret_pass is: " << secret_pass << endl;
+
+    string aws_access_key = "AKIA6ODU5DHT7VPXGCE4";
+    cout << "aws access key is: " << aws_access_key << endl;
 
     string temp_password = "short line for testing";
     cout << "temp_password is: " << temp_password << endl;

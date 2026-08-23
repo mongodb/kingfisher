@@ -297,8 +297,8 @@ kingfisher validate --rule github \
   --endpoint github=https://ghe.corp.example.com \
   "<your-github-pat>"
 
-# 6. Revoke (delete) a confirmed-leaked PAT against GHE
-kingfisher revoke --rule github \
+# 6. Revoke through a Kingfisher 1.x custom rule that defines revocation
+kingfisher revoke --rules-path ./custom-rules.yml --rule custom.github.pat \
   --endpoint github=https://ghe.corp.example.com \
   "<your-github-pat>"
 ```
@@ -424,8 +424,8 @@ kingfisher validate --rule gitlab \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "<your-gitlab-pat>"
 
-# 6. Revoke (delete) a confirmed-leaked PAT against self-hosted GitLab
-kingfisher revoke --rule gitlab \
+# 6. Revoke through a Kingfisher 1.x custom rule that defines revocation
+kingfisher revoke --rules-path ./custom-rules.yml --rule custom.gitlab.pat \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "<your-gitlab-pat>"
 ```

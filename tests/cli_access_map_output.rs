@@ -98,3 +98,25 @@ fn access_map_help_lists_supported_providers() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn blast_radius_flag_accepts_access_map_alias() -> anyhow::Result<()> {
+    for flag in ["--blast-radius", "--access-map"] {
+        let args = CommandLineArgs::try_parse_from(["kingfisher", "scan", ".", flag])?;
+        let scan = match args.command {
+            Command::Scan(args) => args,
+            other => panic!("unexpected command parsed: {:?}", other),
+        };
+
+        assert!(scan.scan_args.access_map, "flag `{flag}` should enable blast-radius mapping");
+    }
+
+    let mut command = CommandLineArgs::command();
+    let scan = command.find_subcommand_mut("scan").expect("scan subcommand should exist");
+    let mut help = Vec::new();
+    scan.write_long_help(&mut help)?;
+    let help = String::from_utf8(help)?;
+    assert!(help.contains("--blast-radius"));
+
+    Ok(())
+}

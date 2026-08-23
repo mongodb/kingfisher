@@ -185,3 +185,48 @@ pub fn find_secret_capture<'a>(
     // 4. Finally, fall back to the full match (group 0).
     captures.get(0).unwrap()
 }
+
+/// Select a capture using Betterleaks' `secretGroup` semantics when supplied.
+///
+/// Betterleaks treats an omitted/zero `secretGroup` as the first non-empty positional capture.
+/// A positive value selects that exact capture. `None` retains Kingfisher's legacy custom-rule
+/// behavior implemented by [`find_secret_capture`].
+pub fn find_secret_capture_with_group<'a>(
+    re: &regex::bytes::Regex,
+    captures: &regex::bytes::Captures<'a>,
+    betterleaks_secret_group: Option<usize>,
+) -> regex::bytes::Match<'a> {
+    let Some(secret_group) = betterleaks_secret_group else {
+        return find_secret_capture(re, captures);
+    };
+
+    if secret_group > 0 {
+        return captures.get(secret_group).unwrap_or_else(|| captures.get(0).unwrap());
+    }
+
+    (1..captures.len())
+        .filter_map(|index| captures.get(index))
+        .find(|capture| !capture.as_bytes().is_empty())
+        .unwrap_or_else(|| captures.get(0).unwrap())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn betterleaks_default_uses_first_non_empty_capture() {
+        let regex = regex::bytes::Regex::new(r"(?:(?P<first>a)|b)(?P<second>c)").unwrap();
+        let captures = regex.captures(b"bc").unwrap();
+
+        assert_eq!(find_secret_capture_with_group(&regex, &captures, Some(0)).as_bytes(), b"c");
+    }
+
+    #[test]
+    fn betterleaks_explicit_group_ignores_capture_names() {
+        let regex = regex::bytes::Regex::new(r"(?P<named>a)(b)").unwrap();
+        let captures = regex.captures(b"ab").unwrap();
+
+        assert_eq!(find_secret_capture_with_group(&regex, &captures, Some(2)).as_bytes(), b"b");
+    }
+}

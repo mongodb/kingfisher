@@ -1,8 +1,18 @@
 use anyhow::{Context, Result, anyhow};
-use reqwest::{Client, Method, StatusCode, header};
+use async_openai::{
+    Client as AsyncOpenAiClient,
+    config::OpenAIConfig,
+    error::OpenAIError,
+    traits::RequestOptionsBuilder,
+    types::{
+        admin::{invites::ProjectMembership, projects::Project},
+        files::{OpenAIFile, OpenAIFilePurpose},
+        finetuning::{FineTuningJob, FineTuningJobStatus},
+        models::Model,
+    },
+};
+use reqwest::{Client as HttpClient, StatusCode, header};
 use serde::Deserialize;
-use serde_json::json;
-use tracing::warn;
 
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
@@ -13,385 +23,55 @@ use super::{
 
 const OPENAI_API: &str = "https://api.openai.com/v1";
 const MAX_OPENAI_SERVICE_RESOURCES: usize = 50;
+type OpenAiClient = AsyncOpenAiClient<OpenAIConfig>;
 
 // ---------------------------------------------------------------------------
 // Deserialization types
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Deserialize, Default, Clone)]
-struct OpenAiMe {
+#[derive(Debug, Deserialize, Default)]
+struct OpenAiProjectModelPermissions {
     #[serde(default)]
-    id: Option<String>,
+    mode: String,
     #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    email: Option<String>,
-    #[serde(default)]
-    #[expect(dead_code)]
-    role: Option<String>,
-    #[serde(default)]
-    orgs: Option<OpenAiOrgsData>,
+    model_ids: Vec<String>,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
-struct OpenAiOrgsData {
+#[derive(Debug, Deserialize, Default)]
+struct OpenAiHostedToolPermission {
     #[serde(default)]
-    data: Vec<OpenAiOrg>,
+    enabled: bool,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
-struct OpenAiOrg {
+#[derive(Debug, Deserialize, Default)]
+struct OpenAiHostedToolPermissions {
     #[serde(default)]
-    id: Option<String>,
+    file_search: OpenAiHostedToolPermission,
     #[serde(default)]
-    title: Option<String>,
+    web_search: OpenAiHostedToolPermission,
     #[serde(default)]
-    name: Option<String>,
+    image_generation: OpenAiHostedToolPermission,
     #[serde(default)]
-    personal: Option<bool>,
+    mcp: OpenAiHostedToolPermission,
     #[serde(default)]
-    is_default: Option<bool>,
-    #[serde(default)]
-    role: Option<String>,
+    code_interpreter: OpenAiHostedToolPermission,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
-struct OpenAiProjectsResponse {
-    #[serde(default)]
-    data: Vec<OpenAiProject>,
+enum Inventory<T> {
+    Accessible(Vec<T>),
+    Denied,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
-struct OpenAiProject {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    name: Option<String>,
-    #[serde(default)]
-    archived: bool,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
-struct OpenAiModelsResponse {
-    #[serde(default)]
-    data: Vec<OpenAiModel>,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
-struct OpenAiModel {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    owned_by: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
-struct OpenAiFilesResponse {
-    #[serde(default)]
-    data: Vec<OpenAiFile>,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
-struct OpenAiFile {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    filename: Option<String>,
-    #[serde(default)]
-    purpose: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize)]
 struct OpenAiAssistantsResponse {
-    #[serde(default)]
     data: Vec<OpenAiAssistant>,
 }
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize)]
 struct OpenAiAssistant {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
+    id: String,
     name: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
-struct OpenAiFineTuningJobsResponse {
-    #[serde(default)]
-    data: Vec<OpenAiFineTuningJob>,
-}
-
-#[derive(Debug, Deserialize, Default, Clone)]
-struct OpenAiFineTuningJob {
-    #[serde(default)]
-    id: Option<String>,
-    #[serde(default)]
-    model: Option<String>,
-    #[serde(default)]
-    status: Option<String>,
-    #[serde(default)]
-    fine_tuned_model: Option<String>,
-}
-
-// ---------------------------------------------------------------------------
-// Scope probing
-// ---------------------------------------------------------------------------
-
-#[derive(Debug, Clone)]
-struct ScopeResult {
-    /// Human-readable scope name (e.g. "/v1/models").
-    scope: &'static str,
-    /// Individual endpoints covered by this scope.
-    endpoints: Vec<&'static str>,
-    /// "Read", "Write", or "Read & Write".
-    permission: &'static str,
-}
-
-struct EndpointProbe {
-    path: &'static str,
-    method: Method,
-    body: Option<serde_json::Value>,
-}
-
-/// Returns true when the status indicates the scope is **not** granted.
-fn is_scope_denied(status: StatusCode) -> bool {
-    status == StatusCode::FORBIDDEN || status == StatusCode::UNAUTHORIZED
-}
-
-async fn probe_endpoint(client: &Client, token: &str, probe: &EndpointProbe) -> bool {
-    let url = format!("{OPENAI_API}{}", probe.path);
-    let mut req = client
-        .request(probe.method.clone(), &url)
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header(header::ACCEPT, "application/json");
-
-    if let Some(body) = &probe.body {
-        req = req.header(header::CONTENT_TYPE, "application/json").json(body);
-    }
-
-    match req.send().await {
-        Ok(resp) => !is_scope_denied(resp.status()),
-        Err(_) => false,
-    }
-}
-
-async fn probe_api_scopes(client: &Client, token: &str) -> (Vec<ScopeResult>, bool) {
-    let mut scopes = Vec::new();
-    let mut any_denied = false;
-
-    // -- /v1/models (Read) --
-    let models_ok = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe { path: "/models", method: Method::GET, body: None },
-    )
-    .await;
-    if models_ok {
-        scopes.push(ScopeResult {
-            scope: "/v1/models",
-            endpoints: vec!["/v1/models"],
-            permission: "Read",
-        });
-    } else {
-        any_denied = true;
-    }
-
-    // -- Model capabilities (Write) – one probe covers the whole scope --
-    let chat_ok = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe {
-            path: "/chat/completions",
-            method: Method::POST,
-            body: Some(json!({"model": "_probe_"})),
-        },
-    )
-    .await;
-    if chat_ok {
-        scopes.push(ScopeResult {
-            scope: "/v1/model_capabilities",
-            endpoints: vec![
-                "/v1/audio",
-                "/v1/chat/completions",
-                "/v1/embeddings",
-                "/v1/images",
-                "/v1/moderations",
-            ],
-            permission: "Write",
-        });
-    } else {
-        any_denied = true;
-    }
-
-    // -- /v1/assistants (Read & Write) --
-    let assist_read = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe { path: "/assistants", method: Method::GET, body: None },
-    )
-    .await;
-    let assist_write = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe {
-            path: "/assistants",
-            method: Method::POST,
-            body: Some(json!({"model": "_probe_"})),
-        },
-    )
-    .await;
-    push_rw_scope(
-        &mut scopes,
-        &mut any_denied,
-        "/v1/assistants",
-        &["/v1/assistants"],
-        assist_read,
-        assist_write,
-    );
-
-    // -- /v1/threads (Read & Write) – read via fake thread GET --
-    let threads_read = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe {
-            path: "/threads/thread_00000000000000000000000000",
-            method: Method::GET,
-            body: None,
-        },
-    )
-    .await;
-    let threads_write = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe {
-            path: "/threads",
-            method: Method::POST,
-            body: Some(json!({"metadata": {"_probe": "1"}})),
-        },
-    )
-    .await;
-    push_rw_scope(
-        &mut scopes,
-        &mut any_denied,
-        "/v1/threads",
-        &["/v1/threads"],
-        threads_read,
-        threads_write,
-    );
-
-    // -- /v1/fine_tuning (Read & Write) --
-    let ft_read = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe { path: "/fine_tuning/jobs", method: Method::GET, body: None },
-    )
-    .await;
-    let ft_write = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe {
-            path: "/fine_tuning/jobs",
-            method: Method::POST,
-            body: Some(json!({"model": "_probe_", "training_file": "_probe_"})),
-        },
-    )
-    .await;
-    push_rw_scope(
-        &mut scopes,
-        &mut any_denied,
-        "/v1/fine_tuning",
-        &["/v1/fine_tuning"],
-        ft_read,
-        ft_write,
-    );
-
-    // -- /v1/files (Read & Write) – write needs multipart so only probe read --
-    let files_read = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe { path: "/files", method: Method::GET, body: None },
-    )
-    .await;
-    push_rw_scope(
-        &mut scopes,
-        &mut any_denied,
-        "/v1/files",
-        &["/v1/files"],
-        files_read,
-        files_read,
-    );
-
-    // -- /v1/evals (Read & Write) --
-    let evals_read = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe { path: "/evals", method: Method::GET, body: None },
-    )
-    .await;
-    let evals_write = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe { path: "/evals", method: Method::POST, body: Some(json!({})) },
-    )
-    .await;
-    push_rw_scope(
-        &mut scopes,
-        &mut any_denied,
-        "/v1/evals",
-        &["/v1/evals"],
-        evals_read,
-        evals_write,
-    );
-
-    // -- /v1/responses (Write) --
-    let responses_ok = probe_endpoint(
-        client,
-        token,
-        &EndpointProbe {
-            path: "/responses",
-            method: Method::POST,
-            body: Some(json!({"model": "_probe_", "input": "x"})),
-        },
-    )
-    .await;
-    if responses_ok {
-        scopes.push(ScopeResult {
-            scope: "/v1/responses",
-            endpoints: vec!["/v1/responses"],
-            permission: "Write",
-        });
-    } else {
-        any_denied = true;
-    }
-
-    (scopes, any_denied)
-}
-
-fn push_rw_scope(
-    scopes: &mut Vec<ScopeResult>,
-    any_denied: &mut bool,
-    scope: &'static str,
-    endpoints: &[&'static str],
-    read: bool,
-    write: bool,
-) {
-    let permission = match (read, write) {
-        (true, true) => "Read & Write",
-        (true, false) => "Read",
-        (false, true) => "Write",
-        (false, false) => {
-            *any_denied = true;
-            return;
-        }
-    };
-    if !read || !write {
-        *any_denied = true;
-    }
-    scopes.push(ScopeResult { scope, endpoints: endpoints.to_vec(), permission });
+    model: String,
 }
 
 // ---------------------------------------------------------------------------
@@ -411,23 +91,18 @@ pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
 }
 
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
-    let client = Client::builder()
+    let http_client = HttpClient::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
         .build()
         .context("Failed to build OpenAI HTTP client")?;
+    let config = OpenAIConfig::new().with_api_key(token);
+    let client = OpenAiClient::with_config(config).with_http_client(http_client.clone());
 
     let mut risk_notes = Vec::new();
     let mut roles = Vec::new();
     let mut permissions = PermissionSummary::default();
     let mut resources = Vec::new();
-
-    // -- Identity & organizations (/v1/me) --
-    let me = fetch_me(&client, token).await.unwrap_or_else(|err| {
-        warn!("OpenAI access-map: /me lookup failed: {err}");
-        risk_notes
-            .push(format!("Identity lookup failed (key may be a restricted project key): {err}"));
-        OpenAiMe::default()
-    });
+    let mut observed_access = Vec::new();
 
     let token_kind = detect_token_type(token);
     roles.push(RoleBinding {
@@ -436,274 +111,164 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
         permissions: vec![format!("token:{token_kind}")],
     });
 
-    let orgs = me.orgs.as_ref().map(|o| o.data.clone()).unwrap_or_default();
+    // OpenAI API reference: https://platform.openai.com/docs/api-reference/projects/list
+    match list_projects(&client).await {
+        Ok(Inventory::Accessible(projects)) => {
+            observed_access.push("organization_projects:list".to_string());
+            permissions.admin.push("organization_projects:list".to_string());
+            for project in &projects {
+                let project_name = project.name.clone().unwrap_or_else(|| project.id.clone());
+                let risk = if project.status.as_deref() == Some("archived") {
+                    Severity::Low
+                } else {
+                    Severity::High
+                };
+                resources.push(ResourceExposure {
+                    resource_type: "project".into(),
+                    name: project_name,
+                    permissions: vec!["organization_project:read".to_string()],
+                    risk: severity_to_str(risk).to_string(),
+                    reason: "Project returned by the OpenAI organization administration API"
+                        .to_string(),
+                });
 
-    for org in &orgs {
-        let org_id = org.id.as_deref().unwrap_or("unknown");
-        let org_title = org.title.as_deref().or(org.name.as_deref()).unwrap_or("unknown");
-        let org_role = org.role.as_deref().unwrap_or("unknown");
-        let is_default = org.is_default.unwrap_or(false);
-        let is_personal = org.personal.unwrap_or(false);
-
-        let label =
-            if is_personal { format!("{org_title} (Personal)") } else { org_title.to_string() };
-
-        let risk = match org_role {
-            "owner" => Severity::High,
-            "reader" => Severity::Low,
-            _ => Severity::Medium,
-        };
-
-        resources.push(ResourceExposure {
-            resource_type: "organization".into(),
-            name: format!("{org_id} — {label}"),
-            permissions: vec![format!("role:{org_role}"), format!("default:{is_default}")],
-            risk: severity_to_str(risk).to_string(),
-            reason: format!("Organization membership with {org_role} role"),
-        });
-
-        if org_role == "owner" {
-            permissions.admin.push(format!("org:{org_id}:owner"));
-        }
-    }
-
-    // -- Projects --
-    let projects = list_projects(&client, token).await.unwrap_or_else(|err| {
-        warn!("OpenAI access-map: project enumeration failed: {err}");
-        risk_notes.push(format!("Project enumeration failed: {err}"));
-        Vec::new()
-    });
-
-    for project in &projects {
-        let project_name = project
-            .name
-            .clone()
-            .or_else(|| project.id.clone())
-            .unwrap_or_else(|| "unknown_project".to_string());
-        let risk = if project.archived { Severity::Low } else { Severity::Medium };
-        resources.push(ResourceExposure {
-            resource_type: "project".into(),
-            name: project_name,
-            permissions: vec!["project:read".to_string()],
-            risk: severity_to_str(risk).to_string(),
-            reason: "Project visible to this OpenAI key".to_string(),
-        });
-    }
-
-    if !projects.is_empty() {
-        permissions.read_only.push("projects:list".to_string());
-    }
-
-    // -- API key scope probing --
-    let (scope_results, is_restricted) = probe_api_scopes(&client, token).await;
-
-    if is_restricted {
-        risk_notes.push("Restricted API key — limited permissions available".into());
-    } else if !scope_results.is_empty() {
-        risk_notes.push("Unrestricted API key — all scopes available".into());
-    }
-
-    let mut scope_labels = Vec::new();
-    let has_model_capabilities = scope_results.iter().any(|s| s.scope == "/v1/model_capabilities");
-
-    for sr in &scope_results {
-        let scope_tag =
-            format!("{}:{}", sr.scope, sr.permission.to_lowercase().replace(" & ", "_"));
-        scope_labels.push(scope_tag.clone());
-
-        for ep in &sr.endpoints {
-            resources.push(ResourceExposure {
-                resource_type: "api_scope".into(),
-                name: ep.to_string(),
-                permissions: vec![sr.permission.to_string()],
-                risk: if sr.permission.contains("Write") { "medium".into() } else { "low".into() },
-                reason: format!("Endpoint accessible under scope {}", sr.scope),
-            });
-        }
-
-        match sr.permission {
-            "Read" => permissions.read_only.push(scope_tag),
-            "Write" => permissions.risky.push(scope_tag),
-            "Read & Write" => {
-                permissions.read_only.push(format!("{}:read", sr.scope));
-                permissions.risky.push(format!("{}:write", sr.scope));
+                if let Err(err) = enumerate_project_administration(
+                    &client,
+                    &http_client,
+                    token,
+                    &project.id,
+                    &mut resources,
+                    &mut permissions,
+                )
+                .await
+                {
+                    risk_notes.push(format!(
+                        "Administrative inventory failed for project {}: {err}",
+                        project.id
+                    ));
+                }
             }
-            _ => {}
         }
+        Ok(Inventory::Denied) => {}
+        Err(err) => risk_notes.push(format!("Project enumeration failed: {err}")),
     }
 
-    if scope_has_read_access(&scope_results, "/v1/models") {
-        let models = list_models(&client, token).await.unwrap_or_else(|err| {
-            warn!("OpenAI access-map: model enumeration failed: {err}");
-            risk_notes.push(format!("Model enumeration failed: {err}"));
-            Vec::new()
-        });
+    match list_models(&client).await {
+        Ok(Inventory::Accessible(models)) => {
+            observed_access.push("models:list".to_string());
+            permissions.read_only.push("models:list".to_string());
+            let truncated = models.len() > MAX_OPENAI_SERVICE_RESOURCES;
+            for model in models.into_iter().take(MAX_OPENAI_SERVICE_RESOURCES) {
+                let reason = format!("Model readable via this API key (owner: {})", model.owned_by);
 
-        let truncated = models.len() > MAX_OPENAI_SERVICE_RESOURCES;
-        for model in models.into_iter().take(MAX_OPENAI_SERVICE_RESOURCES) {
-            let model_id = model.id.unwrap_or_else(|| "unknown_model".to_string());
-            let reason = match model.owned_by.as_deref() {
-                Some(owner) if !owner.is_empty() => {
-                    format!("Model readable via this API key (owner: {owner})")
-                }
-                _ => "Model readable via this API key".to_string(),
-            };
-
-            resources.push(ResourceExposure {
-                resource_type: "model".into(),
-                name: model_id,
-                permissions: vec!["model:read".to_string()],
-                risk: severity_to_str(Severity::Low).to_string(),
-                reason,
-            });
-        }
-        if truncated {
-            risk_notes.push(format!(
-                "Model resource list truncated to first {MAX_OPENAI_SERVICE_RESOURCES} visible entries"
-            ));
-        }
-    }
-
-    if scope_has_read_access(&scope_results, "/v1/files") {
-        let files = list_files(&client, token).await.unwrap_or_else(|err| {
-            warn!("OpenAI access-map: file enumeration failed: {err}");
-            risk_notes.push(format!("File enumeration failed: {err}"));
-            Vec::new()
-        });
-
-        let truncated = files.len() > MAX_OPENAI_SERVICE_RESOURCES;
-        let can_write_files = scope_has_write_access(&scope_results, "/v1/files");
-
-        for file in files.into_iter().take(MAX_OPENAI_SERVICE_RESOURCES) {
-            let file_name =
-                file.filename.or(file.id.clone()).unwrap_or_else(|| "unknown_file".to_string());
-            let mut file_permissions = vec!["file:read".to_string()];
-            if can_write_files {
-                file_permissions.push("file:write".to_string());
+                resources.push(ResourceExposure {
+                    resource_type: "model".into(),
+                    name: model.id,
+                    permissions: vec!["model:read".to_string()],
+                    risk: severity_to_str(Severity::Low).to_string(),
+                    reason,
+                });
             }
-
-            let reason = match (file.purpose.as_deref(), file.status.as_deref()) {
-                (Some(purpose), Some(status)) if !purpose.is_empty() && !status.is_empty() => {
-                    format!("File visible to this API key (purpose: {purpose}, status: {status})")
-                }
-                (Some(purpose), _) if !purpose.is_empty() => {
-                    format!("File visible to this API key (purpose: {purpose})")
-                }
-                _ => "File visible to this API key".to_string(),
-            };
-
-            resources.push(ResourceExposure {
-                resource_type: "file".into(),
-                name: file_name,
-                permissions: file_permissions,
-                risk: if can_write_files { "high".into() } else { "medium".into() },
-                reason,
-            });
+            if truncated {
+                risk_notes.push(format!(
+                    "Model resource list truncated to first {MAX_OPENAI_SERVICE_RESOURCES} visible entries"
+                ));
+            }
         }
-        if truncated {
-            risk_notes.push(format!(
-                "File resource list truncated to first {MAX_OPENAI_SERVICE_RESOURCES} visible entries"
-            ));
-        }
+        Ok(Inventory::Denied) => {}
+        Err(err) => risk_notes.push(format!("Model enumeration failed: {err}")),
     }
 
-    if scope_has_read_access(&scope_results, "/v1/assistants") {
-        let assistants = list_assistants(&client, token).await.unwrap_or_else(|err| {
-            warn!("OpenAI access-map: assistant enumeration failed: {err}");
-            risk_notes.push(format!("Assistant enumeration failed: {err}"));
-            Vec::new()
-        });
+    match list_files(&client).await {
+        Ok(Inventory::Accessible(files)) => {
+            observed_access.push("files:list".to_string());
+            permissions.read_only.push("files:list".to_string());
+            let truncated = files.len() > MAX_OPENAI_SERVICE_RESOURCES;
+            for file in files.into_iter().take(MAX_OPENAI_SERVICE_RESOURCES) {
+                let reason = format!(
+                    "File visible to this API key (purpose: {})",
+                    file_purpose_to_str(file.purpose)
+                );
 
-        let truncated = assistants.len() > MAX_OPENAI_SERVICE_RESOURCES;
-        let can_write_assistants = scope_has_write_access(&scope_results, "/v1/assistants");
-
-        for assistant in assistants.into_iter().take(MAX_OPENAI_SERVICE_RESOURCES) {
-            let assistant_name = assistant
-                .name
-                .or(assistant.id.clone())
-                .unwrap_or_else(|| "unknown_assistant".to_string());
-            let mut assistant_permissions = vec!["assistant:read".to_string()];
-            if can_write_assistants {
-                assistant_permissions.push("assistant:write".to_string());
+                resources.push(ResourceExposure {
+                    resource_type: "file".into(),
+                    name: file.filename,
+                    permissions: vec!["file:metadata:read".to_string()],
+                    risk: "medium".into(),
+                    reason,
+                });
             }
-
-            let reason = match assistant.model.as_deref() {
-                Some(model) if !model.is_empty() => {
-                    format!("Assistant visible to this API key (model: {model})")
-                }
-                _ => "Assistant visible to this API key".to_string(),
-            };
-
-            resources.push(ResourceExposure {
-                resource_type: "assistant".into(),
-                name: assistant_name,
-                permissions: assistant_permissions,
-                risk: if can_write_assistants { "medium".into() } else { "low".into() },
-                reason,
-            });
+            if truncated {
+                risk_notes.push(format!(
+                    "File resource list truncated to first {MAX_OPENAI_SERVICE_RESOURCES} visible entries"
+                ));
+            }
         }
-        if truncated {
-            risk_notes.push(format!(
-                "Assistant resource list truncated to first {MAX_OPENAI_SERVICE_RESOURCES} visible entries"
-            ));
-        }
+        Ok(Inventory::Denied) => {}
+        Err(err) => risk_notes.push(format!("File enumeration failed: {err}")),
     }
 
-    if scope_has_read_access(&scope_results, "/v1/fine_tuning") {
-        let jobs = list_fine_tuning_jobs(&client, token).await.unwrap_or_else(|err| {
-            warn!("OpenAI access-map: fine-tuning job enumeration failed: {err}");
-            risk_notes.push(format!("Fine-tuning job enumeration failed: {err}"));
-            Vec::new()
-        });
+    match list_assistants(&client).await {
+        Ok(Inventory::Accessible(assistants)) => {
+            observed_access.push("assistants:list".to_string());
+            permissions.read_only.push("assistants:list".to_string());
+            let truncated = assistants.len() > MAX_OPENAI_SERVICE_RESOURCES;
+            for assistant in assistants.into_iter().take(MAX_OPENAI_SERVICE_RESOURCES) {
+                let assistant_name = assistant.name.unwrap_or_else(|| assistant.id.clone());
+                let reason =
+                    format!("Assistant visible to this API key (model: {})", assistant.model);
 
-        let truncated = jobs.len() > MAX_OPENAI_SERVICE_RESOURCES;
-        let can_write_fine_tuning = scope_has_write_access(&scope_results, "/v1/fine_tuning");
-
-        for job in jobs.into_iter().take(MAX_OPENAI_SERVICE_RESOURCES) {
-            let job_name = job
-                .fine_tuned_model
-                .clone()
-                .or(job.id.clone())
-                .unwrap_or_else(|| "unknown_fine_tuning_job".to_string());
-            let mut job_permissions = vec!["fine_tuning:read".to_string()];
-            if can_write_fine_tuning {
-                job_permissions.push("fine_tuning:write".to_string());
+                resources.push(ResourceExposure {
+                    resource_type: "assistant".into(),
+                    name: assistant_name,
+                    permissions: vec!["assistant:read".to_string()],
+                    risk: "low".into(),
+                    reason,
+                });
             }
-
-            let reason = match (job.model.as_deref(), job.status.as_deref()) {
-                (Some(model), Some(status)) if !model.is_empty() && !status.is_empty() => {
-                    format!(
-                        "Fine-tuning job visible to this API key (base model: {model}, status: {status})"
-                    )
-                }
-                (Some(model), _) if !model.is_empty() => {
-                    format!("Fine-tuning job visible to this API key (base model: {model})")
-                }
-                _ => "Fine-tuning job visible to this API key".to_string(),
-            };
-
-            resources.push(ResourceExposure {
-                resource_type: "fine_tuning_job".into(),
-                name: job_name,
-                permissions: job_permissions,
-                risk: if can_write_fine_tuning { "high".into() } else { "medium".into() },
-                reason,
-            });
+            if truncated {
+                risk_notes.push(format!(
+                    "Assistant resource list truncated to first {MAX_OPENAI_SERVICE_RESOURCES} visible entries"
+                ));
+            }
         }
-        if truncated {
-            risk_notes.push(format!(
-                "Fine-tuning resource list truncated to first {MAX_OPENAI_SERVICE_RESOURCES} visible entries"
-            ));
+        Ok(Inventory::Denied) => {}
+        Err(err) => risk_notes.push(format!("Assistant enumeration failed: {err}")),
+    }
+
+    match list_fine_tuning_jobs(&client).await {
+        Ok(Inventory::Accessible(jobs)) => {
+            observed_access.push("fine_tuning_jobs:list".to_string());
+            permissions.read_only.push("fine_tuning_jobs:list".to_string());
+            let truncated = jobs.len() > MAX_OPENAI_SERVICE_RESOURCES;
+            for job in jobs.into_iter().take(MAX_OPENAI_SERVICE_RESOURCES) {
+                let job_name = job.fine_tuned_model.clone().unwrap_or_else(|| job.id.clone());
+                let reason = format!(
+                    "Fine-tuning job visible to this API key (base model: {}, status: {})",
+                    job.model,
+                    fine_tuning_status_to_str(job.status)
+                );
+
+                resources.push(ResourceExposure {
+                    resource_type: "fine_tuning_job".into(),
+                    name: job_name,
+                    permissions: vec!["fine_tuning_job:read".to_string()],
+                    risk: "medium".into(),
+                    reason,
+                });
+            }
+            if truncated {
+                risk_notes.push(format!(
+                    "Fine-tuning resource list truncated to first {MAX_OPENAI_SERVICE_RESOURCES} visible entries"
+                ));
+            }
         }
+        Ok(Inventory::Denied) => {}
+        Err(err) => risk_notes.push(format!("Fine-tuning job enumeration failed: {err}")),
     }
 
     // -- Identity --
-    let identity_id = me
-        .email
-        .clone()
-        .or_else(|| me.name.clone())
-        .or_else(|| me.id.clone())
-        .unwrap_or_else(|| "openai_api_key".to_string());
+    let identity_id = format!("openai_{token_kind}");
 
     if resources.is_empty() {
         resources.push(ResourceExposure {
@@ -715,20 +280,8 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
         });
     }
 
-    // -- Risk notes --
-    if has_model_capabilities {
-        risk_notes.push(
-            "Key can make inference requests (chat completions, embeddings, images, audio, moderations)"
-                .into(),
-        );
-    }
-    if scope_results.iter().any(|s| s.scope == "/v1/fine_tuning" && s.permission.contains("Write"))
-    {
-        risk_notes
-            .push("Key can create fine-tuning jobs (potential training data exfiltration)".into());
-    }
-    if scope_results.iter().any(|s| s.scope == "/v1/files" && s.permission.contains("Write")) {
-        risk_notes.push("Key can upload files".into());
+    if observed_access.is_empty() {
+        risk_notes.push("No documented OpenAI list endpoint was accessible to this key".into());
     }
 
     // -- Severity --
@@ -739,7 +292,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     permissions.read_only.sort();
     permissions.read_only.dedup();
 
-    let severity = derive_severity(&permissions, &orgs, has_model_capabilities);
+    let severity = derive_severity(&permissions, &resources);
 
     Ok(AccessMapResult {
         cloud: "openai".into(),
@@ -748,7 +301,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
             access_type: token_kind.into(),
             project: None,
             tenant: None,
-            account_id: me.id.clone(),
+            account_id: None,
         },
         roles,
         permissions,
@@ -757,19 +310,19 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
         recommendations: build_recommendations(severity),
         risk_notes,
         token_details: Some(AccessTokenDetails {
-            name: me.name,
+            name: None,
             username: None,
             account_type: Some("api_key".into()),
             company: None,
             location: None,
-            email: me.email,
+            email: None,
             url: Some("https://platform.openai.com/".into()),
             token_type: Some(token_kind.to_string()),
             created_at: None,
             last_used_at: None,
             expires_at: None,
-            user_id: me.id,
-            scopes: scope_labels,
+            user_id: None,
+            scopes: observed_access,
         }),
         provider_metadata: None,
         fingerprint: None,
@@ -780,143 +333,234 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
 // API helpers
 // ---------------------------------------------------------------------------
 
-async fn fetch_me(client: &Client, token: &str) -> Result<OpenAiMe> {
-    let resp = client
-        .get(format!("{OPENAI_API}/me"))
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header(header::ACCEPT, "application/json")
-        .send()
-        .await
-        .context("OpenAI access-map: failed to query /me")?;
-
-    if !resp.status().is_success() {
-        return Err(anyhow!("OpenAI access-map: /me failed with HTTP {}", resp.status()));
-    }
-
-    resp.json().await.context("OpenAI access-map: invalid /me JSON")
-}
-
-async fn list_projects(client: &Client, token: &str) -> Result<Vec<OpenAiProject>> {
-    let resp = client
-        .get(format!("{OPENAI_API}/organization/projects"))
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header(header::ACCEPT, "application/json")
-        .send()
-        .await
-        .context("OpenAI access-map: failed to list organization projects")?;
-
-    match resp.status() {
-        StatusCode::OK => {
-            let body: OpenAiProjectsResponse =
-                resp.json().await.context("OpenAI access-map: invalid projects JSON")?;
-            Ok(body.data)
-        }
-        StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => Ok(Vec::new()),
-        StatusCode::UNAUTHORIZED => {
-            Err(anyhow!("OpenAI access-map: project listing unauthorized (401)"))
-        }
-        status => Err(anyhow!("OpenAI access-map: project listing failed with HTTP {status}")),
+/// OpenAI API reference: https://platform.openai.com/docs/api-reference/projects/list
+async fn list_projects(client: &OpenAiClient) -> Result<Inventory<Project>> {
+    match client.admin().projects().list().await {
+        Ok(response) => Ok(Inventory::Accessible(response.data)),
+        Err(err) if is_access_denied(&err) => Ok(Inventory::Denied),
+        Err(err) => Err(err).context("OpenAI access-map: failed to list organization projects"),
     }
 }
 
-async fn list_models(client: &Client, token: &str) -> Result<Vec<OpenAiModel>> {
-    let resp = client
-        .get(format!("{OPENAI_API}/models"))
+async fn enumerate_project_administration(
+    client: &OpenAiClient,
+    http_client: &HttpClient,
+    token: &str,
+    project_id: &str,
+    resources: &mut Vec<ResourceExposure>,
+    permissions: &mut PermissionSummary,
+) -> Result<()> {
+    let base = format!("{OPENAI_API}/organization/projects/{project_id}");
+    let admin = client.admin();
+    let projects = admin.projects();
+
+    let api_keys = projects
+        .api_keys(project_id)
+        .query(&[("limit", "100"), ("owner_project_access", "any")])?
+        .list()
+        .await
+        .with_context(|| format!("OpenAI access-map: failed to list API keys for {project_id}"))?;
+    for key in api_keys.data {
+        resources.push(ResourceExposure {
+            resource_type: "project_api_key".into(),
+            name: if key.name.is_empty() { key.id } else { key.name },
+            permissions: vec!["project_api_key:read".into()],
+            risk: "high".into(),
+            reason: format!("Project API key visible to this admin key ({})", key.redacted_value),
+        });
+    }
+
+    let service_accounts = projects
+        .service_accounts(project_id)
+        .query(&[("limit", "100")])?
+        .list()
+        .await
+        .with_context(|| {
+            format!("OpenAI access-map: failed to list service accounts for {project_id}")
+        })?;
+    for account in service_accounts.data {
+        resources.push(ResourceExposure {
+            resource_type: "service_account".into(),
+            name: if account.name.is_empty() { account.id } else { account.name },
+            permissions: vec![format!("project_role:{}", project_role_to_str(account.role))],
+            risk: "high".into(),
+            reason: "Service account assigned to this OpenAI project".into(),
+        });
+    }
+
+    let users = projects
+        .users(project_id)
+        .query(&[("limit", "100")])?
+        .list()
+        .await
+        .with_context(|| format!("OpenAI access-map: failed to list users for {project_id}"))?;
+    for user in users.data {
+        let role = project_role_to_str(user.role);
+        resources.push(ResourceExposure {
+            resource_type: "project_user".into(),
+            name: user.name.unwrap_or(user.id),
+            permissions: vec![format!("project_role:{role}")],
+            risk: if role == "owner" { "high" } else { "medium" }.into(),
+            reason: "User assigned to this OpenAI project".into(),
+        });
+    }
+
+    let model_permissions: OpenAiProjectModelPermissions =
+        get_admin_json(http_client, token, &format!("{base}/model_permissions")).await?;
+    resources.push(ResourceExposure {
+        resource_type: "model_policy".into(),
+        name: project_id.to_string(),
+        permissions: model_permissions.model_ids,
+        risk: "medium".into(),
+        reason: format!("Project model policy mode: {}", model_permissions.mode),
+    });
+
+    let tools: OpenAiHostedToolPermissions =
+        get_admin_json(http_client, token, &format!("{base}/hosted_tool_permissions")).await?;
+    let enabled_tools = [
+        ("file_search", tools.file_search.enabled),
+        ("web_search", tools.web_search.enabled),
+        ("image_generation", tools.image_generation.enabled),
+        ("mcp", tools.mcp.enabled),
+        ("code_interpreter", tools.code_interpreter.enabled),
+    ]
+    .into_iter()
+    .filter_map(|(name, enabled)| enabled.then_some(name.to_string()))
+    .collect::<Vec<_>>();
+    resources.push(ResourceExposure {
+        resource_type: "hosted_tools".into(),
+        name: project_id.to_string(),
+        permissions: enabled_tools,
+        risk: "medium".into(),
+        reason: "Hosted tools enabled for this OpenAI project".into(),
+    });
+
+    let rate_limits =
+        projects.rate_limits(project_id).query(&[("limit", "100")])?.list().await.with_context(
+            || format!("OpenAI access-map: failed to list rate limits for {project_id}"),
+        )?;
+    for limit in rate_limits.data {
+        resources.push(ResourceExposure {
+            resource_type: "model_rate_limit".into(),
+            name: if limit.model.is_empty() { "unknown_model".into() } else { limit.model },
+            permissions: vec![
+                format!("requests_per_minute:{}", limit.max_requests_per_1_minute),
+                format!("tokens_per_minute:{}", limit.max_tokens_per_1_minute),
+            ],
+            risk: "low".into(),
+            reason: "Configured project rate limit".into(),
+        });
+    }
+
+    permissions.admin.push(format!("project:{project_id}:administration:read"));
+    Ok(())
+}
+
+async fn get_admin_json<T: for<'de> Deserialize<'de>>(
+    client: &HttpClient,
+    token: &str,
+    url: &str,
+) -> Result<T> {
+    let response = client
+        .get(url)
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::ACCEPT, "application/json")
         .send()
         .await
-        .context("OpenAI access-map: failed to list models")?;
+        .with_context(|| format!("OpenAI access-map: request failed for {url}"))?;
+    if !response.status().is_success() {
+        return Err(anyhow!("OpenAI access-map: {url} failed with HTTP {}", response.status()));
+    }
+    response.json().await.with_context(|| format!("OpenAI access-map: invalid JSON from {url}"))
+}
 
-    match resp.status() {
-        StatusCode::OK => {
-            let body: OpenAiModelsResponse =
-                resp.json().await.context("OpenAI access-map: invalid models JSON")?;
-            Ok(body.data)
-        }
-        StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => Ok(Vec::new()),
-        StatusCode::UNAUTHORIZED => {
-            Err(anyhow!("OpenAI access-map: model listing unauthorized (401)"))
-        }
-        status => Err(anyhow!("OpenAI access-map: model listing failed with HTTP {status}")),
+/// OpenAI API reference: https://platform.openai.com/docs/api-reference/models/list
+async fn list_models(client: &OpenAiClient) -> Result<Inventory<Model>> {
+    match client.models().list().await {
+        Ok(response) => Ok(Inventory::Accessible(response.data)),
+        Err(err) if is_access_denied(&err) => Ok(Inventory::Denied),
+        Err(err) => Err(err).context("OpenAI access-map: failed to list models"),
     }
 }
 
-async fn list_files(client: &Client, token: &str) -> Result<Vec<OpenAiFile>> {
-    let resp = client
-        .get(format!("{OPENAI_API}/files"))
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header(header::ACCEPT, "application/json")
-        .send()
-        .await
-        .context("OpenAI access-map: failed to list files")?;
-
-    match resp.status() {
-        StatusCode::OK => {
-            let body: OpenAiFilesResponse =
-                resp.json().await.context("OpenAI access-map: invalid files JSON")?;
-            Ok(body.data)
-        }
-        StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => Ok(Vec::new()),
-        StatusCode::UNAUTHORIZED => {
-            Err(anyhow!("OpenAI access-map: file listing unauthorized (401)"))
-        }
-        status => Err(anyhow!("OpenAI access-map: file listing failed with HTTP {status}")),
+/// OpenAI API reference: https://platform.openai.com/docs/api-reference/files/list
+async fn list_files(client: &OpenAiClient) -> Result<Inventory<OpenAIFile>> {
+    match client.files().list().await {
+        Ok(response) => Ok(Inventory::Accessible(response.data)),
+        Err(err) if is_access_denied(&err) => Ok(Inventory::Denied),
+        Err(err) => Err(err).context("OpenAI access-map: failed to list files"),
     }
 }
 
-async fn list_assistants(client: &Client, token: &str) -> Result<Vec<OpenAiAssistant>> {
-    let resp = client
-        .get(format!("{OPENAI_API}/assistants"))
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header(header::ACCEPT, "application/json")
-        .header("OpenAI-Beta", "assistants=v2")
-        .send()
+/// OpenAI API reference: https://platform.openai.com/docs/api-reference/assistants/listAssistants
+#[allow(deprecated)]
+async fn list_assistants(client: &OpenAiClient) -> Result<Inventory<OpenAiAssistant>> {
+    match client
+        .assistants()
+        .header("OpenAI-Beta", "assistants=v2")?
+        .list_byot::<OpenAiAssistantsResponse>()
         .await
-        .context("OpenAI access-map: failed to list assistants")?;
-
-    match resp.status() {
-        StatusCode::OK => {
-            let body: OpenAiAssistantsResponse =
-                resp.json().await.context("OpenAI access-map: invalid assistants JSON")?;
-            Ok(body.data)
-        }
-        StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => Ok(Vec::new()),
-        StatusCode::UNAUTHORIZED => {
-            Err(anyhow!("OpenAI access-map: assistant listing unauthorized (401)"))
-        }
-        status => Err(anyhow!("OpenAI access-map: assistant listing failed with HTTP {status}")),
+    {
+        Ok(response) => Ok(Inventory::Accessible(response.data)),
+        Err(err) if is_access_denied(&err) => Ok(Inventory::Denied),
+        Err(err) => Err(err).context("OpenAI access-map: failed to list assistants"),
     }
 }
 
-async fn list_fine_tuning_jobs(client: &Client, token: &str) -> Result<Vec<OpenAiFineTuningJob>> {
-    let resp = client
-        .get(format!("{OPENAI_API}/fine_tuning/jobs"))
-        .header(header::AUTHORIZATION, format!("Bearer {token}"))
-        .header(header::ACCEPT, "application/json")
-        .send()
-        .await
-        .context("OpenAI access-map: failed to list fine-tuning jobs")?;
-
-    match resp.status() {
-        StatusCode::OK => {
-            let body: OpenAiFineTuningJobsResponse =
-                resp.json().await.context("OpenAI access-map: invalid fine-tuning jobs JSON")?;
-            Ok(body.data)
-        }
-        StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => Ok(Vec::new()),
-        StatusCode::UNAUTHORIZED => {
-            Err(anyhow!("OpenAI access-map: fine-tuning job listing unauthorized (401)"))
-        }
-        status => {
-            Err(anyhow!("OpenAI access-map: fine-tuning job listing failed with HTTP {status}"))
-        }
+/// OpenAI API reference: https://platform.openai.com/docs/api-reference/fine-tuning/list
+async fn list_fine_tuning_jobs(client: &OpenAiClient) -> Result<Inventory<FineTuningJob>> {
+    match client.fine_tuning().list_paginated().await {
+        Ok(response) => Ok(Inventory::Accessible(response.data)),
+        Err(err) if is_access_denied(&err) => Ok(Inventory::Denied),
+        Err(err) => Err(err).context("OpenAI access-map: failed to list fine-tuning jobs"),
     }
 }
 
 // ---------------------------------------------------------------------------
 // Classification helpers
 // ---------------------------------------------------------------------------
+
+fn is_access_denied(err: &OpenAIError) -> bool {
+    matches!(
+        err,
+        OpenAIError::ApiError(response)
+            if matches!(
+                response.status_code,
+                StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND
+            )
+    )
+}
+
+fn project_role_to_str(role: ProjectMembership) -> &'static str {
+    match role {
+        ProjectMembership::Owner => "owner",
+        ProjectMembership::Member => "member",
+    }
+}
+
+fn file_purpose_to_str(purpose: OpenAIFilePurpose) -> &'static str {
+    match purpose {
+        OpenAIFilePurpose::Assistants => "assistants",
+        OpenAIFilePurpose::AssistantsOutput => "assistants_output",
+        OpenAIFilePurpose::Batch => "batch",
+        OpenAIFilePurpose::BatchOutput => "batch_output",
+        OpenAIFilePurpose::FineTune => "fine-tune",
+        OpenAIFilePurpose::FineTuneResults => "fine-tune-results",
+        OpenAIFilePurpose::Vision => "vision",
+        OpenAIFilePurpose::UserData => "user_data",
+    }
+}
+
+fn fine_tuning_status_to_str(status: FineTuningJobStatus) -> &'static str {
+    match status {
+        FineTuningJobStatus::ValidatingFiles => "validating_files",
+        FineTuningJobStatus::Queued => "queued",
+        FineTuningJobStatus::Running => "running",
+        FineTuningJobStatus::Succeeded => "succeeded",
+        FineTuningJobStatus::Failed => "failed",
+        FineTuningJobStatus::Cancelled => "cancelled",
+    }
+}
 
 fn detect_token_type(token: &str) -> &'static str {
     if token.starts_with("sk-proj-") {
@@ -930,25 +574,15 @@ fn detect_token_type(token: &str) -> &'static str {
     }
 }
 
-fn scope_has_read_access(scopes: &[ScopeResult], scope: &str) -> bool {
-    scopes.iter().any(|sr| sr.scope == scope && matches!(sr.permission, "Read" | "Read & Write"))
-}
+fn derive_severity(permissions: &PermissionSummary, resources: &[ResourceExposure]) -> Severity {
+    let sensitive_resources = resources
+        .iter()
+        .any(|resource| matches!(resource.resource_type.as_str(), "file" | "fine_tuning_job"));
 
-fn scope_has_write_access(scopes: &[ScopeResult], scope: &str) -> bool {
-    scopes.iter().any(|sr| sr.scope == scope && matches!(sr.permission, "Write" | "Read & Write"))
-}
-
-fn derive_severity(
-    permissions: &PermissionSummary,
-    orgs: &[OpenAiOrg],
-    has_model_capabilities: bool,
-) -> Severity {
-    let is_org_owner = orgs.iter().any(|o| o.role.as_deref() == Some("owner"));
-
-    if !permissions.admin.is_empty() || is_org_owner {
+    if !permissions.admin.is_empty() {
         return Severity::High;
     }
-    if has_model_capabilities || !permissions.risky.is_empty() {
+    if sensitive_resources || !permissions.risky.is_empty() {
         return Severity::Medium;
     }
     if !permissions.read_only.is_empty() {
@@ -968,29 +602,27 @@ fn severity_to_str(severity: Severity) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{ScopeResult, scope_has_read_access, scope_has_write_access};
+    use super::{PermissionSummary, ResourceExposure, Severity, derive_severity};
 
     #[test]
-    fn scope_helpers_track_read_and_write_access_independently() {
-        let scopes = vec![
-            ScopeResult { scope: "/v1/models", endpoints: vec!["/v1/models"], permission: "Read" },
-            ScopeResult {
-                scope: "/v1/files",
-                endpoints: vec!["/v1/files"],
-                permission: "Read & Write",
-            },
-            ScopeResult {
-                scope: "/v1/responses",
-                endpoints: vec!["/v1/responses"],
-                permission: "Write",
-            },
-        ];
+    fn observed_sensitive_resources_raise_severity_without_write_probes() {
+        let resources = vec![ResourceExposure {
+            resource_type: "file".into(),
+            name: "example.jsonl".into(),
+            permissions: vec!["file:metadata:read".into()],
+            risk: "medium".into(),
+            reason: "Visible file metadata".into(),
+        }];
+        assert!(matches!(
+            derive_severity(&PermissionSummary::default(), &resources),
+            Severity::Medium
+        ));
+    }
 
-        assert!(scope_has_read_access(&scopes, "/v1/models"));
-        assert!(!scope_has_write_access(&scopes, "/v1/models"));
-        assert!(scope_has_read_access(&scopes, "/v1/files"));
-        assert!(scope_has_write_access(&scopes, "/v1/files"));
-        assert!(!scope_has_read_access(&scopes, "/v1/responses"));
-        assert!(scope_has_write_access(&scopes, "/v1/responses"));
+    #[test]
+    fn organization_project_listing_is_high_severity() {
+        let mut permissions = PermissionSummary::default();
+        permissions.admin.push("organization_projects:list".into());
+        assert!(matches!(derive_severity(&permissions, &[]), Severity::High));
     }
 }

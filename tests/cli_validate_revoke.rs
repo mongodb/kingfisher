@@ -7,8 +7,34 @@
 use assert_cmd::Command;
 use predicates::{prelude::PredicateBooleanExt, str::contains};
 use serde_json::Value;
-use std::fs;
+use std::{
+    fs,
+    io::{Read, Write},
+    net::TcpListener,
+    thread,
+};
 use tempfile::TempDir;
+
+const LEGACY_REVOCATION_RULES: &str =
+    concat!(env!("CARGO_MANIFEST_DIR"), "/tests/fixtures/legacy_custom_revocation.yml");
+
+fn local_revocation_url() -> String {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let address = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut request = [0_u8; 4096];
+        let _ = stream.read(&mut request);
+        let body = r#"{"revoked":true}"#;
+        let response = format!(
+            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+            body.len(),
+            body
+        );
+        stream.write_all(response.as_bytes()).unwrap();
+    });
+    format!("http://{address}/revoke")
+}
 
 // =============================================================================
 // Validate Command Tests
@@ -60,7 +86,7 @@ mod validate {
     #[test]
     fn validate_requires_secret() {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["validate", "--rule", "opsgenie", "--no-update-check"])
+            .args(["validate", "--rule", "github-pat", "--no-update-check"])
             .assert()
             .failure()
             .stderr(contains("No secret provided"));
@@ -69,7 +95,7 @@ mod validate {
     #[test]
     fn validate_rejects_empty_secret() {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["validate", "--rule", "opsgenie", "", "--no-update-check"])
+            .args(["validate", "--rule", "github-pat", "", "--no-update-check"])
             .assert()
             .failure()
             .stderr(contains("Secret cannot be empty"));
@@ -92,17 +118,17 @@ mod validate {
 
     #[test]
     fn validate_accepts_rule_prefix() {
-        // Should find rules matching a prefix like "opsgenie"
+        // Short selectors resolve against Betterleaks rule IDs by default.
         // The actual validation will fail but the rule should be found
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["validate", "--rule", "opsgenie", "fake-api-key-12345", "--no-update-check"])
+            .args(["validate", "--rule", "github-pat", "fake-api-key-12345", "--no-update-check"])
             .assert()
             .code(predicates::function::function(|code: &i32| {
                 // Exit 1 means validation failed (expected with fake key)
                 // Exit 0 would mean valid (unexpected but possible)
                 *code == 0 || *code == 1
             }))
-            .stdout(contains("OpsGenie").or(contains("opsgenie")));
+            .stdout(contains("GitHub").or(contains("github")));
     }
 
     #[test]
@@ -111,7 +137,7 @@ mod validate {
             .args([
                 "validate",
                 "--rule",
-                "kingfisher.opsgenie.1",
+                "betterleaks.github-pat",
                 "fake-api-key-12345",
                 "--no-update-check",
             ])
@@ -125,7 +151,7 @@ mod validate {
             .args([
                 "validate",
                 "--rule",
-                "opsgenie",
+                "github-pat",
                 "fake-api-key-12345",
                 "--format",
                 "json",
@@ -147,7 +173,7 @@ mod validate {
             .args([
                 "validate",
                 "--rule",
-                "kingfisher.opsgenie.1",
+                "betterleaks.github-pat",
                 "fake-api-key-12345",
                 "--format",
                 "toon",
@@ -170,7 +196,7 @@ mod validate {
             .args([
                 "validate",
                 "--rule",
-                "opsgenie",
+                "github-pat",
                 "fake-api-key-12345",
                 "--format",
                 "text",
@@ -192,7 +218,7 @@ mod validate {
             .args([
                 "validate",
                 "--rule",
-                "kingfisher.github.2",
+                "betterleaks.github-pat",
                 secret,
                 "--format",
                 "json",
@@ -210,11 +236,11 @@ mod validate {
         assert!(output.status.code().is_some_and(|code| code == 0 || code == 1));
         let stdout = String::from_utf8(output.stdout.clone()).expect("stdout should be UTF-8");
         let decoded: Value = serde_json::from_str(&stdout).expect("json should decode");
-        assert_eq!(decoded.get("rule_id").and_then(|v| v.as_str()), Some("kingfisher.github.2"));
+        assert_eq!(decoded.get("rule_id").and_then(|v| v.as_str()), Some("betterleaks.github-pat"));
         assert_eq!(decoded.get("is_valid").and_then(|v| v.as_bool()), Some(false));
         let message = decoded.get("message").and_then(|v| v.as_str()).unwrap_or("");
         assert!(
-            message.contains("HTTP validation failed"),
+            message.contains("Betterleaks validation request failed"),
             "message should explain the failure, got: {message}"
         );
         // The CLI must never echo the user's secret back to stdout, even
@@ -298,7 +324,7 @@ rules:
             .args([
                 "validate",
                 "--rule",
-                "opsgenie",
+                "github-pat",
                 "fake-api-key",
                 "--timeout",
                 "5",
@@ -314,7 +340,7 @@ rules:
             .args([
                 "validate",
                 "--rule",
-                "opsgenie",
+                "github-pat",
                 "fake-api-key",
                 "--timeout",
                 "100",
@@ -331,7 +357,7 @@ rules:
             .args([
                 "validate",
                 "--rule",
-                "opsgenie",
+                "github-pat",
                 "fake-api-key",
                 "--retries",
                 "3",
@@ -347,7 +373,7 @@ rules:
             .args([
                 "validate",
                 "--rule",
-                "opsgenie",
+                "github-pat",
                 "fake-api-key",
                 "--retries",
                 "10",
@@ -498,12 +524,12 @@ rules:
 
     #[test]
     fn validate_too_many_args() {
-        // OpsGenie only needs TOKEN, no additional variables
+        // GitHub PAT validation only needs TOKEN, no additional variables.
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args([
                 "validate",
                 "--rule",
-                "opsgenie",
+                "github-pat",
                 "--arg",
                 "extra1",
                 "--arg",
@@ -589,7 +615,7 @@ rules:
             .args([
                 "validate",
                 "--rule",
-                "opsgenie",
+                "github-pat",
                 "fake-key",
                 "--format",
                 "yaml",
@@ -677,9 +703,17 @@ mod revoke {
 
     #[test]
     fn revoke_accepts_rule_prefix() {
-        // Slack has revocation support
+        let url = local_revocation_url();
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args(["revoke", "--rule", "slack", "xoxb-fake-token-12345", "--no-update-check"])
+            .args([
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
+                "--var",
+                &format!("REVOCATION_URL={url}"),
+                "--allow-internal-ips",
+            ])
             .assert()
             .code(predicates::function::function(|code: &i32| *code == 0 || *code == 1))
             .stdout(contains("Slack").or(contains("slack")));
@@ -691,8 +725,11 @@ mod revoke {
             .args([
                 "revoke",
                 "--rule",
-                "kingfisher.slack.1",
+                "slack.custom",
                 "xoxb-fake-token",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
                 "--no-update-check",
             ])
             .assert()
@@ -701,12 +738,19 @@ mod revoke {
 
     #[test]
     fn revoke_json_output() {
+        let url = local_revocation_url();
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args([
                 "revoke",
                 "--rule",
                 "slack",
                 "xoxb-fake-token",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
+                "--var",
+                &format!("REVOCATION_URL={url}"),
+                "--allow-internal-ips",
                 "--format",
                 "json",
                 "--no-update-check",
@@ -723,12 +767,19 @@ mod revoke {
 
     #[test]
     fn revoke_toon_output() {
+        let url = local_revocation_url();
         let assert = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args([
                 "revoke",
                 "--rule",
-                "kingfisher.slack.1",
+                "slack.custom",
                 "xoxb-fake-token",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
+                "--var",
+                &format!("REVOCATION_URL={url}"),
+                "--allow-internal-ips",
                 "--format",
                 "toon",
                 "--no-update-check",
@@ -746,12 +797,19 @@ mod revoke {
 
     #[test]
     fn revoke_text_output() {
+        let url = local_revocation_url();
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args([
                 "revoke",
                 "--rule",
                 "slack",
                 "xoxb-fake-token",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
+                "--var",
+                &format!("REVOCATION_URL={url}"),
+                "--allow-internal-ips",
                 "--format",
                 "text",
                 "--no-update-check",
@@ -838,6 +896,9 @@ mod revoke {
                 "--var",
                 "AKID=AKIAIOSFODNN7EXAMPLE",
                 "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
                 "--no-update-check",
             ])
             .assert()
@@ -855,6 +916,9 @@ mod revoke {
                 "--arg",
                 "AKIAIOSFODNN7EXAMPLE",
                 "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
                 "--no-update-check",
             ])
             .assert()
@@ -871,6 +935,9 @@ mod revoke {
                 "--var",
                 "INVALID_FORMAT_NO_EQUALS",
                 "fake-secret",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
                 "--no-update-check",
             ])
             .assert()
@@ -915,7 +982,16 @@ rules:
         let fake_sa_json =
             r#"{"type":"service_account","project_id":"test","private_key_id":"key123"}"#;
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args(["revoke", "--rule", "gcp", fake_sa_json, "--no-update-check"])
+            .args([
+                "revoke",
+                "--rule",
+                "gcp",
+                fake_sa_json,
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
+                "--no-update-check",
+            ])
             .assert()
             .code(predicates::function::function(|code: &i32| *code == 0 || *code == 1));
     }
@@ -929,6 +1005,9 @@ rules:
                 "--rule",
                 "github",
                 "ghp_fake1234567890abcdefghijklmnopqrstuvw",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
                 "--no-update-check",
             ])
             .assert()
@@ -944,6 +1023,9 @@ rules:
                 "--rule",
                 "gitlab",
                 "glpat-fake1234567890abcdefgh",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
                 "--no-update-check",
             ])
             .assert()
@@ -959,6 +1041,9 @@ rules:
                 "--rule",
                 "aws",
                 "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
                 "--no-update-check",
             ])
             .assert()
@@ -1133,7 +1218,7 @@ rules:
                 "--verbose",
                 "validate",
                 "--rule",
-                "opsgenie",
+                "github-pat",
                 "fake-api-key",
                 "--no-update-check",
             ])
@@ -1163,7 +1248,7 @@ rules:
                 "--quiet",
                 "validate",
                 "--rule",
-                "opsgenie",
+                "github-pat",
                 "fake-api-key",
                 "--no-update-check",
             ])
@@ -1187,7 +1272,7 @@ rules:
                 "lax",
                 "validate",
                 "--rule",
-                "opsgenie",
+                "github-pat",
                 "fake-api-key",
                 "--no-update-check",
             ])

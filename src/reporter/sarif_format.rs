@@ -36,6 +36,7 @@ impl DetailsReporter {
             serde_json::json!(finding.validation.outcome),
         );
         props.insert("entropy".to_string(), serde_json::json!(finding.entropy));
+        props.insert("description".to_string(), serde_json::json!(record.rule.description));
         if let Some(git) = &finding.git_metadata {
             props.insert("git_metadata".to_string(), git.clone());
         }
@@ -58,11 +59,11 @@ impl DetailsReporter {
             .build();
 
         let message = sarif::Message::builder()
-            .text(format!("Rule {} matched {}", record.rule.name, finding.path))
+            .text(format!("{} matched {}", record.rule.title, finding.path))
             .build();
 
         let result = sarif::Result::builder()
-            .rule_id(&record.rule.name)
+            .rule_id(&record.rule.id)
             .message(message)
             .kind(sarif::ResultKind::Review)
             .locations(vec![location])
@@ -80,21 +81,25 @@ impl DetailsReporter {
     ) -> Result<()> {
         let envelope = self.build_report_envelope(args)?;
         let finding_rule_ids: HashSet<_> =
-            envelope.findings.iter().map(|r| r.rule.name.clone()).collect();
+            envelope.findings.iter().map(|r| r.rule.id.clone()).collect();
         let rules: Vec<sarif::ReportingDescriptor> = get_builtin_rules(None)?
             .iter_rules()
             .par_bridge()
             .filter_map(|rule| {
-                if finding_rule_ids.contains(&rule.name) {
+                if finding_rule_ids.contains(&rule.id) {
                     let help = sarif::MultiformatMessageString::builder()
                         .text(rule.references.join("\n"))
+                        .build();
+                    let title = sarif::MultiformatMessageString::builder()
+                        .text(finding_title(&rule.id))
                         .build();
                     let description =
                         sarif::MultiformatMessageString::builder().text(&rule.name).build();
                     Some(
                         sarif::ReportingDescriptor::builder()
-                            .id(&rule.name)
-                            .short_description(description)
+                            .id(&rule.id)
+                            .short_description(title)
+                            .full_description(description)
                             .help(help)
                             .build(),
                     )
@@ -164,7 +169,12 @@ mod tests {
 
     fn sample_record(confidence: &str) -> FindingReporterRecord {
         FindingReporterRecord {
-            rule: RuleMetadata { name: "test-rule".to_string(), id: "rule-1".to_string() },
+            rule: RuleMetadata {
+                title: "TEST-RULE => [RULE-1]".to_string(),
+                name: "test-rule".to_string(),
+                id: "rule-1".to_string(),
+                description: "Test rule description".to_string(),
+            },
             finding: FindingRecordData {
                 snippet: "secret".to_string(),
                 fingerprint: "fingerprint".to_string(),

@@ -507,6 +507,11 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
                         (model.permissions?.read_only?.length || 0);
       el.appendChild(badge('Permissions: ' + permCount));
       el.appendChild(badge('Resources: ' + (model.resources?.length || 0)));
+      const evidence = model.provider_metadata?.authorization_evidence;
+      if (evidence) {
+        el.appendChild(badge('Policies: ' + (evidence.policies?.length || 0)));
+        el.appendChild(badge('Identity paths: ' + (evidence.paths?.length || 0)));
+      }
     }
 
     function renderDetail(node, el) {
@@ -675,7 +680,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
       const resource = arn.split(':')[5] || '';
       const parts = resource.split('/');
       const kind = parts[0];
-      const name = parts[1];
+      const name = kind === 'assumed-role' ? parts[1] : parts[parts.length - 1];
       if (!kind || !name) return null;
       if (kind === 'assumed-role' || kind === 'role') {
         return `https://console.aws.amazon.com/iam/home?#/roles/${encodeURIComponent(name)}`;
@@ -697,6 +702,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
     }
 
     function buildTree(model) {
+      const evidence = model.provider_metadata?.authorization_evidence || {};
       const roleNodes = (model.roles || []).map(role => ({
         name: role.name || 'role',
         type: 'role',
@@ -723,6 +729,51 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
         }));
 
       const resourceNodes = buildResourceNodes(model);
+      const policyNodes = (evidence.policies || []).slice(0, 100).map(policy => ({
+        name: policy.name || policy.id || 'policy',
+        type: 'policy',
+        source: [policy.kind, policy.scope, policy.attached_via].filter(Boolean).join(' · '),
+        notes: [`Attached to ${policy.attached_to || 'unknown identity'}`],
+        children: (policy.statements || []).map(statement => ({
+          name: statement.sid || statement.id || 'statement',
+          type: 'policy_statement',
+          permissions: [...(statement.actions || []), ...(statement.not_actions || []).map(value => `NOT ${value}`)],
+          reason: `${statement.effect || 'Unknown'}${(statement.resources || []).length ? ` on ${(statement.resources || []).join(', ')}` : ''}`,
+          notes: [
+            ...(statement.principals || []).map(value => `Principal: ${value}`),
+            ...(statement.condition_keys || []).map(value => `Condition: ${value}`),
+          ],
+        }))
+      }));
+      if ((evidence.policies || []).length > policyNodes.length) {
+        policyNodes.push({
+          name: `+${(evidence.policies || []).length - policyNodes.length} additional policies in structured output`,
+          type: 'note',
+        });
+      }
+      const pathNodes = (evidence.paths || []).slice(0, 50).map((path, index) => ({
+        name: (path.hops || []).map(hop => `${hop.from} → ${hop.to}`).join(' → ') || `Path ${index + 1}`,
+        type: 'identity_path',
+        source: [path.direction, path.status || 'potential'].filter(Boolean).join(' · '),
+        notes: [
+          ...(path.conditions || []).map(value => `Condition: ${value}`),
+          ...(path.evidence || []).map(value => `Evidence: ${value}`),
+        ],
+        children: (path.hops || []).map(hop => ({
+          name: `${hop.from} → ${hop.to}`,
+          type: hop.relationship || 'relationship',
+        }))
+      }));
+      if ((evidence.paths || []).length > pathNodes.length) {
+        pathNodes.push({
+          name: `+${(evidence.paths || []).length - pathNodes.length} additional paths in structured output`,
+          type: 'note',
+        });
+      }
+      const hierarchyNodes = (evidence.hierarchy || []).map(scope => ({
+        name: scope.id,
+        type: scope.kind || 'scope',
+      }));
 
       return {
         name: model.identity?.id || 'Identity',
@@ -732,6 +783,10 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
           { name: 'Resources', type: 'section', children: resourceNodes },
           { name: 'Roles', type: 'section', children: roleNodes },
           { name: 'Permissions', type: 'section', children: permGroups },
+          { name: 'Authorization Paths', type: 'section', children: pathNodes },
+          { name: 'Policy Evidence', type: 'section', children: policyNodes },
+          { name: 'Hierarchy', type: 'section', children: hierarchyNodes },
+          { name: 'Evidence Limits', type: 'section', children: (evidence.limitations || []).map(n => ({ name: n, type: 'note', notes: [n] })) },
           { name: 'Notes', type: 'section', children: (model.risk_notes || []).map(n => ({ name: n, type: 'note', notes: [n] })) },
           { name: 'Recommendations', type: 'section', children: (model.recommendations || []).map(r => ({ name: r, type: 'note', notes: [r] })) },
         ],
@@ -743,7 +798,13 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
       const name = (node.name || '').toLowerCase();
       const type = (node.type || '').toLowerCase();
       const fp = (node.fingerprint || '').toLowerCase();
-      const matchesSelf = query ? name.includes(query) || type.includes(query) || fp.includes(query) : true;
+      const detail = [
+        node.source,
+        node.reason,
+        ...(node.permissions || []),
+        ...(node.notes || []),
+      ].filter(Boolean).join(' ').toLowerCase();
+      const matchesSelf = query ? name.includes(query) || type.includes(query) || fp.includes(query) || detail.includes(query) : true;
       if (!node.children || node.children.length === 0) {
         return matchesSelf ? { ...node } : null;
       }
@@ -848,7 +909,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
         <div class="content">
           <div>
             <div class="search-box">
-              <input class="search-input" placeholder="Search permissions, roles, resources" />
+              <input class="search-input" placeholder="Search permissions, roles, paths, policies, resources" />
             </div>
             <div class="tree"></div>
           </div>

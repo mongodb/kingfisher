@@ -7,6 +7,16 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.0.0]
+- Added Kingfisher-side typed validation for Betterleaks' `generic-credential-uri` rule without changing its detector: PostgreSQL, MySQL/MariaDB, and MongoDB URI captures now use the corresponding live validator and feed validated credentials into blast-radius mapping, while unsupported URI schemes remain detected with validation not attempted. JDBC strings containing a credential-bearing PostgreSQL/MySQL URI are handled through that inner URI, and direct `CredentialUri` validation also dispatches supported `jdbc:` inputs.
+- **Breaking:** moved the candidate detector catalog to the Betterleaks rule format, with selected
+  Veles detectors filling gaps, giving the community a well-designed shared format and a common
+  place to develop generally useful rules.
+- Kingfisher now fetches and parses the Betterleaks catalog and selected Veles source files at build
+  time; the Kingfisher 1.x YAML custom-rule format remains supported for private custom rules.
+- Preserved Kingfisher's engine capabilities around validation, blast-radius mapping, and credential revocation while allowing MongoDB to focus investment on scan performance, integrations, and analysis workflows.
+- All rules now use Vectorscan candidate detection, eliminating unconditional whole-blob regex fallbacks for Betterleaks' large generic credential patterns; Betterleaks path and finding-filter regex helpers are also compiled once with Vectorscan instead of being rebuilt per path or finding.
+
 ## [v1.113.0]
 - Added repository-aware v2 baselines with safe multi-repository updates, atomic writes, and automatic migration while retaining legacy baseline compatibility.
 - Added configurable webhook finding filters, empty-alert suppression, dry-run previews, and access-map impact summaries.
@@ -27,6 +37,8 @@ All notable changes to this project will be documented in this file.
 - Reduced Git scan metadata memory usage by interning repeated committer names and email addresses.
 - Reduced peak memory during large scans by bounding Git delta caches per worker and streaming matcher chunks; `--jobs` now controls the scanner worker pool.
 - Added first-class validation outcomes and `--validation-filter actionable`, allowing active credentials and high-confidence assumed-valid secrets such as private keys to remain visible together without labeling assumed findings active. `--only-valid` remains strict active filtering. Thanks @wing-cheng. [#440](https://github.com/mongodb/kingfisher/issues/440)
+- Expanded GCP coverage with validated generic and Express Mode API keys, GCS HMAC key pairs, and Application Default Credentials, drawing on Veles and Betterleaks.
+- Hardened GCP validation with Google-only OAuth endpoints, read-only multi-API key probes, and concise responses that avoid exposing minted access tokens or bucket metadata.
 - Fixed alert webhooks reporting a temporary stdin file instead of an explicitly requested non-path scan target in non-interactive runs. [#452](https://github.com/mongodb/kingfisher/issues/452)
 - Fixed `kingfisher scan - <path>` discarding the sibling paths when staging stdin; stdin now replaces only the `-` placeholder.
 - Fixed direct validation for Atlassian API keys using the documented Organizations API. [#461](https://github.com/mongodb/kingfisher/issues/461)
