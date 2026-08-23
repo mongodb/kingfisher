@@ -1,10 +1,10 @@
 # Token Revocation Support
 
 Betterleaks currently has no revocation metadata. The former Kingfisher-owned detection-rule matrix
-was removed with the previous built-in YAML catalog. Kingfisher now joins selected Betterleaks rule
+was removed with the previous built-in YAML catalog. Kingfisher now joins selected imported detector
 IDs to safe operational actions in `crates/kingfisher-rules/data/imported-rules-capabilities.yml`.
-That overlay contains no detection patterns and is validated against the downloaded catalog during
-the build.
+That overlay contains no candidate detector regexes, but may add narrow operational filters and
+capability metadata; it is validated against the downloaded catalog during the build.
 
 Revocation is supported for mapped Betterleaks credentials and for Kingfisher 1.x custom rules through
 `Http`, `HttpMultiStep`, `AWS`, and `GCP` configurations. See

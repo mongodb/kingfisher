@@ -86,7 +86,7 @@ kingfisher scan /path/to/code --blast-radius --view-report
 
 ## 6. Revoke a Compromised Secret
 
-Kingfisher joins selected Betterleaks detectors to safe revocation actions in a build-validated
+Kingfisher joins selected imported detectors to safe revocation actions in a build-validated
 capability overlay:
 
 ```bash

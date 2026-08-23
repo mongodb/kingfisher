@@ -5,13 +5,13 @@ description: "Revoke compromised credentials directly from the CLI using built-i
 
 # Secret Revocation
 
-Kingfisher supports direct secret revocation for selected built-in Betterleaks detectors and
+Kingfisher supports direct secret revocation for selected built-in imported detectors and
 through a rule-level `revocation:` block in the Kingfisher 1.x custom-rule format.
 
 Betterleaks does not currently define revocation metadata. Kingfisher therefore keeps operational
 revocation actions in `crates/kingfisher-rules/data/imported-rules-capabilities.yml`. This file is not a
 detection catalog: it contains no regexes or filters, and every entry is joined to the downloaded
-Betterleaks catalog by upstream ID at build time.
+imported-detector catalog by upstream ID at build time.
 
 Current built-in coverage includes:
 

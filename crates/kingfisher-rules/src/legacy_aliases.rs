@@ -108,6 +108,10 @@ mod tests {
                 .contains(&"betterleaks.slack".to_string())
         );
         assert!(replacements_for("kingfisher.alibabacloud.2").is_some());
+        assert_eq!(
+            replacements_for("kingfisher.abuseipdb.1"),
+            Some(["betterleaks.abuseipdb-api-key".to_string()].as_slice())
+        );
         assert!(replacements_for("kingfisher.no-such-provider.1").is_none());
     }
 

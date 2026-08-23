@@ -254,13 +254,14 @@ flowchart TD
     RuleMod --> Syntax[Rule and RuleSyntax]
     RulesMod --> Collections[Rules collection and loading]
     Db --> Compiled[Compiled RulesDatabase]
-    Defaults --> Builtins[Betterleaks-derived defaults]
+    Defaults --> Builtins[Betterleaks + Veles-derived defaults]
     Liquid --> Filters[Template filters]
 ```
 
-### Loading Betterleaks-Derived Rules
+### Loading Imported Candidate Rules
 
-Kingfisher's built-in rules are generated from the Betterleaks catalog at build time:
+Kingfisher's candidate detector catalog is sourced from Betterleaks and selected Veles detectors;
+the built-in rules are generated at build time:
 
 ```rust
 use kingfisher_rules::{get_builtin_rules, Confidence};

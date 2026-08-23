@@ -14,10 +14,16 @@ All notable changes to this project will be documented in this file.
 - **Breaking (library):** `validate_mongodb`, `validate_mysql`, `validate_postgres`, and `validate_jdbc` take an additional `allow_internal_ips: bool` argument.
 - Restored per-rule `tls_mode` for built-in rules. The imported-rule capability overlay now accepts `tls_mode: strict | lax | off`, and `betterleaks.mongodb-connection-string` and `betterleaks.jwt` declare `lax` so self-managed clusters and self-hosted IdPs presenting private-CA or self-signed certificates validate again. This remains opt-in on both sides: it takes effect only when the operator also runs `--tls-mode lax` (or `--tls-mode off`). The build rejects an unknown `tls_mode` value, or a `tls_mode` on a rule with no validator.
 - Kingfisher 1.x rule selectors keep working. `--rule`, `--exclude-rule`, and `rules.disabled` entries naming `kingfisher.*` IDs now resolve to their 2.x replacements through a new alias table, with a one-time deprecation warning naming the selector to migrate to, instead of failing the scan. Exact `kingfisher.*` IDs still win when the 1.x catalog is loaded via `--rules-path`, and an unknown `kingfisher.*` selector is still an error.
-- Added a rule-coverage drift guard. `crates/kingfisher-rules/data/legacy-rule-aliases.yml` maps every Kingfisher 1.x provider family to its 2.x selectors, and a test asserts each one still resolves against the built-in catalog, so an upstream release that drops a provider fails the build instead of silently reducing detection coverage.
+- Added a rule-coverage drift guard. `crates/kingfisher-rules/data/legacy-rule-aliases.yml` maps
+  migrated Kingfisher 1.x families with known 2.x replacements, and a test asserts each alias target
+  still resolves against the built-in catalog, so an upstream release that drops a replacement fails
+  the build instead of silently breaking that compatibility path.
 - Restored scan-time access mapping for validated Veles rules (Slack app-level/config tokens, DigitalOcean, SendGrid), which previously reached the rule-ID dispatch and matched nothing.
-- **Breaking:** moved the default detection catalog to the Betterleaks rule format, giving the community a well-designed shared format and a common place to develop generally useful rules.
-- Kingfisher now fetches and parses the upstream Betterleaks catalog at build time; the Kingfisher 1.x YAML custom-rule format remains supported for custom rules.
+- **Breaking:** moved the candidate detector catalog to the Betterleaks rule format, with selected
+  Veles detectors filling gaps, giving the community a well-designed shared format and a common
+  place to develop generally useful rules.
+- Kingfisher now fetches and parses the Betterleaks catalog and selected Veles source files at build
+  time; the Kingfisher 1.x YAML custom-rule format remains supported for custom rules.
 - Preserved Kingfisher's engine capabilities around validation, blast-radius mapping, and credential revocation while allowing us to focus investment on scan performance, integrations, and analysis workflows.
 - All rules now use Vectorscan candidate detection, eliminating unconditional whole-blob regex fallbacks for Betterleaks' large generic credential patterns; Betterleaks path and finding-filter regex helpers are also compiled once with Vectorscan instead of being rebuilt per path or finding.
 

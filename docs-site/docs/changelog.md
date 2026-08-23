@@ -9,8 +9,11 @@ All notable changes to this project will be documented in this file.
 
 ## [v2.0.0]
 - Added Kingfisher-side typed validation for Betterleaks' `generic-credential-uri` rule without changing its detector: PostgreSQL, MySQL/MariaDB, and MongoDB URI captures now use the corresponding live validator and feed validated credentials into blast-radius mapping, while unsupported URI schemes remain detected with validation not attempted. JDBC strings containing a credential-bearing PostgreSQL/MySQL URI are handled through that inner URI, and direct `CredentialUri` validation also dispatches supported `jdbc:` inputs.
-- **Breaking:** moved the default detection catalog to the Betterleaks rule format, giving the community a well-designed shared format and a common place to develop generally useful rules.
-- Kingfisher now fetches and parses the upstream Betterleaks catalog at build time; the Kingfisher 1.x YAML custom-rule format remains supported for private custom rules.
+- **Breaking:** moved the candidate detector catalog to the Betterleaks rule format, with selected
+  Veles detectors filling gaps, giving the community a well-designed shared format and a common
+  place to develop generally useful rules.
+- Kingfisher now fetches and parses the Betterleaks catalog and selected Veles source files at build
+  time; the Kingfisher 1.x YAML custom-rule format remains supported for private custom rules.
 - Preserved Kingfisher's engine capabilities around validation, blast-radius mapping, and credential revocation while allowing MongoDB to focus investment on scan performance, integrations, and analysis workflows.
 - All rules now use Vectorscan candidate detection, eliminating unconditional whole-blob regex fallbacks for Betterleaks' large generic credential patterns; Betterleaks path and finding-filter regex helpers are also compiled once with Vectorscan instead of being rebuilt per path or finding.
 

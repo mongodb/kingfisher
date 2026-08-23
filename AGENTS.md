@@ -58,10 +58,13 @@ Kingfisher is a Rust secret scanner, live credential validator, revocation helpe
 
 ## Architecture Notes
 
-- Built-in detection rules are generated at build time from pinned upstream Betterleaks and Veles
-  sources. Keep `crates/kingfisher-rules/build.rs` pinned to a Betterleaks release rather than
-  `main`, keep the Veles commit pinned, and update matching documentation and release-dependent
-  tests when either source changes. Clean builds intentionally require network access.
+- Kingfisher's candidate detector catalog is sourced from Betterleaks and selected Veles detectors.
+  Built-in rules are generated at build time from pinned upstream sources. Prefer pinning
+  `crates/kingfisher-rules/build.rs` to a Betterleaks release; when the latest release does not
+  contain a detector we ship, pin a full immutable commit and document the reason and expected
+  source digest. Never use `main` or another floating ref. Keep the Veles commit pinned, and
+  update matching documentation and release-dependent tests when either source changes. Clean
+  builds intentionally require network access.
 - Betterleaks TOML is supported both for the built-in catalog and for custom rules passed through
   `--rules-path`. Custom Betterleaks rules are imported under the `custom.` namespace.
 - Kingfisher 1.x YAML rules remain supported for custom, typically private rules.

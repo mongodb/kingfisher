@@ -7,15 +7,39 @@ second rule source.
 ## Source and reproducibility
 
 - Kingfisher does not check in or distribute the upstream rule source. Clean builds intentionally
-  require outbound HTTPS access and download Betterleaks' development catalog from its
+  require outbound HTTPS access and download the pinned Betterleaks catalog snapshot from its
   [source permalink](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml),
   plus selected Veles files from a pinned OSV-SCALIBR commit, before converting and embedding them.
-- The pinned Betterleaks commit was selected from `main` for importer and detector development.
-  Release build provenance should record the fetched source digest when reproducibility is needed.
+- A Betterleaks release is preferred. The current pinned commit is a full immutable post-release
+  revision because the latest release predates detectors that Kingfisher ships; the build verifies
+  the expected SHA-256 digest for the default snapshot. Release provenance should retain the source
+  revision and digest.
 - `KINGFISHER_BETTERLEAKS_CONFIG` may supply a local TOML file for controlled importer development;
   normal builds fetch the configured upstream sources.
 
+## Rule-level provenance review
+
+- The Fly.io detector is Gitleaks lineage: the Kingfisher 1.x rule explicitly cited the
+  [Gitleaks Fly rule](https://github.com/gitleaks/gitleaks/blob/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b/cmd/generate/config/rules/flyio.go), and Betterleaks carries the same `FlyV1` format with updated upstream validation. The
+  Betterleaks source also contains a TruffleHog pull-request URL as a reference; that citation is
+  not evidence that Kingfisher copied TruffleHog.
+- The Tableau secret regex (`[A-Za-z0-9+/]{22}==:[A-Za-z0-9]{32}`) is present in both the
+  [Betterleaks Tableau commit](https://github.com/betterleaks/betterleaks/commit/f64b922294260c390e4d20442c239b52275247cb) and the
+  [TruffleHog Tableau detector](https://github.com/trufflesecurity/trufflehog/commit/05e2328da28ec37eee95008abdbbfd66d8dd4ec7). A search of the local Betterleaks,
+  Gitleaks, and TruffleHog sources plus an exact web search found no second indexed copy;
+  [Tableau's API documentation](https://help.tableau.com/current/api/rest_api/en-us/REST/rest_api_concepts_auth.htm)
+  independently shows the same token shape. Because the Betterleaks commit is later than the
+  TruffleHog detector, treat this as an unresolved provenance item and obtain legal/source
+  confirmation or replace the detector with an independently documented implementation if a strict
+  no-TruffleHog-overlap policy is required.
+
 ## Detection and filtering
+
+- This migration is not a byte-for-byte catalog replacement. At the default Medium confidence
+  threshold, the pinned snapshot currently embeds 483 Betterleaks/Veles rules versus 1,061 bundled
+  rules in Kingfisher 1.113.0; families without a 2.x replacement remain available only when the
+  1.x YAML catalog is supplied through `--rules-path`. Do not describe the v2 built-in catalog as
+  functionally equivalent to every 1.x detector.
 
 - Regex, Betterleaks `secretGroup` selection (including its first-non-empty default), global
   prefilter/filter expressions, per-rule filters, path constraints, component dependencies, and

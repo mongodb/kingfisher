@@ -9,12 +9,15 @@
 #     keep resolving instead of hard-erroring, with a deprecation warning.
 #  2. Coverage drift guard: `legacy_aliases_all_resolve` fails the build if an alias
 #     target stops matching any built-in rule, i.e. if upstream drops a provider.
+#  The table is intentionally partial: families without a known 2.x replacement are absent and
+#  continue to require the 1.x YAML catalog through `--rules-path`.
 #
 # Adding an entry is cheap. Removing one is a deliberate statement that Kingfisher no
 # longer covers that provider - do it in the same change that drops the coverage.
 version: 1
 aliases:
   1password: [betterleaks.1password]
+  abuseipdb: [betterleaks.abuseipdb-api-key]
   adobe: [betterleaks.adobe]
   age: [betterleaks.age]
   aikido: [betterleaks.aikido]

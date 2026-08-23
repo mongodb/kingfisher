@@ -113,12 +113,13 @@ flowchart LR
 - `src/direct_validate.rs`: direct validation of a known secret without going through pattern matching. Supports HTTP, gRPC, plus schema-level typed validators such as AWS, AzureStorage, CredentialUri, GCP, JDBC, MongoDB, MySQL, PostgreSQL, JWT, and Coinbase, and delegates ad-hoc `Raw` validators to `crates/kingfisher-scanner/src/validation/raw.rs`.
 - `src/direct_revoke.rs`: direct revocation of a known secret without going through the scan pipeline. Uses Liquid templates for revocation configurations and supports multi-step HTTP revocation flows.
 - `src/access_map.rs` and `src/access_map/*`: standalone blast-radius mapping with 24 provider implementations including AWS, Azure, GCP, GitHub, GitLab, Slack, Bitbucket, Gitea, Hugging Face, Buildkite, Anthropic, OpenAI, and more.
-- `crates/kingfisher-rules/build.rs` and `build_support/betterleaks.rs`: download and translate
-  Betterleaks' canonical TOML into the embedded default rule database. No built-in rule catalog is
-  stored in the repository.
+- `crates/kingfisher-rules/build.rs` and `build_support/{betterleaks,veles}.rs`: download pinned
+  Betterleaks and selected Veles detector sources and translate them into the embedded default rule
+  database. No built-in rule catalog is stored in the repository.
 - `crates/kingfisher-rules/data/imported-rules-capabilities.yml`: Kingfisher-only operational bindings
-  and selected safe revocation actions keyed by upstream Betterleaks ID. It contains no detection
-  rules; the build rejects stale IDs and component references.
+  and selected safe revocation actions keyed by upstream detector ID. It contains no candidate
+  detector regexes, but may add narrow operational filters and capability metadata; the build rejects
+  stale IDs and component references.
 
 ## Notes And Boundaries
 
@@ -128,7 +129,7 @@ flowchart LR
   validator families and the `Raw` exception-path validators retained for Kingfisher 1.x custom YAML.
 - Direct `validate`, `revoke`, and standalone `access-map` are sibling command paths. They are not downstream stages of `FindingsStore`.
 - Reporting is downstream from the datastore, which lets Kingfisher emit multiple output formats and drive the local viewer from the same finding set.
-- Every rule uses Vectorscan's high-throughput SIMD-accelerated database for candidate detection. The exact Rust regex then confirms captures before Betterleaks filters, Base64 handling, and parser-based context verification improve accuracy and reduce false positives. No rule performs an unconditional whole-blob regex scan.
+- Every rule uses Vectorscan's high-throughput SIMD-accelerated database for candidate detection. The exact Rust regex then confirms captures before imported-rule filters, Base64 handling, and parser-based context verification improve accuracy and reduce false positives. No rule performs an unconditional whole-blob regex scan.
 - Betterleaks' top-level source prefilter is compiled once into a separate Vectorscan database and
   evaluated per source path before content matching. Keyword hints are not imported because
   Vectorscan already supplies content-candidate selection. Only the global finding filter and

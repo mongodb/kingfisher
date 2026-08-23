@@ -366,8 +366,9 @@ The cache key includes the resolved rule order, rule patterns, platform, cache f
 
 ## Default Betterleaks Rules
 
-[Betterleaks](https://github.com/betterleaks/betterleaks) is Kingfisher's only built-in rule catalog.
-It loads automatically, and its rules use the `betterleaks.` namespace:
+[Betterleaks](https://github.com/betterleaks/betterleaks) supplies Kingfisher's main candidate
+detector catalog, with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles)
+detectors filling gaps. They load automatically and use the `betterleaks.` and `veles.` namespaces:
 
 ```bash
 kingfisher scan --rule betterleaks.openai-api-key /path/to/repo
@@ -384,10 +385,12 @@ cost. Use a targeted custom TOML or YAML rule when your organization needs gener
 detection for a known naming convention.
 
 Kingfisher does not vendor the upstream rule catalogs. Clean source builds require outbound HTTPS
-access: the build downloads Betterleaks' development catalog from its
+access: the build downloads the pinned Betterleaks catalog snapshot from its
 [source permalink](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml) and
 selected Veles source files from the full OSV-SCALIBR commit in
 `crates/kingfisher-rules/data/veles-rules.yml`, then converts and embeds the generated database.
+A Betterleaks release is preferred; the current immutable post-release commit is pinned because
+the latest release predates detectors that Kingfisher ships.
 `KINGFISHER_BETTERLEAKS_CONFIG` may point to a local TOML file for controlled importer development.
 Veles import is not available through `--rules-path`.
 
@@ -407,8 +410,9 @@ that Betterleaks excludes.
 `--blast-radius` (alias `--access-map`) works for validated Betterleaks findings when Kingfisher has
 an access-map handler for the credential shape. Because Betterleaks currently has no revocation or
 checksum metadata, Kingfisher maintains a checked-in capability overlay for access-map bindings and
-selected safe revocation actions. It contains no detection patterns and is validated against the
-downloaded Betterleaks IDs and components during the build. Checksum templates remain available to
+selected safe revocation actions. It contains no candidate detector regexes, but may add narrow
+operational filters and capability metadata; it is validated against the downloaded imported-detector IDs
+and components during the build. Checksum templates remain available to
 Kingfisher 1.x custom rules; Betterleaks detectors rely on their upstream regex/filter behavior until the
 upstream schema exposes checksum metadata.
 

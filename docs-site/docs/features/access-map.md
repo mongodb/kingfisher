@@ -730,9 +730,9 @@ The `kingfisher blast-radius` and `kingfisher blast_radius` aliases also work fo
   a reachable 2xx result when that provider's validator cannot classify it more precisely (the
   current GitLab mappings use this behavior).
 - Some providers require extra context that Kingfisher infers from the finding context or validation response (for example, Azure DevOps organization name).
-- Automatic collection is driven by successfully validated Betterleaks credential shapes with an
+- Automatic collection is driven by successfully validated imported credential shapes with an
   explicit Kingfisher access-map handler. Standalone providers remain usable even when Betterleaks
   has no compatible validation rule.
-- Betterleaks ID-to-handler and component bindings live in
+- Imported-detector ID-to-handler and component bindings live in
   `crates/kingfisher-rules/data/imported-rules-capabilities.yml`. The build verifies those bindings
-  against the downloaded Betterleaks catalog; access-map Rust code does not match rule IDs.
+  against the downloaded imported-detector catalog; access-map Rust code does not match rule IDs.

@@ -241,7 +241,9 @@ This is useful for:
 - Checking if a credential is still active before rotation
 - Validating secrets from external sources (password managers, ticketing systems, etc.)
 
-> **Note:** Built-in rules use the `betterleaks.` namespace. The prefix is optional for short selectors: `--rule github-pat` is equivalent to `--rule betterleaks.github-pat`.
+> **Note:** Betterleaks built-in rules use the `betterleaks.` namespace and selected Veles rules use
+> `veles.`. The prefix is optional for short selectors: `--rule github-pat` is equivalent to
+> `--rule betterleaks.github-pat`.
 
 To reduce API pressure during validation, you can limit request rate:
 

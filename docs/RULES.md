@@ -2,11 +2,9 @@
 
 [← Back to README](../README.md)
 
-Kingfisher uses the [Betterleaks catalog](https://github.com/betterleaks/betterleaks) for its main
-built-in catalog. A small allowlist of validated
-[Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors fills gaps in the current
-Betterleaks catalog. New generally useful detectors and validation improvements should still be
-contributed to Betterleaks first.
+Kingfisher's candidate detector catalog is sourced from the [Betterleaks catalog](https://github.com/betterleaks/betterleaks)
+and selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors. New generally
+useful detectors and validation improvements should still be contributed to Betterleaks first.
 When the Betterleaks catalog covers a Veles detector, the Betterleaks detector is preferred and
 the overlapping Veles detector is not bundled.
 
@@ -740,7 +738,7 @@ Notes:
 
 The `pattern_requirements` field allows you to specify data type requirements for matched secrets. This is particularly useful when:
 
-- Your regex pattern must be permissive (due to Hyperscan limitations)
+- Your regex pattern must be permissive (due to Vectorscan limitations)
 - You want to enforce password complexity requirements
 - You need to filter out low-quality matches that lack certain character types
 
@@ -859,7 +857,7 @@ rules:
 
 ### How It Works
 
-1. Hyperscan regex matches a pattern in the input
+1. Vectorscan regex matches a pattern in the input
 2. Entropy check filters low-complexity matches (if `min_entropy` is set)
 3. **Character requirements check filters matches that don't meet the criteria**
 4. Validation checks verify the secret is live (if `validation` is configured)

@@ -16,7 +16,7 @@
 
 Kingfisher is an open source secret scanner and **live secret validation** tool built in Rust.
 
-It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale. Its main built-in rule catalog comes from [Betterleaks](https://github.com/betterleaks/betterleaks), with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors filling gaps.
+It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale. Kingfisher's candidate detector catalog is sourced from [Betterleaks](https://github.com/betterleaks/betterleaks) and selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors.
 
 Kingfisher also ships a **browser-based report viewer** that visualizes and triages findings from Kingfisher, SARIF, Gitleaks, and TruffleHog reports — so you can import scans from other tools and triage them in the same UI. A [hosted copy of the viewer](https://mongodb.github.io/kingfisher/viewer/) is published on the Kingfisher docs site [or run locally](#3-scan-and-view-results-in-browser)
 
@@ -56,7 +56,7 @@ Kingfisher is a high-performance, open source secret detection tool for source c
 - **Extensible rules**: Betterleaks is the main catalog, with selected Veles detectors filling gaps; custom Betterleaks TOML and Kingfisher 1.x YAML rules are supported ([docs/ADVANCED.md](/docs/ADVANCED.md#default-betterleaks-rules), [docs/RULES.md](/docs/RULES.md))
 - **Validation and revocation**: validate discovered credentials live and revoke supported credentials from the CLI ([docs/USAGE.md](/docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
 - **Blast Radius Mapping**: use `--blast-radius` (alias `--access-map`) to map supported credentials to their effective identities, permissions, and reachable resources ([docs/ACCESS_MAP.md](docs/ACCESS_MAP.md))
-- **Broad provider coverage**: detect and validate credentials across cloud, AI, developer tooling, databases, SaaS, messaging, identity, and cryptographic systems through the Betterleaks-based built-in catalog
+- **Broad provider coverage**: detect and validate credentials across cloud, AI, developer tooling, databases, SaaS, messaging, identity, and cryptographic systems through the Betterleaks- and Veles-based candidate catalog
 - **Compressed Files**: Supports extracting and scanning compressed files for secrets, including `tar.gz`/`bz2`/`xz`, ZIP-family containers (`zip`, `jar`, `docx`, `xlsx`, `pptx`, `odt`, `epub`, `hwpx`, and more), `asar`, HWP (Hancom OLE2/CFBF binary with DEFLATE/zlib stream decoding), and EGG (ALZip; raw-byte scanning)
 - **SQLite Database Scanning**: Automatically extracts and scans SQLite database contents for secrets stored in table rows
 - **Python Bytecode (.pyc) Scanning**: Extracts and scans string constants from compiled Python (`.pyc`, `.pyo`) files
@@ -462,7 +462,7 @@ For payload shapes, per-webhook overrides, and config-file examples, see [docs/A
 
 # Detection Rules
 
-Kingfisher's built-in detection catalog is based on the [Betterleaks rule catalog](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml), with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors filling gaps. Betterleaks filters, dependencies, and validation expressions are resolved when Kingfisher is built; built-in rules use the `betterleaks.` and `veles.` namespaces.
+Kingfisher's candidate detector catalog is sourced from the [Betterleaks rule catalog](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml), with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors filling gaps. Upstream detector definitions are translated at build time; Kingfisher's importer, matching engine, filters, validation, and operational capabilities also determine effective behavior. Built-in rules use the `betterleaks.` and `veles.` namespaces.
 
 See the [Betterleaks catalog](https://github.com/betterleaks/betterleaks) for current detection coverage and contribute generally useful detectors there first. Custom Betterleaks TOML rules and Kingfisher's 1.x YAML format are also supported; use YAML for private, organization-specific rules. See [Moving to Kingfisher v2.0.x](docs/V2_MIGRATION.md), [Default Betterleaks Rules](docs/ADVANCED.md#default-betterleaks-rules), and [Kingfisher 1.x Custom Rules](docs/RULES.md).
 
@@ -861,7 +861,7 @@ kingfisher scan /tmp/repo --branch feature-1 \
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment models for self-serve CLI use, CI/pre-commit enforcement, centralized scanning, and embedded library integrations |
 | [ADVANCED.md](docs/ADVANCED.md) | Advanced features: baselines, confidence levels, validation tuning, CI scanning, and more |
 | [RULES.md](docs/RULES.md) | Writing custom detection rules, pattern requirements, and checksum intelligence |
-| [REVOCATION_PROVIDERS.md](docs/REVOCATION_PROVIDERS.md) | Built-in Betterleaks capability mappings and Kingfisher 1.x custom-rule revocation |
+| [REVOCATION_PROVIDERS.md](docs/REVOCATION_PROVIDERS.md) | Built-in imported-detector capability mappings and Kingfisher 1.x custom-rule revocation |
 | [BASELINE.md](docs/BASELINE.md) | Baseline management for tracking known secrets and detecting new ones |
 | [LIBRARY.md](docs/LIBRARY.md) | Using Kingfisher as a Rust library in your own applications |
 | [FINGERPRINT.md](docs/FINGERPRINT.md) | Understanding finding fingerprints and deduplication |
@@ -891,9 +891,9 @@ Since then it has evolved far beyond that starting point, adding live validation
 
 **Key areas of evolution**
 - **Live validation** of detected secrets directly within rules  
-- **Betterleaks-based built-in detection coverage**, selected Veles detectors, and a supported Kingfisher 1.x custom YAML schema
+- **Betterleaks- and Veles-based candidate detector coverage**, plus a supported Kingfisher 1.x custom YAML schema
 - **Baseline management** to suppress known findings over time  
-- **Parser-based context verification** layered on Hyperscan for language-aware detection  
+- **Parser-based context verification** layered on Vectorscan for language-aware detection  
 - **More scan targets** (GitLab, Bitbucket, Gitea, Jira, Confluence, Slack, Microsoft Teams, Postman, S3, GCS, Docker, Hugging Face, etc.)  
 - **Compressed Files**, **SQLite database**, and **Python bytecode (.pyc)** scanning support
 - **New storage model** (in-memory + Bloom filter, replacing SQLite)  

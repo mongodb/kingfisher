@@ -13,11 +13,14 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use flate2::{Compression, write::GzEncoder};
+use sha2::{Digest, Sha256};
 
 // Source permalink: https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml
 const BETTERLEAKS_CONFIG_URL: &str = "https://raw.githubusercontent.com/betterleaks/betterleaks/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml";
+const BETTERLEAKS_CONFIG_SHA256: &str =
+    "386d0e06be50d7887048a6b31b801ed22c7067f251c36ab226be78fff4ee6166";
 const BUNDLE_MAGIC: &[u8] = b"KFRULES\x01";
 const CAPABILITY_OVERLAY: &str = "data/imported-rules-capabilities.yml";
 const VELES_CONFIG: &str = "data/veles-rules.yml";
@@ -39,7 +42,8 @@ fn main() {
 fn build_default_bundle() -> Result<()> {
     let source_url = std::env::var("KINGFISHER_BETTERLEAKS_CONFIG_URL")
         .unwrap_or_else(|_| BETTERLEAKS_CONFIG_URL.to_string());
-    let contents = match std::env::var_os("KINGFISHER_BETTERLEAKS_CONFIG") {
+    let local_override = std::env::var_os("KINGFISHER_BETTERLEAKS_CONFIG");
+    let contents = match local_override.as_ref() {
         Some(path) => {
             let path = PathBuf::from(path);
             println!("cargo:rerun-if-changed={}", path.display());
@@ -48,6 +52,25 @@ fn build_default_bundle() -> Result<()> {
         }
         None => download_config(&source_url)?,
     };
+    if local_override.is_none() && source_url == BETTERLEAKS_CONFIG_URL {
+        let actual = Sha256::digest(contents.as_bytes())
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
+        if actual != BETTERLEAKS_CONFIG_SHA256 {
+            bail!(
+                "Betterleaks config digest mismatch: expected {BETTERLEAKS_CONFIG_SHA256}, got {actual}"
+            );
+        }
+    } else if local_override.is_some() {
+        println!(
+            "cargo:warning=using KINGFISHER_BETTERLEAKS_CONFIG override; source digest verification is disabled"
+        );
+    } else {
+        println!(
+            "cargo:warning=using KINGFISHER_BETTERLEAKS_CONFIG_URL override; source digest verification is disabled"
+        );
+    }
 
     let capabilities = fs::read_to_string(CAPABILITY_OVERLAY)
         .with_context(|| format!("failed to read {CAPABILITY_OVERLAY}"))?;

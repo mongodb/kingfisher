@@ -1,10 +1,16 @@
 # Moving to Kingfisher v2.0.x
 
-Kingfisher v2.0.x makes Betterleaks the default source of built-in detection rules. We chose Betterleaks because its rule format is well designed and gives the broader secret-scanning community a strong path toward one shared, interoperable format.
+Kingfisher v2.0.x makes Betterleaks the primary source of its candidate detector catalog, with
+selected Veles detectors filling gaps. We chose Betterleaks because its rule format is well
+designed and gives the broader secret-scanning community a strong path toward one shared,
+interoperable format. Kingfisher-specific validation, filtering, access-map, and revocation
+capabilities remain operational behavior layered onto those upstream candidates.
 
 ## What changes
 
-- Built-in rules are fetched from Betterleaks and parsed during the Kingfisher build. They are no longer maintained as a second, vendored Kingfisher catalog.
+- Candidate detectors are fetched from Betterleaks and selected Veles source files and parsed
+  during the Kingfisher build. They are no longer maintained as a second, vendored Kingfisher
+  catalog.
 - Built-in rule IDs use the `betterleaks.` and `veles.` namespaces. Update scripts and rule selectors that refer to former built-in `kingfisher.*` IDs; see [Migrating rule selectors](#migrating-rule-selectors) for the compatibility shim.
 - Kingfisher's 1.x YAML rule format remains supported for private, organization-specific custom rules. Use Betterleaks TOML for new generally useful built-in detectors.
 - Betterleaks rules continue to participate in Kingfisher validation, blast-radius/access-map analysis, and supported credential revocation through Kingfisher's capability mappings.
@@ -31,10 +37,12 @@ Notes:
 - A `kingfisher.*` selector with no known replacement is still an error, so typos are not
   silently ignored.
 
-The mapping lives in
+The mapping covers migrated families with known 2.x replacements and lives in
 [`crates/kingfisher-rules/data/legacy-rule-aliases.yml`](../crates/kingfisher-rules/data/legacy-rule-aliases.yml).
 It doubles as a coverage guard: every entry must resolve against the built-in catalog, so an
-upstream release that drops a provider fails the build instead of quietly reducing coverage.
+upstream release that drops a replacement fails the build instead of quietly breaking that
+compatibility path. Families without a 2.x replacement still require the 1.x catalog through
+`--rules-path` if their original detector is needed.
 
 Run `kingfisher rules list` to see the current catalog.
 

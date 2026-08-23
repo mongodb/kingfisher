@@ -24,8 +24,9 @@ developed by Praetorian Security, Inc:
     https://github.com/praetorian-inc/noseyparker
 
 Kingfisher's scanning engine and architecture derive from Nosey Parker.
-Nosey Parker no longer supplies Kingfisher's detection rules; all built-in
-rules are now sourced from the Betterleaks project (see below).
+Nosey Parker no longer supplies Kingfisher's candidate detector catalog;
+Kingfisher's candidate detector catalog is sourced from Betterleaks and selected
+Veles detectors (see below).
 
 Licensed under the Apache License, Version 2.0 (the "License");
 you may not use this file except in compliance with the License.
@@ -42,9 +43,10 @@ limitations under the License.
 --------------------------------------------------------------------
 Built-in rules
 --------------------------------------------------------------------
-Kingfisher's built-in detection rules are sourced primarily from Betterleaks,
-with a small set adapted from Veles in OSV-SCALIBR. Upstream rule sources are
-fetched at build time and are not vendored in this repository.
+Kingfisher's candidate detector catalog is sourced from Betterleaks and selected
+Veles detectors in OSV-SCALIBR. Upstream candidate sources are fetched at build
+time and are not vendored in this repository; Kingfisher adds operational
+validation, filtering, access-map, and revocation behavior around them.
 
 Veles / OSV-SCALIBR
 https://github.com/google/osv-scalibr

@@ -5,14 +5,22 @@ description: "What changes when Kingfisher adopts Betterleaks as its default rul
 
 # Moving to Kingfisher v2.0.x
 
-Kingfisher v2.0.x makes Betterleaks the default source of built-in detection rules. We chose Betterleaks because its rule format is well designed and gives the broader secret-scanning community a strong path toward one shared, interoperable format.
+Kingfisher v2.0.x sources its candidate detector catalog from Betterleaks and selected Veles
+detectors. We chose Betterleaks because its rule format is well designed and gives the broader
+secret-scanning community a strong path toward one shared, interoperable format.
 
 ## What changes
 
-- Built-in rules are fetched from Betterleaks and parsed during the Kingfisher build. They are no longer maintained as a second, vendored Kingfisher catalog.
-- Built-in rule IDs use the `betterleaks.` namespace. Update scripts and rule selectors that refer to former built-in `kingfisher.*` IDs.
+- Candidate detectors are fetched from Betterleaks and selected Veles source files and parsed during
+  the Kingfisher build. They are no longer maintained as a second, vendored Kingfisher catalog.
+- Betterleaks IDs use the `betterleaks.` namespace and selected Veles IDs use `veles.`. Update
+  scripts and rule selectors that refer to former built-in `kingfisher.*` IDs.
 - Kingfisher's 1.x YAML rule format remains supported for private, organization-specific custom rules. Use Betterleaks TOML for new generally useful built-in detectors.
 - Betterleaks rules continue to participate in Kingfisher validation, blast-radius/access-map analysis, and supported credential revocation through Kingfisher's capability mappings.
+
+The v2 catalog is not a byte-for-byte replacement for every 1.x detector. Families without a 2.x
+replacement still require the 1.x YAML catalog through `--rules-path` when that original detector is
+needed.
 
 ## Why this is a positive change
 

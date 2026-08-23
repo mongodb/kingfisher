@@ -28,8 +28,10 @@ fail-closed adapter in `build_support/veles.rs`.
 - Do not copy or redefine Betterleaks detectors in the overlay.
 - Use exact, unqualified upstream IDs such as `mongodb-connection-string`; the importer adds the
   `betterleaks.` namespace.
-- Every overlay entry must exist in the pinned Betterleaks release. Do not target `main` or an
-  unreleased rule.
+- Every overlay entry must exist in the pinned Betterleaks source revision. Prefer a released
+  Betterleaks version; when the latest release lacks a detector Kingfisher ships, use the immutable
+  full commit pinned by `build.rs` and document the reason and digest. Never target `main` or a
+  floating ref.
 - Keep `imported-rules-capabilities.md` synchronized with supported overlay fields and syntax.
 - Keep Veles revisions pinned to a full commit hash. Never import from `main`.
 - Add only Veles detector families whose live-validated coverage Betterleaks lacks at the pinned
