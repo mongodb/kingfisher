@@ -195,7 +195,7 @@ time = { workspace = true, optional = true }
 chrono = { version = "0.4.45", optional = true }
 hmac = { workspace = true, optional = true }
 sha2 = { workspace = true, optional = true }
-pem = { version = "3.0.6", optional = true }
+pem = { version = "4.0.0", optional = true }
 percent-encoding = { workspace = true, optional = true }
 aws-lc-rs = { version = "1.17", optional = true }
 

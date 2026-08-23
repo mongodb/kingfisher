@@ -115,7 +115,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
 
     // Allow tests to point at a mock HTTP server.
     if let Some(url) = base_url {
-        builder.with_url(url);
+        builder.api_base_url(url);
     }
 
     // ──────────────────────────────────────────────────────
@@ -144,11 +144,11 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
     // Linux and macOS releases use `.tgz`; Windows uses `.zip`.
     // ──────────────────────────────────────────────────────
     #[cfg(target_os = "windows")]
-    builder.identifier("zip");
+    builder.asset_identifier("zip");
 
     // Linux releases also ship as .deb and .rpm packages; select the .tgz asset for self-updates
     #[cfg(not(target_os = "windows"))]
-    builder.identifier("tgz");
+    builder.asset_identifier("tgz");
 
     // Build the updater.
     let Ok(updater) = builder.build() else {
@@ -167,7 +167,22 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
     };
 
     // Query GitHub.
-    let Ok(release) = updater.get_latest_release() else {
+    let Ok(releases) = updater.get_latest_release() else {
+        let plain = "Failed to check for updates".to_string();
+        let styled_message = styled_heading(&styles, &plain);
+        let _ = writeln!(std::io::stderr(), "{}", styled_message);
+        return UpdateStatus {
+            message: Some(plain),
+            styled_message: Some(styled_message),
+            is_outdated: false,
+            running_version,
+            latest_version: None,
+            check_status: UpdateCheckStatus::Failed,
+            was_self_updated: false,
+        };
+    };
+
+    let Some(release) = releases.latest() else {
         let plain = "Failed to check for updates".to_string();
         let styled_message = styled_heading(&styles, &plain);
         let _ = writeln!(std::io::stderr(), "{}", styled_message);
@@ -183,7 +198,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
     };
 
     // ───────────── Case 1: running == latest ─────────────
-    if release.version == running_version {
+    if release.version() == running_version {
         let plain = format!("Kingfisher {running_version} is up to date");
         let _ = writeln!(std::io::stderr(), "{plain}");
         return UpdateStatus {
@@ -191,7 +206,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
             styled_message: Some(plain),
             is_outdated: false,
             running_version,
-            latest_version: Some(release.version),
+            latest_version: Some(release.version().to_string()),
             check_status: UpdateCheckStatus::Ok,
             was_self_updated: false,
         };
@@ -200,7 +215,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
     // Try semantic version comparison.  If parsing fails, fall back to the
     // self-update code-path (which will treat the strings lexicographically).
     if let (Ok(curr), Ok(latest)) =
-        (Version::parse(&running_version), Version::parse(&release.version))
+        (Version::parse(&running_version), Version::parse(release.version()))
     {
         // ───────── Case 2: running > latest (dev build) ─────────
         if curr > latest {
@@ -213,7 +228,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
                 styled_message: Some(styled_message),
                 is_outdated: false,
                 running_version,
-                latest_version: Some(release.version),
+                latest_version: Some(release.version().to_string()),
                 check_status: UpdateCheckStatus::Ok,
                 was_self_updated: false,
             };
@@ -222,7 +237,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
     }
 
     // ───────────── Case 3: latest > running ─────────────
-    let plain = format!("New Kingfisher release {} available", release.version);
+    let plain = format!("New Kingfisher release {} available", release.version());
     let styled_message = styled_heading(&styles, &plain);
     let _ = writeln!(std::io::stderr(), "{}", styled_message);
 
@@ -231,7 +246,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
     if global_args.self_update {
         match updater.update() {
             Ok(status) => {
-                if status.updated() {
+                if status.is_updated() {
                     let message = format!("Updated to version {}", status.version());
                     let _ = writeln!(std::io::stderr(), "{}", styled_heading(&styles, &message));
                     was_self_updated = true;
@@ -286,7 +301,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
         styled_message: Some(styled_message),
         is_outdated: true,
         running_version,
-        latest_version: Some(release.version),
+        latest_version: Some(release.version().to_string()),
         check_status: UpdateCheckStatus::Ok,
         was_self_updated,
     }
