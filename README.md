@@ -16,7 +16,7 @@
 
 Kingfisher is an open source secret scanner and **live secret validation** tool built in Rust.
 
-It combines Intel's SIMD-accelerated regex engine (Hyperscan) with language-aware parsing to achieve high accuracy at massive scale. Kingfisher's candidate detector catalog is sourced from [Betterleaks](https://github.com/betterleaks/betterleaks) and selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors.
+It combines Intel's SIMD-accelerated regex engine ( Vectorscan ) with language-aware parsing to achieve high accuracy at massive scale. Kingfisher's candidate detector catalog is sourced from [Betterleaks](https://github.com/betterleaks/betterleaks) and selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors.
 
 Kingfisher also ships a **browser-based report viewer** that visualizes and triages findings from Kingfisher, SARIF, Gitleaks, and TruffleHog reports — so you can import scans from other tools and triage them in the same UI. A [hosted copy of the viewer](https://mongodb.github.io/kingfisher/viewer/) is published on the Kingfisher docs site [or run locally](#3-scan-and-view-results-in-browser)
 
