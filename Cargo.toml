@@ -277,7 +277,7 @@ temp-env = { version = "0.3.6", features = ["async_closure"] }
 wiremock = "0.6.5"
 git2 = { version = "0.21.0", default-features = false }
 rand_chacha = "0.10.0"
-testcontainers = "0.27.3"
+testcontainers = "0.28.0"
 predicates = "3.1.4"
 assert_cmd = "2.2.2"
 proptest = "1.11.0"
