@@ -113,6 +113,9 @@ NOTE: Replay has been slowed down for demo
 # Homebrew (Linux/macOS)
 brew install kingfisher
 
+# Or install with mise
+mise use --global github:mongodb/kingfisher
+
 # Or install from PyPI with uv
 uv tool install kingfisher-bin
 
@@ -335,6 +338,7 @@ kingfisher scan /path/to/code --blast-radius --view-report
 Kingfisher supports multiple installation methods:
 
 - **Homebrew**: `brew install kingfisher` ![Homebrew Formula Version](https://img.shields.io/homebrew/v/kingfisher)
+- **mise**: `mise use --global github:mongodb/kingfisher`
 - **PyPI with uv**: `uv tool install kingfisher-bin`
 - **Pre-built releases**: Download from [GitHub Releases](https://github.com/mongodb/kingfisher/releases)
 - **Install scripts**: One-line installers for Linux, macOS, and Windows - [INSTALLATION.md](docs/INSTALLATION.md)

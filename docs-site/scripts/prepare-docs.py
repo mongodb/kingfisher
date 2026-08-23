@@ -25,7 +25,7 @@ DOC_MAP = {
     "INSTALLATION.md": (
         "getting-started/installation.md",
         "Installation",
-        "Install Kingfisher via Homebrew, PyPI, Docker, install scripts, or compile from source. Includes pre-commit hook setup.",
+        "Install Kingfisher via Homebrew, mise, PyPI, Docker, install scripts, or compile from source. Includes pre-commit hook setup.",
     ),
     "USAGE.md": (
         "usage/basic-scanning.md",

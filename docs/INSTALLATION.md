@@ -8,6 +8,7 @@ This guide covers all installation methods for Kingfisher, including pre-commit 
 
 - [Pre-built Releases](#pre-built-releases)
 - [Homebrew](#homebrew)
+- [mise](#mise)
 - [Linux and macOS](#linux-and-macos)
 - [Windows](#windows)
 - [Pre-commit Hooks](#pre-commit-hooks)
@@ -29,6 +30,21 @@ Pre-built binaries are available from the [Releases](https://github.com/mongodb/
 
 ```bash
 brew install kingfisher
+```
+
+## mise
+
+Install the latest release globally with the
+[mise GitHub backend](https://mise.jdx.dev/dev-tools/backends/github.html):
+
+```bash
+mise use --global github:mongodb/kingfisher
+```
+
+Append a version to install a specific release:
+
+```bash
+mise use --global github:mongodb/kingfisher@1.113.0
 ```
 
 ## Linux and macOS

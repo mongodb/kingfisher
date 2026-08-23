@@ -10,7 +10,7 @@ This guide summarizes practical ways to deploy Kingfisher in teams, CI systems, 
 
 Best for developers, security engineers, and incident responders who want a local tool.
 
-- Install via Homebrew, PyPI, Docker, or release binaries.
+- Install via Homebrew, mise, PyPI, Docker, or release binaries.
 - Run scans directly against local repositories, remote git hosts, cloud storage, chat exports, and other supported inputs.
 - Use `--format toon`, `json`, `sarif`, or `html` depending on whether the consumer is a human, CI system, or another tool.
 
