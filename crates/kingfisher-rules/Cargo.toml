@@ -18,7 +18,7 @@ kingfisher-core = { path = "../kingfisher-core" }
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
-toml = "0.8"
+toml = "1.1"
 schemars.workspace = true
 
 # Error handling
@@ -71,7 +71,7 @@ flate2 = "1.1"
 regex.workspace = true
 serde.workspace = true
 serde_yaml = "0.9"
-toml = "0.8"
+toml = "1.1"
 sha2.workspace = true
 # Avoid Rustls/ring in the build script: ClusterFuzzLite's sanitizer CFLAGS would
 # otherwise instrument ring and break the non-fuzz build-script linker.
