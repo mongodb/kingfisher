@@ -146,12 +146,46 @@ kingfisher scan docker --archive image.tar.gz
 
 ## GitHub
 
-### Scan GitHub organization (requires `KF_GITHUB_TOKEN`)
+### Scan a GitHub organization
 
 ```bash
 kingfisher scan github --organization my-org
 kingfisher scan github --organization my-org --repo-clone-limit 500
 ```
+
+Public repositories can be scanned anonymously. For private repositories and
+higher API limits, set `KF_GITHUB_TOKEN` to a personal access token or an
+already-minted GitHub App installation token.
+
+For long-running organization scans, configure a GitHub App instead:
+
+```bash
+export KF_GITHUB_APP_ID="123456"
+export KF_GITHUB_APP_INSTALLATION_ID="789012"
+export KF_GITHUB_APP_PRIVATE_KEY_PATH='~/.config/kingfisher/app.pem'
+
+kingfisher scan github --organization my-org
+```
+
+The App installation needs read access to repository contents. Kingfisher uses
+an installation token for API enumeration and mints a new installation token
+immediately before every repository clone or update, so scans can run longer
+than the one-hour installation-token lifetime. Set the private key directly in
+`KF_GITHUB_APP_PRIVATE_KEY` when a secret manager supplies PEM content instead
+of a file. Set only one of the private-key variables.
+
+`KF_GITHUB_APP_PRIVATE_KEY_PATH` performs a lexical, single-pass expansion of
+the current user's leading `~/` or `~\` and environment variables written as
+`$NAME`, `${NAME}`, or `%NAME%`, where `NAME` uses letters, digits, and
+underscores. This supports Unix paths such as
+`$HOME/.config/kingfisher/app.pem` and Windows paths such as
+`%USERPROFILE%\AppData\Local\kingfisher\app.pem`. Undefined or empty variables
+are rejected. The expansion never invokes a shell, performs command
+substitution, or recursively expands variable values. Use `$$` for a literal
+`$` and `%%` for a literal `%`.
+
+All three App values are required. A complete App configuration takes
+precedence over `KF_GITHUB_TOKEN`; an incomplete configuration is rejected.
 
 ### Monitor public GitHub events for users
 
@@ -942,7 +976,11 @@ The token is sent as the `X-Api-Key` header. Either `KF_POSTMAN_TOKEN` or `POSTM
 
 | Variable          | Purpose                      |
 | ----------------- | ---------------------------- |
-| `KF_GITHUB_TOKEN` | GitHub Personal Access Token |
+| `KF_GITHUB_TOKEN` | GitHub personal access token or pre-minted App installation token |
+| `KF_GITHUB_APP_ID` | GitHub App ID used to mint installation tokens |
+| `KF_GITHUB_APP_INSTALLATION_ID` | GitHub App installation ID |
+| `KF_GITHUB_APP_PRIVATE_KEY` | GitHub App RSA private key as PEM content |
+| `KF_GITHUB_APP_PRIVATE_KEY_PATH` | Expandable path to a GitHub App RSA private key PEM file (alternative to `KF_GITHUB_APP_PRIVATE_KEY`) |
 | `KF_GITLAB_TOKEN` | GitLab Personal Access Token |
 | `KF_GITEA_TOKEN` | Gitea Personal Access Token |
 | `KF_GITEA_USERNAME` | Username for private Gitea clones (used with `KF_GITEA_TOKEN`) |

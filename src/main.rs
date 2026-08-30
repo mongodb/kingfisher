@@ -73,7 +73,7 @@ use kingfisher::{
         },
         global::Command,
     },
-    direct_revoke, direct_validate, findings_store,
+    direct_access_map, direct_revoke, direct_validate, findings_store,
     findings_store::FindingsStore,
     gitea, github, huggingface,
     reporter::{DetailsReporter, ScanAuditContext, styles::Styles},
@@ -178,7 +178,7 @@ fn run() -> anyhow::Result<()> {
         Command::Rules(_) => std::thread::available_parallelism().map_or(1, |n| n.get()), // Default for Rules commands
         Command::Validate(_) => 1, // Single validation request
         Command::Revoke(_) => 1,   // Single revocation request
-        Command::AccessMap(_) => 1,
+        Command::AccessMap(_) | Command::BlastRadius(_) => 1,
         Command::View(_) => 1,
         Command::Config(_) => 1,
     };
@@ -1392,6 +1392,78 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
         Command::AccessMap(identity_args) => {
             access_map::run(identity_args).await.map(|_| AsyncMainOutcome::Done)
         }
+        Command::BlastRadius(blast_radius_args) => {
+            if blast_radius_args.rule.is_none() {
+                let view_report = blast_radius_args.view_report;
+                let provider = blast_radius_args
+                    .input
+                    .as_deref()
+                    .ok_or_else(|| {
+                        anyhow::anyhow!("a provider is required for standalone mapping")
+                    })?
+                    .parse::<cli::commands::access_map::AccessMapProvider>()
+                    .map_err(|error| anyhow::anyhow!(error))?;
+                let format = match blast_radius_args.format.as_str() {
+                    "json" => cli::commands::access_map::AccessMapOutputFormat::Json,
+                    "html" => cli::commands::access_map::AccessMapOutputFormat::Html,
+                    _ if blast_radius_args.view_report => {
+                        cli::commands::access_map::AccessMapOutputFormat::Json
+                    }
+                    _ => anyhow::bail!(
+                        "standalone blast-radius mapping supports only json and html output"
+                    ),
+                };
+                let access_map_args = cli::commands::access_map::AccessMapArgs {
+                    provider,
+                    credential_path: blast_radius_args.credential_path,
+                    output_args: cli::commands::access_map::AccessMapOutputArgs {
+                        output: blast_radius_args.output,
+                        format,
+                    },
+                };
+                if view_report {
+                    let result = access_map::map_credential(&access_map_args).await?;
+                    let report_bytes = direct_access_map::build_viewer_report_bytes(&[
+                        direct_access_map::DirectAccessMapResult {
+                            rule_id: format!("standalone.{}", result.cloud),
+                            rule_name: format!("Standalone {} credential", result.cloud),
+                            result,
+                        },
+                    ])?;
+                    view::run(view::ViewArgs {
+                        reports: Vec::new(),
+                        port: view::DEFAULT_PORT,
+                        address: view::DEFAULT_ADDRESS.to_string(),
+                        open_browser: true,
+                        report_bytes: Some(report_bytes),
+                    })
+                    .await?;
+                } else {
+                    access_map::run(access_map_args).await?;
+                }
+                return Ok(AsyncMainOutcome::Done);
+            }
+            let results =
+                direct_access_map::run_direct_access_map(&blast_radius_args, &global_args).await?;
+            if blast_radius_args.view_report {
+                let report_bytes = direct_access_map::build_viewer_report_bytes(&results)?;
+                view::run(view::ViewArgs {
+                    reports: Vec::new(),
+                    port: view::DEFAULT_PORT,
+                    address: view::DEFAULT_ADDRESS.to_string(),
+                    open_browser: true,
+                    report_bytes: Some(report_bytes),
+                })
+                .await?;
+            } else {
+                direct_access_map::print_results(
+                    &results,
+                    &blast_radius_args.format,
+                    blast_radius_args.output.as_deref(),
+                )?;
+            }
+            Ok(AsyncMainOutcome::Done)
+        }
         Command::Config(config_args) => {
             run_config_command(config_args, &global_args, &matches)?;
             Ok(AsyncMainOutcome::Done)
@@ -1714,7 +1786,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                 Command::View(_) => {
                     anyhow::bail!("View command should not reach this branch")
                 }
-                Command::AccessMap(_) => {
+                Command::AccessMap(_) | Command::BlastRadius(_) => {
                     anyhow::bail!("AccessMap command should not reach this branch")
                 }
                 Command::Validate(_) => {

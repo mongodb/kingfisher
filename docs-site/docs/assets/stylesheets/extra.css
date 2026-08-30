@@ -392,20 +392,20 @@ table.rules-table tbody td:first-child {
 }
 
 /* Confidence badges */
-.md-typeset table.rules-table td:nth-child(4),
-table.rules-table td:nth-child(4) {
+.md-typeset table.rules-table td:nth-child(3),
+table.rules-table td:nth-child(3) {
   font-weight: 500;
 }
 
 /* Validation / Revocation columns — center */
+.md-typeset table.rules-table td:nth-child(4),
 .md-typeset table.rules-table td:nth-child(5),
-.md-typeset table.rules-table td:nth-child(6),
+.md-typeset table.rules-table th:nth-child(4),
 .md-typeset table.rules-table th:nth-child(5),
-.md-typeset table.rules-table th:nth-child(6),
+table.rules-table td:nth-child(4),
 table.rules-table td:nth-child(5),
-table.rules-table td:nth-child(6),
-table.rules-table th:nth-child(5),
-table.rules-table th:nth-child(6) {
+table.rules-table th:nth-child(4),
+table.rules-table th:nth-child(5) {
   text-align: center;
   white-space: nowrap;
 }

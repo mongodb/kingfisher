@@ -535,6 +535,7 @@ async fn fetch_all_artifacts(
     if args.input_specifier_args.repo_artifacts {
         fetch_git_host_artifacts(
             repo_urls,
+            &args.input_specifier_args.github_api_url,
             &args.input_specifier_args.bitbucket_api_url,
             &bitbucket_auth,
             bitbucket_host.clone(),

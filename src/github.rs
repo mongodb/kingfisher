@@ -1,6 +1,6 @@
 use std::{
     collections::{BTreeMap, BTreeSet, HashSet},
-    env, fs,
+    fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
@@ -16,7 +16,9 @@ use serde_json::Value;
 use tracing::{info, warn};
 use url::Url;
 
-use crate::{findings_store, git_url::GitUrl, validation::GLOBAL_USER_AGENT};
+use crate::{
+    findings_store, git_url::GitUrl, github_auth::GitHubAuth, validation::GLOBAL_USER_AGENT,
+};
 use std::str::FromStr;
 
 #[derive(Deserialize)]
@@ -309,8 +311,12 @@ fn normalize_api_base(api_url: &Url) -> Url {
     base
 }
 
-fn github_token() -> Option<String> {
-    env::var("KF_GITHUB_TOKEN").ok().filter(|t| !t.is_empty())
+async fn github_token(
+    client: &reqwest::Client,
+    api_url: &Url,
+    ignore_certs: bool,
+) -> Result<Option<String>> {
+    GitHubAuth::from_env(api_url, ignore_certs)?.token(client).await
 }
 
 fn github_get(client: &reqwest::Client, url: Url, token: Option<&str>) -> reqwest::RequestBuilder {
@@ -423,7 +429,7 @@ pub async fn enumerate_contributor_repo_urls(
     let (_, owner, repo) = parse_repo(repo_url).context("invalid GitHub repo URL")?;
     let exclude_set = build_exclude_matcher(exclude_repos);
     let client = reqwest::Client::builder().danger_accept_invalid_certs(ignore_certs).build()?;
-    let token = github_token();
+    let token = github_token(&client, github_api_url, ignore_certs).await?;
     let api_base = normalize_api_base(github_api_url);
 
     let mut contributor_logins = Vec::new();
@@ -599,7 +605,7 @@ pub async fn enumerate_public_event_targets(
 
     let client = create_github_client(ignore_certs)?;
     let api_base = normalize_api_base(&github_url);
-    let token = github_token();
+    let token = github_token(&client, &github_url, ignore_certs).await?;
     let exclude_set = build_exclude_matcher(exclude_repos);
     let cutoff = Utc::now() - ChronoDuration::hours(lookback_hours.min(i64::MAX as u64) as i64);
     let mut targets = Vec::new();
@@ -680,7 +686,7 @@ pub async fn enumerate_repo_urls(
     let mut repo_urls = Vec::new();
     let exclude_set = build_exclude_matcher(&repo_specifiers.exclude_repos);
     let api_base = normalize_api_base(&github_url);
-    let token = github_token();
+    let token = github_token(&client, &github_url, ignore_certs).await?;
     for username in &repo_specifiers.user {
         let repos = fetch_github_repos(
             &client,
@@ -783,14 +789,34 @@ pub fn wiki_url(repo_url: &GitUrl) -> Option<GitUrl> {
     GitUrl::from_str(&wiki).ok()
 }
 
+fn artifact_html_url(value: &Value, fallback: String) -> String {
+    value
+        .get("html_url")
+        .and_then(Value::as_str)
+        .filter(|url| !url.is_empty())
+        .map(str::to_string)
+        .unwrap_or(fallback)
+}
+
+fn fallback_gist_url(host: &str, id: &str) -> String {
+    if host.eq_ignore_ascii_case("github.com") {
+        format!("https://gist.github.com/{id}")
+    } else {
+        format!("https://{host}/gist/{id}")
+    }
+}
+
 pub async fn fetch_repo_items(
     repo_url: &GitUrl,
+    github_api_url: &Url,
     ignore_certs: bool,
     output_root: &Path,
     datastore: &Arc<Mutex<findings_store::FindingsStore>>,
 ) -> Result<Vec<PathBuf>> {
-    let (_, owner, repo) = parse_repo(repo_url).context("invalid GitHub repo URL")?;
+    let (host, owner, repo) = parse_repo(repo_url).context("invalid GitHub repo URL")?;
     let client = reqwest::Client::builder().danger_accept_invalid_certs(ignore_certs).build()?;
+    let api_base = normalize_api_base(github_api_url);
+    let token = github_token(&client, github_api_url, ignore_certs).await?;
 
     let mut dirs = Vec::new();
 
@@ -799,16 +825,14 @@ pub async fn fetch_repo_items(
     fs::create_dir_all(&issues_dir)?;
     let mut page = 1;
     loop {
-        let url = format!(
-            "https://api.github.com/repos/{owner}/{repo}/issues?state=all&per_page=100&page={page}"
-        );
-        let mut req = client.get(&url).header("User-Agent", GLOBAL_USER_AGENT.as_str());
-        if let Ok(token) = env::var("KF_GITHUB_TOKEN")
-            && !token.is_empty()
-        {
-            req = req.bearer_auth(token);
-        }
-        let resp = req.send().await?;
+        let mut url = api_base
+            .join(&format!("repos/{owner}/{repo}/issues"))
+            .context("Failed to build GitHub issues URL")?;
+        url.query_pairs_mut()
+            .append_pair("state", "all")
+            .append_pair("per_page", "100")
+            .append_pair("page", &page.to_string());
+        let resp = github_get(&client, url, token.as_deref()).send().await?;
         if !resp.status().is_success() {
             break;
         }
@@ -823,7 +847,8 @@ pub async fn fetch_repo_items(
             let content = format!("# {title}\n\n{body}");
             let file_path = issues_dir.join(format!("issue_{number}.md"));
             fs::write(&file_path, content)?;
-            let url = format!("https://github.com/{owner}/{repo}/issues/{number}");
+            let url =
+                artifact_html_url(&issue, format!("https://{host}/{owner}/{repo}/issues/{number}"));
             let mut ds = datastore.lock().unwrap();
             ds.register_repo_link(file_path, url);
         }
@@ -841,14 +866,11 @@ pub async fn fetch_repo_items(
     // Public gists for the owner
     page = 1;
     loop {
-        let url = format!("https://api.github.com/users/{owner}/gists?per_page=100&page={page}");
-        let mut req = client.get(&url).header("User-Agent", GLOBAL_USER_AGENT.as_str());
-        if let Ok(token) = env::var("KF_GITHUB_TOKEN")
-            && !token.is_empty()
-        {
-            req = req.bearer_auth(&token);
-        }
-        let resp = req.send().await?;
+        let mut url = api_base
+            .join(&format!("users/{owner}/gists"))
+            .context("Failed to build GitHub user gists URL")?;
+        url.query_pairs_mut().append_pair("per_page", "100").append_pair("page", &page.to_string());
+        let resp = github_get(&client, url, token.as_deref()).send().await?;
         if !resp.status().is_success() {
             break;
         }
@@ -860,15 +882,12 @@ pub async fn fetch_repo_items(
             if let Some(id) = gist.get("id").and_then(|v| v.as_str())
                 && seen.insert(id.to_string())
             {
-                let mut req_g = client
-                    .get(format!("https://api.github.com/gists/{id}"))
-                    .header("User-Agent", GLOBAL_USER_AGENT.as_str());
-                if let Ok(token) = env::var("KF_GITHUB_TOKEN")
-                    && !token.is_empty()
-                {
-                    req_g = req_g.bearer_auth(&token);
-                }
-                let detail: Value = req_g.send().await?.json().await?;
+                let url = api_base
+                    .join(&format!("gists/{id}"))
+                    .context("Failed to build GitHub gist URL")?;
+                let detail: Value =
+                    github_get(&client, url, token.as_deref()).send().await?.json().await?;
+                let gist_url = artifact_html_url(&detail, fallback_gist_url(&host, id));
                 if let Some(files) = detail.get("files").and_then(|v| v.as_object()) {
                     let gist_dir = gists_dir.join(id);
                     fs::create_dir_all(&gist_dir)?;
@@ -876,9 +895,8 @@ pub async fn fetch_repo_items(
                         if let Some(content) = fobj.get("content").and_then(|v| v.as_str()) {
                             let file_path = gist_dir.join(fname);
                             fs::write(&file_path, content)?;
-                            let url = format!("https://gist.github.com/{id}");
                             let mut ds = datastore.lock().unwrap();
-                            ds.register_repo_link(file_path, url);
+                            ds.register_repo_link(file_path, gist_url.clone());
                         }
                     }
                 }
@@ -888,18 +906,15 @@ pub async fn fetch_repo_items(
     }
 
     // Private gists for authenticated user if they own the repo
-    if let Ok(token) = env::var("KF_GITHUB_TOKEN")
-        && !token.is_empty()
-    {
+    if let Some(token) = token.as_deref() {
         page = 1;
         loop {
-            let url = format!("https://api.github.com/gists?per_page=100&page={page}");
-            let resp = client
-                .get(&url)
-                .header("User-Agent", GLOBAL_USER_AGENT.as_str())
-                .bearer_auth(&token)
-                .send()
-                .await?;
+            let mut url =
+                api_base.join("gists").context("Failed to build authenticated GitHub gists URL")?;
+            url.query_pairs_mut()
+                .append_pair("per_page", "100")
+                .append_pair("page", &page.to_string());
+            let resp = github_get(&client, url, Some(token)).send().await?;
             if !resp.status().is_success() {
                 break;
             }
@@ -914,14 +929,12 @@ pub async fn fetch_repo_items(
                     && let Some(id) = gist.get("id").and_then(|v| v.as_str())
                     && seen.insert(id.to_string())
                 {
-                    let detail: Value = client
-                        .get(format!("https://api.github.com/gists/{id}"))
-                        .header("User-Agent", GLOBAL_USER_AGENT.as_str())
-                        .bearer_auth(&token)
-                        .send()
-                        .await?
-                        .json()
-                        .await?;
+                    let url = api_base
+                        .join(&format!("gists/{id}"))
+                        .context("Failed to build GitHub gist URL")?;
+                    let detail: Value =
+                        github_get(&client, url, Some(token)).send().await?.json().await?;
+                    let gist_url = artifact_html_url(&detail, fallback_gist_url(&host, id));
                     if let Some(files) = detail.get("files").and_then(|v| v.as_object()) {
                         let gist_dir = gists_dir.join(id);
                         fs::create_dir_all(&gist_dir)?;
@@ -929,9 +942,8 @@ pub async fn fetch_repo_items(
                             if let Some(content) = fobj.get("content").and_then(|v| v.as_str()) {
                                 let file_path = gist_dir.join(fname);
                                 fs::write(&file_path, content)?;
-                                let url = format!("https://gist.github.com/{id}");
                                 let mut ds = datastore.lock().unwrap();
-                                ds.register_repo_link(file_path, url);
+                                ds.register_repo_link(file_path, gist_url.clone());
                             }
                         }
                     }
@@ -1003,6 +1015,20 @@ mod tests {
         let excludes = build_exclude_matcher(&["owner/*-archive".to_string()]);
         assert!(should_exclude_repo("https://github.com/owner/project-archive.git", &excludes));
         assert!(!should_exclude_repo("https://github.com/owner/project.git", &excludes));
+    }
+
+    #[test]
+    fn artifact_links_preserve_github_enterprise_hosts() {
+        let issue = json!({ "html_url": "https://ghe.example.com/acme/widgets/issues/7" });
+        assert_eq!(
+            artifact_html_url(&issue, "https://github.com/acme/widgets/issues/7".to_string()),
+            "https://ghe.example.com/acme/widgets/issues/7"
+        );
+        assert_eq!(
+            fallback_gist_url("ghe.example.com", "abc123"),
+            "https://ghe.example.com/gist/abc123"
+        );
+        assert_eq!(fallback_gist_url("github.com", "abc123"), "https://gist.github.com/abc123");
     }
 
     #[test]

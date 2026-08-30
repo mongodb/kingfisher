@@ -511,6 +511,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
       if (evidence) {
         el.appendChild(badge('Policies: ' + (evidence.policies?.length || 0)));
         el.appendChild(badge('Identity paths: ' + (evidence.paths?.length || 0)));
+        el.appendChild(badge('Reachable roles: ' + (evidence.role_impacts?.length || 0)));
       }
     }
 
@@ -691,6 +692,18 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
       return null;
     }
 
+    function awsRoleLink(role) {
+      if (!role) return null;
+      let name = role;
+      if (role.startsWith('arn:')) {
+        const resource = role.split(':')[5] || '';
+        const parts = resource.split('/');
+        if (parts[0] !== 'role' || parts.length < 2) return null;
+        name = parts.slice(1).join('/');
+      }
+      return `https://console.aws.amazon.com/iam/home?#/roles/${encodeURIComponent(name)}`;
+    }
+
     function permissionLink(permission, model) {
       if (model.cloud === 'gcp') return gcpPermissionLink(permission);
       return null;
@@ -708,6 +721,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
         type: 'role',
         source: role.source || 'direct',
         permissions: role.permissions || [],
+        link: model.cloud === 'aws' ? awsRoleLink(role.name || '') : null,
         children: (role.permissions || []).map(p => ({
           name: p,
           type: 'permission',
@@ -774,6 +788,31 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
         name: scope.id,
         type: scope.kind || 'scope',
       }));
+      const roleImpactNodes = (evidence.role_impacts || []).map(impact => ({
+        name: impact.target
+          ? `${impact.target} → ${impact.role || impact.name || 'role'}`
+          : (impact.role || impact.name || 'assumable role'),
+        type: 'assumable_role',
+        source: `${impact.status || 'potential'} · ${impact.hop_count || 0} hop(s)`,
+        permissions: impact.permissions || [],
+        link: model.cloud === 'aws' ? awsRoleLink(impact.role || impact.name || '') : null,
+        children: (impact.grants || []).map((grant, index) => ({
+          name: (grant.resources || []).join(', ') || `Grant ${index + 1}`,
+          type: 'role_resource_grant',
+          permissions: grant.permissions || [],
+          reason: [
+            ...(grant.excluded_permissions || []).map(value => `Excluded permission: ${value}`),
+            ...(grant.excluded_resources || []).map(value => `Excluded resource: ${value}`),
+          ].join(' · '),
+          notes: [
+            ...(grant.condition_keys || []).map(value => `Condition: ${value}`),
+            ...(grant.evidence || []).map(value => `Evidence: ${value}`),
+          ],
+          link: model.cloud === 'aws' && (grant.resources || []).length === 1
+            ? awsResourceConsoleLink(grant.resources[0])
+            : null,
+        })),
+      }));
 
       return {
         name: model.identity?.id || 'Identity',
@@ -782,6 +821,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
         children: [
           { name: 'Resources', type: 'section', children: resourceNodes },
           { name: 'Roles', type: 'section', children: roleNodes },
+          { name: 'Reachable Role Impact', type: 'section', children: roleImpactNodes },
           { name: 'Permissions', type: 'section', children: permGroups },
           { name: 'Authorization Paths', type: 'section', children: pathNodes },
           { name: 'Policy Evidence', type: 'section', children: policyNodes },

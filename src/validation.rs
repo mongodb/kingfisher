@@ -8,14 +8,19 @@ use std::{
 
 use std::sync::{LazyLock, OnceLock};
 
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use dashmap::DashMap;
 use futures::FutureExt;
 use http::StatusCode;
 use kingfisher_core::ValidationOutcome;
 use liquid::Object;
 use liquid_core::{Value, ValueView};
-use reqwest::{Client, Url, header, header::HeaderValue, multipart};
+use percent_encoding::percent_decode_str;
+use reqwest::{
+    Client, Url, header,
+    header::{HeaderMap, HeaderValue},
+    multipart,
+};
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::{sync::Notify, time};
 use tracing::{debug, warn};
@@ -118,10 +123,14 @@ pub fn set_user_agent_suffix<S: Into<String>>(suffix: Option<S>) {
 pub struct ValidationClients {
     /// Client with full TLS certificate validation (WebPKI chain, hostname, expiry).
     strict: Client,
+    /// Strict-TLS client that never follows redirects, used when sending URI credentials.
+    strict_credential_uri: Client,
     /// Client that accepts self-signed or invalid certificates.
     /// Used when `--tls-mode=lax` AND the rule opts into lax validation,
     /// or when `--tls-mode=off`.
     lax: Client,
+    /// Lax-TLS client that never follows redirects, used when sending URI credentials.
+    lax_credential_uri: Client,
     /// The global TLS mode from CLI arguments.
     pub global_mode: TlsMode,
     /// When true, skip SSRF IP validation and allow requests to internal/private addresses.
@@ -221,7 +230,17 @@ impl ValidationClients {
             .timeout(timeout)
             .build()?;
 
-        Ok(Self { strict, lax, global_mode, allow_internal_ips })
+        let strict_credential_uri = build_credential_uri_client(false, timeout)?;
+        let lax_credential_uri = build_credential_uri_client(true, timeout)?;
+
+        Ok(Self {
+            strict,
+            strict_credential_uri,
+            lax,
+            lax_credential_uri,
+            global_mode,
+            allow_internal_ips,
+        })
     }
 
     /// Get the appropriate client for a given rule's TLS mode.
@@ -242,6 +261,18 @@ impl ValidationClients {
         }
     }
 
+    /// Get a redirect-disabled client for credential-bearing URI validation.
+    pub fn credential_uri_client_for_rule(
+        &self,
+        rule_tls_mode: Option<kingfisher_rules::TlsMode>,
+    ) -> &Client {
+        if self.should_use_lax(rule_tls_mode) {
+            &self.lax_credential_uri
+        } else {
+            &self.strict_credential_uri
+        }
+    }
+
     /// Check if lax TLS should be used for a rule.
     ///
     /// This is useful for non-HTTP validators (Postgres, MySQL, etc.) that need to
@@ -253,6 +284,15 @@ impl ValidationClients {
             TlsMode::Strict => false,
         }
     }
+}
+
+/// Build a client that cannot forward URI credentials through an automatic redirect.
+pub(crate) fn build_credential_uri_client(use_lax_tls: bool, timeout: Duration) -> Result<Client> {
+    Ok(Client::builder()
+        .danger_accept_invalid_certs(use_lax_tls)
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .build()?)
 }
 
 // Use SkipMap-based cache instead of a mutex-wrapped FxHashMap.
@@ -442,9 +482,10 @@ pub fn is_parseable_mysql_uri(uri: &str) -> bool {
     mysql::parse_mysql_url(uri).is_ok()
 }
 
-/// A database validator target selected from a credential-bearing URI.
+/// A validator target selected from a credential-bearing URI.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum CredentialUriTarget {
+    Http(String),
     MongoDB(String),
     MySQL(String),
     Postgres(String),
@@ -455,6 +496,7 @@ pub(crate) enum CredentialUriTarget {
 impl CredentialUriTarget {
     pub(crate) fn scheme(&self) -> &str {
         match self {
+            Self::Http(uri) => uri.split_once("://").map(|(scheme, _)| scheme).unwrap_or("http"),
             Self::MongoDB(_) => "mongodb",
             Self::MySQL(_) => "mysql",
             Self::Postgres(_) => "postgresql",
@@ -465,6 +507,11 @@ impl CredentialUriTarget {
 
     pub(crate) fn is_parseable(&self) -> bool {
         match self {
+            Self::Http(uri) => Url::parse(uri).is_ok_and(|url| {
+                url.host_str().is_some_and(|host| !host.is_empty())
+                    && !url.username().is_empty()
+                    && url.password().is_some_and(|password| !password.is_empty())
+            }),
             Self::MongoDB(uri) => is_parseable_mongodb_uri(uri),
             Self::MySQL(uri) => is_parseable_mysql_uri(uri),
             Self::Postgres(uri) => is_parseable_postgres_uri(uri),
@@ -502,6 +549,9 @@ pub(crate) fn classify_credential_uri(uri: &str, scheme_hint: Option<&str>) -> C
         .unwrap_or_default();
 
     match scheme.as_str() {
+        "http" | "https" => normalize_uri_scheme(uri, &scheme)
+            .map(CredentialUriTarget::Http)
+            .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
         "mongodb" => normalize_uri_scheme(uri, "mongodb")
             .map(CredentialUriTarget::MongoDB)
             .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
@@ -526,6 +576,143 @@ pub(crate) fn classify_credential_uri(uri: &str, scheme_hint: Option<&str>) -> C
 /// Unsupported schemes remain reportable and are intentionally left unvalidated.
 pub(crate) fn is_parseable_credential_uri(uri: &str, scheme: Option<&str>) -> bool {
     classify_credential_uri(uri, scheme).is_parseable()
+}
+
+fn has_basic_auth_challenge(headers: &HeaderMap) -> bool {
+    headers.get_all(header::WWW_AUTHENTICATE).iter().filter_map(|value| value.to_str().ok()).any(
+        |value| {
+            // A comma can separate either challenges or parameters within one challenge. Only
+            // accept Basic when it is the unambiguous first scheme in a field value; rejecting a
+            // valid later challenge is safer than sending credentials in response to a parameter
+            // that happens to start with "basic".
+            let challenge = value.trim_start();
+            challenge.get(..5).is_some_and(|scheme| scheme.eq_ignore_ascii_case("basic"))
+                && challenge.as_bytes().get(5).is_none_or(|byte| byte.is_ascii_whitespace())
+        },
+    )
+}
+
+fn received_basic_auth_challenge(status: StatusCode, headers: &HeaderMap) -> bool {
+    status == StatusCode::UNAUTHORIZED && has_basic_auth_challenge(headers)
+}
+
+/// Validate an HTTPS credential URI using the username and password as HTTP Basic Auth.
+///
+/// The credentials are removed from the request URL before dispatch so they cannot be echoed in
+/// request errors, redirects, or debug output. Credentials are sent only after an unauthenticated
+/// request receives an explicit Basic Auth challenge. A subsequent successful response proves that
+/// the endpoint accepted them; only HTTP 401 is authoritative rejection, while other response
+/// statuses are reported as inconclusive by the caller.
+pub(crate) async fn validate_http_credential_uri(
+    uri: &str,
+    client: &Client,
+    timeout: Duration,
+    retries: u32,
+    allow_internal_ips: bool,
+) -> Result<(bool, StatusCode, String)> {
+    let mut url =
+        Url::parse(uri).map_err(|error| anyhow!("Invalid HTTP credential URI: {error}"))?;
+    if url.scheme() != "https" {
+        return Err(anyhow!("HTTP credential URI validation requires HTTPS"));
+    }
+
+    let username = percent_decode_str(url.username())
+        .decode_utf8()
+        .map_err(|_| anyhow!("HTTP credential URI username is not valid UTF-8"))?
+        .into_owned();
+    let password = url
+        .password()
+        .filter(|password| !password.is_empty())
+        .ok_or_else(|| anyhow!("HTTP credential URI is missing a password"))?;
+    let password = percent_decode_str(password)
+        .decode_utf8()
+        .map_err(|_| anyhow!("HTTP credential URI password is not valid UTF-8"))?
+        .into_owned();
+    if username.is_empty() {
+        return Err(anyhow!("HTTP credential URI is missing a username"));
+    }
+    if username.contains(':') {
+        return Err(anyhow!("HTTP Basic Auth usernames cannot contain ':'"));
+    }
+
+    httpvalidation::check_url_resolvable(&url, allow_internal_ips)
+        .await
+        .map_err(|error| anyhow!("HTTP credential URI resolution failed: {error}"))?;
+
+    url.set_username("").map_err(|_| anyhow!("Failed to remove HTTP URI username"))?;
+    url.set_password(None).map_err(|_| anyhow!("Failed to remove HTTP URI password"))?;
+
+    let unauthenticated = httpvalidation::retry_request(
+        client
+            .get(url.clone())
+            .header(header::USER_AGENT, GLOBAL_USER_AGENT.as_str())
+            .timeout(timeout),
+        retries,
+        Duration::from_millis(500),
+        Duration::from_secs(2),
+    )
+    .await
+    .map_err(|error| anyhow!("HTTP credential URI challenge request failed: {error}"))?;
+
+    let challenge_status = unauthenticated.status();
+    if unauthenticated.url() != &url {
+        return Ok((
+            false,
+            StatusCode::BAD_GATEWAY,
+            "HTTP Basic Auth validation was inconclusive: challenge request was redirected"
+                .to_string(),
+        ));
+    }
+    if !received_basic_auth_challenge(challenge_status, unauthenticated.headers()) {
+        return Ok((
+            false,
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "HTTP Basic Auth validation was inconclusive: unauthenticated request did not receive a Basic challenge (HTTP {challenge_status})"
+            ),
+        ));
+    }
+    drop(unauthenticated);
+
+    let authenticated = httpvalidation::retry_request(
+        client
+            .get(url.clone())
+            .basic_auth(username, Some(password))
+            .header(header::USER_AGENT, GLOBAL_USER_AGENT.as_str())
+            .timeout(timeout),
+        retries,
+        Duration::from_millis(500),
+        Duration::from_secs(2),
+    )
+    .await
+    .map_err(|error| anyhow!("HTTP credential URI request failed: {error}"))?;
+
+    let response_status = authenticated.status();
+    if authenticated.url() != &url {
+        return Ok((
+            false,
+            StatusCode::BAD_GATEWAY,
+            format!(
+                "HTTP Basic Auth validation was inconclusive: authenticated request was redirected (HTTP {response_status})"
+            ),
+        ));
+    }
+    let valid = response_status.is_success();
+    let status = if valid || response_status == StatusCode::UNAUTHORIZED {
+        response_status
+    } else {
+        // A generic endpoint cannot distinguish a bad credential from a missing route,
+        // authorization policy, or a server failure. Keep those responses inconclusive.
+        StatusCode::BAD_GATEWAY
+    };
+    let message = if valid {
+        format!("HTTP Basic Auth accepted (HTTP {status})")
+    } else if response_status == StatusCode::UNAUTHORIZED {
+        "HTTP Basic Auth rejected (HTTP 401 Unauthorized)".to_string()
+    } else {
+        format!("HTTP Basic Auth validation was inconclusive (HTTP {})", response_status)
+    };
+    Ok((valid, status, message))
 }
 
 /// Collect dependent variables and missing dependencies from the provided matches.
@@ -959,9 +1146,12 @@ async fn timed_validate_single_match(
             validate_credential_uri_rule(
                 m,
                 &captured_values,
+                clients.credential_uri_client_for_rule(rule_tls_mode),
                 cache,
                 use_lax_tls,
                 clients.allow_internal_ips,
+                validation_timeout,
+                validation_retries,
             )
             .await;
         }
@@ -1566,12 +1756,16 @@ fn captured_value<'a>(
         .filter(|value| !value.is_empty())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn validate_credential_uri_rule(
     m: &mut OwnedBlobMatch,
     captured_values: &[(String, String, usize, usize)],
+    client: &Client,
     cache: &Cache,
     use_lax_tls: bool,
     allow_internal_ips: bool,
+    validation_timeout: Duration,
+    validation_retries: u32,
 ) {
     let Some(uri) =
         captured_value(captured_values, "URI").or_else(|| captured_value(captured_values, "TOKEN"))
@@ -1603,6 +1797,30 @@ async fn validate_credential_uri_rule(
         }
         CredentialUriTarget::Jdbc(uri) => {
             validate_jdbc_connection(m, &uri, cache, use_lax_tls, allow_internal_ips).await;
+        }
+        CredentialUriTarget::Http(uri) => {
+            match validate_http_credential_uri(
+                &uri,
+                client,
+                validation_timeout,
+                validation_retries,
+                allow_internal_ips,
+            )
+            .await
+            {
+                Ok((valid, status, message)) => {
+                    m.validation_success = valid;
+                    m.validation_response_status = status;
+                    m.validation_response_body = validation_body::from_string(message);
+                }
+                Err(error) => {
+                    m.validation_success = false;
+                    m.validation_response_status = StatusCode::BAD_GATEWAY;
+                    m.validation_response_body = validation_body::from_string(format!(
+                        "HTTP credential URI validation error: {error}"
+                    ));
+                }
+            }
         }
         CredentialUriTarget::Unsupported(scheme) => {
             m.validation_success = false;
@@ -2222,10 +2440,10 @@ mod tests {
     }
 
     #[test]
-    fn credential_uri_classifier_preserves_unsupported_detections() {
+    fn credential_uri_classifier_accepts_http_basic_auth_uris() {
         assert_eq!(
             classify_credential_uri("https://alice:hunter2@service.internal", Some("https")),
-            CredentialUriTarget::Unsupported("https".to_string())
+            CredentialUriTarget::Http("https://alice:hunter2@service.internal".to_string())
         );
         assert!(is_parseable_credential_uri(
             "https://alice:hunter2@service.internal",
@@ -2235,6 +2453,188 @@ mod tests {
             "postgresql://alice:hunter2@db.internal:70000/app",
             Some("postgresql")
         ));
+
+        let malformed_https =
+            classify_credential_uri("https://alice@service.internal", Some("https"));
+        assert_eq!(malformed_https.scheme(), "https");
+        assert!(!malformed_https.is_parseable());
+    }
+
+    #[tokio::test]
+    async fn credential_uri_client_does_not_follow_redirects() {
+        use axum::{Router, response::Redirect, routing::get};
+
+        let app = Router::new()
+            .route("/challenge", get(|| async { Redirect::temporary("/target") }))
+            .route("/target", get(|| async { "redirected" }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+        let client = build_credential_uri_client(false, Duration::from_secs(5)).unwrap();
+        let response = client.get(format!("http://{address}/challenge")).send().await.unwrap();
+        server.abort();
+
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(response.url().path(), "/challenge");
+    }
+
+    #[test]
+    fn http_credential_uri_requires_basic_challenge_before_authentication() {
+        let mut headers = HeaderMap::new();
+        headers
+            .append(header::WWW_AUTHENTICATE, HeaderValue::from_static("Digest realm=\"example\""));
+        assert!(!received_basic_auth_challenge(StatusCode::OK, &headers));
+        assert!(!received_basic_auth_challenge(StatusCode::UNAUTHORIZED, &headers));
+
+        headers.append(
+            header::WWW_AUTHENTICATE,
+            HeaderValue::from_static("Digest realm=\"example\", basic = \"metadata\""),
+        );
+        assert!(!received_basic_auth_challenge(StatusCode::UNAUTHORIZED, &headers));
+
+        headers
+            .append(header::WWW_AUTHENTICATE, HeaderValue::from_static("Basic realm=\"example\""));
+        assert!(received_basic_auth_challenge(StatusCode::UNAUTHORIZED, &headers));
+    }
+
+    #[tokio::test]
+    async fn http_credential_uri_rejects_plaintext_transport() {
+        let client = Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+        let result = validate_http_credential_uri(
+            "http://alice:hunter2@service.internal/health",
+            &client,
+            Duration::from_secs(5),
+            0,
+            true,
+        )
+        .await
+        .unwrap_err();
+
+        assert!(result.to_string().contains("requires HTTPS"));
+    }
+
+    #[tokio::test]
+    async fn http_credential_uri_rejects_ambiguous_or_invalid_userinfo() {
+        let client = Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap();
+        let cases = [
+            (
+                "https://alice%3Aadmin:hunter2@service.invalid/protected",
+                "usernames cannot contain ':'",
+            ),
+            ("https://alice%FF:hunter2@service.invalid/protected", "username is not valid UTF-8"),
+            ("https://alice:hunter%FF@service.invalid/protected", "password is not valid UTF-8"),
+        ];
+
+        for (uri, expected_error) in cases {
+            let error = validate_http_credential_uri(uri, &client, Duration::from_secs(5), 0, true)
+                .await
+                .unwrap_err();
+
+            assert!(error.to_string().contains(expected_error), "{error}");
+        }
+    }
+
+    async fn run_https_basic_auth_flow(
+        authenticated_status: StatusCode,
+    ) -> ((bool, StatusCode, String), Vec<Option<String>>) {
+        use rcgen::{CertifiedKey, generate_simple_self_signed};
+        use rustls::{ServerConfig, pki_types::PrivatePkcs8KeyDer};
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        use tokio_rustls::TlsAcceptor;
+
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
+        let provider = rustls::crypto::aws_lc_rs::default_provider();
+        let config = ServerConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()
+            .unwrap()
+            .with_no_client_auth()
+            .with_single_cert(vec![cert.der().clone()], key.into())
+            .unwrap();
+        let acceptor = TlsAcceptor::from(Arc::new(config));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+
+        let server = tokio::spawn(async move {
+            let mut authorization_headers = Vec::new();
+            for status in [StatusCode::UNAUTHORIZED, authenticated_status] {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut stream = acceptor.accept(socket).await.unwrap();
+                let mut request = Vec::new();
+                let mut buffer = [0_u8; 1024];
+                loop {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    if read == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&buffer[..read]);
+                    if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let request = String::from_utf8(request).unwrap();
+                authorization_headers.push(
+                    request
+                        .lines()
+                        .find_map(|line| line.strip_prefix("authorization: "))
+                        .map(str::to_string),
+                );
+
+                let status_line = match status {
+                    StatusCode::OK => "200 OK",
+                    StatusCode::UNAUTHORIZED => "401 Unauthorized",
+                    other => panic!("unsupported test status: {other}"),
+                };
+                let challenge = if status == StatusCode::UNAUTHORIZED {
+                    "WWW-Authenticate: Basic realm=\"test\"\r\n"
+                } else {
+                    ""
+                };
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\n{challenge}Content-Length: 0\r\nConnection: close\r\n\r\n"
+                );
+                stream.write_all(response.as_bytes()).await.unwrap();
+                stream.shutdown().await.unwrap();
+            }
+            authorization_headers
+        });
+
+        let client = build_credential_uri_client(true, Duration::from_secs(5)).unwrap();
+        let result = validate_http_credential_uri(
+            &format!("https://alice:hunter2@{address}/protected"),
+            &client,
+            Duration::from_secs(5),
+            0,
+            true,
+        )
+        .await
+        .unwrap();
+        let authorization_headers = server.await.unwrap();
+        (result, authorization_headers)
+    }
+
+    #[tokio::test]
+    async fn http_credential_uri_sends_basic_auth_only_after_https_challenge() {
+        let ((valid, status, _), authorization_headers) =
+            run_https_basic_auth_flow(StatusCode::OK).await;
+
+        assert!(valid);
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(authorization_headers[0], None);
+        assert_eq!(authorization_headers[1].as_deref(), Some("Basic YWxpY2U6aHVudGVyMg=="));
+    }
+
+    #[tokio::test]
+    async fn http_credential_uri_treats_repeated_unauthorized_as_inactive() {
+        let ((valid, status, _), authorization_headers) =
+            run_https_basic_auth_flow(StatusCode::UNAUTHORIZED).await;
+
+        assert!(!valid);
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(authorization_headers[0], None);
+        assert!(authorization_headers[1].is_some());
     }
 
     fn aws_rule(id: &str, secret_dependency: bool) -> Rule {
@@ -2438,6 +2838,13 @@ mod tests {
         assert_eq!(static_shape, ("static-rule-token".to_string(), None));
         assert_eq!(session_shape, ("static-secret".to_string(), Some("session-token".to_string())));
         assert!(is_aws_session_token_rule(&aws_rule("kingfisher.aws.4", false)));
+    }
+
+    #[test]
+    fn betterleaks_aws_session_token_rule_is_detected_by_its_secret_dependency() {
+        let rule = aws_rule("betterleaks.aws-session-token", true);
+
+        assert!(is_aws_session_token_rule(&rule));
     }
 
     #[tokio::test]

@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow};
+use futures::{StreamExt, stream};
 use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};
 use reqwest::{Client, StatusCode};
 use serde_json::Value;
@@ -24,7 +25,10 @@ struct Ancestor {
 }
 
 const MAX_IMPERSONATION_ROLE_EXPANSIONS: usize = 64;
+const MAX_IMPERSONATED_ROLE_IMPACTS: usize = 256;
 const MAX_AUTHORIZATION_PATHS: usize = 256;
+const MAX_SERVICE_ACCOUNT_POLICY_PROBES: usize = 128;
+const SERVICE_ACCOUNT_POLICY_CONCURRENCY: usize = 8;
 
 #[derive(Debug, Clone)]
 struct GcpIamBinding {
@@ -38,10 +42,10 @@ struct GcpIamBinding {
 }
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, AuthorizationEvidence, AuthorizationHop,
-    AuthorizationPath, AuthorizationStatement, HierarchyScope, PermissionSummary, PolicyEvidence,
-    PrincipalEvidence, ProviderMetadata, ResourceExposure, RoleBinding, Severity,
-    build_default_resource, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, AuthorizationEvidence, AuthorizationGrant,
+    AuthorizationHop, AuthorizationPath, AuthorizationStatement, HierarchyScope, PermissionSummary,
+    PolicyEvidence, PrincipalEvidence, ProviderMetadata, ResourceExposure, RoleBinding, RoleImpact,
+    Severity, build_default_resource, build_recommendations,
 };
 
 pub async fn map_access(credential_path: Option<&Path>) -> Result<AccessMapResult> {
@@ -107,7 +111,8 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
             "Conditional IAM bindings and deny policies are retained as limitations rather than fully evaluated.".into(),
             "Resource inventory is limited to the project associated with the credential; inherited roles may apply to additional descendant projects.".into(),
             "Google group membership is not resolved, so group-based service-account grants may be absent.".into(),
-            "Outbound service-account paths are permission-based candidates; target service-account IAM policies are not exhaustively inspected.".into(),
+            "Outbound service-account paths are permission-based candidates derived from caller-readable hierarchy and target service-account policies; target role impact is limited to direct service-account members in visible hierarchy policies.".into(),
+            "Kingfisher does not mint credentials for discovered target service accounts or re-enumerate resources as those identities.".into(),
             "Service-account inventory is limited to the first API response and at most 128 targets are considered for outbound paths.".into(),
         ],
         ..AuthorizationEvidence::default()
@@ -316,13 +321,12 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
     )
     .await;
 
-    let permissions = classify_permissions(&roles);
-    let severity = derive_severity(&permissions);
+    let direct_permissions = classify_permissions(&roles);
 
     let mut resources = Vec::new();
     if let Some(project) = project_id.as_deref() {
         let mut enumerated =
-            enumerate_resources(&http_client, &access_token, project, &permissions, &roles)
+            enumerate_resources(&http_client, &access_token, project, &direct_permissions, &roles)
                 .await
                 .unwrap_or_else(|e| {
                     verbose_warn!("GCP access-map: failed resource enumeration: {e}");
@@ -330,7 +334,41 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
                 });
         resources.append(&mut enumerated);
     }
-    add_outgoing_impersonation_paths(&client_email, &resources, &mut authorization_evidence);
+    let target_bindings = fetch_visible_service_account_bindings(
+        &http_client,
+        &access_token,
+        &client_email,
+        &resources,
+        &roles,
+        &mut authorization_evidence,
+    )
+    .await;
+    add_impersonation_binding_policy_evidence(
+        &http_client,
+        &access_token,
+        &target_bindings,
+        &mut role_permissions,
+        &mut authorization_evidence,
+    )
+    .await;
+    iam_bindings.extend(target_bindings);
+    let reachable_targets =
+        add_outgoing_impersonation_paths(&client_email, &resources, &mut authorization_evidence);
+    let impersonated = build_outgoing_impersonation_impacts(
+        &http_client,
+        &access_token,
+        &reachable_targets,
+        &iam_bindings,
+        &mut role_permissions,
+        &mut authorization_evidence,
+    )
+    .await;
+    roles.extend(impersonated.roles);
+    resources.extend(impersonated.resources);
+    authorization_evidence.role_impacts = impersonated.impacts;
+
+    let permissions = classify_permissions(&roles);
+    let severity = derive_severity(&permissions);
 
     if resources.is_empty() {
         resources.push(build_default_resource(project_id.as_deref(), severity));
@@ -346,6 +384,7 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
 
     let mut risk_notes = derive_risk_notes(&roles, &permissions);
     risk_notes.extend(impersonation_notes);
+    risk_notes.extend(impersonated.notes);
     if sa_metadata.is_disabled == Some(true) {
         risk_notes.push("Service account is disabled but key is still valid".into());
     }
@@ -1704,6 +1743,131 @@ async fn fetch_service_account_iam_policy(
     Ok(Some(policy))
 }
 
+async fn fetch_visible_service_account_bindings(
+    client: &Client,
+    token: &str,
+    source: &str,
+    resources: &[ResourceExposure],
+    roles: &[RoleBinding],
+    evidence: &mut AuthorizationEvidence,
+) -> Vec<GcpIamBinding> {
+    if !collect_permission_set(roles).contains("iam.serviceAccounts.getIamPolicy") {
+        return Vec::new();
+    }
+    let mut targets = BTreeMap::<String, (String, String)>::new();
+    for resource in resources.iter().filter(|resource| resource.resource_type == "service_account")
+    {
+        let Some((project, email)) = parse_service_account_resource(&resource.name) else {
+            continue;
+        };
+        if email == source {
+            continue;
+        }
+        targets
+            .entry(resource.name.clone())
+            .or_insert_with(|| (project.to_string(), email.to_string()));
+    }
+
+    if targets.len() > MAX_SERVICE_ACCOUNT_POLICY_PROBES {
+        evidence.limitations.push(format!(
+            "Direct service-account impersonation checks were limited to {MAX_SERVICE_ACCOUNT_POLICY_PROBES} visible targets."
+        ));
+    }
+
+    let requests = targets.into_iter().take(MAX_SERVICE_ACCOUNT_POLICY_PROBES).map(
+        |(scope, (project, email))| async move {
+            let result = fetch_service_account_iam_policy(client, token, &project, &email).await;
+            (scope, result)
+        },
+    );
+    let mut results: Vec<_> =
+        stream::iter(requests).buffer_unordered(SERVICE_ACCOUNT_POLICY_CONCURRENCY).collect().await;
+    results.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let mut bindings = Vec::new();
+    let mut unreadable = 0usize;
+    for (scope, result) in results {
+        match result {
+            Ok(Some(policy)) => {
+                collect_iam_bindings(&policy, &scope, "service_account_binding", &mut bindings)
+            }
+            Ok(None) => unreadable += 1,
+            Err(err) => {
+                unreadable += 1;
+                verbose_warn!(
+                    "GCP access-map: failed to fetch target service account policy for {scope}: {err}"
+                );
+            }
+        }
+    }
+    if unreadable > 0 {
+        evidence.limitations.push(format!(
+            "Direct impersonation bindings could not be checked on {unreadable} visible service account(s) because their IAM policies were unreadable."
+        ));
+    }
+    bindings
+}
+
+fn parse_service_account_resource(resource: &str) -> Option<(&str, &str)> {
+    let mut parts = resource.split('/');
+    match (parts.next(), parts.next(), parts.next(), parts.next(), parts.next()) {
+        (Some("projects"), Some(project), Some("serviceAccounts"), Some(email), None) => {
+            Some((project, email))
+        }
+        _ => None,
+    }
+}
+
+async fn add_impersonation_binding_policy_evidence(
+    client: &Client,
+    token: &str,
+    bindings: &[GcpIamBinding],
+    role_permissions: &mut BTreeMap<String, Vec<String>>,
+    evidence: &mut AuthorizationEvidence,
+) {
+    let mut expanded = 0usize;
+    let mut expansion_limited = false;
+    for binding in bindings {
+        let permissions = if let Some(permissions) = role_permissions.get(&binding.role) {
+            permissions.clone()
+        } else if expanded < MAX_IMPERSONATION_ROLE_EXPANSIONS {
+            expanded += 1;
+            let fetched =
+                fetch_role_permissions(client, token, &binding.role).await.unwrap_or_else(|err| {
+                    verbose_warn!(
+                        "GCP access-map: failed to expand direct impersonation role {}: {err}",
+                        binding.role
+                    );
+                    evidence.limitations.push(format!(
+                        "Permissions for direct impersonation role {} could not be expanded.",
+                        binding.role
+                    ));
+                    RolePermissions { permissions: Vec::new(), disabled: false }
+                });
+            if fetched.disabled {
+                evidence.limitations.push(format!(
+                    "IAM role {} is disabled or deleted and was ignored.",
+                    binding.role
+                ));
+                continue;
+            }
+            role_permissions.insert(binding.role.clone(), fetched.permissions.clone());
+            fetched.permissions
+        } else {
+            expansion_limited = true;
+            continue;
+        };
+        if !impersonation_capabilities(&permissions).is_empty() {
+            upsert_binding_policy(evidence, binding, &permissions);
+        }
+    }
+    if expansion_limited {
+        evidence.limitations.push(format!(
+            "Direct impersonation analysis expanded at most {MAX_IMPERSONATION_ROLE_EXPANSIONS} additional IAM roles."
+        ));
+    }
+}
+
 async fn add_incoming_impersonation_evidence(
     client: &Client,
     token: &str,
@@ -1784,16 +1948,31 @@ async fn add_incoming_impersonation_evidence(
     notes
 }
 
+#[derive(Clone, Debug)]
+struct ReachableServiceAccount {
+    email: String,
+    status: String,
+}
+
+#[derive(Default)]
+struct GcpImpersonationDiscovery {
+    roles: Vec<RoleBinding>,
+    impacts: Vec<RoleImpact>,
+    resources: Vec<ResourceExposure>,
+    notes: Vec<String>,
+}
+
 fn add_outgoing_impersonation_paths(
     source: &str,
     resources: &[ResourceExposure],
     evidence: &mut AuthorizationEvidence,
-) {
+) -> Vec<ReachableServiceAccount> {
+    let mut reachable = BTreeMap::<String, ReachableServiceAccount>::new();
     let candidates: Vec<(String, Vec<String>, Vec<String>, String)> = evidence
         .policies
         .iter()
         .filter(|policy| {
-            policy.kind == "iam_binding"
+            matches!(policy.kind.as_str(), "iam_binding" | "service_account_binding")
                 && policy.statements.iter().any(|statement| {
                     statement
                         .principals
@@ -1818,28 +1997,28 @@ fn add_outgoing_impersonation_paths(
             })
         })
         .collect();
-    for (statement_id, conditions, permissions, _scope) in candidates {
+    for (statement_id, conditions, permissions, scope) in candidates {
         for (permission, relationship) in impersonation_capabilities(&permissions) {
             for resource in resources
                 .iter()
                 .filter(|resource| resource.resource_type == "service_account")
                 .take(128)
             {
+                if !gcp_scope_contains_service_account(&scope, &resource.name) {
+                    continue;
+                }
                 if evidence.paths.len() >= MAX_AUTHORIZATION_PATHS {
                     record_gcp_path_cap(evidence);
-                    return;
+                    return reachable.into_values().collect();
                 }
                 let target = resource.name.rsplit('/').next().unwrap_or(&resource.name);
                 if target == source {
                     continue;
                 }
+                let status = if conditions.is_empty() { "potential" } else { "conditional" };
                 evidence.paths.push(AuthorizationPath {
                     direction: Some("outbound".into()),
-                    status: if conditions.is_empty() {
-                        "potential".into()
-                    } else {
-                        "conditional".into()
-                    },
+                    status: status.into(),
                     hops: vec![AuthorizationHop {
                         from: source.into(),
                         to: target.into(),
@@ -1848,9 +2027,227 @@ fn add_outgoing_impersonation_paths(
                     evidence: vec![statement_id.clone(), permission.into()],
                     conditions: conditions.clone(),
                 });
+                // Access-token and signing permissions can yield credentials that inherit the
+                // target service account's IAM roles. actAs requires a separate workload-
+                // deployment capability, while an OpenID token alone does not grant Google API
+                // access as the target identity. Keep those relationships as path evidence
+                // without inflating the target's effective permission impact.
+                if !matches!(
+                    permission,
+                    "iam.serviceAccounts.getAccessToken"
+                        | "iam.serviceAccounts.signJwt"
+                        | "iam.serviceAccounts.signBlob"
+                ) {
+                    continue;
+                }
+                let entry = reachable.entry(target.to_string()).or_insert_with(|| {
+                    ReachableServiceAccount { email: target.to_string(), status: status.into() }
+                });
+                if gcp_path_status_rank(status) > gcp_path_status_rank(&entry.status) {
+                    entry.status = status.into();
+                }
             }
         }
     }
+    reachable.into_values().collect()
+}
+
+fn gcp_scope_contains_service_account(scope: &str, target: &str) -> bool {
+    if scope.is_empty() || scope.starts_with("folders/") || scope.starts_with("organizations/") {
+        return true;
+    }
+    if scope.contains("/serviceAccounts/") {
+        return scope == target;
+    }
+    if let Some(project) = scope.strip_prefix("projects/").and_then(|value| value.split('/').next())
+    {
+        return target.starts_with(&format!("projects/{project}/serviceAccounts/"));
+    }
+    true
+}
+
+fn gcp_path_status_rank(status: &str) -> u8 {
+    match status {
+        "potential" => 2,
+        "conditional" => 1,
+        _ => 0,
+    }
+}
+
+async fn build_outgoing_impersonation_impacts(
+    client: &Client,
+    token: &str,
+    reachable: &[ReachableServiceAccount],
+    bindings: &[GcpIamBinding],
+    role_permissions: &mut BTreeMap<String, Vec<String>>,
+    evidence: &mut AuthorizationEvidence,
+) -> GcpImpersonationDiscovery {
+    let mut impacts = BTreeMap::<(String, String), RoleImpact>::new();
+    let mut expanded = 0usize;
+    let mut expansion_limited = false;
+    let mut impact_limited = false;
+
+    for target in reachable {
+        let member = format!("serviceAccount:{}", target.email);
+        for binding in bindings.iter().filter(|binding| {
+            binding.kind == "iam_binding" && binding.members.iter().any(|item| item == &member)
+        }) {
+            let key = (target.email.clone(), binding.role.clone());
+            if !impacts.contains_key(&key) && impacts.len() >= MAX_IMPERSONATED_ROLE_IMPACTS {
+                impact_limited = true;
+                continue;
+            }
+
+            let permissions = if let Some(permissions) = role_permissions.get(&binding.role) {
+                permissions.clone()
+            } else if expanded < MAX_IMPERSONATION_ROLE_EXPANSIONS {
+                expanded += 1;
+                let fetched = fetch_role_permissions(client, token, &binding.role)
+                    .await
+                    .unwrap_or_else(|err| {
+                        verbose_warn!(
+                            "GCP access-map: failed to expand role {} for impersonated service account {}: {err}",
+                            binding.role,
+                            target.email
+                        );
+                        evidence.limitations.push(format!(
+                            "Permissions for IAM role {} on impersonated service account {} could not be expanded.",
+                            binding.role, target.email
+                        ));
+                        RolePermissions { permissions: Vec::new(), disabled: false }
+                    });
+                if fetched.disabled {
+                    evidence.limitations.push(format!(
+                        "IAM role {} is disabled or deleted and was ignored.",
+                        binding.role
+                    ));
+                    continue;
+                }
+                role_permissions.insert(binding.role.clone(), fetched.permissions.clone());
+                fetched.permissions
+            } else {
+                expansion_limited = true;
+                Vec::new()
+            };
+
+            upsert_binding_policy(evidence, binding, &permissions);
+            let binding_status =
+                if binding.condition_keys.is_empty() { "potential" } else { "conditional" };
+            let status =
+                if gcp_path_status_rank(&target.status) <= gcp_path_status_rank(binding_status) {
+                    target.status.as_str()
+                } else {
+                    binding_status
+                };
+            let impact = impacts.entry(key).or_insert_with(|| RoleImpact {
+                target: Some(target.email.clone()),
+                role: binding.role.clone(),
+                name: Some(binding.role.clone()),
+                status: status.into(),
+                hop_count: 1,
+                permissions: permissions.clone(),
+                grants: Vec::new(),
+            });
+            if gcp_path_status_rank(status) > gcp_path_status_rank(&impact.status) {
+                impact.status = status.into();
+            }
+            impact.permissions.extend(permissions.iter().cloned());
+            impact.permissions.sort();
+            impact.permissions.dedup();
+            impact.grants.push(AuthorizationGrant {
+                permissions,
+                excluded_permissions: Vec::new(),
+                resources: vec![binding.scope.clone()],
+                excluded_resources: Vec::new(),
+                condition_keys: binding.condition_keys.clone(),
+                evidence: vec![format!("{}#0", binding.id)],
+            });
+        }
+    }
+
+    if expansion_limited {
+        evidence.limitations.push(format!(
+            "Impersonated-service-account analysis expanded at most {MAX_IMPERSONATION_ROLE_EXPANSIONS} additional IAM roles."
+        ));
+    }
+    if impact_limited {
+        evidence.limitations.push(format!(
+            "Impersonated-service-account impact was limited to {MAX_IMPERSONATED_ROLE_IMPACTS} target-role pairs."
+        ));
+    }
+
+    let mut impacts: Vec<RoleImpact> = impacts.into_values().collect();
+    impacts.sort_by(|left, right| {
+        left.target.cmp(&right.target).then_with(|| left.role.cmp(&right.role))
+    });
+    let roles = impacts
+        .iter()
+        .map(|impact| RoleBinding {
+            name: impact.role.clone(),
+            source: format!(
+                "impersonated service account {} ({}; {} scope(s))",
+                impact.target.as_deref().unwrap_or("unknown"),
+                impact.status,
+                impact.grants.len()
+            ),
+            permissions: impact.permissions.clone(),
+        })
+        .collect();
+    let resources = gcp_impersonated_resource_exposures(&impacts);
+    let notes = if impacts.is_empty() {
+        Vec::new()
+    } else {
+        let targets = impacts
+            .iter()
+            .filter_map(|impact| impact.target.as_deref())
+            .collect::<HashSet<_>>()
+            .len();
+        vec![format!(
+            "Potential service-account impersonation reaches {targets} identity/identities, {} role assignment(s), and {} hierarchy-scoped grant(s).",
+            impacts.len(),
+            impacts.iter().map(|impact| impact.grants.len()).sum::<usize>()
+        )]
+    };
+
+    GcpImpersonationDiscovery { roles, impacts, resources, notes }
+}
+
+fn gcp_impersonated_resource_exposures(impacts: &[RoleImpact]) -> Vec<ResourceExposure> {
+    let mut resources = Vec::new();
+    for impact in impacts {
+        let role = RoleBinding {
+            name: impact.role.clone(),
+            source: "impersonated".into(),
+            permissions: impact.permissions.clone(),
+        };
+        let summary = classify_permissions(std::slice::from_ref(&role));
+        let risk = if !summary.admin.is_empty() || !summary.privilege_escalation.is_empty() {
+            "critical"
+        } else if !summary.risky.is_empty() {
+            "high"
+        } else if !summary.read_only.is_empty() {
+            "medium"
+        } else {
+            "low"
+        };
+        for grant in &impact.grants {
+            for resource in &grant.resources {
+                resources.push(ResourceExposure {
+                    resource_type: "impersonated_service_account_scope".into(),
+                    name: resource.clone(),
+                    permissions: grant.permissions.clone(),
+                    risk: risk.into(),
+                    reason: format!(
+                        "Potentially reachable by impersonating {} and inheriting {} [{}]",
+                        impact.target.as_deref().unwrap_or("unknown service account"),
+                        impact.role,
+                        impact.status
+                    ),
+                });
+            }
+        }
+    }
+    resources
 }
 
 fn record_gcp_path_cap(evidence: &mut AuthorizationEvidence) {
@@ -2243,6 +2640,220 @@ mod tests {
         assert_eq!(evidence.paths[0].hops[0].relationship, "can_mint_access_token");
         assert_eq!(evidence.paths[0].hops[0].to, "target@example.iam.gserviceaccount.com");
         assert_eq!(evidence.paths[0].conditions, ["expression"]);
+    }
+
+    #[test]
+    fn act_as_path_does_not_inherit_target_service_account_roles() {
+        let source = "source@example.iam.gserviceaccount.com";
+        let target = "target@example.iam.gserviceaccount.com";
+        let resources = vec![ResourceExposure {
+            resource_type: "service_account".into(),
+            name: format!("projects/example/serviceAccounts/{target}"),
+            permissions: Vec::new(),
+            risk: "high".into(),
+            reason: "visible".into(),
+        }];
+        let mut evidence = AuthorizationEvidence {
+            policies: vec![PolicyEvidence {
+                id: "source-user".into(),
+                name: Some("roles/iam.serviceAccountUser".into()),
+                kind: "iam_binding".into(),
+                attached_to: "projects/example".into(),
+                scope: Some("projects/example".into()),
+                statements: vec![AuthorizationStatement {
+                    id: "source-user#0".into(),
+                    effect: "Allow".into(),
+                    actions: vec!["iam.serviceAccounts.actAs".into()],
+                    principals: vec![format!("serviceAccount:{source}")],
+                    ..AuthorizationStatement::default()
+                }],
+                ..PolicyEvidence::default()
+            }],
+            ..AuthorizationEvidence::default()
+        };
+
+        let reachable = add_outgoing_impersonation_paths(source, &resources, &mut evidence);
+
+        assert!(reachable.is_empty());
+        assert_eq!(evidence.paths.len(), 1);
+        assert_eq!(evidence.paths[0].hops[0].relationship, "can_act_as");
+    }
+
+    #[test]
+    fn signing_path_inherits_target_service_account_roles() {
+        let source = "source@example.iam.gserviceaccount.com";
+        let target = "target@example.iam.gserviceaccount.com";
+        let resources = vec![ResourceExposure {
+            resource_type: "service_account".into(),
+            name: format!("projects/example/serviceAccounts/{target}"),
+            permissions: Vec::new(),
+            risk: "high".into(),
+            reason: "visible".into(),
+        }];
+        let mut evidence = AuthorizationEvidence {
+            policies: vec![PolicyEvidence {
+                id: "source-token-creator".into(),
+                name: Some("roles/iam.serviceAccountTokenCreator".into()),
+                kind: "iam_binding".into(),
+                attached_to: "projects/example".into(),
+                scope: Some("projects/example".into()),
+                statements: vec![AuthorizationStatement {
+                    id: "source-token-creator#0".into(),
+                    effect: "Allow".into(),
+                    actions: vec!["iam.serviceAccounts.signJwt".into()],
+                    principals: vec![format!("serviceAccount:{source}")],
+                    ..AuthorizationStatement::default()
+                }],
+                ..PolicyEvidence::default()
+            }],
+            ..AuthorizationEvidence::default()
+        };
+
+        let reachable = add_outgoing_impersonation_paths(source, &resources, &mut evidence);
+
+        assert_eq!(reachable.len(), 1);
+        assert_eq!(reachable[0].email, target);
+        assert_eq!(evidence.paths[0].hops[0].relationship, "can_sign_jwt");
+    }
+
+    #[tokio::test]
+    async fn impersonatable_service_account_roles_expose_their_hierarchy_scope() {
+        let source = "source@example.iam.gserviceaccount.com";
+        let target = "target@example.iam.gserviceaccount.com";
+        let resources = vec![ResourceExposure {
+            resource_type: "service_account".into(),
+            name: format!("projects/example/serviceAccounts/{target}"),
+            permissions: Vec::new(),
+            risk: "high".into(),
+            reason: "visible".into(),
+        }];
+        let mut evidence = AuthorizationEvidence {
+            policies: vec![PolicyEvidence {
+                id: "source-token-creator".into(),
+                name: Some("roles/iam.serviceAccountTokenCreator".into()),
+                kind: "iam_binding".into(),
+                attached_to: "projects/example".into(),
+                scope: Some("projects/example".into()),
+                statements: vec![AuthorizationStatement {
+                    id: "source-token-creator#0".into(),
+                    effect: "Allow".into(),
+                    actions: vec!["iam.serviceAccounts.getAccessToken".into()],
+                    resources: vec!["projects/example".into()],
+                    principals: vec![format!("serviceAccount:{source}")],
+                    ..AuthorizationStatement::default()
+                }],
+                ..PolicyEvidence::default()
+            }],
+            ..AuthorizationEvidence::default()
+        };
+        let reachable = add_outgoing_impersonation_paths(source, &resources, &mut evidence);
+        let bindings = vec![GcpIamBinding {
+            id: "target-storage-admin".into(),
+            role: "roles/storage.objectAdmin".into(),
+            members: vec![format!("serviceAccount:{target}")],
+            scope: "projects/example".into(),
+            kind: "iam_binding".into(),
+            version: Some("3".into()),
+            condition_keys: vec!["expression".into()],
+        }];
+        let mut role_permissions = BTreeMap::from([(
+            "roles/storage.objectAdmin".into(),
+            vec!["storage.objects.get".into(), "storage.objects.create".into()],
+        )]);
+
+        let discovery = build_outgoing_impersonation_impacts(
+            &Client::new(),
+            "unused",
+            &reachable,
+            &bindings,
+            &mut role_permissions,
+            &mut evidence,
+        )
+        .await;
+
+        assert_eq!(reachable.len(), 1);
+        assert_eq!(discovery.impacts.len(), 1);
+        let impact = &discovery.impacts[0];
+        assert_eq!(impact.target.as_deref(), Some(target));
+        assert_eq!(impact.role, "roles/storage.objectAdmin");
+        assert_eq!(impact.status, "conditional");
+        assert_eq!(impact.grants[0].resources, ["projects/example"]);
+        assert_eq!(impact.grants[0].condition_keys, ["expression"]);
+        assert_eq!(discovery.roles[0].permissions.len(), 2);
+        let effective = classify_permissions(&discovery.roles);
+        assert_eq!(effective.admin, ["roles/storage.objectAdmin"]);
+        assert_eq!(discovery.resources[0].resource_type, "impersonated_service_account_scope");
+        assert!(discovery.resources[0].reason.contains(target));
+    }
+
+    #[tokio::test]
+    async fn target_specific_binding_creates_outgoing_impersonation_path() {
+        let source = "source@example.iam.gserviceaccount.com";
+        let target = "target@example.iam.gserviceaccount.com";
+        let resources = vec![ResourceExposure {
+            resource_type: "service_account".into(),
+            name: format!("projects/example/serviceAccounts/{target}"),
+            permissions: Vec::new(),
+            risk: "high".into(),
+            reason: "visible".into(),
+        }];
+        let bindings = vec![GcpIamBinding {
+            id: "target-token-creator".into(),
+            role: "roles/iam.serviceAccountTokenCreator".into(),
+            members: vec![format!("serviceAccount:{source}")],
+            scope: format!("projects/example/serviceAccounts/{target}"),
+            kind: "service_account_binding".into(),
+            version: Some("3".into()),
+            condition_keys: Vec::new(),
+        }];
+        let mut role_permissions = BTreeMap::from([(
+            "roles/iam.serviceAccountTokenCreator".into(),
+            vec!["iam.serviceAccounts.getAccessToken".into()],
+        )]);
+        let mut evidence = AuthorizationEvidence::default();
+
+        add_impersonation_binding_policy_evidence(
+            &Client::new(),
+            "unused",
+            &bindings,
+            &mut role_permissions,
+            &mut evidence,
+        )
+        .await;
+        let reachable = add_outgoing_impersonation_paths(source, &resources, &mut evidence);
+
+        assert_eq!(reachable.len(), 1);
+        assert_eq!(reachable[0].email, target);
+        assert_eq!(evidence.paths.len(), 1);
+        assert_eq!(evidence.paths[0].hops[0].to, target);
+        assert_eq!(evidence.paths[0].hops[0].relationship, "can_mint_access_token");
+        assert_eq!(
+            evidence.paths[0].evidence,
+            ["target-token-creator#0", "iam.serviceAccounts.getAccessToken"]
+        );
+    }
+
+    #[test]
+    fn parses_only_canonical_service_account_resources() {
+        assert_eq!(
+            parse_service_account_resource(
+                "projects/example/serviceAccounts/target@example.iam.gserviceaccount.com"
+            ),
+            Some(("example", "target@example.iam.gserviceaccount.com"))
+        );
+        assert_eq!(parse_service_account_resource("projects/example"), None);
+    }
+
+    #[test]
+    fn project_scoped_impersonation_does_not_cross_projects() {
+        assert!(gcp_scope_contains_service_account(
+            "projects/allowed",
+            "projects/allowed/serviceAccounts/target@example.iam.gserviceaccount.com"
+        ));
+        assert!(!gcp_scope_contains_service_account(
+            "projects/allowed",
+            "projects/other/serviceAccounts/target@example.iam.gserviceaccount.com"
+        ));
     }
 
     #[test]

@@ -128,6 +128,6 @@ organization-specific rules and the fixtures that exercise that format.
 
 - Usage: `docs/USAGE.md`, `docs/ADVANCED.md`, `docs/INTEGRATIONS.md`
 - Rules: `docs/RULES.md`
-- Architecture: `docs/ARCHITECTURE.md`, `docs/ACCESS_MAP.md`
+- Architecture: `docs/ARCHITECTURE.md`, `docs/BLAST_RADIUS.md`
 - Deployment/install: `docs/INSTALLATION.md`, `docs/DEPLOYMENT.md`, `docs/PYPI.md`
 - Library API: `docs/LIBRARY.md`

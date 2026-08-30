@@ -42,7 +42,7 @@ mod paypal;
 mod pinecone;
 mod plaid;
 pub(crate) mod postgres;
-mod report;
+pub(crate) mod report;
 mod salesforce;
 mod sendgrid;
 mod sendinblue;
@@ -339,9 +339,9 @@ pub struct AccessMapResult {
 }
 
 #[derive(Debug)]
-struct AccessMapAttempt {
-    result: AccessMapResult,
-    succeeded: bool,
+pub(crate) struct AccessMapAttempt {
+    pub result: AccessMapResult,
+    pub succeeded: bool,
 }
 
 /// Access-map output retained by scans together with alert correlation metadata.
@@ -368,7 +368,7 @@ pub struct AccessSummary {
 }
 
 /// A single role or binding and its permissions.
-#[derive(Debug, Serialize, Clone)]
+#[derive(Debug, Serialize, Clone, JsonSchema)]
 pub struct RoleBinding {
     /// Name of the role (for example, `roles/editor`).
     pub name: String,
@@ -470,10 +470,52 @@ pub struct AuthorizationEvidence {
     pub policies: Vec<PolicyEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub paths: Vec<AuthorizationPath>,
+    /// Roles reachable through the recorded identity paths and the policy grants they add.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub role_impacts: Vec<RoleImpact>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hierarchy: Vec<HierarchyScope>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limitations: Vec<String>,
+}
+
+/// Permissions and resource scopes added by a role reachable through an identity transition.
+#[derive(Debug, Serialize, Clone, Default, JsonSchema)]
+pub struct RoleImpact {
+    /// Optional identity reached before this role applies, such as an impersonated service account.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target: Option<String>,
+    /// Stable provider identifier for the role, such as an AWS role ARN.
+    pub role: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Strongest observed path status: `potential`, `conditional`, or `trust_only`.
+    pub status: String,
+    /// Hop count for the summarized strongest path status.
+    pub hop_count: usize,
+    /// Effective role permissions summarized from the visible identity policies.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<String>,
+    /// Statement-level permission/resource pairs retained without flattening their scope.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grants: Vec<AuthorizationGrant>,
+}
+
+/// One policy grant that contributes to a reachable role's blast radius.
+#[derive(Debug, Serialize, Clone, Default, JsonSchema)]
+pub struct AuthorizationGrant {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub permissions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded_permissions: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub excluded_resources: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub condition_keys: Vec<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub evidence: Vec<String>,
 }
 
 /// Metadata resolved for the credential's effective principal.
@@ -567,13 +609,18 @@ pub struct HierarchyScope {
 
 /// Map a batch of credentials to their effective identities.
 pub async fn map_requests(requests: Vec<AccessMapRequest>) -> Vec<AccessMapResult> {
+    map_request_attempts(requests).await.into_iter().map(|attempt| attempt.result).collect()
+}
+
+/// Map a batch of credentials while preserving whether each provider request succeeded.
+pub(crate) async fn map_request_attempts(requests: Vec<AccessMapRequest>) -> Vec<AccessMapAttempt> {
     let mut results = Vec::new();
 
     for request in requests {
         let (mut attempt, fp) = dispatch_access_map_request(request).await;
 
         attempt.result.fingerprint = Some(fp);
-        results.push(attempt.result);
+        results.push(attempt);
     }
 
     results
@@ -878,6 +925,11 @@ async fn map_token(mapper: &impl TokenAccessMapper, token: &str) -> AccessMapAtt
 pub fn write_reports(results: &[AccessMapResult], html_out: &std::path::Path) -> Result<()> {
     report::generate_html_report_multi(results, html_out)?;
     Ok(())
+}
+
+/// Map a provider credential without writing its result to an output stream.
+pub async fn map_credential(args: &AccessMapArgs) -> Result<AccessMapResult> {
+    dispatch_cli_request(args).await
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1325,6 +1377,20 @@ mod tests {
                     evidence: vec!["policy#allow".into()],
                     conditions: Vec::new(),
                 }],
+                role_impacts: vec![RoleImpact {
+                    target: Some("intermediate".into()),
+                    role: "target".into(),
+                    name: Some("TargetRole".into()),
+                    status: "potential".into(),
+                    hop_count: 2,
+                    permissions: vec!["s3.getobject".into()],
+                    grants: vec![AuthorizationGrant {
+                        permissions: vec!["s3.getobject".into()],
+                        resources: vec!["arn:aws:s3:::example/*".into()],
+                        evidence: vec!["policy#objects".into()],
+                        ..AuthorizationGrant::default()
+                    }],
+                }],
                 ..AuthorizationEvidence::default()
             }),
         };
@@ -1333,6 +1399,10 @@ mod tests {
         let hops = json["authorization_evidence"]["paths"][0]["hops"].as_array().unwrap();
         assert_eq!(hops[0]["from"], "source");
         assert_eq!(hops[1]["to"], "target");
+        assert_eq!(
+            json["authorization_evidence"]["role_impacts"][0]["grants"][0]["resources"][0],
+            "arn:aws:s3:::example/*"
+        );
     }
 }
 

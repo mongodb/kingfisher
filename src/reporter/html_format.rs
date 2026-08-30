@@ -169,6 +169,29 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
                 )
             })
             .unwrap_or_default();
+        let command_html = [
+            record.finding.validate_command.as_deref().map(|command| {
+                format!(
+                    "<div><strong>Validate Cmd</strong>: <code>{}</code></div>",
+                    escape_html(command)
+                )
+            }),
+            record.finding.revoke_command.as_deref().map(|command| {
+                format!(
+                    "<div><strong>Revoke Cmd</strong>: <code>{}</code></div>",
+                    escape_html(command)
+                )
+            }),
+            record.finding.blast_radius_command.as_deref().map(|command| {
+                format!(
+                    "<div><strong>Blast Radius Cmd</strong>: <code>{}</code></div>",
+                    escape_html(command)
+                )
+            }),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<String>();
 
         rows.push_str(&format!(
             "<tr>\
@@ -180,6 +203,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
                 <td><span class=\"status {}\">{}</span></td>\
                 <td>{}</td>\
                 <td>{}</td>\
+                <td>{}</td>\
              </tr>",
             escape_html(&record.rule.title),
             escape_html(&record.rule.id),
@@ -189,7 +213,8 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
             status_class,
             escape_html(&record.finding.validation.status),
             escape_html(&record.finding.confidence),
-            record.finding.line
+            record.finding.line,
+            command_html
         ));
     }
 
@@ -205,6 +230,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
               <th>Validation</th>
               <th>Confidence</th>
               <th>Line</th>
+              <th>Commands</th>
             </tr>
           </thead>
           <tbody>{rows}</tbody>
@@ -229,9 +255,10 @@ fn render_access_map(access_map: Option<&Vec<AccessMapEntry>>) -> String {
             .and_then(|metadata| metadata.authorization_evidence.as_ref())
             .map(|evidence| {
                 format!(
-                    ", {} policies, {} identity paths",
+                    ", {} policies, {} identity paths, {} reachable roles",
                     evidence.policies.len(),
-                    evidence.paths.len()
+                    evidence.paths.len(),
+                    evidence.role_impacts.len()
                 )
             })
             .unwrap_or_default();

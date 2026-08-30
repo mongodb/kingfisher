@@ -100,13 +100,13 @@ you've fished out of a paste or a customer report:
 
 ```bash
 # What does this AWS keypair actually own?
-kingfisher access-map aws ./aws.json --format json > aws.access-map.json
+kingfisher blast-radius aws ./aws.json --format json > aws.blast-radius.json
 
 # Same for a GitHub token
-kingfisher access-map github ./github.token --format json > github.access-map.json
+kingfisher blast-radius github ./github.token --format json > github.blast-radius.json
 
 # Or a GCP service account
-kingfisher access-map gcp ./service-account.json --format json > gcp.access-map.json
+kingfisher blast-radius gcp ./service-account.json --format json > gcp.blast-radius.json
 ```
 
 The blast-radius HTML report renders the blast radius as an interactive

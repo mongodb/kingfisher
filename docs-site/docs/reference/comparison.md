@@ -8,7 +8,7 @@ description: "Benchmark results comparing Kingfisher performance against Truffle
 ## Runtime Comparison (seconds)
 *Lower runtimes are better.*
 
-| Repository | Kingfisher Runtime | TruffleHog Runtime | GitLeaks Runtime |
+| Repository | Kingfisher Runtime | TruffleHog Runtime | Gitleaks Runtime |
 |------------|--------------------|--------------------|------------------|
 | croc | 2.64 | 10.36 | 3.10 |
 | rails | 8.75 | 24.19 | 24.24 |
@@ -26,9 +26,9 @@ description: "Benchmark results comparing Kingfisher performance against Truffle
 
 ### Validated/Verified Findings Comparison
 
-Note: For GitLeaks and detect-secrets, validated/verified counts are not available.
+Note: For Gitleaks and detect-secrets, validated/verified counts are not available.
 
-| Repository | Kingfisher Validated | TruffleHog Verified | GitLeaks Verified |
+| Repository | Kingfisher Validated | TruffleHog Verified | Gitleaks Verified |
 |------------|----------------------|---------------------|-------------------|
 | croc | 0 | 0 | 0 |
 | rails | 0 | 0 | 0 |
@@ -43,7 +43,7 @@ Note: For GitLeaks and detect-secrets, validated/verified counts are not availab
 ### Network Requests Comparison
 *'Network Requests' shows the total number of HTTP calls made during a scan. Since Gitleaks and detect‑secrets don’t validate secrets, they never make any network requests.*
 
-| Repository | Kingfisher Network Requests | TruffleHog Network Requests | GitLeaks Network Requests |
+| Repository | Kingfisher Network Requests | TruffleHog Network Requests | Gitleaks Network Requests |
 |------------|-----------------------------|-----------------------------|---------------------------|
 | croc | 0 | 17 | 0 |
 | rails | 1 | 25 | 0 |
@@ -65,11 +65,7 @@ Note: For GitLeaks and detect-secrets, validated/verified counts are not availab
 | **Kingfisher** | **1.95.0** | **32.8 MB** |
 | TruffleHog | 3.94.2 | 160.3 MB |
 
-*Smaller binaries are easier to distribute, deploy in CI, and embed in container images*
-
-<p align="center">
-  <img src="./binary-size-comparison.png" alt="Binary Size Comparison" />
-</p>
+*Smaller binaries are easier to distribute, deploy in CI, and embed in container images.*
 
 ## Benchmark Environment
 

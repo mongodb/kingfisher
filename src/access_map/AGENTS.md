@@ -35,7 +35,7 @@ Guidance for working in `src/access_map/`.
 - Add the provider module here.
 - Wire the provider into `src/access_map.rs`.
 - Wire the CLI enum/aliases in `src/cli/commands/access_map.rs`.
-- Update `docs/ACCESS_MAP.md` and any relevant README/docs mentions.
+- Update `docs/BLAST_RADIUS.md` and any relevant README/docs mentions.
 - If scan-time auto-collection should support the provider, verify the validation-to-access-map path too.
 
 ## Testing

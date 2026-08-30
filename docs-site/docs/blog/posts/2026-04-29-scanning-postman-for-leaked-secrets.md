@@ -164,11 +164,12 @@ and you're looking at the exact collection or environment that needs
 remediation:
 
 ```
-GITHUB PERSONAL ACCESS TOKEN => [BETTERLEAKS.GITHUB-PAT]
- |Finding.......: ghp_EZopZDMW...
- |Confidence....: medium
- |Validation....: Active
- |Path..........: https://go.postman.co/environments/env-uid-1
+ GITHUB PERSONAL ACCESS TOKEN => [BETTERLEAKS.GITHUB-PAT]
+  |Finding.........: ghp_EZopZDMW...
+  |Confidence......: medium
+  |Validation......: Active
+  |Blast Radius Cmd: kingfisher blast-radius --rule betterleaks.github-pat '<REDACTED>'
+  |Path............: https://go.postman.co/environments/env-uid-1
 ```
 
 In JSON output, the URL appears in the finding's source/origin block, so

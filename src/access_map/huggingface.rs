@@ -453,6 +453,36 @@ mod tests {
     }
 
     #[test]
+    fn private_bucket_raises_severity() {
+        let role = Some("read".to_string());
+        let private_bucket = vec![HfResource {
+            id: "owner/checkpoints".into(),
+            resource_type: "bucket".into(),
+            visibility: "private".into(),
+            storage: Some(42),
+        }];
+        assert!(matches!(derive_severity(&role, &private_bucket, &[]), Severity::Medium));
+    }
+
+    #[test]
+    fn bucket_inventory_metadata_deserializes() {
+        let resource: HfStorageResource = serde_json::from_value(serde_json::json!({
+            "id": "owner/checkpoints",
+            "type": "bucket",
+            "visibility": "private",
+            "storage": 42,
+            "updatedAt": "2026-08-27T00:00:00Z",
+            "storagePercent": 0.1
+        }))
+        .unwrap();
+
+        assert_eq!(resource.id, "owner/checkpoints");
+        assert_eq!(resource.resource_type, "bucket");
+        assert_eq!(resource.visibility, "private");
+        assert_eq!(resource.storage, Some(42));
+    }
+
+    #[test]
     fn write_token_with_admin_org_is_high_severity() {
         let role = Some("write".to_string());
         let organizations =

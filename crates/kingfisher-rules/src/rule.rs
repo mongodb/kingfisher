@@ -75,7 +75,7 @@ pub enum Validation {
     MySQL,
     Postgres,
     Jdbc,
-    /// Dispatch a captured credential URI to the matching database validator.
+    /// Dispatch a captured credential URI to an HTTPS Basic Auth or database validator.
     ///
     /// Scan rules can provide a named `URI` capture; otherwise `TOKEN` is used. Keeping `TOKEN`
     /// separate lets broad URI detectors report only the embedded password while validation uses

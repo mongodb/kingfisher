@@ -10,10 +10,11 @@ It lets the scanner **deduplicate** repeated hits of the *same logical issue* wh
 
 ```bash
 🔓 AWS ACCESS TOKEN => [BETTERLEAKS.AWS-ACCESS-TOKEN]
- |Finding.......: 4HKmwiS1GzI[...]2TF6zYz7
- |Fingerprint...: 14085685380484734428
- |Confidence....: medium
- |Entropy.......: 5.12
+ |Finding.........: 4HKmwiS1GzI[...]2TF6zYz7
+ |Fingerprint.....: 14085685380484734428
+ |Confidence......: medium
+ |Entropy.........: 5.12
+ |Blast Radius Cmd: kingfisher blast-radius --rule betterleaks.aws-access-token '<REDACTED>'
 [...]
 
 ```

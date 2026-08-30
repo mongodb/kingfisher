@@ -134,6 +134,8 @@ struct DependsOnRule {
 enum Validation {
     Betterleaks(BetterleaksValidation),
     Assumed,
+    #[serde(rename = "AWS")]
+    Aws,
     #[serde(rename = "JWT")]
     Jwt,
     MongoDB,
@@ -557,6 +559,12 @@ fn import_config_with_namespace(
             capability_overlay.rules.keys().cloned().collect::<Vec<_>>().join(", ")
         );
     }
+    if namespace == "betterleaks."
+        && imported.iter().any(|rule| rule.id == "betterleaks.aws-access-token")
+        && imported.iter().any(|rule| rule.id == "betterleaks.aws-secret-access-key")
+    {
+        imported.push(aws_session_token_rule(namespace));
+    }
     imported.sort_by(|left, right| left.id.cmp(&right.id));
 
     let yaml =
@@ -569,6 +577,40 @@ fn import_config_with_namespace(
         omitted_low_value.join(", "),
         skipped_path_only.join(", "),
     ))
+}
+
+/// Preserve AWS STS validation when the upstream AWS access-key rule is used with temporary
+/// credentials. The session token is detected as a separate finding so the existing typed AWS
+/// validator can receive all three credential values.
+fn aws_session_token_rule(namespace: &str) -> ImportedRule {
+    ImportedRule {
+        name: "AWS Session Token".to_string(),
+        id: qualify_id("aws-session-token", namespace),
+        pattern: r#"(?x)\b(?i:AWS[_-]?(?:SESSION|SECURITY)[_-]?TOKEN)\b["']?\s*(?:=|:)\s*["']?([A-Za-z0-9/+=._-]{16,2048})(?:["'\s,;}]|$)"#.to_string(),
+        confidence: "medium".to_string(),
+        authoritative: true,
+        visible: true,
+        validation: Some(Validation::Aws),
+        revocation: None,
+        depends_on_rule: vec![
+            DependsOnRule {
+                rule_id: qualify_id("aws-access-token", namespace),
+                variable: "AKID".to_string(),
+                optional: false,
+                within: Some("5L".to_string()),
+            },
+            DependsOnRule {
+                rule_id: qualify_id("aws-secret-access-key", namespace),
+                variable: "AWS_SECRET_ACCESS_KEY".to_string(),
+                optional: false,
+                within: Some("5L".to_string()),
+            },
+        ],
+        path: None,
+        betterleaks_filter: None,
+        betterleaks_secret_group: 0,
+        tls_mode: None,
+    }
 }
 
 fn qualify_id(id: &str, namespace: &str) -> String {

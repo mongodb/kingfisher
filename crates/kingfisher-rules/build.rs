@@ -17,10 +17,10 @@ use anyhow::{Context, Result, bail};
 use flate2::{Compression, write::GzEncoder};
 use sha2::{Digest, Sha256};
 
-// Source permalink: https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml
-const BETTERLEAKS_CONFIG_URL: &str = "https://raw.githubusercontent.com/betterleaks/betterleaks/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml";
+// Source permalink: https://github.com/betterleaks/betterleaks/blob/2ba7943682b82a3659a89dae8fc680de1ef6b781/config/betterleaks.toml
+const BETTERLEAKS_CONFIG_URL: &str = "https://raw.githubusercontent.com/betterleaks/betterleaks/2ba7943682b82a3659a89dae8fc680de1ef6b781/config/betterleaks.toml";
 const BETTERLEAKS_CONFIG_SHA256: &str =
-    "386d0e06be50d7887048a6b31b801ed22c7067f251c36ab226be78fff4ee6166";
+    "d60ee4d1457716509c2369f97063069385876b29dbe89f09b1b83665a45a3f3a";
 const BUNDLE_MAGIC: &[u8] = b"KFRULES\x01";
 const CAPABILITY_OVERLAY: &str = "data/imported-rules-capabilities.yml";
 const VELES_CONFIG: &str = "data/veles-rules.yml";

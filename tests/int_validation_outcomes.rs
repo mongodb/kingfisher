@@ -4,6 +4,7 @@ use anyhow::Result;
 use assert_cmd::Command;
 use serde_json::Value;
 use tempfile::tempdir;
+use wiremock::MockServer;
 
 const PRIVATE_KEY: &str = r#"-----BEGIN PRIVATE KEY-----
 MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC7a7kN8LymUu8Z
@@ -134,7 +135,7 @@ fn unsupported_generic_credential_uri_scheme_remains_not_attempted() -> Result<(
     let temp = tempdir()?;
     let input = temp.path().join("service.env");
     let report_path = temp.path().join("report.json");
-    fs::write(&input, "SERVICE_URL=https://svc_reader:hunter2x@service.internal/api")?;
+    fs::write(&input, "SERVICE_URL=ssh://svc_reader:hunter2x@service.internal/api")?;
 
     Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
         .args([
@@ -156,5 +157,45 @@ fn unsupported_generic_credential_uri_scheme_remains_not_attempted() -> Result<(
     assert_eq!(findings.len(), 1);
     assert_eq!(findings[0]["finding"]["validation"]["outcome"], "not_attempted");
     assert_eq!(findings[0]["finding"]["validation"]["status"], "Not Attempted");
+    Ok(())
+}
+
+#[tokio::test]
+async fn generic_credential_uri_refuses_plaintext_basic_auth() -> Result<()> {
+    let server = MockServer::start().await;
+
+    let temp = tempdir()?;
+    let input = temp.path().join("service.env");
+    let report_path = temp.path().join("report.json");
+    let uri = server.uri().replacen("http://", "http://alice:hunter2@", 1) + "/api";
+    fs::write(&input, format!("SERVICE_URL={uri}"))?;
+
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .args([
+            "scan",
+            input.to_str().unwrap(),
+            "--rule",
+            "betterleaks.generic-credential-uri",
+            "--format",
+            "json",
+            "--output",
+            report_path.to_str().unwrap(),
+            "--allow-internal-ips",
+            "--no-update-check",
+        ])
+        .assert()
+        .code(200);
+
+    let report: Value = serde_json::from_str(&fs::read_to_string(report_path)?)?;
+    let findings = report["findings"].as_array().unwrap();
+    assert_eq!(findings.len(), 1);
+    assert_eq!(findings[0]["finding"]["validation"]["outcome"], "unavailable");
+    assert!(
+        findings[0]["finding"]["validation"]["response"]
+            .as_str()
+            .unwrap()
+            .contains("requires HTTPS")
+    );
+    assert!(server.received_requests().await.unwrap().is_empty());
     Ok(())
 }

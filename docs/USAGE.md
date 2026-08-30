@@ -143,10 +143,26 @@ Kingfisher's blast-radius feature transforms secret detection from a simple aler
 * Visualize the Blast Radius: See exactly which resources (S3 buckets, EC2 instances, projects, storage containers) are exposed and at risk.
  
 
-Add `--blast-radius` (alias `--access-map`) to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with blast-radius data in the `access_map` field, including the resources and permissions the key can access (grouped when identical). AWS and GCP entries can also include policy provenance, hierarchy context, principal attributes, and potential identity paths under `provider_metadata.authorization_evidence`.
+Add `--blast-radius` (alias `--access-map`) to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with blast-radius data in the `access_map` field, including the resources and permissions the key can access (grouped when identical). AWS and GCP entries can also include policy provenance, hierarchy context, principal attributes, and potential identity paths under `provider_metadata.authorization_evidence`. AWS entries additionally report assumable roles and their policy-scoped resources; GCP entries report impersonatable service accounts, their inherited roles, and the project/folder/organization scopes those roles affect. Both contribute to the credential's effective impact, and blast-radius mapping is included by default in the open-source release.
 - If you validated cloud credentials without `--blast-radius`, Kingfisher will remind you on stderr to rerun with the flag so blast-radius results appear in the output.
 - Run `kingfisher view ./kingfisher.json` to explore a report locally in a local web UI (opens your browser automatically when a report is provided).
 - Or use `kingfisher scan --view-report ...` to generate a JSON report, start the viewer at `http://127.0.0.1:7890`, and open it in your browser.
+
+For a single known credential, `kingfisher blast-radius` can open the same interactive viewer directly:
+
+```bash
+printf '%s' 'ghp_example0000000000000000000000000000' \
+  | kingfisher blast-radius \
+      --rule betterleaks.github-pat \
+      - \
+      --view-report
+
+# GitHub PAT file mapping also supports the viewer
+printf '%s' 'ghp_example0000000000000000000000000000' > ./github.token
+kingfisher blast-radius github ./github.token --view-report
+```
+
+Use `--format html` when you want a standalone static HTML document instead of the local interactive viewer.
 
 > **Use blast-radius mapping only when you are authorized to inspect the target account, as Kingfisher will issue additional network requests to determine what access the secret grants**
 
@@ -293,7 +309,7 @@ kingfisher validate --rule jwt \
   "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
 ```
 
-**Supported validators:** Betterleaks validation expressions are imported by default, including HTTP and supported cloud helpers. Kingfisher also uses `CredentialUri` to route imported credential-bearing PostgreSQL, MySQL/MariaDB, MongoDB, and supported JDBC inputs to database validators. Kingfisher 1.x custom rules can use HTTP, Grpc, AWS, GCP, MongoDB, MySQL, Postgres, JDBC, CredentialUri, JWT, Azure Storage, Coinbase, raw validators, and local Ethereum validation.
+**Supported validators:** Betterleaks validation expressions are imported by default, including HTTP and supported cloud helpers. Kingfisher also uses `CredentialUri` to validate imported HTTPS credential URIs with Basic Auth after an explicit unauthenticated challenge, and to route PostgreSQL, MySQL/MariaDB, MongoDB, and supported JDBC inputs to database validators. Kingfisher 1.x custom rules can use HTTP, Grpc, AWS, GCP, MongoDB, MySQL, Postgres, JDBC, CredentialUri, JWT, Azure Storage, Coinbase, raw validators, and local Ethereum validation.
 
 **Exit codes:** Returns `0` if any matching rule validates the secret as valid, `1` if all are invalid or an error occurred.
 
@@ -410,9 +426,17 @@ provide revocation metadata, so built-in actions are maintained as a detection-f
 overlay and joined to upstream rule IDs at build time. HTTP actions use the same Liquid templating
 and response matchers as Kingfisher 1.x `validation`.
 
+For supported provider flows, this lets an authorized defender contain the credential without first
+finding the employee who created or leaked it. That matters when ownership is unclear or the person
+has changed teams or left the company. The boundary is deliberately conservative: Kingfisher does
+not offer a revoke command when it cannot safely identify the exact credential or bind the values a
+provider requires. Review the target first, because revoking a credential can interrupt workloads
+that still use it.
+
 This is useful for:
 - Responding to a leaked credential quickly
 - Revoking tokens discovered during incident response
+- Containing credentials whose original owner is unavailable
 - Automating cleanup after rotation
 
 ```bash
@@ -771,12 +795,46 @@ kingfisher scan docker --archive image.tar.gz
 
 ## GitHub
 
-### Scan GitHub organization (requires `KF_GITHUB_TOKEN`)
+### Scan a GitHub organization
 
 ```bash
 kingfisher scan github --organization my-org
 kingfisher scan github --organization my-org --repo-clone-limit 500
 ```
+
+Public repositories can be scanned anonymously. For private repositories and
+higher API limits, set `KF_GITHUB_TOKEN` to a personal access token or an
+already-minted GitHub App installation token.
+
+For long-running organization scans, configure a GitHub App instead:
+
+```bash
+export KF_GITHUB_APP_ID="123456"
+export KF_GITHUB_APP_INSTALLATION_ID="789012"
+export KF_GITHUB_APP_PRIVATE_KEY_PATH='~/.config/kingfisher/app.pem'
+
+kingfisher scan github --organization my-org
+```
+
+The App installation needs read access to repository contents. Kingfisher uses
+an installation token for API enumeration and mints a new installation token
+immediately before every repository clone or update, so scans can run longer
+than the one-hour installation-token lifetime. Set the private key directly in
+`KF_GITHUB_APP_PRIVATE_KEY` when a secret manager supplies PEM content instead
+of a file. Set only one of the private-key variables.
+
+`KF_GITHUB_APP_PRIVATE_KEY_PATH` performs a lexical, single-pass expansion of
+the current user's leading `~/` or `~\` and environment variables written as
+`$NAME`, `${NAME}`, or `%NAME%`, where `NAME` uses letters, digits, and
+underscores. This supports Unix paths such as
+`$HOME/.config/kingfisher/app.pem` and Windows paths such as
+`%USERPROFILE%\AppData\Local\kingfisher\app.pem`. Undefined or empty variables
+are rejected. The expansion never invokes a shell, performs command
+substitution, or recursively expands variable values. Use `$$` for a literal
+`$` and `%%` for a literal `%`.
+
+All three App values are required. A complete App configuration takes
+precedence over `KF_GITHUB_TOKEN`; an incomplete configuration is rejected.
 
 ### Monitor public GitHub events for users
 
@@ -905,11 +963,12 @@ kingfisher revoke --rules-path ./custom-rules.yml --rule custom.github.pat \
 > flags because some deployments front-load auth (an SSO portal for repo
 > access vs. a direct API endpoint for token validation).
 
-> **Token scoping.** `KF_GITHUB_TOKEN` is installed as a host-scoped,
-> HTTPS-only git credential helper, so it is sent only to `github.com` and
+> **Token scoping.** `KF_GITHUB_TOKEN` and freshly minted GitHub App
+> installation tokens are installed as a host-scoped, HTTPS-only git
+> credential helper, so they are sent only to `github.com` and
 > to the GHE host(s) you name in `--github-api-url` / `--endpoint github=…`.
 > An untrusted clone target — or a plaintext `http://` remote — never
-> receives the token. The same scoping applies to the GitLab, Gitea, Azure,
+> receives a token. The same scoping applies to the GitLab, Gitea, Azure,
 > and Hugging Face clone tokens and their corresponding API-URL flags.
 
 ---
@@ -1548,7 +1607,7 @@ have separate summary counters.
 
 ### Finding Validation Statuses
 
-The ` |Validation....: ` line on a finding describes the semantic validation result:
+ The ` |Validation......: ` line on a finding describes the semantic validation result:
 
 | Finding status | Machine-readable outcome | Meaning |
 | -------------- | ------------------------ | ------- |
@@ -1585,8 +1644,8 @@ Validations are marked as "skipped" when:
 When a validation is skipped, the finding will show:
 
 ```
- |Validation....: Validation Skipped
- |__Response....: Validation skipped - missing dependent rules: helper-rule-id
+  |Validation......: Validation Skipped
+  |__Response......: Validation skipped - missing dependent rules: helper-rule-id
 ```
 
 This distinction helps you understand validation coverage: **Failed Validations** represent
@@ -1599,7 +1658,11 @@ not be attempted and may need additional context.
 
 | Variable          | Purpose                      |
 | ----------------- | ---------------------------- |
-| `KF_GITHUB_TOKEN` | GitHub Personal Access Token |
+| `KF_GITHUB_TOKEN` | GitHub personal access token or pre-minted App installation token |
+| `KF_GITHUB_APP_ID` | GitHub App ID used to mint installation tokens |
+| `KF_GITHUB_APP_INSTALLATION_ID` | GitHub App installation ID |
+| `KF_GITHUB_APP_PRIVATE_KEY` | GitHub App RSA private key as PEM content |
+| `KF_GITHUB_APP_PRIVATE_KEY_PATH` | Expandable path to a GitHub App RSA private key PEM file (alternative to `KF_GITHUB_APP_PRIVATE_KEY`) |
 | `KF_GITLAB_TOKEN` | GitLab Personal Access Token |
 | `KF_GITEA_TOKEN` | Gitea Personal Access Token |
 | `KF_GITEA_USERNAME` | Username for private Gitea clones (used with `KF_GITEA_TOKEN`) |

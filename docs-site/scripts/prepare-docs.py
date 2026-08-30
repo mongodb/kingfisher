@@ -15,7 +15,12 @@ DOCS_SRC = os.path.join(REPO_ROOT, "docs")
 DOCS_DST = os.path.join(REPO_ROOT, "docs-site", "docs")
 VIEWER_SRC_DIR = os.path.join(DOCS_SRC, "viewer")
 VIEWER_DST_DIR = os.path.join(DOCS_DST, "viewer")
-VIEWER_CLI_BOOTSTRAP = "    loadCliReport();\n"
+VIEWER_CLI_BOOTSTRAP = (
+    "    // GitHub Pages serves this file statically; only the bundled local viewer\n"
+    "    // has the CLI's /report endpoint.\n"
+    "    const isHostedViewer = window.location.hostname.endsWith(\".github.io\");\n"
+    "    if (!isHostedViewer) loadCliReport();\n"
+)
 VIEWER_STATIC_BOOTSTRAP = (
     "    // Static docs-site build: skip the CLI-only /report bootstrap.\n"
 )
@@ -37,6 +42,16 @@ DOC_MAP = {
         "Platform Integrations",
         "Scan GitHub, GitLab, Azure Repos, Bitbucket, Gitea, Hugging Face, Docker, S3, Jira, Confluence, Slack, and Teams for leaked secrets.",
     ),
+    "ALERTS.md": (
+        "usage/alerts.md",
+        "Alert Webhooks",
+        "Send scan summaries and finding details to Slack, Teams, Discord, Mattermost, Google Chat, or any HTTPS webhook.",
+    ),
+    "DEFENDER_WORKFLOW.md": (
+        "usage/defender-workflow.md",
+        "Defender Workflow",
+        "Follow an end-to-end workflow for detecting, validating, notifying on, mapping, and revoking exposed credentials.",
+    ),
     "ADVANCED.md": (
         "usage/advanced.md",
         "Advanced Configuration",
@@ -57,25 +72,40 @@ DOC_MAP = {
         "Project Configuration (kingfisher.yaml)",
         "Use kingfisher.yaml as project-default policy: confidence, filters, output, alerts, and global flags. Loaded only via --config FILE.",
     ),
-    "ACCESS_MAP.md": (
-        "features/access-map.md",
-        "Blast Radius (aka Access Map)",
-        "Map the blast radius of leaked credentials by authenticating and enumerating accessible resources and permissions.",
+    "BLAST_RADIUS.md": (
+        "features/blast-radius.md",
+        "Blast Radius",
+        "Map identity, permissions, and resources across 43 open-source providers, including AWS and GCP.",
     ),
     "REVOCATION_PROVIDERS.md": (
         "features/revocation.md",
         "Secret Revocation",
-        "Revoke compromised credentials directly from the CLI using built-in provider-specific revocation flows.",
+        "Contain leaked credentials directly from the CLI with conservative provider-specific revocation flows.",
     ),
     "PARSING.md": (
         "features/parsing.md",
         "Source Code Parsing",
         "Language-aware secret detection using lightweight parser-based context verification across 16 supported source and config languages.",
     ),
+    "CONTEXT_VERIFICATION.md": (
+        "features/context-verification.md",
+        "Parser-Based Context Verification",
+        "Reduce false positives with lightweight, language-aware verification of assignment-style secret matches.",
+    ),
     "FINGERPRINT.md": (
         "features/fingerprints.md",
         "Finding Fingerprints",
         "Stable fingerprints for deduplication and tracking of discovered secrets across scans.",
+    ),
+    "MULTI_STEP_REVOCATION.md": (
+        "features/multi-step-revocation.md",
+        "Multi-Step Revocation",
+        "Configure lookup-then-delete HTTP revocation workflows for credentials that require multiple API requests.",
+    ),
+    "TOKEN_REVOCATION_SUPPORT.md": (
+        "features/token-revocation-support.md",
+        "Token Revocation Support",
+        "Understand the relationship between Betterleaks detectors and Kingfisher's operational revocation capabilities.",
     ),
     "RULES.md": (
         "rules/overview.md",
@@ -114,11 +144,14 @@ LINK_REWRITES = {
     "BASELINE.md": "../usage/baseline.md",
     "DEPLOYMENT.md": "../usage/deployment.md",
     "CONFIG.md": "../usage/configuration.md",
-    "ACCESS_MAP.md": "../features/access-map.md",
+    "ALERTS.md": "../usage/alerts.md",
+    "DEFENDER_WORKFLOW.md": "../usage/defender-workflow.md",
+    "BLAST_RADIUS.md": "../features/blast-radius.md",
     "REVOCATION_PROVIDERS.md": "../features/revocation.md",
-    "TOKEN_REVOCATION_SUPPORT.md": "../features/revocation.md",
-    "MULTI_STEP_REVOCATION.md": "../features/revocation.md",
+    "TOKEN_REVOCATION_SUPPORT.md": "../features/token-revocation-support.md",
+    "MULTI_STEP_REVOCATION.md": "../features/multi-step-revocation.md",
     "PARSING.md": "../features/parsing.md",
+    "CONTEXT_VERIFICATION.md": "../features/context-verification.md",
     "TREE_SITTER.md": "../features/parsing.md",
     "FINGERPRINT.md": "../features/fingerprints.md",
     "RULES.md": "../rules/overview.md",
@@ -126,7 +159,6 @@ LINK_REWRITES = {
     "LIBRARY.md": "../reference/library.md",
     "PYPI.md": "../reference/python-bindings.md",
     "COMPARISON.md": "../reference/comparison.md",
-    "ALERTS.md": "https://github.com/mongodb/kingfisher/blob/main/docs/ALERTS.md",
 }
 
 

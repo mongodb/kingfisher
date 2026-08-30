@@ -42,8 +42,9 @@ veles:
   must never be reported as active or valid credentials.
 - `validation` attaches a Kingfisher validator. It supports `Assumed`, `JWT`, `MongoDB`,
   `CredentialUri`, and configured `Ethereum` validation for `private_key`, `public_key`, or
-  `mnemonic` material. `CredentialUri` uses a named `URI` capture, dispatches supported database
-  schemes to their typed validators, and leaves unsupported URI schemes unvalidated.
+  `mnemonic` material. `CredentialUri` uses a named `URI` capture, validates HTTPS URIs with
+  Basic Auth, dispatches supported database schemes to their typed validators, and leaves other
+  unsupported URI schemes unvalidated.
 - `validation_override` replaces an upstream Betterleaks validation expression.
 - `filter_override` adds a filter to the upstream Betterleaks filter expression. A filter returning
   true discards the finding.

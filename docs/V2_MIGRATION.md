@@ -51,5 +51,3 @@ Run `kingfisher rules list` to see the current catalog.
 This move lets MongoDB concentrate on improving the Kingfisher engine: fast scanning, repository and artifact coverage, validation workflows, reporting, blast-radius analysis, revocation, and integrations. Rule development can be abstracted into a community-maintained upstream catalog, so improvements can be shared across tools instead of being reimplemented in separate formats.
 
 If you want a new generally useful Kingfisher rule, please support this direction by creating or improving it in the [Betterleaks repository](https://github.com/betterleaks/betterleaks). Keep the Kingfisher 1.x YAML format for rules that are intentionally private or specific to your environment; see [Kingfisher 1.x Custom Rules](RULES.md).
-
-For the implementation details and known format differences, see [Betterleaks rule parity notes](BETTERLEAKS_RULE_PARITY.md).

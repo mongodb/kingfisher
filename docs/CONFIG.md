@@ -134,7 +134,7 @@ into permitting `http://` for a remote host.
   a CLI value takes precedence over `scan.jobs`. This only affects
   parallelism, never correctness.
 - **Subcommand scope.** Project config only applies to `kingfisher scan`.
-  `validate`, `revoke`, `access-map`, `view`, and `rules` commands ignore
+  `validate`, `revoke`, `blast-radius`, `access-map`, `view`, and `rules` commands ignore
   `kingfisher.yaml`; pass their flags on the CLI directly.
 
 ## What is *not* config-overridable

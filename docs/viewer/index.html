@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#08110e" />
   <title>Kingfisher Blast Radius Viewer</title>
   <style>
     :root {
@@ -210,7 +211,7 @@
     }
 
     :root[data-theme="light"] .nav-button.active {
-      color: #ffffff;
+      color: #0f172a !important;
     }
 
     .nav-icon {
@@ -458,7 +459,7 @@
         linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent),
         var(--surface-muted);
       cursor: pointer;
-      transition: all 0.2s ease;
+      transition: background 0.2s ease, border-color 0.2s ease, transform 0.2s ease;
       border: 1px dashed var(--border-strong);
       border-radius: var(--radius);
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
@@ -648,10 +649,7 @@
       color: var(--text-main);
     }
 
-    .am-toolbar input:focus {
-      outline: none;
-      border-color: var(--brand);
-    }
+    .am-toolbar input:focus { border-color: var(--brand); }
 
     .am-view-switch {
       display: inline-flex;
@@ -780,7 +778,6 @@
 
     .am-graph-node {
       cursor: pointer;
-      outline: none;
     }
 
     .am-graph-node rect {
@@ -987,6 +984,7 @@
     .id-card__body.open {
       display: block;
     }
+    .id-card__body[aria-hidden="true"] { visibility: hidden; }
 
     .id-card__section {
       margin-bottom: 14px;
@@ -1261,7 +1259,7 @@
       margin-bottom: 24px;
     }
 
-    .detail-field label {
+    .detail-field__label {
       display: block;
       font-size: 12px;
       color: var(--text-muted);
@@ -1486,6 +1484,9 @@
       background: linear-gradient(180deg, rgba(0, 237, 100, 0.06), transparent), var(--surface-muted);
       cursor: pointer;
     }
+    .table tbody tr:focus-visible td {
+      background: var(--surface-strong);
+    }
 
     .sortable {
       cursor: pointer;
@@ -1508,10 +1509,9 @@
     }
     .status-badge.active { background: #ecfdf5; color: #15803d; }
     .status-badge.assumed { background: #eff6ff; color: #1d4ed8; }
-    .status-badge.local { background: #ecfeff; color: #0e7490; }
     .status-badge.inactive { background: #fef2f2; color: #b91c1c; }
-    .status-badge.invalid-material { background: #fff1f2; color: #be123c; }
-    .status-badge.unknown { background: var(--surface-muted); color: var(--text-muted); }
+    .status-badge.not_attempted { background: #f0f9ff; color: #0369a1; }
+    .status-badge.inconclusive { background: #fffbeb; color: #92400e; }
 
     /* Finding detail snippet */
     .snippet-box {
@@ -1547,7 +1547,7 @@
       border-radius: 6px;
     }
 
-    #fd-validation-box label {
+    #fd-validation-box .detail-section-label {
       font-size: 13px;
       font-weight: 600;
       color: #166534;
@@ -1571,7 +1571,7 @@
       border-radius: 6px;
     }
 
-    #fd-validate-box label {
+    #fd-validate-box .detail-section-label {
       font-size: 13px;
       font-weight: 600;
       color: #1e40af;
@@ -1611,7 +1611,7 @@
       border-radius: 6px;
     }
 
-    #fd-revoke-box label {
+    #fd-revoke-box .detail-section-label {
       font-size: 13px;
       font-weight: 600;
       color: #92400e;
@@ -1683,8 +1683,8 @@
       border-radius: 4px;
       margin-bottom: 10px;
     }
-    #fd-kf-validate-wrap label,
-    #fd-kf-revoke-wrap label {
+    #fd-kf-validate-wrap .detail-section-label,
+    #fd-kf-revoke-wrap .detail-section-label {
       font-size: 12px;
       font-weight: 600;
       color: var(--brand-dark);
@@ -1802,6 +1802,7 @@
       font-size: 13px;
       background: var(--surface);
       color: var(--text-main);
+      min-width: 0;
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
     }
 
@@ -1810,13 +1811,14 @@
       color: var(--text-muted);
     }
 
-    .rows-select {
+    select.rows-select {
       padding: 8px 10px;
       border-radius: 10px;
       border: 1px solid var(--border);
-      background: var(--surface);
+      background-color: var(--surface);
       font-size: 13px;
       color: var(--text-main);
+      background-color: var(--surface);
       box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
     }
 
@@ -1924,8 +1926,7 @@
     .rows-select:focus-visible,
     .am-toolbar input:focus-visible,
     .pager-btn:focus-visible {
-      outline: none;
-      border-color: var(--brand);
+       border-color: var(--brand);
       box-shadow: 0 0 0 3px rgba(0, 237, 100, 0.18);
     }
 
@@ -2219,25 +2220,624 @@
     @keyframes spin {
       to { transform: rotate(360deg); }
     }
+
+    /* Professional console shell */
+    :root {
+      --console-bg: #f6f7f9;
+      --console-surface: #ffffff;
+      --console-muted: #f1f3f6;
+      --console-border: #e3e6ea;
+      --console-border-strong: #cbd1d8;
+      --console-text: #0f172a;
+      --console-text-muted: #64748b;
+      --console-accent: #00684a;
+      --console-accent-soft: #e8f5ef;
+      --console-ink: #001e2b;
+      --console-radius: 7px;
+    }
+
+    :root[data-theme="dark"] {
+      --console-bg: #08110e;
+      --console-surface: #0f1716;
+      --console-muted: #121d1b;
+      --console-border: #263b32;
+      --console-border-strong: #3b5a4b;
+      --console-text: #f3faf6;
+      --console-text-muted: #a8bbb1;
+      --console-accent: #00ed64;
+      --console-accent-soft: rgba(0, 237, 100, 0.12);
+      --console-ink: #001e2b;
+    }
+
+    body {
+      background: var(--console-bg);
+      color: var(--console-text);
+      font-size: 13px;
+    }
+
+    .hero {
+      min-height: 58px;
+      padding: 10px 24px;
+      background: var(--console-surface);
+      border-bottom: 1px solid var(--console-border);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+      backdrop-filter: none;
+    }
+
+    .hero__brand { gap: 10px; }
+    .hero__icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 7px;
+      background: var(--console-ink);
+      color: #00ed64;
+      border: 0;
+      box-shadow: none;
+      font-size: 13px;
+    }
+    .hero__title { font-size: 16px; letter-spacing: -0.01em; }
+    .hero__subtitle { font-size: 12px; color: var(--console-text-muted); }
+
+    .info-banner {
+      padding: 7px 16px;
+      background: var(--console-accent-soft);
+      border-bottom: 1px solid var(--console-border);
+      color: var(--console-text-muted);
+      font-size: 11.5px;
+    }
+
+    .page {
+      max-width: 1600px;
+      margin: 16px auto 30px;
+      padding: 0 24px;
+      gap: 14px;
+    }
+
+    .panel,
+    .workspace-overview,
+    .workspace-actions {
+      border-radius: var(--console-radius);
+      background: var(--console-surface);
+      border-color: var(--console-border);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+
+    .panel__header {
+      padding: 14px 16px;
+      background: var(--console-muted);
+      border-bottom-color: var(--console-border);
+    }
+    .panel__title h3 { font-size: 15px; letter-spacing: -0.01em; }
+    .panel__title p { margin-top: 3px; font-size: 12px; color: var(--console-text-muted); }
+
+    #upload-section { max-width: 960px !important; }
+    .upload-shell { padding: 16px; gap: 12px; }
+    .upload-area {
+      padding: 34px 24px 28px;
+      border-radius: var(--console-radius);
+      background: var(--console-muted);
+      box-shadow: none;
+    }
+    .upload-area:hover,
+    .upload-area.active { background: var(--console-accent-soft); }
+    .upload-icon {
+      width: 54px;
+      height: 54px;
+      margin-bottom: 12px;
+      border-radius: 11px;
+      box-shadow: none;
+    }
+    .upload-text { font-size: 23px; }
+    .upload-sub { font-size: 13px; }
+    .upload-primary { padding: 8px 13px; border-radius: var(--console-radius); }
+    .upload-help-grid { gap: 8px; }
+    .upload-help-card { padding: 11px 12px; border-radius: var(--console-radius); box-shadow: none; }
+
+    .layout {
+      grid-template-columns: 190px minmax(0, 1fr);
+      gap: 16px;
+    }
+
+    .sidebar {
+      position: sticky;
+      top: 74px;
+      align-items: stretch;
+      gap: 10px;
+      padding: 12px 10px;
+      min-height: 470px;
+      background: var(--console-surface);
+      border: 1px solid var(--console-border);
+      border-radius: var(--console-radius);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    .sidebar-nav,
+    .nav-group { align-items: stretch; gap: 2px; }
+    .sidebar-section-label {
+      display: block;
+      padding: 3px 10px 7px;
+      color: var(--console-text-muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .nav-button {
+      flex-direction: row;
+      justify-content: flex-start;
+      gap: 10px;
+      padding: 8px 10px;
+      min-height: 34px;
+      border: 1px solid transparent;
+      border-radius: 6px;
+      color: var(--console-text-muted);
+      text-align: left;
+      box-shadow: none;
+    }
+    .nav-button:hover {
+      background: var(--console-muted);
+      border-color: transparent;
+      color: var(--console-text);
+      transform: none;
+    }
+    .nav-button.active {
+      background: var(--console-accent-soft);
+      border-color: transparent;
+      color: var(--console-accent);
+      box-shadow: inset 3px 0 0 var(--console-accent);
+    }
+    :root[data-theme="light"] .nav-button.active,
+    :root[data-theme="light"] .nav-button.active .nav-button__title,
+    :root[data-theme="light"] .nav-button.active .nav-icon {
+      color: #0f172a !important;
+    }
+    .nav-icon {
+      width: 18px;
+      height: 18px;
+      border: 0;
+      background: transparent;
+      color: currentColor;
+      font-size: 14px;
+    }
+    .nav-icon svg { width: 16px; height: 16px; }
+    .nav-button__content { align-items: flex-start; }
+    .nav-button__title {
+      font-size: 12.5px;
+      font-weight: 600;
+      letter-spacing: 0;
+      text-align: left;
+      text-transform: none;
+    }
+    .nav-button__sub { display: none; }
+
+    .view-stack { gap: 12px; min-width: 0; }
+    .workspace-tabs {
+      display: flex;
+      align-items: center;
+      gap: 2px;
+      min-height: 42px;
+      padding: 0 8px;
+      background: var(--console-surface);
+      border: 1px solid var(--console-border);
+      border-radius: var(--console-radius);
+      box-shadow: 0 1px 2px rgba(15, 23, 42, 0.04);
+    }
+    .workspace-tabs__label {
+      padding: 0 12px 0 4px;
+      margin-right: 4px;
+      color: var(--console-text-muted);
+      font-size: 10px;
+      font-weight: 700;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    .workspace-tab {
+      position: relative;
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      height: 42px;
+      padding: 0 13px;
+      border: 0;
+      border-radius: 0;
+      background: transparent;
+      color: var(--console-text-muted);
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .workspace-tab::after {
+      content: "";
+      position: absolute;
+      right: 10px;
+      bottom: -1px;
+      left: 10px;
+      height: 2px;
+      background: transparent;
+    }
+    .workspace-tab:hover { color: var(--console-text); }
+    .workspace-tab.active { color: var(--console-accent); }
+    .workspace-tab.active::after { background: var(--console-accent); }
+    :root[data-theme="dark"] .workspace-tab.active { color: var(--console-accent); }
+
+    .workspace-topbar { gap: 12px; }
+    .workspace-overview,
+    .workspace-actions { box-shadow: none; }
+    .workspace-overview { padding: 14px 16px; }
+    .workspace-overview__eyebrow { font-size: 10px; }
+    .workspace-overview__title { font-size: 18px; }
+    .workspace-overview__meta { font-size: 12px; }
+    .workspace-overview__stats { gap: 8px; margin-top: 12px; }
+    .workspace-overview__stat {
+      padding: 9px 11px;
+      border-radius: 6px;
+      background: var(--console-muted);
+      border-color: var(--console-border);
+    }
+    .workspace-overview__value { font-size: 21px; }
+    .workspace-overview__label { font-size: 10px; }
+    .workspace-pill {
+      padding: 4px 8px;
+      border-radius: 6px;
+      background: var(--console-muted);
+      font-size: 10px;
+    }
+    .workspace-actions { padding: 10px; gap: 8px; }
+    .report-type-group {
+      gap: 6px;
+      padding: 10px;
+      border-radius: 6px;
+      background: var(--console-muted);
+      border-color: var(--console-border);
+    }
+
+    .metrics-grid { padding: 14px 16px; gap: 8px; }
+    .metric {
+      min-height: 88px;
+      padding: 12px 13px 14px;
+      border-radius: 6px;
+      background: var(--console-muted);
+      border-color: var(--console-border);
+      box-shadow: none;
+    }
+    .metric__label { font-size: 10px; }
+    .metric__value { margin-top: 6px; font-size: 28px; }
+    .scan-meta-bar,
+    .am-stats { border-radius: 6px; box-shadow: none; }
+
+    .btn,
+    .search-input,
+    .rows-select,
+    .pager-btn,
+    .am-toolbar input,
+    .am-toolbar__toggle { border-radius: 6px; }
+    .btn {
+      padding: 7px 11px;
+      background: var(--console-surface);
+      box-shadow: none;
+      font-size: 12px;
+    }
+    .btn:hover { box-shadow: none; transform: none; }
+    #theme-toggle { background: var(--console-muted); color: var(--console-text); }
+    #reset-btn { background: var(--console-accent); color: #04210f; box-shadow: none; }
+    :root[data-theme="dark"] #reset-btn { color: var(--console-ink); }
+
+    #view-findings > .panel:first-child > .panel__header {
+      display: block;
+      padding-bottom: 12px;
+    }
+    #view-findings > .panel:first-child > .panel__header > div:last-child {
+      display: flex !important;
+      align-items: center;
+      gap: 6px !important;
+      margin-top: 12px;
+      padding-top: 10px;
+      border-top: 1px solid var(--console-border);
+    }
+    #view-findings .search-input { flex: 1 1 220px; min-width: 160px; }
+    #view-findings .table-container { background: var(--console-surface); }
+    #view-findings .table { font-size: 12px; }
+    #view-findings .table th { padding: 10px 12px; background: var(--console-muted); }
+    #view-findings .table td { padding: 11px 12px; border-bottom-color: var(--console-border); }
+    #view-findings .table tr:hover td { background: var(--console-muted); }
+
+    .chart-grid { gap: 10px; padding: 0 16px 16px; }
+    .chart-card { border-radius: 8px; box-shadow: none; padding: 14px; }
+    .breakdown-card { border-radius: 8px; box-shadow: none; }
+    .breakdown-header { padding: 13px 15px; }
+    .am-container { padding: 14px 16px 16px; }
+    .am-toolbar { padding: 10px; margin-bottom: 12px; border-radius: 6px; }
+    .am-graph { border-radius: 8px; box-shadow: none; }
+    .am-graph__inspector { padding: 14px; }
+    .id-card,
+    .perm-group,
+    .resource-chip { border-radius: 6px; box-shadow: none; }
+
+    @media (max-width: 1100px) {
+      .page { padding: 0 16px; }
+      .hero { padding-left: 16px; padding-right: 16px; }
+      .layout { grid-template-columns: 1fr; gap: 12px; }
+      .sidebar {
+        position: relative;
+        top: auto;
+        min-height: 0;
+        flex-direction: row;
+        overflow-x: auto;
+      }
+      .sidebar-nav,
+      .nav-group { flex-direction: row; width: max-content; }
+      .sidebar-section-label { display: none; }
+      .nav-button { min-width: 132px; }
+    }
+
+    @media (max-width: 720px) {
+      .hero { align-items: flex-start; }
+      .hero__subtitle { display: none; }
+      .hero__title { font-size: 14px; }
+      .hero > div:last-child { gap: 6px !important; }
+      #reset-btn { font-size: 0; padding: 7px 9px; }
+      #reset-btn::after { content: "New report"; font-size: 12px; }
+      .page { margin-top: 10px; padding: 0 10px; }
+      .workspace-tabs { overflow-x: auto; }
+      .workspace-tabs__label { display: none; }
+      .workspace-tab { flex: 1 0 auto; justify-content: center; padding: 0 11px; }
+      .workspace-topbar { grid-template-columns: 1fr; }
+      .workspace-actions { grid-template-columns: 1fr; }
+      .workspace-overview__header { flex-direction: column; }
+      .upload-text { font-size: 20px; }
+      .chart-grid { grid-template-columns: 1fr; }
+      #view-findings > .panel:first-child > .panel__header > div:last-child {
+        align-items: stretch;
+        flex-wrap: wrap;
+      }
+      #view-findings .search-input { flex-basis: 100%; }
+      .panel__header { align-items: flex-start; flex-direction: column; gap: 10px; }
+    }
+
+    .findings-pagination {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      padding: 10px 16px;
+      border-top: 1px solid var(--console-border);
+      background: var(--console-surface);
+      color: var(--console-text-muted);
+      font-size: 12px;
+    }
+    .findings-pagination .pager-btn { flex: 0 0 auto; }
+
+    .findings-pagination--top {
+      justify-content: space-between;
+      padding: 0 16px 10px;
+      border-top: 0;
+      border-bottom: 1px solid var(--console-border);
+    }
+    .findings-pagination__summary { margin-right: auto; color: var(--console-text-muted); }
+
+    .finding-modal {
+      position: fixed;
+      inset: 0;
+      z-index: 90;
+      display: grid;
+      place-items: center;
+      padding: 24px;
+    }
+    .finding-modal__backdrop {
+      position: absolute;
+      inset: 0;
+      background: rgba(15, 23, 42, 0.42);
+      backdrop-filter: blur(3px);
+    }
+    :root[data-theme="dark"] .finding-modal__backdrop { background: rgba(0, 0, 0, 0.62); }
+    .finding-modal__dialog {
+      position: relative;
+      z-index: 1;
+      width: min(980px, 100%);
+      max-height: min(900px, calc(100vh - 48px));
+      overflow: auto;
+      border-radius: 9px;
+      box-shadow: 0 24px 70px rgba(15, 23, 42, 0.24);
+    }
+    :root[data-theme="dark"] .finding-modal__dialog { box-shadow: 0 24px 70px rgba(0, 0, 0, 0.48); }
+    .finding-modal__dialog > .panel__header {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    .finding-modal__dialog > div:last-child { padding: 20px 22px 22px !important; }
+    .modal-close {
+      min-width: 68px;
+      justify-content: center;
+    }
+    body.modal-open { overflow: hidden; }
+
+    @media (prefers-reduced-motion: reduce) {
+      .finding-modal__backdrop { backdrop-filter: none; }
+    }
+
+    @media (max-width: 720px) {
+      .finding-modal { padding: 10px; }
+      .finding-modal__dialog { max-height: calc(100vh - 20px); }
+      .finding-modal__dialog > div:last-child { padding: 16px !important; }
+    }
+
+    html { scroll-behavior: smooth; }
+    body { padding-bottom: env(safe-area-inset-bottom); }
+    button, a, input, select, textarea { touch-action: manipulation; }
+    h1, h2, h3, h4, [id] { scroll-margin-top: 84px; }
+    .numeric,
+    .metric__value,
+    .workspace-overview__value,
+    .am-stat-value,
+    .breakdown-count,
+    .table,
+    .am-stats { font-variant-numeric: tabular-nums; }
+
+    .skip-link {
+      position: fixed;
+      top: 8px;
+      left: 8px;
+      z-index: 200;
+      padding: 10px 14px;
+      border-radius: 6px;
+      background: var(--console-ink);
+      color: #ffffff;
+      font-weight: 700;
+      text-decoration: none;
+      transform: translateY(-160%);
+      transition: transform 0.15s ease;
+    }
+    .skip-link:focus-visible { transform: translateY(0); }
+
+    .sr-only {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+      border: 0;
+    }
+
+    .upload-area:focus-visible,
+    .am-graph-node:focus-visible {
+      outline: 3px solid var(--brand);
+      outline-offset: 3px;
+    }
+    .am-toolbar input:focus-visible,
+    .search-input:focus-visible,
+    .rows-select:focus-visible,
+    .btn:focus-visible,
+    .nav-button:focus-visible,
+    .workspace-tab:focus-visible,
+    .am-view-switch__button:focus-visible,
+    .breakdown-sort-btn:focus-visible,
+    .pager-btn:focus-visible,
+    .id-card__header:focus-visible,
+    .am-provider-header:focus-visible,
+    .perm-severity__title:focus-visible,
+    .modal-close:focus-visible {
+      outline: 3px solid var(--brand);
+      outline-offset: 2px;
+    }
+    .am-toolbar input:focus { outline: 3px solid var(--brand); outline-offset: 2px; }
+
+    .table-sort-button {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      min-height: 24px;
+      padding: 3px 0;
+      border: 0;
+      background: transparent;
+      color: inherit;
+      font: inherit;
+      font-weight: inherit;
+      text-transform: inherit;
+      letter-spacing: inherit;
+      cursor: pointer;
+    }
+    .table-sort-button:hover,
+    .table-sort-button:focus-visible { color: var(--text-main); }
+
+    .hero__title,
+    .panel__title h2,
+    .panel__title h3 { margin: 0; }
+    .panel__title h2,
+    .panel__title h3 {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: -0.01em;
+    }
+
+    .id-card__header,
+    .am-provider-header,
+    .perm-severity__title {
+      font: inherit;
+      color: inherit;
+    }
+    .id-card__header {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+      cursor: pointer;
+    }
+    .id-card { content-visibility: auto; contain-intrinsic-size: 0 180px; }
+    .am-provider-header {
+      width: 100%;
+      text-align: left;
+      appearance: none;
+      cursor: pointer;
+    }
+    .perm-severity__title {
+      width: 100%;
+      border: 0;
+      background: transparent;
+      text-align: left;
+    }
+    .finding-modal,
+    .finding-modal__dialog { overscroll-behavior: contain; }
+    .hero { top: env(safe-area-inset-top); padding-top: max(10px, env(safe-area-inset-top)); }
+    .toast {
+      position: fixed;
+      right: 16px;
+      bottom: calc(16px + env(safe-area-inset-bottom));
+      z-index: 150;
+      max-width: min(360px, calc(100vw - 32px));
+      padding: 10px 14px;
+      border: 1px solid var(--border-strong);
+      border-radius: 6px;
+      background: var(--console-surface);
+      color: var(--console-text);
+      box-shadow: var(--shadow-md);
+    }
+
+    @media (max-width: 720px) {
+      button, a, input, select, textarea { min-height: 44px; }
+      input { font-size: 16px; }
+      .nav-button, .workspace-tab { min-height: 44px; }
+      .pager-btn { width: 44px; height: 44px; }
+      .am-view-switch__button { min-height: 44px; }
+      .sidebar-check,
+      .breakdown-toggle,
+      #dedup-toggle-label,
+      .am-toolbar__toggle { min-height: 44px; }
+      .upload-area { padding: 28px 18px 24px; }
+      .skip-link { top: env(safe-area-inset-top); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+      }
+    }
   </style>
 </head>
 <body>
 
-  <div id="loader" class="loading-overlay hidden">
+  <a class="skip-link" href="#main-content">Skip to content</a>
+
+  <div id="loader" class="loading-overlay hidden" role="status" aria-live="polite" aria-busy="true">
     <div style="background:var(--surface); padding:18px 22px; border-radius:10px; border:1px solid var(--border); box-shadow:var(--shadow-md); text-align:center; min-width:260px; color:var(--text-main);">
-      <div class="spinner" style="margin:0 auto 12px;"></div>
-      <div class="progress-track"><div class="progress-inner"></div></div>
+      <div class="spinner" aria-hidden="true" style="margin:0 auto 12px;"></div>
+      <div class="progress-track" aria-hidden="true"><div class="progress-inner"></div></div>
       <div id="loader-text" style="margin-top:10px; font-size:13px; color:var(--text-muted);">
-        Processing report...
+        Processing report…
       </div>
     </div>
   </div>
 
   <header class="hero">
     <div class="hero__brand">
-      <div class="hero__icon">K</div>
+      <div class="hero__icon" aria-hidden="true">K</div>
       <div style="display:flex; align-items:center;">
-        <span class="hero__title">Kingfisher Report Viewer</span>
+        <h1 class="hero__title" translate="no">Kingfisher Report Viewer</h1>
         <span class="hero__subtitle">Blast Radius &amp; Findings</span>
       </div>
     </div>
@@ -2249,28 +2849,29 @@
   </header>
 
   <div class="info-banner">Runs entirely in your browser. Reports stay local and are never uploaded.</div>
+  <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
-  <main class="page">
+  <main id="main-content" class="page">
     <section id="upload-section" class="panel" style="max-width: 920px; margin: 0 auto;">
       <div class="panel__header">
         <div class="panel__title">
-          <h3>Load Report</h3>
+          <h2>Load Report</h2>
           <p>Analyze Kingfisher JSON / JSONL / SARIF output, plus Gitleaks and TruffleHog JSON reports</p>
         </div>
       </div>
       <div class="upload-shell">
-        <div class="upload-area" id="drop-zone">
-          <div class="upload-icon">📄</div>
+        <div class="upload-area" id="drop-zone" role="button" tabindex="0" aria-controls="file-input" aria-describedby="upload-instructions">
+          <div class="upload-icon" aria-hidden="true">📄</div>
           <div class="upload-text">Load one or more reports</div>
-          <div class="upload-sub">Drop files anywhere in this card, or click to choose them from disk.</div>
+          <div class="upload-sub" id="upload-instructions">Drop files anywhere in this card, or press Enter to choose them from disk.</div>
           <div class="upload-action-row">
             <span class="upload-primary">Choose Reports</span>
             <span class="upload-action-hint">JSON, JSONL, and SARIF</span>
           </div>
-          <input type="file" id="file-input" hidden accept=".json,.jsonl,.sarif" multiple>
+          <input type="file" id="file-input" name="reports" hidden accept=".json,.jsonl,.sarif" multiple aria-label="Choose report files">
           <div class="upload-options" style="margin-top:14px; display:flex; justify-content:center; font-size:12px; color:var(--text-muted);">
             <label id="dedup-toggle-label" style="display:inline-flex; align-items:center; gap:6px; cursor:pointer;">
-              <input type="checkbox" id="dedup-toggle" checked>
+               <input type="checkbox" id="dedup-toggle" name="deduplicate-findings" checked>
               <span>Deduplicate findings (remove same-tool fingerprint repeats)</span>
             </label>
           </div>
@@ -2297,7 +2898,7 @@
             <div class="upload-help-text">Reads SARIF plus JSON output from the open-source TruffleHog and Gitleaks CLIs. Kingfisher is not affiliated with or endorsed by Truffle Security Co. or the Gitleaks project. TruffleHog and Gitleaks are trademarks of their respective owners.</div>
           </div>
         </div>
-        <div id="error-msg" class="hidden" style="margin-top:16px; padding:10px 12px; background:#fef2f2; border:1px solid #fecaca; border-radius:6px; color:#b91c1c; font-size:13px;"></div>
+        <div id="error-msg" class="hidden" role="alert" aria-live="assertive" tabindex="-1" style="margin-top:16px; padding:10px 12px; background:#fef2f2; border:1px solid #fecaca; border-radius:6px; color:#b91c1c; font-size:13px;"></div>
       </div>
     </section>
 
@@ -2354,6 +2955,21 @@
         </aside>
 
         <div class="view-stack">
+          <nav class="workspace-tabs" role="tablist" aria-label="Report views">
+            <span class="workspace-tabs__label">Workspace</span>
+            <button id="workspace-tab-dashboard" class="workspace-tab active" type="button" role="tab" data-view-target="view-dashboard" aria-controls="view-dashboard" aria-selected="true" tabindex="0">
+              <span aria-hidden="true">&#9632;</span>
+              <span>Overview</span>
+            </button>
+            <button id="workspace-tab-access" class="workspace-tab" type="button" role="tab" data-view-target="view-access" aria-controls="view-access" aria-selected="false" tabindex="-1">
+              <span aria-hidden="true">&#9673;</span>
+              <span>Blast Radius</span>
+            </button>
+            <button id="workspace-tab-findings" class="workspace-tab" type="button" role="tab" data-view-target="view-findings" aria-controls="view-findings" aria-selected="false" tabindex="-1">
+              <span aria-hidden="true">&#9776;</span>
+              <span>Findings</span>
+            </button>
+          </nav>
           <section class="workspace-topbar">
             <div class="workspace-overview">
               <div class="workspace-overview__eyebrow">Report overview</div>
@@ -2382,24 +2998,24 @@
 
             <div class="workspace-actions">
               <div class="report-type-group">
-                <label>For Researchers</label>
+                <div>For Researchers</div>
                 <button class="btn" id="download-risk-report" type="button" style="width:100%;">Risk Report</button>
                 <label class="sidebar-check">
-                  <input type="checkbox" id="risk-active-only"> Active credentials only
+                   <input type="checkbox" id="risk-active-only" name="risk-active-only"> Active credentials only
                 </label>
                 <div class="sidebar-help">Findings + blast radius per credential. Suitable for bug bounty submissions.</div>
               </div>
               <div class="report-type-group">
-                <label>For Defenders</label>
+                <div>For Defenders</div>
                 <button class="btn" id="download-scan-report" type="button" style="width:100%;">Scan Report</button>
                 <div style="display:flex; flex-direction:column; gap:6px; margin-top:4px;">
-                  <select id="report-scope" class="rows-select">
+                   <select id="report-scope" name="report-scope" aria-label="Scan report scope" class="rows-select">
                     <option value="all" selected>All findings</option>
                     <option value="filtered">Filtered findings</option>
                   </select>
                 </div>
                 <label class="sidebar-check">
-                  <input type="checkbox" id="scan-active-only"> Active credentials only
+                   <input type="checkbox" id="scan-active-only" name="scan-active-only"> Active credentials only
                 </label>
                 <div class="sidebar-help">Scan summary for tickets and remediation tracking.</div>
                 <button class="btn" id="download-access-report" type="button" style="width:100%; margin-top:4px;" disabled>Blast Radius Report</button>
@@ -2407,7 +3023,7 @@
             </div>
           </section>
 
-          <section id="view-dashboard" class="view">
+           <section id="view-dashboard" class="view" role="tabpanel" aria-labelledby="workspace-tab-dashboard" tabindex="0">
             <div id="scan-meta-section" class="scan-meta-bar hidden">
               <div class="scan-meta-item"><strong>Report Generated:</strong> <span id="meta-timestamp">—</span></div>
               <div class="scan-meta-item" id="meta-target-wrap" style="display:none;"><strong>Target:</strong> <span id="meta-target">—</span></div>
@@ -2444,7 +3060,7 @@
             <section class="panel hidden" id="dedup-panel">
               <div class="panel__header">
                 <div class="panel__title">
-                  <h3>Duplicates Removed by Tool</h3>
+                    <h2>Duplicates Removed by Tool</h2>
                   <p id="dedup-info">Same-tool fingerprint matches removed by the viewer. Uncheck &ldquo;Deduplicate findings&rdquo; on upload to keep every emitted row.</p>
                 </div>
               </div>
@@ -2471,20 +3087,20 @@
             <section class="panel">
               <div class="panel__header">
                 <div class="panel__title">
-                  <h3>Finding Status Distribution</h3>
+                  <h2>Finding Status Distribution</h2>
                   <p>Validation state and report source mix</p>
                 </div>
               </div>
               <div class="chart-grid">
                 <div class="chart-card">
-                  <canvas id="status-chart" width="260" height="220"></canvas>
-                  <div class="chart-legend" id="status-legend">
+                  <canvas id="status-chart" width="260" height="220" role="img" aria-label="Finding validation status chart"></canvas>
+           <div class="chart-legend" id="status-legend" role="list" aria-label="Validation status values">
                     <!-- filled by JS -->
                   </div>
                 </div>
                 <div class="chart-card">
-                  <canvas id="source-chart" width="260" height="220"></canvas>
-                  <div class="chart-legend" id="source-legend">
+                  <canvas id="source-chart" width="260" height="220" role="img" aria-label="Finding source chart"></canvas>
+           <div class="chart-legend" id="source-legend" role="list" aria-label="Report source values">
                     <!-- filled by JS -->
                   </div>
                 </div>
@@ -2493,7 +3109,7 @@
             <section class="panel">
               <div class="panel__header">
                 <div class="panel__title">
-                  <h3>Detector Families</h3>
+                  <h2>Detector Families</h2>
                   <p>Collapsed Kingfisher rule families plus imported detector names</p>
                 </div>
               </div>
@@ -2519,12 +3135,12 @@
                     </div>
                     <div class="breakdown-controls">
                       <div class="pager">
-                        <button id="detector-breakdown-prev" class="pager-btn" type="button">&lsaquo;</button>
+                        <button id="detector-breakdown-prev" class="pager-btn" type="button" aria-label="Previous detector page">&lsaquo;</button>
                         <span id="detector-breakdown-page-info">0 of 0</span>
-                        <button id="detector-breakdown-next" class="pager-btn" type="button">&rsaquo;</button>
+                        <button id="detector-breakdown-next" class="pager-btn" type="button" aria-label="Next detector page">&rsaquo;</button>
                       </div>
                       <label class="breakdown-toggle" for="detector-breakdown-active-only">
-                        <input id="detector-breakdown-active-only" type="checkbox">
+                        <input id="detector-breakdown-active-only" name="detector-active-only" type="checkbox">
                         <span>Active only</span>
                       </label>
                     </div>
@@ -2535,11 +3151,11 @@
             </section>
           </section>
 
-          <section id="view-access" class="view hidden">
+           <section id="view-access" class="view hidden" role="tabpanel" aria-labelledby="workspace-tab-access" tabindex="0">
             <section class="panel" id="am-section">
               <div class="panel__header">
                 <div class="panel__title">
-                  <h3>Blast Radius</h3>
+                  <h2>Blast Radius</h2>
                   <p>Credentials and what they can reach</p>
                 </div>
                 <div style="display:flex; gap:10px; align-items:center;">
@@ -2550,12 +3166,12 @@
               <div class="am-container" id="am-container">
                 <div id="am-stats-bar" class="am-stats hidden"></div>
                 <div class="am-toolbar" style="display:flex; gap:10px; align-items:center;">
-                  <input id="tree-search" type="text" placeholder="Filter by identity, resource, or permission…" style="flex:1;">
+                  <input id="tree-search" name="access-search" type="search" autocomplete="off" spellcheck="false" aria-label="Filter blast radius" placeholder="Filter by identity, resource, or permission…" style="flex:1;">
                   <label id="am-critical-toggle" class="am-toolbar__toggle" title="Hide read-only permissions and identities with no admin / privilege-escalation / risky permissions.">
-                    <input type="checkbox" id="am-critical-checkbox">
+                    <input type="checkbox" id="am-critical-checkbox" name="critical-only">
                     <span>Critical only</span>
                   </label>
-                  <div class="am-view-switch" aria-label="Blast radius view">
+                  <div class="am-view-switch" role="group" aria-label="Blast radius view">
                     <button class="am-view-switch__button active" id="am-view-map" type="button" aria-pressed="true">Map</button>
                     <button class="am-view-switch__button" id="am-view-details" type="button" aria-pressed="false">Details</button>
                   </div>
@@ -2573,130 +3189,133 @@
             </section>
           </section>
 
-          <section id="view-findings" class="view hidden">
+           <section id="view-findings" class="view hidden" role="tabpanel" aria-labelledby="workspace-tab-findings" tabindex="0">
             <section class="panel">
               <div class="panel__header">
                 <div class="panel__title">
-                  <h3>Findings</h3>
+                  <h2>Findings</h2>
                   <p>Detailed list of detected secrets</p>
                 </div>
                 <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
                   <button class="btn" id="download-json" type="button">Download JSON</button>
                   <button class="btn" id="download-csv" type="button">Export CSV</button>
-                  <input type="text" id="search-input" class="search-input" placeholder="Search rule, path, snippet">
-                  <select id="source-filter" class="rows-select">
+                  <input type="search" id="search-input" name="finding-search" class="search-input" autocomplete="off" spellcheck="false" placeholder="Search rule, path, or snippet…">
+                  <select id="source-filter" name="source-filter" aria-label="Filter findings by source" class="rows-select">
                     <option value="all" selected>All sources</option>
                     <option value="kingfisher">Kingfisher</option>
                     <option value="sarif">SARIF</option>
                     <option value="gitleaks">Gitleaks</option>
                     <option value="trufflehog">TruffleHog</option>
                   </select>
-                  <select id="validation-filter" class="rows-select">
+                  <select id="validation-filter" name="validation-filter" aria-label="Filter findings by validation" class="rows-select">
                     <option value="all" selected>All validation states</option>
                     <option value="active">Active Credential</option>
                     <option value="assumed">Assumed Valid (Not Live-Validated)</option>
-                    <option value="local">Locally Derived</option>
                     <option value="inactive">Inactive Credential</option>
-                    <option value="invalid_material">Invalid Cryptographic Material</option>
-                    <option value="inconclusive">Inconclusive Validation</option>
                     <option value="not_attempted">Not Attempted</option>
-                    <option value="canary">Validation Skipped</option>
+                    <option value="inconclusive">Inconclusive Validation</option>
                   </select>
                   <span class="rows-label">Rows</span>
-                  <select id="rows-select" class="rows-select">
+                  <select id="rows-select" name="rows-per-page" aria-label="Findings per page" class="rows-select">
                     <option value="10" selected>10</option>
                     <option value="25">25</option>
                     <option value="50">50</option>
-                    <option value="100">100</option>
-                    <option value="250">250</option>
                   </select>
-                  <div class="pager">
-                    <button id="page-prev" class="pager-btn" type="button">&lsaquo;</button>
-                    <span id="page-info">0 of 0</span>
-                    <button id="page-next" class="pager-btn" type="button">&rsaquo;</button>
-                  </div>
                 </div>
+              </div>
+              <div class="findings-pagination findings-pagination--top" aria-label="Findings pagination">
+                <span class="findings-pagination__summary">Browse findings</span>
+                <button id="page-prev" class="pager-btn" type="button" aria-label="Previous page">&lsaquo;</button>
+                <span id="page-info">0 of 0</span>
+                <button id="page-next" class="pager-btn" type="button" aria-label="Next page">&rsaquo;</button>
               </div>
               <div class="table-container">
                 <table class="table">
                   <thead>
                     <tr>
-                      <th class="sortable" data-field="rule">
-                        Rule <span class="sort-indicator"></span>
+                      <th class="sortable" data-field="rule" aria-sort="ascending">
+                        <button class="table-sort-button" type="button">Rule <span class="sort-indicator" aria-hidden="true"></span></button>
                       </th>
-                      <th class="sortable" data-field="source">
-                        Source <span class="sort-indicator"></span>
+                      <th class="sortable" data-field="source" aria-sort="none">
+                        <button class="table-sort-button" type="button">Source <span class="sort-indicator" aria-hidden="true"></span></button>
                       </th>
-                      <th class="sortable" data-field="location">
-                        Location <span class="sort-indicator"></span>
+                      <th class="sortable" data-field="location" aria-sort="none">
+                        <button class="table-sort-button" type="button">Location <span class="sort-indicator" aria-hidden="true"></span></button>
                       </th>
-                      <th class="sortable" data-field="validation">
-                        Validation <span class="sort-indicator"></span>
+                      <th class="sortable" data-field="validation" aria-sort="none">
+                        <button class="table-sort-button" type="button">Validation <span class="sort-indicator" aria-hidden="true"></span></button>
                       </th>
-                      <th class="sortable" data-field="confidence">
-                        Confidence <span class="sort-indicator"></span>
+                      <th class="sortable" data-field="confidence" aria-sort="none">
+                        <button class="table-sort-button" type="button">Confidence <span class="sort-indicator" aria-hidden="true"></span></button>
                       </th>
-                      <th class="sortable" data-field="line">
-                        Line <span class="sort-indicator"></span>
+                      <th class="sortable" data-field="line" aria-sort="none">
+                        <button class="table-sort-button" type="button">Line <span class="sort-indicator" aria-hidden="true"></span></button>
                       </th>
                     </tr>
                   </thead>
                   <tbody id="findings-body"></tbody>
                 </table>
               </div>
+              <div class="findings-pagination" aria-label="Findings pagination">
+                <button id="page-prev-bottom" class="pager-btn" type="button" aria-label="Previous page">&lsaquo;</button>
+                <span id="page-info-bottom">0 of 0</span>
+                <button id="page-next-bottom" class="pager-btn" type="button" aria-label="Next page">&rsaquo;</button>
+              </div>
             </section>
 
-            <section id="finding-detail" class="panel hidden">
+            <div id="finding-detail" class="finding-modal hidden" role="dialog" aria-modal="true" aria-hidden="true" aria-labelledby="finding-detail-title">
+              <div class="finding-modal__backdrop" data-modal-close aria-hidden="true"></div>
+              <section class="finding-modal__dialog panel">
               <div class="panel__header">
                 <div class="panel__title">
-                  <h3>Finding Details</h3>
+                  <h3 id="finding-detail-title">Finding Details</h3>
                 </div>
-                <button class="btn" onclick="document.getElementById('finding-detail').classList.add('hidden')">Close</button>
+                <button class="btn modal-close" id="finding-detail-close" type="button">Close</button>
               </div>
               <div style="padding:20px 22px 22px;">
                 <div class="detail-grid">
                   <div class="detail-field">
-                    <label>Rule ID</label>
+                    <div class="detail-field__label">Rule ID</div>
                     <div id="fd-rule-id"></div>
                   </div>
                   <div class="detail-field">
-                    <label>Fingerprint</label>
+                    <div class="detail-field__label">Fingerprint</div>
                     <div id="fd-fingerprint"></div>
                   </div>
                   <div class="detail-field">
-                    <label>Entropy</label>
+                    <div class="detail-field__label">Entropy</div>
                     <div id="fd-entropy"></div>
                   </div>
                   <div class="detail-field">
-                    <label>Validation Status</label>
+                    <div class="detail-field__label">Validation Status</div>
                     <div id="fd-validation-status"></div>
                   </div>
                   <div class="detail-field">
-                    <label>Report Source</label>
+                    <div class="detail-field__label">Report Source</div>
                     <div id="fd-source"></div>
                   </div>
                   <div class="detail-field">
-                    <label>Git Commit</label>
+                    <div class="detail-field__label">Git Commit</div>
                     <div id="fd-commit"></div>
                   </div>
                   <div class="detail-field" id="fd-committer-email-wrapper">
-                    <label>Committer Email</label>
+                     <div class="detail-field__label">Committer Email</div>
                     <div id="fd-committer-email"></div>
                   </div>
                   <div class="detail-field">
-                    <label>File Path</label>
+                     <div class="detail-field__label">File Path</div>
                     <textarea id="fd-path" class="path-area" readonly></textarea>
                   </div>
                   <div class="detail-field" id="fd-git-url-wrapper">
-                    <label>Git URL</label>
+                     <div class="detail-field__label">Git URL</div>
                     <div id="fd-git-url" class="link-mono"></div>
                   </div>
                 </div>
 
-                <label style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.06em; font-weight:600;">
+                <div style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.06em; font-weight:600;">
                   Match Snippet
-                </label>
-                <div class="snippet-box" id="fd-snippet"></div>
+                </div>
+                <div class="snippet-box" id="fd-snippet" role="region" aria-label="Match snippet"></div>
 
                 <div id="fd-import-note" class="hidden" style="margin:14px 0 0; padding:12px 14px; border-radius:8px; border:1px solid #fcd34d; background:#fffbeb; color:#92400e; font-size:12px; line-height:1.6;"></div>
 
@@ -2706,12 +3325,12 @@
                     <span id="fd-kf-enrichment-strength" class="kf-enrichment-strength"></span>
                   </div>
                   <div class="kf-enrichment-row">
-                    <label>Kingfisher Validation</label>
+                    <div class="detail-section-label">Kingfisher Validation</div>
                     <span id="fd-kf-validation"></span>
                   </div>
                   <pre id="fd-kf-validation-res" class="hidden"></pre>
                   <div id="fd-kf-validate-wrap" class="hidden">
-                    <label>Validate with Kingfisher</label>
+                     <div class="detail-section-label">Validate with Kingfisher</div>
                     <div class="cmd-container">
                       <code id="fd-kf-validate-cmd"></code>
                       <button class="copy-btn" id="fd-kf-validate-copy" title="Copy to clipboard">
@@ -2724,7 +3343,7 @@
                     </div>
                   </div>
                   <div id="fd-kf-revoke-wrap" class="hidden">
-                    <label>Revoke</label>
+                     <div class="detail-section-label">Revoke</div>
                     <div class="cmd-container">
                       <code id="fd-kf-revoke-cmd"></code>
                       <button class="copy-btn" id="fd-kf-revoke-copy" title="Copy to clipboard">
@@ -2742,12 +3361,12 @@
                 </div>
 
                 <div id="fd-validation-box" class="hidden">
-                  <label>Live Validation Response</label>
+                   <div class="detail-section-label">Live Validation Response</div>
                   <pre id="fd-validation-res"></pre>
                 </div>
 
                 <div id="fd-validate-box" class="hidden">
-                  <label>Validate Command</label>
+                   <div class="detail-section-label">Validate Command</div>
                   <div class="cmd-container">
                     <code id="fd-validate-cmd"></code>
                     <button class="copy-btn copy-btn-validate" id="fd-validate-copy" title="Copy to clipboard">
@@ -2761,7 +3380,7 @@
                 </div>
 
                 <div id="fd-revoke-box" class="hidden">
-                  <label>Revoke Command</label>
+                   <div class="detail-section-label">Revoke Command</div>
                   <div class="cmd-container">
                     <code id="fd-revoke-cmd"></code>
                     <button class="copy-btn" id="fd-revoke-copy" title="Copy to clipboard">
@@ -2790,7 +3409,8 @@
                   </div>
                 </div>
               </div>
-            </section>
+              </section>
+            </div>
           </section>
         </div>
       </div>
@@ -2820,6 +3440,9 @@
     let accessMapViewMode = "map";
     let selectedAccessMapNode = null;
     let visibleAccessMapView = [];
+    let modalReturnFocus = null;
+    let expandedAccessKeys = new Set();
+    let accessRenderLimit = 50;
 
     const dropZone = document.getElementById("drop-zone");
     const fileInput = document.getElementById("file-input");
@@ -2846,6 +3469,9 @@
     const pagePrev = document.getElementById("page-prev");
     const pageNext = document.getElementById("page-next");
     const pageInfo = document.getElementById("page-info");
+    const pagePrevBottom = document.getElementById("page-prev-bottom");
+    const pageNextBottom = document.getElementById("page-next-bottom");
+    const pageInfoBottom = document.getElementById("page-info-bottom");
     const findingsBody = document.getElementById("findings-body");
     const downloadJsonBtn = document.getElementById("download-json");
     const downloadCsvBtn = document.getElementById("download-csv");
@@ -2877,6 +3503,116 @@
     const THEME_KEY = "viewer-theme";
     const systemThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
 
+    function readUrlState() {
+      const params = new URLSearchParams(window.location.search);
+      const view = params.get("view");
+      const allowedViews = Object.prototype.hasOwnProperty.call(viewRegistry, view) ? view : "view-dashboard";
+      const requestedRows = Number(params.get("rows"));
+      const allowedRows = [10, 25, 50];
+      return {
+        view: allowedViews,
+        filter: params.get("q") || "",
+        source: ["all", "kingfisher", "sarif", "gitleaks", "trufflehog"].includes(params.get("source"))
+          ? params.get("source")
+          : "all",
+        validation: ["all", "active", "assumed", "inactive", "not_attempted", "inconclusive"].includes(params.get("validation"))
+          ? params.get("validation")
+          : "all",
+        page: Math.max(1, Number.parseInt(params.get("page"), 10) || 1),
+        rows: allowedRows.includes(requestedRows) ? requestedRows : 10,
+        sort: ["rule", "source", "location", "validation", "confidence", "line"].includes(params.get("sort"))
+          ? params.get("sort")
+          : "rule",
+        sortDirection: params.get("sort-dir") === "desc" ? "desc" : "asc",
+        accessFilter: params.get("access-q") || "",
+        accessView: params.get("access-view") === "details" ? "details" : "map",
+        critical: params.get("critical") === "1",
+        expandedAccessKeys: (params.get("access-open") || "").split(",").filter(Boolean),
+        accessLimit: Math.max(50, Number.parseInt(params.get("access-limit"), 10) || 50),
+        finding: params.get("finding") || "",
+      };
+    }
+
+    function syncUrlState({ replace = true } = {}) {
+      const params = new URLSearchParams();
+      const view = Object.entries(viewRegistry).find(([, element]) => element && !element.classList.contains("hidden"));
+      if (view && view[0] !== "view-dashboard") params.set("view", view[0]);
+      if (currentFilter) params.set("q", currentFilter);
+      if (sourceFilter !== "all") params.set("source", sourceFilter);
+      if (validationFilter !== "all") params.set("validation", validationFilter);
+      if (currentPage > 1) params.set("page", String(currentPage));
+      if (pageSize !== 10) params.set("rows", String(pageSize));
+      if (sortField !== "rule") params.set("sort", sortField);
+      if (sortDirection !== "asc") params.set("sort-dir", sortDirection);
+      if (treeSearch && treeSearch.value) params.set("access-q", treeSearch.value);
+      if (accessMapViewMode !== "map") params.set("access-view", accessMapViewMode);
+      if (isCriticalOnly()) params.set("critical", "1");
+      if (expandedAccessKeys.size) params.set("access-open", [...expandedAccessKeys].join(","));
+      if (accessRenderLimit > 50) params.set("access-limit", String(accessRenderLimit));
+      if (currentDetailFinding && currentDetailFinding.finding && currentDetailFinding.finding.fingerprint) {
+        params.set("finding", currentDetailFinding.finding.fingerprint);
+      }
+      const query = params.toString();
+      const url = window.location.pathname + (query ? "?" + query : "") + window.location.hash;
+      const state = Object.assign({}, window.history.state || {}, { scrollY: window.scrollY });
+      if (replace) {
+        window.history.replaceState(state, "", url);
+      } else {
+        window.history.replaceState(state, "", window.location.href);
+        window.history.pushState({ scrollY: window.scrollY }, "", url);
+      }
+    }
+
+    function applyUrlState({ focusFinding = false } = {}) {
+      const state = readUrlState();
+      currentFilter = state.filter;
+      sourceFilter = state.source;
+      validationFilter = state.validation;
+      pageSize = state.rows;
+      currentPage = state.page;
+      sortField = state.sort;
+      sortDirection = state.sortDirection;
+      expandedAccessKeys = new Set(state.expandedAccessKeys);
+      accessRenderLimit = state.accessLimit;
+      searchInput.value = currentFilter;
+      sourceSelect.value = sourceFilter;
+      validationSelect.value = validationFilter;
+      rowsSelect.value = String(pageSize);
+      treeSearch.value = state.accessFilter;
+      accessMapViewMode = state.accessView;
+      setCriticalOnly(state.critical);
+      if (criticalCheckbox) criticalCheckbox.checked = state.critical;
+      setActiveView(state.view);
+      if (focusFinding && state.finding) {
+        const match = findings.find((entry) => entry && entry.finding && entry.finding.fingerprint === state.finding);
+        if (match) showFindingDetail(match, { restoreUrl: false });
+      }
+    }
+
+    function announce(message) {
+      const toast = document.getElementById("toast");
+      if (!toast) return;
+      toast.textContent = message;
+      toast.classList.remove("hidden");
+      window.clearTimeout(announce.timeout);
+      announce.timeout = window.setTimeout(() => toast.classList.add("hidden"), 2600);
+    }
+
+    function formatNumber(value) {
+      return new Intl.NumberFormat().format(Number(value) || 0);
+    }
+
+    function formatDateTime(value) {
+      const date = value ? new Date(value) : new Date();
+      return Number.isNaN(date.getTime())
+        ? String(value || "")
+        : new Intl.DateTimeFormat(undefined, { dateStyle: "medium", timeStyle: "short" }).format(date);
+    }
+
+    function formatDisplayDate(value) {
+      return value ? formatDateTime(value) : formatDateTime();
+    }
+
     function getStoredThemePreference() {
       const stored = localStorage.getItem(THEME_KEY);
       return stored === "light" || stored === "dark" ? stored : null;
@@ -2891,6 +3627,8 @@
     function setTheme(theme) {
       const normalized = theme === "light" ? "light" : "dark";
       document.documentElement.setAttribute("data-theme", normalized);
+      const themeColor = document.querySelector('meta[name="theme-color"]');
+      if (themeColor) themeColor.content = normalized === "light" ? "#eef4f0" : "#08110e";
       if (themeToggle) {
         themeToggle.textContent = normalized === "dark" ? "Light Mode" : "Dark Mode";
       }
@@ -2912,6 +3650,8 @@
       setTheme(getPreferredTheme());
       rerenderThemeSensitiveViews();
     });
+
+    if ("scrollRestoration" in window.history) window.history.scrollRestoration = "auto";
 
     // Dedup toggle: checked means "deduplicate findings" (default ON).
     // localStorage stores "0" only when the user has explicitly turned dedup off.
@@ -2946,6 +3686,11 @@
     }
 
     dropZone.addEventListener("click", () => openReplaceFilePicker());
+    dropZone.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      openReplaceFilePicker();
+    });
     fileInput.addEventListener("change", (e) => {
       if (e.target.files.length) {
         processFiles(Array.from(e.target.files), { append: false });
@@ -2968,7 +3713,21 @@
     });
 
     navButtons.forEach((btn) => {
-      btn.addEventListener("click", () => setActiveView(btn.dataset.viewTarget));
+      btn.addEventListener("click", () => setActiveView(btn.dataset.viewTarget, { history: true }));
+      if (btn.classList.contains("workspace-tab")) {
+        btn.addEventListener("keydown", (event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight" && event.key !== "Home" && event.key !== "End") return;
+          event.preventDefault();
+          const tabs = [...document.querySelectorAll('.workspace-tab')];
+          const index = tabs.indexOf(btn);
+          const nextIndex = event.key === "Home" ? 0
+            : event.key === "End" ? tabs.length - 1
+            : (index + (event.key === "ArrowRight" ? 1 : -1) + tabs.length) % tabs.length;
+          const next = tabs[nextIndex];
+          next.focus();
+          setActiveView(next.dataset.viewTarget, { history: true });
+        });
+      }
     });
 
     const resetButton = document.getElementById("reset-btn");
@@ -2987,18 +3746,21 @@
       currentFilter = e.target.value || "";
       currentPage = 1;
       renderFindingsTable();
+      syncUrlState();
     });
 
     validationSelect.addEventListener("change", (e) => {
       validationFilter = e.target.value || "all";
       currentPage = 1;
       renderFindingsTable();
+      syncUrlState();
     });
 
     sourceSelect.addEventListener("change", (e) => {
       sourceFilter = e.target.value || "all";
       currentPage = 1;
       renderFindingsTable();
+      syncUrlState();
     });
 
     if (detectorBreakdownActiveOnlyToggle) {
@@ -3029,12 +3791,14 @@
       pageSize = parseInt(e.target.value, 10) || 10;
       currentPage = 1;
       renderFindingsTable();
+      syncUrlState();
     });
 
     pagePrev.addEventListener("click", () => {
       if (currentPage > 1) {
         currentPage--;
         renderFindingsTable();
+        syncUrlState();
       }
     });
 
@@ -3044,11 +3808,79 @@
       if (currentPage < totalPages) {
         currentPage++;
         renderFindingsTable();
+        syncUrlState();
+      }
+    });
+
+    pagePrevBottom.addEventListener("click", () => {
+      if (currentPage > 1) {
+        currentPage--;
+        renderFindingsTable();
+        syncUrlState();
+      }
+    });
+
+    pageNextBottom.addEventListener("click", () => {
+      const total = getFilteredSortedFindings().length;
+      const totalPages = total ? Math.ceil(total / pageSize) : 1;
+      if (currentPage < totalPages) {
+        currentPage++;
+        renderFindingsTable();
+        syncUrlState();
+      }
+    });
+
+    function closeFindingDetail({ restoreUrl = true } = {}) {
+      const modal = document.getElementById("finding-detail");
+      if (!modal) return;
+      currentDetailFinding = null;
+      modal.classList.add("hidden");
+      modal.setAttribute("aria-hidden", "true");
+      document.body.classList.remove("modal-open");
+      if (restoreUrl) {
+        syncUrlState();
+      }
+      if (modalReturnFocus && typeof modalReturnFocus.focus === "function") {
+        modalReturnFocus.focus();
+      }
+      modalReturnFocus = null;
+    }
+
+    window.addEventListener("popstate", () => {
+      if (!hasLoadedReportData()) return;
+      closeFindingDetail({ restoreUrl: false });
+      applyUrlState({ focusFinding: true });
+      renderAccessMapTree(treeSearch.value || "");
+      renderFindingsTable();
+      window.requestAnimationFrame(() => window.scrollTo(0, window.history.state && window.history.state.scrollY || 0));
+    });
+
+    document.getElementById("finding-detail-close").addEventListener("click", closeFindingDetail);
+    document.querySelector("[data-modal-close]").addEventListener("click", closeFindingDetail);
+    document.addEventListener("keydown", (event) => {
+      const modal = document.getElementById("finding-detail");
+      if (event.key === "Escape" && modal && !modal.classList.contains("hidden")) {
+        closeFindingDetail();
+        return;
+      }
+      if (event.key !== "Tab" || !modal || modal.classList.contains("hidden")) return;
+      const focusable = [...modal.querySelectorAll("button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex=\"-1\"])")]
+        .filter((element) => !element.closest(".hidden"));
+      if (!focusable.length) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
       }
     });
 
     treeSearch.addEventListener("input", (e) => {
       renderAccessMapTree(e.target.value || "");
+      syncUrlState();
     });
 
     function setAccessMapViewMode(mode) {
@@ -3067,10 +3899,16 @@
     }
 
     if (amViewMap) {
-      amViewMap.addEventListener("click", () => setAccessMapViewMode("map"));
+      amViewMap.addEventListener("click", () => {
+        setAccessMapViewMode("map");
+        syncUrlState();
+      });
     }
     if (amViewDetails) {
-      amViewDetails.addEventListener("click", () => setAccessMapViewMode("details"));
+      amViewDetails.addEventListener("click", () => {
+        setAccessMapViewMode("details");
+        syncUrlState();
+      });
     }
 
     const criticalCheckbox = document.getElementById("am-critical-checkbox");
@@ -3086,6 +3924,7 @@
           criticalToggleWrap.classList.toggle("active", criticalCheckbox.checked);
         }
         renderAccessMapTree(treeSearch.value || "");
+        syncUrlState();
       });
     }
 
@@ -3132,10 +3971,13 @@
       });
     }
 
-    loadCliReport();
+    // GitHub Pages serves this file statically; only the bundled local viewer
+    // has the CLI's /report endpoint.
+    const isHostedViewer = window.location.hostname.endsWith(".github.io");
+    if (!isHostedViewer) loadCliReport();
 
     document.querySelectorAll("th.sortable").forEach((th) => {
-      th.addEventListener("click", () => {
+      th.querySelector(".table-sort-button").addEventListener("click", () => {
         const field = th.dataset.field;
         if (!field) return;
         if (sortField === field) {
@@ -3146,12 +3988,18 @@
         }
         currentPage = 1;
         renderFindingsTable();
+        syncUrlState();
       });
     });
 
-    function setActiveView(targetId) {
+    function setActiveView(targetId, { history = false } = {}) {
       const fallback = "view-dashboard";
       const viewId = targetId && viewRegistry[targetId] ? targetId : fallback;
+      const viewTitle = {
+        "view-dashboard": "Overview",
+        "view-access": "Blast Radius",
+        "view-findings": "Findings",
+      }[viewId];
 
       Object.entries(viewRegistry).forEach(([id, el]) => {
         if (!el) return;
@@ -3161,7 +4009,15 @@
 
       navButtons.forEach((btn) => {
         btn.classList.toggle("active", btn.dataset.viewTarget === viewId);
+        if (btn.classList.contains("workspace-tab")) {
+          btn.setAttribute("aria-selected", btn.dataset.viewTarget === viewId ? "true" : "false");
+          btn.tabIndex = btn.dataset.viewTarget === viewId ? 0 : -1;
+        }
       });
+      document.title = scanMetadata.reportSource
+        ? `${scanMetadata.reportSource} | ${viewTitle} | Kingfisher Report Viewer`
+        : `${viewTitle} | Kingfisher Report Viewer`;
+      if (history) syncUrlState({ replace: false });
     }
 
     function setAccessMapCollapsed(collapsed, { auto = false } = {}) {
@@ -3501,15 +4357,15 @@
         findings: normalizedFindings.length,
         active_findings: counts.active || 0,
         inactive_findings: counts.inactive || 0,
-        locally_derived_findings: counts.local || 0,
-        invalid_material_findings: counts.invalid_material || 0,
-        unknown_validation_findings: counts.unknown || 0,
+        locally_derived_findings: 0,
+        invalid_material_findings: 0,
+        unknown_validation_findings: 0,
         access_map_identities: 0,
         confidence_level: toolName === "Gitleaks" ? "imported" : "imported",
         custom_rules_used: false,
         successful_validations: counts.active || 0,
         failed_validations: counts.inactive || 0,
-        skipped_validations: (counts.canary || 0) + (counts.assumed || 0),
+        skipped_validations: (counts.not_attempted || 0) + (counts.assumed || 0),
       };
     }
 
@@ -4110,6 +4966,7 @@
       if (validFiles.length === 0) {
         errorMsg.textContent = "No JSON, JSONL, or SARIF files found in the selection.";
         errorMsg.classList.remove("hidden");
+        errorMsg.focus();
         return;
       }
 
@@ -4118,6 +4975,7 @@
         : (append ? "Importing " + validFiles.length + " additional files…" : "Processing " + validFiles.length + " files…");
       loaderText.textContent = label;
       loader.classList.remove("hidden");
+      loader.setAttribute("aria-busy", "true");
       errorMsg.classList.add("hidden");
       errorMsg.textContent = "";
 
@@ -4137,6 +4995,8 @@
                 console.error(err);
                 errorMsg.textContent = "Error parsing files: " + err.message;
                 errorMsg.classList.remove("hidden");
+                errorMsg.focus();
+                loader.setAttribute("aria-busy", "false");
                 loader.classList.add("hidden");
               }
             }
@@ -4149,6 +5009,8 @@
               if (validTexts.length === 0) {
                 errorMsg.textContent = "Failed to read any files.";
                 errorMsg.classList.remove("hidden");
+                errorMsg.focus();
+                loader.setAttribute("aria-busy", "false");
                 loader.classList.add("hidden");
               } else {
                 try {
@@ -4157,6 +5019,8 @@
                   console.error(err);
                   errorMsg.textContent = "Error parsing files: " + err.message;
                   errorMsg.classList.remove("hidden");
+                  errorMsg.focus();
+                  loader.setAttribute("aria-busy", "false");
                   loader.classList.add("hidden");
                 }
               }
@@ -4175,6 +5039,7 @@
 
         if (response.status === 404) {
           loader.classList.add("hidden");
+          loader.setAttribute("aria-busy", "false");
           return;
         }
 
@@ -4186,8 +5051,10 @@
         parseAndRender(text);
       } catch (err) {
         loader.classList.add("hidden");
+        loader.setAttribute("aria-busy", "false");
         errorMsg.textContent = "Failed to load report from CLI: " + err.message;
         errorMsg.classList.remove("hidden");
+        errorMsg.focus();
       }
     }
 
@@ -4197,6 +5064,7 @@
       filteredAccessMapView = [];
       rawData = null;
       currentDetailFinding = null;
+      modalReturnFocus = null;
       scanMetadata = {};
       selectedAccessMapNode = null;
       duplicatesRemoved = { kingfisher: 0, sarif: 0, trufflehog: 0, gitleaks: 0, total: 0 };
@@ -4239,7 +5107,11 @@
       const blastSection = document.getElementById("fd-blast-radius");
       if (blastSection) blastSection.classList.add("hidden");
       const findingDetail = document.getElementById("finding-detail");
-      if (findingDetail) findingDetail.classList.add("hidden");
+      if (findingDetail) {
+        findingDetail.classList.add("hidden");
+        findingDetail.setAttribute("aria-hidden", "true");
+        document.body.classList.remove("modal-open");
+      }
 
       setActiveView("view-dashboard");
       dashboard.classList.add("hidden");
@@ -4249,9 +5121,12 @@
       errorMsg.textContent = "";
 
       loader.classList.add("hidden");
-      loaderText.textContent = "Processing report...";
+      loaderText.textContent = "Processing report…";
+      loader.setAttribute("aria-busy", "false");
+      document.title = "Kingfisher Report Viewer";
 
       fileInput.value = "";
+      window.history.replaceState(null, "", window.location.pathname + window.location.hash);
 
       if (promptFilePicker) {
         openReplaceFilePicker();
@@ -4512,6 +5387,9 @@
         resources: resource.startsWith("__unscoped__:") ? [] : [resource],
         permissions: [...permissions].sort(),
       }));
+      merged.roles = mergeUnique(existing.roles, incoming.roles, (role) =>
+        (role.name || "") + ":" + (role.source || "") + ":" + JSON.stringify(role.permissions || [])
+      );
       merged.token_details = Object.assign({}, existing.token_details || {});
       Object.entries(incoming.token_details || {}).forEach(([key, value]) => {
         merged.token_details[key] = preferPresent(merged.token_details[key], value);
@@ -4563,6 +5441,7 @@
         });
         evidence.policies = [...policies.values()];
         evidence.paths = mergeUnique(firstEvidence && firstEvidence.paths, secondEvidence && secondEvidence.paths, (path) => JSON.stringify(path));
+        evidence.role_impacts = mergeUnique(firstEvidence && firstEvidence.role_impacts, secondEvidence && secondEvidence.role_impacts, (impact) => JSON.stringify(impact));
         evidence.hierarchy = mergeUnique(firstEvidence && firstEvidence.hierarchy, secondEvidence && secondEvidence.hierarchy, (scope) => (scope.kind || "") + ":" + (scope.id || ""));
         evidence.limitations = mergeUnique(firstEvidence && firstEvidence.limitations, secondEvidence && secondEvidence.limitations, (value) => String(value));
         merged.provider_metadata.authorization_evidence = evidence;
@@ -4589,8 +5468,14 @@
       uploadSection.classList.add("hidden");
       dashboard.classList.remove("hidden");
 
+      applyUrlState({ focusFinding: true });
+      renderAccessMapTree(treeSearch.value || "");
+      renderFindingsTable();
+      syncUrlState();
+
       const elapsed = performance.now() - t0;
       loaderText.textContent = "Done in " + elapsed.toFixed(1) + " ms";
+      loader.setAttribute("aria-busy", "false");
       setTimeout(() => loader.classList.add("hidden"), 250);
     }
 
@@ -4616,7 +5501,7 @@
     function extractScanMetadata() {
       scanMetadata = {};
       if (!rawData || typeof rawData !== "object") {
-        scanMetadata.timestamp = new Date().toLocaleString();
+        scanMetadata.timestamp = formatDateTime();
         return;
       }
 
@@ -4632,7 +5517,7 @@
         data.timestamp ||
         data.scan_timestamp ||
         data.generated_at ||
-        new Date().toLocaleString();
+        formatDateTime();
 
       // Target info
       scanMetadata.target =
@@ -4733,7 +5618,7 @@
       const importNote = document.getElementById("import-note");
 
       section.classList.remove("hidden");
-      if (ts) ts.textContent = scanMetadata.timestamp || new Date().toLocaleString();
+      if (ts) ts.textContent = formatDisplayDate(scanMetadata.timestamp);
 
       if (scanMetadata.target) {
         targetWrap.style.display = "";
@@ -4775,6 +5660,9 @@
       }
 
       updateSidebarSummary();
+      document.title = scanMetadata.reportSource
+        ? `${scanMetadata.reportSource} | Kingfisher Report Viewer`
+        : "Kingfisher Report Viewer";
     }
 
     function updateSidebarSummary() {
@@ -4795,26 +5683,26 @@
 
       sourceEl.textContent = sourceText;
       targetEl.textContent = targetText;
-      totalEl.textContent = totalFindings.toString();
-      activeEl.textContent = String(validationCounts.active || 0);
-      identitiesEl.textContent = totalIdentities.toString();
+      totalEl.textContent = formatNumber(totalFindings);
+      activeEl.textContent = formatNumber(validationCounts.active || 0);
+      identitiesEl.textContent = formatNumber(totalIdentities);
       accessEl.textContent = totalIdentities > 0 ? "Yes" : "No";
     }
 
     function updateMetrics() {
       const totalFindings = findings.length;
-      document.getElementById("stat-total").textContent = totalFindings.toString();
+      document.getElementById("stat-total").textContent = formatNumber(totalFindings);
 
       const highSev = findings.filter((f) => {
         const conf = f.finding && f.finding.confidence ? String(f.finding.confidence) : "";
         return conf.toLowerCase() === "high";
       }).length;
-      document.getElementById("stat-high").textContent = highSev.toString();
+      document.getElementById("stat-high").textContent = formatNumber(highSev);
 
       const validationCounts = calculateValidationCounts();
-      document.getElementById("stat-active").textContent = (validationCounts.active || 0).toString();
+      document.getElementById("stat-active").textContent = formatNumber(validationCounts.active || 0);
 
-      document.getElementById("stat-identities").textContent = (accessMap || []).length.toString();
+      document.getElementById("stat-identities").textContent = formatNumber((accessMap || []).length);
 
       const enrichedCount = findings.reduce(
         (n, f) => n + (f && f.finding && f.finding.kingfisher_enrichment ? 1 : 0),
@@ -4822,7 +5710,7 @@
       );
       const enrichedEl = document.getElementById("stat-enriched");
       const enrichedCard = document.getElementById("stat-enriched-card");
-      if (enrichedEl) enrichedEl.textContent = enrichedCount.toString();
+      if (enrichedEl) enrichedEl.textContent = formatNumber(enrichedCount);
       if (enrichedCard) {
         if (enrichedCount > 0) enrichedCard.classList.remove("hidden");
         else enrichedCard.classList.add("hidden");
@@ -4834,10 +5722,10 @@
       const sarifCount = document.getElementById("dedup-count-sarif");
       const thCount = document.getElementById("dedup-count-trufflehog");
       const glCount = document.getElementById("dedup-count-gitleaks");
-      if (kfCount) kfCount.textContent = (dr.kingfisher || 0).toLocaleString();
-      if (sarifCount) sarifCount.textContent = (dr.sarif || 0).toLocaleString();
-      if (thCount) thCount.textContent = (dr.trufflehog || 0).toLocaleString();
-      if (glCount) glCount.textContent = (dr.gitleaks || 0).toLocaleString();
+      if (kfCount) kfCount.textContent = formatNumber(dr.kingfisher || 0);
+      if (sarifCount) sarifCount.textContent = formatNumber(dr.sarif || 0);
+      if (thCount) thCount.textContent = formatNumber(dr.trufflehog || 0);
+      if (glCount) glCount.textContent = formatNumber(dr.gitleaks || 0);
       if (dedupPanel) {
         if (dr.total > 0) dedupPanel.classList.remove("hidden");
         else dedupPanel.classList.add("hidden");
@@ -4879,9 +5767,9 @@
         const snippet = (finding.snippet || "").toLowerCase();
         const fingerprint = (finding.fingerprint || "").toLowerCase();
         const sourceTool = getFindingSourceTool(finding);
-        const status = (finding.validation && finding.validation.status
-          ? String(finding.validation.status)
-          : "").toLowerCase();
+          const status = finding.validation && finding.validation.status
+            ? validationStatusLabel(finding.validation.status).toLowerCase()
+            : "not attempted";
 
         if (filterLower) {
           if (!ruleName.includes(filterLower) && !path.includes(filterLower) && !snippet.includes(filterLower) && !fingerprint.includes(filterLower)) {
@@ -4899,18 +5787,12 @@
           return normalizedStatus === "active";
         } else if (validation === "assumed") {
           return normalizedStatus === "assumed";
-        } else if (validation === "local") {
-          return normalizedStatus === "local";
         } else if (validation === "inactive") {
           return normalizedStatus === "inactive";
-        } else if (validation === "invalid_material") {
-          return normalizedStatus === "invalid_material";
         } else if (validation === "inconclusive") {
           return normalizedStatus === "inconclusive";
         } else if (validation === "not_attempted") {
           return normalizedStatus === "not_attempted";
-        } else if (validation === "canary") {
-          return normalizedStatus === "canary";
         }
 
         return true;
@@ -4945,8 +5827,8 @@
             vb = (fb.confidence || "").toLowerCase();
             break;
           case "validation":
-            va = (fa.validation && fa.validation.status ? fa.validation.status : "").toLowerCase();
-            vb = (fb.validation && fb.validation.status ? fb.validation.status : "").toLowerCase();
+            va = validationStatusLabel(fa.validation && fa.validation.status ? fa.validation.status : "Not Attempted").toLowerCase();
+            vb = validationStatusLabel(fb.validation && fb.validation.status ? fb.validation.status : "Not Attempted").toLowerCase();
             break;
           case "line":
             va = fa.line != null ? Number(fa.line) : Number.POSITIVE_INFINITY;
@@ -4975,6 +5857,7 @@
         const field = th.dataset.field;
         const span = th.querySelector(".sort-indicator");
         if (!span) return;
+        th.setAttribute("aria-sort", field === sortField ? (sortDirection === "asc" ? "ascending" : "descending") : "none");
         if (field === sortField) {
           span.textContent = sortDirection === "asc" ? "▲" : "▼";
         } else {
@@ -4987,7 +5870,7 @@
       if (!path) return "-";
       const parts = path.split("/");
       if (parts.length > 4) {
-        return ".../" + parts.slice(-3).join("/");
+        return "…/" + parts.slice(-3).join("/");
       }
       return path;
     }
@@ -4995,6 +5878,7 @@
     function normalizeValidationStatus(status) {
       const normalized = (status || "").toString().trim().toLowerCase();
 
+      // Keep the viewer's status vocabulary small while preserving imported findings.
       if (
         normalized === "verified active credential" ||
         normalized === "active credential" ||
@@ -5018,8 +5902,11 @@
         return "inactive";
       }
 
-      if (normalized === "locally derived" || normalized === "locally_derived") {
-        return "local";
+      if (
+        normalized === "locally derived" ||
+        normalized === "locally_derived"
+      ) {
+        return "assumed";
       }
 
       if (
@@ -5027,7 +5914,7 @@
         normalized === "invalid material" ||
         normalized === "invalid_material"
       ) {
-        return "invalid_material";
+        return "inconclusive";
       }
 
       if (
@@ -5041,7 +5928,8 @@
 
       if (
         normalized === "not attempted" ||
-        normalized === "not_attempted"
+        normalized === "not_attempted" ||
+        normalized === "unknown"
       ) {
         return "not_attempted";
       }
@@ -5051,42 +5939,49 @@
         normalized === "canary token (skipped)" ||
         normalized === "canary"
       ) {
-        return "canary";
+        return "not_attempted";
       }
 
-      return "unknown";
+      return "not_attempted";
+    }
+
+    function validationStatusLabel(status) {
+      const labels = {
+        active: "Active Credential",
+        assumed: "Assumed Valid (Not Live-Validated)",
+        inactive: "Inactive Credential",
+        not_attempted: "Not Attempted",
+        inconclusive: "Inconclusive Validation",
+      };
+      return labels[normalizeValidationStatus(status)] || labels.not_attempted;
     }
 
     function validationBadgeClass(normalizedStatus) {
       if (
         normalizedStatus === "active" ||
         normalizedStatus === "assumed" ||
-        normalizedStatus === "inactive"
+        normalizedStatus === "inactive" ||
+        normalizedStatus === "inconclusive" ||
+        normalizedStatus === "not_attempted"
       ) {
         return normalizedStatus;
       }
-      if (normalizedStatus === "local") return "local";
-      if (normalizedStatus === "invalid_material") return "invalid-material";
-      return "unknown";
+      return "not_attempted";
     }
 
     function calculateValidationCounts(list = findings) {
       const counts = {
         active: 0,
         assumed: 0,
-        local: 0,
         inactive: 0,
-        invalid_material: 0,
         inconclusive: 0,
         not_attempted: 0,
-        canary: 0,
-        unknown: 0,
       };
       (list || []).forEach((f) => {
         const status =
           f.finding && f.finding.validation && f.finding.validation.status
-            ? f.finding.validation.status
-            : "";
+            ? validationStatusLabel(f.finding.validation.status)
+            : "Not Attempted";
         const key = normalizeValidationStatus(status);
         counts[key] = (counts[key] || 0) + 1;
       });
@@ -5135,7 +6030,7 @@
         ? (list || []).filter((entry) => {
             const finding = entry && entry.finding ? entry.finding : {};
             const normalizedStatus = normalizeValidationStatus(
-              finding.validation && finding.validation.status ? finding.validation.status : ""
+              finding.validation && finding.validation.status ? finding.validation.status : "Not Attempted"
             );
             return normalizedStatus === "active";
           })
@@ -5144,9 +6039,9 @@
       workingList.forEach((entry) => {
         const finding = entry && entry.finding ? entry.finding : {};
         const source = getFindingSourceTool(finding);
-        const normalizedStatus = normalizeValidationStatus(
-          finding.validation && finding.validation.status ? finding.validation.status : ""
-        );
+          const normalizedStatus = normalizeValidationStatus(
+            finding.validation && finding.validation.status ? finding.validation.status : "Not Attempted"
+          );
         const label = getFindingDetectorLabel(entry);
 
         const key = source + "::" + label;
@@ -5299,6 +6194,7 @@
       if (!ctx) return;
 
       const total = dataPoints.reduce((sum, entry) => sum + (counts[entry.key] || 0), 0);
+      canvas.setAttribute("aria-label", `${emptyLabel}; ${formatNumber(total)} findings`);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const style = getComputedStyle(document.documentElement);
@@ -5351,7 +6247,7 @@
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
       ctx.font = "700 16px -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif";
-      ctx.fillText(total + " findings", centerX, centerY);
+       ctx.fillText(formatNumber(total) + " findings", centerX, centerY);
       ctx.restore();
 
       if (legendEl) {
@@ -5365,6 +6261,7 @@
           swatch.style.background = entry.color;
           const text = document.createElement("span");
           text.textContent = `${entry.label}: ${counts[entry.key] || 0}`;
+          row.setAttribute("role", "listitem");
           row.appendChild(swatch);
           row.appendChild(text);
           legendEl.appendChild(row);
@@ -5376,22 +6273,16 @@
       const palette = {
         active: "#22c55e",
         assumed: "#3b82f6",
-        local: "#06b6d4",
         inactive: "#f97316",
-        invalid_material: "#e11d48",
         not_attempted: "#38bdf8",
-        canary: "#a855f7",
-        unknown: "#9ca3af",
+        inconclusive: "#eab308",
       };
       const dataPoints = [
-        { key: "active", label: "Active", color: palette.active },
+        { key: "active", label: "Active Credential", color: palette.active },
         { key: "assumed", label: "Assumed Valid", color: palette.assumed },
-        { key: "local", label: "Locally Derived", color: palette.local },
-        { key: "inactive", label: "Inactive", color: palette.inactive },
-        { key: "invalid_material", label: "Invalid Material", color: palette.invalid_material },
+        { key: "inactive", label: "Inactive Credential", color: palette.inactive },
         { key: "not_attempted", label: "Not Attempted", color: palette.not_attempted },
-        { key: "canary", label: "Validation Skipped", color: palette.canary },
-        { key: "unknown", label: "Unknown", color: palette.unknown },
+        { key: "inconclusive", label: "Inconclusive Validation", color: palette.inconclusive },
       ];
       renderDonutChart(statusChartCanvas, statusLegend, dataPoints, counts, "No validation data yet");
     }
@@ -5423,7 +6314,7 @@
 
       sourceDetectorCharts.innerHTML = "";
       chartEntries.forEach((entry, index) => {
-        const card = document.createElement("div");
+       const card = document.createElement("div");
         card.className = "chart-card";
 
         const canvas = document.createElement("canvas");
@@ -5503,15 +6394,19 @@
         <table class="breakdown-table">
           <thead>
             <tr>
-              <th><button class="breakdown-sort-btn" type="button" onclick="toggleDetectorBreakdownSort('label')">Detector <span class="breakdown-sort-indicator">${getDetectorBreakdownSortIndicator("label")}</span></button></th>
-              <th><button class="breakdown-sort-btn" type="button" onclick="toggleDetectorBreakdownSort('source')">Source <span class="breakdown-sort-indicator">${getDetectorBreakdownSortIndicator("source")}</span></button></th>
-              <th><button class="breakdown-sort-btn" type="button" onclick="toggleDetectorBreakdownSort('count')">${detectorBreakdownActiveOnly ? "Active findings" : "Findings"} <span class="breakdown-sort-indicator">${getDetectorBreakdownSortIndicator("count")}</span></button></th>
-              <th><button class="breakdown-sort-btn" type="button" onclick="toggleDetectorBreakdownSort('active')">Active <span class="breakdown-sort-indicator">${getDetectorBreakdownSortIndicator("active")}</span></button></th>
+              <th><button class="breakdown-sort-btn" type="button" data-sort-field="label">Detector <span class="breakdown-sort-indicator">${getDetectorBreakdownSortIndicator("label")}</span></button></th>
+              <th><button class="breakdown-sort-btn" type="button" data-sort-field="source">Source <span class="breakdown-sort-indicator">${getDetectorBreakdownSortIndicator("source")}</span></button></th>
+              <th><button class="breakdown-sort-btn" type="button" data-sort-field="count">${detectorBreakdownActiveOnly ? "Active findings" : "Findings"} <span class="breakdown-sort-indicator">${getDetectorBreakdownSortIndicator("count")}</span></button></th>
+              <th><button class="breakdown-sort-btn" type="button" data-sort-field="active">Active <span class="breakdown-sort-indicator">${getDetectorBreakdownSortIndicator("active")}</span></button></th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
         </table>
       `;
+      detectorBreakdown.querySelectorAll(".breakdown-sort-btn").forEach((button) => {
+        const field = button.dataset.sortField;
+        if (field) button.addEventListener("click", () => toggleDetectorBreakdownSort(field));
+      });
     }
 
     function triggerDownload(filename, content, type) {
@@ -5520,18 +6415,27 @@
       const link = document.createElement("a");
       link.href = url;
       link.download = filename;
+      document.body.appendChild(link);
       link.click();
+      link.remove();
       URL.revokeObjectURL(url);
     }
 
     function downloadFindingsJson() {
       const filtered = getFilteredSortedFindings();
       if (!filtered.length) {
-        alert("No findings are available for the current filters.");
+        announce("No findings are available for the current filters.");
         return;
       }
 
-      const json = JSON.stringify(filtered, null, 2);
+      const enriched = filtered.map((entry) => {
+        const blastRadius = getAccessMapForFingerprint(entry.finding && entry.finding.fingerprint);
+        return Object.assign({}, entry, {
+          blast_radius: blastRadius,
+          access_map: blastRadius,
+        });
+      });
+      const json = JSON.stringify(enriched, null, 2);
       triggerDownload("kingfisher-findings.json", json, "application/json");
     }
 
@@ -5546,7 +6450,7 @@
     function downloadFindingsCsv() {
       const filtered = getFilteredSortedFindings();
       if (!filtered.length) {
-        alert("No findings are available for the current filters.");
+        announce("No findings are available for the current filters.");
         return;
       }
 
@@ -5565,7 +6469,10 @@
         const rule = entry.rule || {};
         const finding = entry.finding || {};
         const status =
-          finding.validation && finding.validation.status ? finding.validation.status : "";
+          finding.validation && finding.validation.status
+            ? validationStatusLabel(finding.validation.status)
+            : "Not Attempted";
+        const blastRadius = getAccessMapForFingerprint(finding.fingerprint);
 
         return [
           rule.id || "",
@@ -5576,9 +6483,11 @@
           status,
           finding.confidence || "",
           (finding.snippet || "").replace(/\s+/g, " ").trim(),
+          JSON.stringify(blastRadius),
         ];
       });
 
+      headers.push("blast_radius");
       const csv = [headers.join(",")].concat(rows.map((r) => r.map(csvEscape).join(","))).join("\n");
       triggerDownload("kingfisher-findings.csv", csv, "text/csv");
     }
@@ -5674,11 +6583,11 @@
 
     function generateScanReport(scope = "all", { activeOnly = false } = {}) {
       if (!findings || findings.length === 0) {
-        alert("Load a report before downloading a Scan report.");
+        announce("Load a report before downloading a Scan report.");
         return;
       }
 
-      const statusOrder = { active: 0, assumed: 1, local: 2, inconclusive: 3, inactive: 4, invalid_material: 5, canary: 6, not_attempted: 7, unknown: 8 };
+      const statusOrder = { active: 0, assumed: 1, inactive: 2, not_attempted: 3, inconclusive: 4 };
       let baseFindings =
         scope === "filtered" ? getFilteredSortedFindings().slice() : (Array.isArray(findings) ? findings.slice() : []);
       if (activeOnly) {
@@ -5687,7 +6596,7 @@
           return normalizeValidationStatus(fd.validation && fd.validation.status ? fd.validation.status : "") === "active";
         });
         if (baseFindings.length === 0) {
-          alert("No active credentials found for the selected scope. Uncheck 'Active credentials only' to include all findings.");
+          announce("No active credentials found for the selected scope. Uncheck 'Active credentials only' to include all findings.");
           return;
         }
       }
@@ -5697,8 +6606,8 @@
         const fb = b.finding || {};
         const keyA = normalizeValidationStatus(fa.validation && fa.validation.status ? fa.validation.status : "");
         const keyB = normalizeValidationStatus(fb.validation && fb.validation.status ? fb.validation.status : "");
-        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : statusOrder.unknown;
-        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : statusOrder.unknown;
+        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 99;
+        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 99;
         if (sa !== sb) return sa - sb;
 
         const ra = (a.rule && (a.rule.name || a.rule.id)) || "";
@@ -5740,12 +6649,12 @@
             .map((entry) => {
               const rule = entry.rule || {};
               const finding = entry.finding || {};
-              const statusRaw = finding.validation && finding.validation.status ? finding.validation.status : "Unknown";
+              const statusRaw = validationStatusLabel(finding.validation && finding.validation.status ? finding.validation.status : "Not Attempted");
               const normalizedStatus = normalizeValidationStatus(statusRaw);
               const findingId = getFindingIdFromFinding(finding);
               const gitUrl = getFileUrlFromFinding(finding);
               const sourceTool = getFindingSourceDisplayName(finding);
-              const statusColor = normalizedStatus === "active" ? "#dc2626" : normalizedStatus === "assumed" ? "#2563eb" : normalizedStatus === "inactive" ? "#f97316" : "#6b7280";
+              const statusColor = normalizedStatus === "active" ? "#dc2626" : normalizedStatus === "assumed" ? "#2563eb" : normalizedStatus === "inactive" ? "#f97316" : normalizedStatus === "inconclusive" ? "#92400e" : "#0369a1";
               return `
                 <tr>
                   <td>${escapeHtml(rule.name || rule.id || "")}</td>
@@ -5755,7 +6664,7 @@
                   <td style="color:${statusColor};font-weight:600;">${escapeHtml(statusRaw)}</td>
                   <td>${escapeHtml(finding.confidence || "")}</td>
                   <td>${finding.line != null ? finding.line : ""}</td>
-                  ${gitUrl ? `<td style="font-size:10px;"><a href="${escapeHtml(gitUrl)}" style="color:#1d4ed8;">${escapeHtml(gitUrl.length > 50 ? gitUrl.substring(0, 50) + "..." : gitUrl)}</a></td>` : "<td></td>"}
+                  ${gitUrl ? `<td style="font-size:10px;"><a href="${escapeHtml(gitUrl)}" style="color:#1d4ed8;">${escapeHtml(gitUrl.length > 50 ? gitUrl.substring(0, 50) + "…" : gitUrl)}</a></td>` : "<td></td>"}
                 </tr>
               `;
             })
@@ -5818,8 +6727,7 @@
         execSummary = `<div style="padding:12px 16px;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;font-size:13px;color:#92400e;line-height:1.6;margin-bottom:16px;">
           <strong>Review Recommended:</strong> This scan found <strong>${baseFindings.length} finding${baseFindings.length !== 1 ? "s" : ""}</strong>.
           ${counts.inactive > 0 ? `${counts.inactive} credential${counts.inactive !== 1 ? "s were" : " was"} inactive at scan time.` : ""}
-          ${counts.not_attempted > 0 ? `${counts.not_attempted} ${counts.not_attempted !== 1 ? "were" : "was"} not validated.` : ""}
-          ${counts.canary > 0 ? `${counts.canary} ${counts.canary !== 1 ? "had" : "had"} validation skipped.` : ""}
+          ${counts.not_attempted > 0 ? `${counts.not_attempted} ${counts.not_attempted !== 1 ? "were" : "was"} not attempted.` : ""}
           ${scanMetadata.imported ? `Imported reports do not include Kingfisher blast-radius data or command workflows.` : ""}
         </div>`;
       } else {
@@ -5859,7 +6767,7 @@
 <body>
   <div class="report-header">
     <h1>Kingfisher Scan Report</h1>
-    <div class="report-date">${escapeHtml(new Date().toLocaleString())}<br>Scope: ${escapeHtml(scopeLabel)}</div>
+     <div class="report-date">${escapeHtml(formatDateTime())}<br>Scope: ${escapeHtml(scopeLabel)}</div>
   </div>
 
   ${metaHtml}
@@ -5878,12 +6786,11 @@
     <div class="chart-wrapper">
       ${statusImage ? `<img src="${statusImage}" alt="Status chart" style="max-width:240px; border:1px solid #d1d5db; border-radius:10px;">` : ""}
       <div class="legend">
-        <span><span class="dot" style="background:#22c55e"></span> Active: ${counts.active || 0}</span>
+        <span><span class="dot" style="background:#22c55e"></span> Active Credential: ${counts.active || 0}</span>
         <span><span class="dot" style="background:#3b82f6"></span> Assumed Valid: ${counts.assumed || 0}</span>
         <span><span class="dot" style="background:#f97316"></span> Inactive: ${counts.inactive || 0}</span>
         <span><span class="dot" style="background:#38bdf8"></span> Not Attempted: ${counts.not_attempted || 0}</span>
-        <span><span class="dot" style="background:#a855f7"></span> Validation Skipped: ${counts.canary || 0}</span>
-        <span><span class="dot" style="background:#9ca3af"></span> Unknown: ${counts.unknown || 0}</span>
+        <span><span class="dot" style="background:#eab308"></span> Inconclusive Validation: ${counts.inconclusive || 0}</span>
       </div>
     </div>
   </div>
@@ -5940,7 +6847,7 @@
 
     function generateAccessMapReport() {
       if (!Array.isArray(accessMap) || accessMap.length === 0) {
-        alert("No Blast Radius entries are available. Run a scan with --blast-radius first.");
+        announce("No Blast Radius entries are available. Run a scan with --blast-radius first.");
         return;
       }
 
@@ -6066,7 +6973,7 @@
 <body>
   <div class="report-header">
     <h1>Kingfisher Blast Radius Report</h1>
-    <div class="report-date">${escapeHtml(new Date().toLocaleString())}</div>
+     <div class="report-date">${escapeHtml(formatDateTime())}</div>
   </div>
 
   <div class="section">
@@ -6137,8 +7044,8 @@
 
           const status =
             finding.validation && finding.validation.status
-              ? String(finding.validation.status)
-              : "Unknown";
+              ? validationStatusLabel(finding.validation.status)
+              : "Not Attempted";
           const normalizedStatus = normalizeValidationStatus(status);
           const badgeClass = validationBadgeClass(normalizedStatus);
 
@@ -6149,7 +7056,7 @@
           const sourceTool = getFindingSourceTool(finding);
           const sourceBadge = `<span class="badge ${getSourceBadgeClass(sourceTool)}">${escapeHtml(getSourceDisplayName(sourceTool))}</span>`;
 
-          const tr = document.createElement("tr");
+        const tr = document.createElement("tr");
           tr.innerHTML = `
             <td>
               <div style="font-weight:600">${escapeHtml(ruleName)}${enrichedChip}</div>
@@ -6167,7 +7074,18 @@
               ${finding.line != null ? finding.line : ""}
             </td>
           `;
-          tr.onclick = () => showFindingDetail(f);
+           tr.tabIndex = 0;
+           tr.setAttribute("role", "button");
+           tr.setAttribute("aria-label", `Open details for ${ruleName}, ${path || "unknown location"}`);
+           tr.addEventListener("click", (event) => {
+             if (event.target.closest("a, button")) return;
+             showFindingDetail(f);
+           });
+           tr.addEventListener("keydown", (event) => {
+             if (event.key !== "Enter" && event.key !== " ") return;
+             event.preventDefault();
+             showFindingDetail(f);
+           });
           frag.appendChild(tr);
         }
         findingsBody.appendChild(frag);
@@ -6177,29 +7095,42 @@
         pageInfo.textContent = "0 of 0";
         pagePrev.disabled = true;
         pageNext.disabled = true;
+        pageInfoBottom.textContent = "0 of 0";
+        pagePrevBottom.disabled = true;
+        pageNextBottom.disabled = true;
       } else {
-        pageInfo.textContent = (startIndex + 1) + "–" + endIndex + " of " + total;
+        const pageLabel = (startIndex + 1) + "–" + endIndex + " of " + total;
+        pageInfo.textContent = pageLabel;
         pagePrev.disabled = currentPage <= 1;
         pageNext.disabled = currentPage >= totalPages;
+        pageInfoBottom.textContent = pageLabel;
+        pagePrevBottom.disabled = currentPage <= 1;
+        pageNextBottom.disabled = currentPage >= totalPages;
       }
 
       updateSortIndicators();
     }
 
-    function showFindingDetail(f) {
+    function showFindingDetail(f, { restoreUrl = true } = {}) {
       const rule = f.rule || {};
       const finding = f.finding || {};
       const importInfo = finding.viewer_import && typeof finding.viewer_import === "object" ? finding.viewer_import : null;
 
       const panel = document.getElementById("finding-detail");
+      if (restoreUrl || !modalReturnFocus) {
+        modalReturnFocus = document.activeElement === document.body
+          ? document.getElementById("main-content")
+          : document.activeElement;
+      }
       panel.classList.remove("hidden");
-      panel.scrollIntoView({ behavior: "smooth", block: "start" });
+      panel.setAttribute("aria-hidden", "false");
+      document.body.classList.add("modal-open");
+      document.getElementById("finding-detail-close").focus();
 
       document.getElementById("fd-rule-id").textContent = rule.id || "";
       const fpEl = document.getElementById("fd-fingerprint");
       const fpVal = finding.fingerprint || "";
       fpEl.textContent = fpVal;
-      fpEl.innerHTML = fpVal; // reset content
 
       if (fpVal && Array.isArray(accessMap)) {
           const hasEntry = accessMap.some(entry => entry.fingerprint === fpVal);
@@ -6213,7 +7144,8 @@
               btn.style.borderColor = "var(--brand)";
               btn.style.color = "var(--brand-dark)";
               btn.onclick = () => {
-                  setActiveView("view-access");
+                   closeFindingDetail({ restoreUrl: false });
+                   setActiveView("view-access", { history: true });
                   const treeSearch = document.getElementById("tree-search");
                   if (treeSearch) {
                       treeSearch.value = fpVal;
@@ -6250,8 +7182,9 @@
         }
       }
 
-      const statusRaw =
-        finding.validation && finding.validation.status ? String(finding.validation.status) : "Unknown";
+      const statusRaw = validationStatusLabel(
+        finding.validation && finding.validation.status ? finding.validation.status : "Not Attempted"
+      );
       const normalizedStatus = normalizeValidationStatus(statusRaw);
       const badgeClass = validationBadgeClass(normalizedStatus);
       const statusEl = document.getElementById("fd-validation-status");
@@ -6327,7 +7260,8 @@
         // Set up copy button
         validateCopyBtn.onclick = async () => {
           try {
-            await navigator.clipboard.writeText(finding.validate_command);
+             await navigator.clipboard.writeText(finding.validate_command);
+             announce("Validation command copied to clipboard.");
             validateCopyBtn.classList.add("copied");
             validateCopyBtn.querySelector("span").textContent = "Copied!";
             setTimeout(() => {
@@ -6354,7 +7288,8 @@
         // Set up copy button
         revokeCopyBtn.onclick = async () => {
           try {
-            await navigator.clipboard.writeText(finding.revoke_command);
+             await navigator.clipboard.writeText(finding.revoke_command);
+             announce("Revocation command copied to clipboard.");
             revokeCopyBtn.classList.add("copied");
             revokeCopyBtn.querySelector("span").textContent = "Copied!";
             setTimeout(() => {
@@ -6373,6 +7308,7 @@
       // Blast radius
       currentDetailFinding = f;
       renderBlastRadius(f);
+      if (restoreUrl) syncUrlState({ replace: false });
     }
 
     function getFileUrlFromFinding(finding) {
@@ -6407,7 +7343,8 @@
       code.textContent = cmd;
       btn.onclick = async () => {
         try {
-          await navigator.clipboard.writeText(cmd);
+         await navigator.clipboard.writeText(cmd);
+          announce("Command copied to clipboard.");
           btn.classList.add("copied");
           const label = btn.querySelector("span");
           if (label) label.textContent = "Copied!";
@@ -6439,7 +7376,9 @@
           : "Partial match (file + line only)";
       }
 
-      const statusRaw = enr.validation && enr.validation.status ? String(enr.validation.status) : "Unknown";
+      const statusRaw = validationStatusLabel(
+        enr.validation && enr.validation.status ? enr.validation.status : "Not Attempted"
+      );
       const normalized = normalizeValidationStatus(statusRaw);
       const badgeClass = validationBadgeClass(normalized);
       const validationEl = document.getElementById("fd-kf-validation");
@@ -6502,7 +7441,7 @@
       const rule = finding.rule || {};
       const fd = finding.finding || {};
       const importInfo = fd.viewer_import && typeof fd.viewer_import === "object" ? fd.viewer_import : null;
-      const statusRaw = fd.validation && fd.validation.status ? String(fd.validation.status) : "";
+      const statusRaw = fd.validation && fd.validation.status ? validationStatusLabel(fd.validation.status) : "Not Attempted";
       const normalizedStatus = normalizeValidationStatus(statusRaw);
       const isActive = normalizedStatus === "active";
 
@@ -6733,7 +7672,7 @@
       const fingerprint = finding.fingerprint || "";
       const entries = getAccessMapForFingerprint(fingerprint);
       const { level, text: rationaleText } = generateRiskRationale(f, entries);
-      const statusRaw = finding.validation && finding.validation.status ? String(finding.validation.status) : "Unknown";
+       const statusRaw = validationStatusLabel(finding.validation && finding.validation.status ? finding.validation.status : "Not Attempted");
       const gitUrl = getFileUrlFromFinding(finding);
       const sourceTool = getFindingSourceDisplayName(finding);
 
@@ -6815,7 +7754,7 @@
 </head>
 <body>
   <h1>Risk Report: ${escapeHtml(rule.name || rule.id || "")}</h1>
-  <div class="meta">Generated ${escapeHtml(new Date().toLocaleString())} · Fingerprint: ${escapeHtml(fingerprint)}</div>
+   <div class="meta">Generated ${escapeHtml(formatDateTime())} · Fingerprint: ${escapeHtml(fingerprint)}</div>
 
   <h2>Risk Assessment</h2>
   <div class="rationale" style="background:${colors.bg};border:1px solid ${colors.border};color:${colors.text};">
@@ -6867,7 +7806,7 @@
 
     function generateRiskReport({ activeOnly = false } = {}) {
       if (!findings || findings.length === 0) {
-        alert("No findings loaded. Load a report first.");
+        announce("No findings loaded. Load a report first.");
         return;
       }
 
@@ -6878,20 +7817,20 @@
           return normalizeValidationStatus(fd.validation && fd.validation.status ? fd.validation.status : "") === "active";
         });
         if (pool.length === 0) {
-          alert("No active credentials found. Uncheck 'Active credentials only' to include all findings.");
+          announce("No active credentials found. Uncheck 'Active credentials only' to include all findings.");
           return;
         }
       }
 
       // Sort: active first, then by rule name
-      const statusOrder = { active: 0, assumed: 1, local: 2, inconclusive: 3, inactive: 4, invalid_material: 5, canary: 6, not_attempted: 7, unknown: 8 };
+      const statusOrder = { active: 0, assumed: 1, inactive: 2, not_attempted: 3, inconclusive: 4 };
       const sorted = pool.sort((a, b) => {
         const fa = a.finding || {};
         const fb = b.finding || {};
         const keyA = normalizeValidationStatus(fa.validation && fa.validation.status ? fa.validation.status : "");
         const keyB = normalizeValidationStatus(fb.validation && fb.validation.status ? fb.validation.status : "");
-        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : statusOrder.unknown;
-        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : statusOrder.unknown;
+        const sa = statusOrder.hasOwnProperty(keyA) ? statusOrder[keyA] : 99;
+        const sb = statusOrder.hasOwnProperty(keyB) ? statusOrder[keyB] : 99;
         if (sa !== sb) return sa - sb;
         const ra = (a.rule && (a.rule.name || a.rule.id)) || "";
         const rb = (b.rule && (b.rule.name || b.rule.id)) || "";
@@ -6921,7 +7860,7 @@
         const entries = getAccessMapForFingerprint(fp);
         const { level, text: rationaleText } = generateRiskRationale(f, entries);
         const colors = levelColors[level] || levelColors.none;
-        const statusRaw = finding.validation && finding.validation.status ? String(finding.validation.status) : "Unknown";
+         const statusRaw = validationStatusLabel(finding.validation && finding.validation.status ? finding.validation.status : "Not Attempted");
         const gitUrl = getFileUrlFromFinding(finding);
         const sourceTool = getFindingSourceDisplayName(finding);
 
@@ -6992,7 +7931,7 @@
 <body>
   <h1>Kingfisher Risk Report</h1>
   <div class="meta">
-    Generated ${escapeHtml(new Date().toLocaleString())} ·
+     Generated ${escapeHtml(formatDateTime())} ·
     Scope: ${escapeHtml(riskScopeLabel)} ·
     ${sorted.length} finding${sorted.length !== 1 ? "s" : ""} ·
     ${findingsWithAccess.length} with blast-radius data
@@ -7206,6 +8145,9 @@
       element.dataset.graphKey = node.graphKey;
       element.setAttribute("role", "button");
       element.setAttribute("tabindex", "0");
+      element.setAttribute("aria-label", node.kind === "summary"
+        ? "Additional resources"
+        : `${node.kind === "resource" ? "Resource" : "Credential identity"}: ${node.label || node.resourceName || "unknown"}`);
       element.addEventListener("click", () => activateAccessMapNode(node));
       element.addEventListener("keydown", (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
@@ -7316,6 +8258,7 @@
         const identitySelection = {
           kind: "identity",
           entryKey: entry.key,
+          label: identity.account || "unknown identity",
           graphKey: "identity:" + entry.key,
         };
         attachGraphNodeInteraction(identityNode, identitySelection);
@@ -7356,6 +8299,7 @@
           const resourceSelection = {
             kind: resource.summary ? "summary" : "resource",
             entryKey: entry.key,
+            label: resource.name,
             resourceName: resource.name,
             permissions: resource.permissions,
             graphKey: `resource:${entry.key}:${resourceIndex}`,
@@ -7380,6 +8324,7 @@
         selectedAccessMapNode = {
           kind: "identity",
           entryKey: graphEntries[0].key,
+          label: graphEntries[0].identity.account || "unknown identity",
           graphKey: "identity:" + graphEntries[0].key,
         };
       }
@@ -7488,9 +8433,11 @@
         return;
       }
 
+      const renderedVisible = visible.slice(0, accessRenderLimit);
+
       // Group by provider.
       const byProvider = new Map();
-      visible.forEach((entry) => {
+      renderedVisible.forEach((entry) => {
         const prov = String(entry.identity.provider || "unknown").toLowerCase();
         if (!byProvider.has(prov)) byProvider.set(prov, []);
         byProvider.get(prov).push(entry);
@@ -7512,7 +8459,24 @@
         frag.appendChild(buildProviderSection(prov, entries));
       });
       list.appendChild(frag);
-      renderAccessMapGraph(visible);
+      if (renderedVisible.length < visible.length) {
+        const more = document.createElement("div");
+        more.className = "am-empty-hint";
+        more.textContent = `Showing ${formatNumber(renderedVisible.length)} of ${formatNumber(visible.length)} identities.`;
+        const moreButton = document.createElement("button");
+        moreButton.className = "btn";
+        moreButton.type = "button";
+        moreButton.textContent = "Show more identities";
+        moreButton.style.marginTop = "10px";
+        moreButton.addEventListener("click", () => {
+          accessRenderLimit += 50;
+          renderAccessMapTree(treeSearch.value || "");
+          syncUrlState();
+        });
+        more.appendChild(moreButton);
+        list.appendChild(more);
+      }
+      renderAccessMapGraph(renderedVisible);
     }
 
     function buildProviderSection(provider, entries) {
@@ -7544,8 +8508,10 @@
         risky += s.risky;
       });
 
-      const header = document.createElement("div");
+      const header = document.createElement("button");
       header.className = "am-provider-header";
+      header.type = "button";
+      header.setAttribute("aria-expanded", "true");
 
       const caret = document.createElement("span");
       caret.className = "am-provider-header__caret";
@@ -7559,14 +8525,14 @@
 
       const title = document.createElement("span");
       title.className = "am-provider-header__title";
-      title.textContent = `${entries.length} identit${entries.length !== 1 ? "ies" : "y"}`;
+      title.textContent = `${formatNumber(entries.length)} identit${entries.length !== 1 ? "ies" : "y"}`;
       header.appendChild(title);
 
       const sub = document.createElement("span");
       sub.className = "am-provider-header__sub";
       const subParts = [
-        `${totalRes} resource${totalRes !== 1 ? "s" : ""}`,
-        `${permSet.size} unique perm${permSet.size !== 1 ? "s" : ""}`,
+         `${formatNumber(totalRes)} resource${totalRes !== 1 ? "s" : ""}`,
+         `${formatNumber(permSet.size)} unique perm${permSet.size !== 1 ? "s" : ""}`,
       ];
       if (admin) subParts.push(`<span class="rollup-chip rollup-chip--admin">⚠ ${admin} admin</span>`);
       else if (privesc) subParts.push(`<span class="rollup-chip rollup-chip--privesc">${privesc} privesc</span>`);
@@ -7576,11 +8542,24 @@
 
       const cards = document.createElement("div");
       cards.className = "am-provider-section__cards";
+      cards.id = "access-provider-" + slugifyIdentifier(provider);
+      header.setAttribute("aria-controls", cards.id);
       entries.forEach((entry) => cards.appendChild(buildIdentityCard(entry)));
 
       header.addEventListener("click", () => {
-        section.classList.toggle("collapsed");
-        caret.textContent = section.classList.contains("collapsed") ? "▶" : "▼";
+        const collapsed = section.classList.toggle("collapsed");
+        caret.textContent = collapsed ? "▶" : "▼";
+        header.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      });
+      header.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        header.click();
+      });
+      header.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        header.click();
       });
 
       section.appendChild(header);
@@ -7641,9 +8620,9 @@
         ? `<div class="am-stat"><span class="am-stat-value" style="color:#b91c1c;">⚠ ${totalAdmin}</span><span class="am-stat-label">admin perm${totalAdmin !== 1 ? "s" : ""} / ${identitiesWithAdmin} identit${identitiesWithAdmin !== 1 ? "ies" : "y"}</span></div>`
         : "";
       bar.innerHTML = `
-        <div class="am-stat"><span class="am-stat-value">${accessMap.length}</span><span class="am-stat-label">Identities</span></div>
-        <div class="am-stat"><span class="am-stat-value">${totalRes}</span><span class="am-stat-label">Resources</span></div>
-        <div class="am-stat"><span class="am-stat-value">${permSet.size}</span><span class="am-stat-label">Unique Permissions</span></div>
+        <div class="am-stat"><span class="am-stat-value">${formatNumber(accessMap.length)}</span><span class="am-stat-label">Identities</span></div>
+        <div class="am-stat"><span class="am-stat-value">${formatNumber(totalRes)}</span><span class="am-stat-label">Resources</span></div>
+        <div class="am-stat"><span class="am-stat-value">${formatNumber(permSet.size)}</span><span class="am-stat-label">Unique Permissions</span></div>
         ${adminStat}
         <div class="am-stat">${[...providerSet].map((p) => '<span class="badge ' + providerBadgeClass(p) + '">' + escapeHtml(p) + '</span>').join(" ")}</div>
       `;
@@ -7673,10 +8652,14 @@
       const card = document.createElement("div");
       card.className = "id-card";
       card.dataset.accessMapKey = entry.key || "";
+      card.setAttribute("aria-label", `Access details for ${account}`);
 
       // Header (always visible)
       const header = document.createElement("div");
       header.className = "id-card__header";
+      header.setAttribute("role", "button");
+      header.setAttribute("tabindex", "0");
+      header.setAttribute("aria-expanded", "false");
 
       const avatar = document.createElement("div");
       avatar.className = "id-card__avatar";
@@ -7747,7 +8730,8 @@
         evidenceMeta.className = "id-card__meta-item";
         const policyCount = (authorizationEvidence.policies || []).length;
         const pathCount = (authorizationEvidence.paths || []).length;
-        evidenceMeta.textContent = "Policy evidence: " + policyCount + " · Identity paths: " + pathCount;
+        const roleImpactCount = (authorizationEvidence.role_impacts || []).length;
+        evidenceMeta.textContent = "Policy evidence: " + policyCount + " · Identity paths: " + pathCount + " · Reachable roles: " + roleImpactCount;
         meta.appendChild(evidenceMeta);
       }
       info.appendChild(meta);
@@ -7804,7 +8788,13 @@
 
       // Body (expandable)
       const body = document.createElement("div");
-      body.className = "id-card__body";
+      const initiallyOpen = expandedAccessKeys.has(entry.key);
+      body.className = initiallyOpen ? "id-card__body open" : "id-card__body";
+      body.id = "access-details-" + slugifyIdentifier(entry.key || account);
+      header.setAttribute("aria-controls", body.id);
+       header.setAttribute("aria-expanded", initiallyOpen ? "true" : "false");
+       body.setAttribute("aria-hidden", initiallyOpen ? "false" : "true");
+      toggle.textContent = initiallyOpen ? "▼" : "▶";
 
       // Resources / permissions — rendered as one block per group.
       // Each group is a (resources, permissions) pair where permissions are
@@ -7875,8 +8865,10 @@
             const hasOther = (cls.admin.length + cls.privilege_escalation.length + cls.risky.length) > 0;
             if (key === "read_only" && hasOther) wrap.classList.add("collapsed");
 
-            const titleEl = document.createElement("div");
-            titleEl.className = "perm-severity__title";
+             const titleEl = document.createElement("button");
+             titleEl.className = "perm-severity__title";
+             titleEl.type = "button";
+             titleEl.setAttribute("aria-expanded", key === "read_only" && hasOther ? "false" : "true");
             titleEl.innerHTML = `<span class="perm-severity__caret">▼</span> ${escapeHtml(label)} <span style="color:var(--text-main); font-weight:700;">${list.length}</span>`;
 
             const pills = document.createElement("div");
@@ -7889,11 +8881,12 @@
               pills.appendChild(tag);
             });
 
-            titleEl.addEventListener("click", (e) => {
+             titleEl.addEventListener("click", (e) => {
               e.stopPropagation();
               wrap.classList.toggle("collapsed");
               const c = titleEl.querySelector(".perm-severity__caret");
-              if (c) c.textContent = wrap.classList.contains("collapsed") ? "▶" : "▼";
+               if (c) c.textContent = wrap.classList.contains("collapsed") ? "▶" : "▼";
+               titleEl.setAttribute("aria-expanded", wrap.classList.contains("collapsed") ? "false" : "true");
             });
 
             wrap.appendChild(titleEl);
@@ -7923,6 +8916,14 @@
           evidenceSection.appendChild(principalBox);
         }
 
+        (identity.roles || []).forEach((role) => {
+          const block = document.createElement("div");
+          block.className = "perm-group";
+          const permissions = role.permissions || [];
+          block.textContent = "Role: " + (role.name || "unknown") + " · " + (role.source || "direct") + " · " + permissions.length + " permission(s)";
+          evidenceSection.appendChild(block);
+        });
+
         const displayedPaths = (authorizationEvidence.paths || []).slice(0, 50);
         displayedPaths.forEach((path, index) => {
           const block = document.createElement("div");
@@ -7944,6 +8945,26 @@
             note.textContent = "Conditions: " + conditions.join(", ");
             block.appendChild(note);
           }
+          evidenceSection.appendChild(block);
+        });
+
+        (authorizationEvidence.role_impacts || []).forEach((impact) => {
+          const block = document.createElement("div");
+          block.className = "perm-group";
+          const title = document.createElement("div");
+          title.className = "perm-group__shared-note";
+          const target = impact.target ? impact.target + " → " : "";
+          title.textContent = "Reachable role [" + (impact.status || "potential") + " · " + (impact.hop_count || 0) + " hop(s)]: " + target + (impact.role || impact.name || "unknown role");
+          block.appendChild(title);
+          (impact.grants || []).forEach((grant) => {
+            const row = document.createElement("div");
+            row.className = "token-field";
+            const excludedPermissions = (grant.excluded_permissions || []).length ? " · Except permissions: " + grant.excluded_permissions.join(", ") : "";
+            const excludedResources = (grant.excluded_resources || []).length ? " · Except resources: " + grant.excluded_resources.join(", ") : "";
+            const conditions = (grant.condition_keys || []).length ? " · Conditions: " + grant.condition_keys.join(", ") : "";
+            row.textContent = ((grant.permissions || []).join(", ") || "no permissions") + " → " + ((grant.resources || []).join(", ") || "*") + excludedPermissions + excludedResources + conditions;
+            block.appendChild(row);
+          });
           evidenceSection.appendChild(block);
         });
 
@@ -8097,6 +9118,16 @@
         const isOpen = body.classList.contains("open");
         body.classList.toggle("open");
         toggle.textContent = isOpen ? "▶" : "▼";
+        header.setAttribute("aria-expanded", isOpen ? "false" : "true");
+        body.setAttribute("aria-hidden", isOpen ? "true" : "false");
+        if (isOpen) expandedAccessKeys.delete(entry.key);
+        else expandedAccessKeys.add(entry.key);
+        syncUrlState();
+      });
+      header.addEventListener("keydown", (event) => {
+        if (event.key !== "Enter" && event.key !== " ") return;
+        event.preventDefault();
+        header.click();
       });
 
       return card;
@@ -8116,9 +9147,11 @@
           principal: evidence.principal,
           policies: evidence.policies,
           paths: evidence.paths,
+          role_impacts: evidence.role_impacts,
           hierarchy: evidence.hierarchy,
           limitations: evidence.limitations,
-        }).toLowerCase() : "";
+          roles: identity.roles,
+        }).toLowerCase() : JSON.stringify(identity.roles || []).toLowerCase();
         const identityNameMatches = Boolean(filterLower) && (account.toLowerCase().includes(filterLower) || fingerprint.includes(filterLower) || evidenceSearch.includes(filterLower));
         let anyResourceMatches = false;
         let anyPermMatches = false;
@@ -8165,7 +9198,7 @@
 
     function copyFilteredAccessMap() {
       if (!filteredAccessMapView || filteredAccessMapView.length === 0) {
-        alert("No blast-radius entries are available for the current filter.");
+        announce("No blast-radius entries are available for the current filter.");
         return;
       }
 
@@ -8182,13 +9215,13 @@
         area.select();
         document.execCommand("copy");
         document.body.removeChild(area);
-        alert("Copied blast radius for " + payload.length + " identities.");
+        announce("Copied blast radius for " + formatNumber(payload.length) + " identities.");
       };
 
       if (navigator.clipboard && navigator.clipboard.writeText) {
         navigator.clipboard
           .writeText(text)
-          .then(() => alert("Copied blast radius for " + payload.length + " identities."))
+            .then(() => announce("Copied blast radius for " + formatNumber(payload.length) + " identities."))
           .catch(fallbackCopy);
       } else {
         fallbackCopy();

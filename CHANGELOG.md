@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.1.0]
+- Added GitHub App authentication for GitHub organization scans. Configure
+  `KF_GITHUB_APP_ID`, `KF_GITHUB_APP_INSTALLATION_ID`, and either
+  `KF_GITHUB_APP_PRIVATE_KEY` or `KF_GITHUB_APP_PRIVATE_KEY_PATH` to let Kingfisher
+  sign short-lived App JWTs and mint a fresh installation token immediately before
+  each repository clone, allowing scans to run beyond GitHub's one-hour installation-token
+  lifetime. A complete App configuration takes precedence over `KF_GITHUB_TOKEN`, which
+  continues to support personal access tokens and pre-minted installation tokens. [#488](https://github.com/mongodb/kingfisher/issues/488)
+- Further improved read-only AWS and GCP blast-radius role-impact analysis, included by default. AWS maps
+  direct and one-hop assumable IAM roles; GCP maps impersonatable service accounts, inherited
+  roles, and hierarchy scopes. Reachable roles and their policy grants are preserved in JSON,
+  TOON, SARIF, and HTML reports/viewers.
+- Added direct single-finding blast-radius mapping with `kingfisher blast-radius --rule <RULE> <SECRET>`, including stdin and component variables. Exposed `Blast Radius Cmd` in all report formats, aligned pretty output labels, and documented JSON/`jq` command extraction in the defender workflow.
+- Added HTTPS Basic Auth validation for Betterleaks' `generic-credential-uri` rule. Kingfisher
+  sends credentials only after an unauthenticated request receives an explicit Basic challenge;
+  plaintext HTTP and endpoints without authoritative authentication evidence remain inconclusive.
+
 ## [v2.0.0]
 - Added Kingfisher-side typed validation for Betterleaks' `generic-credential-uri` rule without
   changing its detector: PostgreSQL, MySQL/MariaDB, and MongoDB URI captures now use the
@@ -54,7 +71,7 @@ All notable changes to this project will be documented in this file.
 - Fixed direct validation for Atlassian API keys using the documented Organizations API. [#461](https://github.com/mongodb/kingfisher/issues/461)
 - Fixed self-hosted Bitbucket scans to recognize `http`-labeled HTTPS clone links instead of falling back to SSH. [#462](https://github.com/mongodb/kingfisher/issues/462)
 - Added Jira Cloud and Confluence Cloud scanning improvements, including complete pagination, full issue descriptions, and `--all` support. Thanks @Safenein. [#460](https://github.com/mongodb/kingfisher/pull/460)
-- Renamed "Access Map" to "Blast Radius" throughout the CLI, HTML and pretty reporters, the standalone and report viewers, and documentation; the `--access-map` flag, `--blast-radius` alias, and `access_map` JSON field names remain unchanged for backwards compatibility.
+- Renamed "Access Map" to "Blast Radius" throughout the CLI, HTML and pretty reporters, the standalone and report viewers, and documentation; `--blast-radius` is now the primary flag, while the `--access-map` alias and `access_map` JSON field names remain unchanged for backwards compatibility.
 
 ## [v1.110.0]
 - Added 37 Titus-derived rules plus a DeviantArt OAuth client-ID helper, covering network-device configurations, hard-coded database connections, Windows artifacts, Maven credentials, and provider-specific formats. Added vendor-documented YAML validation for DeviantArt client secrets, Intra42 prefixed credentials, LaunchDarkly client-side IDs, and Mattermost webhooks and personal access tokens. Built-in coverage is now 1,051 rules (914 standalone detectors + 137 dependent rules), with 516 standalone detectors supporting live validation.
@@ -81,7 +98,7 @@ All notable changes to this project will be documented in this file.
 - Migrated the TLS and JWT-signing crypto backend from `ring` to `aws-lc-rs` across all validators (GCP, Postgres, raw), the main binary's default provider installation, the MongoDB driver, and gcloud-storage, consolidating on a single FIPS-eligible crypto provider.
 - Reduced dependency footprint and binary size: removed `include_dir` and `color-backtrace`; trimmed `clap` to `default-features = false` and `tokio` from `"full"` to specific features; added per-package `opt-level = "z"` for cold crates in the release profile. Viewer assets and builtin rules are now gzip-compressed at build time via `build.rs` and lazily decompressed at runtime, replacing `include_dir` directory embedding.
 - Improved Docker builds in the Makefile: added `SKIP_TESTS=1` to skip tests, a separate `CARGO_TARGET_DIR=target-docker` to avoid clobbering host build artifacts, and `bash` to the Alpine package list.
-- Reworked `--access-map` provider parsing from clap `ValueEnum` to a custom `FromStr` parser with flexible aliases (`mongo`, `hf`, `wandb`, `msteams`, `brevo`, `do`, `ibm`, `tfc`, etc.) and clearer error messages.
+- Reworked `blast-radius` provider parsing from clap `ValueEnum` to a custom `FromStr` parser with flexible aliases (`mongo`, `hf`, `wandb`, `msteams`, `brevo`, `do`, `ibm`, `tfc`, etc.) and clearer error messages.
 
 ## [v1.106.0]
 - Added 3 detection rules derived from Titus: `kingfisher.ansible.1` (Ansible Vault encrypted secret blobs), `kingfisher.html.1` (credentials pre-populated in HTML `<input type="password">` value attributes), and `kingfisher.jamf.3` (JAMF Pro API client credentials with OAuth2 client-credentials validation via the Jamf Pro `/api/v1/oauth/token` endpoint). Also added `kingfisher.jamf.1` and `kingfisher.jamf.2` as invisible helper rules capturing the Jamf Pro server URL and API client ID. Built-in coverage is now 1,005 rules (875 standalone detectors + 130 dependent rules), with 511 standalone detectors supporting live validation.
@@ -179,8 +196,8 @@ All notable changes to this project will be documented in this file.
 - Added live HTTP validation for 18 rules across 15 providers: Val Town, Polar, hCaptcha, Thunderstore, Elastic Cloud (2 rules), LlamaCloud, Gemfury (2 rules), Vonage, ThingsBoard, Zapier, Facebook Access Token, GitLab Session Cookie, PostHog Feature Flags, Unkey API Key, and Hop.io (2 rules).
 - Added revocation support for 7 rules across 6 providers: Discord webhooks (single-step DELETE), DigitalOcean PATs (self-revoke via OAuth), and multi-step HttpMultiStep revocation for LaunchDarkly, Resend, Linode, and Netlify (2 rules). Built-in revocation coverage is now 34 provider families with 53 revocation-enabled rules.
 - Expanded Alibaba Cloud coverage with STS temporary credential detection for STS access key IDs, STS security tokens, and STS access key secrets. Built-in rule coverage is now 923 rules total.
-- **Access Map:** Alibaba Cloud long-lived and STS access key pairs (validated `kingfisher.alibabacloud.2` and `kingfisher.alibabacloud.5`): caller identity via STS GetCallerIdentity; standalone `kingfisher access-map alibaba` (alias `aliyun`).
-- **Access Map:** monday.com API tokens (validated `kingfisher.monday.1`) and Asana personal access / OAuth tokens (validated `kingfisher.asana.3`, `kingfisher.asana.4`, `kingfisher.asana.5`). Monday maps the caller via the `me { account, teams }` GraphQL query and enumerates accessible workspaces and boards; Asana resolves the caller via `/users/me` and enumerates accessible workspaces, organizations, projects, and team memberships. Standalone `kingfisher access-map monday` and `kingfisher access-map asana`.
+- **Access Map:** Alibaba Cloud long-lived and STS access key pairs (validated `kingfisher.alibabacloud.2` and `kingfisher.alibabacloud.5`): caller identity via STS GetCallerIdentity; standalone `kingfisher blast-radius alibaba` (alias `aliyun`).
+- **Access Map:** monday.com API tokens (validated `kingfisher.monday.1`) and Asana personal access / OAuth tokens (validated `kingfisher.asana.3`, `kingfisher.asana.4`, `kingfisher.asana.5`). Monday maps the caller via the `me { account, teams }` GraphQL query and enumerates accessible workspaces and boards; Asana resolves the caller via `/users/me` and enumerates accessible workspaces, organizations, projects, and team memberships. Standalone `kingfisher blast-radius monday` and `kingfisher blast-radius asana`.
 - **Report viewer:** Import Gitleaks and TruffleHog JSON into the bundled local viewer with deduplication for repeated imported findings, and publish a static upload-based viewer on the docs site for GitHub Pages hosting. See `docs/USAGE.md`.
 - Fixed parser-based context gating so assignment-style contextual secrets still scan in raw text when parser verification is unavailable, instead of being dropped.
 - Fixed dependent-variable pairing for HTTP validation so rules use the nearest helper match in-file, and updated Pinata detection/validation to reliably catch API key IDs, API secrets, and JWTs, including key+secret validation.
@@ -242,7 +259,7 @@ All notable changes to this project will be documented in this file.
 - Added TOON output for `scan`, `validate`, and `revoke`, optimized for LLM/agent workflows; prefer `--format toon` when calling Kingfisher from an LLM.
 - Expanded built-in revocation support with new YAML revocation flows for Cloudflare, Confluent, Doppler, Mapbox, Particle.io, Twitch, and additional Vercel token formats.
 - Added revocation coverage documentation: new `docs/REVOCATION_PROVIDERS.md` matrix and README links highlighting supported revocation providers/rule IDs.
-- Access Map: added Microsoft Teams provider. Parses Incoming Webhook URLs (legacy and workflow-based) to extract tenant and webhook identity, probes for active status, and reports channel-level blast radius. Supports standalone `access-map microsoftteams` (alias `msteams`) and automatic mapping for validated `kingfisher.msteams.*` and `kingfisher.microsoftteamswebhook.*` findings.
+- Access Map: added Microsoft Teams provider. Parses Incoming Webhook URLs (legacy and workflow-based) to extract tenant and webhook identity, probes for active status, and reports channel-level blast radius. Supports standalone `blast-radius microsoftteams` (alias `msteams`) and automatic mapping for validated `kingfisher.msteams.*` and `kingfisher.microsoftteamswebhook.*` findings.
 - Added Microsoft Teams scan target: `kingfisher scan teams "QUERY"` searches Teams messages via Microsoft Graph Search API and scans them for secrets, mirroring the Slack integration.
 - Requires `KF_TEAMS_TOKEN` environment variable (Microsoft Graph access token with `ChannelMessage.Read.All` or `Chat.Read` permissions).
 - Findings reference Teams message URLs in reports; see `docs/USAGE.md` and `docs/INTEGRATIONS.md` for authentication setup.
@@ -290,9 +307,9 @@ All notable changes to this project will be documented in this file.
 - Added/updated `pipedrive` and `amplitude` rules
 - Access Map: added Buildkite provider. Enumerates token scopes, user identity, organizations, and pipelines with severity classification based on scope risk.
 - Access Map: added Harness provider. Uses `x-api-key` authentication to enumerate organizations/projects when permitted (best-effort).
-- Access Map: added OpenAI provider. Supports standalone `access-map openai` and automatic mapping for validated `kingfisher.openai.*` findings. Enumerates organizations (from `/v1/me`), projects, and API key permission scopes by probing endpoints for restricted key detection.
-- Access Map: added Anthropic provider. Supports standalone `access-map anthropic` and automatic mapping for validated `kingfisher.anthropic.*` findings.
-- Access Map: added Salesforce provider. Supports standalone `access-map salesforce` (token + instance) and automatic mapping for validated `kingfisher.salesforce.*` findings.
+- Access Map: added OpenAI provider. Supports standalone `blast-radius openai` and automatic mapping for validated `kingfisher.openai.*` findings. Enumerates organizations (from `/v1/me`), projects, and API key permission scopes by probing endpoints for restricted key detection.
+- Access Map: added Anthropic provider. Supports standalone `blast-radius anthropic` and automatic mapping for validated `kingfisher.anthropic.*` findings.
+- Access Map: added Salesforce provider. Supports standalone `blast-radius salesforce` (token + instance) and automatic mapping for validated `kingfisher.salesforce.*` findings.
 - Added Weights & Biases support: new `kingfisher.wandb.2` rule for `wandb_v1_...` keys (legacy `kingfisher.wandb.1` retained), plus Access Map provider/CLI support (`weightsandbiases`, alias `wandb`).
 - Reports: always emit `validate`/`revoke` command hints when supported by a rule (no suppression for missing template vars).
 - Access Map GCP: added resource enumeration for Cloud KMS key rings, Cloud Functions, Firestore databases, Cloud Spanner instances, and project service accounts.
@@ -311,7 +328,7 @@ All notable changes to this project will be documented in this file.
 - Library crates: added an external-consumer integration test (`tests/library_crates_external_project.rs`) and fixed `kingfisher-scanner` manifest wiring by making `serde` a required dependency, ensuring `kingfisher-core`/`kingfisher-rules`/`kingfisher-scanner` compile and run from a non-kingfisher Rust project.
 - Improved tree-sitter parsing + structured secret detection in source files. A Vectorscan pre-filter over the combined tree-sitter output avoids the O(results × rules) regex cost.
 - Access Map: added Hugging Face, Gitea, Bitbucket, PostgreSQL, and MongoDB providers. All perform read-only enumeration with severity classification.
-- Access Map: Hugging Face, Bitbucket, Postgres, and MongoDB credentials from scans are now auto-collected when using `--access-map`.
+- Access Map: Hugging Face, Bitbucket, Postgres, and MongoDB credentials from scans are now auto-collected when using `--blast-radius`.
 - Access Map CLI: added providers `huggingface`/`hf`, `gitea`, `bitbucket`, `postgres`, `mongodb`/`mongo`.
 - Added `kingfisher.gitea.1` rule for Gitea access tokens with validation; self-revocation not supported (API requires Basic Auth).
 - Added revocation for GitHub App Server-to-Server tokens (`ghs_`, `kingfisher.github.5`) via `DELETE /installation/token`. Note: `ghu_` (user-to-server) tokens cannot be self-revoked; they require the GitHub App's client credentials or manual revocation via GitHub Settings.
