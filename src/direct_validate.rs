@@ -652,11 +652,9 @@ pub async fn run_direct_validation(
         .brotli(true)
         .build()
         .context("Failed to build HTTP client")?;
-    let credential_uri_client = crate::validation::build_credential_uri_client(
-        use_lax_tls,
-        Duration::from_secs(args.timeout),
-    )
-    .context("Failed to build credential URI HTTP client")?;
+    let credential_uri_client =
+        crate::validation::build_credential_uri_client(Duration::from_secs(args.timeout))
+            .context("Failed to build credential URI HTTP client")?;
 
     // Build Liquid parser
     let parser = register_all(liquid::ParserBuilder::with_stdlib()).build()?;

@@ -124,13 +124,11 @@ pub struct ValidationClients {
     /// Client with full TLS certificate validation (WebPKI chain, hostname, expiry).
     strict: Client,
     /// Strict-TLS client that never follows redirects, used when sending URI credentials.
-    strict_credential_uri: Client,
+    credential_uri: Client,
     /// Client that accepts self-signed or invalid certificates.
     /// Used when `--tls-mode=lax` AND the rule opts into lax validation,
     /// or when `--tls-mode=off`.
     lax: Client,
-    /// Lax-TLS client that never follows redirects, used when sending URI credentials.
-    lax_credential_uri: Client,
     /// The global TLS mode from CLI arguments.
     pub global_mode: TlsMode,
     /// When true, skip SSRF IP validation and allow requests to internal/private addresses.
@@ -230,17 +228,9 @@ impl ValidationClients {
             .timeout(timeout)
             .build()?;
 
-        let strict_credential_uri = build_credential_uri_client(false, timeout)?;
-        let lax_credential_uri = build_credential_uri_client(true, timeout)?;
+        let credential_uri = build_credential_uri_client(timeout)?;
 
-        Ok(Self {
-            strict,
-            strict_credential_uri,
-            lax,
-            lax_credential_uri,
-            global_mode,
-            allow_internal_ips,
-        })
+        Ok(Self { strict, credential_uri, lax, global_mode, allow_internal_ips })
     }
 
     /// Get the appropriate client for a given rule's TLS mode.
@@ -261,16 +251,9 @@ impl ValidationClients {
         }
     }
 
-    /// Get a redirect-disabled client for credential-bearing URI validation.
-    pub fn credential_uri_client_for_rule(
-        &self,
-        rule_tls_mode: Option<kingfisher_rules::TlsMode>,
-    ) -> &Client {
-        if self.should_use_lax(rule_tls_mode) {
-            &self.lax_credential_uri
-        } else {
-            &self.strict_credential_uri
-        }
+    /// Get the strict-TLS, redirect-disabled client for credential-bearing URI validation.
+    pub fn credential_uri_client(&self) -> &Client {
+        &self.credential_uri
     }
 
     /// Check if lax TLS should be used for a rule.
@@ -286,13 +269,9 @@ impl ValidationClients {
     }
 }
 
-/// Build a client that cannot forward URI credentials through an automatic redirect.
-pub(crate) fn build_credential_uri_client(use_lax_tls: bool, timeout: Duration) -> Result<Client> {
-    Ok(Client::builder()
-        .danger_accept_invalid_certs(use_lax_tls)
-        .redirect(reqwest::redirect::Policy::none())
-        .timeout(timeout)
-        .build()?)
+/// Build a strict-TLS client that cannot forward URI credentials through an automatic redirect.
+pub(crate) fn build_credential_uri_client(timeout: Duration) -> Result<Client> {
+    Ok(Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(timeout).build()?)
 }
 
 // Use SkipMap-based cache instead of a mutex-wrapped FxHashMap.
@@ -1146,7 +1125,7 @@ async fn timed_validate_single_match(
             validate_credential_uri_rule(
                 m,
                 &captured_values,
-                clients.credential_uri_client_for_rule(rule_tls_mode),
+                clients.credential_uri_client(),
                 cache,
                 use_lax_tls,
                 clients.allow_internal_ips,
@@ -2471,7 +2450,7 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        let client = build_credential_uri_client(false, Duration::from_secs(5)).unwrap();
+        let client = build_credential_uri_client(Duration::from_secs(5)).unwrap();
         let response = client.get(format!("http://{address}/challenge")).send().await.unwrap();
         server.abort();
 
@@ -2544,14 +2523,15 @@ mod tests {
         use tokio_rustls::TlsAcceptor;
 
         let CertifiedKey { cert, signing_key } =
-            generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+            generate_simple_self_signed(vec!["127.0.0.1".to_string()]).unwrap();
+        let cert_der = cert.der().clone();
         let key = PrivatePkcs8KeyDer::from(signing_key.serialize_der());
         let provider = rustls::crypto::aws_lc_rs::default_provider();
         let config = ServerConfig::builder_with_provider(Arc::new(provider))
             .with_safe_default_protocol_versions()
             .unwrap()
             .with_no_client_auth()
-            .with_single_cert(vec![cert.der().clone()], key.into())
+            .with_single_cert(vec![cert_der.clone()], key.into())
             .unwrap();
         let acceptor = TlsAcceptor::from(Arc::new(config));
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -2601,7 +2581,12 @@ mod tests {
             authorization_headers
         });
 
-        let client = build_credential_uri_client(true, Duration::from_secs(5)).unwrap();
+        let client = Client::builder()
+            .add_root_certificate(reqwest::Certificate::from_der(cert_der.as_ref()).unwrap())
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(Duration::from_secs(5))
+            .build()
+            .unwrap();
         let result = validate_http_credential_uri(
             &format!("https://alice:hunter2@{address}/protected"),
             &client,

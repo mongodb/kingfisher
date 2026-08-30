@@ -1513,6 +1513,10 @@ The `lax` mode is designed for environments where:
 
 Rules must opt into lax TLS by declaring `tls_mode: lax` in their definition. When you pass `--tls-mode=lax`, only rules with this declaration will use relaxed certificate validation. SaaS API validators (GitHub, Slack, AWS, etc.) always use strict validation regardless of this flag.
 
+HTTPS credential URIs also always use strict certificate validation because Kingfisher sends the
+embedded username and password after the endpoint issues a Basic Auth challenge. The `lax` and
+`off` modes still apply to supported database credential URIs.
+
 ### Examples
 
 ```bash
