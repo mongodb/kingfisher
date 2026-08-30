@@ -773,7 +773,7 @@ pub async fn list_repositories(
 
 fn parse_repo(repo_url: &GitUrl) -> Option<(String, String, String)> {
     let url = Url::parse(repo_url.as_str()).ok()?;
-    let host = url.host_str()?.to_string();
+    let host = url[url::Position::BeforeHost..url::Position::AfterPort].to_string();
     let mut segments = url.path_segments()?;
     let owner = segments.next()?.to_string();
     let mut repo = segments.next()?.to_string();
@@ -1029,6 +1029,24 @@ mod tests {
             "https://ghe.example.com/gist/abc123"
         );
         assert_eq!(fallback_gist_url("github.com", "abc123"), "https://gist.github.com/abc123");
+    }
+
+    #[test]
+    fn github_enterprise_urls_preserve_non_default_ports() {
+        let repo_url = GitUrl::from_str("https://ghe.example.com:8443/acme/widgets.git").unwrap();
+
+        assert_eq!(
+            parse_repo(&repo_url),
+            Some(("ghe.example.com:8443".to_string(), "acme".to_string(), "widgets".to_string(),))
+        );
+        assert_eq!(
+            wiki_url(&repo_url).unwrap().as_str(),
+            "https://ghe.example.com:8443/acme/widgets.wiki.git"
+        );
+        assert_eq!(
+            fallback_gist_url("ghe.example.com:8443", "abc123"),
+            "https://ghe.example.com:8443/gist/abc123"
+        );
     }
 
     #[test]

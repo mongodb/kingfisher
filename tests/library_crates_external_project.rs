@@ -98,7 +98,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let output = Command::new("cargo")
         .arg("run")
         .arg("--quiet")
-        .arg("--frozen")
+        // The external dependency graph can include packages that the workspace build did not
+        // download. Keep its generated lockfile fixed without requiring a warm Cargo cache.
+        .arg("--locked")
         .current_dir(&project_dir)
         .output()?;
 
