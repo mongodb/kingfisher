@@ -129,8 +129,7 @@ const HUGGINGFACE_CREDENTIAL_HELPER: &str = r#"!_hfcreds() {
     fi
 }; _hfcreds"#;
 
-const GITHUB_CREDENTIAL_HELPER: &str =
-    r#"!_ghcreds() { echo username="kingfisher"; echo password="$KF_GITHUB_TOKEN"; }; _ghcreds"#;
+const GITHUB_CREDENTIAL_HELPER: &str = r#"!_ghcreds() { echo username="x-access-token"; echo password="$KF_GITHUB_TOKEN"; }; _ghcreds"#;
 
 const GITLAB_CREDENTIAL_HELPER: &str =
     r#"!_glcreds() { echo username="oauth2"; echo password="$KF_GITLAB_TOKEN"; }; _glcreds"#;
@@ -172,6 +171,21 @@ impl ProviderHosts {
         if !host.is_empty() && !list.iter().any(|existing| existing == &host) {
             list.push(host);
         }
+    }
+
+    /// Whether a repository URL targets one of the trusted GitHub clone hosts.
+    pub fn is_github_url(&self, repo_url: &GitUrl) -> bool {
+        let Ok(url) = Url::parse(repo_url.as_str()) else {
+            return false;
+        };
+        let Some(host) = url.host_str() else {
+            return false;
+        };
+        let host = match url.port() {
+            Some(port) => format!("{}:{port}", host.to_ascii_lowercase()),
+            None => host.to_ascii_lowercase(),
+        };
+        self.github.iter().any(|trusted| trusted.eq_ignore_ascii_case(&host))
     }
 }
 
@@ -223,6 +237,7 @@ fn summarize_output(output: &[u8]) -> Option<String> {
 pub struct Git {
     credentials: Vec<String>,
     ignore_certs: bool,
+    github_token: Option<String>,
     bitbucket_access_token: Option<String>,
     bitbucket_env: Vec<(String, String)>,
     bitbucket_basic_auth: Option<(String, String)>,
@@ -242,6 +257,23 @@ impl Git {
     ///
     /// * `ignore_certs`: If `true`, disables SSL certificate verification for `git` operations.
     pub fn with_provider_hosts(ignore_certs: bool, provider_hosts: &ProviderHosts) -> Self {
+        let github_token = std::env::var("KF_GITHUB_TOKEN")
+            .ok()
+            .map(|token| token.trim().to_owned())
+            .filter(|token| !token.is_empty());
+        Self::with_provider_hosts_and_github_token(ignore_certs, provider_hosts, github_token)
+    }
+
+    /// Create a Git instance with an explicit GitHub token.
+    ///
+    /// The token is passed to the child process through its environment and is
+    /// never embedded in command arguments. This is used for freshly minted
+    /// GitHub App installation tokens.
+    pub fn with_provider_hosts_and_github_token(
+        ignore_certs: bool,
+        provider_hosts: &ProviderHosts,
+        github_token: Option<String>,
+    ) -> Self {
         let mut credentials = Vec::new();
 
         fn normalized_env_var(name: &str) -> Option<String> {
@@ -270,8 +302,7 @@ impl Git {
             }
         }
 
-        let has_github_token =
-            matches!(std::env::var("KF_GITHUB_TOKEN"), Ok(token) if !token.is_empty());
+        let has_github_token = github_token.is_some();
         let has_gitlab_token =
             matches!(std::env::var("KF_GITLAB_TOKEN"), Ok(token) if !token.is_empty());
         let has_gitea_token =
@@ -353,6 +384,7 @@ impl Git {
         Self {
             credentials,
             ignore_certs,
+            github_token,
             bitbucket_access_token,
             bitbucket_env,
             bitbucket_basic_auth,
@@ -370,6 +402,9 @@ impl Git {
         cmd.env("GIT_TERMINAL_PROMPT", "0");
         if self.ignore_certs {
             cmd.env("GIT_SSL_NO_VERIFY", "1");
+        }
+        if let Some(token) = &self.github_token {
+            cmd.env("KF_GITHUB_TOKEN", token);
         }
         for (key, value) in &self.bitbucket_env {
             cmd.env(key, value);
@@ -391,7 +426,9 @@ impl Git {
     /// [`GitError::Timeout`] is returned so callers can surface the stuck
     /// repo and move on instead of parking a clone worker forever.
     fn run_cmd(&self, mut cmd: Command, timeout: Duration) -> Result<(), GitError> {
-        debug!("{cmd:#?}");
+        // Command's explicit environment can contain freshly minted GitHub
+        // App and Bitbucket credentials, so never debug-format it.
+        debug!("Executing git command");
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         // Put `git` in its own process group so that on timeout we can signal
         // the entire tree, not just the immediate child (see
@@ -471,7 +508,6 @@ impl Git {
         cmd.arg("remote");
         cmd.arg("update");
         cmd.arg("--prune");
-        debug!("{cmd:#?}");
         self.run_cmd(cmd, git_update_timeout())
     }
 
@@ -498,7 +534,6 @@ impl Git {
         cmd.arg("remote.origin.fetch=+refs/*:refs/remotes/origin/*");
         cmd.arg(self.repo_arg_for_clone(repo_url));
         cmd.arg(output_dir);
-        debug!("{cmd:#?}");
         self.run_cmd(cmd, git_clone_timeout())
     }
 
@@ -892,6 +927,49 @@ mod tests {
                     "credential.https://ghe.corp.example.com.helper={GITHUB_CREDENTIAL_HELPER}"
                 )));
         });
+    }
+
+    #[test]
+    fn explicit_github_token_is_scoped_and_passed_to_child() {
+        let hosts = ProviderHosts::saas_defaults();
+        temp_env::with_var("KF_GITHUB_TOKEN", None::<&str>, || {
+            let git = Git::with_provider_hosts_and_github_token(
+                false,
+                &hosts,
+                Some("fresh-installation-token".to_string()),
+            );
+
+            assert!(git.credentials.iter().any(|value| value
+                == &format!("credential.https://github.com.helper={GITHUB_CREDENTIAL_HELPER}")));
+            let command = git.git();
+            let token = command
+                .get_envs()
+                .find_map(|(name, value)| {
+                    (name == "KF_GITHUB_TOKEN").then(|| value.and_then(|value| value.to_str()))
+                })
+                .flatten();
+            assert_eq!(token, Some("fresh-installation-token"));
+        });
+    }
+
+    #[test]
+    fn github_url_matches_only_trusted_clone_hosts() {
+        let hosts = ProviderHosts {
+            github: vec!["github.com".to_string(), "ghe.example.com:8443".to_string()],
+            ..ProviderHosts::default()
+        };
+        let github =
+            GitUrl::try_from(Url::parse("https://github.com/org/repo.git").unwrap()).unwrap();
+        let enterprise =
+            GitUrl::try_from(Url::parse("https://ghe.example.com:8443/org/repo.git").unwrap())
+                .unwrap();
+        let untrusted =
+            GitUrl::try_from(Url::parse("https://github.attacker.test/org/repo.git").unwrap())
+                .unwrap();
+
+        assert!(hosts.is_github_url(&github));
+        assert!(hosts.is_github_url(&enterprise));
+        assert!(!hosts.is_github_url(&untrusted));
     }
 
     #[test]

@@ -1174,6 +1174,72 @@ mod test {
     }
 
     #[test]
+    fn aws_access_key_is_retained_when_used_by_a_session_token() -> Result<()> {
+        let access_key = compatibility_rule(
+            "betterleaks.aws-access-token",
+            r"(ASIA[A-Z0-9]{16})",
+            Confidence::High,
+            None,
+            vec![],
+            true,
+        );
+        let secret_key = compatibility_rule(
+            "betterleaks.aws-secret-access-key",
+            r"(SECRET_[A-Z0-9]{8})",
+            Confidence::High,
+            None,
+            vec![],
+            false,
+        );
+        let session_token = compatibility_rule(
+            "betterleaks.aws-session-token",
+            r"(AWS_SESSION_TOKEN=[A-Za-z0-9]{16})",
+            Confidence::Medium,
+            None,
+            vec![
+                DependsOnRule {
+                    rule_id: "betterleaks.aws-access-token".into(),
+                    variable: "AKID".into(),
+                    optional: false,
+                    within: Some("5L".into()),
+                },
+                DependsOnRule {
+                    rule_id: "betterleaks.aws-secret-access-key".into(),
+                    variable: "AWS_SECRET_ACCESS_KEY".into(),
+                    optional: false,
+                    within: Some("5L".into()),
+                },
+            ],
+            true,
+        );
+
+        let temporary = scan_test_rules(
+            vec![access_key.clone(), secret_key, session_token.clone()],
+            b"AWS_ACCESS_KEY_ID=ASIA4XXC3LMYUK5SL77P\nAWS_SECRET_ACCESS_KEY=SECRET_A1B2C3D4\nAWS_SESSION_TOKEN=Ab9xQ7mN2kLp4RsT",
+        )?;
+        assert_eq!(
+            temporary.iter().filter(|(id, ..)| id == "betterleaks.aws-access-token").count(),
+            1,
+            "temporary findings: {temporary:?}"
+        );
+        assert!(
+            temporary
+                .iter()
+                .any(|(id, _, _, visible)| { id == "betterleaks.aws-session-token" && *visible }),
+            "temporary findings: {temporary:?}"
+        );
+
+        let static_key =
+            scan_test_rules(vec![access_key], b"AWS_ACCESS_KEY_ID=ASIA4XXC3LMYUK5SL77P")?;
+        assert!(
+            static_key
+                .iter()
+                .any(|(id, _, _, visible)| { id == "betterleaks.aws-access-token" && *visible })
+        );
+        Ok(())
+    }
+
+    #[test]
     fn old_yaml_dependency_without_within_does_not_suppress_primary() -> Result<()> {
         let primary = compatibility_rule(
             "custom.legacy-primary",

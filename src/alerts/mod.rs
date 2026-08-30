@@ -618,6 +618,7 @@ pub(crate) fn make_test_record(
             git_metadata: None,
             validate_command: None,
             revoke_command: None,
+            blast_radius_command: None,
         },
     }
 }
@@ -863,6 +864,7 @@ mod tests {
                 git_metadata: None,
                 validate_command: None,
                 revoke_command: None,
+                blast_radius_command: None,
             },
         }
     }

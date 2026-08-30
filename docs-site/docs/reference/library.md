@@ -727,7 +727,7 @@ kingfisher-scanner = { git = "https://github.com/mongodb/kingfisher", features =
 | `validation-database` | MongoDB, MySQL, PostgreSQL, and JDBC validation |
 | `validation-all` | Enable all validation features |
 
-`validation: type: Raw` is the ad-hoc validator path for provider-specific or protocol-specific checks that are not generic enough to become schema-level validator families. Typed validators such as `AWS`, `CredentialUri`, `GCP`, `MongoDB`, and `JWT` remain separate validator kinds in the rule schema. `CredentialUri` selects a supported database validator from a named `URI` capture (or direct `TOKEN` input).
+`validation: type: Raw` is the ad-hoc validator path for provider-specific or protocol-specific checks that are not generic enough to become schema-level validator families. Typed validators such as `AWS`, `CredentialUri`, `GCP`, `MongoDB`, and `JWT` remain separate validator kinds in the rule schema. `CredentialUri` selects HTTPS Basic Auth or a supported database validator from a named `URI` capture (or direct `TOKEN` input). HTTPS credentials are sent only after an unauthenticated request receives an explicit Basic challenge.
 
 `kingfisher_core::ValidationOutcome` provides the transport-independent result model used by
 Kingfisher reports: `VerifiedActive`, `Assumed`, `LocallyDerived`, `InvalidMaterial`,

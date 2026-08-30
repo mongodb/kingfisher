@@ -202,7 +202,7 @@ Kingfisher supports these validation types:
 
 1. `Assumed`: a rule-level marker for secret material accepted with high confidence without live validation. It produces the `Assumed Valid (Not Live-Validated)` finding status and is included by the `actionable` filter, but not by the strict `active` filter. In colorized pretty output it uses the same bright color as an active credential but with a locked icon. It counts as skipped validation by default and as successful validation with the `actionable` filter.
 2. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
-3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `CredentialUri`, `Ethereum`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`. `CredentialUri` dispatches a named `URI` capture (falling back to `TOKEN`) to a supported database validator while leaving unsupported schemes unvalidated. `Ethereum` is deterministic and network-free; it validates key material and derives an address without claiming the address is active.
+3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `CredentialUri`, `Ethereum`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`. `CredentialUri` dispatches a named `URI` capture (falling back to `TOKEN`) to HTTPS Basic Auth or a supported database validator while leaving other unsupported schemes unvalidated. `Ethereum` is deterministic and network-free; it validates key material and derives an address without claiming the address is active.
 4. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
 
 Rules without a `validation` block produce `Not Attempted` findings. They are not treated as
@@ -733,6 +733,22 @@ Notes:
 - `[:xdigit:]` matches `0-9`, `a-f`, and `A-F` regardless of the `(?i)` flag.
 - Classes can be combined inside one bracket expression, for example `[[:alnum:]_=-]` adds
   underscore, equals, and hyphen to the alphanumeric set.
+
+## Checksum Intelligence
+
+Modern API tokens increasingly include **built-in checksums**, short internal digests that make each credential self-verifiable. For background, see [GitHub's write-up on newer token formats](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/) and why checksums reduce false positives.
+
+Kingfisher's 1.x custom-rule format supports **checksum-aware matching**, enabling **offline structural verification** of credentials without calling third-party APIs.
+
+By validating each token's internal checksum, when supported by the token format, Kingfisher filters structurally invalid or fake tokens before validation runs.
+
+**Why this matters**
+
+- **Offline verification**: no API call is required.
+- **Industry-aligned**: compatible with prefix and checksum token designs such as modern PATs.
+- **Lower false positives**: invalid tokens are filtered out by structure alone.
+
+The checksum block below documents the Liquid templating and capture requirements for implementing this behavior in a custom rule.
 
 ## Character Requirements
 

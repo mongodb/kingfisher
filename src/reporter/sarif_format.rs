@@ -46,6 +46,9 @@ impl DetailsReporter {
         if let Some(revoke_cmd) = &finding.revoke_command {
             props.insert("revoke_command".to_string(), serde_json::json!(revoke_cmd));
         }
+        if let Some(blast_radius_cmd) = &finding.blast_radius_command {
+            props.insert("blast_radius_command".to_string(), serde_json::json!(blast_radius_cmd));
+        }
         let properties = sarif::PropertyBag::builder().additional_properties(props).build();
 
         let location = sarif::Location::builder()
@@ -194,6 +197,7 @@ mod tests {
                 git_metadata: None,
                 validate_command: None,
                 revoke_command: None,
+                blast_radius_command: None,
             },
         }
     }

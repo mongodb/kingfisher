@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     future::Future,
     panic::AssertUnwindSafe,
     sync::{
@@ -25,7 +26,7 @@ use crate::{
     blob::BlobId,
     findings_store::{FindingsStore, FindingsStoreMessage},
     location::OffsetSpan,
-    matcher::OwnedBlobMatch,
+    matcher::{OwnedBlobMatch, SerializableCaptures},
     provider_endpoints::ProviderEndpointOverrides,
     rules::rule::{BetterleaksAccessMapHandler, Rule, Validation},
     validation::{
@@ -40,6 +41,48 @@ use crate::{
 pub struct AccessMapCollector {
     inner: Arc<DashMap<u64, AccessMapRequest>>,
     finding_fingerprints: Arc<DashMap<u64, FxHashSet<String>>>,
+}
+
+/// Build the same access-map request used by scanning for one known finding.
+pub(crate) fn direct_access_map_requests(
+    rule: Arc<Rule>,
+    secret: &str,
+    dependent_captures: BTreeMap<String, String>,
+) -> Vec<AccessMapRequest> {
+    let collector = AccessMapCollector::default();
+    let mut synthetic_captures = smallvec::smallvec![crate::matcher::SerializableCapture {
+        name: Some(crate::util::intern("TOKEN")),
+        match_number: 0,
+        start: 0,
+        end: secret.len(),
+        value: crate::util::intern(secret),
+    }];
+    synthetic_captures.extend(dependent_captures.iter().enumerate().map(
+        |(index, (name, value))| crate::matcher::SerializableCapture {
+            name: Some(crate::util::intern(name)),
+            match_number: index.saturating_add(1).try_into().unwrap_or(i32::MAX),
+            start: 0,
+            end: value.len(),
+            value: crate::util::intern(value),
+        },
+    ));
+    let captures = SerializableCaptures { captures: synthetic_captures };
+    let owned = OwnedBlobMatch {
+        rule,
+        blob_id: BlobId::new(b"direct-access-map"),
+        finding_fingerprint: 0,
+        matching_input_offset_span: OffsetSpan { start: 0, end: secret.len() },
+        captures,
+        validation_response_body: None,
+        validation_response_status: StatusCode::OK,
+        validation_success: true,
+        validation_outcome: ValidationOutcome::VerifiedActive,
+        calculated_entropy: 0.0,
+        is_base64: false,
+        dependent_captures,
+    };
+    maybe_record_access_map(&owned, Some(&collector));
+    collector.into_collected_requests().into_iter().map(|item| item.request).collect()
 }
 
 #[allow(dead_code)] // Retained for standalone providers awaiting compatible Betterleaks validators.
@@ -1376,7 +1419,9 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                 CredentialUriTarget::Postgres(uri) => collector.record_postgres(&uri, fp.clone()),
                 CredentialUriTarget::MongoDB(uri) => collector.record_mongodb(&uri, fp.clone()),
                 CredentialUriTarget::MySQL(uri) => collector.record_mysql(&uri, fp.clone()),
-                CredentialUriTarget::Jdbc(_) | CredentialUriTarget::Unsupported(_) => {}
+                CredentialUriTarget::Http(_)
+                | CredentialUriTarget::Jdbc(_)
+                | CredentialUriTarget::Unsupported(_) => {}
             }
         }
         Some(Validation::Betterleaks(validation)) => {
@@ -1986,6 +2031,27 @@ mod tests {
     }
 
     #[test]
+    fn direct_azure_storage_mapping_materializes_supplied_account_capture() {
+        let mut matched = make_owned_blob_match();
+        Arc::make_mut(&mut matched.rule).syntax.validation = Some(Validation::AzureStorage);
+        let requests = direct_access_map_requests(
+            matched.rule,
+            "storage-key",
+            BTreeMap::from([("AZURENAME".to_string(), "storage-account".to_string())]),
+        );
+
+        assert_eq!(requests.len(), 1);
+        match &requests[0] {
+            AccessMapRequest::Azure { credential_json, .. } => {
+                let credential: serde_json::Value = serde_json::from_str(credential_json).unwrap();
+                assert_eq!(credential["storage_account"], "storage-account");
+                assert_eq!(credential["storage_key"], "storage-key");
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
     fn access_map_collector_dedupes_monday_and_asana_tokens() {
         let collector = AccessMapCollector::default();
         collector.record_monday("monday-token-1", "fp-2".into());
@@ -2059,6 +2125,45 @@ mod tests {
                 assert_eq!(secret_key, "secret-access-key");
                 assert!(session_token.is_none());
                 assert_eq!(fingerprint, "fp-aws");
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn betterleaks_aws_session_token_validation_feeds_access_map() {
+        let mut rules = kingfisher_rules::get_betterleaks_rules(Some(Confidence::Low)).unwrap();
+        let syntax = rules.rules.remove("betterleaks.aws-session-token").unwrap();
+        let mut matched = make_owned_blob_match();
+        matched.rule = Arc::new(Rule::new(syntax));
+        matched.captures = SerializableCaptures {
+            captures: smallvec![SerializableCapture {
+                name: Some(intern("TOKEN")),
+                match_number: 1,
+                start: 0,
+                end: "session-token".len(),
+                value: intern("session-token"),
+            }],
+        };
+        matched
+            .dependent_captures
+            .insert("AWS_SECRET_ACCESS_KEY".to_string(), "secret-access-key".to_string());
+        matched.dependent_captures.insert("AKID".to_string(), "ASIA1234567890123456".to_string());
+        matched.finding_fingerprint = 1;
+        matched.validation_success = true;
+        matched.validation_response_status = StatusCode::OK;
+        let collector = AccessMapCollector::default();
+
+        maybe_record_access_map(&matched, Some(&collector));
+
+        let requests = collector.into_requests();
+        assert_eq!(requests.len(), 1);
+        match &requests[0] {
+            AccessMapRequest::Aws { access_key, secret_key, session_token, fingerprint } => {
+                assert_eq!(access_key, "ASIA1234567890123456");
+                assert_eq!(secret_key, "secret-access-key");
+                assert_eq!(session_token.as_deref(), Some("session-token"));
+                assert_eq!(fingerprint, "1");
             }
             other => panic!("unexpected request: {other:?}"),
         }

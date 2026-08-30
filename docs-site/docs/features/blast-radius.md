@@ -1,12 +1,31 @@
-# Blast Radius (aka Access Map): supported tokens & credential formats
+---
+title: "Blast Radius"
+description: "Map identity, permissions, and resources across 43 open-source providers, including AWS and GCP."
+---
 
-Kingfisher’s **blast-radius mapping** (aka the access map) determines the *effective identity* and *blast radius* of a credential by authenticating to the target provider and enumerating accessible resources and permissions.
+# Blast Radius: supported tokens & credential formats
+
+Kingfisher’s **blast-radius mapping** determines the *effective identity* and
+*blast radius* of a credential by authenticating to the target provider and enumerating accessible
+resources and permissions. It turns “we found a key” into the questions defenders need answered:
+*Who or what is this credential? What can it reach? Which permissions make it urgent?*
+
+All 43 provider implementations are included by default in the Apache-2.0 open-source release.
+That includes AWS and GCP alongside major providers such as Azure, Alibaba Cloud, GitHub, GitLab,
+Bitbucket, Slack, Salesforce, DigitalOcean, Terraform Cloud, MongoDB, PostgreSQL, MySQL, OpenAI,
+and Anthropic.
+
+AWS mapping resolves the principal, policies and group inheritance, visible resources, and potential
+role-assumption paths. GCP mapping resolves the service account, visible project/folder/organization
+IAM context, role bindings and permissions, authorization paths, and resources across major Google
+Cloud services. Both report explicit limitations when permissions or safety caps prevent a complete
+view.
 
 There are two ways to produce blast-radius results:
 
 - **During scanning**: `kingfisher scan ... --blast-radius`
   Kingfisher validates detected secrets and automatically generates blast-radius entries for supported credential types.
-- **Standalone**: `kingfisher access-map <provider> [credential_file]`  
+- **Standalone**: `kingfisher blast-radius <provider> [credential_file]`  
   This reads a credential artifact from disk and maps it directly.
   The standalone command defaults to JSON output. The examples below use
   `--format json` explicitly so the output type stays unambiguous when
@@ -14,10 +33,20 @@ There are two ways to produce blast-radius results:
   and `--output <PATH>` if you prefer writing directly instead of using shell
   redirection.
 
+Add `--view-report` to open the result in the interactive local viewer instead of printing the
+standalone result. The viewer starts on `127.0.0.1:7890` and opens the browser automatically.
+This works with both direct rule mappings and provider credential files. `--format html` remains
+available when a self-contained static HTML file is preferred.
+
+For backward compatibility, `--access-map` remains an alias for `--blast-radius`.
+The standalone `kingfisher access-map` and `kingfisher blast_radius` spellings also remain aliases
+for `kingfisher blast-radius`.
+
 The HTML blast-radius viewer is built for triage: it starts in a topology view,
 groups identities by provider, lets you click through to individual resources,
 and keeps the detailed permissions in a side inspector. That makes it easier
-to compare two credentials at a glance without reading nested JSON by hand.
+to compare two credentials at a glance, prioritize administrator or production access, and decide
+what to revoke first without reading nested JSON by hand.
 
 > Blast-radius mapping runs additional network requests. Only use it when you are authorized to inspect the target account/workspace.
 
@@ -27,7 +56,7 @@ to compare two credentials at a glance without reading nested JSON by hand.
 
 ```mermaid
 flowchart LR
-    CLI[kingfisher access-map] --> Args[Provider and credential input]
+    CLI[kingfisher blast-radius] --> Args[Provider and credential input]
     Args --> Dispatch[Provider dispatch]
     Dispatch --> Provider[Provider mapper]
     Provider --> APIs[Provider APIs]
@@ -78,6 +107,7 @@ AWS and GCP results may populate `provider_metadata.authorization_evidence` in s
 - `principal`: canonical identity, groups, tag-key presence, and provider attributes;
 - `policies`: policy or binding provenance and normalized statements;
 - `paths`: ordered identity hops with `outbound`/`inbound` direction and `potential`, `conditional`, or provider-specific status;
+- `role_impacts`: reachable roles with effective permission summaries and statement-level resource grants;
 - `hierarchy`: visible project, folder, or organization scopes; and
 - `limitations`: incomplete reads, traversal caps, and policy-evaluation constraints.
 
@@ -87,7 +117,7 @@ Structured JSON, JSONL, BSON, TOON, and SARIF reports preserve the complete evid
 
 ### GitHub (`github`)
 
-- **Credential**: a single GitHub token string (read from a file for `kingfisher access-map github <FILE>`).
+- **Credential**: a single GitHub token string (read from a file for `kingfisher blast-radius github <FILE>`).
 - **Token types supported**: any token accepted by GitHub’s REST API `Authorization` scheme used by Kingfisher (`Authorization: token <TOKEN>`), including:
   - Classic PATs (commonly `ghp_...`)
   - Fine-grained PATs (commonly `github_pat_...`)
@@ -98,7 +128,7 @@ Structured JSON, JSONL, BSON, TOON, and SARIF reports preserve the complete evid
 
 ```bash
 printf '%s' 'ghp_example...' > ./github.token
-kingfisher access-map github ./github.token --format json > github.access-map.json
+kingfisher blast-radius github ./github.token --format json > github.blast-radius.json
 ```
 
 #### Notes (GitHub)
@@ -107,14 +137,14 @@ kingfisher access-map github ./github.token --format json > github.access-map.js
 
 ### GitLab (`gitlab`)
 
-- **Credential**: a single GitLab token string (read from a file for `kingfisher access-map gitlab <FILE>`).
+- **Credential**: a single GitLab token string (read from a file for `kingfisher blast-radius gitlab <FILE>`).
 - **Token types supported**: any token accepted by GitLab’s `PRIVATE-TOKEN` header (PATs like `glpat-...`, plus other GitLab token types that work with that header).
 
 #### Standalone example (GitLab)
 
 ```bash
 printf '%s' 'glpat-example...' > ./gitlab.token
-kingfisher access-map gitlab ./gitlab.token --format json > gitlab.access-map.json
+kingfisher blast-radius gitlab ./gitlab.token --format json > gitlab.blast-radius.json
 ```
 
 #### Notes (GitLab)
@@ -127,7 +157,7 @@ kingfisher access-map gitlab ./gitlab.token --format json > gitlab.access-map.js
 
 ### Slack (`slack`)
 
-- **Credential**: a single Slack token string (read from a file for `kingfisher access-map slack <FILE>`).
+- **Credential**: a single Slack token string (read from a file for `kingfisher blast-radius slack <FILE>`).
 - **Token types supported**: tokens accepted by Slack Web API with `Authorization: Bearer <TOKEN>` (for example `xoxp-...`, `xoxb-...`, etc.).  
   Kingfisher derives scopes from the `x-oauth-scopes` response header when Slack returns it.
 
@@ -135,13 +165,13 @@ kingfisher access-map gitlab ./gitlab.token --format json > gitlab.access-map.js
 
 ```bash
 printf '%s' 'xoxp-example...' > ./slack.token
-kingfisher access-map slack ./slack.token --format json > slack.access-map.json
+kingfisher blast-radius slack ./slack.token --format json > slack.blast-radius.json
 ```
 
 ### AWS (`aws`)
 
 - **Credential**: AWS access key credentials.
-- **Supported formats for `kingfisher access-map aws <FILE>`**:
+- **Supported formats for `kingfisher blast-radius aws <FILE>`**:
   - **JSON object** with case-insensitive support for the following keys:
     - `access_key_id` / `accessKeyId` / `aws_access_key_id` / `AccessKeyId`
     - `secret_access_key` / `secretAccessKey` / `aws_secret_access_key` / `SecretAccessKey`
@@ -163,7 +193,7 @@ cat > ./aws.json <<'EOF'
 }
 EOF
 
-kingfisher access-map aws ./aws.json --format json > aws.access-map.json
+kingfisher blast-radius aws ./aws.json --format json > aws.blast-radius.json
 ```
 
 ```bash
@@ -173,7 +203,7 @@ aws_secret_access_key=....
 aws_session_token=....
 EOF
 
-kingfisher access-map aws ./aws.env --format json > aws.access-map.json
+kingfisher blast-radius aws ./aws.env --format json > aws.blast-radius.json
 ```
 
 Kingfisher performs read-only enumeration for the IAM principal and, when allowed by the credential, visible resources in several common AWS services including S3, EC2, IAM, Lambda, DynamoDB, KMS, Secrets Manager, SQS, SNS, RDS, ECR, and SSM Parameter Store. Enumeration follows paginated API responses, and IAM users include permissions inherited from IAM groups.
@@ -183,17 +213,34 @@ When IAM read access is available, the result also includes `provider_metadata.a
 - canonical IAM identity metadata, user group membership, and principal tag-key presence;
 - managed and inline policy statements with attachment provenance, including group inheritance;
 - role trust-policy statements;
-- potential direct and one-additional-hop role-assumption paths; and
+- potential direct and one-additional-hop role-assumption paths;
+- `role_impacts` that pair each reachable role with its effective action summary and the
+  statement-level resource scopes those actions grant; and
 - explicit coverage limits when IAM reads are denied or safety caps are reached.
 
-Role paths are derived passively. Kingfisher does not call `sts:AssumeRole` or mint credentials for a discovered role. A path marked `potential`, `conditional`, or `trust_only` is evidence for investigation, not proof that every request will succeed. Permissions boundaries, session policies, organization policies, resource control policies, resource policies, and request context can further restrict access. Condition values are used only for local evaluation and are not retained in reports; reports contain condition operator and key names.
+Reachable roles are also emitted in the top-level `roles` list. Their permissions contribute to the
+credential's effective permission summary and severity, while their policy resource patterns appear
+as `assumable_role_scope` resources. This makes a path such as credential → deployment role →
+production Lambda function visible in JSON/TOON/SARIF and in both blast-radius viewers without
+mixing the role's policy-derived resources with resources directly enumerated by the original
+session.
+
+Role paths and their resource impact are derived passively. Kingfisher does not call
+`sts:AssumeRole` or mint credentials for a discovered role. A path marked `potential` or
+`conditional` is included in effective blast radius; a `trust_only` path is retained for
+investigation but is not counted as granted access because no matching identity-policy allow was
+found. The listed role resources come from visible IAM policy statements, not API enumeration under
+an assumed-role session. Permissions boundaries, session policies, organization policies, resource
+control policies, resource policies, and request context can further restrict access. Condition
+values are used only for local evaluation and are not retained in reports; reports contain condition
+operator and key names.
 
 IAM policy summaries are intentionally conservative: explicit denies, `NotAction`, resource scoping, and conditions are called out in risk notes because a flat action list cannot fully reproduce AWS policy evaluation. Global services are mapped account-wide; regional services use the region selected by the AWS SDK configuration.
 
 ### Alibaba Cloud (`alibaba` / `aliyun`)
 
 - **Credential**: an Alibaba Cloud access key pair, with an optional STS security token.
-- **Supported formats for `kingfisher access-map alibaba <FILE>`**:
+- **Supported formats for `kingfisher blast-radius alibaba <FILE>`**:
   - **JSON object** with support for:
     - `access_key_id` / `accessKeyId` / `AccessKeyId`
     - `access_key_secret` / `accessKeySecret` / `AccessKeySecret`
@@ -214,7 +261,7 @@ cat > ./alibaba.json <<'EOF'
 }
 EOF
 
-kingfisher access-map alibaba ./alibaba.json --format json > alibaba.access-map.json
+kingfisher blast-radius alibaba ./alibaba.json --format json > alibaba.blast-radius.json
 ```
 
 ```bash
@@ -224,7 +271,7 @@ access_key_secret=....
 security_token=....
 EOF
 
-kingfisher access-map alibaba ./alibaba.env --format json > alibaba.access-map.json
+kingfisher blast-radius alibaba ./alibaba.env --format json > alibaba.blast-radius.json
 ```
 
 Kingfisher resolves the Alibaba Cloud caller identity with `sts:GetCallerIdentity` for both long-lived access key pairs and STS temporary credentials discovered during scanning. Current coverage is identity-focused: it maps the account and resolved RAM principal, and records that broader Alibaba service enumeration is not yet available.
@@ -236,12 +283,12 @@ Kingfisher resolves the Alibaba Cloud caller identity with `sts:GetCallerIdentit
 #### Standalone example (GCP)
 
 ```bash
-kingfisher access-map gcp ./service-account.json --format json > gcp.access-map.json
+kingfisher blast-radius gcp ./service-account.json --format json > gcp.blast-radius.json
 ```
 
-Kingfisher resolves the service account and reads visible project, folder, and organization IAM policies. Authorization evidence records the scope that contributed each role binding, expands roles into permissions, and records both inbound and outbound authorization-capability paths involving visible service accounts. Relationships distinguish access-token creation, OpenID-token creation, `actAs`, signing, and delegation permissions. The mapper also enumerates visible resources in the key's project across services including Cloud Storage, BigQuery, Secret Manager, Compute Engine, Cloud SQL, Pub/Sub, Cloud Run, Artifact Registry, GKE, Cloud KMS, Cloud Functions, Firestore, and Spanner.
+Kingfisher resolves the service account and reads visible project, folder, and organization IAM policies. When the credential exposes `iam.serviceAccounts.getIamPolicy`, it also uses bounded, read-only policy checks on visible target service accounts to find direct impersonation grants. Authorization evidence records the scope that contributed each role binding, expands roles into permissions, and records both inbound and outbound authorization-capability paths involving visible service accounts. Relationships distinguish access-token creation, OpenID-token creation, `actAs`, signing, and delegation permissions. For target service accounts reachable through access-token or signing capabilities, `role_impacts` matches the target to its visible project/folder/organization role bindings, expands those roles, and pairs their permissions with the hierarchy scopes they affect. `actAs`, OpenID-token, and delegation-only relationships remain path evidence without inheriting the target's Google API roles. Propagated roles are included in the effective severity and their scopes appear as `impersonated_service_account_scope` resources. The mapper also enumerates visible resources in the key's project across services including Cloud Storage, BigQuery, Secret Manager, Compute Engine, Cloud SQL, Pub/Sub, Cloud Run, Artifact Registry, GKE, Cloud KMS, Cloud Functions, Firestore, and Spanner.
 
-GCP analysis is best effort. Conditional bindings and deny policies are not fully evaluated, Google group membership is not resolved, service-account inventory is limited to its first API response, and resource enumeration is limited to the project associated with the credential even when an inherited folder or organization role can apply to other descendants. Outbound service-account paths are permission-based candidates; Kingfisher does not exhaustively read each target service account's IAM policy. These limits are included in `provider_metadata.authorization_evidence.limitations`.
+GCP analysis is best effort and passive: Kingfisher does not mint an access token for a discovered target service account or repeat resource enumeration as that target. Conditional bindings and deny policies are not fully evaluated, Google group membership is not resolved, service-account inventory is limited to its first API response, direct target-policy checks are capped at 128 visible service accounts, and live resource enumeration is limited to the project associated with the original credential even when an inherited folder or organization role can apply to other descendants. Target role impact is limited to bindings visible in the hierarchy policies the original credential can read. These limits are included in `provider_metadata.authorization_evidence.limitations`.
 
 ### Microsoft Azure, Entra ID, and Microsoft Graph (`azure`)
 
@@ -272,7 +319,7 @@ cat > ./azure-storage.json <<'EOF'
 }
 EOF
 
-kingfisher access-map azure ./azure-storage.json --format json > azure.access-map.json
+kingfisher blast-radius azure ./azure-storage.json --format json > azure.blast-radius.json
 ```
 
 Kingfisher treats the account key as full-control Storage credentials and performs best-effort enumeration across Blob containers, File shares, and Queue resources reachable with that key.
@@ -288,7 +335,7 @@ cat > ./azure-entra.json <<'EOF'
 }
 EOF
 
-kingfisher access-map azure ./azure-entra.json --format json > azure.access-map.json
+kingfisher blast-radius azure ./azure-entra.json --format json > azure.blast-radius.json
 ```
 
 For Entra client credentials, Kingfisher requests separate read-only access
@@ -317,7 +364,7 @@ cat > ./azure-token.json <<'EOF'
 }
 EOF
 
-kingfisher access-map azure ./azure-token.json --format json
+kingfisher blast-radius azure ./azure-token.json --format json
 ```
 
 A single access token only maps the API audience for which it was issued.
@@ -337,7 +384,7 @@ client IDs, plus Azure-context OAuth2 JWTs, can automatically feed
 
 ### Azure DevOps (scan `--blast-radius` only)
 
-Azure DevOps blast-radius mapping is supported when a **validated Azure DevOps PAT** is discovered during scanning (the `access_map` record includes both the PAT and the organization). At the moment, there is **no standalone** `kingfisher access-map azure-devops ...` provider flag.
+Azure DevOps blast-radius mapping is supported when a **validated Azure DevOps PAT** is discovered during scanning (the `access_map` record includes both the PAT and the organization). At the moment, there is **no standalone** `kingfisher blast-radius azure-devops ...` provider flag.
 
 ### PostgreSQL (`postgres`)
 
@@ -347,7 +394,7 @@ Azure DevOps blast-radius mapping is supported when a **validated Azure DevOps P
 
 ```bash
 printf '%s' 'postgres://user:pass@db.example.com:5432/mydb' > ./postgres.uri
-kingfisher access-map postgres ./postgres.uri --format json > postgres.access-map.json
+kingfisher blast-radius postgres ./postgres.uri --format json > postgres.blast-radius.json
 ```
 
 Kingfisher derives role attributes and memberships from PostgreSQL's documented
@@ -370,12 +417,30 @@ License.
 
 ```bash
 printf '%s' 'mongodb+srv://user:pass@cluster.example.net/?retryWrites=true&w=majority' > ./mongodb.uri
-kingfisher access-map mongodb ./mongodb.uri --format json > mongodb.access-map.json
+kingfisher blast-radius mongodb ./mongodb.uri --format json > mongodb.blast-radius.json
+```
+
+To inspect a direct rule mapping in the interactive viewer without saving the credential-bearing
+result to a report file:
+
+```bash
+printf '%s' 'ghp_example0000000000000000000000000000' \
+  | kingfisher blast-radius \
+      --rule betterleaks.github-pat \
+      - \
+      --view-report
+```
+
+For a GitHub PAT file, use the same option:
+
+```bash
+printf '%s' 'ghp_example0000000000000000000000000000' > ./github.token
+kingfisher blast-radius github ./github.token --view-report
 ```
 
 ### Hugging Face (`huggingface` / `hf`)
 
-- **Credential**: a single Hugging Face token string (read from a file for `kingfisher access-map huggingface <FILE>`).
+- **Credential**: a single Hugging Face token string (read from a file for `kingfisher blast-radius huggingface <FILE>`).
 - **Token types supported**: tokens accepted by the Hugging Face API with `Authorization: Bearer <TOKEN>`, including:
   - User access tokens (commonly `hf_...`)
   - Organization API tokens (commonly `api_org_...`)
@@ -391,7 +456,7 @@ reported by the API.
 
 ```bash
 printf '%s' 'hf_example...' > ./huggingface.token
-kingfisher access-map huggingface ./huggingface.token --format json > huggingface.access-map.json
+kingfisher blast-radius huggingface ./huggingface.token --format json > huggingface.blast-radius.json
 ```
 
 #### Notes (Hugging Face)
@@ -406,13 +471,14 @@ kingfisher access-map huggingface ./huggingface.token --format json > huggingfac
   are recorded separately from the token role because effective access is the
   intersection of both.
 - Implementation provenance: the response fields and repository inventory routes are defined in
-  Hugging Face's [Hub OpenAPI schema](https://huggingface.co/.well-known/openapi.json). Identity and
-  token-role handling also follows the Apache-2.0
+  Hugging Face's [Hub OpenAPI schema](https://huggingface.co/.well-known/openapi.json), and bucket
+  behavior follows the official [Storage Buckets guide](https://huggingface.co/docs/hub/storage-buckets).
+  Identity and token-role handling also follows the Apache-2.0
   [`huggingface_hub` v0.24.3 SDK](https://github.com/huggingface/huggingface_hub/tree/v0.24.3).
 
 ### Gitea (`gitea`)
 
-- **Credential**: a single Gitea token string (read from a file for `kingfisher access-map gitea <FILE>`).
+- **Credential**: a single Gitea token string (read from a file for `kingfisher blast-radius gitea <FILE>`).
 - **Token types supported**: any token accepted by Gitea's `Authorization: token <TOKEN>` header (personal access tokens).
 
 Kingfisher queries `/api/v1/user` for identity, enumerates organizations via `/api/v1/user/orgs`, and lists accessible repositories via `/api/v1/user/repos`. Repository-level permissions (admin, push, pull) are used to classify risk.
@@ -421,7 +487,7 @@ Kingfisher queries `/api/v1/user` for identity, enumerates organizations via `/a
 
 ```bash
 printf '%s' 'your_gitea_pat...' > ./gitea.token
-kingfisher access-map gitea ./gitea.token --format json > gitea.access-map.json
+kingfisher blast-radius gitea ./gitea.token --format json > gitea.blast-radius.json
 ```
 
 #### Notes (Gitea)
@@ -431,7 +497,7 @@ kingfisher access-map gitea ./gitea.token --format json > gitea.access-map.json
 
 ### Bitbucket (`bitbucket`)
 
-- **Credential**: a single Bitbucket token string (read from a file for `kingfisher access-map bitbucket <FILE>`).
+- **Credential**: a single Bitbucket token string (read from a file for `kingfisher blast-radius bitbucket <FILE>`).
 - **Token types supported**: tokens accepted by Bitbucket Cloud's `Authorization: Bearer <TOKEN>` header (OAuth access tokens, app passwords, repository access tokens).
 
 Kingfisher queries `/2.0/user` for identity, enumerates workspace memberships and permissions via `/2.0/user/permissions/workspaces`, and lists accessible repositories via `/2.0/repositories?role=member`. Workspace ownership and private repository access are used to classify risk.
@@ -440,7 +506,7 @@ Kingfisher queries `/2.0/user` for identity, enumerates workspace memberships an
 
 ```bash
 printf '%s' 'your_bitbucket_token...' > ./bitbucket.token
-kingfisher access-map bitbucket ./bitbucket.token --format json > bitbucket.access-map.json
+kingfisher blast-radius bitbucket ./bitbucket.token --format json > bitbucket.blast-radius.json
 ```
 
 #### Notes (Bitbucket)
@@ -450,7 +516,7 @@ kingfisher access-map bitbucket ./bitbucket.token --format json > bitbucket.acce
 
 ### Buildkite (`buildkite`)
 
-- **Credential**: a single Buildkite API token string (read from a file for `kingfisher access-map buildkite <FILE>`).
+- **Credential**: a single Buildkite API token string (read from a file for `kingfisher blast-radius buildkite <FILE>`).
 - **Token types supported**: tokens accepted by Buildkite's REST API with `Authorization: Bearer <TOKEN>` (API access tokens, commonly `bkua_...`).
 
 Kingfisher queries `/v2/access-token` for token metadata and scopes, `/v2/user` for identity, `/v2/organizations` for organization memberships, and `/v2/organizations/{org}/pipelines` for pipeline enumeration. Token scopes and organization access are used to classify risk.
@@ -459,7 +525,7 @@ Kingfisher queries `/v2/access-token` for token metadata and scopes, `/v2/user` 
 
 ```bash
 printf '%s' 'bkua_example...' > ./buildkite.token
-kingfisher access-map buildkite ./buildkite.token --format json > buildkite.access-map.json
+kingfisher blast-radius buildkite ./buildkite.token --format json > buildkite.blast-radius.json
 ```
 
 #### Notes (Buildkite)
@@ -469,7 +535,7 @@ kingfisher access-map buildkite ./buildkite.token --format json > buildkite.acce
 
 ### Harness (`harness`)
 
-- **Credential**: a single Harness API key / personal access token (PAT) string (read from a file for `kingfisher access-map harness <FILE>`).
+- **Credential**: a single Harness API key / personal access token (PAT) string (read from a file for `kingfisher blast-radius harness <FILE>`).
 - **Auth header**: Harness APIs authenticate via `x-api-key: <TOKEN>` (see the Harness API docs).
 
 Kingfisher performs best-effort, read-only enumeration:
@@ -483,7 +549,7 @@ If organizations/projects are not enumerable (scope-limited keys), Kingfisher st
 
 ```bash
 printf '%s' 'pat.example...' > ./harness.token
-kingfisher access-map harness ./harness.token --format json > harness.access-map.json
+kingfisher blast-radius harness ./harness.token --format json > harness.blast-radius.json
 ```
 
 #### Notes (Harness)
@@ -492,7 +558,7 @@ kingfisher access-map harness ./harness.token --format json > harness.access-map
 
 ### OpenAI (`openai`)
 
-- **Credential**: a single OpenAI API key string (read from a file for `kingfisher access-map openai <FILE>`).
+- **Credential**: a single OpenAI API key string (read from a file for `kingfisher blast-radius openai <FILE>`).
 - **Token types supported**: OpenAI keys accepted by `Authorization: Bearer <TOKEN>` (for example `sk-...`, `sk-proj-...`, `sk-svcacct-...`).
 
 Kingfisher performs only documented read-only inventory requests. It does not send synthetic write
@@ -510,7 +576,7 @@ requests or infer access to one endpoint from another endpoint's response. Curre
 
 ```bash
 printf '%s' 'sk-example...' > ./openai.token
-kingfisher access-map openai ./openai.token --format json > openai.access-map.json
+kingfisher blast-radius openai ./openai.token --format json > openai.blast-radius.json
 ```
 
 #### Notes (OpenAI)
@@ -528,7 +594,7 @@ kingfisher access-map openai ./openai.token --format json > openai.access-map.js
 
 ### Anthropic (`anthropic`)
 
-- **Credential**: a single Anthropic API key string (read from a file for `kingfisher access-map anthropic <FILE>`).
+- **Credential**: a single Anthropic API key string (read from a file for `kingfisher blast-radius anthropic <FILE>`).
 - **Token types supported**: Anthropic keys accepted via `x-api-key`, including standard API keys and admin-style keys when exposed by Anthropic.
 
 Kingfisher performs read-only enumeration via:
@@ -541,7 +607,7 @@ Kingfisher performs read-only enumeration via:
 
 ```bash
 printf '%s' 'sk-ant-api-example...' > ./anthropic.token
-kingfisher access-map anthropic ./anthropic.token --format json > anthropic.access-map.json
+kingfisher blast-radius anthropic ./anthropic.token --format json > anthropic.blast-radius.json
 ```
 
 #### Notes (Anthropic)
@@ -552,7 +618,7 @@ kingfisher access-map anthropic ./anthropic.token --format json > anthropic.acce
 ### Salesforce (`salesforce`)
 
 - **Credential**: Salesforce access token plus instance domain.
-- **Supported standalone formats** for `kingfisher access-map salesforce <FILE>`:
+- **Supported standalone formats** for `kingfisher blast-radius salesforce <FILE>`:
   - JSON:
     - `token` (or `access_token`)
     - `instance_url` (or `instance`), such as `https://mydomain.my.salesforce.com`
@@ -580,7 +646,7 @@ cat > ./salesforce.json <<'EOF'
 }
 EOF
 
-kingfisher access-map salesforce ./salesforce.json --format json > salesforce.access-map.json
+kingfisher blast-radius salesforce ./salesforce.json --format json > salesforce.blast-radius.json
 ```
 
 #### Notes (Salesforce)
@@ -590,7 +656,7 @@ kingfisher access-map salesforce ./salesforce.json --format json > salesforce.ac
 
 ### Weights & Biases (`weightsandbiases` / `wandb`)
 
-- **Credential**: a single Weights & Biases API key string (read from a file for `kingfisher access-map weightsandbiases <FILE>`).
+- **Credential**: a single Weights & Biases API key string (read from a file for `kingfisher blast-radius weightsandbiases <FILE>`).
 - **Token types supported**:
   - Legacy 40-character hex API keys
   - New v1 keys (`wandb_v1_...`)
@@ -603,7 +669,7 @@ Kingfisher performs read-only identity resolution via:
 
 ```bash
 printf '%s' 'wandb_v1_example...' > ./wandb.token
-kingfisher access-map weightsandbiases ./wandb.token --format json > wandb.access-map.json
+kingfisher blast-radius weightsandbiases ./wandb.token --format json > wandb.blast-radius.json
 ```
 
 #### Notes (Weights & Biases)
@@ -613,7 +679,7 @@ kingfisher access-map weightsandbiases ./wandb.token --format json > wandb.acces
 
 ### Microsoft Teams (`microsoftteams` / `msteams`)
 
-- **Credential**: a Microsoft Teams Incoming Webhook URL (read from a file for `kingfisher access-map microsoftteams <FILE>`).
+- **Credential**: a Microsoft Teams Incoming Webhook URL (read from a file for `kingfisher blast-radius microsoftteams <FILE>`).
 - **Webhook types supported**:
   - Legacy Incoming Webhooks (`*.office.com/webhook/...`)
   - Workflow-based webhooks (`*.webhook.office.com/webhookb2/...`)
@@ -624,7 +690,7 @@ Kingfisher parses the webhook URL to extract the tenant ID and webhook identity,
 
 ```bash
 printf '%s' 'https://contoso.webhook.office.com/webhookb2/...' > ./teams.webhook
-kingfisher access-map microsoftteams ./teams.webhook --format json > teams.access-map.json
+kingfisher blast-radius microsoftteams ./teams.webhook --format json > teams.blast-radius.json
 ```
 
 #### Notes (Microsoft Teams)
@@ -635,7 +701,7 @@ kingfisher access-map microsoftteams ./teams.webhook --format json > teams.acces
 
 ### monday.com (`monday`)
 
-- **Credential**: a single monday.com API token (read from a file for `kingfisher access-map monday <FILE>`).
+- **Credential**: a single monday.com API token (read from a file for `kingfisher blast-radius monday <FILE>`).
 - **Token types supported**: personal or account-level API tokens accepted by the monday.com GraphQL API with the `Authorization: <TOKEN>` header (the JWT-style token is sent verbatim, without the `Bearer` prefix — this matches monday.com's native scheme).
 
 Kingfisher performs read-only enumeration against `https://api.monday.com/v2`:
@@ -650,7 +716,7 @@ Severity is Critical for account administrators, High for standard members with 
 
 ```bash
 printf '%s' 'eyJhbGciOi...' > ./monday.token
-kingfisher access-map monday ./monday.token --format json > monday.access-map.json
+kingfisher blast-radius monday ./monday.token --format json > monday.blast-radius.json
 ```
 
 #### Notes (monday.com)
@@ -663,7 +729,7 @@ kingfisher access-map monday ./monday.token --format json > monday.access-map.js
 
 ### Asana (`asana`)
 
-- **Credential**: a single Asana access token (read from a file for `kingfisher access-map asana <FILE>`).
+- **Credential**: a single Asana access token (read from a file for `kingfisher blast-radius asana <FILE>`).
 - **Token types supported**: tokens accepted by Asana's REST API with `Authorization: Bearer <TOKEN>`:
   - Legacy OAuth / personal access tokens (`0/...`)
   - Personal Access Tokens V1 (`1/<user_gid>:<secret>`)
@@ -681,7 +747,7 @@ Severity is High when the token reaches an organization workspace with more than
 
 ```bash
 printf '%s' '2/12345.../abcdef...' > ./asana.token
-kingfisher access-map asana ./asana.token --format json > asana.access-map.json
+kingfisher blast-radius asana ./asana.token --format json > asana.blast-radius.json
 ```
 
 #### Notes (Asana)
@@ -693,7 +759,7 @@ kingfisher access-map asana ./asana.token --format json > asana.access-map.json
 
 ### Pinecone (`pinecone`)
 
-- **Credential**: a single Pinecone API key (read from a file for `kingfisher access-map pinecone <FILE>`).
+- **Credential**: a single Pinecone API key (read from a file for `kingfisher blast-radius pinecone <FILE>`).
 - **Token types supported**: API keys accepted by Pinecone's control-plane API with the `Api-Key: <KEY>` header.
 
 Kingfisher performs read-only enumeration against `https://api.pinecone.io` (`X-Pinecone-API-Version: 2025-10`):
@@ -707,16 +773,14 @@ Severity is High when the token reaches more than 10 indexes, Medium when it rea
 
 ```bash
 printf '%s' '62b0dbfe-3489-4b79-b850-34d911527c88' > ./pinecone.key
-kingfisher access-map pinecone ./pinecone.key --format json > pinecone.access-map.json
+kingfisher blast-radius pinecone ./pinecone.key --format json > pinecone.blast-radius.json
 ```
-
-The `kingfisher blast-radius` and `kingfisher blast_radius` aliases also work for any provider, e.g. `kingfisher blast-radius pinecone ./pinecone.key`.
 
 #### Notes (Pinecone)
 
 - Pinecone API keys do not carry granular scopes; access follows the API key's project-level permissions, which include read and write (upsert/delete) against any index in the project.
 - Indexes with `deletion_protection: enabled` are flagged in the resource record but still accessible for read/write.
-- Recorded during `scan --blast-radius` (or the `--access-map` alias) for validated
+- Recorded during `scan --blast-radius` for validated
   `betterleaks.pinecone-api-key.1` and `betterleaks.pinecone-api-key.2` findings.
 
 ## Notes on blast-radius generation during `scan --blast-radius`
@@ -726,8 +790,8 @@ The `kingfisher blast-radius` and `kingfisher blast_radius` aliases also work fo
   current GitLab mappings use this behavior).
 - Some providers require extra context that Kingfisher infers from the finding context or validation response (for example, Azure DevOps organization name).
 - Automatic collection is driven by successfully validated imported credential shapes with an
-  explicit Kingfisher access-map handler. Standalone providers remain usable even when Betterleaks
+  explicit Kingfisher blast-radius handler. Standalone providers remain usable even when Betterleaks
   has no compatible validation rule.
 - Imported-detector ID-to-handler and component bindings live in
   `crates/kingfisher-rules/data/imported-rules-capabilities.yml`. The build verifies those bindings
-  against the downloaded imported-detector catalog; access-map Rust code does not match rule IDs.
+  against the downloaded imported-detector catalog; blast-radius Rust code does not match rule IDs.

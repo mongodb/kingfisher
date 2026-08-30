@@ -67,7 +67,7 @@ Typical centralized inputs:
 See:
 
 - [INTEGRATIONS.md](../usage/integrations.md)
-- [ACCESS_MAP.md](../features/access-map.md)
+- [BLAST_RADIUS.md](../features/blast-radius.md)
 - [ARCHITECTURE.md](../reference/architecture.md)
 
 ### Embedded Library Usage
@@ -103,5 +103,5 @@ See:
 - [USAGE.md](../usage/basic-scanning.md)
 - [ADVANCED.md](../usage/advanced.md)
 - [INTEGRATIONS.md](../usage/integrations.md)
-- [ACCESS_MAP.md](../features/access-map.md)
+- [BLAST_RADIUS.md](../features/blast-radius.md)
 - [LIBRARY.md](../reference/library.md)

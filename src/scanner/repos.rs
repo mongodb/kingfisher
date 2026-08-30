@@ -26,7 +26,9 @@ use crate::{
     confluence, findings_store, gcs,
     git_binary::{CloneMode, Git, ProviderHosts},
     git_url::GitUrl,
-    gitea, github, gitlab, huggingface, jira,
+    gitea, github,
+    github_auth::GitHubAuth,
+    gitlab, huggingface, jira,
     matcher::{Match, Matcher, MatcherStats},
     origin::{Origin, OriginSet},
     postman,
@@ -45,6 +47,15 @@ fn repo_host_contains(repo_url: &GitUrl, needle: &str) -> bool {
         .and_then(|url| url.host_str().map(|host| host.to_lowercase()))
         .map(|host| host.contains(needle))
         .unwrap_or(false)
+}
+
+fn repo_clone_host(repo_url: &GitUrl) -> Option<String> {
+    let url = Url::parse(repo_url.as_str()).ok()?;
+    let host = url.host_str()?.to_ascii_lowercase();
+    Some(match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host,
+    })
 }
 
 /// Map a configured API/base URL to the host `git clone` actually contacts,
@@ -229,6 +240,14 @@ where
     let clone_concurrency = std::cmp::max(1, args.num_jobs);
     let ignore_certs = global_args.ignore_certs;
     let provider_hosts = provider_hosts(args, global_args);
+    let github_auth = if repo_urls.iter().any(|url| provider_hosts.is_github_url(url)) {
+        Some(Arc::new(
+            GitHubAuth::from_env(&args.input_specifier_args.github_api_url, ignore_certs)
+                .context("Failed to configure GitHub authentication")?,
+        ))
+    } else {
+        None
+    };
     let datastore = Arc::clone(datastore);
     let worker_progress = progress.clone();
 
@@ -238,7 +257,28 @@ where
         clone_concurrency,
         repo_urls.iter().cloned(),
         move |repo_url| {
-            let git = Git::with_provider_hosts(ignore_certs, &provider_hosts);
+            let git_for_repo = || -> Result<Git> {
+                let github_token = if provider_hosts.is_github_url(&repo_url) {
+                    let auth = github_auth
+                        .as_ref()
+                        .expect("GitHub auth is configured when GitHub URLs are present");
+                    let clone_host = repo_clone_host(&repo_url);
+                    if clone_host.as_deref().is_some_and(|host| auth.allows_clone_host(host)) {
+                        auth.token_blocking().with_context(|| {
+                            format!("Failed to mint GitHub credentials for repository {repo_url}")
+                        })?
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+                Ok(Git::with_provider_hosts_and_github_token(
+                    ignore_certs,
+                    &scoped_provider_hosts(&provider_hosts, &repo_url, github_token.is_some()),
+                    github_token,
+                ))
+            };
             let output_dir = {
                 let datastore = datastore.lock().unwrap();
                 datastore.clone_destination(&repo_url)
@@ -246,6 +286,14 @@ where
 
             if output_dir.is_dir() {
                 worker_progress.suspend(|| info!("Updating clone of {repo_url}..."));
+                let git = match git_for_repo() {
+                    Ok(git) => git,
+                    Err(e) => {
+                        worker_progress.suspend(|| error!("{e:#}"));
+                        worker_progress.inc(1);
+                        return None;
+                    }
+                };
                 match git.update_clone(&repo_url, &output_dir) {
                     Ok(()) => {
                         {
@@ -275,6 +323,14 @@ where
             }
 
             worker_progress.suspend(|| info!("Cloning {repo_url}..."));
+            let git = match git_for_repo() {
+                Ok(git) => git,
+                Err(e) => {
+                    worker_progress.suspend(|| error!("{e:#}"));
+                    worker_progress.inc(1);
+                    return None;
+                }
+            };
             if let Err(e) = git.create_fresh_clone(&repo_url, &output_dir, clone_mode) {
                 worker_progress.suspend(|| {
                     if repo_url.as_str().ends_with(".wiki.git") {
@@ -304,11 +360,35 @@ where
     Ok(())
 }
 
+fn scoped_provider_hosts(
+    provider_hosts: &ProviderHosts,
+    repo_url: &GitUrl,
+    has_github_token: bool,
+) -> ProviderHosts {
+    if !has_github_token {
+        return provider_hosts.clone();
+    }
+
+    let mut scoped = provider_hosts.clone();
+    let Some(clone_host) = repo_clone_host(repo_url) else {
+        scoped.github.clear();
+        return scoped;
+    };
+    scoped.github.retain(|host| host.eq_ignore_ascii_case(&clone_host));
+    scoped
+}
+
 #[cfg(test)]
 mod tests {
-    use std::{sync::mpsc, thread, time::Duration};
+    use std::{str::FromStr, sync::mpsc, thread, time::Duration};
 
-    use super::stream_parallel_results;
+    use url::Url;
+
+    use crate::git_url::GitUrl;
+
+    use super::{
+        ProviderHosts, clone_host, repo_clone_host, scoped_provider_hosts, stream_parallel_results,
+    };
 
     #[test]
     fn streaming_pool_makes_progress_with_one_worker() {
@@ -331,6 +411,32 @@ mod tests {
         streamed.sort_unstable();
         assert_eq!(streamed, vec![0, 2, 4, 6]);
         handle.join().expect("streaming thread should not panic");
+    }
+
+    #[test]
+    fn github_enterprise_api_host_matches_clone_host() {
+        let api = Url::parse("https://ghe.example.com:8443/api/v3/").unwrap();
+        let repo = GitUrl::from_str("https://ghe.example.com:8443/acme/widgets.git").unwrap();
+
+        assert_eq!(clone_host(&api).as_deref(), Some("ghe.example.com:8443"));
+        assert_eq!(repo_clone_host(&repo).as_deref(), Some("ghe.example.com:8443"));
+        assert_eq!(
+            clone_host(&Url::parse("https://api.github.com/").unwrap()).as_deref(),
+            Some("github.com")
+        );
+    }
+
+    #[test]
+    fn explicit_github_token_is_scoped_to_repository_host() {
+        let hosts = ProviderHosts {
+            github: vec!["github.com".to_string(), "ghe.example.com".to_string()],
+            ..ProviderHosts::default()
+        };
+        let repo = GitUrl::from_str("https://ghe.example.com/acme/widgets.git").unwrap();
+
+        let scoped = scoped_provider_hosts(&hosts, &repo, true);
+
+        assert_eq!(scoped.github, vec!["ghe.example.com".to_string()]);
     }
 }
 
@@ -1053,6 +1159,7 @@ pub async fn fetch_teams_messages(
 #[allow(clippy::too_many_arguments)]
 pub async fn fetch_git_host_artifacts(
     repo_urls: &[GitUrl],
+    github_api_url: &Url,
     bitbucket_api_url: &Url,
     bitbucket_auth: &bitbucket::AuthConfig,
     bitbucket_host: Option<String>,
@@ -1068,26 +1175,32 @@ pub async fn fetch_git_host_artifacts(
         ds.clone_root()
     };
     let concurrency = std::cmp::max(1, concurrency);
+    let github_clone_host = clone_host(github_api_url).unwrap_or_default();
 
     // Fan out per-repo artifact fetches concurrently. Each completed fetch
     // pushes its dirs into `out_tx` immediately so the scanner can pick them
     // up while the remaining fetches are still running.
     let mut stream = stream::iter(repo_urls.iter().cloned())
         .map(|repo_url| {
+            let github_api_url = github_api_url.clone();
             let bitbucket_api_url = bitbucket_api_url.clone();
             let bitbucket_auth = bitbucket_auth.clone();
             let bitbucket_host = bitbucket_host.clone();
+            let github_clone_host = github_clone_host.clone();
             let output_root = output_root.clone();
             let datastore = Arc::clone(datastore);
             let ignore_certs = global_args.ignore_certs;
             async move {
-                let host = Url::parse(repo_url.as_str())
-                    .ok()
-                    .and_then(|u| u.host_str().map(|s| s.to_string()))
-                    .unwrap_or_default();
-                if host.contains("github") {
-                    github::fetch_repo_items(&repo_url, ignore_certs, &output_root, &datastore)
-                        .await
+                let host = repo_clone_host(&repo_url).unwrap_or_default();
+                if host.eq_ignore_ascii_case(&github_clone_host) {
+                    github::fetch_repo_items(
+                        &repo_url,
+                        &github_api_url,
+                        ignore_certs,
+                        &output_root,
+                        &datastore,
+                    )
+                    .await
                 } else if host.contains("gitlab") {
                     gitlab::fetch_repo_items(&repo_url, ignore_certs, &output_root, &datastore)
                         .await

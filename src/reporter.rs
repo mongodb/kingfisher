@@ -1,6 +1,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Write,
+    path::PathBuf,
     sync::{Arc, Mutex},
 };
 
@@ -18,6 +19,7 @@ use kingfisher_scanner::validation::http_validation::is_auto_provided_request_va
 use crate::{
     access_map::{
         AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata, ResourceExposure,
+        RoleBinding,
     },
     alerts::AlertAccessMapEntry,
     blob::BlobMetadata,
@@ -270,10 +272,12 @@ fn build_var_args(
     let mut var_args = Vec::new();
 
     // Add AKID if available (for AWS)
+    let dependent_akid_is_present =
+        dependent_captures.get("AKID").is_some_and(|value| !value.is_empty());
     if let Some(akid) = akid_from_captures.or(akid_from_validation_body)
         && !akid.is_empty()
         && required_vars.contains("AKID")
-        && !dependent_captures.contains_key("AKID")
+        && !dependent_akid_is_present
     {
         var_args.push(format!("--var AKID={}", escape_for_shell(akid)));
     }
@@ -283,12 +287,28 @@ fn build_var_args(
     // are just internal parsing aids (e.g., checksum payloads).
     for (name, value) in dependent_captures {
         let name_upper = name.to_ascii_uppercase();
-        if required_vars.contains(&name_upper) && !name.eq_ignore_ascii_case("TOKEN") {
+        if required_vars.contains(&name_upper)
+            && !name.eq_ignore_ascii_case("TOKEN")
+            && !value.is_empty()
+        {
             var_args.push(format!("--var {}={}", name, escape_for_shell(value)));
         }
     }
 
     if var_args.is_empty() { String::new() } else { format!("{} ", var_args.join(" ")) }
+}
+
+/// Build rule-loading flags for a direct command emitted from a scan result.
+fn build_rule_loading_args(rules_path: &[PathBuf], load_builtins: bool) -> Option<String> {
+    let mut args = rules_path
+        .iter()
+        .map(|path| path.to_str().map(|path| format!("--rules-path {}", escape_for_shell(path))))
+        .collect::<Option<Vec<_>>>()?;
+    if !load_builtins {
+        args.push("--no-builtins".to_string());
+    }
+
+    Some(if args.is_empty() { String::new() } else { format!("{} ", args.join(" ")) })
 }
 
 /// Generate a kingfisher revoke command for an active credential if the rule supports revocation.
@@ -328,7 +348,7 @@ fn build_revoke_command(
             }
             Some(format!(
                 "kingfisher revoke --rule {} {}{}",
-                rule_id,
+                escape_for_shell(rule_id),
                 var_args,
                 escape_for_shell(snippet)
             ))
@@ -337,7 +357,7 @@ fn build_revoke_command(
             // GCP revocation uses the service account JSON key (which is the snippet)
             Some(format!(
                 "kingfisher revoke --rule {} {}{}",
-                rule_id,
+                escape_for_shell(rule_id),
                 var_args,
                 escape_for_shell(snippet)
             ))
@@ -346,7 +366,7 @@ fn build_revoke_command(
             // HTTP-based revocation with dependent variables
             Some(format!(
                 "kingfisher revoke --rule {} {}{}",
-                rule_id,
+                escape_for_shell(rule_id),
                 var_args,
                 escape_for_shell(snippet)
             ))
@@ -355,7 +375,7 @@ fn build_revoke_command(
             // Multi-step HTTP revocation with dependent variables
             Some(format!(
                 "kingfisher revoke --rule {} {}{}",
-                rule_id,
+                escape_for_shell(rule_id),
                 var_args,
                 escape_for_shell(snippet)
             ))
@@ -392,7 +412,7 @@ fn build_validate_command(
 
     let mut required_vars = required_vars_for_validation(validation);
     let is_aws_session_token = matches!(validation, Validation::AWS)
-        && dependent_captures.contains_key("AWS_SECRET_ACCESS_KEY");
+        && dependent_captures.get("AWS_SECRET_ACCESS_KEY").is_some_and(|value| !value.is_empty());
     if is_aws_session_token {
         required_vars.insert("AWS_SECRET_ACCESS_KEY".to_string());
     }
@@ -408,16 +428,15 @@ fn build_validate_command(
         Validation::Assumed => None,
         Validation::AWS => {
             // AWS needs the access key ID (AKID) in addition to the secret
-            let akid = akid_from_captures.or(akid_from_validation_body)?;
-            if akid.is_empty() {
-                return None;
-            }
-            if is_aws_session_token && !dependent_captures.contains_key("AWS_SECRET_ACCESS_KEY") {
-                return None;
-            }
+            dependent_captures
+                .get("AKID")
+                .map(String::as_str)
+                .filter(|value| !value.is_empty())
+                .or(akid_from_captures.filter(|value| !value.is_empty()))
+                .or(akid_from_validation_body.filter(|value| !value.is_empty()))?;
             Some(format!(
                 "kingfisher validate --rule {} {}{}",
-                rule_id,
+                escape_for_shell(rule_id),
                 var_args,
                 escape_for_shell(snippet)
             ))
@@ -426,14 +445,14 @@ fn build_validate_command(
             // Both validators use the captured token directly.
             Some(format!(
                 "kingfisher validate --rule {} {}{}",
-                rule_id,
+                escape_for_shell(rule_id),
                 var_args,
                 escape_for_shell(snippet)
             ))
         }
         Validation::Betterleaks(_) => Some(format!(
             "kingfisher validate --rule {} {}{}",
-            rule_id,
+            escape_for_shell(rule_id),
             var_args,
             escape_for_shell(snippet)
         )),
@@ -441,7 +460,7 @@ fn build_validate_command(
             // HTTP-based validation with dependent variables
             Some(format!(
                 "kingfisher validate --rule {} {}{}",
-                rule_id,
+                escape_for_shell(rule_id),
                 var_args,
                 escape_for_shell(snippet)
             ))
@@ -450,7 +469,7 @@ fn build_validate_command(
             // gRPC-based validation with dependent variables
             Some(format!(
                 "kingfisher validate --rule {} {}{}",
-                rule_id,
+                escape_for_shell(rule_id),
                 var_args,
                 escape_for_shell(snippet)
             ))
@@ -463,7 +482,7 @@ fn build_validate_command(
                 .unwrap_or(snippet);
             Some(format!(
                 "kingfisher validate --rule {} {}{}",
-                rule_id,
+                escape_for_shell(rule_id),
                 var_args,
                 escape_for_shell(uri)
             ))
@@ -479,12 +498,119 @@ fn build_validate_command(
             // These validators with dependent variables
             Some(format!(
                 "kingfisher validate --rule {} {}{}",
-                rule_id,
+                escape_for_shell(rule_id),
                 var_args,
                 escape_for_shell(snippet)
             ))
         }
     }
+}
+
+struct BlastRadiusCommandContext<'a> {
+    dependent_captures: &'a BTreeMap<String, String>,
+    akid_from_captures: Option<&'a str>,
+    akid_from_validation_body: Option<&'a str>,
+    rules_path: &'a [PathBuf],
+    load_builtins: bool,
+}
+
+/// Generate a direct blast-radius command when the finding can be mapped by a known handler.
+fn build_blast_radius_command(
+    rule_id: &str,
+    validation: &crate::rules::Validation,
+    is_aws_session_token: bool,
+    snippet: &str,
+    context: &BlastRadiusCommandContext<'_>,
+) -> Option<String> {
+    use crate::rules::Validation;
+
+    let BlastRadiusCommandContext {
+        dependent_captures,
+        akid_from_captures,
+        akid_from_validation_body,
+        rules_path,
+        load_builtins,
+    } = context;
+
+    let mut required_vars = BTreeSet::new();
+    let command_secret = match validation {
+        Validation::CredentialUri => {
+            let uri = dependent_captures
+                .get("URI")
+                .map(String::as_str)
+                .filter(|uri| !uri.is_empty())
+                .unwrap_or(snippet);
+            let scheme = dependent_captures.get("SCHEME").map(String::as_str);
+            match crate::validation::classify_credential_uri(uri, scheme) {
+                crate::validation::CredentialUriTarget::Postgres(_)
+                | crate::validation::CredentialUriTarget::MongoDB(_)
+                | crate::validation::CredentialUriTarget::MySQL(_) => uri,
+                crate::validation::CredentialUriTarget::Http(_)
+                | crate::validation::CredentialUriTarget::Jdbc(_)
+                | crate::validation::CredentialUriTarget::Unsupported(_) => return None,
+            }
+        }
+        _ => snippet,
+    };
+    match validation {
+        Validation::Betterleaks(validation) => {
+            let mapping = validation.capabilities.access_map.as_ref()?;
+            for source in mapping.inputs.values() {
+                if let Some(component) = source.strip_prefix("components.") {
+                    let variable = validation.components.get(component)?.to_ascii_uppercase();
+                    if dependent_captures.get(&variable).is_none_or(String::is_empty) {
+                        return None;
+                    }
+                    required_vars.insert(variable);
+                }
+            }
+        }
+        Validation::AWS => {
+            required_vars.insert("AKID".to_string());
+            let akid_from_dependencies = dependent_captures
+                .get("AKID")
+                .map(String::as_str)
+                .filter(|value| !value.is_empty());
+            let has_secret_access_key = dependent_captures
+                .get("AWS_SECRET_ACCESS_KEY")
+                .is_some_and(|value| !value.is_empty());
+            if is_aws_session_token && !has_secret_access_key {
+                return None;
+            }
+            if has_secret_access_key {
+                required_vars.insert("AWS_SECRET_ACCESS_KEY".to_string());
+            }
+            akid_from_dependencies
+                .or(akid_from_captures.filter(|value| !value.is_empty()))
+                .or(akid_from_validation_body.filter(|value| !value.is_empty()))?;
+        }
+        Validation::GCP => {}
+        Validation::AzureStorage => {
+            required_vars.insert("AZURENAME".to_string());
+            if dependent_captures.get("AZURENAME").is_none_or(String::is_empty) {
+                return None;
+            }
+        }
+        Validation::CredentialUri
+        | Validation::Postgres
+        | Validation::MongoDB
+        | Validation::MySQL => {}
+        _ => return None,
+    }
+    let var_args = build_var_args(
+        dependent_captures,
+        *akid_from_captures,
+        *akid_from_validation_body,
+        &required_vars,
+    );
+    let rule_loading_args = build_rule_loading_args(rules_path, *load_builtins)?;
+    Some(format!(
+        "kingfisher blast-radius --rule {} {}{}{}",
+        escape_for_shell(rule_id),
+        rule_loading_args,
+        var_args,
+        escape_for_shell(command_secret)
+    ))
 }
 
 /// Extract AWS Access Key ID from validation response body if present.
@@ -1077,9 +1203,9 @@ impl DetailsReporter {
             .or_else(|| self.git_object_fallback_path(rm))
             .unwrap_or_else(|| format!("blob:{}", rm.blob_metadata.id.hex()));
 
-        // Generate validate/revoke commands only if not redacting (they contain the secret)
-        let (validate_command, revoke_command) = if args.redact {
-            (None, None)
+        // Generate validate/revoke/blast-radius commands only if not redacting (they contain the secret)
+        let (validate_command, revoke_command, blast_radius_command) = if args.redact {
+            (None, None, None)
         } else {
             // Try to find AKID from captures (for AWS)
             let akid_from_captures: Option<String> =
@@ -1118,6 +1244,32 @@ impl DetailsReporter {
             } else {
                 None
             };
+
+            let blast_radius_cmd = rm.m.rule.syntax().validation.as_ref().and_then(|validation| {
+                let mut merged_vars = rm.m.dependent_captures.clone();
+                for cap in rm.m.groups.captures.iter() {
+                    let Some(name) = cap.name else { continue };
+                    if name.eq_ignore_ascii_case("TOKEN") {
+                        continue;
+                    }
+                    merged_vars
+                        .entry(name.to_uppercase())
+                        .or_insert_with(|| cap.raw_value().to_string());
+                }
+                build_blast_radius_command(
+                    rm.m.rule.id(),
+                    validation,
+                    crate::validation::is_aws_session_token_rule(&rm.m.rule),
+                    &raw_snippet,
+                    &BlastRadiusCommandContext {
+                        dependent_captures: &merged_vars,
+                        akid_from_captures: akid_from_captures.as_deref(),
+                        akid_from_validation_body: akid_from_body.as_deref(),
+                        rules_path: &args.rules.rules_path,
+                        load_builtins: args.rules.load_builtins,
+                    },
+                )
+            });
 
             // Generate revoke command for active credentials with revocation support
             let revoke_cmd = if rm.validation_outcome.is_verified_active() {
@@ -1182,7 +1334,7 @@ impl DetailsReporter {
                 None
             };
 
-            (validate_cmd, revoke_cmd)
+            (validate_cmd, revoke_cmd, blast_radius_cmd)
         };
 
         FindingReporterRecord {
@@ -1215,6 +1367,7 @@ impl DetailsReporter {
                 git_metadata: git_metadata_val,
                 validate_command,
                 revoke_command,
+                blast_radius_command,
             },
         }
     }
@@ -1397,44 +1550,7 @@ impl DetailsReporter {
                 .iter()
                 .any(|fingerprint| non_authoritative_fingerprints.contains(fingerprint))
         }) {
-            let result = &mapped.result;
-            let account = summarize_account(&result.identity);
-            let mut grouped: BTreeMap<Vec<String>, Vec<String>> = BTreeMap::new();
-
-            if result.resources.is_empty() {
-                grouped.insert(Vec::new(), vec![result.identity.id.clone()]);
-            } else {
-                for resource in &result.resources {
-                    let resource_name = format_resource(resource);
-                    let permissions = normalize_permissions(&result.cloud, &resource.permissions);
-                    grouped.entry(permissions).or_default().push(resource_name);
-                }
-            }
-
-            let mut groups: Vec<AccessMapResourceGroup> = grouped
-                .into_iter()
-                .map(|(permissions, mut resources)| {
-                    resources.sort();
-                    AccessMapResourceGroup { resources, permissions }
-                })
-                .collect();
-
-            groups.sort_by(|a, b| a.resources.cmp(&b.resources));
-
-            let permissions_by_severity =
-                if result.permissions.is_empty() { None } else { Some(result.permissions.clone()) };
-            let context = AccessIdentityContext::from_summary(&result.identity);
-
-            entries.push(AccessMapEntry {
-                provider: result.cloud.clone(),
-                account: account.clone(),
-                groups,
-                token_details: result.token_details.clone(),
-                provider_metadata: result.provider_metadata.clone(),
-                fingerprint: result.fingerprint.clone(),
-                permissions_by_severity,
-                context,
-            });
+            entries.push(access_map_entry_from_result(&mapped.result));
         }
 
         (!entries.is_empty()).then_some(entries)
@@ -1675,6 +1791,9 @@ pub struct AccessMapEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
     pub groups: Vec<AccessMapResourceGroup>,
+    /// Direct and reachable roles associated with the credential.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub roles: Vec<RoleBinding>,
     #[serde(default)]
     pub token_details: Option<AccessTokenDetails>,
     #[serde(default)]
@@ -1689,6 +1808,46 @@ pub struct AccessMapEntry {
     /// Discriminator context to tell duplicate-named identities apart in the UI.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub context: Option<AccessIdentityContext>,
+}
+
+/// Convert a provider result into the access-map shape consumed by report viewers.
+pub fn access_map_entry_from_result(result: &crate::access_map::AccessMapResult) -> AccessMapEntry {
+    let account = summarize_account(&result.identity);
+    let mut grouped: BTreeMap<Vec<String>, Vec<String>> = BTreeMap::new();
+
+    if result.resources.is_empty() {
+        grouped.insert(Vec::new(), vec![result.identity.id.clone()]);
+    } else {
+        for resource in &result.resources {
+            let resource_name = format_resource(resource);
+            let permissions = normalize_permissions(&result.cloud, &resource.permissions);
+            grouped.entry(permissions).or_default().push(resource_name);
+        }
+    }
+
+    let mut groups: Vec<AccessMapResourceGroup> = grouped
+        .into_iter()
+        .map(|(permissions, mut resources)| {
+            resources.sort();
+            AccessMapResourceGroup { resources, permissions }
+        })
+        .collect();
+    groups.sort_by(|a, b| a.resources.cmp(&b.resources));
+
+    let permissions_by_severity =
+        if result.permissions.is_empty() { None } else { Some(result.permissions.clone()) };
+
+    AccessMapEntry {
+        provider: result.cloud.clone(),
+        account,
+        groups,
+        roles: result.roles.clone(),
+        token_details: result.token_details.clone(),
+        provider_metadata: result.provider_metadata.clone(),
+        fingerprint: result.fingerprint.clone(),
+        permissions_by_severity,
+        context: AccessIdentityContext::from_summary(&result.identity),
+    }
 }
 
 #[derive(Serialize, JsonSchema, Clone, Debug)]
@@ -1830,6 +1989,8 @@ pub struct FindingRecordData {
     pub validate_command: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub revoke_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub blast_radius_command: Option<String>,
 }
 
 #[cfg(test)]
@@ -1862,6 +2023,18 @@ mod tests {
     use std::path::PathBuf;
     use std::sync::{Arc, Mutex};
     use tempfile::tempdir;
+
+    fn default_blast_radius_context(
+        dependent_captures: &BTreeMap<String, String>,
+    ) -> BlastRadiusCommandContext<'_> {
+        BlastRadiusCommandContext {
+            dependent_captures,
+            akid_from_captures: None,
+            akid_from_validation_body: None,
+            rules_path: &[],
+            load_builtins: true,
+        }
+    }
 
     #[test]
     fn build_var_args_ignores_unrequired_named_captures() {
@@ -1913,7 +2086,7 @@ mod tests {
             "command should not include CHECKSUM var: {}",
             cmd
         );
-        assert!(cmd.contains("kingfisher validate --rule custom.vercel.token"));
+        assert!(cmd.contains("kingfisher validate --rule 'custom.vercel.token'"));
     }
 
     #[test]
@@ -1936,6 +2109,39 @@ mod tests {
     }
 
     #[test]
+    fn credential_uri_blast_radius_command_requires_supported_database_target() {
+        let database_uri = "postgresql://alice:hunter2@db.internal/app";
+        let database_captures = BTreeMap::from([
+            ("URI".to_string(), database_uri.to_string()),
+            ("SCHEME".to_string(), "postgresql".to_string()),
+        ]);
+        let database_command = build_blast_radius_command(
+            "betterleaks.generic-credential-uri",
+            &crate::rules::Validation::CredentialUri,
+            false,
+            "hunter2",
+            &default_blast_radius_context(&database_captures),
+        )
+        .expect("database credential URI should support blast-radius mapping");
+        assert!(database_command.contains(database_uri));
+
+        let http_captures = BTreeMap::from([
+            ("URI".to_string(), "https://alice:hunter2@service.example/api".to_string()),
+            ("SCHEME".to_string(), "https".to_string()),
+        ]);
+        assert!(
+            build_blast_radius_command(
+                "betterleaks.generic-credential-uri",
+                &crate::rules::Validation::CredentialUri,
+                false,
+                "hunter2",
+                &default_blast_radius_context(&http_captures),
+            )
+            .is_none()
+        );
+    }
+
+    #[test]
     fn build_validate_command_includes_static_secret_for_aws_session_token() {
         let dependent = BTreeMap::from([(
             "AWS_SECRET_ACCESS_KEY".to_string(),
@@ -1955,6 +2161,151 @@ mod tests {
         assert!(cmd.contains("--var AKID='ASIAIOSFODNN7EXAMPLE'"), "{cmd}");
         assert!(cmd.contains("--var AWS_SECRET_ACCESS_KEY='aws-static-secret'"), "{cmd}");
         assert!(cmd.ends_with("'session-token'"), "{cmd}");
+    }
+
+    #[test]
+    fn aws_session_token_blast_radius_command_requires_static_secret() {
+        assert!(
+            build_blast_radius_command(
+                "betterleaks.aws-session-token",
+                &crate::rules::Validation::AWS,
+                true,
+                "session-token",
+                &BlastRadiusCommandContext {
+                    dependent_captures: &BTreeMap::new(),
+                    akid_from_captures: Some("ASIAIOSFODNN7EXAMPLE"),
+                    akid_from_validation_body: None,
+                    rules_path: &[],
+                    load_builtins: true,
+                },
+            )
+            .is_none()
+        );
+
+        let dependent = BTreeMap::from([(
+            "AWS_SECRET_ACCESS_KEY".to_string(),
+            "aws-static-secret".to_string(),
+        )]);
+        let command = build_blast_radius_command(
+            "betterleaks.aws-session-token",
+            &crate::rules::Validation::AWS,
+            true,
+            "session-token",
+            &BlastRadiusCommandContext {
+                dependent_captures: &dependent,
+                akid_from_captures: Some("ASIAIOSFODNN7EXAMPLE"),
+                akid_from_validation_body: None,
+                rules_path: &[],
+                load_builtins: true,
+            },
+        )
+        .expect("complete session credentials should produce a blast-radius command");
+        assert!(command.contains("--var AWS_SECRET_ACCESS_KEY='aws-static-secret'"));
+    }
+
+    #[test]
+    fn aws_session_token_commands_accept_dependency_only_access_key_id() {
+        let dependent = BTreeMap::from([
+            ("AKID".to_string(), "ASIAIOSFODNN7EXAMPLE".to_string()),
+            ("AWS_SECRET_ACCESS_KEY".to_string(), "aws-static-secret".to_string()),
+        ]);
+
+        let validate_command = build_validate_command(
+            "betterleaks.aws-session-token",
+            &crate::rules::Validation::AWS,
+            "session-token",
+            &dependent,
+            None,
+            None,
+        )
+        .expect("dependency-only credentials should produce a validate command");
+        assert!(validate_command.contains("--var AKID='ASIAIOSFODNN7EXAMPLE'"));
+
+        let blast_radius_command = build_blast_radius_command(
+            "betterleaks.aws-session-token",
+            &crate::rules::Validation::AWS,
+            true,
+            "session-token",
+            &default_blast_radius_context(&dependent),
+        )
+        .expect("dependency-only credentials should produce a blast-radius command");
+        assert!(blast_radius_command.contains("--var AKID='ASIAIOSFODNN7EXAMPLE'"));
+        assert!(blast_radius_command.contains("--var AWS_SECRET_ACCESS_KEY='aws-static-secret'"));
+    }
+
+    #[test]
+    fn aws_commands_ignore_empty_dependency_values() {
+        let dependent = BTreeMap::from([
+            ("AKID".to_string(), String::new()),
+            ("AWS_SECRET_ACCESS_KEY".to_string(), "aws-static-secret".to_string()),
+        ]);
+
+        let command = build_blast_radius_command(
+            "betterleaks.aws-session-token",
+            &crate::rules::Validation::AWS,
+            true,
+            "session-token",
+            &BlastRadiusCommandContext {
+                dependent_captures: &dependent,
+                akid_from_captures: Some("ASIAIOSFODNN7EXAMPLE"),
+                akid_from_validation_body: None,
+                rules_path: &[],
+                load_builtins: true,
+            },
+        )
+        .expect("a non-empty captured access key ID should be used as a fallback");
+
+        assert!(command.contains("--var AKID='ASIAIOSFODNN7EXAMPLE'"));
+        assert!(!command.contains("--var AKID=''"));
+    }
+
+    #[test]
+    fn blast_radius_command_preserves_custom_rule_loading_flags() {
+        let rules_path = PathBuf::from("/tmp/team's rules");
+        let command = build_blast_radius_command(
+            "custom.example",
+            &crate::rules::Validation::GCP,
+            false,
+            "credential",
+            &BlastRadiusCommandContext {
+                dependent_captures: &BTreeMap::new(),
+                akid_from_captures: None,
+                akid_from_validation_body: None,
+                rules_path: &[rules_path],
+                load_builtins: false,
+            },
+        )
+        .expect("custom rule should produce a blast-radius command");
+
+        assert!(command.contains("--rule 'custom.example'"), "{command}");
+        assert!(command.contains("--rules-path '/tmp/team'\\''s rules'"), "{command}");
+        assert!(command.contains("--no-builtins"), "{command}");
+    }
+
+    #[test]
+    fn generated_commands_quote_custom_rule_ids() {
+        let rule_id = "custom.example; echo unsafe";
+        let validation = crate::rules::Validation::GCP;
+        let validate = build_validate_command(
+            rule_id,
+            &validation,
+            "credential",
+            &BTreeMap::new(),
+            None,
+            None,
+        )
+        .expect("custom rule should produce a validate command");
+        let blast_radius = build_blast_radius_command(
+            rule_id,
+            &validation,
+            false,
+            "credential",
+            &default_blast_radius_context(&BTreeMap::new()),
+        )
+        .expect("custom rule should produce a blast-radius command");
+
+        assert!(validate.contains("--rule 'custom.example; echo unsafe'"), "{validate}");
+        assert!(blast_radius.contains("--rule 'custom.example; echo unsafe'"), "{blast_radius}");
     }
 
     #[test]
@@ -1997,7 +2348,7 @@ mod tests {
         );
 
         let cmd = cmd.expect("command should still be emitted when vars are missing");
-        assert!(cmd.contains("kingfisher revoke --rule custom.example.token"));
+        assert!(cmd.contains("kingfisher revoke --rule 'custom.example.token'"));
         assert!(cmd.contains("'secret'"));
     }
 

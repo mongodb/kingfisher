@@ -126,15 +126,15 @@ Findings tied to a skip-listed account report `Validation: Canary Token (Skipped
 
 ```bash
 AWS ACCESS TOKEN => [BETTERLEAKS.AWS-ACCESS-TOKEN]
- |Finding.......: <REDACTED>
- |Fingerprint...: 2141074333616819500
- |Confidence....: medium
- |Entropy.......: 5.00
- |Validation....: Canary Token (Skipped)
- |__Response....: (skip list entry) AWS validation not attempted for account 171436882533.
- |Language......: Unknown
- |Line Num......: 21
- |Path..........: /tmp/test_canary_accounts.log
+ |Finding.........: <REDACTED>
+ |Fingerprint.....: 2141074333616819500
+ |Confidence......: medium
+ |Entropy.........: 5.00
+ |Validation......: Canary Token (Skipped)
+ |__Response......: (skip list entry) AWS validation not attempted for account 171436882533.
+ |Language........: Unknown
+ |Line Num........: 21
+ |Path............: /tmp/test_canary_accounts.log
 ```
 
 **Why this matters**  
@@ -386,7 +386,7 @@ detection for a known naming convention.
 
 Kingfisher does not vendor the upstream rule catalogs. Clean source builds require outbound HTTPS
 access: the build downloads the pinned Betterleaks catalog snapshot from its
-[source permalink](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml) and
+[source permalink](https://github.com/betterleaks/betterleaks/blob/2ba7943682b82a3659a89dae8fc680de1ef6b781/config/betterleaks.toml) and
 selected Veles source files from the full OSV-SCALIBR commit in
 `crates/kingfisher-rules/data/veles-rules.yml`, then converts and embeds the generated database.
 A Betterleaks release is preferred; the current immutable post-release commit is pinned because

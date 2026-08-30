@@ -53,7 +53,7 @@ thread_local = "1.1.9"
 
 [package]
 name = "kingfisher"
-version = "2.0.0"
+version = "2.1.0"
 description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -106,7 +106,7 @@ clap = { version = "4.6", default-features = false, features = [
 anyhow = "1.0"
 bstr = { version = "1.12", features = ["serde"] }
 fixedbitset = "0.5"
-gix = { version = "0.86", features = ["max-performance-safe", "serde", "blocking-network-client"] }
+gix = { version = "0.87", features = ["max-performance-safe", "serde", "blocking-network-client"] }
 ignore = "0.4"
 petgraph = "0.8"
 roaring = "0.11.4"
@@ -141,6 +141,7 @@ reqwest = { version = "0.13", default-features = false, features = [
     "blocking",
     "multipart",
 ] }
+jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto", "use_pem"] }
 async-openai = { version = "0.41.3", default-features = false, features = [
     "administration",
     "assistant",
@@ -287,13 +288,13 @@ system-alloc = [] # Darwin-only: force the system allocator
 pretty_assertions = "1.4"
 temp-env = { version = "0.3.6", features = ["async_closure"] }
 wiremock = "0.6.5"
+rcgen = "0.14.10"
 git2 = { version = "0.21.0", default-features = false }
 rand_chacha = "0.10.0"
 testcontainers = "0.28.0"
 predicates = "3.1.4"
 assert_cmd = "2.2.2"
 proptest = "1.11.0"
-jsonwebtoken = { version = "11.0.0", default-features = false, features = ["rust_crypto", "use_pem"] }
 # Test-only: generate an ephemeral RSA keypair for the RS256 JWT regression test.
 # `getrandom` enables `rsa::rand_core::OsRng`; `pem` is on by default for PEM export.
 rsa = { version = "0.9.10", features = ["getrandom"] }

@@ -58,6 +58,24 @@ kingfisher view ./reports/
 
 `kingfisher view` starts a tiny local web server on `127.0.0.1:7890` and opens the browser automatically. Use `--port` to pick another port and `--address 0.0.0.0` to expose the viewer from a container or remote host.
 
+You can open a direct blast-radius mapping in the same interactive viewer without first writing a
+report file:
+
+```bash
+printf '%s' 'ghp_example0000000000000000000000000000' \
+  | kingfisher blast-radius \
+      --rule betterleaks.github-pat \
+      - \
+      --view-report
+
+printf '%s' 'ghp_example0000000000000000000000000000' > ./github.token
+kingfisher blast-radius github ./github.token --view-report
+```
+
+The viewer's finding exports include the linked blast-radius entry. JSON keeps it as a
+`blast_radius` array on each exported finding, and CSV includes the same data in a quoted
+`blast_radius` column.
+
 You can also chain scanning and viewing in a single step:
 
 ```bash

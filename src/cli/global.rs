@@ -11,8 +11,9 @@ use sysinfo::{MemoryRefreshKind, RefreshKind, System};
 use tracing::Level;
 
 use crate::cli::commands::{
-    access_map::AccessMapArgs, config_command::ConfigArgs, revoke::RevokeArgs, rules::RulesArgs,
-    scan::ScanCommandArgs, validate::ValidateArgs, view::ViewArgs,
+    access_map::AccessMapArgs, blast_radius::BlastRadiusArgs, config_command::ConfigArgs,
+    revoke::RevokeArgs, rules::RulesArgs, scan::ScanCommandArgs, validate::ValidateArgs,
+    view::ViewArgs,
 };
 
 #[deny(missing_docs)]
@@ -90,9 +91,13 @@ pub enum Command {
     /// Directly revoke a known secret against a rule's revocation config
     Revoke(RevokeArgs),
 
-    /// Map a cloud credential to its identity, permissions, and blast radius
-    #[command(name = "access-map", aliases = ["access_map", "blast-radius", "blast_radius"])]
+    /// Map a cloud credential from a provider credential artifact
+    #[command(name = "access-map", aliases = ["access_map"])]
     AccessMap(AccessMapArgs),
+
+    /// Directly map a known secret to its identity, permissions, and blast radius
+    #[command(name = "blast-radius", aliases = ["blast_radius"])]
+    BlastRadius(BlastRadiusArgs),
 
     /// View Kingfisher JSON/JSONL reports in a local web UI
     View(ViewArgs),

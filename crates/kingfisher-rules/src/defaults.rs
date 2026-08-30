@@ -224,6 +224,30 @@ mod test {
         assert_eq!(bindings.secret, "components.aws-secret-access-key");
         assert_eq!(bindings.variables["AKID"], "finding.secret");
 
+        let session = rules
+            .rules
+            .get("betterleaks.aws-session-token")
+            .expect("AWS session-token compatibility rule should exist");
+        assert_eq!(session.name, "AWS Session Token");
+        assert!(matches!(session.validation, Some(Validation::AWS)));
+        let session_regex = session.as_regex().unwrap();
+        let session_captures = session_regex
+            .captures(br#""AWS_SESSION_TOKEN": "Ab9xQ7mN2kLp4RsT""#)
+            .expect("AWS session-token rule should match a quoted structured key");
+        assert_eq!(session_captures.get(1).unwrap().as_bytes(), b"Ab9xQ7mN2kLp4RsT");
+        assert_eq!(
+            session
+                .depends_on_rule
+                .iter()
+                .flatten()
+                .map(|dependency| (dependency.rule_id.as_str(), dependency.variable.as_str()))
+                .collect::<Vec<_>>(),
+            vec![
+                ("betterleaks.aws-access-token", "AKID"),
+                ("betterleaks.aws-secret-access-key", "AWS_SECRET_ACCESS_KEY"),
+            ]
+        );
+
         for (id, handler) in [
             ("betterleaks.auth0-client-secret.1", BetterleaksAccessMapHandler::Auth0),
             ("betterleaks.monday-api-token.1", BetterleaksAccessMapHandler::Monday),

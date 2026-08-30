@@ -22,7 +22,7 @@ flowchart LR
         ScanCmd[scan]
         ValidateCmd[validate]
         RevokeCmd[revoke]
-        AccessMapCmd[access-map]
+        AccessMapCmd[blast-radius]
         ViewCmd[view]
         RulesCmd[rules]
     end
@@ -117,7 +117,7 @@ flowchart LR
 - `src/reporter.rs` and `src/reporter/*`: report rendering for pretty, JSON, BSON, TOON, SARIF, and HTML outputs, plus the data model used by the viewer.
 - `src/direct_validate.rs`: direct validation of a known secret without going through pattern matching. Supports HTTP, gRPC, plus schema-level typed validators such as AWS, AzureStorage, CredentialUri, GCP, JDBC, MongoDB, MySQL, PostgreSQL, JWT, and Coinbase, and delegates ad-hoc `Raw` validators to `crates/kingfisher-scanner/src/validation/raw.rs`.
 - `src/direct_revoke.rs`: direct revocation of a known secret without going through the scan pipeline. Uses Liquid templates for revocation configurations and supports multi-step HTTP revocation flows.
-- `src/access_map.rs` and `src/access_map/*`: standalone blast-radius mapping with 24 provider implementations including AWS, Azure, GCP, GitHub, GitLab, Slack, Bitbucket, Gitea, Hugging Face, Buildkite, Anthropic, OpenAI, and more.
+- `src/access_map.rs` and `src/access_map/*`: standalone blast-radius mapping with 43 provider implementations including AWS, Azure, GCP, GitHub, GitLab, Slack, Bitbucket, Gitea, Hugging Face, Buildkite, Anthropic, OpenAI, and more.
 - `crates/kingfisher-rules/build.rs` and `build_support/{betterleaks,veles}.rs`: download pinned
   Betterleaks and selected Veles detector sources and translate them into the embedded default rule
   database. No built-in rule catalog is stored in the repository.
@@ -132,7 +132,7 @@ flowchart LR
 - `kingfisher-scanner` is still important: it provides the embeddable scanner API plus shared validation and primitive functionality reused by the application.
 - The shared validation layer in `crates/kingfisher-scanner/src/validation/` contains reusable typed
   validator families and the `Raw` exception-path validators retained for Kingfisher 1.x custom YAML.
-- Direct `validate`, `revoke`, and standalone `access-map` are sibling command paths. They are not downstream stages of `FindingsStore`.
+- Direct `validate`, `revoke`, and standalone `blast-radius` are sibling command paths. They are not downstream stages of `FindingsStore`.
 - Reporting is downstream from the datastore, which lets Kingfisher emit multiple output formats and drive the local viewer from the same finding set.
 - Every rule uses Vectorscan's high-throughput SIMD-accelerated database for candidate detection. The exact Rust regex then confirms captures before imported-rule filters, Base64 handling, and parser-based context verification improve accuracy and reduce false positives. No rule performs an unconditional whole-blob regex scan.
 - Betterleaks' top-level source prefilter is compiled once into a separate Vectorscan database and

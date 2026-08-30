@@ -9,10 +9,13 @@
   <a href="https://github.com/mongodb/kingfisher/pkgs/container/kingfisher">
     <img src="https://ghcr-badge.elias.eu.org/shield/mongodb/kingfisher/kingfisher" alt="ghcr downloads" />
   </a>
-  <a href="https://github.com/mongodb/kingfisher/releases">
-    <img src="https://img.shields.io/github/downloads/mongodb/kingfisher/total" alt="GitHub Downloads" style="height: 24px;" />
-  </a>
   <br>
+  <a href="https://github.com/mongodb/kingfisher/releases">
+    <img src="https://img.shields.io/github/downloads/mongodb/kingfisher/total?label=GitHub%20Downloads" alt="GitHub Downloads" style="height: 24px;" />
+  </a>
+  <a href="https://pypi.org/project/kingfisher-bin/">
+    <img src="https://img.shields.io/pepy/dt/kingfisher-bin?label=PyPI%20Downloads" alt="PyPI Downloads" style="height: 24px;" />
+  </a>
 
 Kingfisher is an open source secret scanner and **live secret validation** tool built in Rust.
 
@@ -20,11 +23,37 @@ It combines Intel's SIMD-accelerated regex engine ( Vectorscan ) with language-a
 
 Kingfisher also ships a **browser-based report viewer** that visualizes and triages findings from Kingfisher, SARIF, Gitleaks, and TruffleHog reports — so you can import scans from other tools and triage them in the same UI. A [hosted copy of the viewer](https://mongodb.github.io/kingfisher/viewer/) is published on the Kingfisher docs site [or run locally](#3-scan-and-view-results-in-browser)
 
-Designed for offensive security engineers and blue-team defenders alike, Kingfisher helps you scan repositories, cloud storage, chat, docs, and CI pipelines to find and verify exposed secrets quickly.
+Designed for offensive security engineers and blue-team defenders alike, Kingfisher helps you scan repositories, cloud storage, chat, docs, and CI pipelines to find, verify, assess, and contain exposed credentials quickly.
 
 </p>
 
+> **[Who uses Kingfisher?](#who-uses-kingfisher)** See the full list of publicly documented users and integrations. If your organization uses Kingfisher and would like to be listed, please open an issue or submit a pull request.
+
 **Learn more:** [Introducing Kingfisher: Real‑Time Secret Detection and Validation](https://www.mongodb.com/blog/post/product-release-announcements/introducing-kingfisher-real-time-secret-detection-validation)
+
+> **Defender workflow:** Follow the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md) for secret detection, validation, notifications, blast-radius mapping, and revocation.
+
+## AWS, GCP, and More: Blast-Radius Mapping Included by Default
+
+**Blast-radius analysis for AWS, GCP, and more providers is included by default in Kingfisher.** Add `--blast-radius` (alias `--access-map`) and Kingfisher goes beyond validating a leaked credential:
+
+- **AWS:** finds potential direct and one-additional-hop IAM role-assumption paths, expands each
+  reachable role's policies, and reports the resource patterns and permissions those roles add.
+- **GCP:** finds service accounts the credential may impersonate or act as, resolves the roles those
+  identities inherit from visible project/folder/organization policies, and reports the hierarchy
+  scopes and permissions those roles add.
+- **More providers:** the same mapper covers Azure Storage, Alibaba Cloud, DigitalOcean, GitHub,
+  GitLab, Slack, Salesforce, MongoDB, PostgreSQL, MySQL, OpenAI, Anthropic, and more across 43
+  provider integrations.
+- **Safe, passive analysis:** role impact is derived from read-only IAM metadata. Kingfisher does not
+  call AWS `sts:AssumeRole` or mint access tokens for discovered GCP target service accounts.
+
+```bash
+kingfisher scan /path/to/code --blast-radius --view-report
+```
+
+[Read the blast-radius documentation](docs/BLAST_RADIUS.md) for supported credentials, evidence
+fields, safety limits, and standalone usage.
 
 ## What Is Kingfisher?
 
@@ -32,7 +61,7 @@ Kingfisher is a high-performance, open source secret detection tool for source c
 
 - Scan code, Git history, and integrated platforms (GitHub, GitLab, Azure Repos, Bitbucket, Gitea, Hugging Face, Jira, Confluence, Slack, Microsoft Teams, Postman, Docker, AWS S3, and Google Cloud Storage)
 - Validate discovered credentials against provider APIs to reduce false positives
-- Revoke supported secrets directly from the CLI
+- Revoke supported secrets directly from the CLI, without first tracking down the person who leaked or originally owned the credential
 - Generate JSON, SARIF, TOON, and HTML outputs for security teams, compliance, and CI
 - Send scan summaries and optional per-finding details to Slack, Microsoft Teams, Discord, Mattermost, Google Chat, or any HTTPS webhook ([docs/ALERTS.md](/docs/ALERTS.md))
 
@@ -53,15 +82,16 @@ Kingfisher is a high-performance, open source secret detection tool for source c
 
 ### Performance, Accuracy, and Extensible Rules
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
-- **Extensible rules**: Betterleaks is the main catalog, with selected Veles detectors filling gaps; custom Betterleaks TOML and Kingfisher 1.x YAML rules are supported ([docs/ADVANCED.md](/docs/ADVANCED.md#default-betterleaks-rules), [docs/RULES.md](/docs/RULES.md))
-- **Validation and revocation**: validate discovered credentials live and revoke supported credentials from the CLI ([docs/USAGE.md](/docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
-- **Blast Radius Mapping**: use `--blast-radius` (alias `--access-map`) to map supported credentials to their effective identities, permissions, and reachable resources ([docs/ACCESS_MAP.md](docs/ACCESS_MAP.md))
+- **Extensible rules**: Betterleaks is the main catalog, with selected Veles detectors filling gaps;
+  custom Betterleaks TOML and Kingfisher 1.x YAML rules are supported ([built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), [docs/RULES.md](docs/RULES.md))
+- **Validation and defender-led revocation**: validate discovered credentials live, then revoke supported credentials from the CLI. For supported provider flows, responders can contain a leaked token even when its owner is unknown or has left the company ([docs/USAGE.md](/docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
+- **Blast-radius mapping included by default**: use `--blast-radius` (alias `--access-map`) to map supported credentials to their effective identities, permissions, reachable roles/service accounts, and impacted resource scopes. All 43 providers—including advanced AWS role-assumption and GCP service-account impersonation analysis—are included in the Apache-2.0 release ([blast-radius docs](https://mongodb.github.io/kingfisher/features/blast-radius/))
 - **Broad provider coverage**: detect and validate credentials across cloud, AI, developer tooling, databases, SaaS, messaging, identity, and cryptographic systems through the Betterleaks- and Veles-based candidate catalog
 - **Compressed Files**: Supports extracting and scanning compressed files for secrets, including `tar.gz`/`bz2`/`xz`, ZIP-family containers (`zip`, `jar`, `docx`, `xlsx`, `pptx`, `odt`, `epub`, `hwpx`, and more), `asar`, HWP (Hancom OLE2/CFBF binary with DEFLATE/zlib stream decoding), and EGG (ALZip; raw-byte scanning)
 - **SQLite Database Scanning**: Automatically extracts and scans SQLite database contents for secrets stored in table rows
 - **Python Bytecode (.pyc) Scanning**: Extracts and scans string constants from compiled Python (`.pyc`, `.pyo`) files
 - **Baseline management**: generate and track baselines to suppress known secrets ([docs/BASELINE.md](/docs/BASELINE.md))
-- **Checksum-aware custom detection**: Kingfisher 1.x custom rules can verify token checksums offline before validation
+- **Checksum-aware custom detection**: Kingfisher 1.x custom rules can verify token checksums offline before validation ([checksum intelligence](docs/RULES.md#checksum-intelligence))
 - **Report Viewer (local + hosted)**: Visualize and triage Kingfisher, **SARIF, Gitleaks, and TruffleHog** output locally with `kingfisher view ./report.json` or online with the [hosted viewer](https://mongodb.github.io/kingfisher/viewer/). Multiple files, directories, and imported third-party reports are merged and deduplicated. See [docs/USAGE.md](/docs/USAGE.md#report-viewer-local-and-hosted).
 - **Audit reporting**: Generate compliance-oriented HTML reports with scan metadata and validation ordering
 - **Library crates**: Embed Kingfisher's scanning engine in your own Rust applications ([docs/LIBRARY.md](docs/LIBRARY.md))
@@ -83,8 +113,8 @@ NOTE: Replay has been slowed down for demo
 
 # Table of Contents
 
+- [AWS, GCP, and More: Blast-Radius Mapping Included by Default](#aws-gcp-and-more-blast-radius-mapping-included-by-default)
 - [What Is Kingfisher?](#what-is-kingfisher)
-- [Why Choose Kingfisher?](#why-choose-kingfisher)
 - [Key Features](#key-features)
 - [Report Viewer (local and hosted)](#report-viewer-local-and-hosted)
 - [Alert Webhooks](#alert-webhooks)
@@ -100,6 +130,7 @@ NOTE: Replay has been slowed down for demo
 - [Advanced Features](#advanced-features)
 - [Documentation](#documentation)
 - [Library Usage](#library-usage)
+- [Who Uses Kingfisher?](#who-uses-kingfisher)
 - [Roadmap](#roadmap)
 - [License](#license)
 
@@ -212,6 +243,21 @@ Kingfisher 1.x custom YAML rules can still define their own `revocation:` blocks
 ```bash
 KF_GITHUB_TOKEN="ghp_..." kingfisher scan github --organization my-org
 ```
+
+For long-running organization scans, Kingfisher can authenticate as a GitHub
+App and mint a fresh installation token before every repository clone:
+
+```bash
+KF_GITHUB_APP_ID="123456" \
+KF_GITHUB_APP_INSTALLATION_ID="789012" \
+KF_GITHUB_APP_PRIVATE_KEY_PATH='~/.config/kingfisher/app.pem' \
+  kingfisher scan github --organization my-org
+```
+
+Private-key paths expand the current user's leading `~` and environment
+variables written as `$NAME`, `${NAME}`, or `%NAME%` (Windows style). Expansion
+is single-pass and never invokes a shell; undefined or empty variables are
+rejected.
 
 ### 7: Scan a GitLab group
 
@@ -466,30 +512,25 @@ For payload shapes, per-webhook overrides, and config-file examples, see [docs/A
 
 # Detection Rules
 
-Kingfisher's candidate detector catalog is sourced from the [Betterleaks rule catalog](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml), with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors filling gaps. Upstream detector definitions are translated at build time; Kingfisher's importer, matching engine, filters, validation, and operational capabilities also determine effective behavior. Built-in rules use the `betterleaks.` and `veles.` namespaces.
+Kingfisher's candidate detector catalog is sourced from the [Betterleaks rule catalog](https://github.com/betterleaks/betterleaks/blob/2ba7943682b82a3659a89dae8fc680de1ef6b781/config/betterleaks.toml), with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors filling gaps. Upstream detector definitions are translated at build time; Kingfisher's importer, matching engine, filters, validation, and operational capabilities also determine effective behavior. Built-in rules use the `betterleaks.` and `veles.` namespaces.
 
-See the [Betterleaks catalog](https://github.com/betterleaks/betterleaks) for current detection coverage and contribute generally useful detectors there first. Custom Betterleaks TOML rules and Kingfisher's 1.x YAML format are also supported; use YAML for private, organization-specific rules. See [Moving to Kingfisher v2.0.x](docs/V2_MIGRATION.md), [Default Betterleaks Rules](docs/ADVANCED.md#default-betterleaks-rules), and [Kingfisher 1.x Custom Rules](docs/RULES.md).
+See the [Betterleaks catalog](https://github.com/betterleaks/betterleaks) for current detection coverage and contribute generally useful detectors there first. Custom Betterleaks TOML rules and Kingfisher's 1.x YAML format are also supported; use YAML for private, organization-specific rules. See [Moving to Kingfisher v2.0.x](docs/V2_MIGRATION.md), the hosted [built-in rules listing](https://mongodb.github.io/kingfisher/rules/builtin-rules/), and [docs/RULES.md](docs/RULES.md) for custom-rule implementation details.
+
+Existing custom rules in Kingfisher's 1.x YAML format can be loaded with `--rules-path`. Custom rules are added to the built-in Betterleaks and Veles rules by default. To scan using only the custom rules, pass `--load-builtins=false`; this disables automatic loading of the built-in catalog for that scan:
+
+```bash
+kingfisher scan ~/work/secretstuff \
+  --rules-path ~/work/custom-kingfisher-rules \
+  --load-builtins=false
+```
+
+The `--rules-path` value can be a directory containing `.yml` or `.yaml` rule files, or a single rule file.
 
 ## Write Custom Rules
 
-New generally applicable rules belong in Betterleaks. Use Kingfisher's 1.x YAML format only for private or environment-specific custom rules that cannot be contributed upstream.
+New generally applicable rules generally belong in the Betterleaks catalog, so that the community can benefit from a single maintained corpus of detection and validation rules. Use Kingfisher's 1.x YAML format primarily for private or environment-specific custom rules that cannot be contributed upstream.
 
 **For complete rule documentation, see [docs/RULES.md](docs/RULES.md).**
-
-### Checksum Intelligence
-
-Modern API tokens increasingly include **built-in checksums**, short internal digests that make each credential self-verifiable. (For background, see [GitHub's write-up on their newer token formats](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/) and why checksums slash false positives.)
-
-Kingfisher's 1.x custom-rule format supports **checksum-aware matching**, enabling **offline structural verification** of credentials *without* calling third-party APIs.
-
-By validating each token's internal checksum (for tokens that support checksums), Kingfisher eliminates nearly all false positives—automatically skipping structurally invalid or fake tokens before validation ever runs.
-
-**Why this matters**
-- **Offline verification** — no API call required  
-- **Industry-aligned** — compatible with prefix + checksum token designs (e.g., modern PATs)  
-- **Lower false positives** — invalid tokens are filtered out by structure alone
-
-**Learn more**: implementation details and templating are documented in **[docs/RULES.md](docs/RULES.md)**
 
 # Usage Examples
 
@@ -532,7 +573,7 @@ kingfisher scan /path/to/repo --format sarif --output findings.sarif
 
 Finding a leaked credential is only the first step. The critical question isn't just "Is this a secret?"—it's "What can an attacker do with it?"
 
-Kingfisher's blast-radius feature transforms secret detection from a simple alert into a comprehensive threat assessment. Instead of leaving you with a cryptic API key, Kingfisher actively authenticates against the provider to map the full extent of the credential's power.
+Kingfisher's blast-radius feature transforms secret detection from a simple alert into a comprehensive threat assessment. Instead of leaving you with a cryptic API key, Kingfisher actively authenticates against the provider to map the full extent of the credential's power. Blast-radius mapping is included by default in the open-source release and covers all 43 provider mappers, including AWS and GCP.
 
 * **Instant Identity Resolution**: Immediately identify who the key belongs to—whether it's a specific IAM user, an assumed role, or a service account.
 * **Visualize the Blast Radius**: See exactly which resources (S3 buckets, EC2 instances, projects, storage containers) are exposed and at risk.
@@ -588,6 +629,12 @@ The viewer can import SARIF, Gitleaks JSON, and TruffleHog JSON/JSONL in additio
 | | | Asana | |
 
 ## Direct Secret Validation & Revocation
+
+Removing a secret from source does not invalidate it. For supported credential types, defenders can
+use Kingfisher's provider-specific revocation workflow immediately instead of waiting to identify
+the person who created or leaked the token—a dependency that may be impossible when the owner has
+changed teams or left the company. Revocation can interrupt live workloads, so confirm the target
+and expected impact before proceeding.
 
 ```bash
 # Validate a known secret without scanning
@@ -769,7 +816,11 @@ KF_POSTMAN_TOKEN="PMAK-..." kingfisher scan postman --all
 
 | Variable          | Purpose                      |
 | ----------------- | ---------------------------- |
-| `KF_GITHUB_TOKEN` | GitHub Personal Access Token |
+| `KF_GITHUB_TOKEN` | GitHub personal access token or pre-minted App installation token |
+| `KF_GITHUB_APP_ID` | GitHub App ID used to mint installation tokens |
+| `KF_GITHUB_APP_INSTALLATION_ID` | GitHub App installation ID |
+| `KF_GITHUB_APP_PRIVATE_KEY` | GitHub App RSA private key as PEM content |
+| `KF_GITHUB_APP_PRIVATE_KEY_PATH` | Expandable path to a GitHub App RSA private key PEM file |
 | `KF_GITLAB_TOKEN` | GitLab Personal Access Token |
 | `KF_GITEA_TOKEN` | Gitea Personal Access Token |
 | `KF_GITEA_USERNAME` | Username for private Gitea clones (used with `KF_GITEA_TOKEN`) |
@@ -851,7 +902,7 @@ kingfisher scan /tmp/repo --branch feature-1 \
   --branch-root-commit $(git -C /tmp/repo merge-base main feature-1)
 ```
 
-**For more advanced features including confidence levels, validation tuning, and custom rules, see [docs/ADVANCED.md](docs/ADVANCED.md).** See also [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for centralized and self-serve deployment strategies.
+**For more advanced features including confidence levels and validation tuning, see [docs/ADVANCED.md](docs/ADVANCED.md).** For custom-rule authoring, see [docs/RULES.md](docs/RULES.md). See also [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for centralized and self-serve deployment strategies.
 
 # Documentation
 
@@ -860,7 +911,8 @@ kingfisher scan /tmp/repo --branch feature-1 \
 | [INSTALLATION.md](docs/INSTALLATION.md) | Complete installation guide including pre-commit hooks setup for git, pre-commit framework, and Husky |
 | [INTEGRATIONS.md](docs/INTEGRATIONS.md) | Platform-specific scanning guide (GitHub, GitLab, AWS S3, Docker, Jira, Confluence, Slack, etc.) |
 | [ALERTS.md](docs/ALERTS.md) | Alert webhooks for Slack, Teams, Discord, Mattermost, Google Chat, and generic HTTPS endpoints |
-| [ACCESS_MAP.md](docs/ACCESS_MAP.md) | Blast radius: supported credentials and provider workflows |
+| [DEFENDER_WORKFLOW.md](docs/DEFENDER_WORKFLOW.md) | End-to-end defender workflow for secret detection, validation, Slack/Discord notification, blast-radius mapping, and revocation |
+| [BLAST_RADIUS.md](docs/BLAST_RADIUS.md) | Blast radius: supported credentials and provider workflows |
 | [ARCHITECTURE.md](docs/ARCHITECTURE.md) | High-level Mermaid architecture diagram of the CLI, scanner pipeline, validation, blast-radius mapping, and outputs |
 | [DEPLOYMENT.md](docs/DEPLOYMENT.md) | Deployment models for self-serve CLI use, CI/pre-commit enforcement, centralized scanning, and embedded library integrations |
 | [ADVANCED.md](docs/ADVANCED.md) | Advanced features: baselines, confidence levels, validation tuning, CI scanning, and more |
@@ -878,6 +930,16 @@ kingfisher scan /tmp/repo --branch feature-1 \
 (**beta feature**) - Kingfisher's scanning engine is available as a set of Rust library crates (`kingfisher-core`, `kingfisher-rules`, `kingfisher-scanner`) that can be embedded into other applications. This enables you to integrate secret scanning directly into your own tools and workflows.
 
 **For complete documentation and examples, see [docs/LIBRARY.md](docs/LIBRARY.md).**
+
+# Who Uses Kingfisher?
+
+Kingfisher is used in production security workflows and integrated into other open-source tools. These public references are not an exhaustive list:
+
+- **[MongoDB](https://www.mongodb.com/company/blog/product-release-announcements/introducing-kingfisher-real-time-secret-detection-validation)** — Kingfisher is a core component of MongoDB's internal security workflows, including pre-commit scanning, CI/CD integration, historical code analysis, and cloud/database validation.
+- **[Prowler](https://prowler.com/blog/whats-new-in-prowler-july-2026)** — Prowler's secret scanning uses Kingfisher as an offline scanning engine, with optional live validation.
+- **[MegaLinter](https://megalinter.io/latest/descriptors/repository_kingfisher/)** — ships Kingfisher as the `REPOSITORY_KINGFISHER` linter in its standard and security flavors.
+
+If your organization or project uses Kingfisher and you'd like to be included, please [open an issue](https://github.com/mongodb/kingfisher/issues/new/choose) or [submit a pull request](https://github.com/mongodb/kingfisher/pulls). We'd love to hear how you're using it.
 
 # Exit Codes
 

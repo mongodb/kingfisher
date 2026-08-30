@@ -1,24 +1,42 @@
 # Secret Revocation
 
-Kingfisher supports direct secret revocation for selected built-in imported detectors and
-through a rule-level `revocation:` block in the Kingfisher 1.x custom-rule format.
+Finding an active credential is not containment. Deleting it from the current branch does not
+invalidate copies in Git history, logs, forks, caches, or an attacker's hands.
+
+Kingfisher lets defenders revoke supported leaked credentials directly from the CLI. For
+self-revocable credentials and other provider flows that can safely identify the exact key, this
+removes a common incident-response dependency: locating the employee who created or leaked the
+credential. The responder can contain the risk even when ownership is unclear, the credential
+predates the current team, or the original owner has left the company.
+
+Revocation is provider- and credential-specific, not a universal promise. Some APIs require extra
+captured values or permissions, and some credential formats cannot safely identify the exact key to
+disable. Kingfisher exposes a revoke action only when it has a bounded provider workflow. Always
+review the target and operational impact before running it; revocation can interrupt workloads that
+still depend on the credential.
+
+Kingfisher supports direct revocation for selected built-in imported detectors and through a
+rule-level `revocation:` block in the Kingfisher 1.x custom-rule format. The current open-source
+catalog includes 34 revocation-enabled rules across 15 provider families.
 
 Betterleaks does not currently define revocation metadata. Kingfisher therefore keeps operational
 revocation actions in `crates/kingfisher-rules/data/imported-rules-capabilities.yml`. This file is not a
 detection catalog: it contains no regexes or filters, and every entry is joined to the downloaded
 imported-detector catalog by upstream ID at build time.
 
-Current built-in coverage includes:
+Current built-in provider families include:
 
 - AWS access keys and GCP service-account keys
 - GitHub PAT, fine-grained PAT, OAuth, and refresh credentials
 - GitLab PAT formats
-- Buildkite user tokens, Cloudflare API tokens, crates.io keys, and DigitalOcean access tokens
-- Hugging Face credentials and selected Slack and Vercel token formats
+- Buildkite, Cloudflare, crates.io, DigitalOcean, Doppler, Heroku, and npm credentials
+- Hugging Face credentials and selected Slack, Twitch, and Vercel token formats
 
 The capability file is the authoritative exact-ID list. Kingfisher intentionally omits actions
 when an upstream detector combines credential types with different revocation APIs, when required
 context cannot be bound safely, or when a provider lookup cannot identify the exact credential.
+That conservative boundary is important: a remediation shortcut should never guess which key to
+disable.
 
 Examples:
 

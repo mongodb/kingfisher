@@ -12,7 +12,7 @@ Use this crate with `kingfisher-core` and `kingfisher-scanner` to build reusable
 
 Building this crate requires outbound HTTPS access. Kingfisher's candidate detector catalog is
 sourced from Betterleaks and selected Veles detectors. The build downloads the pinned Betterleaks
-catalog snapshot from its [source permalink](https://github.com/betterleaks/betterleaks/blob/3d798ac55d89f14a60c8df65d4d2bda6fccb1ea1/config/betterleaks.toml)
+catalog snapshot from its [source permalink](https://github.com/betterleaks/betterleaks/blob/2ba7943682b82a3659a89dae8fc680de1ef6b781/config/betterleaks.toml)
 and the Veles source files selected by the pinned commit in `data/veles-rules.yml`, converts them,
 and embeds the generated database in the binary. The importer and Kingfisher runtime add effective
 matching, filtering, validation, access-map, and revocation behavior around those candidates. A

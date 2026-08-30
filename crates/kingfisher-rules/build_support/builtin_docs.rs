@@ -10,7 +10,6 @@ struct Snapshot {
 
 #[derive(Deserialize)]
 struct DocRule {
-    name: String,
     id: String,
     #[serde(default = "default_confidence")]
     confidence: String,
@@ -70,7 +69,7 @@ credentials.
 but does not provide that operation.
 
 !!! tip "Search"
-    Filter by catalog, rule name, rule ID, confidence, validation, or revocation support.
+    Filter by catalog, rule ID, confidence, validation, or revocation support.
 
 <input type="text" class="rules-search" placeholder="Search rules... (e.g. github, HTTP, revocation)" />
 <div class="rules-count"></div>
@@ -79,7 +78,6 @@ but does not provide that operation.
 <thead>
 <tr>
 <th>Catalog</th>
-<th>Rule Name</th>
 <th>Rule ID</th>
 <th>Confidence</th>
 <th>Validation</th>
@@ -92,13 +90,10 @@ but does not provide that operation.
     );
 
     for entry in rules {
-        let helper = if entry.rule.visible { "" } else { " <small>(helper)</small>" };
         page.push_str(&format!(
-            "<tr>\n<td>{}</td>\n<td>{}{}</td>\n<td><code>{}</code></td>\n\
+            "<tr>\n<td>{}</td>\n<td><code>{}</code></td>\n\
              <td>{}</td>\n<td>{}</td>\n<td>{}</td>\n</tr>\n",
             escape_html(&entry.source),
-            escape_html(&entry.rule.name),
-            helper,
             escape_html(&entry.rule.id),
             title_case(&entry.rule.confidence),
             support_label(entry.rule.validation.is_some()),
@@ -178,9 +173,11 @@ rules:
         assert!(page.contains("**2 rules**"));
         assert!(page.contains("**2** include validation"));
         assert!(page.contains("**1** support direct revocation"));
+        assert!(!page.contains("<th>Rule Name</th>"));
+        assert!(!page.contains("Expression token"));
         assert!(page.contains("Yes</td>"));
         assert!(page.contains("None</td>"));
-        assert!(page.contains("Raw token <small>(helper)</small>"));
+        assert!(!page.contains("Raw token"));
     }
 
     #[test]
@@ -205,14 +202,13 @@ rules:
             r#"
 rules:
   - name: <script>alert('x')</script>
-    id: veles.bad&rule
+    id: veles.<script>alert('x')</script>
     pattern: token
 "#,
         )])
         .unwrap();
 
         assert!(!page.contains("<script>"));
-        assert!(page.contains("&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;"));
-        assert!(page.contains("veles.bad&amp;rule"));
+        assert!(page.contains("veles.&lt;script&gt;alert(&#39;x&#39;)&lt;/script&gt;"));
     }
 }

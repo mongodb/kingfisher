@@ -28,16 +28,17 @@ use tracing::warn;
 use crate::cli::commands::access_map::AccessMapArgs;
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, AuthorizationEvidence, AuthorizationHop,
-    AuthorizationPath, AuthorizationStatement, HierarchyScope, PermissionSummary, PolicyEvidence,
-    PrincipalEvidence, ProviderMetadata, ResourceExposure, RoleBinding, Severity,
-    build_default_account_resource, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, AuthorizationEvidence, AuthorizationGrant,
+    AuthorizationHop, AuthorizationPath, AuthorizationStatement, HierarchyScope, PermissionSummary,
+    PolicyEvidence, PrincipalEvidence, ProviderMetadata, ResourceExposure, RoleBinding, RoleImpact,
+    Severity, build_default_account_resource, build_recommendations,
 };
 
 const MAX_DISCOVERED_ROLES: usize = 2_000;
 const MAX_AUTHORIZATION_PATHS: usize = 256;
 const MAX_EXPANDED_PATH_ROLES: usize = 32;
 const MAX_PATH_ROLE_POLICY_EXPANSIONS: usize = 64;
+const MAX_ROLE_RESOURCE_GRANTS: usize = 512;
 const MAX_POLICY_EVIDENCE: usize = 512;
 const MAX_POLICY_STATEMENTS: usize = 2_000;
 
@@ -119,7 +120,7 @@ async fn map_access_with_config(config: SdkConfig) -> Result<AccessMapResult> {
     let groups =
         inspect_principal(&iam, &mut principal, &mut authorization_evidence, &mut risk_notes).await;
 
-    let permissions = expand_permissions(
+    let direct_permissions = expand_permissions(
         &iam,
         &principal,
         &groups,
@@ -138,7 +139,7 @@ async fn map_access_with_config(config: SdkConfig) -> Result<AccessMapResult> {
         discover_role_paths(&iam, &principal, &mut authorization_evidence, &mut risk_notes).await;
     let mut resources = enumerate_resources(
         &config,
-        &permissions,
+        &direct_permissions,
         account_id.as_deref(),
         &role_discovery.inventory,
         &mut risk_notes,
@@ -149,15 +150,25 @@ async fn map_access_with_config(config: SdkConfig) -> Result<AccessMapResult> {
         risk_notes.push(format!("AWS enumeration failed: {err}"));
         Vec::new()
     });
+    resources.extend(role_resource_exposures(&role_discovery.role_impacts));
+    roles.extend(role_discovery.role_impacts.iter().map(|impact| RoleBinding {
+        name: impact.role.clone(),
+        source: format!("assumable ({}; {} hop(s))", impact.status, impact.hop_count),
+        permissions: impact.permissions.clone(),
+    }));
 
-    let severity = max_severity(
-        derive_severity(&identity.access_type, &permissions, !resources.is_empty()),
-        severity_for_reachable_permissions(&role_discovery.reachable_permissions),
+    let permissions = merge_permission_summaries(
+        direct_permissions.clone(),
+        &role_discovery.reachable_permissions,
     );
-    if !role_discovery.reachable_permissions.is_empty() {
+
+    let severity = derive_severity(&identity.access_type, &permissions, !resources.is_empty());
+    if !role_discovery.role_impacts.is_empty() {
         risk_notes.push(format!(
-            "Potential role paths reach {} additional permission entries.",
-            role_discovery.reachable_permissions.total()
+            "{} assumable role(s) add {} potential permission entries and {} policy-scoped resource grant(s).",
+            role_discovery.role_impacts.len(),
+            role_discovery.reachable_permissions.total(),
+            role_discovery.role_impacts.iter().map(|impact| impact.grants.len()).sum::<usize>()
         ));
     }
 
@@ -184,10 +195,10 @@ async fn map_access_with_config(config: SdkConfig) -> Result<AccessMapResult> {
         );
     }
     if identity.access_type != "root"
-        && permissions.admin.is_empty()
-        && permissions.privilege_escalation.is_empty()
-        && permissions.risky.is_empty()
-        && permissions.read_only.is_empty()
+        && direct_permissions.admin.is_empty()
+        && direct_permissions.privilege_escalation.is_empty()
+        && direct_permissions.risky.is_empty()
+        && direct_permissions.read_only.is_empty()
     {
         risk_notes.push("IAM permissions could not be enumerated for this identity.".into());
     }
@@ -976,8 +987,18 @@ fn add_policy_evidence(
 }
 
 fn truncate_authorization_evidence(evidence: &mut AuthorizationEvidence) {
-    let referenced: HashSet<String> =
-        evidence.paths.iter().flat_map(|path| path.evidence.iter().cloned()).collect();
+    let referenced: HashSet<String> = evidence
+        .paths
+        .iter()
+        .flat_map(|path| path.evidence.iter().cloned())
+        .chain(
+            evidence
+                .role_impacts
+                .iter()
+                .flat_map(|impact| impact.grants.iter())
+                .flat_map(|grant| grant.evidence.iter().cloned()),
+        )
+        .collect();
     evidence.policies.sort_by_key(|policy| {
         let referenced_policy = referenced.contains(&policy.id)
             || policy.statements.iter().any(|statement| referenced.contains(&statement.id));
@@ -1023,6 +1044,13 @@ fn truncate_authorization_evidence(evidence: &mut AuthorizationEvidence) {
         path.evidence
             .retain(|item| retained_statements.contains(item.as_str()) || !item.contains('#'));
         references_truncated |= path.evidence.len() != previous;
+    }
+    for grant in evidence.role_impacts.iter_mut().flat_map(|impact| impact.grants.iter_mut()) {
+        let previous = grant.evidence.len();
+        grant
+            .evidence
+            .retain(|item| retained_statements.contains(item.as_str()) || !item.contains('#'));
+        references_truncated |= grant.evidence.len() != previous;
     }
     if references_truncated {
         push_unique_note(
@@ -1325,6 +1353,16 @@ struct DirectRolePath {
 struct RolePathDiscovery {
     inventory: Vec<IamRole>,
     reachable_permissions: PermissionSummary,
+    role_impacts: Vec<RoleImpact>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingRoleImpact {
+    role: String,
+    name: String,
+    status: String,
+    hop_count: usize,
+    permissions: Vec<String>,
 }
 
 async fn discover_role_paths(
@@ -1374,7 +1412,7 @@ async fn discover_role_paths(
 
     let mut emitted_edges = HashSet::new();
     let mut inspected_role_policies = HashSet::new();
-    let mut reachable_actions = Vec::new();
+    let mut pending_impacts = BTreeMap::<String, PendingRoleImpact>::new();
     let mut direct_paths = Vec::new();
     for role in &inventory {
         if evidence.paths.len() >= MAX_AUTHORIZATION_PATHS {
@@ -1407,13 +1445,26 @@ async fn discover_role_paths(
         if !push_authorization_path(evidence, path.clone()) {
             break;
         }
+        if path.status != "trust_only" {
+            record_pending_role_impact(
+                &mut pending_impacts,
+                role.arn(),
+                role.role_name(),
+                &path.status,
+                1,
+                Vec::new(),
+            );
+        }
         direct_paths.push(DirectRolePath { role: role.clone(), path });
     }
 
-    for direct in direct_paths.iter().take(MAX_EXPANDED_PATH_ROLES) {
-        if direct.path.status == "trust_only" {
-            continue;
-        }
+    let actionable_direct_path_count =
+        direct_paths.iter().filter(|direct| direct.path.status != "trust_only").count();
+    for direct in direct_paths
+        .iter()
+        .filter(|direct| direct.path.status != "trust_only")
+        .take(MAX_EXPANDED_PATH_ROLES)
+    {
         inspected_role_policies.insert(direct.role.arn().to_string());
         let mut flags = PolicyDocumentFlags::default();
         let mut actions = collect_role_actions(
@@ -1426,7 +1477,14 @@ async fn discover_role_paths(
         )
         .await;
         finalize_policy_actions(&mut actions, &flags, risk_notes);
-        reachable_actions.extend(actions);
+        record_pending_role_impact(
+            &mut pending_impacts,
+            direct.role.arn(),
+            direct.role.role_name(),
+            &direct.path.status,
+            1,
+            actions,
+        );
 
         let source = PrincipalContext {
             raw_arn: direct.role.arn().to_string(),
@@ -1488,9 +1546,21 @@ async fn discover_role_paths(
             path.conditions.sort();
             path.conditions.dedup();
             path.status = combine_path_status(&direct.path.status, &path.status).into();
+            let path_status = path.status.clone();
             if !push_authorization_path(evidence, path) {
                 break;
             }
+            if path_status == "trust_only" {
+                continue;
+            }
+            record_pending_role_impact(
+                &mut pending_impacts,
+                target.arn(),
+                target.role_name(),
+                &path_status,
+                2,
+                Vec::new(),
+            );
 
             if inspected_role_policies.len() < MAX_PATH_ROLE_POLICY_EXPANSIONS
                 && inspected_role_policies.insert(target.arn().to_string())
@@ -1506,12 +1576,19 @@ async fn discover_role_paths(
                 )
                 .await;
                 finalize_policy_actions(&mut actions, &flags, risk_notes);
-                reachable_actions.extend(actions);
+                record_pending_role_impact(
+                    &mut pending_impacts,
+                    target.arn(),
+                    target.role_name(),
+                    &path_status,
+                    2,
+                    actions,
+                );
             }
         }
     }
 
-    if direct_paths.len() > MAX_EXPANDED_PATH_ROLES {
+    if actionable_direct_path_count > MAX_EXPANDED_PATH_ROLES {
         push_unique_note(
             &mut evidence.limitations,
             format!(
@@ -1528,9 +1605,166 @@ async fn discover_role_paths(
         );
     }
 
-    reachable_actions.sort();
-    reachable_actions.dedup();
-    RolePathDiscovery { inventory, reachable_permissions: classify_permissions(&reachable_actions) }
+    let mut remaining_grants = MAX_ROLE_RESOURCE_GRANTS;
+    let mut grants_truncated = false;
+    let role_impacts: Vec<RoleImpact> = pending_impacts
+        .into_values()
+        .map(|pending| {
+            let (grants, truncated) =
+                role_grants(evidence, &pending.role, &pending.permissions, remaining_grants);
+            remaining_grants = remaining_grants.saturating_sub(grants.len());
+            grants_truncated |= truncated;
+            RoleImpact {
+                target: None,
+                role: pending.role,
+                name: Some(pending.name),
+                status: pending.status,
+                hop_count: pending.hop_count,
+                permissions: pending.permissions,
+                grants,
+            }
+        })
+        .collect();
+    if grants_truncated {
+        push_unique_note(
+            &mut evidence.limitations,
+            format!(
+                "Reachable-role resource grants were limited to {MAX_ROLE_RESOURCE_GRANTS} statements."
+            ),
+        );
+    }
+
+    let reachable_actions = role_impacts
+        .iter()
+        .flat_map(|impact| impact.permissions.iter().cloned())
+        .collect::<Vec<_>>();
+    evidence.role_impacts = role_impacts.clone();
+    RolePathDiscovery {
+        inventory,
+        reachable_permissions: classify_permissions(&reachable_actions),
+        role_impacts,
+    }
+}
+
+fn record_pending_role_impact(
+    impacts: &mut BTreeMap<String, PendingRoleImpact>,
+    role: &str,
+    name: &str,
+    status: &str,
+    hop_count: usize,
+    mut permissions: Vec<String>,
+) {
+    permissions.sort();
+    permissions.dedup();
+    let impact = impacts.entry(role.to_string()).or_insert_with(|| PendingRoleImpact {
+        role: role.to_string(),
+        name: name.to_string(),
+        status: status.to_string(),
+        hop_count,
+        permissions: Vec::new(),
+    });
+    impact.permissions.extend(permissions);
+    impact.permissions.sort();
+    impact.permissions.dedup();
+    update_role_path_summary(impact, status, hop_count);
+}
+
+fn update_role_path_summary(impact: &mut PendingRoleImpact, status: &str, hop_count: usize) {
+    let new_rank = role_path_status_rank(status);
+    let current_rank = role_path_status_rank(&impact.status);
+    if new_rank > current_rank {
+        impact.status = status.to_string();
+        impact.hop_count = hop_count;
+    } else if new_rank == current_rank {
+        impact.hop_count = impact.hop_count.min(hop_count);
+    }
+}
+
+fn role_path_status_rank(status: &str) -> u8 {
+    match status {
+        "potential" => 3,
+        "conditional" => 2,
+        "trust_only" => 1,
+        _ => 0,
+    }
+}
+
+fn role_grants(
+    evidence: &AuthorizationEvidence,
+    role_arn: &str,
+    effective_permissions: &[String],
+    limit: usize,
+) -> (Vec<AuthorizationGrant>, bool) {
+    let mut grants = Vec::new();
+    let mut truncated = false;
+    for policy in evidence
+        .policies
+        .iter()
+        .filter(|policy| policy.kind != "trust" && policy.attached_to == role_arn)
+    {
+        for statement in policy
+            .statements
+            .iter()
+            .filter(|statement| statement.effect.eq_ignore_ascii_case("Allow"))
+        {
+            if grants.len() >= limit {
+                truncated = true;
+                break;
+            }
+
+            let mut permissions = statement
+                .actions
+                .iter()
+                .map(|action| normalize_aws_action(action))
+                .filter(|action| effective_action_contains(effective_permissions, action))
+                .collect::<Vec<_>>();
+            let excluded_permissions = statement
+                .not_actions
+                .iter()
+                .map(|action| normalize_aws_action(action))
+                .collect::<Vec<_>>();
+            if !statement.not_actions.is_empty()
+                && effective_permissions.iter().any(|permission| permission == "*")
+            {
+                permissions.push("*".into());
+            }
+            permissions.sort();
+            permissions.dedup();
+            if permissions.is_empty() {
+                continue;
+            }
+
+            let resources = if statement.resources.is_empty() {
+                vec!["*".into()]
+            } else {
+                statement.resources.clone()
+            };
+            grants.push(AuthorizationGrant {
+                permissions,
+                excluded_permissions,
+                resources,
+                excluded_resources: statement.not_resources.clone(),
+                condition_keys: statement.condition_keys.clone(),
+                evidence: vec![statement.id.clone()],
+            });
+        }
+        if truncated {
+            break;
+        }
+    }
+    (grants, truncated)
+}
+
+fn normalize_aws_action(action: &str) -> String {
+    action.to_ascii_lowercase().replace(':', ".")
+}
+
+fn effective_action_contains(effective_permissions: &[String], action: &str) -> bool {
+    effective_permissions.iter().any(|permission| {
+        permission == "*"
+            || wildcard_matches(permission, action)
+            || wildcard_matches(action, permission)
+    })
 }
 
 fn record_path_cap(evidence: &mut AuthorizationEvidence) {
@@ -2009,26 +2243,72 @@ fn derive_severity(
     }
 }
 
-fn severity_for_reachable_permissions(permissions: &PermissionSummary) -> Severity {
-    if !permissions.admin.is_empty() || !permissions.privilege_escalation.is_empty() {
-        Severity::Critical
-    } else if !permissions.risky.is_empty() {
-        Severity::High
-    } else if !permissions.read_only.is_empty() {
-        Severity::Medium
-    } else {
-        Severity::Low
+fn merge_permission_summaries(
+    mut direct: PermissionSummary,
+    reachable: &PermissionSummary,
+) -> PermissionSummary {
+    for (target, added) in [
+        (&mut direct.admin, &reachable.admin),
+        (&mut direct.privilege_escalation, &reachable.privilege_escalation),
+        (&mut direct.risky, &reachable.risky),
+        (&mut direct.read_only, &reachable.read_only),
+    ] {
+        target.extend(added.iter().cloned());
+        target.sort();
+        target.dedup();
     }
+    direct
 }
 
-fn max_severity(left: Severity, right: Severity) -> Severity {
-    use Severity::{Critical, High, Low, Medium};
-    match (left, right) {
-        (Critical, _) | (_, Critical) => Critical,
-        (High, _) | (_, High) => High,
-        (Medium, _) | (_, Medium) => Medium,
-        (Low, Low) => Low,
+fn role_resource_exposures(impacts: &[RoleImpact]) -> Vec<ResourceExposure> {
+    let mut resources = Vec::new();
+    for impact in impacts {
+        for grant in &impact.grants {
+            let permission_summary = classify_permissions(&grant.permissions);
+            let risk = if !permission_summary.admin.is_empty()
+                || !permission_summary.privilege_escalation.is_empty()
+            {
+                "critical"
+            } else if !permission_summary.risky.is_empty() {
+                "high"
+            } else {
+                "medium"
+            };
+            let mut qualifiers = Vec::new();
+            if !grant.condition_keys.is_empty() {
+                qualifiers.push(format!("conditions: {}", grant.condition_keys.join(", ")));
+            }
+            if !grant.excluded_permissions.is_empty() {
+                qualifiers.push(format!(
+                    "excluded permissions: {}",
+                    grant.excluded_permissions.join(", ")
+                ));
+            }
+            if !grant.excluded_resources.is_empty() {
+                qualifiers
+                    .push(format!("excluded resources: {}", grant.excluded_resources.join(", ")));
+            }
+            let qualifier = if qualifiers.is_empty() {
+                String::new()
+            } else {
+                format!(" ({})", qualifiers.join("; "))
+            };
+
+            for resource in &grant.resources {
+                resources.push(ResourceExposure {
+                    resource_type: "assumable_role_scope".into(),
+                    name: resource.clone(),
+                    permissions: grant.permissions.clone(),
+                    risk: risk.into(),
+                    reason: format!(
+                        "Potentially reachable through {} [{}; {} hop(s)]{}",
+                        impact.role, impact.status, impact.hop_count, qualifier
+                    ),
+                });
+            }
+        }
     }
+    resources
 }
 
 fn can_read(permissions: &PermissionSummary, service_prefix: &str) -> bool {
@@ -3228,14 +3508,98 @@ mod tests {
     }
 
     #[test]
-    fn reachable_admin_permissions_raise_severity() {
-        let direct = Severity::Low;
+    fn reachable_admin_permissions_are_included_in_effective_severity() {
+        let direct = PermissionSummary::default();
         let reachable = PermissionSummary { admin: vec!["*".into()], ..Default::default() };
+        let effective = merge_permission_summaries(direct, &reachable);
 
-        assert!(matches!(
-            max_severity(direct, severity_for_reachable_permissions(&reachable)),
-            Severity::Critical
-        ));
+        assert_eq!(effective.admin, ["*"]);
+        assert!(matches!(derive_severity("user", &effective, false), Severity::Critical));
+    }
+
+    #[test]
+    fn reachable_role_grants_preserve_statement_resource_scope() {
+        let role = "arn:aws:iam::123456789012:role/Deploy";
+        let evidence = AuthorizationEvidence {
+            policies: vec![PolicyEvidence {
+                id: "deploy-policy".into(),
+                kind: "inline".into(),
+                attached_to: role.into(),
+                statements: vec![AuthorizationStatement {
+                    id: "deploy-policy#objects".into(),
+                    effect: "Allow".into(),
+                    actions: vec!["s3:GetObject".into(), "s3:PutObject".into()],
+                    resources: vec!["arn:aws:s3:::production-artifacts/*".into()],
+                    condition_keys: vec!["StringEquals:aws:RequestedRegion".into()],
+                    ..AuthorizationStatement::default()
+                }],
+                ..PolicyEvidence::default()
+            }],
+            ..AuthorizationEvidence::default()
+        };
+
+        let (grants, truncated) =
+            role_grants(&evidence, role, &["s3.getobject".into(), "s3.putobject".into()], 10);
+
+        assert!(!truncated);
+        assert_eq!(grants.len(), 1);
+        assert_eq!(grants[0].permissions, ["s3.getobject", "s3.putobject"]);
+        assert_eq!(grants[0].resources, ["arn:aws:s3:::production-artifacts/*"]);
+        assert_eq!(grants[0].evidence, ["deploy-policy#objects"]);
+    }
+
+    #[test]
+    fn reachable_role_resource_exposure_identifies_the_source_role() {
+        let role = "arn:aws:iam::123456789012:role/Deploy";
+        let impacts = vec![RoleImpact {
+            target: None,
+            role: role.into(),
+            name: Some("Deploy".into()),
+            status: "conditional".into(),
+            hop_count: 2,
+            permissions: vec!["lambda.updatefunctioncode".into()],
+            grants: vec![AuthorizationGrant {
+                permissions: vec!["lambda.updatefunctioncode".into()],
+                resources: vec!["arn:aws:lambda:us-west-2:123456789012:function:production".into()],
+                condition_keys: vec!["StringEquals:aws:RequestedRegion".into()],
+                ..AuthorizationGrant::default()
+            }],
+        }];
+
+        let resources = role_resource_exposures(&impacts);
+
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].resource_type, "assumable_role_scope");
+        assert!(resources[0].reason.contains(role));
+        assert!(resources[0].reason.contains("conditional; 2 hop(s)"));
+        assert!(resources[0].reason.contains("aws:RequestedRegion"));
+    }
+
+    #[test]
+    fn role_path_summary_prefers_a_shorter_unconditional_path() {
+        let mut impacts = BTreeMap::new();
+        let role = "arn:aws:iam::123456789012:role/Deploy";
+        record_pending_role_impact(
+            &mut impacts,
+            role,
+            "Deploy",
+            "conditional",
+            2,
+            vec!["s3.getobject".into()],
+        );
+        record_pending_role_impact(
+            &mut impacts,
+            role,
+            "Deploy",
+            "potential",
+            1,
+            vec!["s3.putobject".into()],
+        );
+
+        let impact = &impacts[role];
+        assert_eq!(impact.status, "potential");
+        assert_eq!(impact.hop_count, 1);
+        assert_eq!(impact.permissions, ["s3.getobject", "s3.putobject"]);
     }
 
     #[test]

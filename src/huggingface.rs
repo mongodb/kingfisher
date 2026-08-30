@@ -361,7 +361,7 @@ fn parse_bucket_target(raw: &str) -> Option<BucketTarget> {
         return None;
     }
 
-    let segments = if trimmed.starts_with("http://")
+    let (segments, strip_web_route) = if trimmed.starts_with("http://")
         || trimmed.starts_with("https://")
         || trimmed.starts_with("hf://")
     {
@@ -380,16 +380,17 @@ fn parse_bucket_target(raw: &str) -> Option<BucketTarget> {
             if url.host_str() != Some("buckets") {
                 return None;
             }
+            (segments, false)
         } else if matches!(
             url.host_str().map(|host| host.to_ascii_lowercase()),
             Some(host) if matches!(host.as_str(), "huggingface.co" | "www.huggingface.co" | "hf.co")
         ) && segments.first().map(String::as_str) == Some("buckets")
         {
             segments.remove(0);
+            (segments, true)
         } else {
             return None;
         }
-        segments
     } else {
         let mut segments: Vec<String> = trimmed
             .split('/')
@@ -399,7 +400,7 @@ fn parse_bucket_target(raw: &str) -> Option<BucketTarget> {
         if matches!(segments.first().map(String::as_str), Some("bucket" | "buckets")) {
             segments.remove(0);
         }
-        segments
+        (segments, false)
     };
 
     if segments.len() < 2 {
@@ -408,7 +409,11 @@ fn parse_bucket_target(raw: &str) -> Option<BucketTarget> {
 
     let bucket_id = format!("{}/{}", segments[0], segments[1]);
     let mut prefix_parts = segments[2..].to_vec();
-    if matches!(prefix_parts.first().map(String::as_str), Some("tree" | "blob" | "resolve")) {
+    // Browser URLs insert a route marker between the bucket ID and object path. In an hf:// URI
+    // or a plain bucket handle, these are valid object-directory names and must be preserved.
+    if strip_web_route
+        && matches!(prefix_parts.first().map(String::as_str), Some("tree" | "blob" | "resolve"))
+    {
         prefix_parts.remove(0);
     }
     let prefix = if prefix_parts.is_empty() { None } else { Some(prefix_parts.join("/")) };
@@ -927,6 +932,22 @@ mod tests {
             Some(BucketTarget::new("owner/checkpoints".into(), Some("logs".into())))
         );
         assert_eq!(parse_bucket_target("https://example.com/buckets/owner/checkpoints"), None);
+    }
+
+    #[test]
+    fn bucket_uri_preserves_prefixes_named_like_web_routes() {
+        assert_eq!(
+            parse_bucket_target("hf://buckets/owner/checkpoints/tree/run-1"),
+            Some(BucketTarget::new("owner/checkpoints".into(), Some("tree/run-1".into())))
+        );
+        assert_eq!(
+            parse_bucket_target("owner/checkpoints/resolve/output"),
+            Some(BucketTarget::new("owner/checkpoints".into(), Some("resolve/output".into())))
+        );
+        assert_eq!(
+            parse_bucket_target("https://huggingface.co/buckets/owner/checkpoints/tree/run-1"),
+            Some(BucketTarget::new("owner/checkpoints".into(), Some("run-1".into())))
+        );
     }
 
     #[test]

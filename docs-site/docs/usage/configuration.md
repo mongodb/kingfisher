@@ -139,7 +139,7 @@ into permitting `http://` for a remote host.
   a CLI value takes precedence over `scan.jobs`. This only affects
   parallelism, never correctness.
 - **Subcommand scope.** Project config only applies to `kingfisher scan`.
-  `validate`, `revoke`, `access-map`, `view`, and `rules` commands ignore
+  `validate`, `revoke`, `blast-radius`, `access-map`, `view`, and `rules` commands ignore
   `kingfisher.yaml`; pass their flags on the CLI directly.
 
 ## What is *not* config-overridable
@@ -314,5 +314,5 @@ alerts:
       format: slack
 ```
 
-Combined with [`docs/ALERTS.md`](https://github.com/mongodb/kingfisher/blob/main/docs/ALERTS.md), this lets one repo own its
+Combined with [`docs/ALERTS.md`](../usage/alerts.md), this lets one repo own its
 webhook configuration and CI policy without baking it into command-line strings.

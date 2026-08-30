@@ -67,6 +67,9 @@ fn outcome_from_validator_result(is_valid: bool) -> ValidationOutcome {
 
 async fn validate_credential_uri_direct(
     uri: &str,
+    client: &Client,
+    timeout: Duration,
+    retries: u32,
     use_lax_tls: bool,
     allow_internal_ips: bool,
 ) -> DirectValidationResult {
@@ -175,6 +178,38 @@ async fn validate_credential_uri_direct(
                 },
             }
         }
+        CredentialUriTarget::Http(uri) => {
+            match crate::validation::validate_http_credential_uri(
+                &uri,
+                client,
+                timeout,
+                retries,
+                allow_internal_ips,
+            )
+            .await
+            {
+                Ok((is_valid, status, message)) => DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid,
+                    validation_outcome: ValidationOutcome::from_legacy(
+                        false,
+                        is_valid,
+                        status.as_u16(),
+                    ),
+                    status_code: Some(status.as_u16()),
+                    message,
+                },
+                Err(error) => DirectValidationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    is_valid: false,
+                    validation_outcome: ValidationOutcome::Unavailable,
+                    status_code: None,
+                    message: format!("HTTP credential URI validation error: {error}"),
+                },
+            }
+        }
         CredentialUriTarget::Unsupported(scheme) => DirectValidationResult {
             rule_id: String::new(),
             rule_name: String::new(),
@@ -210,7 +245,7 @@ pub struct DirectValidationResult {
 /// Find all rules matching an ID or prefix.
 ///
 /// Returns all matching rules, or an error if no rules match.
-fn find_rules_by_selector<'a>(
+pub(crate) fn find_rules_by_selector<'a>(
     selector: &str,
     rules: &'a BTreeMap<String, Rule>,
 ) -> Result<Vec<&'a Rule>> {
@@ -250,12 +285,12 @@ fn find_rules_by_selector<'a>(
 }
 
 /// Extract a string value from the globals object.
-fn get_global_var(globals: &Object, name: &str) -> Option<String> {
+pub(crate) fn get_global_var(globals: &Object, name: &str) -> Option<String> {
     globals.get(name).and_then(|v| v.to_kstr().to_string().into())
 }
 
 /// Extract all template variables used in a validation configuration.
-fn extract_validation_vars(validation: &Validation) -> BTreeSet<String> {
+pub(crate) fn extract_validation_vars(validation: &Validation) -> BTreeSet<String> {
     let mut vars = BTreeSet::new();
 
     match validation {
@@ -349,7 +384,7 @@ fn extract_validation_vars(validation: &Validation) -> BTreeSet<String> {
 /// - `args`: Unnamed values to auto-assign to template variables (excluding TOKEN)
 /// - `variables`: Named variables in NAME=VALUE format (explicit overrides)
 /// - `template_vars`: Set of variable names used in the validation template
-fn build_globals(
+pub(crate) fn build_globals(
     rule_id: &str,
     secret: &str,
     args: &[String],
@@ -401,7 +436,7 @@ fn build_globals(
 }
 
 /// Read the secret value from the provided argument or stdin.
-fn read_secret(secret_arg: Option<&str>) -> Result<String> {
+pub(crate) fn read_secret(secret_arg: Option<&str>) -> Result<String> {
     match secret_arg {
         Some("-") => {
             // Read from stdin
@@ -617,6 +652,9 @@ pub async fn run_direct_validation(
         .brotli(true)
         .build()
         .context("Failed to build HTTP client")?;
+    let credential_uri_client =
+        crate::validation::build_credential_uri_client(Duration::from_secs(args.timeout))
+            .context("Failed to build credential URI HTTP client")?;
 
     // Build Liquid parser
     let parser = register_all(liquid::ParserBuilder::with_stdlib()).build()?;
@@ -1036,8 +1074,15 @@ pub async fn run_direct_validation(
             }
 
             Validation::CredentialUri => {
-                validate_credential_uri_direct(&secret, use_lax_tls, global_args.allow_internal_ips)
-                    .await
+                validate_credential_uri_direct(
+                    &secret,
+                    &credential_uri_client,
+                    timeout,
+                    args.retries,
+                    use_lax_tls,
+                    global_args.allow_internal_ips,
+                )
+                .await
             }
 
             Validation::JWT => {
@@ -1417,6 +1462,26 @@ pub fn any_actionable(results: &[DirectValidationResult]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn direct_http_credential_uri_preserves_sanitized_validator_errors() {
+        let result = validate_credential_uri_direct(
+            "http://alice:hunter2@example.com",
+            &Client::new(),
+            Duration::from_secs(1),
+            0,
+            false,
+            false,
+        )
+        .await;
+
+        assert_eq!(result.validation_outcome, ValidationOutcome::Unavailable);
+        assert_eq!(
+            result.message,
+            "HTTP credential URI validation error: HTTP credential URI validation requires HTTPS"
+        );
+        assert!(!result.message.contains("hunter2"));
+    }
 
     fn selector_test_rule(id: &str) -> Rule {
         Rule::new(kingfisher_rules::RuleSyntax {
