@@ -115,7 +115,6 @@ NOTE: Replay has been slowed down for demo
 
 - [AWS, GCP, and More: Blast-Radius Mapping Included by Default](#aws-gcp-and-more-blast-radius-mapping-included-by-default)
 - [What Is Kingfisher?](#what-is-kingfisher)
-- [Why Choose Kingfisher?](#why-choose-kingfisher)
 - [Key Features](#key-features)
 - [Report Viewer (local and hosted)](#report-viewer-local-and-hosted)
 - [Alert Webhooks](#alert-webhooks)
