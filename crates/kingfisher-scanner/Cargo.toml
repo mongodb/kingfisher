@@ -189,7 +189,7 @@ reqwest = { version = "0.13", default-features = false, features = [
 tokio = { version = "1.52", features = ["net", "time", "sync", "io-util"], optional = true }
 liquid = { version = "0.26", optional = true }
 liquid-core = { version = "0.26", optional = true }
-quick-xml = { version = "0.41", features = ["serde", "serialize"], optional = true }
+quick-xml = { version = "0.42", features = ["serde", "serialize"], optional = true }
 sha1 = { workspace = true, optional = true }
 time = { workspace = true, optional = true }
 chrono = { version = "0.4.45", optional = true }
