@@ -1,9 +1,9 @@
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use futures::{StreamExt, stream};
-use reqwest::{Client, StatusCode};
+use reqwest::{Client, StatusCode, redirect::Policy};
 use serde_json::Value;
 
 use crate::access_map::{
@@ -11,7 +11,6 @@ use crate::access_map::{
     HierarchyScope, PermissionSummary, PrincipalEvidence, ProviderMetadata, ResourceExposure,
     Severity,
 };
-use crate::validation::gcp::GcpValidator;
 
 const PROBE_CONCURRENCY: usize = 4;
 const PROBE_TIMEOUT: Duration = Duration::from_secs(10);
@@ -97,7 +96,7 @@ pub async fn map_access(api_key: &str) -> Result<AccessMapResult> {
         return Err(anyhow!("Google API key cannot be empty"));
     }
 
-    let client = GcpValidator::global()?.client().clone();
+    let client = probe_client()?;
     let mut results = stream::iter(PROBES)
         .map(|probe| probe_api_key(&client, api_key, probe))
         .buffer_unordered(PROBE_CONCURRENCY)
@@ -106,6 +105,21 @@ pub async fn map_access(api_key: &str) -> Result<AccessMapResult> {
     results.sort_unstable_by_key(|result| result.probe.service);
 
     build_access_map(results)
+}
+
+/// Builds a redirect-free client for the API-key probes.
+///
+/// The probes send the key in the query string or the `x-goog-api-key`
+/// header, and reqwest's cross-host redirect handling strips neither, so
+/// following a redirect could forward the credential to a different domain.
+/// The probes target fixed googleapis.com endpoints and gain nothing from
+/// redirects; an unexpected 3xx response classifies as inconclusive.
+fn probe_client() -> Result<Client> {
+    Client::builder()
+        .user_agent(crate::validation::GLOBAL_USER_AGENT.as_str())
+        .redirect(Policy::none())
+        .build()
+        .context("Failed to build Google API-key probe client")
 }
 
 async fn probe_api_key(client: &Client, api_key: &str, probe: ApiKeyProbe) -> ProbeResult {
