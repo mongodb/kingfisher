@@ -54,6 +54,7 @@ pub mod rules;
 pub mod rules_database;
 pub mod s3;
 pub mod safe_list;
+pub mod scan_audit;
 pub mod scanner;
 pub mod scanner_pool;
 pub mod slack;
@@ -320,25 +321,9 @@ impl FilesystemEnumerator {
     }
 
     pub fn set_exclude_patterns(&mut self, patterns: &[String]) -> Result<&mut Self> {
-        if patterns.is_empty() {
+        let Some(globset) = build_exclude_globset(patterns)? else {
             return Ok(self);
-        }
-        let mut builder = GlobSetBuilder::new();
-        for pat in patterns {
-            // Add the pattern itself
-            builder.add(Glob::new(pat)?);
-
-            // If the pattern doesn't contain any glob characters, also exclude
-            // directories with this name anywhere in the tree. This lets
-            // `--exclude=.git` skip the entire `.git` directory subtree no
-            // matter where it appears in the path.
-            if !pat.contains('*') && !pat.contains('?') && !pat.contains('[') {
-                let base = pat.trim_end_matches('/');
-                builder.add(Glob::new(&format!("**/{}", base))?);
-                builder.add(Glob::new(&format!("**/{}/**", base))?);
-            }
-        }
-        let globset = std::sync::Arc::new(builder.build()?);
+        };
         self.exclude_globset = Some(globset.clone());
         self.filter_entry(move |entry| {
             let path = entry.path();
@@ -349,6 +334,22 @@ impl FilesystemEnumerator {
             !matches
         });
         Ok(self)
+    }
+
+    /// Prune repository subtrees from a grouped filesystem root while keeping
+    /// the existing `--exclude` predicate active.
+    pub fn set_repository_excludes(&mut self, repositories: Vec<PathBuf>) -> &mut Self {
+        let exclude_globset = self.exclude_globset.clone();
+        self.filter_entry(move |entry| {
+            let path = entry.path();
+            let excluded = exclude_globset.as_ref().is_some_and(|globset| globset.is_match(path))
+                || repositories.iter().any(|repository| path.starts_with(repository));
+            if excluded {
+                debug!("Skipping {} during grouped filesystem scan", path.display());
+            }
+            !excluded
+        });
+        self
     }
 
     pub fn exclude_globset(&self) -> Option<std::sync::Arc<GlobSet>> {
@@ -369,6 +370,31 @@ impl FilesystemEnumerator {
         self.walk_builder.build_parallel().visit(&mut visitor_builder);
         Ok(())
     }
+}
+
+/// Builds the `--exclude` match set shared by the filesystem walker and any
+/// pre-scan traversal, so both skip exactly the same trees.
+///
+/// Returns `None` when no patterns are configured. Literal patterns (no glob
+/// characters) also exclude a directory of that name anywhere in the tree, so
+/// `--exclude=.git` skips the entire `.git` directory subtree no matter where
+/// it appears.
+pub(crate) fn build_exclude_globset(
+    patterns: &[String],
+) -> Result<Option<std::sync::Arc<globset::GlobSet>>> {
+    if patterns.is_empty() {
+        return Ok(None);
+    }
+    let mut builder = GlobSetBuilder::new();
+    for pat in patterns {
+        builder.add(Glob::new(pat)?);
+        if !pat.contains('*') && !pat.contains('?') && !pat.contains('[') {
+            let base = pat.trim_end_matches('/');
+            builder.add(Glob::new(&format!("**/{}", base))?);
+            builder.add(Glob::new(&format!("**/{}/**", base))?);
+        }
+    }
+    Ok(Some(std::sync::Arc::new(builder.build()?)))
 }
 
 /// Opens the given Git repository if it exists, returning None if not.

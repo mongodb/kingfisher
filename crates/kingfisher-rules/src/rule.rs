@@ -134,6 +134,7 @@ pub struct BetterleaksAccessMap {
 pub enum BetterleaksAccessMapHandler {
     Aws,
     Gcp,
+    GcpApiKey,
     AzureClientSecret,
     AzureStorage,
     Algolia,

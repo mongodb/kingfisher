@@ -162,6 +162,7 @@ fn test_bitbucket_remote_scan() -> Result<()> {
         min_entropy: None,
         redact: false,
         git_repo_timeout: 1800,
+        audit_log: None,
         output_args: OutputArgs { output: None, format: ReportOutputFormat::Pretty },
         no_dedup: true,
         view_report: false,

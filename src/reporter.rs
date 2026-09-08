@@ -1436,9 +1436,10 @@ impl DetailsReporter {
     ) -> Result<ReportEnvelope> {
         let findings = self.build_finding_records(args)?;
         let access_map = self.build_access_map_records(args);
+        let audit = self.datastore.lock().unwrap().scan_audit().cloned();
         let metadata = self.build_report_metadata(args, &findings, access_map.as_ref());
 
-        Ok(ReportEnvelope { findings, access_map, metadata: Some(metadata) })
+        Ok(ReportEnvelope { findings, access_map, audit, metadata: Some(metadata) })
     }
 
     fn build_report_metadata(
@@ -1904,6 +1905,8 @@ pub struct ReportEnvelope {
     pub findings: Vec<FindingReporterRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub access_map: Option<Vec<AccessMapEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub audit: Option<crate::scan_audit::ScanAuditManifest>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub metadata: Option<ScanReportMetadata>,
 }
@@ -2513,6 +2516,7 @@ mod tests {
             no_base64: false,
             turbo: false,
             git_repo_timeout: 1_800,
+            audit_log: None,
             output_args: OutputArgs { output: None, format: ReportOutputFormat::Pretty },
             baseline_file: None,
             manage_baseline: false,

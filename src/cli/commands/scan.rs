@@ -1,5 +1,6 @@
 use anyhow::{Context, bail};
 use clap::{Args, Subcommand, ValueEnum, ValueHint};
+use path_dedot::ParseDot;
 use serde::{Deserialize, Serialize};
 use std::{
     fs,
@@ -29,6 +30,7 @@ use crate::{
     },
     git_url::GitUrl,
     rules::rule::Confidence,
+    util::expand_tilde,
 };
 
 /// Sentinel `max_results` meaning "keep paging while the provider returns
@@ -194,6 +196,10 @@ pub struct ScanArgs {
     /// Timeout for Git repository scanning in seconds
     #[arg(global = true, long, default_value_t = 1800, value_name = "SECONDS")]
     pub git_repo_timeout: u64,
+
+    /// Write incremental repository discovery, fetch, and scan audit events as JSON Lines
+    #[arg(global = true, long = "audit-log", value_name = "FILE", value_hint = ValueHint::FilePath)]
+    pub audit_log: Option<PathBuf>,
 
     #[command(flatten)]
     pub output_args: OutputArgs<ReportOutputFormat>,
@@ -372,6 +378,86 @@ pub enum ValidationFilter {
 }
 
 impl ScanArgs {
+    /// Rejects `--audit-log` aliasing a path the scan reads or rewrites.
+    ///
+    /// The audit log is opened with truncation at scan startup, before the
+    /// baseline is loaded and before custom rules are read, so an aliased
+    /// baseline (including the `baseline-file.yaml` default used by
+    /// `--manage-baseline`), rule file, or report output would be destroyed.
+    /// This runs once during CLI validation and again after kingfisher.yaml
+    /// merging in the caller: `apply_config` can populate `output_args.output`
+    /// from `output.path` after the CLI-only check has already passed, so the
+    /// effective paths must be re-compared against the merged values.
+    pub fn validate_audit_log_collisions(
+        &self,
+        endpoint_config: Option<&Path>,
+        project_config: Option<&Path>,
+    ) -> anyhow::Result<()> {
+        let Some(audit_log) = &self.audit_log else { return Ok(()) };
+
+        if let Some(output) = &self.output_args.output
+            && paths_refer_to_same_file(audit_log, output)
+        {
+            bail!("--audit-log and --output must use different paths");
+        }
+
+        if self.baseline_file.is_some() || self.manage_baseline {
+            let baseline = self
+                .baseline_file
+                .clone()
+                .unwrap_or_else(|| std::path::PathBuf::from("baseline-file.yaml"));
+            if paths_refer_to_same_file(audit_log, &baseline) {
+                bail!("--audit-log and the baseline file must use different paths");
+            }
+        }
+
+        for rules_path in &self.rules.rules_path {
+            let rules_path = expand_tilde(rules_path);
+            if paths_refer_to_same_file(audit_log, &rules_path)
+                || path_is_beneath(audit_log, &rules_path)
+            {
+                bail!("--audit-log must not overwrite a custom rules file");
+            }
+        }
+
+        for input in &self.input_specifier_args.path_inputs {
+            if input == Path::new("-") {
+                continue;
+            }
+            if paths_refer_to_same_file(audit_log, input) || path_is_beneath(audit_log, input) {
+                bail!(
+                    "--audit-log must not alias or reside inside the scanned input {}",
+                    input.display()
+                );
+            }
+        }
+
+        let file_inputs = self
+            .input_specifier_args
+            .gcs_service_account
+            .iter()
+            .chain(self.input_specifier_args.docker_archive.iter())
+            .chain(self.skip_aws_account_file.iter());
+        for input in file_inputs {
+            if paths_refer_to_same_file(audit_log, input) {
+                bail!("--audit-log must not overwrite input file {}", input.display());
+            }
+        }
+
+        if let Some(endpoint_config) = endpoint_config
+            && paths_refer_to_same_file(audit_log, endpoint_config)
+        {
+            bail!("--audit-log must not overwrite the endpoint configuration file");
+        }
+        if let Some(project_config) = project_config
+            && paths_refer_to_same_file(audit_log, project_config)
+        {
+            bail!("--audit-log must not overwrite the project configuration file");
+        }
+
+        Ok(())
+    }
+
     /// Resolve the compatibility `--only-valid` flag and the richer filter.
     pub fn effective_validation_filter(&self) -> ValidationFilter {
         if self.only_valid {
@@ -534,6 +620,14 @@ impl ScanCommandArgs {
                         bail!("--user-file can only be used with --public-events");
                     }
                     if args.public_events {
+                        if let (Some(audit_log), Some(user_file)) =
+                            (scan_args.audit_log.as_deref(), args.event_user_file.as_deref())
+                            && paths_refer_to_same_file(audit_log, user_file)
+                        {
+                            bail!(
+                                "--audit-log must not overwrite the GitHub public-event user file"
+                            );
+                        }
                         let event_users = load_github_event_users(
                             std::mem::take(&mut specifiers.user),
                             args.event_user_file.as_deref(),
@@ -826,8 +920,111 @@ impl ScanCommandArgs {
             bail!("--blast-radius cannot be used with --no-validate");
         }
 
+        self.scan_args.validate_audit_log_collisions(None, None)?;
+
         Ok(ScanOperation::Scan(self.scan_args))
     }
+}
+
+/// Determines whether two output paths refer to the same file.
+///
+/// Plain `PathBuf` equality misses aliases such as `--output report.json
+/// --audit-log ./report.json`, pre-existing symlink and hard-link aliases,
+/// paths whose parent directories are symlinks, and case-variant names on
+/// case-insensitive filesystems. Paths are compared after absolutizing and
+/// dot-normalization. Existing paths are compared by on-disk file identity
+/// (`same-file`: device/inode on Unix, volume serial/file index on Windows),
+/// which detects both symlink and hard-link aliases. Not-yet-existing paths
+/// are resolved through their nearest existing ancestor so symlinked parent
+/// directories are followed the same way the kernel resolves them at open
+/// time; because such a final component cannot be identity-checked, its
+/// comparison is case-folded conservatively (on a case-insensitive filesystem
+/// — the default on macOS and Windows — case variants are the same file, and
+/// on a case-sensitive one distinct names differing only by case are rejected
+/// as a precaution).
+fn paths_refer_to_same_file(a: &Path, b: &Path) -> bool {
+    fn normalize(path: &Path) -> Option<PathBuf> {
+        std::path::absolute(path)
+            .ok()
+            .map(|abs| abs.parse_dot().map(|dedotted| dedotted.into_owned()).unwrap_or(abs))
+    }
+
+    let (Some(a), Some(b)) = (normalize(a), normalize(b)) else { return a == b };
+    if a == b {
+        return true;
+    }
+    // When both paths exist, compare file identity so symlink and hard-link
+    // aliases are detected on every platform: `same-file` compares device and
+    // inode on Unix and volume serial number and file index on Windows. An
+    // error means a path does not exist (or cannot be opened), so fall through
+    // to resolution below.
+    if let Ok(same) = same_file::is_same_file(&a, &b) {
+        return same;
+    }
+    // Not both paths exist: resolve each through its nearest existing ancestor
+    // so that a symlinked parent directory still aliases correctly.
+    match (canonicalize_best_effort(&a), canonicalize_best_effort(&b)) {
+        (Some(resolved_a), Some(resolved_b)) => {
+            // Canonicalization resolves existing components to on-disk casing,
+            // but not-yet-existing components keep their typed case. On
+            // case-insensitive filesystems (the default on macOS and Windows)
+            // case-variant names would still open the same file, so compare
+            // the resolved paths case-insensitively rather than letting
+            // --audit-log and --output clobber each other. On case-sensitive
+            // filesystems this can conservatively flag distinct files; the
+            // error tells the user exactly what to rename.
+            resolved_a.to_string_lossy().to_lowercase()
+                == resolved_b.to_string_lossy().to_lowercase()
+        }
+        _ => false,
+    }
+}
+
+/// Canonicalizes a path, resolving the nearest existing ancestor when the
+/// final components do not exist yet.
+///
+/// `fs::canonicalize` requires the whole path to exist, but output files are
+/// typically created during the scan. Walking up to the closest existing
+/// directory (which may be reached through a symlink) and re-appending the
+/// missing components mirrors how a later open resolves the same path.
+fn canonicalize_best_effort(path: &Path) -> Option<PathBuf> {
+    if let Ok(canonical) = fs::canonicalize(path) {
+        return Some(canonical);
+    }
+    let mut tail = vec![path.file_name()?.to_os_string()];
+    for ancestor in path.ancestors().skip(1) {
+        if let Ok(canonical) = fs::canonicalize(ancestor) {
+            let mut resolved = canonical;
+            for component in tail.iter().rev() {
+                resolved.push(component);
+            }
+            return Some(resolved);
+        }
+        tail.push(ancestor.file_name()?.to_os_string());
+    }
+    None
+}
+
+fn path_is_beneath(candidate: &Path, root: &Path) -> bool {
+    let candidate_path = root_for_comparison(candidate);
+    let root_path = root_for_comparison(root);
+    if candidate_path.starts_with(&root_path) && candidate_path != root_path {
+        return true;
+    }
+    let Some(candidate) = canonicalize_best_effort(&candidate_path) else {
+        return false;
+    };
+    let Some(root) = canonicalize_best_effort(&root_path) else {
+        return false;
+    };
+    candidate.starts_with(&root) && candidate != root
+}
+
+fn root_for_comparison(path: &Path) -> PathBuf {
+    std::path::absolute(path)
+        .ok()
+        .and_then(|absolute| absolute.parse_dot().ok().map(|path| path.into_owned()))
+        .unwrap_or_else(|| path.to_path_buf())
 }
 
 fn parse_git_url_target(path: &Path) -> Option<GitUrl> {
@@ -1230,4 +1427,84 @@ pub struct DockerScanArgs {
     /// Docker image archive files to scan, such as files produced by docker save
     #[arg(long = "archive", value_name = "PATH", value_hint = ValueHint::FilePath)]
     pub archives: Vec<PathBuf>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn equivalent_output_paths_are_detected() {
+        assert!(paths_refer_to_same_file(Path::new("report.json"), Path::new("report.json")));
+        assert!(paths_refer_to_same_file(Path::new("report.json"), Path::new("./report.json")));
+        assert!(paths_refer_to_same_file(Path::new("a/../report.json"), Path::new("report.json")));
+        // Textual equality is not required when the paths are not normalized
+        // the same way, but existing files must still resolve consistently.
+        assert!(!paths_refer_to_same_file(Path::new("report.json"), Path::new("other.json")));
+    }
+
+    #[test]
+    fn case_variant_names_are_treated_as_the_same_file() {
+        // On case-insensitive filesystems (the default on macOS and Windows)
+        // case-variant names are the same file once created, so not-yet-
+        // existing paths are compared case-folded.
+        assert!(paths_refer_to_same_file(Path::new("report.json"), Path::new("Report.json")));
+        assert!(paths_refer_to_same_file(
+            Path::new("sub/report.json"),
+            Path::new("sub/REPORT.JSON")
+        ));
+        // Different names are still distinct.
+        assert!(!paths_refer_to_same_file(Path::new("Report.json"), Path::new("Repo.json")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlink_aliases_are_detected_for_existing_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let target = dir.path().join("report.json");
+        std::fs::write(&target, b"x").unwrap();
+        let link = dir.path().join("alias.json");
+        std::os::unix::fs::symlink(&target, &link).unwrap();
+
+        assert!(paths_refer_to_same_file(&target, &link));
+        assert!(paths_refer_to_same_file(Path::new("."), Path::new("./")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symlinked_parent_directories_are_detected_for_new_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let link = dir.path().join("link");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        // Neither output file exists yet, but both opens would resolve through
+        // the symlinked parent to the same file.
+        assert!(paths_refer_to_same_file(&real.join("report.json"), &link.join("report.json")));
+        // Same symlinked parent, different final components: distinct files.
+        assert!(!paths_refer_to_same_file(&real.join("report.json"), &link.join("other.json")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn hard_link_aliases_are_detected() {
+        let dir = tempfile::tempdir().unwrap();
+        let a = dir.path().join("a.json");
+        std::fs::write(&a, b"x").unwrap();
+        let b = dir.path().join("b.json");
+        std::fs::hard_link(&a, &b).unwrap();
+
+        assert!(paths_refer_to_same_file(&a, &b));
+    }
+
+    #[test]
+    fn audit_log_inside_scanned_directory_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let input = dir.path().join("workspace");
+        std::fs::create_dir(&input).unwrap();
+        let audit_log = input.join("audit.jsonl");
+
+        assert!(path_is_beneath(&audit_log, &input));
+    }
 }

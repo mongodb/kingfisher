@@ -19,36 +19,27 @@ struct DocRule {
     revocation: Option<serde_yaml::Value>,
 }
 
-struct CatalogRule {
-    source: String,
-    rule: DocRule,
-}
-
-pub fn generate_builtin_rules_page(snapshots: &[(&str, &str)]) -> Result<String> {
+pub fn generate_builtin_rules_page(snapshots: &[&str]) -> Result<String> {
     let mut rules = Vec::new();
-    for (source, yaml) in snapshots {
+    for (source, yaml) in snapshots.iter().enumerate() {
+        let yaml = &**yaml;
         let snapshot: Snapshot = serde_yaml::from_str(yaml).with_context(|| {
-            format!("failed to read generated {source} rules for documentation")
+            format!("failed to read generated rule source #{source} for documentation")
         })?;
-        rules.extend(
-            snapshot
-                .rules
-                .into_iter()
-                .map(|rule| CatalogRule { source: (*source).to_string(), rule }),
-        );
+        rules.extend(snapshot.rules);
     }
-    rules.sort_by(|left, right| left.rule.id.cmp(&right.rule.id));
+    rules.sort_by(|left, right| left.id.cmp(&right.id));
 
     let mut ids = BTreeSet::new();
-    for entry in &rules {
-        if !ids.insert(entry.rule.id.as_str()) {
-            bail!("duplicate built-in rule ID {} while generating documentation", entry.rule.id);
+    for rule in &rules {
+        if !ids.insert(rule.id.as_str()) {
+            bail!("duplicate built-in rule ID {} while generating documentation", rule.id);
         }
     }
 
-    let validation_count = rules.iter().filter(|entry| entry.rule.validation.is_some()).count();
-    let revocation_count = rules.iter().filter(|entry| entry.rule.revocation.is_some()).count();
-    let helper_count = rules.iter().filter(|entry| !entry.rule.visible).count();
+    let validation_count = rules.iter().filter(|rule| rule.validation.is_some()).count();
+    let revocation_count = rules.iter().filter(|rule| rule.revocation.is_some()).count();
+    let helper_count = rules.iter().filter(|rule| !rule.visible).count();
 
     let mut page = format!(
         r#"---
@@ -69,7 +60,7 @@ credentials.
 but does not provide that operation.
 
 !!! tip "Search"
-    Filter by catalog, rule ID, confidence, validation, or revocation support.
+    Filter by rule ID, confidence, validation, or revocation support.
 
 <input type="text" class="rules-search" placeholder="Search rules... (e.g. github, HTTP, revocation)" />
 <div class="rules-count"></div>
@@ -77,7 +68,6 @@ but does not provide that operation.
 <table class="rules-table">
 <thead>
 <tr>
-<th>Catalog</th>
 <th>Rule ID</th>
 <th>Confidence</th>
 <th>Validation</th>
@@ -89,15 +79,13 @@ but does not provide that operation.
         rule_count = rules.len(),
     );
 
-    for entry in rules {
+    for rule in rules {
         page.push_str(&format!(
-            "<tr>\n<td>{}</td>\n<td><code>{}</code></td>\n\
-             <td>{}</td>\n<td>{}</td>\n<td>{}</td>\n</tr>\n",
-            escape_html(&entry.source),
-            escape_html(&entry.rule.id),
-            title_case(&entry.rule.confidence),
-            support_label(entry.rule.validation.is_some()),
-            support_label(entry.rule.revocation.is_some()),
+            "<tr>\n<td><code>{}</code></td>\n<td>{}</td>\n<td>{}</td>\n<td>{}</td>\n</tr>\n",
+            escape_html(&rule.id),
+            title_case(&rule.confidence),
+            support_label(rule.validation.is_some()),
+            support_label(rule.revocation.is_some()),
         ));
     }
     page.push_str("</tbody>\n</table>\n");
@@ -138,9 +126,7 @@ mod tests {
     #[test]
     fn documents_combined_capability_types() {
         let page = generate_builtin_rules_page(&[
-            (
-                "Betterleaks",
-                r#"
+            r#"
 rules:
   - name: Expression token
     id: betterleaks.expression-token
@@ -153,10 +139,7 @@ rules:
       type: HttpMultiStep
       content: { steps: [] }
 "#,
-            ),
-            (
-                "Veles",
-                r#"
+            r#"
 rules:
   - name: Raw token
     id: veles.secrets/raw
@@ -166,7 +149,6 @@ rules:
       type: Raw
       content: gcs_hmac
 "#,
-            ),
         ])
         .unwrap();
 
@@ -174,6 +156,7 @@ rules:
         assert!(page.contains("**2** include validation"));
         assert!(page.contains("**1** support direct revocation"));
         assert!(!page.contains("<th>Rule Name</th>"));
+        assert!(!page.contains("<th>Catalog</th>"));
         assert!(!page.contains("Expression token"));
         assert!(page.contains("Yes</td>"));
         assert!(page.contains("None</td>"));
@@ -182,14 +165,11 @@ rules:
 
     #[test]
     fn labels_all_capability_types_as_yes() {
-        let page = generate_builtin_rules_page(&[(
-            "Betterleaks",
-            r#"
+        let page = generate_builtin_rules_page(&[r#"
 rules:
   - { name: JWT, id: betterleaks.jwt, pattern: token, validation: { type: JWT } }
   - { name: HTTP, id: betterleaks.http, pattern: token, validation: { type: Http, content: {} }, revocation: { type: AWS } }
-"#,
-        )])
+"#])
         .unwrap();
 
         assert_eq!(page.matches("Yes</td>").count(), 3);
@@ -197,15 +177,12 @@ rules:
 
     #[test]
     fn escapes_untrusted_upstream_metadata() {
-        let page = generate_builtin_rules_page(&[(
-            "Veles",
-            r#"
+        let page = generate_builtin_rules_page(&[r#"
 rules:
   - name: <script>alert('x')</script>
     id: veles.<script>alert('x')</script>
     pattern: token
-"#,
-        )])
+"#])
         .unwrap();
 
         assert!(!page.contains("<script>"));

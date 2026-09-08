@@ -178,6 +178,7 @@ fn run_skiplist(skip_regex: Vec<String>, skip_skipword: Vec<String>) -> Result<u
         min_entropy: Some(0.0),
         redact: false,
         git_repo_timeout: 1800,
+        audit_log: None,
         output_args: OutputArgs { output: None, format: ReportOutputFormat::Pretty },
         no_dedup: false,
         view_report: false,

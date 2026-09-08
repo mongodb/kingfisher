@@ -14,11 +14,20 @@
       <div class="kf-hero__content">
         <img src="{{ 'assets/images/kingfisher_logo.png' | url }}" alt="Kingfisher Logo" class="kf-hero__logo" width="126" height="173">
         <h1 class="kf-hero__title">Kingfisher</h1>
-        <p class="kf-hero__subtitle">Open Source Secret Scanner with Live Validation</p>
+        <p class="kf-hero__subtitle">The Batteries-Included Open Source Secret Scanner</p>
         <p class="kf-hero__tagline">
-          Detect, validate, and revoke leaked credentials across your codebase,
-          Git history, cloud storage, and developer platforms.
-          Built in Rust by MongoDB.
+          Find exposed credentials, verify which are active, map what they can reach,
+          triage findings visually, and revoke supported secrets.
+        </p>
+        <ol class="kf-hero__workflow" aria-label="Secret response workflow">
+          <li>Detect</li>
+          <li>Validate</li>
+          <li>Map</li>
+          <li>Triage</li>
+          <li>Revoke</li>
+        </ol>
+        <p class="kf-hero__proof">
+          The end-to-end defender workflow in one Apache-2.0-licensed Rust tool, built by MongoDB.
         </p>
         <div class="kf-hero__actions">
           <a href="{{ 'getting-started/installation/' | url }}" class="md-button md-button--primary">
@@ -36,7 +45,7 @@
   <section class="kf-stats">
     <div class="kf-stats__inner md-grid">
       <div class="kf-stats__item">
-        <span class="kf-stats__number">483</span>
+        <span class="kf-stats__number">485</span>
         <span class="kf-stats__label">Detection Rules</span>
       </div>
       <div class="kf-stats__item">
@@ -57,11 +66,15 @@
   <!-- Features -->
   <section class="kf-features">
     <div class="kf-features__inner md-grid">
-      <h2 class="kf-section__title">Why Kingfisher?</h2>
+      <h2 class="kf-section__title">From Exposure to Containment</h2>
+      <p class="kf-section__desc">
+        Go beyond matching patterns. Kingfisher connects detection, verification, impact analysis,
+        investigation, and supported remediation in one workflow.
+      </p>
 
       <div class="kf-features__grid">
         <div class="kf-feature">
-          <h3>Scan Everything</h3>
+          <h3>Detect Across Your Estate</h3>
           <p>
             Files, Git repos, GitHub, GitLab, Azure Repos, Bitbucket, Gitea,
             Hugging Face, Docker images, AWS S3, Google Cloud Storage, Jira,
@@ -88,6 +101,15 @@
         </div>
 
         <div class="kf-feature">
+          <h3>Visual Triage</h3>
+          <p>
+            Investigate, filter, deduplicate, and export findings in a browser-based report viewer.
+            Import common report formats to enrich an existing scanning workflow with Kingfisher's
+            validation and remediation data.
+          </p>
+        </div>
+
+        <div class="kf-feature">
           <h3>Direct Revocation</h3>
           <p>
             Contain compromised credentials from the CLI across 34 rules and 15 provider
@@ -96,11 +118,10 @@
         </div>
 
         <div class="kf-feature">
-          <h3>Open Source</h3>
+          <h3>Batteries Included</h3>
           <p>
-            Apache 2.0 licensed. Free to use, modify, and distribute. No vendor
-            lock-in, no usage limits, no telemetry. Fully auditable codebase
-            backed by MongoDB.
+            Validation, advanced AWS and GCP blast-radius analysis, visual triage, and supported
+            revocation ship in the Apache-2.0 release instead of a separate commercial tier.
           </p>
         </div>
 

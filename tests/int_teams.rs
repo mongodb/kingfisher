@@ -186,6 +186,7 @@ async fn test_scan_teams_messages() -> Result<()> {
         min_entropy: Some(0.0),
         redact: false,
         git_repo_timeout: 1800,
+        audit_log: None,
         output_args: OutputArgs { output: None, format: ReportOutputFormat::Pretty },
         no_dedup: true,
         baseline_file: None,

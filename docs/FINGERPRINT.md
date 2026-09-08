@@ -2,8 +2,14 @@
 
 [← Back to README](../README.md)
 
-Every reported finding carries a **64-bit fingerprint** that acts as a stable, privacy-safe ID.
-It lets the scanner **deduplicate** repeated hits of the *same logical issue* while still treating different locations as distinct.
+Every reported finding carries a **64-bit fingerprint** that identifies the detected value and
+its position. Kingfisher uses this reported fingerprint for output, baseline matching, and
+downstream correlation.
+
+Default scan deduplication is related, but deliberately uses a different identity. It groups
+identical detected credentials without using their file path or byte offset. This distinction lets
+Kingfisher present one actionable credential while retaining a location-sensitive fingerprint for
+the occurrence that is reported.
 
 ```bash
 🔓 AWS ACCESS TOKEN => [BETTERLEAKS.AWS-ACCESS-TOKEN]
@@ -65,13 +71,29 @@ This content-aware approach provides several benefits:
 This method ensures that every unique secret is tracked precisely, providing a clear and accurate picture of sensitive data exposure.
 
 ---
+### Why deduplication is credential-focused
+
+By default, Kingfisher reports one finding for identical matched credential content detected by the
+same rule and broad origin class. The deduplication identity intentionally excludes the file path
+and byte offset. As a result, copying the same credential into many files or carrying it through
+many Git revisions does not produce dozens of equivalent findings.
+
+This behavior is designed around remediation. A credential leaked in 50 locations still represents
+one credential that must be investigated and revoked. Repeating the same credential for every
+location can obscure the number of distinct credentials requiring action and make scan output,
+alerts, and downstream triage unnecessarily noisy.
+
+The reported finding still includes the location selected for presentation. Deduplication therefore
+reduces repeated credential findings; it does not imply that the credential appeared only once.
+
 ### Controlling deduplication
 
-By default the CLI **deduplicates** findings that share the same fingerprint, so you see only one entry even if the secret appears in multiple commits.
-
-
-If you want to see **every individual occurrence**, run with `--no-dedup`:
+To investigate propagation, enumerate every affected location, or perform forensic analysis, disable
+default deduplication with `--no-dedup`:
 
 ```bash
 kingfisher scan /path/to/repo --no-dedup
 ```
+
+With this option, Kingfisher reports individual occurrences instead of collapsing repeated
+credential content into one actionable finding.

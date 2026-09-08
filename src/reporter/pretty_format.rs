@@ -4,6 +4,18 @@ use indenter::indented;
 
 use super::*;
 
+const ACCESS_MAP_FIELD_COLON_COLUMN: usize = 18;
+
+fn write_access_map_field<W: std::io::Write, V: Display>(
+    writer: &mut W,
+    label: &str,
+    value: V,
+) -> Result<()> {
+    let dots = ACCESS_MAP_FIELD_COLON_COLUMN.saturating_sub(label.len());
+    writeln!(writer, "{label}{}: {value}", ".".repeat(dots))?;
+    Ok(())
+}
+
 impl DetailsReporter {
     pub fn pretty_format<W: std::io::Write>(
         &self,
@@ -21,6 +33,59 @@ impl DetailsReporter {
 
         if let Some(access_map) = envelope.access_map {
             self.write_access_map(&mut writer, &access_map)?;
+        }
+        if let Some(audit) = envelope.audit {
+            self.write_repository_audit(&mut writer, &audit)?;
+        }
+        Ok(())
+    }
+
+    fn write_repository_audit<W: std::io::Write>(
+        &self,
+        writer: &mut W,
+        audit: &crate::scan_audit::ScanAuditManifest,
+    ) -> Result<()> {
+        writeln!(writer, " |{}", self.style_heading("REPOSITORY COVERAGE"))?;
+        writeln!(writer, " |Run ID..........: {}", audit.run_id)?;
+        writeln!(writer, " |Repositories....: {}", audit.summary.discovered)?;
+        writeln!(writer, " |__Completed.....: {}", audit.summary.scan_succeeded)?;
+        writeln!(writer, " |__Failed........: {}", audit.summary.scan_failed)?;
+        writeln!(writer, " |__Fetch Failed..: {}", audit.summary.fetch_failed)?;
+        for repository in &audit.repositories {
+            writeln!(writer, " |Repo............: {}", repository.repository)?;
+            let status = if repository.fetch.status == "failed" {
+                "fetch_failed"
+            } else {
+                repository.scan.status.as_str()
+            };
+            writeln!(writer, " |__Status........: {status}")?;
+            if let Some(started_at) = &repository.scan.started_at {
+                writeln!(writer, " |__Started.......: {started_at}")?;
+            }
+            if let Some(duration) = repository.scan.duration_seconds {
+                writeln!(writer, " |__Duration......: {duration:.3}s")?;
+            }
+            if let Some(git) = &repository.git {
+                if let Some(sha) = &git.tip_sha {
+                    writeln!(writer, " |__Tip SHA.......: {sha}")?;
+                }
+                writeln!(writer, " |__Scope.........: {}", git.scope)?;
+                if let Some(sha) = &git.base_sha {
+                    writeln!(writer, " |__Base SHA......: {sha}")?;
+                }
+                if let Some(sha) = &git.inclusive_root_sha {
+                    writeln!(writer, " |__Root SHA......: {sha}")?;
+                }
+            }
+            if let Some(stats) = &repository.stats {
+                writeln!(writer, " |__Blobs.........: {}", stats.blobs_scanned)?;
+                writeln!(writer, " |__Bytes.........: {}", stats.bytes_scanned)?;
+                writeln!(writer, " |__Findings......: {}", stats.findings)?;
+            }
+            if let Some(error) = repository.scan.error.as_ref().or(repository.fetch.error.as_ref())
+            {
+                writeln!(writer, " |__Error.........: {error}")?;
+            }
         }
         Ok(())
     }
@@ -68,21 +133,29 @@ impl DetailsReporter {
         writeln!(writer, " |{}", self.style_heading("BLAST RADIUS"))?;
         for entry in entries {
             for role in &entry.roles {
-                writeln!(writer, " |__role........: {} [{}]", role.name, role.source)?;
+                write_access_map_field(
+                    writer,
+                    " |__role",
+                    format_args!("{} [{}]", role.name, role.source),
+                )?;
                 if !role.permissions.is_empty() {
-                    writeln!(writer, " |____grants.....: {}", role.permissions.join(","))?;
+                    write_access_map_field(writer, " |____grants", role.permissions.join(","))?;
                 }
             }
             for group in &entry.groups {
-                writeln!(writer, " |_service.......: {}", entry.provider.to_uppercase())?;
+                write_access_map_field(writer, " |_service", entry.provider.to_uppercase())?;
                 if let Some(account) = &entry.account {
-                    writeln!(writer, " |__account.....: {}", account)?;
+                    write_access_map_field(writer, " |__account", account)?;
                 }
                 for resource in &group.resources {
-                    writeln!(writer, " |____resource....: {}", resource)?;
+                    write_access_map_field(writer, " |____resource", resource)?;
                 }
                 if !group.permissions.is_empty() {
-                    writeln!(writer, " |____permission..: {}", group.permissions.join(","))?;
+                    write_access_map_field(
+                        writer,
+                        " |____permission",
+                        group.permissions.join(","),
+                    )?;
                 }
             }
             if let Some(evidence) = entry
@@ -90,9 +163,27 @@ impl DetailsReporter {
                 .as_ref()
                 .and_then(|metadata| metadata.authorization_evidence.as_ref())
             {
-                writeln!(writer, " |__policies....: {}", evidence.policies.len())?;
-                writeln!(writer, " |__paths.......: {}", evidence.paths.len())?;
-                writeln!(writer, " |__role-impact.: {}", evidence.role_impacts.len())?;
+                write_access_map_field(writer, " |__policies", evidence.policies.len())?;
+                write_access_map_field(writer, " |__paths", evidence.paths.len())?;
+                write_access_map_field(writer, " |__role-impact", evidence.role_impacts.len())?;
+                write_access_map_field(writer, " |__api-probes", evidence.probes.len())?;
+                for probe in &evidence.probes {
+                    write_access_map_field(
+                        writer,
+                        " |____probe",
+                        format_args!(
+                            "[{}] {} {}{}",
+                            probe.status,
+                            probe.service,
+                            probe.method,
+                            probe
+                                .reason
+                                .as_deref()
+                                .map(|reason| format!(" ({reason})"))
+                                .unwrap_or_default()
+                        ),
+                    )?;
+                }
                 for path in evidence.paths.iter().take(25) {
                     let hops = path
                         .hops
@@ -100,19 +191,25 @@ impl DetailsReporter {
                         .map(|hop| format!("{} --{}--> {}", hop.from, hop.relationship, hop.to))
                         .collect::<Vec<_>>()
                         .join("; ");
-                    writeln!(
+                    write_access_map_field(
                         writer,
-                        " |____path.......: [{} {}] {}",
-                        path.direction.as_deref().unwrap_or("unknown"),
-                        path.status,
-                        hops
+                        " |____path",
+                        format_args!(
+                            "[{} {}] {}",
+                            path.direction.as_deref().unwrap_or("unknown"),
+                            path.status,
+                            hops
+                        ),
                     )?;
                 }
                 if evidence.paths.len() > 25 {
-                    writeln!(
+                    write_access_map_field(
                         writer,
-                        " |____path.......: {} additional paths in structured output",
-                        evidence.paths.len() - 25
+                        " |____path",
+                        format_args!(
+                            "{} additional paths in structured output",
+                            evidence.paths.len() - 25
+                        ),
                     )?;
                 }
             }
@@ -227,6 +324,31 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+
+    #[test]
+    fn blast_radius_fields_align_colons() {
+        let labels = [
+            " |__role",
+            " |____grants",
+            " |_service",
+            " |__account",
+            " |____resource",
+            " |____permission",
+            " |__policies",
+            " |__paths",
+            " |__role-impact",
+            " |__api-probes",
+            " |____probe",
+            " |____path",
+        ];
+
+        for label in labels {
+            let mut output = Vec::new();
+            write_access_map_field(&mut output, label, "value").unwrap();
+            let output = String::from_utf8(output).unwrap();
+            assert_eq!(output.find(':').unwrap(), ACCESS_MAP_FIELD_COLON_COLUMN, "{output}");
+        }
+    }
 
     #[test]
     fn high_confidence_findings_use_active_color_with_locked_icon() {

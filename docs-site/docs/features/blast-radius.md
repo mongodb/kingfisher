@@ -108,10 +108,11 @@ AWS and GCP results may populate `provider_metadata.authorization_evidence` in s
 - `policies`: policy or binding provenance and normalized statements;
 - `paths`: ordered identity hops with `outbound`/`inbound` direction and `potential`, `conditional`, or provider-specific status;
 - `role_impacts`: reachable roles with effective permission summaries and statement-level resource grants;
-- `hierarchy`: visible project, folder, or organization scopes; and
+- `hierarchy`: visible project, folder, or organization scopes;
+- `probes`: bounded, read-only API methods and their accepted, restricted, invalid, or inconclusive outcomes; and
 - `limitations`: incomplete reads, traversal caps, and policy-evaluation constraints.
 
-Structured JSON, JSONL, BSON, TOON, and SARIF reports preserve the complete evidence payload. Pretty output summarizes paths, scan HTML summarizes evidence counts, and the standalone HTML report and interactive report viewer expose policy and path details without storing condition values.
+Structured JSON, JSONL, BSON, TOON, and SARIF reports preserve the complete evidence payload. Pretty output summarizes paths and API probes, scan HTML summarizes evidence counts, and the standalone HTML report and interactive report viewer expose policy, path, and probe details without storing condition values or response bodies.
 
 ## Providers and supported credential formats
 
@@ -278,13 +279,26 @@ Kingfisher resolves the Alibaba Cloud caller identity with `sts:GetCallerIdentit
 
 ### GCP (`gcp`)
 
-- **Credential**: a Google Cloud **service account key JSON** file.
+- **Standalone provider credential**: a Google Cloud **service account key JSON** file.
+- **Scan/direct-rule credential**: Google API keys detected by `betterleaks.gcp-api-key` are mapped when `--blast-radius` is enabled or when that rule is passed to `kingfisher blast-radius --rule`.
 
 #### Standalone example (GCP)
 
 ```bash
 kingfisher blast-radius gcp ./service-account.json --format json > gcp.blast-radius.json
 ```
+
+#### Google API-key example
+
+```bash
+printf '%s' 'AIza...' \
+  | kingfisher blast-radius --rule gcp-api-key - --format json \
+  > google-api-key.blast-radius.json
+```
+
+Google API-key mapping runs four fixed GET probes with at most four requests in flight: Identity Toolkit public project configuration, Gemini model listing, Cloud Translation language listing, and YouTube language listing. Gemini, Translation, and YouTube receive the key in the `x-goog-api-key` header; Identity Toolkit follows the validation contract and sends it as the `key` query parameter. Results retain a structured outcome for every probe under `provider_metadata.authorization_evidence.probes`; only a successful response contributes an observed read-only permission and exposed service resource. Restriction errors, invalid-key errors, disabled services, timeouts, and unrecognized responses do not grant permissions. Because the Identity Toolkit request uses a query parameter, URL/request-target logging can expose that credential; protect such logs accordingly.
+
+This is intentionally a narrow empirical map, not an exhaustive Google API sweep. A successful probe proves only that exact read method. Method-specific API restrictions may deny other calls on the same service, application restrictions may make the key usable only from an allowed IP/referrer/app, and services outside the allowlist may still accept the key. The mapper never invokes generation, translation, sign-in, write, mutation, or administrative methods.
 
 Kingfisher resolves the service account and reads visible project, folder, and organization IAM policies. When the credential exposes `iam.serviceAccounts.getIamPolicy`, it also uses bounded, read-only policy checks on visible target service accounts to find direct impersonation grants. Authorization evidence records the scope that contributed each role binding, expands roles into permissions, and records both inbound and outbound authorization-capability paths involving visible service accounts. Relationships distinguish access-token creation, OpenID-token creation, `actAs`, signing, and delegation permissions. For target service accounts reachable through access-token or signing capabilities, `role_impacts` matches the target to its visible project/folder/organization role bindings, expands those roles, and pairs their permissions with the hierarchy scopes they affect. `actAs`, OpenID-token, and delegation-only relationships remain path evidence without inheriting the target's Google API roles. Propagated roles are included in the effective severity and their scopes appear as `impersonated_service_account_scope` resources. The mapper also enumerates visible resources in the key's project across services including Cloud Storage, BigQuery, Secret Manager, Compute Engine, Cloud SQL, Pub/Sub, Cloud Run, Artifact Registry, GKE, Cloud KMS, Cloud Functions, Firestore, and Spanner.
 

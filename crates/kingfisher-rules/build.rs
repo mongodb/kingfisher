@@ -17,10 +17,10 @@ use anyhow::{Context, Result, bail};
 use flate2::{Compression, write::GzEncoder};
 use sha2::{Digest, Sha256};
 
-// Source permalink: https://github.com/betterleaks/betterleaks/blob/2ba7943682b82a3659a89dae8fc680de1ef6b781/config/betterleaks.toml
-const BETTERLEAKS_CONFIG_URL: &str = "https://raw.githubusercontent.com/betterleaks/betterleaks/2ba7943682b82a3659a89dae8fc680de1ef6b781/config/betterleaks.toml";
+// Source permalink: https://github.com/betterleaks/betterleaks/blob/95237cf8eb4d8e9f67409595b245e674832992cf/config/betterleaks.toml
+const BETTERLEAKS_CONFIG_URL: &str = "https://raw.githubusercontent.com/betterleaks/betterleaks/95237cf8eb4d8e9f67409595b245e674832992cf/config/betterleaks.toml";
 const BETTERLEAKS_CONFIG_SHA256: &str =
-    "d60ee4d1457716509c2369f97063069385876b29dbe89f09b1b83665a45a3f3a";
+    "b45bd602f46f1fce1f9a6d86b054096d9f2d1c2fe29d2e5b9ef3a7923195fe1a";
 const BUNDLE_MAGIC: &[u8] = b"KFRULES\x01";
 const CAPABILITY_OVERLAY: &str = "data/imported-rules-capabilities.yml";
 const VELES_CONFIG: &str = "data/veles-rules.yml";
@@ -91,10 +91,7 @@ fn build_default_bundle() -> Result<()> {
         ],
         &output_dir.join("builtin-rules.gz"),
     )?;
-    let docs = builtin_docs::generate_builtin_rules_page(&[
-        ("Betterleaks", &yaml),
-        ("Veles", &veles_yaml),
-    ])?;
+    let docs = builtin_docs::generate_builtin_rules_page(&[&yaml, &veles_yaml])?;
     let workspace_root = Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
         .and_then(Path::parent)

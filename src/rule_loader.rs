@@ -15,7 +15,7 @@ use crate::{
         Rules,
         rule::{BetterleaksExpr, Confidence, Rule},
     },
-    util::Counted,
+    util::{Counted, expand_tilde},
 };
 #[derive(Error, Debug)]
 pub enum RuleLoaderError {
@@ -60,7 +60,7 @@ impl RuleLoader {
         mut self,
         paths: I,
     ) -> Self {
-        self.additional_load_paths.extend(paths.into_iter().map(|p| p.as_ref().to_owned()));
+        self.additional_load_paths.extend(paths.into_iter().map(|p| expand_tilde(p.as_ref())));
         self
     }
 
@@ -750,5 +750,14 @@ mod tests {
             .and_then(|loaded| loaded.resolve_enabled_rules_owned());
 
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn additional_rule_load_paths_expand_tilde() {
+        let loader = RuleLoader::new().additional_rule_load_paths(["~/rules", "/abs/rules"]);
+        assert_eq!(
+            loader.additional_load_paths,
+            vec![expand_tilde(Path::new("~/rules")), PathBuf::from("/abs/rules")]
+        );
     }
 }

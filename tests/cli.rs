@@ -27,6 +27,40 @@ mod test {
             .expect("cache entry should be written");
     }
 
+    fn init_git_repository(path: &std::path::Path) {
+        let status = std::process::Command::new("git")
+            .args(["init", "--quiet"])
+            .arg(path)
+            .status()
+            .expect("git should run");
+        assert!(status.success());
+        let status = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(path)
+            .args(["add", "."])
+            .status()
+            .expect("git add should run");
+        assert!(status.success());
+        let status = std::process::Command::new("git")
+            .args(["-C"])
+            .arg(path)
+            .args([
+                "-c",
+                "user.name=Kingfisher Test",
+                "-c",
+                "user.email=kingfisher@example.invalid",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "-m",
+                "test fixture",
+            ])
+            .status()
+            .expect("git commit should run");
+        assert!(status.success());
+    }
+
     #[test]
     fn cli_lists_rules_pretty() {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
@@ -81,9 +115,11 @@ mod test {
         let temp = tempdir().expect("tempdir should be created");
         let input_dir = temp.path().join("repo");
         let output_html = temp.path().join("audit-report.html");
+        let audit_log = temp.path().join("repository-events.jsonl");
         fs::create_dir_all(&input_dir).expect("input directory should be created");
         fs::write(input_dir.join("README.txt"), "no credentials here")
             .expect("seed file should be written");
+        init_git_repository(&input_dir);
 
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args([
@@ -93,6 +129,8 @@ mod test {
                 "html",
                 "--output",
                 output_html.to_str().unwrap(),
+                "--audit-log",
+                audit_log.to_str().unwrap(),
                 "--rule",
                 "betterleaks.aws-access-token",
                 "--no-validate",
@@ -104,6 +142,70 @@ mod test {
         let html = fs::read_to_string(&output_html).expect("html report should be written");
         assert!(html.contains("Kingfisher Audit Report"));
         assert!(html.contains("Scan Summary"));
+        assert!(html.contains("Repository Coverage"));
+        assert!(html.contains(input_dir.to_str().unwrap()));
+        assert!(html.contains("data-table-search=\"repository-coverage-table\""));
+        assert!(html.contains("class=\"sort-button\""));
+        assert!(!html.contains("<script src="));
+        let events = fs::read_to_string(audit_log).expect("repository audit log should be written");
+        assert!(events.contains("repository_scan_started"));
+        assert!(events.contains("repository_scan_completed"));
+        assert!(events.contains("run_completed"));
+    }
+
+    #[test]
+    fn cli_audits_each_local_repository_in_a_parent_directory() {
+        let temp = tempdir().expect("tempdir should be created");
+        let workspace = temp.path().join("workspace");
+        let rules_dir = temp.path().join("rules");
+        let output_json = temp.path().join("report.json");
+        fs::create_dir_all(&workspace).expect("workspace should be created");
+        fs::create_dir_all(&rules_dir).expect("rules directory should be created");
+        fs::write(
+            rules_dir.join("demo.yml"),
+            r#"
+rules:
+  - id: custom.audit.1
+    name: Audit fixture
+    pattern: '(audit_fixture_secret_[0-9]{4})'
+    confidence: medium
+"#,
+        )
+        .expect("rule should be written");
+
+        for name in ["alpha", "beta"] {
+            let repository = workspace.join(name);
+            fs::create_dir_all(&repository).expect("repository should be created");
+            fs::write(repository.join("README.txt"), format!("repository {name}"))
+                .expect("seed file should be written");
+            init_git_repository(&repository);
+        }
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "scan",
+                workspace.to_str().unwrap(),
+                "--format",
+                "json",
+                "--output",
+                output_json.to_str().unwrap(),
+                "--rules-path",
+                rules_dir.to_str().unwrap(),
+                "--load-builtins=false",
+                "--no-validate",
+                "--no-update-check",
+            ])
+            .assert()
+            .success();
+
+        let report: Value =
+            serde_json::from_slice(&fs::read(output_json).expect("JSON report should be written"))
+                .expect("JSON report should parse");
+        assert_eq!(report["audit"]["summary"]["discovered"], 2);
+        assert_eq!(report["audit"]["summary"]["scan_succeeded"], 2);
+        let repositories = report["audit"]["repositories"].as_array().unwrap();
+        assert!(repositories.iter().all(|record| record["scan"]["status"] == "completed"));
+        assert!(repositories.iter().all(|record| record["git"]["tip_sha"].is_string()));
     }
 
     #[test]
@@ -128,6 +230,7 @@ rules:
         .expect("rule should be written");
         fs::write(input_dir.join("README.txt"), "demo_secret_1234")
             .expect("seed file should be written");
+        init_git_repository(&input_dir);
 
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args([
@@ -153,6 +256,9 @@ rules:
         assert_eq!(decoded["findings"][0]["rule_id"], "custom.demo.1");
         assert_eq!(decoded["findings"][0]["validation_status"], "Not Attempted");
         assert_eq!(decoded["findings"][0]["validation_outcome"], "not_attempted");
+        assert_eq!(decoded["audit"]["summary"]["discovered"], 1);
+        assert_eq!(decoded["audit"]["summary"]["scan_succeeded"], 1);
+        assert_eq!(decoded["audit"]["repositories"][0]["git"]["scope"], "all_fetched_git_objects");
     }
 
     #[test]

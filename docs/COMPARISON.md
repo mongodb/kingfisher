@@ -55,13 +55,21 @@ Note: For Gitleaks and detect-secrets, validated/verified counts are not availab
 
 ### Binary Size Comparison (macOS arm64)
 
-| Tool | Version | Binary Size |
-|------|---------|-------------|
-| Gitleaks | 8.30.0 | 14.5 MB |
-| **Kingfisher** | **1.95.0** | **32.8 MB** |
-| TruffleHog | 3.94.2 | 160.3 MB |
+| Tool | Reported Version | Executable Size |
+|------|------------------|-----------------|
+| Gitleaks* | 8.30.1 | 14.6 MiB (15,301,234 bytes) |
+| **Kingfisher** | **2.1.0** | **25.3 MiB (26,557,520 bytes)** |
+| TruffleHog | 3.97.2 | 162.7 MiB (170,552,610 bytes) |
 
-*Smaller binaries are easier to distribute, deploy in CI, and embed in container images.*
+<p align="center">
+  <img src="./binary-size-comparison.svg" alt="macOS arm64 executable size comparison: Gitleaks 8.30.1 at 14.6 MiB, Kingfisher 2.1.0 at 25.3 MiB, and TruffleHog 3.97.2 at 162.7 MiB" />
+</p>
+
+<sup>*</sup> Gitleaks does not support credential validation or blast-radius mapping.
+
+*Measured in September 2026 from the unaltered installed macOS arm64 executables. Versions are the
+values reported by each executable. Smaller binaries are easier to distribute, deploy in CI, and
+embed in container images.*
 
 ## Benchmark Environment
 

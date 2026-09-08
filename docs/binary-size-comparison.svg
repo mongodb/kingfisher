@@ -1,0 +1,46 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 590" role="img" aria-labelledby="title desc">
+  <title id="title">Executable size comparison</title>
+  <desc id="desc">On macOS arm64, Gitleaks 8.30.1 is 14.6 MiB, Kingfisher 2.1.0 is 25.3 MiB, and TruffleHog 3.97.2 is 162.7 MiB. Gitleaks does not support credential validation or blast-radius mapping. Lower is smaller.</desc>
+
+  <rect width="1000" height="590" rx="18" fill="#ffffff" />
+  <text x="500" y="52" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="30" font-weight="700" fill="#14222b">Executable size comparison</text>
+  <text x="500" y="84" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="16" fill="#5b6871">macOS arm64 · installed binaries measured September 2026 · lower is smaller</text>
+
+  <rect x="24" y="220" width="952" height="116" rx="14" fill="#ecfdf7" />
+
+  <g stroke="#dbe3e8" stroke-width="1">
+    <line x1="210" y1="112" x2="210" y2="470" />
+    <line x1="370" y1="112" x2="370" y2="470" />
+    <line x1="530" y1="112" x2="530" y2="470" />
+    <line x1="690" y1="112" x2="690" y2="470" />
+    <line x1="850" y1="112" x2="850" y2="470" />
+  </g>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" fill="#22313a">
+    <text x="188" y="150" text-anchor="end" font-size="21" font-weight="600">Gitleaks*</text>
+    <text x="188" y="176" text-anchor="end" font-size="15" fill="#65727b">8.30.1</text>
+    <rect x="210" y="130" width="58.4" height="62" rx="6" fill="#87939d" />
+    <text x="282" y="168" font-size="20" font-weight="700">14.6 MiB</text>
+
+    <text x="188" y="260" text-anchor="end" font-size="21" font-weight="700" fill="#00684a">Kingfisher</text>
+    <text x="188" y="286" text-anchor="end" font-size="15" fill="#438173">2.1.0</text>
+    <rect x="210" y="240" width="101.2" height="62" rx="6" fill="#00a87a" />
+    <text x="325" y="278" font-size="20" font-weight="700" fill="#00684a">25.3 MiB</text>
+
+    <text x="188" y="370" text-anchor="end" font-size="21" font-weight="600">TruffleHog</text>
+    <text x="188" y="396" text-anchor="end" font-size="15" fill="#65727b">3.97.2</text>
+    <rect x="210" y="350" width="650.8" height="62" rx="6" fill="#87939d" />
+    <text x="875" y="388" font-size="20" font-weight="700">162.7 MiB</text>
+  </g>
+
+  <line x1="210" y1="470" x2="930" y2="470" stroke="#71808a" stroke-width="2" />
+  <g font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" fill="#65727b" text-anchor="middle">
+    <text x="210" y="496">0</text>
+    <text x="370" y="496">40</text>
+    <text x="530" y="496">80</text>
+    <text x="690" y="496">120</text>
+    <text x="850" y="496">160</text>
+    <text x="570" y="530" font-size="17" font-weight="600" fill="#33444e">Executable size (MiB)</text>
+  </g>
+  <text x="500" y="568" text-anchor="middle" font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif" font-size="15" fill="#5b6871">* Gitleaks does not support credential validation or blast-radius mapping.</text>
+</svg>

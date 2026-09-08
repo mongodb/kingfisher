@@ -1,8 +1,9 @@
 use std::{
     borrow::Cow,
+    env,
     fs::{File, OpenOptions},
     io::{BufReader, BufWriter, stdin, stdout},
-    path::Path,
+    path::{Path, PathBuf},
     sync::atomic::{AtomicBool, Ordering},
 };
 
@@ -51,6 +52,57 @@ pub fn is_safe_path(path: &Path) -> std::io::Result<bool> {
         .parse_dot()
         .map(|p| !p.components().any(|c| matches!(c, std::path::Component::ParentDir)))
         .unwrap_or(false))
+}
+
+/// Expands a leading `~` in a path to the current user's home directory.
+///
+/// Shells only expand `~` when it begins a whole word, so arguments such as
+/// `--rules-path=~/rules` reach Kingfisher with the tilde still literal. If the
+/// home directory cannot be resolved, the path is returned unchanged so callers
+/// report their usual "path does not exist" errors.
+pub fn expand_tilde(path: &Path) -> PathBuf {
+    expand_tilde_with_home(path, current_user_home().as_deref())
+}
+
+fn current_user_home() -> Option<String> {
+    if cfg!(windows) {
+        if let Ok(profile) = env::var("USERPROFILE")
+            && !profile.is_empty()
+        {
+            return Some(profile);
+        }
+        if let (Ok(drive), Ok(home_path)) = (env::var("HOMEDRIVE"), env::var("HOMEPATH"))
+            && !drive.is_empty()
+            && !home_path.is_empty()
+        {
+            return Some(format!("{drive}{home_path}"));
+        }
+        return None;
+    }
+
+    env::var("HOME").ok().filter(|home| !home.is_empty())
+}
+
+fn expand_tilde_with_home(path: &Path, home: Option<&str>) -> PathBuf {
+    let Some(text) = path.to_str() else {
+        return path.to_path_buf();
+    };
+    // The backslash separator form is only meaningful on Windows; on Unix a
+    // backslash is a regular filename character, so `~\rules` names a literal
+    // file and must not be rewritten to a home-relative path.
+    let windows_backslash_form = cfg!(windows) && text.starts_with("~\\");
+    if text != "~" && !text.starts_with("~/") && !windows_backslash_form {
+        return path.to_path_buf();
+    }
+    let Some(home) = home.filter(|home| !home.is_empty()) else {
+        return path.to_path_buf();
+    };
+    if text == "~" {
+        return PathBuf::from(home);
+    }
+    // Replace only the leading '~'; the original separator is preserved so an
+    // expanded home suffix cannot change how the remainder is joined.
+    PathBuf::from(format!("{home}{}", &text[1..]))
 }
 
 pub fn redact_value(value: &str) -> String {
@@ -128,12 +180,12 @@ pub fn get_writer_for_file_or_stdout<P: AsRef<Path>>(
 /// Create (truncating) a file for writing, refusing to follow a symlink at the
 /// final path component.
 ///
-/// A scanned repository can contain a symlink at the report output path (e.g.
+/// A scanned repository can contain a symlink at an output path (e.g.
 /// `report.json` in the workspace). Plain `File::create` follows it and
 /// truncates whatever the link targets, letting a malicious repo clobber files
 /// outside the workspace as the scanner user. `O_NOFOLLOW` makes the open fail
 /// atomically when the final component is a symlink, closing the TOCTOU window.
-fn create_no_follow(path: &Path) -> std::io::Result<File> {
+pub fn create_no_follow(path: &Path) -> std::io::Result<File> {
     let mut opts = OpenOptions::new();
     opts.write(true).create(true).truncate(true);
 
@@ -364,5 +416,88 @@ mod tests {
         assert!(!is_base64(invalid_base64));
         assert!(!is_base64(invalid_length));
         assert!(!is_base64(invalid_characters));
+    }
+
+    #[test]
+    fn test_expand_tilde_expands_leading_tilde() {
+        assert_eq!(
+            expand_tilde_with_home(Path::new("~/rules"), Some("/home/alice")),
+            PathBuf::from("/home/alice/rules")
+        );
+        assert_eq!(
+            expand_tilde_with_home(Path::new("~/src/kingfisher-rules-113"), Some("/home/alice")),
+            PathBuf::from("/home/alice/src/kingfisher-rules-113")
+        );
+        assert_eq!(
+            expand_tilde_with_home(Path::new("~"), Some("/home/alice")),
+            PathBuf::from("/home/alice")
+        );
+    }
+
+    #[test]
+    fn test_expand_tilde_leaves_other_paths_untouched() {
+        assert_eq!(
+            expand_tilde_with_home(Path::new("/abs/rules"), Some("/home/alice")),
+            PathBuf::from("/abs/rules")
+        );
+        assert_eq!(
+            expand_tilde_with_home(Path::new("relative/rules"), Some("/home/alice")),
+            PathBuf::from("relative/rules")
+        );
+        // Mid-path tildes are not shell-expanded either.
+        assert_eq!(
+            expand_tilde_with_home(Path::new("rules/~"), Some("/home/alice")),
+            PathBuf::from("rules/~")
+        );
+    }
+
+    #[test]
+    fn test_expand_tilde_without_home_is_passthrough() {
+        assert_eq!(expand_tilde_with_home(Path::new("~/rules"), None), PathBuf::from("~/rules"));
+        assert_eq!(
+            expand_tilde_with_home(Path::new("~/rules"), Some("")),
+            PathBuf::from("~/rules")
+        );
+    }
+
+    #[test]
+    fn test_expand_tilde_preserves_literal_after_tilde() {
+        // A home whose expansion happens to end in a separator must not collapse
+        // or duplicate the following separator.
+        assert_eq!(
+            expand_tilde_with_home(Path::new("~/rules"), Some("/home/alice/")),
+            PathBuf::from("/home/alice//rules")
+        );
+        assert_eq!(
+            expand_tilde_with_home(Path::new("~rules"), Some("/home/alice")),
+            PathBuf::from("~rules")
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_expand_tilde_handles_windows_style_separator() {
+        assert_eq!(
+            expand_tilde_with_home(Path::new("~\\rules"), Some(r"C:\Users\alice")),
+            PathBuf::from(r"C:\Users\alice\rules")
+        );
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn test_expand_tilde_backslash_form_is_literal_on_unix() {
+        // On Unix a backslash is a normal filename character, so `~\rules`
+        // must not be rewritten to a home-relative path.
+        assert_eq!(
+            expand_tilde_with_home(Path::new("~\\rules"), Some("/home/alice")),
+            PathBuf::from("~\\rules")
+        );
+    }
+
+    #[test]
+    fn test_expand_tilde_non_tilde_path_is_deterministic() {
+        // The public entry point must not depend on the environment for paths
+        // that need no expansion.
+        assert_eq!(expand_tilde(Path::new("/abs/rules")), PathBuf::from("/abs/rules"));
     }
 }

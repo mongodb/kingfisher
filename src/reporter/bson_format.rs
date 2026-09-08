@@ -18,6 +18,10 @@ impl DetailsReporter {
             let doc = bson::to_document(&serde_json::json!({ "access_map": access_map }))?;
             doc.to_writer(&mut writer)?;
         }
+        if let Some(audit) = envelope.audit {
+            let doc = bson::to_document(&serde_json::json!({ "audit": audit }))?;
+            doc.to_writer(&mut writer)?;
+        }
         Ok(())
     }
 }

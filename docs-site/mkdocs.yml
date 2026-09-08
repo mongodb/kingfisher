@@ -1,9 +1,8 @@
 site_name: Kingfisher
 site_url: https://mongodb.github.io/kingfisher
 site_description: >-
-  Open source secret scanner with live validation. 483 detection rules,
-  43-provider blast radius mapping including AWS and GCP, defender-led credential revocation, and a browser-based
-  report viewer that also imports SARIF, Gitleaks, and TruffleHog output.
+  The batteries-included open source secret scanner. Detect exposed credentials, validate which
+  are active, map blast radius, triage findings visually, and revoke supported secrets.
   Built in Rust by MongoDB.
 site_author: MongoDB
 repo_url: https://github.com/mongodb/kingfisher
@@ -105,6 +104,7 @@ nav:
     - Deployment: usage/deployment.md
   - Features:
     - Blast Radius: features/blast-radius.md
+    - Repository Scan Audit Log: features/repository-audit.md
     - Hosted Report Viewer: features/report-viewer.md
     - Secret Revocation: features/revocation.md
     - Parser-Based Context Verification: features/context-verification.md
@@ -117,10 +117,12 @@ nav:
     - Built-in Rules: rules/builtin-rules.md
     - Kingfisher 1.x Custom Rules: rules/overview.md
   - Reference:
+    - Documentation Index: reference/documentation-index.md
     - Architecture: reference/architecture.md
     - Rust Library Crates: reference/library.md
     - Python Bindings: reference/python-bindings.md
     - Benchmarks & Comparison: reference/comparison.md
+    - Project Background: reference/project.md
   - Report Viewer: https://mongodb.github.io/kingfisher/viewer/
   - Blog:
     - blog/index.md

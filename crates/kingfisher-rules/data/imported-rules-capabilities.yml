@@ -54,6 +54,9 @@ betterleaks:
   gcp-application-default-credentials:
     access_map:
       handler: gcp
+  gcp-api-key:
+    access_map:
+      handler: gcp_api_key
   gcp-service-account:
     access_map:
       handler: gcp

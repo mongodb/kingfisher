@@ -133,13 +133,18 @@ impl DetailsReporter {
             envelope.findings.iter().filter_map(|r| self.record_to_sarif_result(r).ok()).collect();
 
         let run_builder = sarif::Run::builder().tool(tool).results(sarif_results);
-        let run = if let Some(access_map) = envelope.access_map {
-            let mut props = BTreeMap::new();
+        let mut props = BTreeMap::new();
+        if let Some(access_map) = envelope.access_map {
             props.insert("access_map".to_string(), serde_json::to_value(access_map)?);
+        }
+        if let Some(audit) = envelope.audit {
+            props.insert("repository_audit".to_string(), serde_json::to_value(audit)?);
+        }
+        let run = if props.is_empty() {
+            run_builder.build()
+        } else {
             let property_bag = sarif::PropertyBag::builder().additional_properties(props).build();
             run_builder.properties(property_bag).build()
-        } else {
-            run_builder.build()
         };
         let sarif = sarif::Sarif::builder()
             .version(sarif::Version::V2_1_0.to_string())
