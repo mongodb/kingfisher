@@ -15,6 +15,7 @@ use regex::Regex;
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::json;
+use tracing::debug;
 use uuid::Uuid;
 
 use crate::{
@@ -491,11 +492,7 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
         } else {
             input.branch.clone().unwrap_or_else(|| "HEAD".to_string())
         };
-        let tip_sha = git_output(
-            root,
-            deadline,
-            &["rev-parse", "--verify", &format!("{tip_ref}^{{commit}}")],
-        );
+        let tip_sha = git_commit_sha(root, deadline, &tip_ref);
         (tip_ref, tip_sha, input.since_commit.clone())
     };
     let inclusive_root_ref = if branch_root_enabled {
@@ -520,13 +517,11 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
         scope: scope.to_string(),
         tip_sha,
         tip_ref,
-        base_sha: base_ref.as_ref().and_then(|value| {
-            git_output(root, deadline, &["rev-parse", "--verify", &format!("{value}^{{commit}}")])
-        }),
+        base_sha: base_ref.as_ref().and_then(|value| git_commit_sha(root, deadline, value)),
         base_ref,
-        inclusive_root_sha: inclusive_root_ref.as_ref().and_then(|value| {
-            git_output(root, deadline, &["rev-parse", "--verify", &format!("{value}^{{commit}}")])
-        }),
+        inclusive_root_sha: inclusive_root_ref
+            .as_ref()
+            .and_then(|value| git_commit_sha(root, deadline, value)),
         inclusive_root_ref,
         clone_mode,
         shallow: git_output(root, deadline, &["rev-parse", "--is-shallow-repository"])
@@ -569,6 +564,16 @@ pub fn combine_git_snapshots(
     }
 }
 
+/// Resolves a ref (branch, tag, or commit SHA) to its commit SHA.
+///
+/// Uses `rev-list -n 1` instead of `rev-parse --verify <ref>^{commit}`: both
+/// peel tags to the underlying commit, but the caret in the peel syntax is an
+/// escape character in cmd.exe-style argument processing, which mangles the
+/// argument on Windows and breaks resolution.
+fn git_commit_sha(root: &Path, deadline: Instant, ref_name: &str) -> Option<String> {
+    git_output(root, deadline, &["rev-list", "-n", "1", ref_name])
+}
+
 fn git_output(root: &Path, deadline: Instant, args: &[&str]) -> Option<String> {
     let mut command = Command::new("git");
     if root.join("HEAD").is_file() && root.join("objects").is_dir() {
@@ -576,8 +581,14 @@ fn git_output(root: &Path, deadline: Instant, args: &[&str]) -> Option<String> {
     } else {
         command.arg("-C").arg(root);
     }
-    command.args(args).stdout(Stdio::piped()).stderr(Stdio::null());
-    let mut child = command.spawn().ok()?;
+    command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
+    let mut child = match command.spawn() {
+        Ok(child) => child,
+        Err(error) => {
+            debug!("Failed to spawn git {}: {error}", args.join(" "));
+            return None;
+        }
+    };
 
     // Poll for completion so a wedged Git subprocess cannot outlive the
     // repository timeout (plain `output()` would block without bound). Every
@@ -591,21 +602,40 @@ fn git_output(root: &Path, deadline: Instant, args: &[&str]) -> Option<String> {
                 if Instant::now() >= deadline {
                     let _ = child.kill();
                     let _ = child.wait();
+                    debug!("git {} timed out against {}", args.join(" "), root.display());
                     return None;
                 }
                 std::thread::sleep(backoff);
                 backoff = (backoff * 2).min(Duration::from_millis(50));
             }
-            Err(_) => return None,
+            Err(error) => {
+                debug!("Failed to wait for git {}: {error}", args.join(" "));
+                return None;
+            }
+        }
+    };
+    let output = match child.wait_with_output() {
+        Ok(output) => output,
+        Err(error) => {
+            debug!("Failed to read git {} output: {error}", args.join(" "));
+            return None;
         }
     };
     if !status.success() {
+        debug!(
+            "git {} against {} failed: {}",
+            args.join(" "),
+            root.display(),
+            String::from_utf8_lossy(&output.stderr).trim()
+        );
         return None;
     }
-    let output = child.wait_with_output().ok()?;
     let value = String::from_utf8(output.stdout).ok()?;
     let value = value.trim();
-    (!value.is_empty()).then(|| value.to_string())
+    (!value.is_empty()).then(|| value.to_string()).or_else(|| {
+        debug!("git {} against {} produced no output", args.join(" "), root.display());
+        None
+    })
 }
 
 #[cfg(test)]

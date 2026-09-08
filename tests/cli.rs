@@ -204,8 +204,14 @@ rules:
         assert_eq!(report["audit"]["summary"]["discovered"], 2);
         assert_eq!(report["audit"]["summary"]["scan_succeeded"], 2);
         let repositories = report["audit"]["repositories"].as_array().unwrap();
-        assert!(repositories.iter().all(|record| record["scan"]["status"] == "completed"));
-        assert!(repositories.iter().all(|record| record["git"]["tip_sha"].is_string()));
+        assert!(
+            repositories.iter().all(|record| record["scan"]["status"] == "completed"),
+            "every scanned repository should complete: {repositories:?}"
+        );
+        assert!(
+            repositories.iter().all(|record| record["git"]["tip_sha"].is_string()),
+            "every scanned repository should record a git tip SHA: {repositories:?}"
+        );
     }
 
     #[test]
