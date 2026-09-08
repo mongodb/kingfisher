@@ -2522,6 +2522,29 @@ output:
     }
 
     #[test]
+    fn audit_log_tilde_path_is_expanded_for_collision_checks() {
+        // Shells do not expand `~` in the `--flag=~/...` form; the audit-log
+        // path must still collide with the same file spelled with an absolute
+        // home path. The scan input stays outside the working directory so
+        // only the tilde expansion can produce the collision.
+        let Ok(home) = std::env::var("HOME") else { return };
+        let input = tempfile::tempdir().unwrap();
+        let (args, _) = parse(&[
+            "kingfisher",
+            "scan",
+            "--audit-log=~/kf-audit-collision.jsonl",
+            "--output",
+            &format!("{home}/kf-audit-collision.jsonl"),
+            input.path().to_str().unwrap(),
+        ]);
+        let cmd = match args.command {
+            Command::Scan(c) => c,
+            _ => panic!("expected scan subcommand"),
+        };
+        assert!(cmd.into_operation().is_err());
+    }
+
+    #[test]
     fn audit_log_colliding_with_endpoint_config_is_rejected() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("endpoints.yaml");

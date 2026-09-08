@@ -97,9 +97,10 @@ pub async fn run_async_scan(
 
     let start_time = Instant::now();
     let scan_started_at = chrono::Local::now();
+    let audit_log = args.audit_log.as_deref().map(crate::util::expand_tilde);
     let scan_audit: SharedScanAudit = Arc::new(Mutex::new(ScanAuditCollector::new(
         scan_started_at.to_rfc3339(),
-        args.audit_log.as_deref(),
+        audit_log.as_deref(),
     )?));
 
     trace!("Args:\n{global_args:#?}\n{args:#?}");

@@ -6,11 +6,12 @@ use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
 
 use anyhow::{Context, Result};
+use regex::Regex;
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::json;
@@ -432,14 +433,17 @@ fn now() -> String {
     chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
+static URL_CREDENTIAL_RE: LazyLock<Regex> =
+    LazyLock::new(|| Regex::new(r"(?i)(https?://)[^/@\s]+@").expect("valid URL credential regex"));
+static AUTHORIZATION_HEADER_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)(authorization:\s*)(?:(?:bearer|basic)\s+)?[^\s,;]+")
+        .expect("valid authorization header regex")
+});
+
 fn sanitize_error(error: &str) -> String {
     let compact = error.split_whitespace().collect::<Vec<_>>().join(" ");
-    let compact = regex::Regex::new(r"(?i)(https?://)[^/@\s]+@")
-        .expect("valid URL credential regex")
-        .replace_all(&compact, "$1***@");
-    let compact = regex::Regex::new(r"(?i)(authorization:\s*)(?:(?:bearer|basic)\s+)?[^\s,;]+")
-        .expect("valid authorization header regex")
-        .replace_all(&compact, "$1***");
+    let compact = URL_CREDENTIAL_RE.replace_all(&compact, "$1***@");
+    let compact = AUTHORIZATION_HEADER_RE.replace_all(&compact, "$1***");
     compact.chars().take(2048).collect()
 }
 

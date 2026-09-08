@@ -394,6 +394,9 @@ impl ScanArgs {
         project_config: Option<&Path>,
     ) -> anyhow::Result<()> {
         let Some(audit_log) = &self.audit_log else { return Ok(()) };
+        // Shells do not expand `~` in `--audit-log=~/...`, so normalize it
+        // before comparing against the other paths.
+        let audit_log = &expand_tilde(audit_log);
 
         if let Some(output) = &self.output_args.output
             && paths_refer_to_same_file(audit_log, output)
