@@ -95,15 +95,15 @@ always confirm the target and operational impact before containment.
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
 - **Extensible rules**: Betterleaks is the main catalog, with selected Veles detectors filling gaps;
   custom Betterleaks TOML and Kingfisher 1.x YAML rules are supported ([built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), [docs/RULES.md](docs/RULES.md))
-- **Validation and defender-led revocation**: validate discovered credentials live, then revoke supported credentials from the CLI. For supported provider flows, responders can contain a leaked token even when its owner is unknown or has left the company ([docs/USAGE.md](/docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](/docs/REVOCATION_PROVIDERS.md))
+- **Validation and defender-led revocation**: validate discovered credentials live, then revoke supported credentials from the CLI. For supported provider flows, responders can contain a leaked token even when its owner is unknown or has left the company ([docs/USAGE.md](docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](docs/REVOCATION_PROVIDERS.md))
 - **Blast-radius mapping included by default**: use `--blast-radius` (alias `--access-map`) to map supported credentials to their effective identities, permissions, reachable roles/service accounts, and impacted resource scopes. All 43 providers—including advanced AWS role-assumption and GCP service-account impersonation analysis—are included in the Apache-2.0 release ([blast-radius docs](https://mongodb.github.io/kingfisher/features/blast-radius/))
 - **Broad provider coverage**: detect and validate credentials across cloud, AI, developer tooling, databases, SaaS, messaging, identity, and cryptographic systems through the Betterleaks- and Veles-based candidate catalog
 - **Compressed Files**: Supports extracting and scanning compressed files for secrets, including `tar.gz`/`bz2`/`xz`, ZIP-family containers (`zip`, `jar`, `docx`, `xlsx`, `pptx`, `odt`, `epub`, `hwpx`, and more), `asar`, HWP (Hancom OLE2/CFBF binary with DEFLATE/zlib stream decoding), and EGG (ALZip; raw-byte scanning)
 - **SQLite Database Scanning**: Automatically extracts and scans SQLite database contents for secrets stored in table rows
 - **Python Bytecode (.pyc) Scanning**: Extracts and scans string constants from compiled Python (`.pyc`, `.pyo`) files
-- **Baseline management**: generate and track baselines to suppress known secrets ([docs/BASELINE.md](/docs/BASELINE.md))
+- **Baseline management**: generate and track baselines to suppress known secrets ([docs/BASELINE.md](docs/BASELINE.md))
 - **Checksum-aware custom detection**: Kingfisher 1.x custom rules can verify token checksums offline before validation ([checksum intelligence](docs/RULES.md#checksum-intelligence))
-- **Report Viewer (local + hosted)**: Visualize and triage Kingfisher, **SARIF, Gitleaks, and TruffleHog** output locally with `kingfisher view ./report.json` or online with the [hosted viewer](https://mongodb.github.io/kingfisher/viewer/). Multiple files, directories, and imported third-party reports are merged and deduplicated. See [docs/USAGE.md](/docs/USAGE.md#report-viewer-local-and-hosted).
+- **Report Viewer (local + hosted)**: Visualize and triage Kingfisher, **SARIF, Gitleaks, and TruffleHog** output locally with `kingfisher view ./report.json` or online with the [hosted viewer](https://mongodb.github.io/kingfisher/viewer/). Multiple files, directories, and imported third-party reports are merged and deduplicated. See [docs/USAGE.md](docs/USAGE.md#report-viewer-local-and-hosted).
 - **Audit reporting**: Generate compliance-oriented HTML reports with scan metadata and validation ordering
 - **Library crates**: Embed Kingfisher's scanning engine in your own Rust applications ([docs/LIBRARY.md](docs/LIBRARY.md))
 
@@ -124,26 +124,19 @@ NOTE: Replay has been slowed down for demo
 
 # Table of Contents
 
-- [AWS, GCP, and More: Blast-Radius Mapping Included by Default](#aws-gcp-and-more-blast-radius-mapping-included-by-default)
-- [What Is Kingfisher?](#what-is-kingfisher)
-- [Key Features](#key-features)
-- [Report Viewer (local and hosted)](#report-viewer-local-and-hosted)
-- [Alert Webhooks](#alert-webhooks)
-- [Compliance and Audit-Ready Scans](#compliance-and-audit-ready-scans)
+- [Why Kingfisher](#why-kingfisher)
+- [Map the Blast Radius. Revoke the Credential.](#map-the-blast-radius-revoke-the-credential)
+  - [Performance, Accuracy, and Extensible Rules](#performance-accuracy-and-extensible-rules)
 - [Benchmark Results](#benchmark-results)
+- [Basic Usage Demo](#basic-usage-demo)
 - [Getting Started](#getting-started)
   - [Quick Start](#quick-start)
-  - [Installation](#installation)
-- [Detection Rules](#detection-rules)
-- [Usage Examples](#usage-examples)
-- [Platform Integrations](#platform-integrations)
-  - [Environment Variables](#environment-variables)
-- [Advanced Features](#advanced-features)
+  - [Scan Targets](#scan-targets)
+  - [Built for Speed](#built-for-speed)
+  - [Common Workflows](#common-workflows)
+  - [Output for People and Machines](#output-for-people-and-machines)
 - [Documentation](#documentation)
-- [Library Usage](#library-usage)
-- [Who Uses Kingfisher?](#who-uses-kingfisher)
-- [Roadmap](#roadmap)
-- [License](#license)
+- [Project](#project)
 
 # Getting Started
 
