@@ -32,6 +32,41 @@ Kingfisher is a blazingly fast, completely free and open source secret scanner b
 
 > **Defender workflow:** Follow the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md) for secret detection, validation, notifications, blast-radius mapping, and revocation.
 
+## Scan Targets
+
+Kingfisher handles local files and directories, Git repositories and history, compressed and
+office-document archives, SQLite databases, Python bytecode, Docker images, source-hosting
+organizations, cloud object storage, collaboration tools, and API-development platforms.
+
+<div align="center">
+
+| Files / Dirs | Local Git | GitHub | GitLab | Azure Repos | Bitbucket | Gitea | Hugging Face |
+|:-------------:|:----------:|:------:|:------:|:-------------:|:----------:|:------:|:-------------:|
+| <img src="./docs/assets/icons/files.svg" height="40" alt="Files / Dirs"/><br/><sub>Files / Dirs</sub> | <img src="./docs/assets/icons/local-git.svg" height="40" alt="Local Git"/><br/><sub>Local Git</sub> | <img src="./docs/assets/icons/github.svg" height="40" alt="GitHub"/><br/><sub>GitHub</sub> | <img src="./docs/assets/icons/gitlab.svg" height="40" alt="GitLab"/><br/><sub>GitLab</sub> | <img src="./docs/assets/icons/azure-devops.svg" height="40" alt="Azure Repos"/><br/><sub>Azure Repos</sub> | <img src="./docs/assets/icons/bitbucket.svg" height="40" alt="Bitbucket"/><br/><sub>Bitbucket</sub> | <img src="./docs/assets/icons/gitea.svg" height="40" alt="Gitea"/><br/><sub>Gitea</sub> | <img src="./docs/assets/icons/huggingface.svg" height="40" width="40" alt="Hugging Face"/><br/><sub>Hugging Face</sub> |
+
+| Docker | Jira | Confluence | Slack | Teams | Postman | AWS S3 | Google Cloud |
+|:------:|:----:|:-----------:|:-----:|:-----:|:-------:|:------:|:------------:|
+| <img src="./docs/assets/icons/docker.svg" height="40" alt="Docker"/><br/><sub>Docker</sub> | <img src="./docs/assets/icons/jira.svg" height="40" alt="Jira"/><br/><sub>Jira</sub> | <img src="./docs/assets/icons/confluence.svg" height="40" alt="Confluence"/><br/><sub>Confluence</sub> | <img src="./docs/assets/icons/slack.svg" height="40" alt="Slack"/><br/><sub>Slack</sub> | <img src="./docs/assets/icons/teams.svg" height="40" alt="Microsoft Teams"/><br/><sub>Teams</sub> | <img src="./docs/assets/icons/postman.svg" height="40" alt="Postman"/><br/><sub>Postman</sub> | <img src="./docs/assets/icons/aws-s3.svg" height="40" alt="AWS S3"/><br/><sub>AWS&nbsp;S3</sub> | <img src="./docs/assets/icons/gcs.svg" height="40" alt="Google Cloud Storage"/><br/><sub>Cloud Storage</sub> |
+
+</div>
+
+For target-specific commands, authentication, scope, and pagination behavior, use the
+[platform integration guide](docs/INTEGRATIONS.md).
+
+
+## Built for Speed and Accuracy
+
+Kingfisher's multithreaded Vectorscan engine recorded the lowest runtime on every repository in the published benchmark suite, from small projects through the Linux kernel and GitLab monorepo.
+Lower runtimes are better.
+
+<p align="center">
+  <img src="docs/runtime-comparison.png" alt="Kingfisher runtime comparison across open source repositories" />
+</p>
+
+Despite it's broad feature-set, Kingfisher ships as a compact static binary. For example, the published macOS arm64 comparison measures Kingfisher 2.1.0 at 25.3 MiB, making it easy to distribute in CI jobs and container images.
+
+See the [binary-size comparison](docs/COMPARISON.md#binary-size-comparison-macos-arm64) and
+[deployment options](docs/DEPLOYMENT.md), which includes validation results, network-request counts, test environment, and binary-size comparison.
 
 ## Why Kingfisher
 
@@ -85,10 +120,6 @@ Kingfisher also provides explicit, defender-led revocation for supported credent
 is opt-in and is exposed only where Kingfisher has a bounded provider workflow; responders should
 always confirm the target and operational impact before containment.
 
-| Docker | Jira | Confluence | Slack | Teams | Postman | AWS S3 | Google Cloud |
-|:------:|:----:|:-----------:|:-----:|:-----:|:-------:|:------:|:---:|
-| <img src="./docs/assets/icons/docker.svg" height="40" alt="Docker"/><br/><sub>Docker</sub> | <img src="./docs/assets/icons/jira.svg" height="40" alt="Jira"/><br/><sub>Jira</sub> | <img src="./docs/assets/icons/confluence.svg" height="40" alt="Confluence"/><br/><sub>Confluence</sub> | <img src="./docs/assets/icons/slack.svg" height="40" alt="Slack"/><br/><sub>Slack</sub> | <img src="./docs/assets/icons/teams.svg" height="40" alt="Microsoft Teams"/><br/><sub>Teams</sub> | <img src="./docs/assets/icons/postman.svg" height="40" alt="Postman"/><br/><sub>Postman</sub> | <img src="./docs/assets/icons/aws-s3.svg" height="40" alt="AWS S3"/><br/><sub>AWS&nbsp;S3</sub> |  <img src="./docs/assets/icons/gcs.svg" height="40" alt="Google Cloud Storage"/><br/><sub>Cloud Storage</sub> |
-
 </div>
 
 ### Performance, Accuracy, and Extensible Rules
@@ -107,14 +138,6 @@ always confirm the target and operational impact before containment.
 - **Audit reporting**: Generate compliance-oriented HTML reports with scan metadata and validation ordering
 - **Library crates**: Embed Kingfisher's scanning engine in your own Rust applications ([docs/LIBRARY.md](docs/LIBRARY.md))
 
-# Benchmark Results
-
-See ([docs/COMPARISON.md](docs/COMPARISON.md))
-
-<p align="center">
-  <img src="docs/runtime-comparison.png" alt="Kingfisher Runtime Comparison" style="vertical-align: center;" />
-</p>
-
 ## Basic Usage Demo
 ```bash
 kingfisher scan /path/to/scan --view-report
@@ -122,21 +145,6 @@ kingfisher scan /path/to/scan --view-report
 NOTE: Replay has been slowed down for demo
 ![Kingfisher secret scanning demo](docs/kingfisher-usage-01.gif)
 
-# Table of Contents
-
-- [Why Kingfisher](#why-kingfisher)
-- [Map the Blast Radius. Revoke the Credential.](#map-the-blast-radius-revoke-the-credential)
-  - [Performance, Accuracy, and Extensible Rules](#performance-accuracy-and-extensible-rules)
-- [Benchmark Results](#benchmark-results)
-- [Basic Usage Demo](#basic-usage-demo)
-- [Getting Started](#getting-started)
-  - [Quick Start](#quick-start)
-  - [Scan Targets](#scan-targets)
-  - [Built for Speed](#built-for-speed)
-  - [Common Workflows](#common-workflows)
-  - [Output for People and Machines](#output-for-people-and-machines)
-- [Documentation](#documentation)
-- [Project](#project)
 
 # Getting Started
 
@@ -170,41 +178,6 @@ validation filters, output formats, scan scope, and command examples.
 
 > Live validation and blast-radius mapping make authorized requests to provider APIs. Review the
 > relevant documentation and use them only where you are authorized to inspect the target account.
-
-## Scan Targets
-
-Kingfisher handles local files and directories, Git repositories and history, compressed and
-office-document archives, SQLite databases, Python bytecode, Docker images, source-hosting
-organizations, cloud object storage, collaboration tools, and API-development platforms.
-
-<div align="center">
-
-| Files / Dirs | Local Git | GitHub | GitLab | Azure Repos | Bitbucket | Gitea | Hugging Face |
-|:-------------:|:----------:|:------:|:------:|:-------------:|:----------:|:------:|:-------------:|
-| <img src="./docs/assets/icons/files.svg" height="40" alt="Files / Dirs"/><br/><sub>Files / Dirs</sub> | <img src="./docs/assets/icons/local-git.svg" height="40" alt="Local Git"/><br/><sub>Local Git</sub> | <img src="./docs/assets/icons/github.svg" height="40" alt="GitHub"/><br/><sub>GitHub</sub> | <img src="./docs/assets/icons/gitlab.svg" height="40" alt="GitLab"/><br/><sub>GitLab</sub> | <img src="./docs/assets/icons/azure-devops.svg" height="40" alt="Azure Repos"/><br/><sub>Azure Repos</sub> | <img src="./docs/assets/icons/bitbucket.svg" height="40" alt="Bitbucket"/><br/><sub>Bitbucket</sub> | <img src="./docs/assets/icons/gitea.svg" height="40" alt="Gitea"/><br/><sub>Gitea</sub> | <img src="./docs/assets/icons/huggingface.svg" height="40" width="40" alt="Hugging Face"/><br/><sub>Hugging Face</sub> |
-
-| Docker | Jira | Confluence | Slack | Teams | Postman | AWS S3 | Google Cloud |
-|:------:|:----:|:-----------:|:-----:|:-----:|:-------:|:------:|:------------:|
-| <img src="./docs/assets/icons/docker.svg" height="40" alt="Docker"/><br/><sub>Docker</sub> | <img src="./docs/assets/icons/jira.svg" height="40" alt="Jira"/><br/><sub>Jira</sub> | <img src="./docs/assets/icons/confluence.svg" height="40" alt="Confluence"/><br/><sub>Confluence</sub> | <img src="./docs/assets/icons/slack.svg" height="40" alt="Slack"/><br/><sub>Slack</sub> | <img src="./docs/assets/icons/teams.svg" height="40" alt="Microsoft Teams"/><br/><sub>Teams</sub> | <img src="./docs/assets/icons/postman.svg" height="40" alt="Postman"/><br/><sub>Postman</sub> | <img src="./docs/assets/icons/aws-s3.svg" height="40" alt="AWS S3"/><br/><sub>AWS&nbsp;S3</sub> | <img src="./docs/assets/icons/gcs.svg" height="40" alt="Google Cloud Storage"/><br/><sub>Cloud Storage</sub> |
-
-</div>
-
-For target-specific commands, authentication, scope, and pagination behavior, use the
-[platform integration guide](docs/INTEGRATIONS.md).
-
-## Built for Speed
-
-Kingfisher's multithreaded Vectorscan engine recorded the lowest runtime on every repository in the published benchmark suite, from small projects through the Linux kernel and GitLab monorepo.
-Lower runtimes are better.
-
-<p align="center">
-  <img src="docs/runtime-comparison.png" alt="Kingfisher runtime comparison across open source repositories" />
-</p>
-
-Despite it's broad feature-set, Kingfisher ships as a compact static binary. For example, the published macOS arm64 comparison measures Kingfisher 2.1.0 at 25.3 MiB, making it easy to distribute in CI jobs and container images.
-
-See the [binary-size comparison](docs/COMPARISON.md#binary-size-comparison-macos-arm64) and
-[deployment options](docs/DEPLOYMENT.md), which includes validation results, network-request counts, test environment, and binary-size comparison.
 
 ## Common Workflows
 
