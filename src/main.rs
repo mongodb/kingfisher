@@ -1523,6 +1523,14 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                             set_user_agent_suffix(effective_global_args.user_agent_suffix.clone());
                         }
                         let global_args = effective_global_args;
+                        // Config merging can introduce `output_args.output`
+                        // (output.path) after CLI validation already ran, so
+                        // re-check the effective --audit-log / --output paths
+                        // against the merged values.
+                        scan_args.validate_audit_log_collisions(
+                            global_args.endpoint_config.as_deref(),
+                            global_args.config.as_deref(),
+                        )?;
                         warn_on_alert_misconfiguration(&scan_args);
                         if scan_args.view_report {
                             view::ensure_port_available(
@@ -1939,6 +1947,7 @@ fn create_default_scan_args() -> cli::commands::scan::ScanArgs {
         min_entropy: None,
         redact: false,
         git_repo_timeout: 1800,
+        audit_log: None,
         no_dedup: false,
         view_report: false,
         baseline_file: None,
@@ -2374,6 +2383,29 @@ mod apply_config_tests {
     }
 
     #[test]
+    fn github_event_user_file_cannot_alias_audit_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("users.txt");
+        let path = path.to_str().unwrap();
+        let (args, _) = parse(&[
+            "kingfisher",
+            "scan",
+            "github",
+            "--public-events",
+            "--user-file",
+            path,
+            "--audit-log",
+            path,
+        ]);
+
+        let command = match args.command {
+            Command::Scan(command) => command,
+            _ => panic!("expected scan subcommand"),
+        };
+        assert!(command.into_operation().is_err());
+    }
+
+    #[test]
     fn staging_stdin_keeps_sibling_paths_and_collapses_repeats() {
         let stdin_file = PathBuf::from("/tmp/kf/stdin_input");
         let mut path_inputs = vec![
@@ -2410,6 +2442,134 @@ output:
         assert_eq!(scan_args.confidence, ConfidenceLevel::High);
         assert!(scan_args.redact);
         assert_eq!(scan_args.output_args.format, ReportOutputFormat::Json);
+    }
+
+    #[test]
+    fn config_output_path_colliding_with_audit_log_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("report.json");
+        let path_str = path.display().to_string();
+        let yaml = format!(
+            r#"
+output:
+  path: {path_str}
+"#
+        );
+        let cfg: KingfisherConfig = parse_str(&yaml).unwrap();
+        let (args, matches) = parse(&["kingfisher", "scan", "--audit-log", &path_str, "."]);
+        let mut global_args = args.global_args.clone();
+        let mut scan_args = into_scan(args);
+
+        // CLI-only validation passes: the config has not been merged yet, so
+        // `output_args.output` is still unset.
+        assert!(scan_args.validate_audit_log_collisions(None, None).is_ok());
+
+        super::apply_config(
+            &mut scan_args,
+            &mut global_args,
+            &cfg,
+            matches.subcommand_matches("scan"),
+        );
+        assert_eq!(scan_args.output_args.output.as_deref(), Some(path.as_path()));
+
+        // After merging, the effective --output collides with --audit-log.
+        assert!(scan_args.validate_audit_log_collisions(None, None).is_err());
+    }
+
+    #[test]
+    fn audit_log_colliding_with_baseline_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("baseline-file.yaml");
+        let path_str = path.display().to_string();
+
+        // An explicit --baseline-file aliasing --audit-log is rejected during
+        // CLI validation, before any file is opened.
+        let (args, _) = parse(&[
+            "kingfisher",
+            "scan",
+            "--audit-log",
+            &path_str,
+            "--baseline-file",
+            &path_str,
+            ".",
+        ]);
+        let cmd = match args.command {
+            Command::Scan(c) => c,
+            _ => panic!("expected scan subcommand"),
+        };
+        assert!(cmd.into_operation().is_err());
+
+        // The managed-baseline default is protected too (resolved against the
+        // working directory, so the collision is expressed relatively here).
+        let (args, _) = parse(&[
+            "kingfisher",
+            "scan",
+            "--audit-log",
+            "baseline-file.yaml",
+            "--manage-baseline",
+            ".",
+        ]);
+        let cmd = match args.command {
+            Command::Scan(c) => c,
+            _ => panic!("expected scan subcommand"),
+        };
+        assert!(cmd.into_operation().is_err());
+
+        // Without baseline operations the default path is not state.
+        let (args, _) = parse(&["kingfisher", "scan", "--audit-log", &path_str, "."]);
+        let scan_args = into_scan(args);
+        assert!(scan_args.validate_audit_log_collisions(None, None).is_ok());
+    }
+
+    #[test]
+    fn audit_log_tilde_path_is_expanded_for_collision_checks() {
+        // Shells do not expand `~` in the `--flag=~/...` form; the audit-log
+        // path must still collide with the same file spelled the way
+        // Kingfisher expands it. The output is computed with the product's
+        // own tilde expansion so the test does not depend on which of
+        // HOME/USERPROFILE the platform resolves first. The scan input stays
+        // outside the working directory so only the tilde expansion can
+        // produce the collision.
+        let expanded =
+            kingfisher::util::expand_tilde(std::path::Path::new("~/kf-audit-collision.jsonl"));
+        let input = tempfile::tempdir().unwrap();
+        let (args, _) = parse(&[
+            "kingfisher",
+            "scan",
+            "--audit-log=~/kf-audit-collision.jsonl",
+            "--output",
+            expanded.to_str().unwrap(),
+            input.path().to_str().unwrap(),
+        ]);
+        let cmd = match args.command {
+            Command::Scan(c) => c,
+            _ => panic!("expected scan subcommand"),
+        };
+        assert!(cmd.into_operation().is_err());
+    }
+
+    #[test]
+    fn audit_log_colliding_with_endpoint_config_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("endpoints.yaml");
+        let path_str = path.display().to_string();
+        let (args, _) = parse(&["kingfisher", "scan", "--audit-log", &path_str, "."]);
+        let scan_args = into_scan(args);
+
+        assert!(scan_args.validate_audit_log_collisions(None, None).is_ok());
+        assert!(scan_args.validate_audit_log_collisions(Some(&path), None).is_err());
+    }
+
+    #[test]
+    fn audit_log_colliding_with_project_config_is_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kingfisher.yaml");
+        let path_str = path.display().to_string();
+        let (args, _) = parse(&["kingfisher", "scan", "--audit-log", &path_str, "."]);
+        let scan_args = into_scan(args);
+
+        assert!(scan_args.validate_audit_log_collisions(None, None).is_ok());
+        assert!(scan_args.validate_audit_log_collisions(None, Some(&path)).is_err());
     }
 
     #[test]

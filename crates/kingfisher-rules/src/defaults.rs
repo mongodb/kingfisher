@@ -286,6 +286,16 @@ mod test {
             .expect("PayPal access-map capabilities should exist");
         assert_eq!(paypal.inputs["client_id"], "components.paypal-client-id.1");
 
+        let google_api_key = rules.rules.get("betterleaks.gcp-api-key").unwrap();
+        let Some(Validation::Betterleaks(google_api_key_validation)) = &google_api_key.validation
+        else {
+            panic!("Google API key should use Betterleaks validation");
+        };
+        assert_eq!(
+            google_api_key_validation.capabilities.access_map.as_ref().unwrap().handler,
+            BetterleaksAccessMapHandler::GcpApiKey
+        );
+
         let gcp = rules.rules.get("betterleaks.gcp-service-account").unwrap();
         assert!(matches!(gcp.revocation, Some(Revocation::GCP)));
 
@@ -332,6 +342,7 @@ mod test {
         ] {
             assert!(rules.rules.contains_key(&format!("betterleaks.{id}")), "missing {id}");
         }
+        assert!(rules.rules.contains_key("betterleaks.voyageai-api-key"));
 
         let hcp = rules.rules.get("veles.secrets/hcpclientcredentials").unwrap();
         assert!(matches!(hcp.validation, Some(Validation::Http(_))));

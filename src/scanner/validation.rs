@@ -125,6 +125,14 @@ impl AccessMapCollector {
         );
     }
 
+    pub fn record_gcp_api_key(&self, api_key: &str, fingerprint: String) {
+        let key = xxhash_rust::xxh3::xxh3_64(api_key.as_bytes());
+        self.record_request(
+            key,
+            AccessMapRequest::GcpApiKey { api_key: api_key.to_string(), fingerprint },
+        );
+    }
+
     pub fn record_azure(
         &self,
         credential_json: &str,
@@ -1751,6 +1759,9 @@ fn record_betterleaks_access_map(
         BetterleaksAccessMapHandler::Gcp => {
             collector.record_gcp(token, fp());
         }
+        BetterleaksAccessMapHandler::GcpApiKey => {
+            collector.record_gcp_api_key(token, fp());
+        }
         BetterleaksAccessMapHandler::AzureClientSecret => {
             let tenant_id = value("tenant_id");
             let client_id = value("client_id");
@@ -2125,6 +2136,37 @@ mod tests {
                 assert_eq!(secret_key, "secret-access-key");
                 assert!(session_token.is_none());
                 assert_eq!(fingerprint, "fp-aws");
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn betterleaks_google_api_key_validation_feeds_access_map() {
+        let mut rules = kingfisher_rules::get_betterleaks_rules(Some(Confidence::Low)).unwrap();
+        let syntax = rules.rules.remove("betterleaks.gcp-api-key").unwrap();
+        let Some(Validation::Betterleaks(validation)) = syntax.validation.clone() else {
+            panic!("expected Betterleaks validation");
+        };
+        let api_key = "AIzaSyA123456789012345678901234567890123";
+        let matched = betterleaks_match(syntax, api_key, &[]);
+        let captures = utils::process_captures(&matched.captures);
+        let collector = AccessMapCollector::default();
+
+        record_betterleaks_access_map(
+            &matched,
+            &validation,
+            &collector,
+            &captures,
+            "fp-google-api-key",
+        );
+
+        let requests = collector.into_requests();
+        assert_eq!(requests.len(), 1);
+        match &requests[0] {
+            AccessMapRequest::GcpApiKey { api_key: recorded, fingerprint } => {
+                assert_eq!(recorded, api_key);
+                assert_eq!(fingerprint, "fp-google-api-key");
             }
             other => panic!("unexpected request: {other:?}"),
         }

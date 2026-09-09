@@ -45,6 +45,12 @@ impl DetailsReporter {
             serde_json::to_writer(&mut writer, &payload)?;
             writeln!(writer)?;
         }
+
+        if let Some(audit) = envelope.audit {
+            let payload = serde_json::json!({ "audit": audit });
+            serde_json::to_writer(&mut writer, &payload)?;
+            writeln!(writer)?;
+        }
         Ok(())
     }
 }
@@ -218,6 +224,7 @@ mod tests {
             min_entropy: None,
             redact: false,
             git_repo_timeout: 1800, // 30 minutes
+            audit_log: None,
             output_args: OutputArgs { output: None, format: ReportOutputFormat::Pretty },
             baseline_file: None,
             manage_baseline: false,
@@ -362,6 +369,10 @@ mod tests {
             validation_outcome: kingfisher_core::ValidationOutcome::VerifiedActive,
         }];
         let reporter = setup_mock_reporter(matches);
+        let mut collector =
+            crate::scan_audit::ScanAuditCollector::new("2026-01-01T00:00:00Z".to_string(), None)?;
+        collector.discover_local(std::path::Path::new("/tmp/repo"));
+        reporter.datastore.lock().unwrap().set_scan_audit(collector.finish()?);
         let mut output = Cursor::new(Vec::new());
         reporter.json_format(&mut output, &create_default_args())?;
         let json_output: serde_json::Value = serde_json::from_slice(&output.into_inner())?;
@@ -374,6 +385,68 @@ mod tests {
         assert_eq!(first["rule"]["id"], "mock_rule_1");
         assert_eq!(first["rule"]["title"], "MOCK_RULE_1 => [MOCK_RULE_1]");
         assert_eq!(first["finding"]["language"], "Rust");
+        assert_eq!(json_output["audit"]["summary"]["discovered"], 1);
+        Ok(())
+    }
+
+    #[test]
+    fn jsonl_appends_repository_audit_record() -> Result<()> {
+        let reporter = setup_mock_reporter(Vec::new());
+        let mut collector =
+            crate::scan_audit::ScanAuditCollector::new("2026-01-01T00:00:00Z".to_string(), None)?;
+        collector.discover_local(std::path::Path::new("/tmp/repo"));
+        reporter.datastore.lock().unwrap().set_scan_audit(collector.finish()?);
+
+        let mut output = Cursor::new(Vec::new());
+        reporter.jsonl_format(&mut output, &create_default_args())?;
+        let lines = String::from_utf8(output.into_inner())?;
+        let audit: serde_json::Value = serde_json::from_str(lines.trim())?;
+        assert_eq!(audit["audit"]["schema"], "kingfisher.repository-audit.v1");
+        assert_eq!(audit["audit"]["repositories"][0]["repository"], "/tmp/repo");
+        Ok(())
+    }
+
+    #[test]
+    fn repository_audit_is_emitted_by_every_report_format() -> Result<()> {
+        let reporter = setup_mock_reporter(Vec::new());
+        let mut collector =
+            crate::scan_audit::ScanAuditCollector::new("2026-01-01T00:00:00Z".to_string(), None)?;
+        collector.discover_local(std::path::Path::new("/tmp/repo"));
+        reporter.datastore.lock().unwrap().set_scan_audit(collector.finish()?);
+        let args = create_default_args();
+
+        let mut json = Cursor::new(Vec::new());
+        reporter.json_format(&mut json, &args)?;
+        let json: serde_json::Value = serde_json::from_slice(&json.into_inner())?;
+        assert_eq!(json["audit"]["summary"]["discovered"], 1);
+
+        let mut jsonl = Cursor::new(Vec::new());
+        reporter.jsonl_format(&mut jsonl, &args)?;
+        assert!(String::from_utf8(jsonl.into_inner())?.contains("\"audit\""));
+
+        let mut bson = Cursor::new(Vec::new());
+        reporter.bson_format(&mut bson, &args)?;
+        let bson = mongodb::bson::Document::from_reader(Cursor::new(bson.into_inner()))?;
+        assert!(bson.contains_key("audit"));
+
+        let mut toon = Cursor::new(Vec::new());
+        reporter.toon_format(&mut toon, &args)?;
+        let toon: serde_json::Value =
+            ::toon_format::decode_default(&String::from_utf8(toon.into_inner())?)?;
+        assert_eq!(toon["audit"]["summary"]["discovered"], 1);
+
+        let mut sarif = Cursor::new(Vec::new());
+        reporter.sarif_format(&mut sarif, false, &args)?;
+        let sarif: serde_json::Value = serde_json::from_slice(&sarif.into_inner())?;
+        assert_eq!(sarif["runs"][0]["properties"]["repository_audit"]["summary"]["discovered"], 1);
+
+        let mut pretty = Cursor::new(Vec::new());
+        reporter.pretty_format(&mut pretty, &args)?;
+        assert!(String::from_utf8(pretty.into_inner())?.contains("REPOSITORY COVERAGE"));
+
+        let mut html = Cursor::new(Vec::new());
+        reporter.html_format(&mut html, &args)?;
+        assert!(String::from_utf8(html.into_inner())?.contains("Repository Coverage"));
         Ok(())
     }
 

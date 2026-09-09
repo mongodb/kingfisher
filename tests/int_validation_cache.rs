@@ -225,6 +225,7 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
         min_entropy: Some(0.0),
         redact: false,
         git_repo_timeout: 1800, // 30 minutes
+        audit_log: None,
         output_args: OutputArgs { output: None, format: ReportOutputFormat::Pretty },
         no_dedup: true, // keep duplicates so the cache is stressed
         view_report: false,

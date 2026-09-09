@@ -189,6 +189,7 @@ struct BetterleaksAccessMap {
 enum BetterleaksAccessMapHandler {
     Aws,
     Gcp,
+    GcpApiKey,
     AzureClientSecret,
     AzureStorage,
     Algolia,
@@ -1763,6 +1764,30 @@ rules:
         .unwrap_err();
 
         assert!(error.to_string().contains("references a missing component"));
+    }
+
+    #[test]
+    fn applies_google_api_key_access_map_handler() {
+        let yaml = import_config(
+            r#"
+[[rules]]
+id = "gcp-api-key"
+description = "Google API key"
+regex = '''(?P<secret>AIza[a-zA-Z0-9_-]{35})'''
+validate = '''let r = http.get("https://example.test"); r.status == 200'''
+"#,
+            "test",
+            r#"
+version: 1
+rules:
+  gcp-api-key:
+    access_map:
+      handler: gcp_api_key
+"#,
+        )
+        .unwrap();
+
+        assert!(yaml.contains("handler: gcp_api_key"));
     }
 
     #[cfg(debug_assertions)]

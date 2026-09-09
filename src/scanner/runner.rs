@@ -1,7 +1,7 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
@@ -34,6 +34,7 @@ use crate::{
         prune_rule_cache,
     },
     safe_list,
+    scan_audit::{RepositoryScanStats, ScanAuditCollector, SharedScanAudit, combine_git_snapshots},
     scanner::{
         AccessMapCollector, clone_or_update_git_repos_streaming, enumerate_azure_repos,
         enumerate_bitbucket_repos, enumerate_filesystem_inputs, enumerate_github_event_targets,
@@ -96,6 +97,11 @@ pub async fn run_async_scan(
 
     let start_time = Instant::now();
     let scan_started_at = chrono::Local::now();
+    let audit_log = args.audit_log.as_deref().map(crate::util::expand_tilde);
+    let scan_audit: SharedScanAudit = Arc::new(Mutex::new(ScanAuditCollector::new(
+        scan_started_at.to_rfc3339(),
+        audit_log.as_deref(),
+    )?));
 
     trace!("Args:\n{global_args:#?}\n{args:#?}");
     let progress_enabled = global_args.use_progress();
@@ -106,6 +112,12 @@ pub async fn run_async_scan(
     // ── Phase 2: Repository enumeration ─────────────────────────────────
     let repo_enumeration = enumerate_all_repos(args, global_args).await?;
     let repo_urls = repo_enumeration.repo_urls;
+    {
+        let mut audit = scan_audit.lock().unwrap();
+        for repo_url in &repo_urls {
+            audit.discover_remote(repo_url.as_str());
+        }
+    }
     let github_event_targets_by_root =
         Arc::new(github_event_targets_by_root(&repo_enumeration.github_event_targets, &datastore));
     let huggingface_buckets = enumerate_huggingface_buckets(args, global_args).await?;
@@ -129,6 +141,7 @@ pub async fn run_async_scan(
         args,
         global_args,
         &datastore,
+        &scan_audit,
         repo_tx.clone(),
         progress_enabled,
     );
@@ -218,9 +231,29 @@ pub async fn run_async_scan(
     let mut access_map_collector =
         if args.access_map { Some(AccessMapCollector::default()) } else { None };
 
-    let repo_roots = expand_repo_roots(&input_roots)?;
+    // Use the same --exclude semantics as the filesystem walker so the
+    // discovery pre-scan skips exactly the trees the scan will skip: this
+    // avoids paying startup traversal for excluded dependency/build trees and
+    // keeps excluded repositories out of the audit manifest.
+    let exclude_globset = crate::build_exclude_globset(&args.content_filtering_args.exclude)?;
+    let (repo_roots, discovered_repos) = if args.input_specifier_args.scan_nested_repos {
+        expand_repo_roots(&input_roots, exclude_globset.as_ref())?
+    } else {
+        let roots =
+            input_roots.iter().filter(|root| is_git_repository_root(root)).cloned().collect();
+        (input_roots.clone(), roots)
+    };
+    let discovered_repos = Arc::new(discovered_repos);
+    {
+        let mut audit = scan_audit.lock().unwrap();
+        for root in &repo_roots {
+            if is_git_repository_root(root) {
+                audit.discover_local(root);
+            }
+        }
+    }
     let git_repo_count =
-        repo_roots.iter().filter(|p| p.join(".git").is_dir()).count() + repo_urls.len();
+        repo_roots.iter().filter(|root| is_git_repository_root(root)).count() + repo_urls.len();
     let use_parallel_repo_scan = git_repo_count > 10;
 
     let validation_rate_limiter =
@@ -252,6 +285,8 @@ pub async fn run_async_scan(
             &datastore,
             rules_db,
             &mut input_roots,
+            &repo_roots,
+            Arc::clone(&discovered_repos),
             repo_rx,
             repo_clone_handle,
             artifact_handle,
@@ -268,6 +303,7 @@ pub async fn run_async_scan(
             scan_started_at,
             update_status,
             auto_cleanup_clones,
+            Arc::clone(&scan_audit),
         )
         .await?;
         return Ok(());
@@ -279,6 +315,7 @@ pub async fn run_async_scan(
         &datastore,
         rules_db,
         &repo_roots,
+        Arc::clone(&discovered_repos),
         repo_rx,
         repo_clone_handle,
         artifact_handle,
@@ -295,6 +332,7 @@ pub async fn run_async_scan(
         scan_started_at,
         update_status,
         auto_cleanup_clones,
+        Arc::clone(&scan_audit),
     )
     .await
 }
@@ -426,6 +464,7 @@ fn start_repo_cloning(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
     datastore: &Arc<Mutex<FindingsStore>>,
+    audit: &SharedScanAudit,
     repo_tx: crossbeam_channel::Sender<PathBuf>,
     _progress_enabled: bool,
 ) -> Option<std::thread::JoinHandle<()>> {
@@ -438,6 +477,7 @@ fn start_repo_cloning(
     let clone_globals = global_args.clone();
     let clone_repo_urls = repo_urls.to_vec();
     let clone_datastore = Arc::clone(datastore);
+    let clone_audit = Arc::clone(audit);
     let clone_repo_tx = repo_tx.clone();
 
     let handle = std::thread::spawn(move || {
@@ -446,6 +486,7 @@ fn start_repo_cloning(
             &clone_globals,
             &clone_repo_urls,
             &clone_datastore,
+            &clone_audit,
             |path| {
                 let _ = clone_repo_tx.send(path);
             },
@@ -702,6 +743,58 @@ fn build_scan_audit_context(
     }
 }
 
+fn audit_snapshot_for_root(
+    args: &scan::ScanArgs,
+    root: &Path,
+    event_targets: Option<&[github::GitHubEventScanTarget]>,
+    fetched: bool,
+) -> Option<crate::scan_audit::GitAuditSnapshot> {
+    if !is_git_repository_root(root) {
+        return None;
+    }
+
+    let snapshots = event_targets
+        .filter(|targets| !targets.is_empty())
+        .map(|targets| {
+            targets
+                .iter()
+                .map(|target| {
+                    let selector = format!("{:?}", target.selector);
+                    let target_args = scan_args_for_github_event_target(args, target);
+                    (selector, crate::scan_audit::git_snapshot(root, &target_args, fetched))
+                })
+                .collect()
+        })
+        .unwrap_or_else(|| {
+            vec![("default".to_string(), crate::scan_audit::git_snapshot(root, args, fetched))]
+        });
+    combine_git_snapshots(snapshots)
+}
+
+fn repository_audit_applies(args: &scan::ScanArgs) -> bool {
+    let input = &args.input_specifier_args;
+    !input.path_inputs.is_empty()
+        || !input.git_url.is_empty()
+        || !input.github_user.is_empty()
+        || !input.github_organization.is_empty()
+        || input.all_github_organizations
+        || !input.github_event_user.is_empty()
+        || !input.gitlab_user.is_empty()
+        || !input.gitlab_group.is_empty()
+        || input.all_gitlab_groups
+        || !input.gitea_user.is_empty()
+        || !input.gitea_organization.is_empty()
+        || input.all_gitea_organizations
+        || !input.bitbucket_user.is_empty()
+        || !input.bitbucket_workspace.is_empty()
+        || !input.bitbucket_project.is_empty()
+        || input.all_bitbucket_workspaces
+        || !input.azure_organization.is_empty()
+        || !input.azure_project.is_empty()
+        || input.all_azure_projects
+        || input.repo_artifacts
+}
+
 /// Applies baseline filtering if configured.
 fn apply_baseline_if_configured(
     args: &scan::ScanArgs,
@@ -782,6 +875,8 @@ async fn run_sequential_scan(
     datastore: &Arc<Mutex<FindingsStore>>,
     rules_db: &RulesDatabase,
     input_roots: &mut Vec<PathBuf>,
+    repo_roots: &[PathBuf],
+    discovered_repos: Arc<Vec<PathBuf>>,
     repo_rx: crossbeam_channel::Receiver<PathBuf>,
     repo_clone_handle: Option<std::thread::JoinHandle<()>>,
     artifact_handle: std::thread::JoinHandle<Result<()>>,
@@ -798,6 +893,7 @@ async fn run_sequential_scan(
     scan_started_at: chrono::DateTime<chrono::Local>,
     update_status: &crate::update::UpdateStatus,
     auto_cleanup_clones: bool,
+    scan_audit: SharedScanAudit,
 ) -> Result<()> {
     let mut streamed_roots = Vec::new();
     // Run the scan loop in a closure so that, even if a per-repo
@@ -806,45 +902,161 @@ async fn run_sequential_scan(
     // threads before returning. Without this, the producer threads would
     // continue cloning into `/tmp` after the scan has already failed.
     let scan_result: Result<()> = (|| {
-        if !input_roots.is_empty() {
-            enumerate_filesystem_inputs(
+        for root in repo_roots {
+            // Only Git repositories have a git boundary to snapshot; ordinary
+            // directories and files skip the subprocess work entirely.
+            let snapshot = is_git_repository_root(root)
+                .then(|| crate::scan_audit::git_snapshot(root, args, false));
+            let audit_key = scan_audit.lock().unwrap().scan_started_with_snapshot(root, snapshot);
+            let repo_datastore =
+                Arc::new(Mutex::new(FindingsStore::new(datastore.lock().unwrap().clone_root())));
+            let repo_rules = datastore.lock().unwrap().get_rules()?;
+            let repo_link = datastore.lock().unwrap().repo_links().get(root).cloned();
+            {
+                let mut ds = repo_datastore.lock().unwrap();
+                ds.record_rules(&repo_rules);
+                if let Some(repo_link) = repo_link {
+                    ds.register_repo_link(root.clone(), repo_link);
+                }
+            }
+            let repo_matcher_stats = Mutex::new(MatcherStats::default());
+            match enumerate_filesystem_inputs(
                 args,
-                datastore.clone(),
-                input_roots,
+                Arc::clone(&repo_datastore),
+                std::slice::from_ref(root),
+                &discovered_repos,
                 progress_enabled,
                 rules_db,
                 enable_profiling,
                 Arc::clone(shared_profiler),
-                matcher_stats.as_ref(),
-            )?;
+                &repo_matcher_stats,
+            ) {
+                Ok(partial) => {
+                    deduplicate_new_matches(&repo_datastore, global_args, args, 0)?;
+                    apply_baseline_if_configured(
+                        args,
+                        &repo_datastore,
+                        baseline.as_ref(),
+                        std::slice::from_ref(root),
+                    )?;
+                    let local_stats = repo_matcher_stats.lock().unwrap().clone();
+                    let findings = repo_datastore.lock().unwrap().get_matches().len();
+                    matcher_stats.lock().unwrap().update(&local_stats);
+                    datastore
+                        .lock()
+                        .unwrap()
+                        .merge_from(&repo_datastore.lock().unwrap(), !args.no_dedup);
+                    if let Some(key) = audit_key {
+                        let stats = RepositoryScanStats {
+                            findings,
+                            blobs_scanned: local_stats.blobs_scanned,
+                            bytes_scanned: local_stats.bytes_scanned,
+                        };
+                        if partial {
+                            scan_audit.lock().unwrap().scan_partial(
+                                &key,
+                                stats,
+                                "one or more repository inputs could not be enumerated",
+                            );
+                        } else {
+                            scan_audit.lock().unwrap().scan_completed(&key, stats);
+                        }
+                    }
+                }
+                Err(error) => {
+                    if let Some(key) = audit_key {
+                        scan_audit.lock().unwrap().scan_failed(&key, &format!("{error:#}"));
+                    }
+                    return Err(error);
+                }
+            }
         }
 
         for repo_root in repo_rx.iter() {
-            if let Some(targets) = github_event_targets_by_root.get(&repo_root) {
-                for target in targets {
-                    let target_args = scan_args_for_github_event_target(args, target);
-                    enumerate_filesystem_inputs(
-                        &target_args,
-                        datastore.clone(),
+            let event_targets = github_event_targets_by_root.get(&repo_root);
+            let snapshot =
+                audit_snapshot_for_root(args, &repo_root, event_targets.map(Vec::as_slice), true);
+            let audit_key =
+                scan_audit.lock().unwrap().scan_started_with_snapshot(&repo_root, snapshot);
+            let repo_datastore =
+                Arc::new(Mutex::new(FindingsStore::new(datastore.lock().unwrap().clone_root())));
+            let repo_rules = datastore.lock().unwrap().get_rules()?;
+            let repo_link = datastore.lock().unwrap().repo_links().get(&repo_root).cloned();
+            {
+                let mut ds = repo_datastore.lock().unwrap();
+                ds.record_rules(&repo_rules);
+                if let Some(repo_link) = repo_link {
+                    ds.register_repo_link(repo_root.clone(), repo_link);
+                }
+            }
+            let repo_matcher_stats = Mutex::new(MatcherStats::default());
+            let result: Result<()> = (|| {
+                let mut partial = false;
+                if let Some(targets) = github_event_targets_by_root.get(&repo_root) {
+                    for target in targets {
+                        let target_args = scan_args_for_github_event_target(args, target);
+                        partial |= enumerate_filesystem_inputs(
+                            &target_args,
+                            Arc::clone(&repo_datastore),
+                            std::slice::from_ref(&repo_root),
+                            &discovered_repos,
+                            progress_enabled,
+                            rules_db,
+                            enable_profiling,
+                            Arc::clone(shared_profiler),
+                            &repo_matcher_stats,
+                        )?;
+                    }
+                } else {
+                    partial = enumerate_filesystem_inputs(
+                        args,
+                        Arc::clone(&repo_datastore),
                         std::slice::from_ref(&repo_root),
+                        &discovered_repos,
                         progress_enabled,
                         rules_db,
                         enable_profiling,
                         Arc::clone(shared_profiler),
-                        matcher_stats.as_ref(),
+                        &repo_matcher_stats,
                     )?;
                 }
-            } else {
-                enumerate_filesystem_inputs(
+                deduplicate_new_matches(&repo_datastore, global_args, args, 0)?;
+                apply_baseline_if_configured(
                     args,
-                    datastore.clone(),
+                    &repo_datastore,
+                    baseline.as_ref(),
                     std::slice::from_ref(&repo_root),
-                    progress_enabled,
-                    rules_db,
-                    enable_profiling,
-                    Arc::clone(shared_profiler),
-                    matcher_stats.as_ref(),
                 )?;
+                let local_stats = repo_matcher_stats.lock().unwrap().clone();
+                let findings = repo_datastore.lock().unwrap().get_matches().len();
+                matcher_stats.lock().unwrap().update(&local_stats);
+                datastore
+                    .lock()
+                    .unwrap()
+                    .merge_from(&repo_datastore.lock().unwrap(), !args.no_dedup);
+                if let Some(key) = &audit_key {
+                    let stats = RepositoryScanStats {
+                        findings,
+                        blobs_scanned: local_stats.blobs_scanned,
+                        bytes_scanned: local_stats.bytes_scanned,
+                    };
+                    if partial {
+                        scan_audit.lock().unwrap().scan_partial(
+                            key,
+                            stats,
+                            "one or more repository inputs could not be enumerated",
+                        );
+                    } else {
+                        scan_audit.lock().unwrap().scan_completed(key, stats);
+                    }
+                }
+                Ok(())
+            })();
+            if let Err(error) = result {
+                if let Some(key) = &audit_key {
+                    scan_audit.lock().unwrap().scan_failed(key, &format!("{error:#}"));
+                }
+                return Err(error);
             }
             if auto_cleanup_clones && let Err(e) = fs::remove_dir_all(&repo_root) {
                 debug!("Failed to remove scanned clone {}: {e}", repo_root.display());
@@ -891,6 +1103,11 @@ async fn run_sequential_scan(
         finalize_access_map(datastore, collector, args).await?;
     }
 
+    let repository_audit = scan_audit.lock().unwrap().finish()?;
+    if repository_audit.summary.discovered > 0 || repository_audit_applies(args) {
+        datastore.lock().unwrap().set_scan_audit(repository_audit.clone());
+    }
+
     let audit_context = build_scan_audit_context(
         args,
         rules_db,
@@ -930,6 +1147,7 @@ async fn run_parallel_scan(
     datastore: &Arc<Mutex<FindingsStore>>,
     rules_db: &RulesDatabase,
     repo_roots: &[PathBuf],
+    discovered_repos: Arc<Vec<PathBuf>>,
     repo_rx: crossbeam_channel::Receiver<PathBuf>,
     repo_clone_handle: Option<std::thread::JoinHandle<()>>,
     artifact_handle: std::thread::JoinHandle<Result<()>>,
@@ -946,6 +1164,7 @@ async fn run_parallel_scan(
     scan_started_at: chrono::DateTime<chrono::Local>,
     update_status: &crate::update::UpdateStatus,
     auto_cleanup_clones: bool,
+    scan_audit: SharedScanAudit,
 ) -> Result<()> {
     deduplicate_new_matches(datastore, global_args, args, 0)?;
     apply_baseline_if_configured(args, datastore, baseline.as_ref(), repo_roots)?;
@@ -1092,6 +1311,7 @@ async fn run_parallel_scan(
                     permit_take.recv().expect("permit pool closed unexpectedly");
 
                     let repo_rules = repo_rules.clone();
+                    let discovered_repos = Arc::clone(&discovered_repos);
                     let base_clone_root = base_clone_root.clone();
                     let baseline = Arc::clone(baseline);
                     let shared_profiler = Arc::clone(shared_profiler);
@@ -1105,6 +1325,7 @@ async fn run_parallel_scan(
                     let repo_errors = Arc::clone(&repo_errors);
                     let successful_roots = Arc::clone(&successful_roots);
                     let datastore = Arc::clone(datastore);
+                    let scan_audit = Arc::clone(&scan_audit);
                     let access_map = access_map_collector.clone();
                     let permit_release = permit_return.clone();
                     let scan_counter = Arc::clone(&active_scans);
@@ -1148,6 +1369,19 @@ async fn run_parallel_scan(
                         }
                         let _guard = ScanGuard { permit_release, scan_counter };
 
+                        // Gather the git snapshot before taking the audit
+                        // mutex: it runs blocking Git subprocesses, and
+                        // holding the lock here would serialize the startup
+                        // of every parallel scan worker behind them.
+                        let snapshot = audit_snapshot_for_root(
+                            &args,
+                            &root,
+                            event_targets.as_deref(),
+                            matches!(source, ScanRootSource::Streamed),
+                        );
+                        let audit_key =
+                            scan_audit.lock().unwrap().scan_started_with_snapshot(&root, snapshot);
+
                         let result: Result<()> = (|| {
                             let repo_datastore =
                                 Arc::new(Mutex::new(FindingsStore::new(base_clone_root.clone())));
@@ -1163,14 +1397,16 @@ async fn run_parallel_scan(
 
                             let repo_matcher_stats = Mutex::new(MatcherStats::default());
 
+                            let mut partial = false;
                             if let Some(event_targets) = &event_targets {
                                 for target in event_targets {
                                     let target_args =
                                         scan_args_for_github_event_target(&args, target);
-                                    enumerate_filesystem_inputs(
+                                    partial |= enumerate_filesystem_inputs(
                                         &target_args,
                                         Arc::clone(&repo_datastore),
                                         std::slice::from_ref(&root),
+                                        &discovered_repos,
                                         progress_enabled,
                                         rules_db,
                                         enable_profiling,
@@ -1179,10 +1415,11 @@ async fn run_parallel_scan(
                                     )?;
                                 }
                             } else {
-                                enumerate_filesystem_inputs(
+                                partial = enumerate_filesystem_inputs(
                                     &args,
                                     Arc::clone(&repo_datastore),
                                     std::slice::from_ref(&root),
+                                    &discovered_repos,
                                     progress_enabled,
                                     rules_db,
                                     enable_profiling,
@@ -1232,6 +1469,28 @@ async fn run_parallel_scan(
                             {
                                 let mut global_stats = matcher_stats.lock().unwrap();
                                 global_stats.update(&repo_matcher_stats.lock().unwrap());
+                            }
+
+                            if let Some(key) = &audit_key {
+                                let findings = repo_datastore.lock().unwrap().get_matches().len();
+                                let local_stats = repo_matcher_stats.lock().unwrap().clone();
+                                let mut audit = scan_audit.lock().unwrap();
+                                let stats = RepositoryScanStats {
+                                    findings,
+                                    blobs_scanned: local_stats.blobs_scanned,
+                                    bytes_scanned: local_stats.bytes_scanned,
+                                };
+                                if partial {
+                                    audit.scan_partial(
+                                        key,
+                                        stats,
+                                        "one or more repository inputs could not be enumerated",
+                                    );
+                                } else {
+                                    audit.scan_completed(key, stats);
+                                }
+                                let manifest = audit.snapshot().for_repository(key);
+                                repo_datastore.lock().unwrap().set_scan_audit(manifest);
                             }
 
                             if !output_to_file {
@@ -1284,6 +1543,9 @@ async fn run_parallel_scan(
                         })();
 
                         if let Err(e) = result {
+                            if let Some(key) = &audit_key {
+                                scan_audit.lock().unwrap().scan_failed(key, &format!("{e:#}"));
+                            }
                             error!("Repository scan failed: {e}");
                             repo_errors.lock().unwrap().push(e);
                         }
@@ -1336,6 +1598,15 @@ async fn run_parallel_scan(
         )?;
     }
 
+    if let Some(collector) = access_map_collector.take() {
+        finalize_access_map(datastore, collector, args).await?;
+    }
+
+    let repository_audit = scan_audit.lock().unwrap().finish()?;
+    if repository_audit.summary.discovered > 0 || repository_audit_applies(args) {
+        datastore.lock().unwrap().set_scan_audit(repository_audit.clone());
+    }
+
     if output_to_file && ran_repo_scan.load(Ordering::Relaxed) {
         let audit_context = build_scan_audit_context(
             args,
@@ -1348,6 +1619,22 @@ async fn run_parallel_scan(
         );
         crate::reporter::run(global_args, Arc::clone(datastore), args, Some(audit_context))
             .context("Failed to run report command")?;
+    } else if ran_repo_scan.load(Ordering::Relaxed) {
+        let audit_only =
+            Arc::new(Mutex::new(FindingsStore::new(datastore.lock().unwrap().clone_root())));
+        audit_only.lock().unwrap().set_scan_audit(repository_audit);
+        let mut buf = Vec::with_capacity(8 * 1024);
+        crate::reporter::run_with_writer(global_args, audit_only, args, None, &mut buf)
+            .context("Failed to render final repository audit")?;
+        use std::io::Write;
+        let mut stdout = std::io::stdout().lock();
+        if let Err(error) = stdout.write_all(&buf) {
+            if error.kind() == std::io::ErrorKind::BrokenPipe {
+                std::process::exit(0);
+            }
+            return Err(error.into());
+        }
+        stdout.flush()?;
     }
 
     if !ran_repo_scan.load(Ordering::Relaxed) {
@@ -1409,13 +1696,8 @@ async fn run_parallel_scan(
         aggregate_summary,
     );
 
-    match access_map_collector.take() {
-        Some(collector) => {
-            finalize_access_map(datastore, collector, args).await?;
-        }
-        _ => {
-            maybe_hint_access_map(datastore, args);
-        }
+    if access_map_collector.is_none() {
+        maybe_hint_access_map(datastore, args);
     }
     Ok(())
 }
@@ -1450,43 +1732,133 @@ async fn finalize_access_map(
     Ok(())
 }
 
-fn expand_repo_roots(input_roots: &[PathBuf]) -> Result<Vec<PathBuf>> {
+/// Expands directory inputs into scan roots and discovered repositories.
+///
+/// Repositories found anywhere in a directory subtree become their own scan
+/// roots (each with its own scan lifecycle and audit record); the input
+/// directory itself also remains a scan root covering all non-repository
+/// content, with the discovered repository subtrees excluded from its walk so
+/// nothing is scanned twice. That grouped root keeps loose sibling files at
+/// directory granularity instead of turning each into its own scan root, and
+/// repository-free directory trees still collapse to a single root. Returns
+/// `(scan_roots, repo_roots)`.
+fn expand_repo_roots(
+    input_roots: &[PathBuf],
+    exclude_globset: Option<&std::sync::Arc<globset::GlobSet>>,
+) -> Result<(Vec<PathBuf>, Vec<PathBuf>)> {
+    let mut scan_roots = Vec::new();
     let mut repo_roots = Vec::new();
 
     for root in input_roots {
-        if root.join(".git").is_dir() {
+        if is_symlink(root) {
+            scan_roots.push(root.clone());
+            continue;
+        }
+        if is_git_repository_root(root) {
+            scan_roots.push(root.clone());
             repo_roots.push(root.clone());
             continue;
         }
-
         if !root.is_dir() {
-            repo_roots.push(root.clone());
+            scan_roots.push(root.clone());
             continue;
         }
 
-        let mut child_roots = Vec::new();
-        let mut non_repo_children = Vec::new();
-        for entry in fs::read_dir(root).with_context(|| {
-            format!("Failed to read directory while expanding repo roots: {}", root.display())
-        })? {
-            let entry = entry?;
-            let child_path = entry.path();
-            if child_path.join(".git").is_dir() {
-                child_roots.push(child_path);
-            } else {
-                non_repo_children.push(child_path);
-            }
+        let (mut found, non_repo_content) = find_repo_roots_in_dir(root, exclude_globset)?;
+        if found.is_empty() {
+            scan_roots.push(root.clone());
+            continue;
         }
-
-        if child_roots.is_empty() {
-            repo_roots.push(root.clone());
-        } else {
-            repo_roots.extend(child_roots);
-            repo_roots.extend(non_repo_children);
+        repo_roots.extend(found.iter().cloned());
+        scan_roots.append(&mut found);
+        if non_repo_content {
+            // The grouped root covers every non-repository file and directory
+            // in the subtree; the walker prunes the repository subtrees, which
+            // are scanned through their own roots above.
+            scan_roots.push(root.clone());
         }
     }
 
-    Ok(repo_roots)
+    Ok((deduplicate_paths(scan_roots), deduplicate_paths(repo_roots)))
+}
+
+fn deduplicate_paths(paths: Vec<PathBuf>) -> Vec<PathBuf> {
+    let mut seen = HashSet::with_capacity(paths.len());
+    paths.into_iter().filter(|path| seen.insert(path.clone())).collect()
+}
+
+/// Collects the repository roots found under `dir`, not descending into a
+/// discovered repository, skipping children matched by the `--exclude`
+/// globset, and skipping symlinked directories (the filesystem walker runs
+/// with `follow_links(false)` and would not traverse them either; a link is
+/// reported as non-repository content so the grouped root covers it).
+///
+/// Returns the repository roots plus whether any non-repository content was
+/// seen, so the caller can decide whether a grouped root is needed.
+fn find_repo_roots_in_dir(
+    dir: &Path,
+    exclude_globset: Option<&std::sync::Arc<globset::GlobSet>>,
+) -> Result<(Vec<PathBuf>, bool)> {
+    let mut repos = Vec::new();
+    // Mirror the filesystem walker, which logs and skips unreadable entries
+    // instead of failing the scan: this pre-scan also runs before --exclude
+    // filtering, so an unreadable — and possibly excluded — descendant must
+    // not abort an otherwise valid scan.
+    let entries = match fs::read_dir(dir) {
+        Ok(entries) => entries,
+        Err(error) => {
+            debug!(
+                "Skipping unreadable directory while expanding repo roots: {}: {error}",
+                dir.display()
+            );
+            return Ok((repos, true));
+        }
+    };
+    let mut non_repo_content = false;
+    for entry in entries {
+        let entry = match entry {
+            Ok(entry) => entry,
+            Err(error) => {
+                debug!("Skipping entry while expanding repo roots: {error}");
+                continue;
+            }
+        };
+        let child_path = entry.path();
+        if exclude_globset.as_ref().is_some_and(|globset| globset.is_match(&child_path)) {
+            debug!("Skipping {} due to --exclude while expanding repo roots", child_path.display());
+            continue;
+        }
+        if is_symlink(&child_path) {
+            // Never classify a symlink as a repository root: the walker does
+            // not descend into symlinked directories, so the link target
+            // would be scanned (and audited) even though it is not part of
+            // the tree. The grouped root still covers the link entry itself.
+            non_repo_content = true;
+            continue;
+        }
+        if is_git_repository_root(&child_path) {
+            repos.push(child_path);
+        } else if child_path.is_dir() {
+            let (mut child_repos, child_content) =
+                find_repo_roots_in_dir(&child_path, exclude_globset)?;
+            repos.append(&mut child_repos);
+            non_repo_content |= child_content;
+        } else {
+            non_repo_content = true;
+        }
+    }
+    repos.sort();
+    Ok((repos, non_repo_content))
+}
+
+fn is_git_repository_root(root: &Path) -> bool {
+    !is_symlink(root)
+        && (root.join(".git").exists()
+            || (root.join("HEAD").is_file() && root.join("objects").is_dir()))
+}
+
+fn is_symlink(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok_and(|meta| meta.file_type().is_symlink())
 }
 
 fn maybe_hint_access_map(datastore: &Arc<Mutex<FindingsStore>>, args: &scan::ScanArgs) {
@@ -1690,8 +2062,165 @@ pub fn load_and_record_rules(
 
 #[cfg(test)]
 mod tests {
+    use clap::Parser;
+
+    use super::expand_repo_roots;
     use super::git_refs_for_github_event_selector;
     use crate::github::GitHubEventScanSelector;
+
+    #[test]
+    fn expand_repo_roots_discovers_nested_repositories() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        // workspace/services/api/.git — a repository two levels below the
+        // input, plus a repository-free sibling subtree and a loose file.
+        std::fs::create_dir_all(base.join("workspace/services/api/.git")).unwrap();
+        std::fs::create_dir_all(base.join("workspace/docs")).unwrap();
+        std::fs::write(base.join("workspace/docs/README.md"), b"x").unwrap();
+        std::fs::create_dir_all(base.join("plain")).unwrap();
+        std::fs::write(base.join("plain/notes.txt"), b"x").unwrap();
+
+        let (roots, repos) = expand_repo_roots(&[base.to_path_buf()], None).unwrap();
+
+        let nested = base.join("workspace/services/api");
+        assert!(
+            roots.contains(&nested),
+            "nested repository must become its own scan root: {roots:?}"
+        );
+        assert!(repos.contains(&nested));
+        // The input root stays a single grouped root covering the loose
+        // sibling content instead of exploding into per-file roots.
+        assert!(roots.contains(&base.to_path_buf()));
+        // Intermediate directories are not roots of their own, and the
+        // repository is not covered twice.
+        assert!(!roots.contains(&base.join("workspace")));
+        assert!(!roots.contains(&base.join("workspace/services")));
+        assert_eq!(roots.len(), roots.iter().collect::<std::collections::HashSet<_>>().len());
+    }
+
+    #[test]
+    fn expand_repo_roots_keeps_repository_free_tree_as_one_root() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        std::fs::create_dir_all(base.join("a/b/c")).unwrap();
+        std::fs::write(base.join("a/b/c/file.txt"), b"x").unwrap();
+
+        let (roots, repos) = expand_repo_roots(&[base.to_path_buf()], None).unwrap();
+
+        assert_eq!(roots, vec![base.to_path_buf()]);
+        assert!(repos.is_empty());
+    }
+
+    #[test]
+    fn expand_repo_roots_skips_excluded_subtrees() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        std::fs::create_dir_all(base.join("deps/vendor/repo/.git")).unwrap();
+        std::fs::create_dir_all(base.join("src/api/.git")).unwrap();
+
+        // The same pattern expansion the filesystem walker applies via
+        // --exclude: a literal pattern excludes the named directory anywhere
+        // in the tree.
+        let exclude_globset = crate::build_exclude_globset(&["deps".to_string()]).unwrap().unwrap();
+        let (roots, repos) =
+            expand_repo_roots(&[base.to_path_buf()], Some(&exclude_globset)).unwrap();
+
+        // The excluded subtree is neither expanded nor emitted, so the
+        // repository inside it stays out of the audit manifest exactly like
+        // the filesystem walker keeps it out of the scan.
+        assert!(!roots.contains(&base.join("deps/vendor/repo")));
+        assert!(!roots.iter().any(|root| root.starts_with(base.join("deps"))));
+        assert!(roots.contains(&base.join("src/api")));
+        assert!(repos.contains(&base.join("src/api")));
+    }
+
+    #[test]
+    fn expand_repo_roots_does_not_descend_into_found_repository() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        // A repository containing a nested-looking .git deeper inside: the
+        // outer repository wins and the walk must not recurse into it.
+        std::fs::create_dir_all(base.join("outer/.git")).unwrap();
+        std::fs::create_dir_all(base.join("outer/vendor/inner/.git")).unwrap();
+
+        let (roots, repos) = expand_repo_roots(&[base.to_path_buf()], None).unwrap();
+
+        assert_eq!(roots, vec![base.join("outer")]);
+        assert_eq!(repos, vec![base.join("outer")]);
+    }
+
+    #[test]
+    fn expand_repo_roots_deduplicates_overlapping_inputs() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        let repo = base.join("workspace/repo");
+        std::fs::create_dir_all(repo.join(".git")).unwrap();
+        std::fs::write(base.join("notes.txt"), b"notes").unwrap();
+
+        let (roots, repos) = expand_repo_roots(&[base.to_path_buf(), repo.clone()], None).unwrap();
+
+        assert_eq!(roots, vec![repo.clone(), base.to_path_buf()]);
+        assert_eq!(repos, vec![repo]);
+    }
+
+    #[test]
+    fn scan_nested_repositories_can_be_disabled() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        let nested = base.join("workspace/repo");
+        std::fs::create_dir_all(nested.join(".git")).unwrap();
+
+        let roots = vec![base.to_path_buf()];
+        let repos = roots
+            .iter()
+            .filter(|root| super::is_git_repository_root(root))
+            .cloned()
+            .collect::<Vec<_>>();
+        assert_eq!(roots, vec![base.to_path_buf()]);
+        assert!(repos.is_empty());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn expand_repo_roots_does_not_recurse_into_symlinked_directories() {
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        std::fs::create_dir_all(base.join("real/repo/.git")).unwrap();
+        std::os::unix::fs::symlink(base.join("real"), base.join("link")).unwrap();
+
+        let (roots, repos) = expand_repo_roots(&[base.to_path_buf()], None).unwrap();
+
+        // The walker runs with follow_links(false), so a symlinked directory
+        // is never turned into a repository root (even when it targets one);
+        // the grouped root covers the link entry itself.
+        assert!(roots.contains(&base.join("real/repo")));
+        assert!(!roots.contains(&base.join("link")));
+        assert!(!repos.contains(&base.join("link")));
+        assert!(repos.contains(&base.join("real/repo")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn expand_repo_roots_skips_unreadable_directories() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp = tempfile::tempdir().unwrap();
+        let base = temp.path();
+        std::fs::create_dir_all(base.join("locked")).unwrap();
+        std::fs::create_dir_all(base.join("open/repo/.git")).unwrap();
+        std::fs::set_permissions(base.join("locked"), std::fs::Permissions::from_mode(0o000))
+            .unwrap();
+
+        // An unreadable descendant must not abort the pre-scan; the scanner's
+        // own walker decides later whether to skip its contents, which the
+        // grouped root covers.
+        let (roots, _repos) = expand_repo_roots(&[base.to_path_buf()], None).unwrap();
+        assert!(roots.contains(&base.join("open/repo")));
+        assert!(roots.contains(&base.to_path_buf()));
+
+        std::fs::set_permissions(base.join("locked"), std::fs::Permissions::from_mode(0o755))
+            .unwrap();
+    }
 
     #[test]
     fn github_event_commit_selector_scans_commit_diff() {
@@ -1721,5 +2250,30 @@ mod tests {
 
         assert!(branch.is_none());
         assert!(branch_root_commit.is_none());
+    }
+
+    #[test]
+    fn local_repository_audit_snapshot_does_not_claim_clone_mode() {
+        let temp = tempfile::tempdir().unwrap();
+        let root = temp.path().join("repo");
+        std::fs::create_dir_all(root.join(".git")).unwrap();
+        let command_line = crate::cli::CommandLineArgs::try_parse_from([
+            "kingfisher",
+            "scan",
+            root.to_str().unwrap(),
+        ])
+        .unwrap();
+        let args = match command_line.command {
+            crate::cli::global::Command::Scan(command) => match command.into_operation().unwrap() {
+                crate::cli::commands::scan::ScanOperation::Scan(args) => args,
+                crate::cli::commands::scan::ScanOperation::ListRepositories(_) => {
+                    panic!("expected scan operation")
+                }
+            },
+            _ => panic!("expected scan command"),
+        };
+
+        let snapshot = super::audit_snapshot_for_root(&args, &root, None, false).unwrap();
+        assert!(snapshot.clone_mode.is_none());
     }
 }

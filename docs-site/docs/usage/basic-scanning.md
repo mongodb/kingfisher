@@ -60,7 +60,7 @@ kingfisher scan /projects/mono‑repo‑dir
 kingfisher scan ~/src/myrepo --no-validate
 ```
 
-### Display only secrets confirmed active by third‑party APIs
+### Display only secrets confirmed active by third-party APIs
 
 ```bash
 kingfisher scan /path/to/repo --only-valid
@@ -134,7 +134,32 @@ kingfisher scan /path/to/repo --format sarif --output findings.sarif
 kingfisher scan /path/to/repo --format html --output kingfisher-audit.html
 ```
 
-The HTML audit report is standalone and includes scan metadata designed for evidence workflows, including scan timestamp, sanitized CLI arguments, version, and finding summary counts.
+The HTML audit report is standalone and includes scan metadata designed for evidence workflows,
+including scan timestamp, sanitized CLI arguments, version, finding summary counts, and a
+Repository Coverage table for Git scans. Repository and finding tables support client-side search,
+status/confidence filters, and sortable columns. All styles and JavaScript are embedded in the
+single output file; long remediation commands are collapsed until opened.
+When printed from the browser, the scrolling frame is removed, the page switches to landscape,
+table headers repeat across pages, and command details expand. Active filters are respected.
+
+### Record repository coverage and lifecycle events
+
+Every report produced by a repository scan includes an audit manifest with eligible repositories, fetch and scan
+outcomes, lifecycle timing, resolved tip SHA, Git scan scope/boundary, and per-repository scan
+volume. Add `--audit-log` to incrementally flush the same lifecycle transitions as JSON Lines:
+
+```bash
+kingfisher scan github --organization my-org \
+  --audit-log repository-events.jsonl \
+  --format json --output kingfisher.json
+```
+
+This is especially useful for long-running source-host scans because the event stream shows the
+last completed transition even if the process is interrupted. See [Repository Scan Audit Log](../features/repository-audit.md)
+for schema, format locations, security guidance, and Git coverage semantics. In that guide, **Tip
+SHA** means the exact commit hash Kingfisher pinned when the scan started—a version bookmark. Git
+history has branches and merges, so “last commit scanned” can be ambiguous; the report instead
+shows the tip, an optional older diff boundary, and the scope of files/history that were eligible.
 
 ### Blast Radius (aka Access Map) outputs and viewer
 
@@ -148,7 +173,7 @@ Kingfisher's blast-radius feature transforms secret detection from a simple aler
 * Visualize the Blast Radius: See exactly which resources (S3 buckets, EC2 instances, projects, storage containers) are exposed and at risk.
  
 
-Add `--blast-radius` (alias `--access-map`) to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with blast-radius data in the `access_map` field, including the resources and permissions the key can access (grouped when identical). AWS and GCP entries can also include policy provenance, hierarchy context, principal attributes, and potential identity paths under `provider_metadata.authorization_evidence`. AWS entries additionally report assumable roles and their policy-scoped resources; GCP entries report impersonatable service accounts, their inherited roles, and the project/folder/organization scopes those roles affect. Both contribute to the credential's effective impact, and blast-radius mapping is included by default in the open-source release.
+Add `--blast-radius` (alias `--access-map`) to enrich TOON, JSON, JSONL, BSON, pretty, and SARIF reports with blast-radius data in the `access_map` field, including the resources and permissions the key can access (grouped when identical). AWS and GCP entries can also include policy provenance, hierarchy context, principal attributes, potential identity paths, and bounded read-only probe outcomes under `provider_metadata.authorization_evidence`. AWS entries additionally report assumable roles and their policy-scoped resources; GCP service-account entries report impersonatable service accounts and inherited hierarchy roles, while Google API-key entries report exact read methods accepted by a four-service allowlist without invoking write or billable-workload methods. Blast-radius mapping is included by default in the open-source release.
 - If you validated cloud credentials without `--blast-radius`, Kingfisher will remind you on stderr to rerun with the flag so blast-radius results appear in the output.
 - Run `kingfisher view ./kingfisher.json` to explore a report locally in a local web UI (opens your browser automatically when a report is provided).
 - Or use `kingfisher scan --view-report ...` to generate a JSON report, start the viewer at `http://127.0.0.1:7890`, and open it in your browser.
@@ -177,7 +202,7 @@ Use `--format html` when you want a standalone static HTML document instead of t
 kingfisher view kingfisher.json
 ```
 
-The `view` subcommand starts a server (default port `7890`, bind address `127.0.0.1`) that bundles the HTML, CSS, and JavaScript for the blast-radius viewer directly into the Kingfisher binary. Provide a JSON, JSONL, or SARIF report to load it automatically and Kingfisher will open your browser, or open the page and upload a report in the browser. If port 7890 is already in use, re-run with `--port <PORT>`. To allow access from Docker or other hosts, use `--address 0.0.0.0`.
+The `view` subcommand starts a server (default port `7890`, bind address `127.0.0.1`) that bundles the HTML, CSS, and JavaScript for the blast-radius viewer directly into the Kingfisher binary. Provide a JSON, JSONL, or SARIF report to load it automatically and Kingfisher will open your browser, or open the page and upload a report in the browser. Native reports expose repository audit data in the dedicated Coverage workspace. If port 7890 is already in use, re-run with `--port <PORT>`. To allow access from Docker or other hosts, use `--address 0.0.0.0`.
 
 You can pass multiple files or a directory to combine reports. Findings are deduplicated by fingerprint. Non-matching files in a directory are silently skipped (no recursion).
 
@@ -1517,6 +1542,10 @@ The `lax` mode is designed for environments where:
 - **Internal services** have certificates not signed by public CAs
 
 Rules must opt into lax TLS by declaring `tls_mode: lax` in their definition. When you pass `--tls-mode=lax`, only rules with this declaration will use relaxed certificate validation. SaaS API validators (GitHub, Slack, AWS, etc.) always use strict validation regardless of this flag.
+
+HTTPS credential URIs also always use strict certificate validation because Kingfisher sends the
+embedded username and password after the endpoint issues a Basic Auth challenge. The `lax` and
+`off` modes still apply to supported database credential URIs.
 
 ### Examples
 

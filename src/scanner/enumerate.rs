@@ -60,12 +60,13 @@ pub fn enumerate_filesystem_inputs(
     args: &scan::ScanArgs,
     datastore: Arc<Mutex<findings_store::FindingsStore>>,
     input_roots: &[PathBuf],
+    discovered_repos: &[PathBuf],
     progress_enabled: bool,
     rules_db: &RulesDatabase,
     enable_profiling: bool,
     shared_profiler: Arc<ConcurrentRuleProfiler>,
     matcher_stats: &Mutex<MatcherStats>,
-) -> Result<()> {
+) -> Result<bool> {
     let repo_scan_timeout = Duration::from_secs(args.git_repo_timeout);
 
     let branch_root_enabled = args.input_specifier_args.branch_root
@@ -126,7 +127,7 @@ pub fn enumerate_filesystem_inputs(
     .context("Failed to initialize filesystem enumerator")?;
 
     let (enum_thread, input_recv, exclude_globset) = {
-        let fs_enumerator = make_fs_enumerator(args, input_roots.to_vec())
+        let fs_enumerator = make_fs_enumerator(args, input_roots.to_vec(), discovered_repos)
             .context("Failed to initialize filesystem enumerator")?;
         let exclude_globset = fs_enumerator.as_ref().and_then(|ie| ie.exclude_globset());
         let channel_size = std::cmp::max(args.num_jobs * 128, 1024);
@@ -169,6 +170,7 @@ pub fn enumerate_filesystem_inputs(
         spawn_datastore_writer_thread(datastore, recv_ds, !args.no_dedup)?;
 
     let t1 = Instant::now();
+    let had_errors = Arc::new(AtomicBool::new(false));
     let num_blob_processors = Mutex::new(0u64);
     let seen_blobs = BlobIdMap::new();
     let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
@@ -194,11 +196,14 @@ pub fn enumerate_filesystem_inputs(
         }
         BlobProcessor { matcher }
     };
+    let had_errors_for_enumeration = Arc::clone(&had_errors);
+    let had_errors_for_processing = Arc::clone(&had_errors);
     let scan_res: Result<()> = input_recv
         .into_iter()
         .par_bridge()
         .filter_map(|input| match (&enum_cfg, input).into_blob_iter() {
             Err(e) => {
+                had_errors_for_enumeration.store(true, Ordering::Relaxed);
                 debug!("Error enumerating input: {e:#}");
                 None
             }
@@ -210,6 +215,7 @@ pub fn enumerate_filesystem_inputs(
             move |(processor, progress), entry| {
                 let (origin, blob) = match entry {
                     Err(e) => {
+                        had_errors_for_processing.store(true, Ordering::Relaxed);
                         error!("Error loading input: {e:#}");
                         return Ok(());
                     }
@@ -273,6 +279,7 @@ pub fn enumerate_filesystem_inputs(
                         }
                     }
                     Err(e) => {
+                        had_errors_for_processing.store(true, Ordering::Relaxed);
                         debug!("Error scanning input: {e:#}");
                     }
                 }
@@ -287,7 +294,7 @@ pub fn enumerate_filesystem_inputs(
         .context("Failed to save results to the datastore")?;
     scan_res.context("Failed to scan inputs")?;
     progress.finish();
-    Ok(())
+    Ok(had_errors.load(Ordering::Relaxed))
 }
 
 /// Initialize a `FilesystemEnumerator` based on the command-line arguments and
@@ -296,6 +303,7 @@ pub fn enumerate_filesystem_inputs(
 fn make_fs_enumerator(
     args: &scan::ScanArgs,
     input_roots: Vec<PathBuf>,
+    discovered_repos: &[PathBuf],
 ) -> Result<Option<FilesystemEnumerator>> {
     if input_roots.is_empty() {
         Ok(None)
@@ -314,6 +322,27 @@ fn make_fs_enumerator(
         // Determine whether to collect git metadata or not
         let collect_git_metadata = false;
         ie.collect_git_metadata(collect_git_metadata);
+
+        // A grouped directory root covers its subtree's non-repository
+        // content; prune the repository subtrees discovered beneath it, which
+        // are scanned through their own roots. Without this the grouped walk
+        // would scan those repositories a second time.
+        let grouped_root_excludes: Vec<PathBuf> = if args.input_specifier_args.scan_nested_repos {
+            discovered_repos
+                .iter()
+                .filter(|repo| {
+                    input_roots.iter().any(|root| repo.starts_with(root))
+                        && !input_roots.contains(repo)
+                })
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        };
+        if !grouped_root_excludes.is_empty() {
+            ie.set_repository_excludes(grouped_root_excludes);
+        }
+
         Ok(Some(ie))
     }
 }
@@ -1191,7 +1220,7 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                 match git_result {
                     Err(e) => {
                         debug!("Failed to enumerate Git repo at {}: {e}", path.display());
-                        Ok(None)
+                        Err(e)
                     }
                     Ok(repo_result) => {
                         debug!(

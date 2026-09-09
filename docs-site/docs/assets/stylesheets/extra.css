@@ -28,9 +28,41 @@
 .kf-hero__tagline {
   font-size: 1.1rem;
   max-width: 700px;
-  margin: 0 auto 2rem;
+  margin: 0 auto 1.25rem;
   opacity: 0.9;
   line-height: 1.6;
+}
+
+.kf-hero__workflow {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.75rem;
+  margin: 0 auto 1rem;
+  padding: 0;
+  list-style: none;
+  font-size: 0.9rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.kf-hero__workflow li {
+  display: flex;
+  align-items: center;
+}
+
+.kf-hero__workflow li:not(:last-child)::after {
+  content: "\2192";
+  margin-left: 0.75rem;
+  opacity: 0.7;
+}
+
+.kf-hero__proof {
+  max-width: 700px;
+  margin: 0 auto 2rem;
+  font-size: 0.85rem;
+  opacity: 0.8;
 }
 
 .kf-hero__actions {
@@ -56,6 +88,17 @@
 
 .kf-hero__actions .md-button--primary:hover {
   background-color: rgba(255, 255, 255, 0.9);
+}
+
+@media screen and (max-width: 44.984375em) {
+  .kf-hero__workflow {
+    flex-wrap: wrap;
+    gap: 0.4rem 0.6rem;
+  }
+
+  .kf-hero__workflow li:not(:last-child)::after {
+    margin-left: 0.6rem;
+  }
 }
 
 /* Stats bar */
@@ -384,7 +427,7 @@ table.rules-table tbody tr:nth-child(even) td code {
   background: var(--md-default-bg-color);
 }
 
-/* First column (Catalog) — emphasized */
+/* First column (Rule ID) — emphasized */
 .md-typeset table.rules-table tbody td:first-child,
 table.rules-table tbody td:first-child {
   font-weight: 600;
@@ -392,20 +435,20 @@ table.rules-table tbody td:first-child {
 }
 
 /* Confidence badges */
-.md-typeset table.rules-table td:nth-child(3),
-table.rules-table td:nth-child(3) {
+.md-typeset table.rules-table td:nth-child(2),
+table.rules-table td:nth-child(2) {
   font-weight: 500;
 }
 
 /* Validation / Revocation columns — center */
+.md-typeset table.rules-table td:nth-child(3),
 .md-typeset table.rules-table td:nth-child(4),
-.md-typeset table.rules-table td:nth-child(5),
+.md-typeset table.rules-table th:nth-child(3),
 .md-typeset table.rules-table th:nth-child(4),
-.md-typeset table.rules-table th:nth-child(5),
+table.rules-table td:nth-child(3),
 table.rules-table td:nth-child(4),
-table.rules-table td:nth-child(5),
-table.rules-table th:nth-child(4),
-table.rules-table th:nth-child(5) {
+table.rules-table th:nth-child(3),
+table.rules-table th:nth-child(4) {
   text-align: center;
   white-space: nowrap;
 }

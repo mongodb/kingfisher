@@ -228,6 +228,7 @@ pub fn build_viewer_report_bytes(results: &[DirectAccessMapResult]) -> Result<Ve
     let envelope = ReportEnvelope {
         findings,
         access_map: Some(access_map),
+        audit: None,
         metadata: Some(ScanReportMetadata {
             generated_at: generated_at.clone(),
             scan_timestamp: generated_at,

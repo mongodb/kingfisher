@@ -18,6 +18,10 @@ macro_rules! verbose_warn {
 
 use crate::validation::gcp::GcpValidator;
 
+mod api_key;
+
+pub use api_key::map_access as map_access_from_api_key;
+
 #[derive(Debug, Clone)]
 struct Ancestor {
     kind: String,

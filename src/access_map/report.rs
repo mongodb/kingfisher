@@ -512,6 +512,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
         el.appendChild(badge('Policies: ' + (evidence.policies?.length || 0)));
         el.appendChild(badge('Identity paths: ' + (evidence.paths?.length || 0)));
         el.appendChild(badge('Reachable roles: ' + (evidence.role_impacts?.length || 0)));
+        el.appendChild(badge('API probes: ' + (evidence.probes?.length || 0)));
       }
     }
 
@@ -813,6 +814,13 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
             : null,
         })),
       }));
+      const probeNodes = (evidence.probes || []).map(probe => ({
+        name: probe.service || 'API probe',
+        type: 'api_probe',
+        source: [probe.status, probe.http_status ? `HTTP ${probe.http_status}` : null].filter(Boolean).join(' · '),
+        reason: probe.reason || '',
+        permissions: probe.method ? [probe.method] : [],
+      }));
 
       return {
         name: model.identity?.id || 'Identity',
@@ -825,6 +833,7 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
           { name: 'Permissions', type: 'section', children: permGroups },
           { name: 'Authorization Paths', type: 'section', children: pathNodes },
           { name: 'Policy Evidence', type: 'section', children: policyNodes },
+          { name: 'API Probes', type: 'section', children: probeNodes },
           { name: 'Hierarchy', type: 'section', children: hierarchyNodes },
           { name: 'Evidence Limits', type: 'section', children: (evidence.limitations || []).map(n => ({ name: n, type: 'note', notes: [n] })) },
           { name: 'Notes', type: 'section', children: (model.risk_notes || []).map(n => ({ name: n, type: 'note', notes: [n] })) },

@@ -19,6 +19,7 @@ use crate::{
     matcher::Match,
     origin::{Origin, OriginSet},
     rules::rule::Rule,
+    scan_audit::ScanAuditManifest,
     util::intern,
 };
 
@@ -112,6 +113,7 @@ pub struct FindingsStore {
     s3_buckets: FxHashMap<PathBuf, String>,
     repo_links: FxHashMap<PathBuf, String>,
     access_map_results: Vec<ScanAccessMapResult>,
+    scan_audit: Option<ScanAuditManifest>,
 }
 
 impl FindingsStore {
@@ -134,6 +136,7 @@ impl FindingsStore {
             s3_buckets: FxHashMap::default(),
             repo_links: FxHashMap::default(),
             access_map_results: Vec::new(),
+            scan_audit: None,
         }
     }
 
@@ -188,6 +191,14 @@ impl FindingsStore {
 
     pub(crate) fn access_map_results(&self) -> &[ScanAccessMapResult] {
         &self.access_map_results
+    }
+
+    pub fn set_scan_audit(&mut self, audit: ScanAuditManifest) {
+        self.scan_audit = Some(audit);
+    }
+
+    pub fn scan_audit(&self) -> Option<&ScanAuditManifest> {
+        self.scan_audit.as_ref()
     }
 
     pub fn record_rules(&mut self, rules: &[Arc<Rule>]) {
@@ -442,6 +453,9 @@ impl FindingsStore {
     }
 
     pub fn merge_from(&mut self, other: &FindingsStore, dedup: bool) {
+        if let Some(audit) = other.scan_audit() {
+            self.scan_audit = Some(audit.clone());
+        }
         for (dir, link) in other.repo_links() {
             self.repo_links.entry(dir.clone()).or_insert_with(|| link.clone());
         }

@@ -1360,6 +1360,7 @@ pub(crate) fn create_minimal_scan_args() -> crate::cli::commands::scan::ScanArgs
         min_entropy: None,
         redact: false,
         git_repo_timeout: 1800,
+        audit_log: None,
         no_dedup: false,
         view_report: false,
         baseline_file: None,

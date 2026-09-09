@@ -9,6 +9,8 @@ struct ToonReportEnvelope {
     findings: Vec<ToonFindingRecord>,
     #[serde(skip_serializing_if = "Option::is_none")]
     access_map: Option<Vec<AccessMapEntry>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    audit: Option<crate::scan_audit::ScanAuditManifest>,
 }
 
 #[derive(Serialize)]
@@ -154,6 +156,7 @@ impl DetailsReporter {
             },
             findings: envelope.findings.iter().map(ToonFindingRecord::from_record).collect(),
             access_map: envelope.access_map,
+            audit: envelope.audit,
         };
 
         write!(writer, "{}", crate::toon::encode_llm_friendly(&payload)?)?;

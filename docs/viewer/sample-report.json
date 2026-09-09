@@ -217,6 +217,42 @@
       ]
     }
   ],
+  "audit": {
+    "schema": "kingfisher.repository-audit.v1",
+    "run_id": "018f3d72-7d32-7c55-91bd-example000001",
+    "started_at": "2025-11-25T23:37:41.863Z",
+    "completed_at": "2025-11-25T23:38:04.291Z",
+    "duration_seconds": 22.428,
+    "summary": {
+      "discovered": 2,
+      "fetch_succeeded": 1,
+      "fetch_failed": 1,
+      "scan_succeeded": 1,
+      "scan_partial": 0,
+      "scan_failed": 0,
+      "pending": 0
+    },
+    "repositories": [
+      {
+        "key": "https://github.com/example/payments",
+        "repository": "https://github.com/example/payments",
+        "source": "remote",
+        "discovered_at": "2025-11-25T23:37:41.900Z",
+        "fetch": { "status": "completed", "started_at": "2025-11-25T23:37:42.000Z", "completed_at": "2025-11-25T23:37:44.100Z", "duration_seconds": 2.1, "method": "cloned" },
+        "scan": { "status": "completed", "started_at": "2025-11-25T23:37:44.110Z", "completed_at": "2025-11-25T23:38:03.900Z", "duration_seconds": 19.79 },
+        "git": { "scope": "all_fetched_git_objects", "tip_ref": "HEAD", "tip_sha": "17dbca8c7bb91fb20f18ac0219a4b12be67309ad", "clone_mode": "bare", "shallow": false, "fetched_commit_count": 1842 },
+        "stats": { "findings": 3, "blobs_scanned": 14839, "bytes_scanned": 74255112 }
+      },
+      {
+        "key": "https://github.com/example/archived-service",
+        "repository": "https://github.com/example/archived-service",
+        "source": "remote",
+        "discovered_at": "2025-11-25T23:37:41.905Z",
+        "fetch": { "status": "failed", "started_at": "2025-11-25T23:37:42.010Z", "completed_at": "2025-11-25T23:37:42.710Z", "duration_seconds": 0.7, "error": "repository access denied" },
+        "scan": { "status": "not_run" }
+      }
+    ]
+  },
   "stats": {
     "total": 259,
     "critical": 37,

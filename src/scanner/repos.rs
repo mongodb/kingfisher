@@ -34,6 +34,7 @@ use crate::{
     postman,
     rules_database::RulesDatabase,
     s3,
+    scan_audit::SharedScanAudit,
     scanner::processing::BlobProcessor,
     scanner_pool::ScannerPool,
     slack, teams,
@@ -200,6 +201,7 @@ pub fn clone_or_update_git_repos_streaming<F>(
     global_args: &global::GlobalArgs,
     repo_urls: &[GitUrl],
     datastore: &Arc<Mutex<findings_store::FindingsStore>>,
+    audit: &SharedScanAudit,
     mut on_repo_ready: F,
 ) -> Result<()>
 where
@@ -249,6 +251,7 @@ where
         None
     };
     let datastore = Arc::clone(datastore);
+    let audit = Arc::clone(audit);
     let worker_progress = progress.clone();
 
     // The helper's bounded result channel prevents cloners from racing ahead
@@ -257,6 +260,7 @@ where
         clone_concurrency,
         repo_urls.iter().cloned(),
         move |repo_url| {
+            audit.lock().unwrap().fetch_started(repo_url.as_str());
             let git_for_repo = || -> Result<Git> {
                 let github_token = if provider_hosts.is_github_url(&repo_url) {
                     let auth = github_auth
@@ -290,6 +294,7 @@ where
                     Ok(git) => git,
                     Err(e) => {
                         worker_progress.suspend(|| error!("{e:#}"));
+                        audit.lock().unwrap().fetch_failed(repo_url.as_str(), &format!("{e:#}"));
                         worker_progress.inc(1);
                         return None;
                     }
@@ -300,6 +305,11 @@ where
                             let mut ds = datastore.lock().unwrap();
                             ds.register_repo_link(output_dir.clone(), repo_url.to_string());
                         }
+                        audit.lock().unwrap().fetch_completed(
+                            repo_url.as_str(),
+                            &output_dir,
+                            "updated",
+                        );
                         worker_progress.inc(1);
                         return Some(output_dir);
                     }
@@ -327,11 +337,13 @@ where
                 Ok(git) => git,
                 Err(e) => {
                     worker_progress.suspend(|| error!("{e:#}"));
+                    audit.lock().unwrap().fetch_failed(repo_url.as_str(), &format!("{e:#}"));
                     worker_progress.inc(1);
                     return None;
                 }
             };
             if let Err(e) = git.create_fresh_clone(&repo_url, &output_dir, clone_mode) {
+                audit.lock().unwrap().fetch_failed(repo_url.as_str(), &e.to_string());
                 worker_progress.suspend(|| {
                     if repo_url.as_str().ends_with(".wiki.git") {
                         info!("Wiki repository not found for {repo_url}, skipping");
@@ -349,6 +361,7 @@ where
                 let mut ds = datastore.lock().unwrap();
                 ds.register_repo_link(output_dir.clone(), repo_url.to_string());
             }
+            audit.lock().unwrap().fetch_completed(repo_url.as_str(), &output_dir, "cloned");
 
             worker_progress.inc(1);
             Some(output_dir)

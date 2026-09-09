@@ -7,6 +7,7 @@ This guide covers all installation methods for Kingfisher, including pre-commit 
 ## Table of Contents
 
 - [Pre-built Releases](#pre-built-releases)
+- [Verifying Release Artifacts](#verifying-release-artifacts)
 - [Homebrew](#homebrew)
 - [mise](#mise)
 - [Linux and macOS](#linux-and-macos)
@@ -23,6 +24,49 @@ This guide covers all installation methods for Kingfisher, including pre-commit 
 ## Pre-built Releases
 
 Pre-built binaries are available from the [Releases](https://github.com/mongodb/kingfisher/releases) section.
+
+## Verifying Release Artifacts
+
+Every release ships
+[SLSA v1 build-provenance attestations](https://github.com/actions/attest-build-provenance)
+using Sigstore keyless OIDC. The attestation ties an artifact digest to Kingfisher's release
+workflow, tag, and source commit. It is available through GitHub's attestation store and as the
+`multiple.intoto.jsonl` release asset.
+
+The simplest verification path uses the [GitHub CLI](https://cli.github.com/):
+
+```bash
+gh release download <version> --repo mongodb/kingfisher --pattern 'kingfisher-linux-x64.tgz'
+gh attestation verify kingfisher-linux-x64.tgz --repo mongodb/kingfisher
+```
+
+For offline-friendly verification, use [cosign](https://docs.sigstore.dev/system_config/installation/)
+2.x or later with the downloaded attestation bundle:
+
+```bash
+gh release download <version> --repo mongodb/kingfisher \
+  --pattern 'kingfisher-linux-x64.tgz' --pattern 'multiple.intoto.jsonl'
+
+cosign verify-blob-attestation \
+  --bundle multiple.intoto.jsonl \
+  --new-bundle-format \
+  --certificate-identity-regexp '^https://github.com/mongodb/kingfisher/\.github/workflows/release\.yml@refs/tags/v.*$' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  kingfisher-linux-x64.tgz
+```
+
+You can also use [slsa-verifier](https://github.com/slsa-framework/slsa-verifier):
+
+```bash
+slsa-verifier verify-artifact kingfisher-linux-x64.tgz \
+  --provenance-path multiple.intoto.jsonl \
+  --source-uri github.com/mongodb/kingfisher \
+  --source-tag <version>
+```
+
+A successful verification proves the artifact's SHA-256, signing workflow, tag, and source commit.
+Sigstore records the signing event in the public
+[Rekor transparency log](https://search.sigstore.dev/).
 
 ## Homebrew
 
@@ -354,9 +398,9 @@ kingfisher scan . --staged --quiet --no-update-check
 
 Source builds require outbound HTTPS access. During compilation, Kingfisher downloads the pinned
 Betterleaks catalog snapshot and selected Veles source files, converts them, and embeds the
-generated rule database. A Betterleaks release is preferred; the current immutable post-release
-commit is pinned because the latest release predates detectors that Kingfisher ships. The upstream
-rule source is intentionally not vendored in this repository.
+generated rule database. The current built-in catalog contains 485 rules. A Betterleaks release is
+preferred; the current immutable post-release commit is pinned because the latest release predates
+detectors that Kingfisher ships. The upstream rule source is intentionally not vendored in this repository.
 
 You may compile for your platform via `make`:
 

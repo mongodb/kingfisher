@@ -384,9 +384,9 @@ from the built-in catalog because their broad patterns provide low signal at dis
 cost. Use a targeted custom TOML or YAML rule when your organization needs generic credential
 detection for a known naming convention.
 
-Kingfisher does not vendor the upstream rule catalogs. Clean source builds require outbound HTTPS
-access: the build downloads the pinned Betterleaks catalog snapshot from its
-[source permalink](https://github.com/betterleaks/betterleaks/blob/2ba7943682b82a3659a89dae8fc680de1ef6b781/config/betterleaks.toml) and
+Kingfisher embeds 485 built-in rules. It does not vendor the upstream rule catalogs. Clean source
+builds require outbound HTTPS access: the build downloads the pinned Betterleaks catalog snapshot from its
+[source permalink](https://github.com/betterleaks/betterleaks/blob/95237cf8eb4d8e9f67409595b245e674832992cf/config/betterleaks.toml) and
 selected Veles source files from the full OSV-SCALIBR commit in
 `crates/kingfisher-rules/data/veles-rules.yml`, then converts and embeds the generated database.
 A Betterleaks release is preferred; the current immutable post-release commit is pinned because
@@ -415,6 +415,11 @@ operational filters and capability metadata; it is validated against the downloa
 and components during the build. Checksum templates remain available to
 Kingfisher 1.x custom rules; Betterleaks detectors rely on their upstream regex/filter behavior until the
 upstream schema exposes checksum metadata.
+
+The `betterleaks.gcp-api-key` binding uses this path to run the bounded, read-only Google API-key
+mapper. It records exact accepted, restricted, invalid, and inconclusive probe outcomes without
+inferring access to untested methods; see [Blast Radius](../features/blast-radius.md#gcp-gcp) for its allowlist
+and safety boundaries.
 
 New generally useful rules and validation improvements must be contributed to the
 [Betterleaks repository](https://github.com/betterleaks/betterleaks) first. Do not add a new

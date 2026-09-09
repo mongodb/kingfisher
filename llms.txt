@@ -1,0 +1,41 @@
+# Kingfisher
+
+> Kingfisher is a batteries-included open source secret scanner and credential-response tool. It
+> detects exposed credentials, validates which are active, maps blast radius, supports visual
+> triage, and revokes supported secrets.
+
+Kingfisher is written in Rust and licensed under Apache-2.0. Use TOON output for LLM and agent
+workflows: `kingfisher scan <target> --format toon --no-update-check`.
+
+## Start Here
+
+- [Documentation index](https://mongodb.github.io/kingfisher/reference/documentation-index/)
+- [Installation](https://mongodb.github.io/kingfisher/getting-started/installation/)
+- [Basic scanning](https://mongodb.github.io/kingfisher/usage/basic-scanning/)
+- [Platform integrations](https://mongodb.github.io/kingfisher/usage/integrations/)
+- [Defender workflow](https://mongodb.github.io/kingfisher/usage/defender-workflow/)
+
+## Core Capabilities
+
+- [Blast-radius mapping](https://mongodb.github.io/kingfisher/features/blast-radius/)
+- [Report viewer and triage](https://mongodb.github.io/kingfisher/features/report-viewer/)
+- [Credential revocation](https://mongodb.github.io/kingfisher/features/revocation/)
+- [Alert webhooks](https://mongodb.github.io/kingfisher/usage/alerts/)
+- [Repository scan audit log](https://mongodb.github.io/kingfisher/features/repository-audit/)
+- [Baselines](https://mongodb.github.io/kingfisher/usage/baseline/)
+
+## Configuration and Extension
+
+- [Project configuration](https://mongodb.github.io/kingfisher/usage/configuration/)
+- [Advanced configuration](https://mongodb.github.io/kingfisher/usage/advanced/)
+- [Rule authoring](https://mongodb.github.io/kingfisher/rules/overview/)
+- [Rust library API](https://mongodb.github.io/kingfisher/reference/library/)
+- [Architecture](https://mongodb.github.io/kingfisher/reference/architecture/)
+- [Project background](https://mongodb.github.io/kingfisher/reference/project/)
+
+## Repository
+
+- [Source](https://github.com/mongodb/kingfisher)
+- [Changelog](https://github.com/mongodb/kingfisher/blob/main/CHANGELOG.md)
+- [Contributing](https://github.com/mongodb/kingfisher/blob/main/CONTRIBUTING.md)
+- [Security policy](https://github.com/mongodb/kingfisher/blob/main/SECURITY.md)

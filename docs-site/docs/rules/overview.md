@@ -11,6 +11,10 @@ useful detectors and validation improvements should still be contributed to Bett
 When the Betterleaks catalog covers a Veles detector, the Betterleaks detector is preferred and
 the overlapping Veles detector is not bundled.
 
+The current built-in catalog contains **485 rules**, including selected Veles rules and hidden
+component/helper rules. See the [built-in rules listing](builtin-rules.md) for the per-rule catalog
+and capability counts.
+
 The Betterleaks TOML format is supported for custom rules as well as for Kingfisher's built-in
 catalog. Use it for generally useful detectors that should be developed and shared through
 Betterleaks. Custom Betterleaks TOML rules are automatically placed in the `custom.` namespace.

@@ -13,6 +13,8 @@ import shutil
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 DOCS_SRC = os.path.join(REPO_ROOT, "docs")
 DOCS_DST = os.path.join(REPO_ROOT, "docs-site", "docs")
+LLMS_SRC = os.path.join(REPO_ROOT, "llms.txt")
+LLMS_DST = os.path.join(DOCS_DST, "llms.txt")
 VIEWER_SRC_DIR = os.path.join(DOCS_SRC, "viewer")
 VIEWER_DST_DIR = os.path.join(DOCS_DST, "viewer")
 VIEWER_CLI_BOOTSTRAP = (
@@ -27,6 +29,11 @@ VIEWER_STATIC_BOOTSTRAP = (
 
 # Mapping: source filename -> (destination path, title, description)
 DOC_MAP = {
+    "INDEX.md": (
+        "reference/documentation-index.md",
+        "Documentation Index",
+        "Task-oriented map of Kingfisher documentation for users, operators, LLM agents, rule authors, and library developers.",
+    ),
     "INSTALLATION.md": (
         "getting-started/installation.md",
         "Installation",
@@ -76,6 +83,11 @@ DOC_MAP = {
         "features/blast-radius.md",
         "Blast Radius",
         "Map identity, permissions, and resources across 43 open-source providers, including AWS and GCP.",
+    ),
+    "AUDIT_LOG.md": (
+        "features/repository-audit.md",
+        "Repository Scan Audit Log",
+        "Record repository discovery, fetch and scan outcomes, timing, Git snapshot coverage, and incremental JSONL lifecycle events.",
     ),
     "REVOCATION_PROVIDERS.md": (
         "features/revocation.md",
@@ -132,11 +144,17 @@ DOC_MAP = {
         "Benchmarks & Comparison",
         "Benchmark results comparing Kingfisher performance against TruffleHog, GitLeaks, and detect-secrets across major open source repositories.",
     ),
+    "PROJECT.md": (
+        "reference/project.md",
+        "Project Background",
+        "Kingfisher production use, open source integrations, lineage, evolution, roadmap, and contribution links.",
+    ),
 }
 
 # Link rewriting rules: old link target -> new relative path
 # These are approximate; the script handles common patterns
 LINK_REWRITES = {
+    "INDEX.md": "../reference/documentation-index.md",
     "INSTALLATION.md": "../getting-started/installation.md",
     "USAGE.md": "../usage/basic-scanning.md",
     "INTEGRATIONS.md": "../usage/integrations.md",
@@ -147,6 +165,7 @@ LINK_REWRITES = {
     "ALERTS.md": "../usage/alerts.md",
     "DEFENDER_WORKFLOW.md": "../usage/defender-workflow.md",
     "BLAST_RADIUS.md": "../features/blast-radius.md",
+    "AUDIT_LOG.md": "../features/repository-audit.md",
     "REVOCATION_PROVIDERS.md": "../features/revocation.md",
     "TOKEN_REVOCATION_SUPPORT.md": "../features/token-revocation-support.md",
     "MULTI_STEP_REVOCATION.md": "../features/multi-step-revocation.md",
@@ -159,6 +178,7 @@ LINK_REWRITES = {
     "LIBRARY.md": "../reference/library.md",
     "PYPI.md": "../reference/python-bindings.md",
     "COMPARISON.md": "../reference/comparison.md",
+    "PROJECT.md": "../reference/project.md",
 }
 
 
@@ -200,11 +220,36 @@ def rewrite_links(content: str) -> str:
     # Rewrite image references from docs/ relative paths (markdown and HTML src=)
     content = content.replace("](./runtime-comparison.png", "](../assets/images/runtime-comparison.png")
     content = content.replace('src="./runtime-comparison.png"', 'src="../assets/images/runtime-comparison.png"')
+    content = content.replace("](./binary-size-comparison.svg", "](../assets/images/binary-size-comparison.svg")
+    content = content.replace(
+        'src="./binary-size-comparison.svg"',
+        'src="../assets/images/binary-size-comparison.svg"',
+    )
     content = content.replace("](./assets/icons/", "](../assets/icons/")
+    content = content.replace(
+        "](../docs-site/docs/rules/builtin-rules.md)",
+        "](builtin-rules.md)",
+    )
 
     # Rewrite links to files that live at non-standard site locations
     content = content.replace("](../README.md)", "](../getting-started/quick-start.md)")
     content = content.replace("](../CHANGELOG.md)", "](../changelog.md)")
+    content = content.replace(
+        "](../AGENTS.md)",
+        "](https://github.com/mongodb/kingfisher/blob/main/AGENTS.md)",
+    )
+    content = content.replace(
+        "](../CONTRIBUTING.md)",
+        "](https://github.com/mongodb/kingfisher/blob/main/CONTRIBUTING.md)",
+    )
+    content = content.replace(
+        "](../SECURITY.md)",
+        "](https://github.com/mongodb/kingfisher/blob/main/SECURITY.md)",
+    )
+    content = content.replace(
+        "](../LICENSE)",
+        "](https://github.com/mongodb/kingfisher/blob/main/LICENSE)",
+    )
     return content
 
 
@@ -258,6 +303,15 @@ def copy_changelog():
         print("  CHANGELOG.md -> changelog.md")
 
 
+def copy_llms_index():
+    """Publish the root machine-readable documentation map."""
+    if os.path.exists(LLMS_SRC):
+        shutil.copy2(LLMS_SRC, LLMS_DST)
+        print("  llms.txt -> llms.txt")
+    else:
+        print("  WARNING: llms.txt not found, skipping")
+
+
 def transform_viewer_for_docs_site(content: str) -> str:
     """Disable the CLI-only embedded report bootstrap in the hosted viewer."""
     if VIEWER_CLI_BOOTSTRAP not in content:
@@ -308,6 +362,7 @@ def main():
             print(f"  WARNING: {src_name} not found, skipping")
 
     copy_changelog()
+    copy_llms_index()
     copy_report_viewer()
     print("Done.")
 

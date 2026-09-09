@@ -2119,6 +2119,33 @@
       font-weight: 600;
     }
 
+    .coverage-note {
+      color: var(--text-muted);
+      font-size: 13px;
+      line-height: 1.6;
+      margin: 0 0 16px;
+    }
+
+    .coverage-status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      padding: 2px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--border);
+      background: var(--surface-muted);
+      color: var(--text-main);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: capitalize;
+    }
+
+    .coverage-status.completed { color: var(--success); border-color: rgba(34, 197, 94, 0.4); }
+    .coverage-status.failed { color: var(--danger); border-color: rgba(239, 68, 68, 0.45); }
+    .coverage-status.running, .coverage-status.pending { color: var(--warning); border-color: rgba(245, 158, 11, 0.45); }
+    .coverage-repository { min-width: 260px; max-width: 480px; overflow-wrap: anywhere; }
+    .coverage-error { color: var(--danger); max-width: 340px; overflow-wrap: anywhere; }
+
     /* Report type selector */
     .report-type-group {
       display: flex;
@@ -2936,6 +2963,19 @@
                   <span class="nav-button__sub">Identity reach and permissions</span>
                 </span>
               </button>
+              <button class="nav-button" data-view-target="view-coverage" title="Repository Coverage">
+                <span class="nav-icon" aria-hidden="true">
+                  <svg viewBox="0 0 24 24">
+                    <path d="M4 5h16v14H4z"></path>
+                    <path d="M8 9h8"></path>
+                    <path d="M8 13h5"></path>
+                  </svg>
+                </span>
+                <span class="nav-button__content">
+                  <span class="nav-button__title">Coverage</span>
+                  <span class="nav-button__sub">Repositories and Git snapshots</span>
+                </span>
+              </button>
               <button class="nav-button" data-view-target="view-findings" title="Findings">
                 <span class="nav-icon" aria-hidden="true">
                   <svg viewBox="0 0 24 24">
@@ -2965,6 +3005,10 @@
               <span aria-hidden="true">&#9673;</span>
               <span>Blast Radius</span>
             </button>
+            <button id="workspace-tab-coverage" class="workspace-tab" type="button" role="tab" data-view-target="view-coverage" aria-controls="view-coverage" aria-selected="false" tabindex="-1">
+              <span aria-hidden="true">&#9638;</span>
+              <span>Coverage</span>
+            </button>
             <button id="workspace-tab-findings" class="workspace-tab" type="button" role="tab" data-view-target="view-findings" aria-controls="view-findings" aria-selected="false" tabindex="-1">
               <span aria-hidden="true">&#9776;</span>
               <span>Findings</span>
@@ -2992,6 +3036,10 @@
                 <div class="workspace-overview__stat">
                   <div class="workspace-overview__value" id="sidebar-summary-identities">0</div>
                   <div class="workspace-overview__label">Identities</div>
+                </div>
+                <div class="workspace-overview__stat">
+                  <div class="workspace-overview__value" id="sidebar-summary-repositories">0</div>
+                  <div class="workspace-overview__label">Repos scanned</div>
                 </div>
               </div>
             </div>
@@ -3147,6 +3195,39 @@
                   </div>
                   <div id="detector-breakdown"></div>
                 </div>
+              </div>
+            </section>
+          </section>
+
+           <section id="view-coverage" class="view hidden" role="tabpanel" aria-labelledby="workspace-tab-coverage" tabindex="0">
+            <section class="panel">
+              <div class="panel__header">
+                <div class="panel__title">
+                  <h2>Repository Coverage</h2>
+                  <p>Discovery, fetch, scan timing, and the exact Git snapshot inspected</p>
+                </div>
+                <input type="search" id="coverage-search" name="coverage-search" class="search-input" autocomplete="off" spellcheck="false" placeholder="Filter repository or status…" aria-label="Filter repository coverage">
+              </div>
+              <p class="coverage-note"><strong>How to read this:</strong> Git history is not one straight line—branches and merges make a single “last commit scanned” ambiguous. <strong>Tip SHA</strong> is the exact commit Kingfisher pinned when this scan started (a version bookmark). An optional boundary is the older end of a diff, and <strong>Scope</strong> tells you what was eligible. <code>all_fetched_git_objects</code> means every file-content object (Git blob) available in the fetched repository—including history objects, not only the latest files.</p>
+              <div class="metrics-grid">
+                <div class="metric"><div class="metric__label">Discovered</div><div class="metric__value" id="coverage-discovered">0</div></div>
+                <div class="metric success"><div class="metric__label">Completed</div><div class="metric__value" id="coverage-completed">0</div></div>
+                <div class="metric"><div class="metric__label">Pending</div><div class="metric__value" id="coverage-pending">0</div></div>
+                <div class="metric critical"><div class="metric__label">Fetch Failed</div><div class="metric__value" id="coverage-fetch-failed">0</div></div>
+                <div class="metric critical"><div class="metric__label">Scan Failed</div><div class="metric__value" id="coverage-scan-failed">0</div></div>
+              </div>
+              <div id="coverage-empty" class="am-empty-hint">This report does not contain Kingfisher repository audit data. Generate a new native report to capture repository coverage.</div>
+              <div id="coverage-table-wrap" class="table-container hidden">
+                <table class="table">
+                  <thead><tr><th>Repository</th><th>Scan status</th><th>Started</th><th>Duration</th><th>Tip SHA</th><th>Scope / boundary</th><th>Scanned</th><th>Error</th></tr></thead>
+                  <tbody id="coverage-body"></tbody>
+                </table>
+              </div>
+              <div class="findings-pagination" aria-label="Repository coverage pagination">
+                <span class="findings-pagination__summary" id="coverage-page-summary">0 repositories</span>
+                <button id="coverage-prev" class="pager-btn" type="button" aria-label="Previous repository coverage page">&lsaquo;</button>
+                <span id="coverage-page-info">0 of 0</span>
+                <button id="coverage-next" class="pager-btn" type="button" aria-label="Next repository coverage page">&rsaquo;</button>
               </div>
             </section>
           </section>
@@ -3421,6 +3502,9 @@
     let rawData = null;
     let findings = [];
     let accessMap = [];
+    let repositoryAudit = null;
+    let coveragePage = 1;
+    const coveragePageSize = 50;
     let duplicatesRemoved = { kingfisher: 0, sarif: 0, trufflehog: 0, gitleaks: 0, total: 0 };
     let filteredAccessMapView = [];
     let currentFilter = "";
@@ -3461,6 +3545,10 @@
     const detectorBreakdownPrev = document.getElementById("detector-breakdown-prev");
     const detectorBreakdownNext = document.getElementById("detector-breakdown-next");
     const detectorBreakdownPageInfo = document.getElementById("detector-breakdown-page-info");
+    const coverageSearch = document.getElementById("coverage-search");
+    const coverageBody = document.getElementById("coverage-body");
+    const coveragePrev = document.getElementById("coverage-prev");
+    const coverageNext = document.getElementById("coverage-next");
 
     const searchInput = document.getElementById("search-input");
     const sourceSelect = document.getElementById("source-filter");
@@ -3496,6 +3584,7 @@
     const detectorBreakdown = document.getElementById("detector-breakdown");
     const viewRegistry = {
       "view-dashboard": document.getElementById("view-dashboard"),
+      "view-coverage": document.getElementById("view-coverage"),
       "view-access": document.getElementById("view-access"),
       "view-findings": document.getElementById("view-findings"),
     };
@@ -3600,6 +3689,19 @@
 
     function formatNumber(value) {
       return new Intl.NumberFormat().format(Number(value) || 0);
+    }
+
+    function formatBytes(value) {
+      const bytes = Number(value) || 0;
+      if (bytes < 1024) return `${formatNumber(bytes)} B`;
+      const units = ["KB", "MB", "GB", "TB"];
+      let scaled = bytes / 1024;
+      let unit = units[0];
+      for (let index = 1; index < units.length && scaled >= 1024; index += 1) {
+        scaled /= 1024;
+        unit = units[index];
+      }
+      return `${new Intl.NumberFormat(undefined, { maximumFractionDigits: 1 }).format(scaled)} ${unit}`;
     }
 
     function formatDateTime(value) {
@@ -3729,6 +3831,25 @@
         });
       }
     });
+
+    if (coverageSearch) {
+      coverageSearch.addEventListener("input", () => {
+        coveragePage = 1;
+        renderRepositoryCoverage();
+      });
+    }
+    if (coveragePrev) {
+      coveragePrev.addEventListener("click", () => {
+        coveragePage = Math.max(1, coveragePage - 1);
+        renderRepositoryCoverage();
+      });
+    }
+    if (coverageNext) {
+      coverageNext.addEventListener("click", () => {
+        coveragePage += 1;
+        renderRepositoryCoverage();
+      });
+    }
 
     const resetButton = document.getElementById("reset-btn");
 
@@ -3997,6 +4118,7 @@
       const viewId = targetId && viewRegistry[targetId] ? targetId : fallback;
       const viewTitle = {
         "view-dashboard": "Overview",
+        "view-coverage": "Repository Coverage",
         "view-access": "Blast Radius",
         "view-findings": "Findings",
       }[viewId];
@@ -4078,6 +4200,52 @@
       return null;
     }
 
+    function summarizeRepositoryAudit(repositories) {
+      const summary = { discovered: repositories.length, fetch_succeeded: 0, fetch_failed: 0, scan_succeeded: 0, scan_partial: 0, scan_failed: 0, pending: 0 };
+      repositories.forEach((record) => {
+        const fetchStatus = String(record && record.fetch && record.fetch.status || "");
+        const scanStatus = String(record && record.scan && record.scan.status || "");
+        if (fetchStatus === "completed") summary.fetch_succeeded += 1;
+        if (fetchStatus === "failed") summary.fetch_failed += 1;
+        if (scanStatus === "completed") summary.scan_succeeded += 1;
+        if (scanStatus === "partial") summary.scan_partial += 1;
+        if (scanStatus === "failed") summary.scan_failed += 1;
+        if (scanStatus === "pending" || scanStatus === "running") summary.pending += 1;
+      });
+      return summary;
+    }
+
+    function mergeRepositoryAudits(base, incoming) {
+      if (!base || typeof base !== "object") return incoming && typeof incoming === "object" ? incoming : null;
+      if (!incoming || typeof incoming !== "object") return base;
+      const records = new Map();
+      const baseRunId = String(base.run_id || "");
+      const incomingRunId = String(incoming.run_id || "");
+      const sameRun = baseRunId && incomingRunId && baseRunId === incomingRunId && baseRunId !== "multiple";
+      [
+        ...toArray(base.repositories).map((record) => ({ record, runId: baseRunId })),
+        ...toArray(incoming.repositories).map((record) => ({ record, runId: incomingRunId })),
+      ].forEach(({ record, runId }) => {
+        if (!record || typeof record !== "object") return;
+        const namespace = sameRun ? baseRunId : (String(record.run_id || runId) || "unknown");
+        const key = `${namespace}:${String(record.key || record.repository || records.size)}`;
+        const previous = records.get(key) || {};
+        records.set(key, Object.assign({}, previous, record, { run_id: namespace }));
+      });
+      const repositories = [...records.values()].sort((left, right) =>
+        String(left.repository || "").localeCompare(String(right.repository || ""))
+      );
+      const mergedRunId = sameRun ? incomingRunId : "multiple";
+      return Object.assign({}, base, incoming, {
+        run_id: mergedRunId,
+        repositories,
+        summary: summarizeRepositoryAudit(repositories),
+        started_at: sameRun ? firstNonEmpty(base.started_at, incoming.started_at) : null,
+        completed_at: sameRun ? firstNonEmpty(incoming.completed_at, base.completed_at) : null,
+        duration_seconds: sameRun ? (incoming.duration_seconds || base.duration_seconds) : null,
+      });
+    }
+
     function collectReportData(entries) {
       const findings = [];
       const accessMap = [];
@@ -4088,9 +4256,11 @@
       items.forEach((item) => {
         if (!item || typeof item !== "object") return;
 
-        if (Array.isArray(item.findings) || Array.isArray(item.access_map)) {
+        if (Array.isArray(item.findings) || Array.isArray(item.access_map) || item.audit) {
           if (!mainReport) {
             mainReport = item;
+          } else if (item.audit) {
+            mainReport.audit = mergeRepositoryAudits(mainReport.audit, item.audit);
           }
         }
 
@@ -4615,6 +4785,7 @@
       let version = "";
       let hasKingfisherSarif = false;
       let hasCommands = false;
+      let repositoryAudit = null;
 
       documents.forEach((document) => {
         const runs = isSarifPayload(document)
@@ -4630,6 +4801,10 @@
           const runProps = run.properties && typeof run.properties === "object" ? run.properties : {};
           const runAccessMap = firstNonEmpty(runProps.access_map, runProps.accessMap);
           if (Array.isArray(runAccessMap)) accessMap.push(...runAccessMap);
+          repositoryAudit = mergeRepositoryAudits(
+            repositoryAudit,
+            firstNonEmpty(runProps.repository_audit, runProps.repositoryAudit)
+          );
 
           const ruleMaps = buildSarifRuleMaps(run);
           (run.results || []).forEach((result) => {
@@ -4653,6 +4828,7 @@
         rd: {
           findings: normalizedFindings,
           access_map: accessMap,
+          audit: repositoryAudit,
           metadata: {
             generated_at: new Date().toISOString(),
             scan_timestamp: new Date().toISOString(),
@@ -4938,6 +5114,7 @@
       if (!incoming) return base;
 
       const merged = Object.assign({}, base, incoming);
+      merged.audit = mergeRepositoryAudits(base.audit, incoming.audit);
       merged.metadata = Object.assign({}, base.metadata || {}, incoming.metadata || {});
       merged.metadata.viewer_import = mergeViewerImportMetadata(
         base.metadata && base.metadata.viewer_import,
@@ -5061,6 +5238,8 @@
     function resetViewer(promptFilePicker = false) {
       findings = [];
       accessMap = [];
+      repositoryAudit = null;
+      coveragePage = 1;
       filteredAccessMapView = [];
       rawData = null;
       currentDetailFinding = null;
@@ -5084,6 +5263,7 @@
       sourceSelect.value = "all";
       rowsSelect.value = "10";
       treeSearch.value = "";
+      if (coverageSearch) coverageSearch.value = "";
       if (detectorBreakdownActiveOnlyToggle) detectorBreakdownActiveOnlyToggle.checked = false;
       setAccessMapViewMode("map");
 
@@ -5094,6 +5274,7 @@
       if (amStatsBar) amStatsBar.classList.add("hidden");
 
       renderAccessMapTree();
+      renderRepositoryCoverage();
       renderFindingsTable();
       updateMetrics();
 
@@ -5443,6 +5624,7 @@
         evidence.paths = mergeUnique(firstEvidence && firstEvidence.paths, secondEvidence && secondEvidence.paths, (path) => JSON.stringify(path));
         evidence.role_impacts = mergeUnique(firstEvidence && firstEvidence.role_impacts, secondEvidence && secondEvidence.role_impacts, (impact) => JSON.stringify(impact));
         evidence.hierarchy = mergeUnique(firstEvidence && firstEvidence.hierarchy, secondEvidence && secondEvidence.hierarchy, (scope) => (scope.kind || "") + ":" + (scope.id || ""));
+        evidence.probes = mergeUnique(firstEvidence && firstEvidence.probes, secondEvidence && secondEvidence.probes, (probe) => (probe.service || "") + ":" + (probe.method || ""));
         evidence.limitations = mergeUnique(firstEvidence && firstEvidence.limitations, secondEvidence && secondEvidence.limitations, (value) => String(value));
         merged.provider_metadata.authorization_evidence = evidence;
       }
@@ -5459,9 +5641,13 @@
       sourceSelect.value = "all";
 
       extractScanMetadata();
+      repositoryAudit = rawData && rawData.audit && typeof rawData.audit === "object"
+        ? rawData.audit
+        : null;
       setActiveView("view-dashboard");
       updateMetrics();
       renderScanMetadata();
+      renderRepositoryCoverage();
       renderAccessMapTree();
       renderFindingsTable();
 
@@ -5665,12 +5851,85 @@
         : "Kingfisher Report Viewer";
     }
 
+    function renderRepositoryCoverage() {
+      if (!coverageBody) return;
+      const repositories = repositoryAudit && Array.isArray(repositoryAudit.repositories)
+        ? repositoryAudit.repositories
+        : [];
+      const summary = repositoryAudit && repositoryAudit.summary
+        ? repositoryAudit.summary
+        : summarizeRepositoryAudit(repositories);
+      const setMetric = (id, value) => {
+        const element = document.getElementById(id);
+        if (element) element.textContent = formatNumber(value || 0);
+      };
+      setMetric("coverage-discovered", summary.discovered);
+      setMetric("coverage-completed", summary.scan_succeeded);
+      setMetric("coverage-pending", summary.pending);
+      setMetric("coverage-fetch-failed", summary.fetch_failed);
+      setMetric("coverage-scan-failed", summary.scan_failed);
+
+      const query = String(coverageSearch && coverageSearch.value || "").trim().toLowerCase();
+      const filtered = repositories.filter((record) => {
+        if (!query) return true;
+        return [record.repository, record.source, record.fetch && record.fetch.status, record.scan && record.scan.status, record.git && record.git.scope]
+          .some((value) => String(value || "").toLowerCase().includes(query));
+      });
+      const pages = Math.max(1, Math.ceil(filtered.length / coveragePageSize));
+      coveragePage = Math.min(Math.max(1, coveragePage), pages);
+      const start = (coveragePage - 1) * coveragePageSize;
+      const visible = filtered.slice(start, start + coveragePageSize);
+      coverageBody.innerHTML = visible.map((record) => {
+        const scan = record.scan || {};
+        const fetch = record.fetch || {};
+        const git = record.git || {};
+        const stats = record.stats || {};
+        const status = fetch.status === "failed" ? "fetch_failed" : String(scan.status || "pending");
+        const statusClass = status === "fetch_failed"
+          ? "failed"
+          : status.toLowerCase().replace(/[^a-z_-]/g, "");
+        const duration = Number(scan.duration_seconds);
+        const tip = String(git.tip_sha || "");
+        const boundary = git.base_sha
+          ? `base ${String(git.base_sha).slice(0, 12)}`
+          : git.inclusive_root_sha
+            ? `root ${String(git.inclusive_root_sha).slice(0, 12)}`
+            : "";
+        const error = firstNonEmpty(scan.error, fetch.error, "");
+        const scanned = stats.blobs_scanned || stats.bytes_scanned
+          ? `${formatNumber(stats.blobs_scanned || 0)} blobs / ${formatBytes(stats.bytes_scanned || 0)}`
+          : "—";
+        return `<tr>
+          <td class="coverage-repository"><strong>${escapeHtml(record.repository || record.key || "Unknown")}</strong><br><span class="muted">${escapeHtml(record.source || "")}</span></td>
+          <td><span class="coverage-status ${statusClass}">${escapeHtml(status.replace(/_/g, " "))}</span></td>
+          <td>${scan.started_at ? escapeHtml(formatDisplayDate(scan.started_at)) : "—"}</td>
+          <td>${Number.isFinite(duration) ? escapeHtml(duration.toFixed(3) + "s") : "—"}</td>
+          <td><code title="${escapeHtml(tip)}">${tip ? escapeHtml(tip.slice(0, 12)) : "—"}</code></td>
+          <td><code>${escapeHtml(git.scope || "—")}</code>${boundary ? `<br><span class="muted">${escapeHtml(boundary)}</span>` : ""}</td>
+          <td>${escapeHtml(scanned)}</td>
+          <td class="coverage-error">${escapeHtml(error)}</td>
+        </tr>`;
+      }).join("");
+
+      const empty = document.getElementById("coverage-empty");
+      const table = document.getElementById("coverage-table-wrap");
+      if (empty) empty.classList.toggle("hidden", repositories.length > 0);
+      if (table) table.classList.toggle("hidden", repositories.length === 0);
+      const summaryElement = document.getElementById("coverage-page-summary");
+      const pageInfo = document.getElementById("coverage-page-info");
+      if (summaryElement) summaryElement.textContent = `${formatNumber(filtered.length)} repositories`;
+      if (pageInfo) pageInfo.textContent = `${coveragePage} of ${pages}`;
+      if (coveragePrev) coveragePrev.disabled = coveragePage <= 1;
+      if (coverageNext) coverageNext.disabled = coveragePage >= pages;
+    }
+
     function updateSidebarSummary() {
       const sourceEl = document.getElementById("sidebar-summary-source");
       const targetEl = document.getElementById("sidebar-summary-target");
       const totalEl = document.getElementById("sidebar-summary-total");
       const activeEl = document.getElementById("sidebar-summary-active");
       const identitiesEl = document.getElementById("sidebar-summary-identities");
+      const repositoriesEl = document.getElementById("sidebar-summary-repositories");
       const accessEl = document.getElementById("sidebar-summary-access");
       if (!sourceEl || !targetEl || !totalEl || !activeEl || !identitiesEl || !accessEl) return;
 
@@ -5686,6 +5945,11 @@
       totalEl.textContent = formatNumber(totalFindings);
       activeEl.textContent = formatNumber(validationCounts.active || 0);
       identitiesEl.textContent = formatNumber(totalIdentities);
+      if (repositoriesEl) {
+        repositoriesEl.textContent = formatNumber(
+          repositoryAudit && repositoryAudit.summary && repositoryAudit.summary.scan_succeeded || 0
+        );
+      }
       accessEl.textContent = totalIdentities > 0 ? "Yes" : "No";
     }
 
@@ -6714,6 +6978,56 @@
         ? `<div style="display:flex;flex-wrap:wrap;gap:16px;padding:10px 14px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:6px;font-size:12px;margin-bottom:16px;">${metaLines.join('<span style="color:#cbd5e1;">|</span>')}</div>${cliArgsHtml}`
         : "";
 
+      const auditRepositories = repositoryAudit && Array.isArray(repositoryAudit.repositories)
+        ? repositoryAudit.repositories
+        : [];
+      const auditSummary = repositoryAudit && repositoryAudit.summary
+        ? repositoryAudit.summary
+        : summarizeRepositoryAudit(auditRepositories);
+      const auditRows = auditRepositories.map((record) => {
+        const fetch = record.fetch || {};
+        const scan = record.scan || {};
+        const git = record.git || {};
+        const stats = record.stats || {};
+        const status = fetch.status === "failed"
+          ? "fetch failed"
+          : String(scan.status || "pending").replace(/_/g, " ");
+        const duration = Number(scan.duration_seconds);
+        const boundary = git.base_sha
+          ? `base ${String(git.base_sha).slice(0, 12)}`
+          : git.inclusive_root_sha
+            ? `root ${String(git.inclusive_root_sha).slice(0, 12)}`
+            : "—";
+        const scanned = stats.blobs_scanned || stats.bytes_scanned
+          ? `${formatNumber(stats.blobs_scanned || 0)} blobs / ${formatBytes(stats.bytes_scanned || 0)}`
+          : "—";
+        return `<tr>
+          <td>${escapeHtml(record.repository || record.key || "Unknown")}</td>
+          <td>${escapeHtml(status)}</td>
+          <td>${scan.started_at ? escapeHtml(formatDisplayDate(scan.started_at)) : "—"}</td>
+          <td>${Number.isFinite(duration) ? escapeHtml(duration.toFixed(3) + "s") : "—"}</td>
+          <td><code>${git.tip_sha ? escapeHtml(String(git.tip_sha).slice(0, 12)) : "—"}</code></td>
+          <td><code>${escapeHtml(git.scope || "—")}</code><br>${escapeHtml(boundary)}</td>
+          <td>${escapeHtml(scanned)}</td>
+          <td>${escapeHtml(firstNonEmpty(scan.error, fetch.error, ""))}</td>
+        </tr>`;
+      }).join("");
+      const auditHtml = auditRepositories.length ? `
+        <div class="section">
+          <h2>Repository Coverage</h2>
+          <p style="font-size:12px;color:#475569;line-height:1.5;"><strong>How to read this:</strong> Git history is not one straight line—branches and merges make a single “last commit scanned” ambiguous. The <strong>Tip SHA</strong> is the exact commit pinned when scanning started; the optional boundary is the older end of a diff; and the scope says which files or history were eligible. <code>all_fetched_git_objects</code> means every fetched file-content object (Git blob), including history objects—not only the latest files.</p>
+          <div class="grid">
+            <div class="stat"><div class="label">Discovered</div><div class="value">${auditSummary.discovered || 0}</div></div>
+            <div class="stat"><div class="label">Completed</div><div class="value">${auditSummary.scan_succeeded || 0}</div></div>
+            <div class="stat"><div class="label">Fetch Failed</div><div class="value" style="color:#dc2626;">${auditSummary.fetch_failed || 0}</div></div>
+            <div class="stat"><div class="label">Scan Failed</div><div class="value" style="color:#dc2626;">${auditSummary.scan_failed || 0}</div></div>
+          </div>
+          <table>
+            <thead><tr><th>Repository</th><th>Status</th><th>Started</th><th>Duration</th><th>Tip SHA</th><th>Scope / Boundary</th><th>Scanned</th><th>Error</th></tr></thead>
+            <tbody>${auditRows}</tbody>
+          </table>
+        </div>` : "";
+
       // Executive summary
       let execSummary = "";
       if (counts.active > 0) {
@@ -6782,6 +7096,7 @@
       <div class="stat"><div class="label">Inactive</div><div class="value" style="color:#f97316;">${counts.inactive || 0}</div></div>
       <div class="stat"><div class="label">Not Validated</div><div class="value">${counts.not_attempted || 0}</div></div>
       <div class="stat"><div class="label">Identities</div><div class="value">${(accessMap || []).length}</div></div>
+      <div class="stat"><div class="label">Repos Scanned</div><div class="value">${auditSummary.scan_succeeded || 0}</div></div>
     </div>
     <div class="chart-wrapper">
       ${statusImage ? `<img src="${statusImage}" alt="Status chart" style="max-width:240px; border:1px solid #d1d5db; border-radius:10px;">` : ""}
@@ -6794,6 +7109,8 @@
       </div>
     </div>
   </div>
+
+  ${auditHtml}
 
   ${Object.keys(ruleSummary).length > 1 ? `
   <div class="section">
@@ -8731,7 +9048,8 @@
         const policyCount = (authorizationEvidence.policies || []).length;
         const pathCount = (authorizationEvidence.paths || []).length;
         const roleImpactCount = (authorizationEvidence.role_impacts || []).length;
-        evidenceMeta.textContent = "Policy evidence: " + policyCount + " · Identity paths: " + pathCount + " · Reachable roles: " + roleImpactCount;
+        const probeCount = (authorizationEvidence.probes || []).length;
+        evidenceMeta.textContent = "Policy evidence: " + policyCount + " · Identity paths: " + pathCount + " · Reachable roles: " + roleImpactCount + " · API probes: " + probeCount;
         meta.appendChild(evidenceMeta);
       }
       info.appendChild(meta);
@@ -9001,6 +9319,15 @@
           evidenceSection.appendChild(note);
         }
 
+        (authorizationEvidence.probes || []).forEach((probe) => {
+          const row = document.createElement("div");
+          row.className = "token-field";
+          const httpStatus = probe.http_status ? " · HTTP " + probe.http_status : "";
+          const reason = probe.reason ? " · " + probe.reason : "";
+          row.textContent = "Probe [" + (probe.status || "inconclusive") + "]: " + (probe.service || "unknown service") + " · " + (probe.method || "unknown method") + httpStatus + reason;
+          evidenceSection.appendChild(row);
+        });
+
         if ((authorizationEvidence.hierarchy || []).length) {
           const hierarchy = document.createElement("div");
           hierarchy.className = "perm-group__shared-note";
@@ -9149,6 +9476,7 @@
           paths: evidence.paths,
           role_impacts: evidence.role_impacts,
           hierarchy: evidence.hierarchy,
+          probes: evidence.probes,
           limitations: evidence.limitations,
           roles: identity.roles,
         }).toLowerCase() : JSON.stringify(identity.roles || []).toLowerCase();

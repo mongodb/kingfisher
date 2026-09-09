@@ -169,6 +169,7 @@ fn test_github_remote_scan() -> Result<()> {
         min_entropy: None,
         redact: false,
         git_repo_timeout: 1800, // 30 minutes
+        audit_log: None,
         output_args: OutputArgs { output: None, format: ReportOutputFormat::Pretty },
         no_dedup: true,
         view_report: false,

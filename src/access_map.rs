@@ -153,6 +153,8 @@ pub enum AccessMapRequest {
     },
     /// A GCP service account JSON document.
     Gcp { credential_json: String, fingerprint: String },
+    /// A Google API key.
+    GcpApiKey { api_key: String, fingerprint: String },
     /// An Azure Storage, Entra client-credential, or OAuth2 token document.
     Azure { credential_json: String, containers: Option<Vec<String>>, fingerprint: String },
     /// An Azure DevOps personal access token with organization.
@@ -250,6 +252,7 @@ impl AccessMapRequest {
         match self {
             Self::Aws { fingerprint, .. }
             | Self::Gcp { fingerprint, .. }
+            | Self::GcpApiKey { fingerprint, .. }
             | Self::Azure { fingerprint, .. }
             | Self::AzureDevops { fingerprint, .. }
             | Self::Github { fingerprint, .. }
@@ -475,8 +478,28 @@ pub struct AuthorizationEvidence {
     pub role_impacts: Vec<RoleImpact>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub hierarchy: Vec<HierarchyScope>,
+    /// Bounded, read-only API probes used to establish observed access.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub probes: Vec<AccessProbeEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub limitations: Vec<String>,
+}
+
+/// One non-mutating API probe and its credential-specific outcome.
+#[derive(Debug, Serialize, Clone, Default, JsonSchema)]
+pub struct AccessProbeEvidence {
+    /// Provider API service name, such as `translate.googleapis.com`.
+    pub service: String,
+    /// Exact read-only method exercised by the probe.
+    pub method: String,
+    /// `accepted`, `restricted`, `invalid`, or `inconclusive`.
+    pub status: String,
+    /// HTTP status returned by the provider, if a response was received.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub http_status: Option<u16>,
+    /// Stable provider reason code or a redacted transport classification.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// Permissions and resource scopes added by a role reachable through an identity transition.
@@ -689,6 +712,11 @@ fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture
                 "gcp",
                 "service_account",
             );
+            (mapped, fingerprint)
+        }),
+        AccessMapRequest::GcpApiKey { api_key, fingerprint } => Box::pin(async move {
+            let mapped =
+                finish_mapping(gcp::map_access_from_api_key(&api_key).await, "gcp", "api_key");
             (mapped, fingerprint)
         }),
         AccessMapRequest::Azure { credential_json, containers, fingerprint } => {
@@ -1403,6 +1431,29 @@ mod tests {
             json["authorization_evidence"]["role_impacts"][0]["grants"][0]["resources"][0],
             "arn:aws:s3:::example/*"
         );
+    }
+
+    #[test]
+    fn authorization_evidence_serializes_read_only_probe_outcomes() {
+        let metadata = ProviderMetadata {
+            authorization_evidence: Some(AuthorizationEvidence {
+                probes: vec![AccessProbeEvidence {
+                    service: "translate.googleapis.com".into(),
+                    method: "language.languages.list".into(),
+                    status: "restricted".into(),
+                    http_status: Some(403),
+                    reason: Some("API_KEY_SERVICE_BLOCKED".into()),
+                }],
+                ..AuthorizationEvidence::default()
+            }),
+            ..ProviderMetadata::default()
+        };
+
+        let json = serde_json::to_value(metadata).unwrap();
+        let probe = &json["authorization_evidence"]["probes"][0];
+        assert_eq!(probe["service"], "translate.googleapis.com");
+        assert_eq!(probe["status"], "restricted");
+        assert_eq!(probe["http_status"], 403);
     }
 }
 

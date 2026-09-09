@@ -7,6 +7,19 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.2.0]
+- Added repository coverage manifests and incremental `--audit-log` JSONL events, including
+  discovery, fetch, scan outcome, Git scope, and per-repository scan statistics.
+- Added read-only Google API-key blast-radius probes for Identity Toolkit, Generative Language,
+  Translation, and YouTube services.
+- Updated Cargo dependencies, including AWS SDK, Git, TLS, and runtime libraries.
+- Explicitly enabled HTTP/2 for outbound validation requests to improve connection reuse and multiplexing.
+- Refreshed the pinned Betterleaks catalog to commit
+  [`95237cf`](https://github.com/betterleaks/betterleaks/blob/95237cf8eb4d8e9f67409595b245e674832992cf/config/betterleaks.toml),
+  adding the Voyage AI API-key detector. Built-in coverage is now 485 rules (459 Betterleaks and
+  26 Veles), with 246 rules supporting validation. The OSV-SCALIBR Veles audit found no new secret
+  detectors since the existing pinned revision.
+
 ## [v2.1.0]
 - Added GitHub App authentication for GitHub organization scans. Configure
   `KF_GITHUB_APP_ID`, `KF_GITHUB_APP_INSTALLATION_ID`, and either
