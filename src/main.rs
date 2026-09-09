@@ -2524,17 +2524,21 @@ output:
     #[test]
     fn audit_log_tilde_path_is_expanded_for_collision_checks() {
         // Shells do not expand `~` in the `--flag=~/...` form; the audit-log
-        // path must still collide with the same file spelled with an absolute
-        // home path. The scan input stays outside the working directory so
-        // only the tilde expansion can produce the collision.
-        let Ok(home) = std::env::var("HOME") else { return };
+        // path must still collide with the same file spelled the way
+        // Kingfisher expands it. The output is computed with the product's
+        // own tilde expansion so the test does not depend on which of
+        // HOME/USERPROFILE the platform resolves first. The scan input stays
+        // outside the working directory so only the tilde expansion can
+        // produce the collision.
+        let expanded =
+            kingfisher::util::expand_tilde(std::path::Path::new("~/kf-audit-collision.jsonl"));
         let input = tempfile::tempdir().unwrap();
         let (args, _) = parse(&[
             "kingfisher",
             "scan",
             "--audit-log=~/kf-audit-collision.jsonl",
             "--output",
-            &format!("{home}/kf-audit-collision.jsonl"),
+            expanded.to_str().unwrap(),
             input.path().to_str().unwrap(),
         ]);
         let cmd = match args.command {
