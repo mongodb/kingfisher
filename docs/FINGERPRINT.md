@@ -86,6 +86,9 @@ alerts, and downstream triage unnecessarily noisy.
 The reported finding still includes the location selected for presentation. Deduplication therefore
 reduces repeated credential findings; it does not imply that the credential appeared only once.
 
+The in-memory Bloom filter is only an acceleration hint. An exact set is authoritative before a
+candidate is discarded, so a Bloom false positive cannot suppress a unique credential.
+
 ### Controlling deduplication
 
 To investigate propagation, enumerate every affected location, or perform forensic analysis, disable

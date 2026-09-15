@@ -6,7 +6,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use std::sync::{LazyLock, OnceLock};
+use std::sync::{
+    LazyLock, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 use anyhow::{Result, anyhow};
 use dashmap::DashMap;
@@ -277,12 +280,52 @@ pub(crate) fn build_credential_uri_client(timeout: Duration) -> Result<Client> {
 // Use SkipMap-based cache instead of a mutex-wrapped FxHashMap.
 type Cache = kingfisher_scanner::validation::Cache;
 
+/// Return the dependency values that affect a match's validation request.
+///
+/// Location is only used to select a nearby dependency. Once selected, the
+/// value—not the source blob or span—is what determines the request, so the
+/// same credential can be reused across duplicated blobs and repositories.
+pub(crate) fn validation_dependency_values(
+    m: &OwnedBlobMatch,
+    dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
+) -> Vec<(String, Option<String>)> {
+    m.rule
+        .syntax()
+        .depends_on_rule
+        .iter()
+        .flatten()
+        .filter(|dep| !dep.variable.eq_ignore_ascii_case("TOKEN"))
+        .map(|dep| {
+            let variable = dep.variable.to_uppercase();
+            let value = m.dependent_captures.get(&variable).cloned().or_else(|| {
+                dependent_variables
+                    .get(&variable)
+                    .and_then(|values| {
+                        select_closest_dependency_value(values, m.matching_input_offset_span)
+                    })
+                    .map(|(value, _)| value)
+            });
+            (variable, value)
+        })
+        .collect()
+}
+
+pub(crate) fn materialize_dependency_captures(
+    m: &mut OwnedBlobMatch,
+    dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
+) {
+    for (variable, value) in validation_dependency_values(m, dependent_variables) {
+        if let Some(value) = value {
+            m.dependent_captures.entry(variable).or_insert(value);
+        }
+    }
+}
+
 /// Returns an opaque key for internal validation deduplication.
 ///
 /// This is an INTERNAL key used only for validation deduplication within a single scan.
-/// It uses `captures.get(0)` to get the primary secret value. Rules with dependent
-/// variables also include blob location because validation can depend on nearby context
-/// such as an AWS access-key ID paired with a secret access key.
+/// It uses `captures.get(0)` to get the primary secret value and includes the
+/// selected dependent values when validation uses nearby context.
 ///
 /// **Important**: This is distinct from the EXTERNAL `finding_fingerprint` used for:
 /// - Baseline comparisons across scans
@@ -291,7 +334,10 @@ type Cache = kingfisher_scanner::validation::Cache;
 ///
 /// The external fingerprint uses `get(1).or_else(get(0))` for backward compatibility
 /// and must remain stable. This internal key can evolve independently.
-fn validation_dedup_key(m: &OwnedBlobMatch) -> [u8; 32] {
+fn validation_dedup_key(
+    m: &OwnedBlobMatch,
+    dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
+) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"kingfisher.validation-dedup.v1\0");
     hash_key_part(&mut hasher, m.rule.syntax().id.as_bytes());
@@ -312,10 +358,13 @@ fn validation_dedup_key(m: &OwnedBlobMatch) -> [u8; 32] {
         hash_key_part(&mut hasher, val.as_bytes());
     }
 
-    if !m.rule.syntax().depends_on_rule.is_empty() {
-        hash_key_part(&mut hasher, m.blob_id.to_string().as_bytes());
-        hash_key_part(&mut hasher, &m.matching_input_offset_span.start.to_le_bytes());
-        hash_key_part(&mut hasher, &m.matching_input_offset_span.end.to_le_bytes());
+    for (variable, value) in validation_dependency_values(m, dependent_variables) {
+        hash_key_part(&mut hasher, variable.as_bytes());
+        if let Some(value) = value {
+            hash_key_part(&mut hasher, value.as_bytes());
+        } else {
+            hash_key_part(&mut hasher, b"<missing>");
+        }
     }
 
     *hasher.finalize().as_bytes()
@@ -327,7 +376,13 @@ fn hash_key_part(hasher: &mut blake3::Hasher, part: &[u8]) {
 }
 
 static VALIDATION_CACHE: OnceLock<DashMap<[u8; 32], CachedResponse>> = OnceLock::new();
-static IN_FLIGHT: OnceLock<DashMap<[u8; 32], Arc<Notify>>> = OnceLock::new();
+
+struct InFlightValidation {
+    notify: Notify,
+    completed: AtomicBool,
+}
+
+static IN_FLIGHT: OnceLock<DashMap<[u8; 32], Arc<InFlightValidation>>> = OnceLock::new();
 
 fn cache_validation_result(fp: [u8; 32], m: &OwnedBlobMatch) {
     VALIDATION_CACHE.get_or_init(DashMap::new).insert(
@@ -343,8 +398,9 @@ fn cache_validation_result(fp: [u8; 32], m: &OwnedBlobMatch) {
 }
 
 fn clear_in_flight_validation(fp: [u8; 32]) {
-    if let Some((_, notify)) = IN_FLIGHT.get_or_init(DashMap::new).remove(&fp) {
-        notify.notify_waiters();
+    if let Some((_, in_flight)) = IN_FLIGHT.get_or_init(DashMap::new).remove(&fp) {
+        in_flight.completed.store(true, Ordering::Release);
+        in_flight.notify.notify_waiters();
     }
 }
 
@@ -355,7 +411,8 @@ pub fn init_validation_caches() {
     aws::set_aws_validation_concurrency(15);
 }
 
-/// Clear the static validation caches to reclaim memory after validation completes.
+/// Clear the static validation caches at a scan boundary to reclaim memory and
+/// prevent validation results from leaking into a later scan.
 pub fn clear_validation_caches() {
     if let Some(c) = VALIDATION_CACHE.get() {
         c.clear();
@@ -829,7 +886,8 @@ pub async fn validate_single_match(
         return;
     }
 
-    let fp = validation_dedup_key(m);
+    materialize_dependency_captures(m, dependent_variables);
+    let fp = validation_dedup_key(m, dependent_variables);
     // Keep the unwind boundary inside this module so the process-wide
     // validation de-dupe state is cleared before the caller observes a panic.
     // The panic branch below overwrites the match with a deterministic failure.
@@ -886,7 +944,7 @@ pub async fn validate_single_match(
 }
 
 /// Perform the actual validation of a match.
-/// Guarantees that each <RULE-ID>|<secret> is validated only once per process,
+/// Guarantees that each <RULE-ID>|<secret> is validated only once per scan,
 /// even when `--no-dedup` is used.
 #[allow(clippy::too_many_arguments)]
 async fn timed_validate_single_match(
@@ -909,21 +967,43 @@ async fn timed_validate_single_match(
     // ──────────────────────────────────────────────────────────
     // 1. process-wide fingerprint de-dup
     // ──────────────────────────────────────────────────────────
-    let fp = validation_dedup_key(m);
+    let fp = validation_dedup_key(m, dependent_variables);
 
-    if let Some(entry) = VALIDATION_CACHE.get_or_init(DashMap::new).get(&fp)
-        && entry.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS)
-    {
+    // This cache is cleared at the start and end of every scan, so entries
+    // remain valid for the full scan even when a large scan runs longer than
+    // the provider-specific cache TTL.
+    if let Some(entry) = VALIDATION_CACHE.get_or_init(DashMap::new).get(&fp) {
         m.validation_success = entry.is_valid;
         m.validation_response_body = entry.body.clone();
         m.validation_response_status = entry.status;
         m.validation_outcome = entry.outcome;
         return;
     }
-    if let Some(wait) =
-        IN_FLIGHT.get_or_init(DashMap::new).get(&fp).map(|entry| entry.value().clone())
-    {
-        wait.notified().await;
+    // Claim the key atomically. A separate get followed by insert allows two
+    // parallel repository phases to observe a miss and both hit the provider.
+    let in_flight =
+        Arc::new(InFlightValidation { notify: Notify::new(), completed: AtomicBool::new(false) });
+    let wait = match IN_FLIGHT.get_or_init(DashMap::new).entry(fp) {
+        dashmap::mapref::entry::Entry::Occupied(entry) => Some(entry.get().clone()),
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
+            entry.insert(Arc::clone(&in_flight));
+            None
+        }
+    };
+    if let Some(wait) = wait {
+        // `Notify::notify_waiters` does not retain a permit when nobody is
+        // waiting yet. Track completion separately and enable the Notified
+        // future before checking it so an owner finishing concurrently cannot
+        // strand this waiter.
+        loop {
+            let notified = wait.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if wait.completed.load(Ordering::Acquire) {
+                break;
+            }
+            notified.await;
+        }
         if let Some(entry) = VALIDATION_CACHE.get().unwrap().get(&fp) {
             m.validation_success = entry.is_valid;
             m.validation_response_body = entry.body.clone();
@@ -932,7 +1012,6 @@ async fn timed_validate_single_match(
         }
         return;
     }
-    IN_FLIGHT.get().unwrap().insert(fp, Arc::new(Notify::new()));
 
     // helper to persist result + notify waiters
     let commit_and_return = |m: &OwnedBlobMatch| {

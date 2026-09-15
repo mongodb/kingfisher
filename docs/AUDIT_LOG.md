@@ -136,7 +136,7 @@ names, local paths, commit identifiers, and operational failures may be sensitiv
 | TOON | Top-level `audit` object |
 | BSON | A trailing document containing `audit` |
 | SARIF | `runs[].properties.repository_audit` |
-| Pretty | `REPOSITORY COVERAGE` section |
+| Pretty | `REPOSITORY COVERAGE` section (only when `--audit-log` is requested) |
 | HTML | Self-contained Repository Coverage and findings tables with search, filters, and sortable columns |
 
 The standalone HTML report embeds its styles and JavaScript; it does not load a table library or

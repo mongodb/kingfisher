@@ -71,7 +71,7 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
         id: demo.key.validation.1
         depends_on_rule:
           - rule_id: demo.key.1
-            variable: TOKEN
+            variable: COMPONENT
         pattern: '(demokey_[a-z0-9]{{8}})'
         confidence: low
         validation:
@@ -318,6 +318,15 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
     );
 
     let ds = datastore.lock().unwrap();
+    for entry in ds.get_matches() {
+        if entry.2.rule.syntax().id == "demo.key.validation.1" {
+            assert_eq!(
+                entry.2.dependent_captures.get("COMPONENT").map(String::as_str),
+                Some("demokey_abcdefgh"),
+                "every dependent occurrence must retain its selected token"
+            );
+        }
+    }
     let total_matches = ds.get_matches().len();
     assert_eq!(total_matches, 4, "expected 2 matches per rule (dup secrets)"); // 2 for each rule
 

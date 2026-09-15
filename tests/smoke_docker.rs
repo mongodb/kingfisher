@@ -100,3 +100,37 @@ fn smoke_scan_docker_archive() -> anyhow::Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn docker_archive_without_findings_emits_complete_coverage() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let archive = dir.path().join("image.tar");
+    let report = dir.path().join("report.json");
+    build_docker_archive(&archive, "not-a-credential")?;
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .args([
+            "scan",
+            "docker",
+            "--archive",
+            archive.to_str().unwrap(),
+            "--format",
+            "json",
+            "--output",
+            report.to_str().unwrap(),
+            "--rule",
+            "betterleaks.github-pat",
+            "--no-validate",
+            "--no-update-check",
+        ])
+        .assert()
+        .success();
+    let report: Value = serde_json::from_reader(File::open(report)?)?;
+    assert!(report["audit"]["completed_at"].is_string());
+    assert_eq!(report["audit"]["summary"]["discovered"], 1);
+    assert_eq!(report["audit"]["summary"]["scan_succeeded"], 1);
+    for field in ["fetch_failed", "scan_failed", "scan_partial", "pending"] {
+        assert_eq!(report["audit"]["summary"][field], 0, "{field}");
+    }
+    assert!(report["audit"]["repositories"][0].get("git").is_none());
+    Ok(())
+}

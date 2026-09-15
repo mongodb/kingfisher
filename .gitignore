@@ -239,6 +239,7 @@ rust-project.json
 
 # MkDocs build output
 docs-site/site/
+docs-site/docs/viewer/
 
 .codegraph/
 # Created by https://www.toptal.com/developers/gitignore/api/python

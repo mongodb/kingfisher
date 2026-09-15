@@ -341,6 +341,12 @@ def copy_report_viewer():
         f.write(transformed)
     print("  viewer/index.html -> viewer/index.html")
 
+    shutil.copy2(
+        os.path.join(VIEWER_SRC_DIR, "kingfisher_logo.png"),
+        os.path.join(VIEWER_DST_DIR, "kingfisher_logo.png"),
+    )
+    print("  viewer/kingfisher_logo.png -> viewer/kingfisher_logo.png")
+
     sample_src = os.path.join(VIEWER_SRC_DIR, "sample-report.json")
     sample_dst = os.path.join(VIEWER_DST_DIR, "sample-report.json")
     if os.path.exists(sample_src):

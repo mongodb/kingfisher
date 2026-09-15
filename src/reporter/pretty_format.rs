@@ -34,7 +34,9 @@ impl DetailsReporter {
         if let Some(access_map) = envelope.access_map {
             self.write_access_map(&mut writer, &access_map)?;
         }
-        if let Some(audit) = envelope.audit {
+        if args.audit_log.is_some()
+            && let Some(audit) = envelope.audit
+        {
             self.write_repository_audit(&mut writer, &audit)?;
         }
         Ok(())

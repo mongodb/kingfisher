@@ -102,6 +102,9 @@ pub struct FindingsStore {
     blobs: FxHashSet<BlobId>,
     clone_dir: PathBuf,
     dedup_filter: DedupBloomSet,
+    // The Bloom filter is only an acceleration hint. Exact keys are authoritative so a
+    // probabilistic false positive can never discard a unique credential.
+    dedup_exact: FxHashSet<String>,
     blob_scoped_dependency_rule_ids: FxHashSet<String>,
     blob_meta: FxHashMap<BlobId, Arc<BlobMetadata>>,
     origin_meta: FxHashMap<u64, Arc<OriginSet>>,
@@ -127,6 +130,7 @@ impl FindingsStore {
             origin_meta: FxHashMap::default(),
             clone_dir,
             dedup_filter: DedupBloomSet::new(),
+            dedup_exact: FxHashSet::default(),
             blob_scoped_dependency_rule_ids: FxHashSet::default(),
             docker_images: FxHashMap::default(),
             slack_links: FxHashMap::default(),
@@ -266,10 +270,12 @@ impl FindingsStore {
                     format!("{}|{}|{}", rule_id, origin_kind, snippet)
                 };
                 let key = xxh3_64(key_string.as_bytes());
+                let bloom_match = self.dedup_filter.contains_or_insert(key);
 
-                if self.dedup_filter.contains_or_insert(key) {
+                if bloom_match && self.dedup_exact.contains(&key_string) {
                     continue; // very likely a duplicate
                 }
+                self.dedup_exact.insert(key_string);
             }
 
             /*───────────────────────────────────────────────────────────────┐

@@ -367,36 +367,82 @@ fn render_access_map(access_map: Option<&Vec<AccessMapEntry>>) -> String {
 
     let mut items = String::new();
     for entry in entries {
-        let account = entry.account.clone().unwrap_or_else(|| "(identity)".to_string());
+        let resources = entry
+            .groups
+            .iter()
+            .flat_map(|g| &g.resources)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let permissions = entry
+            .groups
+            .iter()
+            .flat_map(|g| &g.permissions)
+            .collect::<std::collections::BTreeSet<_>>()
+            .len();
+        let mut paths = String::new();
+        for group in &entry.groups {
+            let grants = if group.permissions.is_empty() {
+                "<li>Not recorded</li>".into()
+            } else {
+                group
+                    .permissions
+                    .iter()
+                    .map(|p| format!("<li><code>{}</code></li>", escape_html(p)))
+                    .collect::<String>()
+            };
+            let targets = if group.resources.is_empty() {
+                "<li>Scope not recorded</li>".into()
+            } else {
+                group
+                    .resources
+                    .iter()
+                    .map(|r| format!("<li><code>{}</code></li>", escape_html(r)))
+                    .collect::<String>()
+            };
+            paths.push_str(&format!(
+                "<li class=\"access-path\"><div><h4>Permissions</h4><ul>{grants}</ul></div><span aria-label=\"apply to\">→</span><div><h4>Resources</h4><details {}><summary>{} recorded resources</summary><ul>{targets}</ul></details></div></li>",
+                if group.resources.len() <= 6 { "open" } else { "" }, group.resources.len()
+            ));
+        }
         let evidence_counts = entry
             .provider_metadata
             .as_ref()
-            .and_then(|metadata| metadata.authorization_evidence.as_ref())
-            .map(|evidence| {
+            .and_then(|m| m.authorization_evidence.as_ref())
+            .map(|e| {
                 format!(
-                    ", {} policies, {} identity paths, {} reachable roles, {} API probes",
-                    evidence.policies.len(),
-                    evidence.paths.len(),
-                    evidence.role_impacts.len(),
-                    evidence.probes.len()
+                    "<p>{} policies · {} identity paths · {} reachable roles · {} API probes</p>",
+                    e.policies.len(),
+                    e.paths.len(),
+                    e.role_impacts.len(),
+                    e.probes.len()
                 )
             })
             .unwrap_or_default();
+        let limitations = entry
+            .provider_metadata
+            .as_ref()
+            .and_then(|m| m.authorization_evidence.as_ref())
+            .map(|e| {
+                e.limitations
+                    .iter()
+                    .map(|note| format!("<li>{}</li>", escape_html(note)))
+                    .collect::<String>()
+            })
+            .filter(|notes| !notes.is_empty())
+            .map(|notes| format!("<h4>Coverage limitations</h4><ul>{notes}</ul>"))
+            .unwrap_or_default();
         items.push_str(&format!(
-            "<li><strong>{}</strong> <span>{}</span> ({} groups{})</li>",
-            escape_html(&account),
+            "<article class=\"access-identity\"><h3>{} · {}</h3><p>{resources} recorded resources · {permissions} unique permissions</p><ol class=\"access-paths\">{paths}</ol>{evidence_counts}{limitations}</article>",
             escape_html(&entry.provider.to_uppercase()),
-            entry.groups.len(),
-            evidence_counts
+            escape_html(entry.account.as_deref().unwrap_or("Identity")),
         ));
     }
     format!(
-        "<section class=\"panel\">
-            <h2>Blast Radius Summary</h2>
-            <ul>{items}</ul>
-        </section>"
+        "<section class=\"panel\"><h2>Blast Radius Summary</h2><p>Snapshot of recorded access. Unlisted resources are not proof of no access.</p>{items}</section>"
     )
 }
+
+const FINDING_FILTER_SCRIPT: &str = include_str!("finding-filters.js");
 
 const INTERACTIVE_TABLE_SCRIPT: &str = r#"<script>
 (() => {
@@ -438,6 +484,7 @@ const INTERACTIVE_TABLE_SCRIPT: &str = r#"<script>
       row.dataset.searchValue = searchValueFor(row);
     });
 
+    let advancedFilters;
     const refresh = () => {
       const query = (search?.value ?? "").trim().toLocaleLowerCase();
       let visible = 0;
@@ -451,7 +498,7 @@ const INTERACTIVE_TABLE_SCRIPT: &str = r#"<script>
           const expected = filter.value.toLocaleLowerCase();
           return explicitValue === undefined ? actual.includes(expected) : actual === expected;
         });
-        row.hidden = !(matchesSearch && matchesColumns);
+        row.hidden = !(matchesSearch && matchesColumns && (!advancedFilters || advancedFilters.matches(row)));
         if (!row.hidden) visible += 1;
       });
       emptyRow.hidden = visible !== 0;
@@ -485,11 +532,45 @@ const INTERACTIVE_TABLE_SCRIPT: &str = r#"<script>
       });
     });
 
+    if (table.id === "detailed-findings-table") {
+      const container = document.createElement("section");
+      container.className = "finding-filter-builder";
+      container.setAttribute("aria-label", "Finding filters");
+      table.closest(".table-scroll").before(container);
+      const fields = {};
+      Array.from(table.tHead.rows[0].cells).slice(0, -1).forEach((header, index) => {
+        const values = (row) => [row.cells[index]?.dataset.filterValue ?? row.cells[index]?.textContent?.trim()];
+        fields[String(index)] = { label: header.textContent.trim(), values,
+          options: () => [...new Set(rows.flatMap(values).filter(Boolean))].sort().slice(0, 200) };
+      });
+      const urlKey = "finding-filters";
+      advancedFilters = createFindingFilters(container, fields, () => {
+        const url = new URL(window.location.href);
+        if (advancedFilters.serialize() === "[]") url.searchParams.delete(urlKey);
+        else url.searchParams.set(urlKey, advancedFilters.serialize());
+        window.history.replaceState(window.history.state, "", url);
+        refresh();
+      }, () => {
+        if (search) search.value = "";
+        filters.forEach((filter) => { filter.value = ""; });
+      });
+      advancedFilters.restore(new URLSearchParams(window.location.search).get(urlKey));
+      window.addEventListener("popstate", () => {
+        advancedFilters.restore(new URLSearchParams(window.location.search).get(urlKey));
+        refresh();
+      });
+    }
     search?.addEventListener("input", refresh);
     filters.forEach((filter) => filter.addEventListener("change", refresh));
     reset?.addEventListener("click", () => {
       if (search) search.value = "";
       filters.forEach((filter) => { filter.value = ""; });
+      if (advancedFilters) {
+        advancedFilters.restore();
+        const url = new URL(window.location.href);
+        url.searchParams.delete("finding-filters");
+        window.history.replaceState(window.history.state, "", url);
+      }
       refresh();
       search?.focus();
     });
@@ -523,52 +604,80 @@ fn build_html(envelope: &ReportEnvelope) -> String {
 <head>
   <meta charset=\"utf-8\" />
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" />
-  <title>Kingfisher Audit Report</title>
+  <title>Kingfisher Audit Report — Local report snapshot</title>
   <style>
+    /* MongoDB brand / LeafyGreen palette: https://www.mongodb.design/foundations/palette
+   Keep semantic colors aligned with the local viewer and standalone reports. */
+    :root {{
+      --brand: #00684a;
+      --brand-dark: #00684a;
+      --bg: #f9fbfa;
+      --surface: #ffffff;
+      --surface-muted: #f9fbfa;
+      --surface-strong: #e8edeb;
+      --text: #001e2b;
+      --muted: #5c6c75;
+      --border: #c1c7c6;
+      --border-strong: #889397;
+      --hover: #e8edeb;
+      --danger: #970606;
+      --warning: #944f01;
+      --info: #1254b7;
+      --success: #00684a;
+      --purple: #5e0c9e;
+      --brand-soft: #e3fcf7;
+      --danger-soft: #ffeae5;
+      --warning-soft: #fef7db;
+      --info-soft: #e1f7ff;
+      --purple-soft: #f9ebff;
+    }}
     * {{ box-sizing: border-box; }}
-    body {{ font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; margin: 0; padding: 24px; color: #111827; background: #f8fafc; }}
-    .report-shell {{ width: 100%; max-width: 1800px; margin: 0 auto; }}
-    h1 {{ margin: 0 0 6px; color: #0f766e; }}
+    body {{ font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, \"Segoe UI\", sans-serif; margin: 0; padding: 24px; color: var(--text); background: var(--bg); }}
+    body {{ color: var(--text); background: var(--bg); border-top: 4px solid var(--brand); }}
+    .report-shell {{ width: 100%; max-width: 1600px; margin: 0 auto; }}
+    h1 {{ margin: 0 0 6px; color: var(--text); }}
+    .workspace-mode {{ color: var(--info); font-size: 11px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }}
+    .workspace-context {{ padding: 12px 16px; margin: 16px 0; border: 1px solid var(--border); border-radius: 7px; background: var(--surface-muted); color: var(--muted); font-size: 13px; }}
     h2 {{ margin: 0 0 10px; }}
     h3 {{ margin: 16px 0 8px; font-size: 14px; }}
-    .subtitle {{ color: #475569; margin-bottom: 18px; line-height: 1.45; }}
-    .subtitle a {{ color: #0f766e; text-decoration: none; font-weight: 600; }}
+    .subtitle {{ color: var(--muted); margin-bottom: 18px; line-height: 1.45; }}
+    .subtitle a {{ color: var(--brand); text-decoration: none; font-weight: 600; }}
     .subtitle a:hover {{ text-decoration: underline; }}
-    .panel {{ background: #ffffff; border: 1px solid #cbd5e1; border-radius: 10px; padding: 16px; margin-bottom: 16px; }}
+    .panel {{ background: #ffffff; border: 1px solid var(--border); border-radius: 7px; padding: 16px; margin-bottom: 16px; }}
     .summary {{ display: grid; gap: 4px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, \"Liberation Mono\", monospace; }}
-    .summary-line {{ display: flex; align-items: baseline; gap: 8px; color: #111827; }}
-    .summary-line .label {{ color: #0f766e; white-space: nowrap; }}
-    .summary-line .dots {{ flex: 1; border-bottom: 1px dotted #cbd5e1; transform: translateY(-3px); }}
-    .summary-line .value {{ color: #0f172a; }}
+    .summary-line {{ display: flex; align-items: baseline; gap: 8px; color: var(--text); }}
+    .summary-line .label {{ color: var(--brand); white-space: nowrap; }}
+    .summary-line .dots {{ flex: 1; border-bottom: 1px dotted var(--border); transform: translateY(-3px); }}
+    .summary-line .value {{ color: var(--text); }}
     .cmdline {{ margin: 0; padding: 12px; background: #f1f5f9; border-radius: 8px; overflow-x: auto; }}
-    .cmdline code {{ color: #0f172a; white-space: pre-wrap; word-break: break-word; }}
-    .section-note {{ color: #475569; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px; line-height: 1.5; }}
+    .cmdline code {{ color: var(--text); white-space: pre-wrap; word-break: break-word; }}
+    .section-note {{ color: var(--muted); font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px; line-height: 1.5; }}
     .audit-metrics {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin: 14px 0; }}
-    .audit-metrics div {{ border: 1px solid #cbd5e1; border-radius: 8px; padding: 12px; background: #f8fafc; }}
-    .audit-metrics strong {{ display: block; color: #0f766e; font-size: 22px; }}
-    .audit-metrics span {{ color: #475569; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; }}
+    .audit-metrics div {{ border: 1px solid var(--border); border-radius: 8px; padding: 12px; background: var(--bg); }}
+    .audit-metrics strong {{ display: block; color: var(--brand); font-size: 22px; }}
+    .audit-metrics span {{ color: var(--muted); font-family: ui-sans-serif, system-ui, sans-serif; font-size: 12px; }}
     .table-toolbar {{ display: flex; align-items: end; flex-wrap: wrap; gap: 10px; margin: 14px 0 10px; }}
-    .table-toolbar label {{ display: grid; gap: 5px; color: #334155; font-size: 12px; font-weight: 700; }}
+    .table-toolbar label {{ display: grid; gap: 5px; color: var(--text); font-size: 12px; font-weight: 700; }}
     .search-control {{ flex: 1 1 320px; }}
     .select-control {{ flex: 0 1 210px; }}
-    .table-toolbar input, .table-toolbar select {{ width: 100%; min-height: 38px; border: 1px solid #94a3b8; border-radius: 7px; padding: 8px 10px; color: #0f172a; background: #fff; font: inherit; font-weight: 400; }}
-    .table-toolbar input:focus, .table-toolbar select:focus, .sort-button:focus-visible, .secondary-button:focus-visible {{ outline: 3px solid #99f6e4; outline-offset: 1px; border-color: #0f766e; }}
-    .secondary-button {{ min-height: 38px; border: 1px solid #94a3b8; border-radius: 7px; padding: 8px 14px; color: #0f172a; background: #f8fafc; font-weight: 700; cursor: pointer; }}
-    .secondary-button:hover {{ background: #e2e8f0; }}
-    .table-count {{ margin-left: auto; padding: 0 2px 10px; color: #475569; font-size: 12px; white-space: nowrap; }}
-    .table-scroll {{ overflow-x: auto; border: 1px solid #cbd5e1; border-radius: 8px; }}
-    .audit-status {{ display: inline-block; padding: 2px 8px; border-radius: 999px; background: #e2e8f0; font-weight: 700; }}
+    .table-toolbar input, .table-toolbar select {{ width: 100%; min-height: 38px; border: 1px solid var(--border-strong); border-radius: 7px; padding: 8px 10px; color: var(--text); background: #fff; font: inherit; font-weight: 400; }}
+    .table-toolbar input:focus, .table-toolbar select:focus, .sort-button:focus-visible, .secondary-button:focus-visible {{ outline: 3px solid var(--brand); outline-offset: 1px; border-color: var(--brand); }}
+    .secondary-button {{ min-height: 38px; border: 1px solid var(--border-strong); border-radius: 7px; padding: 8px 14px; color: var(--text); background: var(--bg); font-weight: 700; cursor: pointer; }}
+    .secondary-button:hover {{ background: var(--surface-strong); }}
+    .table-count {{ margin-left: auto; padding: 0 2px 10px; color: var(--muted); font-size: 12px; white-space: nowrap; }}
+    .table-scroll {{ overflow-x: auto; border: 1px solid var(--border); border-radius: 8px; }}
+    .audit-status {{ display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--surface-strong); font-weight: 700; }}
     .audit-status--completed {{ background: #dcfce7; color: #166534; }}
     .audit-status--failed, .audit-status--fetch_failed {{ background: #fee2e2; color: #991b1b; }}
-    .muted {{ color: #64748b; font-size: 11px; }}
+    .muted {{ color: var(--muted); font-size: 11px; }}
     code {{ font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 12px; }}
     table {{ width: 100%; border-collapse: separate; border-spacing: 0; }}
     .interactive-table {{ table-layout: fixed; }}
-    .interactive-table th, .interactive-table td {{ border: 0; border-right: 1px solid #cbd5e1; border-bottom: 1px solid #cbd5e1; padding: 10px; font-size: 13px; line-height: 1.4; text-align: left; vertical-align: top; overflow-wrap: anywhere; }}
+    .interactive-table th, .interactive-table td {{ border: 0; border-right: 1px solid var(--border); border-bottom: 1px solid var(--border); padding: 10px; font-size: 13px; line-height: 1.4; text-align: left; vertical-align: top; overflow-wrap: anywhere; }}
     .interactive-table th:last-child, .interactive-table td:last-child {{ border-right: 0; }}
     .interactive-table tbody tr:last-child td {{ border-bottom: 0; }}
-    .interactive-table th {{ position: sticky; top: 0; z-index: 2; padding: 0; background: #e2e8f0; color: #0f172a; box-shadow: inset 0 -1px #94a3b8; }}
-    .interactive-table tbody tr:nth-child(even) {{ background: #f8fafc; }}
+    .interactive-table th {{ position: sticky; top: 0; z-index: 2; padding: 0; background: var(--surface-strong); color: var(--text); box-shadow: inset 0 -1px var(--border-strong); }}
+    .interactive-table tbody tr:nth-child(even) {{ background: var(--bg); }}
     .interactive-table tbody tr:hover {{ background: #ecfeff; }}
     .findings-table {{ min-width: 1560px; }}
     .findings-table col:nth-child(1) {{ width: 160px; }}
@@ -590,36 +699,57 @@ fn build_html(envelope: &ReportEnvelope) -> String {
     .audit-table col:nth-child(7) {{ width: 200px; }}
     .audit-table col:nth-child(8) {{ width: 250px; }}
     .sort-button {{ display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 44px; border: 0; padding: 9px 10px; color: inherit; background: transparent; font: inherit; font-weight: 800; text-align: left; cursor: pointer; }}
-    .sort-button:hover {{ background: #cbd5e1; }}
-    .sort-indicator::before {{ content: \"↕\"; color: #64748b; font-size: 12px; }}
-    th[aria-sort=\"ascending\"] .sort-indicator::before {{ content: \"↑\"; color: #0f766e; }}
-    th[aria-sort=\"descending\"] .sort-indicator::before {{ content: \"↓\"; color: #0f766e; }}
-    .source-link {{ display: inline-flex; gap: 3px; color: #0369a1; font-weight: 700; text-decoration: none; }}
+    .sort-button:hover {{ background: var(--border); }}
+    .sort-indicator::before {{ content: \"↕\"; color: var(--muted); font-size: 12px; }}
+    th[aria-sort=\"ascending\"] .sort-indicator::before {{ content: \"↑\"; color: var(--brand); }}
+    th[aria-sort=\"descending\"] .sort-indicator::before {{ content: \"↓\"; color: var(--brand); }}
+    .source-link {{ display: inline-flex; gap: 3px; color: var(--info); font-weight: 700; text-decoration: none; }}
     .source-link:hover {{ text-decoration: underline; }}
-    .commands summary {{ color: #0f766e; font-weight: 800; cursor: pointer; }}
+    .access-identity {{ margin-top: 20px; overflow-wrap: anywhere; }}
+    .access-paths {{ list-style: none; padding: 0; display: grid; gap: 12px; }}
+    .access-path {{ display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1.2fr); gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }}
+    .access-path h4 {{ margin: 0 0 10px; }}
+    .access-path > div {{ min-width: 0; }}
+    .access-path > span {{ align-self: center; }}
+    .access-path summary {{ cursor: pointer; min-height: 24px; }}
+    .access-path ul {{ padding-left: 18px; }}
+    .access-path li + li {{ margin-top: 8px; }}
+    @media (max-width: 600px) {{ .access-path {{ grid-template-columns: minmax(0, 1fr); }} .access-path > span {{ transform: rotate(90deg); justify-self: center; }} }}
+    .commands summary {{ color: var(--brand); font-weight: 800; cursor: pointer; }}
     .commands div {{ margin-top: 9px; }}
     .commands strong {{ display: block; margin-bottom: 3px; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }}
     .commands code {{ display: block; padding: 7px; border-radius: 5px; background: #f1f5f9; white-space: pre-wrap; overflow-wrap: anywhere; }}
-    .empty-filter-row td {{ padding: 28px; color: #64748b; text-align: center; font-style: italic; }}
+    .empty-filter-row td {{ padding: 28px; color: var(--muted); text-align: center; font-style: italic; }}
     .status {{ display: inline-block; max-width: 100%; padding: 3px 8px; border-radius: 999px; font-weight: 700; }}
-    .status-active {{ background: #14532d; color: #86efac; }}
-    .status-assumed {{ background: #1e3a8a; color: #bfdbfe; }}
-    .status-local {{ background: #164e63; color: #a5f3fc; }}
-    .status-invalid-material {{ background: #7f1d1d; color: #fecaca; }}
-    .status-inactive {{ background: #7f1d1d; color: #fecaca; }}
-    .status-canary {{ background: #581c87; color: #e9d5ff; }}
-    .status-unavailable {{ background: #7f1d1d; color: #fecaca; }}
-    .status-unknown {{ background: #78350f; color: #fde68a; }}
+    .status-active {{ background: var(--danger-soft); color: var(--danger); }}
+    .status-assumed {{ background: var(--info-soft); color: var(--info); }}
+    .status-local {{ background: var(--info-soft); color: var(--info); }}
+    .status-invalid-material {{ background: var(--danger-soft); color: var(--danger); }}
+    .status-inactive {{ background: var(--brand-soft); color: var(--success); }}
+    .status-canary {{ background: var(--purple-soft); color: var(--purple); }}
+    .status-unavailable {{ background: var(--warning-soft); color: var(--warning); }}
+    .status-unknown {{ background: var(--warning-soft); color: var(--warning); }}
     @media (max-width: 720px) {{
       body {{ padding: 12px; }}
       .panel {{ padding: 12px; }}
       .table-count {{ width: 100%; margin-left: 0; padding: 0; }}
     }}
+
+.finding-filter-builder {{ margin: 12px 0; padding: 16px; border: 1px solid var(--border-strong); border-radius: 12px; }}
+.finding-filter-form, .finding-filter-chips {{ display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }}
+.finding-filter-form label {{ display: grid; gap: 6px; flex: 1 1 160px; min-width: 0; }}
+.finding-filter-form input, .finding-filter-form select, .finding-filter-builder button {{ min-height: 36px; max-width: 100%; padding: 8px 12px; border: 1px solid var(--border-strong); border-radius: 8px; background: #fff; color: var(--text); font: inherit; }}
+.finding-filter-builder button {{ cursor: pointer; overflow-wrap: anywhere; text-align: left; }}
+.finding-filter-builder p, .finding-filter-builder [role=status] {{ font-size: 12px; color: var(--muted); }}
+.finding-filter-chips {{ margin-bottom: 8px; }}
+.finding-filter-builder :focus-visible {{ outline: 2px solid var(--accent, #0e9f6e); outline-offset: 2px; }}
+@media (max-width: 600px) {{ .finding-filter-builder input, .finding-filter-builder select {{ font-size: 16px; }} .finding-filter-builder button, .finding-filter-builder select, .finding-filter-builder input {{ min-height: 44px; }} }}
+
     @media print {{
       @page {{ size: landscape; margin: 0.4in; }}
       body {{ padding: 0; background: #fff; }}
       .report-shell {{ max-width: none; }}
-      .table-toolbar {{ display: none; }}
+      .table-toolbar, .finding-filter-builder {{ display: none; }}
       .table-scroll {{ display: contents; overflow: visible; border: 0; }}
       .interactive-table {{ width: 100%; min-width: 0; table-layout: auto; }}
       .interactive-table thead {{ display: table-header-group; }}
@@ -630,14 +760,26 @@ fn build_html(envelope: &ReportEnvelope) -> String {
       .interactive-table .empty-filter-row {{ display: none !important; }}
       .interactive-table th, .interactive-table td {{ padding: 5px; font-size: 9px; }}
       .commands {{ display: block; }}
-      .commands summary {{ display: none; }}
+      .access-identity {{ margin-top: 20px; overflow-wrap: anywhere; }}
+    .access-paths {{ list-style: none; padding: 0; display: grid; gap: 12px; }}
+    .access-path {{ display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1.2fr); gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }}
+    .access-path h4 {{ margin: 0 0 10px; }}
+    .access-path > div {{ min-width: 0; }}
+    .access-path > span {{ align-self: center; }}
+    .access-path summary {{ cursor: pointer; min-height: 24px; }}
+    .access-path ul {{ padding-left: 18px; }}
+    .access-path li + li {{ margin-top: 8px; }}
+    @media (max-width: 600px) {{ .access-path {{ grid-template-columns: minmax(0, 1fr); }} .access-path > span {{ transform: rotate(90deg); justify-self: center; }} }}
+    .commands summary {{ display: none; }}
       .commands code {{ font-size: 8px; }}
     }}
   </style>
 </head>
 <body>
  <main class=\"report-shell\">
-  <h1>Kingfisher Audit Report</h1>
+   <p class=\"workspace-mode\">Kingfisher · Local reports</p>
+   <h1>Kingfisher Audit Report</h1>
+   <div class=\"workspace-context\"><strong>Report workspace · Scan snapshot</strong><br>This standalone report describes a scan at a point in time. Use <code>kingfisher view report.json</code> for the interactive Report Viewer &amp; Triager.</div>
   <div class=\"subtitle\">Secret scanning report generated by <a href=\"https://github.com/mongodb/kingfisher\" target=\"_blank\" rel=\"noopener noreferrer\">MongoDB Kingfisher</a>.</div>
   {metadata_html}
   {repository_audit_html}
@@ -647,6 +789,7 @@ fn build_html(envelope: &ReportEnvelope) -> String {
   </section>
   {access_map_html}
  </main>
+  <script>{FINDING_FILTER_SCRIPT}</script>
   {INTERACTIVE_TABLE_SCRIPT}
 </body>
 </html>"
@@ -706,6 +849,37 @@ mod tests {
                 ),
             },
         }
+    }
+
+    #[test]
+    fn access_map_preserves_permission_resource_groups_and_escapes_provider_text() {
+        let entry = AccessMapEntry {
+            provider: "test".into(),
+            account: Some("<script>account</script>".into()),
+            groups: vec![
+                crate::reporter::AccessMapResourceGroup {
+                    permissions: vec!["read<all>".into()],
+                    resources: vec!["bucket&one".into()],
+                },
+                crate::reporter::AccessMapResourceGroup {
+                    permissions: vec!["read<all>".into()],
+                    resources: vec![],
+                },
+            ],
+            roles: vec![],
+            token_details: None,
+            provider_metadata: None,
+            fingerprint: None,
+            permissions_by_severity: None,
+            context: None,
+        };
+        let html = render_access_map(Some(&vec![entry]));
+        assert!(html.contains("1 recorded resources · 1 unique permissions"));
+        assert_eq!(html.matches("class=\"access-path\"").count(), 2);
+        assert!(html.contains("&lt;script&gt;account&lt;/script&gt;"));
+        assert!(html.contains("bucket&amp;one"));
+        assert!(html.contains("Scope not recorded"));
+        assert!(!html.contains("<script>account"));
     }
 
     #[test]

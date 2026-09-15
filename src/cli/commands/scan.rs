@@ -625,7 +625,10 @@ impl ScanCommandArgs {
                     if args.public_events {
                         if let (Some(audit_log), Some(user_file)) =
                             (scan_args.audit_log.as_deref(), args.event_user_file.as_deref())
-                            && paths_refer_to_same_file(audit_log, user_file)
+                            && paths_refer_to_same_file(
+                                &expand_tilde(audit_log),
+                                &expand_tilde(user_file),
+                            )
                         {
                             bail!(
                                 "--audit-log must not overwrite the GitHub public-event user file"

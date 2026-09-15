@@ -3,70 +3,92 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <meta name="theme-color" content="#08110e" />
-  <title>Kingfisher Blast Radius Viewer</title>
+  <meta name="theme-color" content="#001e2b" />
+  <title>Kingfisher Report Viewer &amp; Triager — Local reports</title>
   <style>
+    /* MongoDB brand / LeafyGreen palette: https://www.mongodb.design/foundations/palette
+   Keep semantic colors aligned with the local viewer and standalone reports. */
     :root {
       color-scheme: dark;
       --brand: #00ed64;
-      --brand-dark: #13aa52;
-      --brand-soft: rgba(0, 237, 100, 0.12);
-      --brand-soft-strong: rgba(0, 237, 100, 0.18);
-      --bg: #08110e;
-      --surface: #0f1716;
-      --surface-muted: #121d1b;
-      --surface-strong: #15211f;
-      --text-main: #f5fbf7;
-      --text-muted: #a8bbb1;
-      --border: #1f332c;
-      --border-strong: #315244;
+      --brand-dark: #00a35c;
+      --brand-soft: #023430;
+      --brand-soft-strong: var(--brand-soft);
+      --bg: #001e2b;
+      --surface: #112733;
+      --surface-muted: #1c2d38;
+      --surface-strong: #1c2d38;
+      --text-main: var(--text);
+      --text-muted: var(--muted);
+      --border: #3d4f58;
+      --border-strong: #5c6c75;
       --shadow-sm: 0 10px 30px rgba(0, 0, 0, 0.14);
       --shadow-md: 0 18px 48px rgba(0, 0, 0, 0.2);
       --shadow-lg: 0 28px 72px rgba(0, 0, 0, 0.28);
-      --critical: #fca5a5;
-      --success: #34d399;
+      --critical: var(--danger);
+      --success: #00ed64;
       --radius: 16px;
-      --hover: #182522;
-      --table-header: #12201d;
-      --code-bg: #0d1617;
-      --code-border: #223733;
+      --hover: #1c2d38;
+      --table-header: var(--surface-muted);
+      --code-bg: var(--surface-muted);
+      --code-border: var(--border);
       --code-border-strong: rgba(0, 237, 100, 0.24);
-      --code-text: #e2e8f0;
+      --code-text: var(--text);
       --code-accent: rgba(0, 237, 100, 0.07);
-      --link-strong: #8fffd0;
-      --link-strong-hover: #d9fff0;
+      --link-strong: var(--info);
+      --link-strong-hover: var(--info);
       --link-underline: rgba(143, 255, 208, 0.32);
+      --text: #e8edeb;
+      --muted: #c1c7c6;
+      --danger: #ff6960;
+      --warning: #ffc010;
+      --info: #0498ec;
+      --purple: #f1d4fd;
+      --danger-soft: #5b0000;
+      --warning-soft: #4c2100;
+      --info-soft: #0c2657;
+      --purple-soft: #2d0b59;
     }
 
     :root[data-theme="light"] {
       color-scheme: light;
-      --brand: #13aa52;
-      --brand-dark: #0f7f3d;
-      --brand-soft: rgba(19, 170, 82, 0.1);
-      --brand-soft-strong: rgba(19, 170, 82, 0.16);
-      --bg: #eef4f0;
+      --brand: #00684a;
+      --brand-dark: #00684a;
+      --brand-soft: #e3fcf7;
+      --brand-soft-strong: var(--brand-soft);
+      --bg: #f9fbfa;
       --surface: #ffffff;
-      --surface-strong: #f5f9f7;
-      --surface-muted: #f8fbf9;
-      --text-main: #15211d;
-      --text-muted: #5f746a;
-      --border: #dbe7df;
-      --border-strong: #bfd5c7;
+      --surface-strong: #e8edeb;
+      --surface-muted: #f9fbfa;
+      --text-main: var(--text);
+      --text-muted: var(--muted);
+      --border: #c1c7c6;
+      --border-strong: #889397;
       --shadow-sm: 0 8px 24px rgba(15, 23, 42, 0.06);
       --shadow-md: 0 14px 34px rgba(15, 23, 42, 0.1);
       --shadow-lg: 0 24px 60px rgba(15, 23, 42, 0.12);
-      --critical: #dc2626;
-      --success: #059669;
-      --hover: #edf5f0;
-      --table-header: #f5f9f7;
-      --code-bg: #f7fbf9;
-      --code-border: #dbe7df;
+      --critical: var(--danger);
+      --success: #00684a;
+      --hover: #e8edeb;
+      --table-header: var(--surface-muted);
+      --code-bg: var(--surface-muted);
+      --code-border: var(--border);
       --code-border-strong: rgba(19, 170, 82, 0.18);
-      --code-text: #0f172a;
+      --code-text: var(--text);
       --code-accent: rgba(19, 170, 82, 0.08);
-      --link-strong: #0f7f3d;
-      --link-strong-hover: #0b5d2d;
+      --link-strong: var(--info);
+      --link-strong-hover: var(--info);
       --link-underline: rgba(15, 127, 61, 0.28);
+      --text: #001e2b;
+      --muted: #5c6c75;
+      --danger: #970606;
+      --warning: #944f01;
+      --info: #1254b7;
+      --purple: #5e0c9e;
+      --danger-soft: #ffeae5;
+      --warning-soft: #fef7db;
+      --info-soft: #e1f7ff;
+      --purple-soft: #f9ebff;
     }
 
     * { box-sizing: border-box; }
@@ -111,17 +133,26 @@
     }
 
     .hero__icon {
-      width: 40px;
-      height: 40px;
-      background: linear-gradient(180deg, rgba(19, 170, 82, 0.95), rgba(15, 127, 61, 0.95));
+      width: 42px;
+      height: 42px;
+      flex: 0 0 42px;
+      background: linear-gradient(155deg, #17c965, #0d6f38);
       color: #ffffff;
-      border-radius: 12px;
+      border-radius: 13px;
       display: grid;
       place-items: center;
-      border: 1px solid rgba(19, 170, 82, 0.25);
-      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12), 0 10px 18px rgba(15, 23, 42, 0.12);
+      border: 1px solid rgba(143, 255, 208, 0.25);
+      box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.18), 0 8px 22px rgba(0, 237, 100, 0.13);
       font-weight: 700;
       font-size: 18px;
+      overflow: hidden;
+    }
+
+    .hero__icon img {
+      width: 100%;
+      height: 100%;
+      padding: 3px;
+      object-fit: contain;
     }
 
     .hero__title {
@@ -1103,10 +1134,10 @@
     .badge-github { background: #f4f4f5; color: #18181b; border-color: #d4d4d8; }
     .badge-gitlab { background: #fff1f2; color: #be123c; border-color: #fecdd3; }
     .badge-perm { background: #ecfdf5; color: #16a34a; border-color: #bbf7d0; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
-    .badge-perm--admin    { background: #fef2f2; color: #b91c1c; border-color: #fecaca; }
-    .badge-perm--privesc  { background: #fff7ed; color: #c2410c; border-color: #fed7aa; }
-    .badge-perm--risky    { background: #fffbeb; color: #b45309; border-color: #fde68a; }
-    .badge-perm--readonly { background: #ecfdf5; color: #16a34a; border-color: #bbf7d0; }
+    .badge-perm--admin { background: var(--danger-soft); border: 1px solid var(--danger); color: var(--danger); }
+    .badge-perm--privesc { background: var(--warning-soft); border: 1px solid var(--warning); color: var(--warning); }
+    .badge-perm--risky { background: var(--warning-soft); border: 1px solid var(--warning); color: var(--warning); }
+    .badge-perm--readonly { background: var(--brand-soft); border: 1px solid var(--success); color: var(--success); }
 
     /* Severity rollup chips on the card header */
     .id-card__rollup {
@@ -1507,11 +1538,11 @@
       font-size: 12px;
       font-weight: 600;
     }
-    .status-badge.active { background: #ecfdf5; color: #15803d; }
-    .status-badge.assumed { background: #eff6ff; color: #1d4ed8; }
-    .status-badge.inactive { background: #fef2f2; color: #b91c1c; }
-    .status-badge.not_attempted { background: #f0f9ff; color: #0369a1; }
-    .status-badge.inconclusive { background: #fffbeb; color: #92400e; }
+    .status-badge.active { background: var(--danger-soft); color: var(--danger); }
+    .status-badge.assumed { background: var(--info-soft); color: var(--info); }
+    .status-badge.inactive { background: var(--brand-soft); color: var(--success); }
+    .status-badge.not_attempted { background: var(--warning-soft); color: var(--warning); }
+    .status-badge.inconclusive { background: var(--warning-soft); color: var(--warning); }
 
     /* Finding detail snippet */
     .snippet-box {
@@ -1811,6 +1842,97 @@
       color: var(--text-muted);
     }
 
+    .group-secret-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      font-size: 12px;
+      color: var(--text-muted);
+      cursor: pointer;
+      user-select: none;
+    }
+
+    .group-secret-toggle input {
+      width: 15px;
+      height: 15px;
+      margin: 0;
+      accent-color: var(--brand);
+      cursor: pointer;
+    }
+
+    .group-count-chip {
+      display: inline-block;
+      padding: 3px 9px;
+      border-radius: 999px;
+      border: 1px solid var(--border-strong);
+      background: var(--brand-soft);
+      color: var(--brand);
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .finding-group-row {
+      cursor: pointer;
+    }
+
+    .finding-group-row:hover {
+      background: var(--hover);
+    }
+
+    .finding-group-row--open td {
+      border-bottom: 1px dotted var(--border);
+    }
+
+    .group-chevron {
+      display: inline-block;
+      margin-right: 7px;
+      color: var(--text-muted);
+      font-size: 10px;
+      transition: transform 0.12s ease;
+    }
+
+    .group-chevron--open {
+      transform: rotate(90deg);
+    }
+
+    .sub-finding-label {
+      margin-bottom: 3px;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      color: var(--brand);
+    }
+
+    .finding-subrow {
+      background: color-mix(in srgb, var(--surface) 55%, transparent);
+    }
+
+    .finding-subrow td {
+      font-size: 12px;
+      padding-top: 7px;
+      padding-bottom: 7px;
+    }
+
+    .finding-subrow:hover {
+      background: var(--hover);
+    }
+
+    .finding-subrow td:first-child {
+      padding-left: 30px;
+      position: relative;
+    }
+
+    .finding-subrow td:first-child::before {
+      content: "";
+      position: absolute;
+      left: 16px;
+      top: 0;
+      bottom: 0;
+      border-left: 2px solid var(--border-strong);
+    }
+
     select.rows-select {
       padding: 8px 10px;
       border-radius: 10px;
@@ -1969,29 +2091,13 @@
       margin-bottom: 14px;
     }
 
-    .risk-rationale.critical {
-      background: #fef2f2;
-      border: 1px solid #fecaca;
-      color: #991b1b;
-    }
+    .risk-rationale.critical { background: var(--danger-soft); border: 1px solid var(--danger); color: var(--danger); }
 
-    .risk-rationale.high {
-      background: #fff7ed;
-      border: 1px solid #fed7aa;
-      color: #9a3412;
-    }
+    .risk-rationale.high { background: var(--warning-soft); border: 1px solid var(--warning); color: var(--warning); }
 
-    .risk-rationale.medium {
-      background: #fffbeb;
-      border: 1px solid #fde68a;
-      color: #92400e;
-    }
+    .risk-rationale.medium { background: var(--warning-soft); border: 1px solid var(--warning); color: var(--warning); }
 
-    .risk-rationale.low {
-      background: #f0fdf4;
-      border: 1px solid #bbf7d0;
-      color: #166534;
-    }
+    .risk-rationale.low { background: var(--brand-soft); border: 1px solid var(--success); color: var(--success); }
 
     .risk-rationale.none {
       background: var(--surface-muted);
@@ -1999,29 +2105,13 @@
       color: var(--text-muted);
     }
 
-    :root[data-theme="dark"] .risk-rationale.critical {
-      background: rgba(239, 68, 68, 0.1);
-      border-color: rgba(239, 68, 68, 0.3);
-      color: #fca5a5;
-    }
+    :root[data-theme="dark"] .risk-rationale.critical { background: var(--danger-soft); border: 1px solid var(--danger); color: var(--danger); }
 
-    :root[data-theme="dark"] .risk-rationale.high {
-      background: rgba(249, 115, 22, 0.1);
-      border-color: rgba(249, 115, 22, 0.3);
-      color: #fdba74;
-    }
+    :root[data-theme="dark"] .risk-rationale.high { background: var(--warning-soft); border: 1px solid var(--warning); color: var(--warning); }
 
-    :root[data-theme="dark"] .risk-rationale.medium {
-      background: rgba(234, 179, 8, 0.1);
-      border-color: rgba(234, 179, 8, 0.3);
-      color: #fde68a;
-    }
+    :root[data-theme="dark"] .risk-rationale.medium { background: var(--warning-soft); border: 1px solid var(--warning); color: var(--warning); }
 
-    :root[data-theme="dark"] .risk-rationale.low {
-      background: rgba(34, 197, 94, 0.1);
-      border-color: rgba(34, 197, 94, 0.3);
-      color: #86efac;
-    }
+    :root[data-theme="dark"] .risk-rationale.low { background: var(--brand-soft); border: 1px solid var(--success); color: var(--success); }
 
     :root[data-theme="dark"] .risk-rationale.none {
       background: var(--surface-muted);
@@ -2221,7 +2311,7 @@
       height: 40px;
       border-radius: 999px;
       border: 3px solid var(--border);
-      border-top-color: #0e7c56;
+      border-top-color: #00684a;
       animation: spin 0.8s linear infinite;
     }
 
@@ -2236,7 +2326,7 @@
     .progress-inner {
       width: 40%;
       height: 100%;
-      background: linear-gradient(90deg, #0e7c56, #22c55e, #f59e0b);
+      background: linear-gradient(90deg, #00684a, #22c55e, #f59e0b);
       animation: progress-move 0.9s linear infinite;
     }
     @keyframes progress-move {
@@ -2250,29 +2340,29 @@
 
     /* Professional console shell */
     :root {
-      --console-bg: #f6f7f9;
-      --console-surface: #ffffff;
-      --console-muted: #f1f3f6;
-      --console-border: #e3e6ea;
-      --console-border-strong: #cbd1d8;
-      --console-text: #0f172a;
-      --console-text-muted: #64748b;
-      --console-accent: #00684a;
-      --console-accent-soft: #e8f5ef;
+      --console-bg: var(--bg);
+      --console-surface: var(--surface);
+      --console-muted: var(--surface-muted);
+      --console-border: var(--border);
+      --console-border-strong: var(--border-strong);
+      --console-text: var(--text);
+      --console-text-muted: var(--muted);
+      --console-accent: var(--brand);
+      --console-accent-soft: var(--brand-soft);
       --console-ink: #001e2b;
       --console-radius: 7px;
     }
 
     :root[data-theme="dark"] {
-      --console-bg: #08110e;
-      --console-surface: #0f1716;
-      --console-muted: #121d1b;
-      --console-border: #263b32;
-      --console-border-strong: #3b5a4b;
-      --console-text: #f3faf6;
-      --console-text-muted: #a8bbb1;
-      --console-accent: #00ed64;
-      --console-accent-soft: rgba(0, 237, 100, 0.12);
+      --console-bg: var(--bg);
+      --console-surface: var(--surface);
+      --console-muted: var(--surface-muted);
+      --console-border: var(--border);
+      --console-border-strong: var(--border-strong);
+      --console-text: var(--text);
+      --console-text-muted: var(--muted);
+      --console-accent: var(--brand);
+      --console-accent-soft: var(--brand-soft);
       --console-ink: #001e2b;
     }
 
@@ -2292,16 +2382,6 @@
     }
 
     .hero__brand { gap: 10px; }
-    .hero__icon {
-      width: 30px;
-      height: 30px;
-      border-radius: 7px;
-      background: var(--console-ink);
-      color: #00ed64;
-      border: 0;
-      box-shadow: none;
-      font-size: 13px;
-    }
     .hero__title { font-size: 16px; letter-spacing: -0.01em; }
     .hero__subtitle { font-size: 12px; color: var(--console-text-muted); }
 
@@ -2598,6 +2678,7 @@
 
     @media (max-width: 720px) {
       .hero { align-items: flex-start; }
+      .hero__icon { width: 38px; height: 38px; flex-basis: 38px; }
       .hero__subtitle { display: none; }
       .hero__title { font-size: 14px; }
       .hero > div:last-child { gap: 6px !important; }
@@ -2844,6 +2925,56 @@
         transition-duration: 0.01ms !important;
       }
     }
+    /* Workspace identity for local reports. */
+    .hero { border-top: 4px solid var(--brand); min-height: 72px; }
+    .workspace-brand { min-width: 0; }
+    .workspace-brand .hero__title { margin: 0; font-size: 17px; }
+    .workspace-mode { color: var(--info); font-size: 10px; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; }
+    :root[data-theme="light"] .workspace-mode { color: var(--info); }
+    .workspace-context { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; padding: 12px 24px; border-bottom: 1px solid var(--console-border); background: var(--console-muted); color: var(--console-text-muted); font-size: 12px; }
+    .workspace-context strong { color: var(--console-text); }
+    .workspace-context details { margin-left: auto; max-width: 580px; }
+    .workspace-context summary { cursor: pointer; min-height: 24px; }
+    .workspace-context p { margin: 6px 0; }
+    @media (max-width: 720px) {
+      .hero { flex-wrap: wrap; }
+      .workspace-context { padding: 12px; }
+      .workspace-context details { margin-left: 0; }
+    }
+    .viewer-selection, .viewer-remediation { margin: 14px 20px; padding: 14px; border: 1px solid var(--border); border-radius: 10px; background: var(--brand-soft); }
+    .viewer-selection p, .viewer-remediation p, .viewer-triage-note { font-size: 13px; color: var(--text-muted); line-height: 1.6; }
+    .viewer-selection textarea { width: 100%; font-family: ui-monospace, monospace; font-size: 13px; }
+    .viewer-select-target { display: inline-flex; min-width: 24px; min-height: 24px; align-items: center; justify-content: center; cursor: pointer; }
+    .viewer-row-selected { background: var(--brand-soft); }
+    .viewer-commit-context { margin-top: 5px; color: var(--text-muted); font: 12px/1.5 system-ui, sans-serif; }
+    .viewer-technical { margin: 12px 0; }
+    .viewer-technical summary { cursor: pointer; margin-bottom: 12px; }
+    @media (max-width: 640px) { .viewer-select-target { min-width: 44px; min-height: 44px; } .viewer-selection textarea { font-size: 16px; } }
+
+    .blast-access-paths { list-style: none; padding: 0; display: grid; gap: 12px; }
+    .blast-access-path { display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1.2fr); gap: 12px; padding: 14px; border: 1px solid var(--border); border-radius: 8px; }
+    .blast-access-path > div { min-width: 0; overflow-wrap: anywhere; }
+    .blast-access-path h4 { margin: 0 0 10px; font-size: 12px; color: var(--text-muted); }
+    .blast-access-path summary { min-height: 24px; cursor: pointer; }
+    .blast-access-path ul { padding-left: 18px; font-size: 12px; }
+    .blast-access-path li + li { margin-top: 8px; }
+    .blast-access-path .blast-perm-tag { white-space: normal; overflow-wrap: anywhere; }
+    .blast-access-arrow { align-self: center; color: var(--brand); }
+    .blast-coverage { font-size: 12px; color: var(--text-muted); overflow-wrap: anywhere; }
+    @media (max-width: 600px) {
+      .blast-access-path { grid-template-columns: minmax(0, 1fr); }
+      .blast-access-arrow { transform: rotate(90deg); justify-self: center; }
+    }
+
+.finding-filter-builder { margin: 12px 0; padding: 16px; border: 1px solid var(--border); border-radius: 12px; }
+.finding-filter-form, .finding-filter-chips { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.finding-filter-form label { display: grid; gap: 6px; flex: 1 1 160px; min-width: 0; }
+.finding-filter-form input, .finding-filter-form select, .finding-filter-builder button { min-height: 36px; max-width: 100%; padding: 8px 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--surface, var(--bg-card)); color: var(--text, var(--text-main)); font: inherit; }
+.finding-filter-builder button { cursor: pointer; overflow-wrap: anywhere; text-align: left; }
+.finding-filter-builder p, .finding-filter-builder [role="status"] { font-size: 12px; color: var(--text-muted); }
+.finding-filter-chips { margin-bottom: 8px; }
+.finding-filter-builder :focus-visible { outline: 2px solid var(--accent, #0e9f6e); outline-offset: 2px; }
+@media (max-width: 600px) { .finding-filter-builder input, .finding-filter-builder select { font-size: 16px; } .finding-filter-builder button, .finding-filter-builder select, .finding-filter-builder input { min-height: 44px; } }
   </style>
 </head>
 <body>
@@ -2862,10 +2993,10 @@
 
   <header class="hero">
     <div class="hero__brand">
-      <div class="hero__icon" aria-hidden="true">K</div>
-      <div style="display:flex; align-items:center;">
-        <h1 class="hero__title" translate="no">Kingfisher Report Viewer</h1>
-        <span class="hero__subtitle">Blast Radius &amp; Findings</span>
+      <div class="hero__icon" aria-hidden="true"><img src="kingfisher_logo.png" alt=""></div>
+      <div class="workspace-brand">
+        <div class="workspace-mode">Kingfisher · Local reports</div>
+        <h1 class="hero__title" translate="no">Report Viewer &amp; Triager</h1>
       </div>
     </div>
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
@@ -2875,7 +3006,10 @@
     </div>
   </header>
 
-  <div class="info-banner">Runs entirely in your browser. Reports stay local and are never uploaded.</div>
+  <div class="workspace-context" aria-label="Current workspace">
+    <strong>Report workspace · Browser-only</strong>
+    <span>Explore loaded scan snapshots. Reports stay local and are never uploaded.</span>
+  </div>
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <main id="main-content" class="page">
@@ -3090,7 +3224,7 @@
                   <div class="metric__label">High Confidence</div>
                   <div class="metric__value" id="stat-high">0</div>
                 </div>
-                <div class="metric success">
+                <div class="metric critical">
                   <div class="metric__label">Active Credentials</div>
                   <div class="metric__value" id="stat-active">0</div>
                 </div>
@@ -3280,7 +3414,7 @@
                 <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
                   <button class="btn" id="download-json" type="button">Download JSON</button>
                   <button class="btn" id="download-csv" type="button">Export CSV</button>
-                  <input type="search" id="search-input" name="finding-search" class="search-input" autocomplete="off" spellcheck="false" placeholder="Search rule, path, or snippet…">
+                  <input type="search" id="search-input" name="finding-search" class="search-input" autocomplete="off" spellcheck="false" placeholder="Search rule ID, author, path, or snippet…" aria-label="Search findings">
                   <select id="source-filter" name="source-filter" aria-label="Filter findings by source" class="rows-select">
                     <option value="all" selected>All sources</option>
                     <option value="kingfisher">Kingfisher</option>
@@ -3296,6 +3430,10 @@
                     <option value="not_attempted">Not Attempted</option>
                     <option value="inconclusive">Inconclusive Validation</option>
                   </select>
+                  <label class="group-secret-toggle" for="group-secret-toggle">
+                    <input type="checkbox" id="group-secret-toggle" name="group-secret" checked>
+                    <span>Group by secret</span>
+                  </label>
                   <span class="rows-label">Rows</span>
                   <select id="rows-select" name="rows-per-page" aria-label="Findings per page" class="rows-select">
                     <option value="10" selected>10</option>
@@ -3304,16 +3442,27 @@
                   </select>
                 </div>
               </div>
+              <section id="finding-filter-builder" class="finding-filter-builder" aria-label="Finding filters"></section>
               <div class="findings-pagination findings-pagination--top" aria-label="Findings pagination">
                 <span class="findings-pagination__summary">Browse findings</span>
                 <button id="page-prev" class="pager-btn" type="button" aria-label="Previous page">&lsaquo;</button>
                 <span id="page-info">0 of 0</span>
                 <button id="page-next" class="pager-btn" type="button" aria-label="Next page">&rsaquo;</button>
               </div>
+              <div class="viewer-selection hidden" id="viewer-selection" role="region" aria-label="Selected findings">
+                <strong id="viewer-selection-count" role="status"></strong>
+                <button class="btn" id="viewer-copy-validation" type="button">Copy revalidation commands</button>
+                <button class="btn" id="viewer-copy-revocation" type="button">Copy revocation commands</button>
+                <button class="btn" id="viewer-clear-selection" type="button">Clear selection</button>
+                <p id="viewer-command-status" role="status"></p>
+                <textarea id="viewer-validation-commands" class="hidden" readonly aria-label="Selected revalidation commands" rows="4" spellcheck="false"></textarea>
+                <p>Run copied commands in your terminal, then load a fresh report to see updated results. This offline viewer does not execute checks or revocations.</p>
+              </div>
               <div class="table-container">
                 <table class="table">
                   <thead>
                     <tr>
+                      <th><label class="viewer-select-target"><input id="viewer-select-all" type="checkbox" aria-label="Select all filtered findings"></label></th>
                       <th class="sortable" data-field="rule" aria-sort="ascending">
                         <button class="table-sort-button" type="button">Rule <span class="sort-indicator" aria-hidden="true"></span></button>
                       </th>
@@ -3360,14 +3509,6 @@
                     <div id="fd-rule-id"></div>
                   </div>
                   <div class="detail-field">
-                    <div class="detail-field__label">Fingerprint</div>
-                    <div id="fd-fingerprint"></div>
-                  </div>
-                  <div class="detail-field">
-                    <div class="detail-field__label">Entropy</div>
-                    <div id="fd-entropy"></div>
-                  </div>
-                  <div class="detail-field">
                     <div class="detail-field__label">Validation Status</div>
                     <div id="fd-validation-status"></div>
                   </div>
@@ -3393,8 +3534,20 @@
                   </div>
                 </div>
 
+                <div id="fd-exposure-dates" class="detail-grid"></div>
+                <p class="viewer-triage-note">Commit dates describe source history, not when a repository became public. Validation reflects the loaded report; removing a secret from a file does not revoke it.</p>
+                <details class="viewer-technical"><summary>Technical identifiers</summary><div class="detail-grid">
+                  <div class="detail-field">
+                    <div class="detail-field__label">Fingerprint</div>
+                    <div id="fd-fingerprint"></div>
+                  </div>
+                  <div class="detail-field">
+                    <div class="detail-field__label">Entropy</div>
+                    <div id="fd-entropy"></div>
+                  </div>
+                </div></details>
                 <div style="font-size:12px; color:var(--text-muted); display:block; margin-bottom:6px; text-transform:uppercase; letter-spacing:0.06em; font-weight:600;">
-                  Match Snippet
+                  What was leaked
                 </div>
                 <div class="snippet-box" id="fd-snippet" role="region" aria-label="Match snippet"></div>
 
@@ -3442,7 +3595,7 @@
                 </div>
 
                 <div id="fd-validation-box" class="hidden">
-                   <div class="detail-section-label">Live Validation Response</div>
+                   <div class="detail-section-label">Recorded Validation Response</div>
                   <pre id="fd-validation-res"></pre>
                 </div>
 
@@ -3460,6 +3613,7 @@
                   </div>
                 </div>
 
+                <div class="viewer-remediation"><strong>Revoke, then verify</strong><p>Review access and dependent applications, replace the credential, and revoke the old credential. Run the validate command again afterward. An inactive result supports revocation; an error or skipped check does not. Remove the secret from affected sources and rescan.</p></div>
                 <div id="fd-revoke-box" class="hidden">
                    <div class="detail-section-label">Revoke Command</div>
                   <div class="cmd-container">
@@ -3501,6 +3655,8 @@
   <script>
     let rawData = null;
     let findings = [];
+    const selectedViewerFindings = new Set();
+    let viewerSelectionControls = [];
     let accessMap = [];
     let repositoryAudit = null;
     let coveragePage = 1;
@@ -3514,6 +3670,8 @@
     let currentPage = 1;
     let sortField = "rule";
     let sortDirection = "asc";
+    let groupBySecret = true;
+    let expandedSecretGroups = new Set();
     let detectorBreakdownSortField = "count";
     let detectorBreakdownSortDirection = "desc";
     let detectorBreakdownActiveOnly = false;
@@ -3553,6 +3711,7 @@
     const searchInput = document.getElementById("search-input");
     const sourceSelect = document.getElementById("source-filter");
     const validationSelect = document.getElementById("validation-filter");
+    const groupSecretToggle = document.getElementById("group-secret-toggle");
     const rowsSelect = document.getElementById("rows-select");
     const pagePrev = document.getElementById("page-prev");
     const pageNext = document.getElementById("page-next");
@@ -3589,8 +3748,148 @@
       "view-findings": document.getElementById("view-findings"),
     };
 
-    const THEME_KEY = "viewer-theme";
+    const THEME_KEY = "kingfisher-ui-theme";
     const systemThemeQuery = window.matchMedia("(prefers-color-scheme: light)");
+
+// BEGIN finding filter builder (inline copy in docs/viewer/index.html for offline use).
+function createFindingFilters(container, fields, onChange, onClear) {
+  const operators = { equals: "is", contains: "contains", not_equals: "is not", not_contains: "does not contain", missing: "is empty", present: "is not empty" };
+  let filters = [];
+  const form = document.createElement("form");
+  form.className = "finding-filter-form";
+  const control = (label, tag) => {
+    const wrapper = document.createElement("label");
+    const title = document.createElement("span");
+    title.textContent = label;
+    const input = document.createElement(tag);
+    input.name = `finding-filter-${label.toLowerCase()}`;
+    wrapper.append(title, input);
+    form.append(wrapper);
+    return input;
+  };
+  const field = control("Field", "select");
+  Object.entries(fields).forEach(([key, config]) => field.add(new Option(config.label, key)));
+  const operator = control("Match", "select");
+  Object.entries(operators).forEach(([key, label]) => operator.add(new Option(label, key)));
+  const value = control("Value", "input");
+  value.autocomplete = "off";
+  value.placeholder = "Select or type a value…";
+  const suggestions = document.createElement("datalist");
+  suggestions.id = "finding-filter-values";
+  value.setAttribute("list", suggestions.id);
+  const add = document.createElement("button");
+  add.type = "submit";
+  add.textContent = "Add filter";
+  const clear = document.createElement("button");
+  clear.type = "button";
+  clear.textContent = "Clear all filters";
+  form.append(add, clear, suggestions);
+  const help = document.createElement("p");
+  help.textContent = "Include values in the same field match ANY; different fields and exclusions must ALL match. Filters also combine with the search and dropdowns above. Matching ignores case.";
+  const chips = document.createElement("div");
+  chips.className = "finding-filter-chips";
+  chips.setAttribute("aria-label", "Applied finding filters");
+  const status = document.createElement("span");
+  status.setAttribute("role", "status");
+  container.append(form, help, chips, status);
+  function render() {
+    chips.replaceChildren();
+    filters.forEach((filter, index) => {
+      const chip = document.createElement("button");
+      chip.type = "button";
+      const label = `${fields[filter.field].label} ${operators[filter.op]}${filter.value ? `: ${filter.value}` : ""}`;
+      chip.textContent = `${label} ×`;
+      chip.setAttribute("aria-label", `Remove filter: ${label}`);
+      chip.addEventListener("click", () => {
+        filters.splice(index, 1);
+        render();
+        onChange();
+        (chips.children[index] || chips.lastElementChild || add).focus();
+      });
+      chips.append(chip);
+    });
+    status.textContent = filters.length ? `${filters.length} additional filters applied` : "No additional filters";
+  }
+  function suggest() {
+    suggestions.replaceChildren();
+    (fields[field.value].options?.() || []).forEach((text) => {
+      const option = document.createElement("option");
+      option.value = text;
+      suggestions.append(option);
+    });
+  }
+  field.addEventListener("change", () => { value.value = ""; suggest(); });
+  value.addEventListener("focus", suggest);
+  operator.addEventListener("change", () => {
+    value.disabled = ["missing", "present"].includes(operator.value);
+  });
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const text = value.disabled ? "" : value.value.trim();
+    if (!value.disabled && !text) { status.textContent = "Enter a filter value."; value.focus(); return; }
+    const filter = { field: field.value, op: operator.value, value: text };
+    if (!filters.some((entry) => entry.field === filter.field && entry.op === filter.op && entry.value.toLowerCase() === text.toLowerCase())) filters.push(filter);
+    value.value = "";
+    render();
+    onChange();
+    (value.disabled ? add : value).focus();
+  });
+  clear.addEventListener("click", () => { filters = []; render(); onClear(); onChange(); });
+  render();
+  return {
+    serialize: () => JSON.stringify(filters),
+    restore(raw) {
+      try {
+        const parsed = JSON.parse(raw || "[]");
+        filters = Array.isArray(parsed) ? parsed.filter((f) => f && Object.hasOwn(fields, f.field) && Object.hasOwn(operators, f.op) && typeof f.value === "string" && (["missing", "present"].includes(f.op) || f.value.trim())) : [];
+      } catch (_) { filters = []; }
+      render();
+    },
+    matches(record) {
+      const groups = new Map();
+      for (const filter of filters) {
+        if (!groups.has(filter.field)) groups.set(filter.field, []);
+        groups.get(filter.field).push(filter);
+      }
+      return [...groups].every(([key, group]) => {
+        const values = fields[key].values(record).filter((v) => v != null && String(v) !== "").map((v) => String(v).toLowerCase());
+        const matches = (f) => {
+          if (f.op === "missing") return values.length === 0;
+          if (f.op === "present") return values.length > 0;
+          const match = values.some((v) => f.op.endsWith("equals") ? v === f.value.toLowerCase() : v.includes(f.value.toLowerCase()));
+          return f.op.startsWith("not_") ? !match : match;
+        };
+        const includes = group.filter((f) => !f.op.startsWith("not_") && f.op !== "present");
+        const excludes = group.filter((f) => f.op.startsWith("not_") || f.op === "present");
+        return (!includes.length || includes.some(matches)) && excludes.every(matches);
+      });
+    },
+  };
+}
+// END finding filter builder.
+
+    const viewerFindingFields = {
+      validation: { label: "Validation", values: (f) => [normalizeValidationStatus(validationStatusLabel(f.finding?.validation?.status || "not attempted"))] },
+      source: { label: "Source", values: (f) => [getFindingSourceTool(f.finding || {})] },
+      rule: { label: "Rule", values: (f) => [f.rule?.id, f.rule?.name] },
+      confidence: { label: "Confidence", values: (f) => [f.finding?.confidence] },
+      repository: { label: "Repository", values: (f) => [f.finding?.git_metadata?.repository?.url] },
+      path: { label: "Path", values: (f) => [f.finding?.path] },
+      committer: { label: "Committer / author", values: (f) => { const c = f.finding?.git_metadata?.commit; return [c?.author?.name, c?.author?.email, c?.committer?.name, c?.committer?.email]; } },
+      language: { label: "Language", values: (f) => [f.finding?.language] },
+    };
+    for (const config of Object.values(viewerFindingFields)) {
+      config.options = () => [...new Set(findings.flatMap(config.values).filter(Boolean))].sort().slice(0, 200);
+    }
+    const viewerFindingFilters = createFindingFilters(document.getElementById("finding-filter-builder"), viewerFindingFields, () => {
+      currentPage = 1;
+      renderFindingsTable();
+      syncUrlState();
+    }, () => {
+      currentFilter = searchInput.value = "";
+      validationFilter = validationSelect.value = "all";
+      sourceFilter = sourceSelect.value = "all";
+    });
 
     function readUrlState() {
       const params = new URLSearchParams(window.location.search);
@@ -3613,6 +3912,7 @@
           ? params.get("sort")
           : "rule",
         sortDirection: params.get("sort-dir") === "desc" ? "desc" : "asc",
+        group: params.get("group") !== "0",
         accessFilter: params.get("access-q") || "",
         accessView: params.get("access-view") === "details" ? "details" : "map",
         critical: params.get("critical") === "1",
@@ -3626,6 +3926,7 @@
       const params = new URLSearchParams();
       const view = Object.entries(viewRegistry).find(([, element]) => element && !element.classList.contains("hidden"));
       if (view && view[0] !== "view-dashboard") params.set("view", view[0]);
+      if (viewerFindingFilters.serialize() !== "[]") params.set("finding-filters", viewerFindingFilters.serialize());
       if (currentFilter) params.set("q", currentFilter);
       if (sourceFilter !== "all") params.set("source", sourceFilter);
       if (validationFilter !== "all") params.set("validation", validationFilter);
@@ -3633,6 +3934,7 @@
       if (pageSize !== 10) params.set("rows", String(pageSize));
       if (sortField !== "rule") params.set("sort", sortField);
       if (sortDirection !== "asc") params.set("sort-dir", sortDirection);
+      if (!groupBySecret) params.set("group", "0");
       if (treeSearch && treeSearch.value) params.set("access-q", treeSearch.value);
       if (accessMapViewMode !== "map") params.set("access-view", accessMapViewMode);
       if (isCriticalOnly()) params.set("critical", "1");
@@ -3654,6 +3956,7 @@
 
     function applyUrlState({ focusFinding = false } = {}) {
       const state = readUrlState();
+      viewerFindingFilters.restore(new URLSearchParams(window.location.search).get("finding-filters"));
       currentFilter = state.filter;
       sourceFilter = state.source;
       validationFilter = state.validation;
@@ -3661,6 +3964,8 @@
       currentPage = state.page;
       sortField = state.sort;
       sortDirection = state.sortDirection;
+      groupBySecret = state.group;
+      if (groupSecretToggle) groupSecretToggle.checked = groupBySecret;
       expandedAccessKeys = new Set(state.expandedAccessKeys);
       accessRenderLimit = state.accessLimit;
       searchInput.value = currentFilter;
@@ -3716,7 +4021,7 @@
     }
 
     function getStoredThemePreference() {
-      const stored = localStorage.getItem(THEME_KEY);
+      const stored = localStorage.getItem(THEME_KEY) || localStorage.getItem("viewer-theme");
       return stored === "light" || stored === "dark" ? stored : null;
     }
 
@@ -3730,7 +4035,7 @@
       const normalized = theme === "light" ? "light" : "dark";
       document.documentElement.setAttribute("data-theme", normalized);
       const themeColor = document.querySelector('meta[name="theme-color"]');
-      if (themeColor) themeColor.content = normalized === "light" ? "#eef4f0" : "#08110e";
+      if (themeColor) themeColor.content = normalized === "light" ? "#f9fbfa" : "#001e2b";
       if (themeToggle) {
         themeToggle.textContent = normalized === "dark" ? "Light Mode" : "Dark Mode";
       }
@@ -3915,6 +4220,21 @@
       syncUrlState();
     });
 
+    if (groupSecretToggle) {
+      groupSecretToggle.addEventListener("change", (e) => {
+        groupBySecret = Boolean(e.target.checked);
+        currentPage = 1;
+        renderFindingsTable();
+        syncUrlState();
+      });
+    }
+
+    function findingsUnitCount() {
+      const all = getFilteredSortedFindings();
+      if (!groupBySecret) return all.length;
+      return groupFindingsBySecret(all).length;
+    }
+
     pagePrev.addEventListener("click", () => {
       if (currentPage > 1) {
         currentPage--;
@@ -3924,7 +4244,7 @@
     });
 
     pageNext.addEventListener("click", () => {
-      const total = getFilteredSortedFindings().length;
+      const total = findingsUnitCount();
       const totalPages = total ? Math.ceil(total / pageSize) : 1;
       if (currentPage < totalPages) {
         currentPage++;
@@ -4708,8 +5028,9 @@
       const line = toNumberOrNull(firstNonEmpty(region.startLine, region.start_line));
       const columnStart = toNumberOrNull(firstNonEmpty(region.startColumn, region.start_column));
       const columnEnd = toNumberOrNull(firstNonEmpty(region.endColumn, region.end_column));
+      const matchedContent = String(region.snippet && sarifMessageText(region.snippet) || "");
       const snippet = String(firstNonEmpty(
-        region.snippet && sarifMessageText(region.snippet),
+        matchedContent,
         sarifMessageText(result.message),
         ruleDescription
       ) || "");
@@ -4749,6 +5070,7 @@
         },
         finding: {
           snippet,
+          matched_content: matchedContent,
           fingerprint,
           confidence: sarifLevelToConfidence(result.level),
           entropy: entropy !== "" ? String(entropy) : "",
@@ -4856,7 +5178,8 @@
       const line = toNumberOrNull(firstNonEmpty(item.StartLine, item.startLine, item.lineNumber));
       const columnStart = toNumberOrNull(firstNonEmpty(item.StartColumn, item.startColumn));
       const columnEnd = toNumberOrNull(firstNonEmpty(item.EndColumn, item.endColumn));
-      const snippet = String(firstNonEmpty(item.Secret, item.secret, item.Match, item.match, item.line, description) || "");
+      const matchedContent = String(firstNonEmpty(item.Secret, item.secret, item.Match, item.match, item.line) || "");
+      const snippet = matchedContent || description;
       const entropy = firstNonEmpty(item.Entropy, item.entropy, item.OffenderEntropy, item.offenderEntropy);
       const secretIdentity = String(firstNonEmpty(item.Secret, item.secret, item.Match, item.match) || "");
       const fingerprint = String(
@@ -4884,6 +5207,7 @@
         },
         finding: {
           snippet,
+          matched_content: matchedContent,
           fingerprint,
           confidence: "medium",
           entropy: entropy !== "" ? String(entropy) : "",
@@ -4943,7 +5267,8 @@
         item.Email,
         item.email
       );
-      const snippet = String(firstNonEmpty(item.Redacted, item.redacted, item.RawV2, item.rawV2, item.Raw, item.raw, detectorDescription) || "");
+      const matchedContent = String(firstNonEmpty(item.RawV2, item.rawV2, item.Raw, item.raw) || "");
+      const snippet = String(firstNonEmpty(item.Redacted, item.redacted, matchedContent, detectorDescription) || "");
       const secretIdentity = String(firstNonEmpty(item.RawV2, item.rawV2, item.Raw, item.raw, item.Redacted, item.redacted) || "");
       const fingerprint = String(
         firstNonEmpty(item.Fingerprint, item.fingerprint) ||
@@ -4964,6 +5289,7 @@
         },
         finding: {
           snippet,
+          matched_content: matchedContent,
           fingerprint,
           confidence: verified ? "high" : "medium",
           entropy: "",
@@ -5236,6 +5562,8 @@
     }
 
     function resetViewer(promptFilePicker = false) {
+      selectedViewerFindings.clear();
+      viewerFindingFilters.restore();
       findings = [];
       accessMap = [];
       repositoryAudit = null;
@@ -5255,6 +5583,8 @@
       currentPage = 1;
       sortField = "rule";
       sortDirection = "asc";
+      groupBySecret = true;
+      expandedSecretGroups.clear();
       detectorBreakdownActiveOnly = false;
       detectorBreakdownPage = 1;
 
@@ -5262,6 +5592,7 @@
       validationSelect.value = "all";
       sourceSelect.value = "all";
       rowsSelect.value = "10";
+      if (groupSecretToggle) groupSecretToggle.checked = true;
       treeSearch.value = "";
       if (coverageSearch) coverageSearch.value = "";
       if (detectorBreakdownActiveOnlyToggle) detectorBreakdownActiveOnlyToggle.checked = false;
@@ -5337,6 +5668,7 @@
       } else {
         dedupResultMulti = deduplicateFindings(nextFindings);
       }
+      selectedViewerFindings.clear();
       findings = dedupResultMulti.findings;
       duplicatesRemoved = dedupResultMulti.dropped;
       // Layer Kingfisher validation/revoke data onto matched imported findings
@@ -5350,6 +5682,7 @@
 
     function parseAndRender(text) {
       const t0 = performance.now();
+      selectedViewerFindings.clear();
       findings = [];
       accessMap = [];
       rawData = null;
@@ -5400,19 +5733,29 @@
       return !!(el && !el.checked);
     }
 
+    function findingFingerprintKey(finding) {
+      const info = finding.viewer_import || {};
+      return JSON.stringify([
+        getFindingSourceTool(finding),
+        String(info.source_tool || "").trim().toLowerCase(),
+        finding.fingerprint || "",
+      ]);
+    }
+
     function deduplicateFindings(list) {
       const seen = new Set();
       const result = [];
       const dropped = { kingfisher: 0, sarif: 0, trufflehog: 0, gitleaks: 0, total: 0 };
       for (const f of list) {
         const fp = f.finding && f.finding.fingerprint ? f.finding.fingerprint : "";
-        if (fp && seen.has(fp)) {
-          const tool = getFindingSourceTool(f.finding || {});
+        const tool = getFindingSourceTool(f.finding || {});
+        const key = findingFingerprintKey(f.finding || {});
+        if (fp && seen.has(key)) {
           dropped[tool] = (dropped[tool] || 0) + 1;
           dropped.total += 1;
           continue;
         }
-        if (fp) seen.add(fp);
+        if (fp) seen.add(key);
         result.push(f);
       }
       return { findings: result, dropped };
@@ -6024,9 +6367,12 @@
       const source = sourceFilter;
 
       let arr = findings.filter((f) => {
+        if (!viewerFindingFilters.matches(f)) return false;
         const rule = f.rule || {};
         const finding = f.finding || {};
-        const ruleName = (rule.name || rule.id || "").toLowerCase();
+        const ruleName = [rule.name, rule.id].filter(Boolean).join(" ").toLowerCase();
+        const commit = finding.git_metadata?.commit || {};
+        const authorSearch = [commit.author?.name, commit.author?.email, commit.committer?.name, commit.committer?.email].filter(Boolean).join(" ").toLowerCase();
         const path = (finding.path || "").toLowerCase();
         const snippet = (finding.snippet || "").toLowerCase();
         const fingerprint = (finding.fingerprint || "").toLowerCase();
@@ -6036,7 +6382,7 @@
             : "not attempted";
 
         if (filterLower) {
-          if (!ruleName.includes(filterLower) && !path.includes(filterLower) && !snippet.includes(filterLower) && !fingerprint.includes(filterLower)) {
+          if (!ruleName.includes(filterLower) && !path.includes(filterLower) && !snippet.includes(filterLower) && !fingerprint.includes(filterLower) && !authorSearch.includes(filterLower)) {
             return false;
           }
         }
@@ -6363,17 +6709,12 @@
     }
 
     function getChartColor(index) {
-      const palette = [
-        "#0ea5e9",
-        "#8b5cf6",
-        "#22c55e",
-        "#f97316",
-        "#ec4899",
-        "#eab308",
-        "#14b8a6",
-        "#ef4444",
-      ];
-      return palette[index % palette.length];
+      const palette = ["--info", "--purple", "--success", "--warning", "--muted"];
+      return chartColor(palette[index % palette.length]);
+    }
+
+    function chartColor(token) {
+      return getComputedStyle(document.documentElement).getPropertyValue(token).trim();
     }
 
     function getSourceDetectorChartEntries(list = findings) {
@@ -6405,7 +6746,7 @@
           const dataPoints = topEntries.map((entry, index) => ({
             key: entry.label,
             label: entry.label,
-            color: entry.label === "Other" ? "#94a3b8" : getChartColor(index),
+            color: entry.label === "Other" ? chartColor("--muted") : getChartColor(index),
           }));
           const counts = {};
           topEntries.forEach((entry) => {
@@ -6535,11 +6876,11 @@
 
     function renderStatusChart(counts) {
       const palette = {
-        active: "#22c55e",
-        assumed: "#3b82f6",
-        inactive: "#f97316",
-        not_attempted: "#38bdf8",
-        inconclusive: "#eab308",
+        active: chartColor("--danger"),
+        assumed: chartColor("--info"),
+        inactive: chartColor("--success"),
+        not_attempted: chartColor("--warning"),
+        inconclusive: chartColor("--warning"),
       };
       const dataPoints = [
         { key: "active", label: "Active Credential", color: palette.active },
@@ -6553,10 +6894,10 @@
 
     function renderSourceChart(counts) {
       const dataPoints = [
-        { key: "kingfisher", label: "Kingfisher", color: "#0e7c56" },
-        { key: "sarif", label: "SARIF", color: "#0891b2" },
-        { key: "gitleaks", label: "Gitleaks", color: "#2563eb" },
-        { key: "trufflehog", label: "TruffleHog", color: "#7c3aed" },
+        { key: "kingfisher", label: "Kingfisher", color: chartColor("--success") },
+        { key: "sarif", label: "SARIF", color: chartColor("--muted") },
+        { key: "gitleaks", label: "Gitleaks", color: chartColor("--info") },
+        { key: "trufflehog", label: "TruffleHog", color: chartColor("--purple") },
       ];
       const loadedSources = dataPoints.filter((entry) => (counts[entry.key] || 0) > 0);
       renderDonutChart(
@@ -6767,6 +7108,30 @@
       );
     }
 
+    function secretGroupKey(entry) {
+      const finding = entry && entry.finding ? entry.finding : {};
+      const content = finding.matched_content ?? finding.snippet;
+      if (content) return "content:" + stableHash53(content);
+      if (finding.fingerprint) return "fingerprint:" + findingFingerprintKey(finding);
+      return "location:" + stableHash53(JSON.stringify([finding.path || "", finding.line || ""]));
+    }
+
+    function groupFindingsBySecret(list) {
+      const groups = [];
+      const byKey = new Map();
+      for (const entry of list) {
+        const key = secretGroupKey(entry);
+        let group = byKey.get(key);
+        if (!group) {
+          group = { key, items: [] };
+          byKey.set(key, group);
+          groups.push(group);
+        }
+        group.items.push(entry);
+      }
+      return groups;
+    }
+
     function getFindingIdFromAccessEntry(entry) {
       if (!entry) return "";
       return (
@@ -6918,7 +7283,7 @@
               const findingId = getFindingIdFromFinding(finding);
               const gitUrl = getFileUrlFromFinding(finding);
               const sourceTool = getFindingSourceDisplayName(finding);
-              const statusColor = normalizedStatus === "active" ? "#dc2626" : normalizedStatus === "assumed" ? "#2563eb" : normalizedStatus === "inactive" ? "#f97316" : normalizedStatus === "inconclusive" ? "#92400e" : "#0369a1";
+              const statusColor = normalizedStatus === "active" ? "#db3030" : normalizedStatus === "assumed" ? "#2563eb" : normalizedStatus === "inactive" ? "#00684a" : normalizedStatus === "inconclusive" ? "#944f01" : "#944f01";
               return `
                 <tr>
                   <td>${escapeHtml(rule.name || rule.id || "")}</td>
@@ -7060,8 +7425,8 @@
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 24px; color: #0f172a; }
     h1 { font-size: 22px; margin: 0 0 4px; }
     h2 { font-size: 16px; margin: 20px 0 10px; border-bottom: 2px solid #e5e7eb; padding-bottom: 6px; }
-    .report-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 3px solid #0e7c56; }
-    .report-header h1 { color: #0e7c56; }
+    .report-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 3px solid #00684a; }
+    .report-header h1 { color: #00684a; }
     .report-date { color: #4b5563; font-size: 13px; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
     .stat { padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; background: #f8fafc; }
@@ -7144,7 +7509,7 @@
   </div>
 
   <div class="no-print" style="margin-top:24px;text-align:center;">
-    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#0e7c56;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">
       Print / Save as PDF
     </button>
   </div>
@@ -7272,8 +7637,8 @@
     body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 0; padding: 24px; color: #0f172a; }
     h1 { font-size: 22px; margin: 0 0 4px; }
     h2 { font-size: 16px; margin: 20px 0 10px; border-bottom: 2px solid #e5e7eb; padding-bottom: 6px; }
-    .report-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 3px solid #0e7c56; }
-    .report-header h1 { color: #0e7c56; }
+    .report-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; padding-bottom: 12px; border-bottom: 3px solid #00684a; }
+    .report-header h1 { color: #00684a; }
     .report-date { color: #4b5563; font-size: 13px; text-align: right; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 18px; }
     .stat { padding: 12px; border: 1px solid #d1d5db; border-radius: 8px; background: #f8fafc; }
@@ -7315,7 +7680,7 @@
   </div>
 
   <div class="no-print" style="margin-top:24px;text-align:center;">
-    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#0e7c56;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">
       Print / Save as PDF
     </button>
   </div>
@@ -7333,77 +7698,265 @@
       setTimeout(() => win.print(), 400);
     }
 
-    function renderFindingsTable() {
+    function viewerActionCommand(entry, kind) {
+      const field = kind === "revocation" ? "revoke_command" : "validate_command";
+      const capability = kind === "revocation" ? "revokeCommandSupported" : "validateCommandSupported";
+      const finding = entry.finding || {};
+      const imported = finding.viewer_import;
+      if (finding[field] && (!imported || scanMetadata.capabilities[capability])) return finding[field];
+      // Only credential-content matches are safe for batch commands; path/line matches
+      // can describe a different secret found at the same location in another scan.
+      const enrichment = finding.kingfisher_enrichment;
+      if (enrichment && ["snippet", "fingerprint"].includes(enrichment.match_strength)) return enrichment[field] || "";
+      return "";
+    }
+
+    function updateViewerSelection() {
       const all = getFilteredSortedFindings();
-      const total = all.length;
+      const count = all.filter((entry) => selectedViewerFindings.has(entry)).length;
+      const header = document.getElementById("viewer-select-all");
+      header.checked = all.length > 0 && count === all.length;
+      header.indeterminate = count > 0 && count < all.length;
+      for (const { input, entries, row } of viewerSelectionControls) {
+        const selected = entries.filter((entry) => selectedViewerFindings.has(entry)).length;
+        input.checked = selected === entries.length;
+        input.indeterminate = selected > 0 && selected < entries.length;
+        row.classList.toggle("viewer-row-selected", selected > 0);
+      }
+      document.getElementById("viewer-selection").classList.toggle("hidden", !selectedViewerFindings.size);
+      document.getElementById("viewer-selection-count").textContent = `${selectedViewerFindings.size} findings selected (${count} match current filters)`;
+      document.getElementById("viewer-validation-commands").value = "";
+      document.getElementById("viewer-validation-commands").classList.add("hidden");
+      document.getElementById("viewer-command-status").textContent = "";
+    }
+
+    function addViewerSelection(row, entries) {
+      const cell = document.createElement("td");
+      const label = document.createElement("label");
+      label.className = "viewer-select-target";
+      const input = document.createElement("input");
+      input.type = "checkbox";
+      input.setAttribute("aria-label", `Select ${entries.length > 1 ? entries.length + " occurrences of " : ""}${entries[0].rule?.name || entries[0].rule?.id || "finding"}`);
+      input.addEventListener("change", () => {
+        for (const entry of entries) {
+          if (input.checked) selectedViewerFindings.add(entry);
+          else selectedViewerFindings.delete(entry);
+        }
+        updateViewerSelection();
+      });
+      label.append(input); cell.append(label); row.prepend(cell);
+      viewerSelectionControls.push({ input, entries, row });
+    }
+
+    document.getElementById("viewer-select-all").addEventListener("change", (event) => {
+      for (const entry of getFilteredSortedFindings()) {
+        if (event.target.checked) selectedViewerFindings.add(entry);
+        else selectedViewerFindings.delete(entry);
+      }
+      updateViewerSelection();
+    });
+    document.getElementById("viewer-clear-selection").addEventListener("click", () => {
+      selectedViewerFindings.clear(); updateViewerSelection();
+      document.getElementById("viewer-select-all").focus();
+    });
+    async function copyViewerActionCommands(kind) {
+      const entries = [...selectedViewerFindings];
+      const commands = [...new Set(entries.map((entry) => viewerActionCommand(entry, kind)).filter(Boolean))];
+      const skipped = entries.filter((entry) => !viewerActionCommand(entry, kind)).length;
+      const output = document.getElementById("viewer-validation-commands");
+      output.setAttribute("aria-label", `Selected ${kind} commands`);
+      output.value = commands.join("\n");
+      output.classList.toggle("hidden", !commands.length);
+      const message = `${commands.length} unique command${commands.length === 1 ? "" : "s"}. ${skipped} selected finding${skipped === 1 ? " has" : "s have"} no supported ${kind} command.`;
+      document.getElementById("viewer-command-status").textContent = message;
+      if (!commands.length) return;
+      try { await navigator.clipboard.writeText(output.value); announce(message + " Copied to clipboard."); }
+      catch (_) { document.getElementById("viewer-command-status").textContent = message + " Clipboard unavailable; copy the commands below."; output.focus(); output.select(); }
+    }
+    document.getElementById("viewer-copy-validation").addEventListener("click", () => copyViewerActionCommands("revalidation"));
+    document.getElementById("viewer-copy-revocation").addEventListener("click", () => copyViewerActionCommands("revocation"));
+
+    function viewerCommitContext(finding) {
+      const commit = finding.git_metadata?.commit || {};
+      const author = commit.author || commit.committer || {};
+      const date = commit.date || commit.timestamp;
+      const details = [author.name || author.email];
+      if (date && Number.isFinite(Date.parse(date))) details.push(new Date(date).toLocaleDateString());
+      const value = details.filter(Boolean).join(" · ");
+      return value ? `<div class="viewer-commit-context" title="Recorded commit author and date">${escapeHtml(value)}</div>` : "";
+    }
+
+    function buildFindingRow(f, extraClass = "", occurrence = null) {
+      const rule = f.rule || {};
+      const finding = f.finding || {};
+
+      const ruleName = rule.name || rule.id || "(unknown rule)";
+      const path = finding.path || "";
+
+      const status =
+        finding.validation && finding.validation.status
+          ? validationStatusLabel(finding.validation.status)
+          : "Not Attempted";
+      const normalizedStatus = normalizeValidationStatus(status);
+      const badgeClass = validationBadgeClass(normalizedStatus);
+
+      const enrichedChip = finding.kingfisher_enrichment
+        ? `<span class="chip-enriched" title="Enriched with Kingfisher validation and revoke data">Enriched</span>`
+        : "";
+
+      const sourceTool = getFindingSourceTool(finding);
+      const sourceBadge = `<span class="badge ${getSourceBadgeClass(sourceTool)}">${escapeHtml(getSourceDisplayName(sourceTool))}</span>`;
+
+      const occurrenceTag = occurrence
+        ? `<div class="sub-finding-label">↳ Occurrence ${occurrence.index} of ${occurrence.total}</div>`
+        : "";
+      const occurrenceAria = occurrence ? `occurrence ${occurrence.index} of ${occurrence.total} ` : "";
+
+      const tr = document.createElement("tr");
+      if (extraClass) tr.className = extraClass;
+      tr.innerHTML = `
+        <td>
+          ${occurrenceTag}
+          <div style="font-weight:600">${escapeHtml(ruleName)}${enrichedChip}</div>
+          <div style="font-size:11px; color:var(--text-muted)">${escapeHtml(rule.id || "")}</div>
+        </td>
+        <td>${sourceBadge}</td>
+        <td style="font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size:12px; color:var(--text-muted);" title="${escapeHtml(path)}">
+          ${escapeHtml(trimPath(path))}
+          ${viewerCommitContext(finding)}
+        </td>
+        <td>
+          <span class="status-badge ${badgeClass}">${escapeHtml(status)}</span>
+        </td>
+        <td>${escapeHtml(finding.confidence || "")}</td>
+        <td style="font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">
+          ${finding.line != null ? finding.line : ""}
+        </td>
+      `;
+      tr.tabIndex = 0;
+      tr.setAttribute("role", "button");
+      tr.setAttribute("aria-label", `Open details for ${occurrenceAria}${ruleName}, ${path || "unknown location"}`);
+      tr.addEventListener("click", (event) => {
+        if (event.target.closest("a, button, input, label")) return;
+        showFindingDetail(f);
+      });
+      tr.addEventListener("keydown", (event) => {
+        if (event.target !== tr || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        showFindingDetail(f);
+      });
+      addViewerSelection(tr, [f]);
+      return tr;
+    }
+
+    function buildGroupRow(group) {
+      const primary = group.items[0] || {};
+      const rule = primary.rule || {};
+      const finding = primary.finding || {};
+      const ruleName = rule.name || rule.id || "(unknown rule)";
+      const path = finding.path || "";
+      const status =
+        finding.validation && finding.validation.status
+          ? validationStatusLabel(finding.validation.status)
+          : "Not Attempted";
+      const normalizedStatus = normalizeValidationStatus(status);
+      const badgeClass = validationBadgeClass(normalizedStatus);
+      const sourceTool = getFindingSourceTool(finding);
+      const sourceBadge = `<span class="badge ${getSourceBadgeClass(sourceTool)}">${escapeHtml(getSourceDisplayName(sourceTool))}</span>`;
+      const count = group.items.length;
+      const expanded = expandedSecretGroups.has(group.key);
+
+      const tr = document.createElement("tr");
+      tr.className = "finding-group-row" + (expanded ? " finding-group-row--open" : "");
+      tr.innerHTML = `
+        <td>
+          <div style="font-weight:600"><span class="group-chevron${expanded ? " group-chevron--open" : ""}" aria-hidden="true">▸</span>${escapeHtml(ruleName)}</div>
+          <div style="font-size:11px; color:var(--text-muted)">${escapeHtml(rule.id || "")}</div>
+        </td>
+        <td>${sourceBadge}</td>
+        <td style="font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size:12px; color:var(--text-muted);" title="${escapeHtml(path)}">
+          ${escapeHtml(trimPath(path))}
+          ${viewerCommitContext(finding)}
+        </td>
+        <td>
+          <span class="status-badge ${badgeClass}">${escapeHtml(status)}</span>
+        </td>
+        <td>${escapeHtml(finding.confidence || "")}</td>
+        <td style="text-align:right; white-space:nowrap;">
+          <span class="group-count-chip" title="The same secret content was detected ${count} times; expand to inspect every occurrence">${count} occurrences</span>
+        </td>
+      `;
+      tr.tabIndex = 0;
+      tr.setAttribute("role", "button");
+      tr.setAttribute("aria-expanded", String(expanded));
+      tr.setAttribute("aria-label",
+        `${expanded ? "Collapse" : "Expand"} ${count} occurrences of the same secret (${ruleName}, ${path || "unknown location"})`);
+      tr.addEventListener("click", (event) => {
+        if (event.target.closest("a, button, input, label")) return;
+        toggleSecretGroup(group.key);
+      });
+      tr.addEventListener("keydown", (event) => {
+        if (event.target !== tr || (event.key !== "Enter" && event.key !== " ")) return;
+        event.preventDefault();
+        toggleSecretGroup(group.key);
+      });
+      addViewerSelection(tr, group.items);
+      return tr;
+    }
+
+    function toggleSecretGroup(key) {
+      if (expandedSecretGroups.has(key)) expandedSecretGroups.delete(key);
+      else expandedSecretGroups.add(key);
+      renderFindingsTable();
+    }
+
+    function renderFindingsTable() {
+      viewerSelectionControls = [];
+      const all = getFilteredSortedFindings();
+      const grouped = groupBySecret;
+      const groups = grouped ? groupFindingsBySecret(all) : [];
+      // In flat mode every finding is its own "group" so pagination logic is shared.
+      const units = grouped
+        ? groups
+        : all.map((f) => ({ key: "flat", items: [f] }));
+      const total = units.length;
 
       const totalPages = total ? Math.ceil(total / pageSize) : 1;
       if (currentPage > totalPages) currentPage = totalPages;
 
       const startIndex = total ? (currentPage - 1) * pageSize : 0;
       const endIndex = total ? Math.min(startIndex + pageSize, total) : 0;
-      const pageItems = total ? all.slice(startIndex, endIndex) : [];
+      const pageUnits = total ? units.slice(startIndex, endIndex) : [];
 
       findingsBody.innerHTML = "";
       const frag = document.createDocumentFragment();
 
-      if (pageItems.length === 0) {
+      if (pageUnits.length === 0) {
         findingsBody.innerHTML =
-          '<tr><td colspan="6" style="text-align:center; padding:24px; color:var(--text-muted);">No findings match your filters.</td></tr>';
+          '<tr><td colspan="7" style="text-align:center; padding:24px; color:var(--text-muted);">No findings match your filters.</td></tr>';
       } else {
-        for (let i = 0; i < pageItems.length; i++) {
-          const f = pageItems[i] || {};
-          const rule = f.rule || {};
-          const finding = f.finding || {};
-
-          const ruleName = rule.name || rule.id || "(unknown rule)";
-          const path = finding.path || "";
-
-          const status =
-            finding.validation && finding.validation.status
-              ? validationStatusLabel(finding.validation.status)
-              : "Not Attempted";
-          const normalizedStatus = normalizeValidationStatus(status);
-          const badgeClass = validationBadgeClass(normalizedStatus);
-
-          const enrichedChip = finding.kingfisher_enrichment
-            ? `<span class="chip-enriched" title="Enriched with Kingfisher validation and revoke data">Enriched</span>`
-            : "";
-
-          const sourceTool = getFindingSourceTool(finding);
-          const sourceBadge = `<span class="badge ${getSourceBadgeClass(sourceTool)}">${escapeHtml(getSourceDisplayName(sourceTool))}</span>`;
-
-        const tr = document.createElement("tr");
-          tr.innerHTML = `
-            <td>
-              <div style="font-weight:600">${escapeHtml(ruleName)}${enrichedChip}</div>
-              <div style="font-size:11px; color:var(--text-muted)">${escapeHtml(rule.id || "")}</div>
-            </td>
-            <td>${sourceBadge}</td>
-            <td style="font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size:12px; color:var(--text-muted);" title="${escapeHtml(path)}">
-              ${escapeHtml(trimPath(path))}
-            </td>
-            <td>
-              <span class="status-badge ${badgeClass}">${escapeHtml(status)}</span>
-            </td>
-            <td>${escapeHtml(finding.confidence || "")}</td>
-            <td style="font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">
-              ${finding.line != null ? finding.line : ""}
-            </td>
-          `;
-           tr.tabIndex = 0;
-           tr.setAttribute("role", "button");
-           tr.setAttribute("aria-label", `Open details for ${ruleName}, ${path || "unknown location"}`);
-           tr.addEventListener("click", (event) => {
-             if (event.target.closest("a, button")) return;
-             showFindingDetail(f);
-           });
-           tr.addEventListener("keydown", (event) => {
-             if (event.key !== "Enter" && event.key !== " ") return;
-             event.preventDefault();
-             showFindingDetail(f);
-           });
-          frag.appendChild(tr);
+        for (let i = 0; i < pageUnits.length; i++) {
+          const unit = pageUnits[i];
+          if (grouped) {
+            // A single finding grouped by itself is the finding: render it as a
+            // plain row that opens the detail modal instead of expanding into a
+            // duplicate of itself.
+            if (unit.items.length === 1) {
+              frag.appendChild(buildFindingRow(unit.items[0]));
+              continue;
+            }
+            frag.appendChild(buildGroupRow(unit));
+            if (expandedSecretGroups.has(unit.key)) {
+              unit.items.forEach((f, index) => {
+                frag.appendChild(buildFindingRow(f, "finding-subrow", {
+                  index: index + 1,
+                  total: unit.items.length,
+                }));
+              });
+            }
+          } else {
+            frag.appendChild(buildFindingRow(unit.items[0]));
+          }
         }
         findingsBody.appendChild(frag);
       }
@@ -7426,6 +7979,7 @@
       }
 
       updateSortIndicators();
+      updateViewerSelection();
     }
 
     function showFindingDetail(f, { restoreUrl = true } = {}) {
@@ -7444,6 +7998,13 @@
       document.body.classList.add("modal-open");
       document.getElementById("finding-detail-close").focus();
 
+      document.getElementById("finding-detail-title").textContent = rule.name || rule.id || "Finding details";
+      const commitMetadata = finding.git_metadata?.commit || {};
+      const commitDate = commitMetadata.date || commitMetadata.timestamp || "";
+      const author = commitMetadata.author || commitMetadata.committer || {};
+      const exposureFact = (title, value) => `<div class="detail-field"><div class="detail-field__label">${escapeHtml(title)}</div><div>${escapeHtml(value || "Not recorded")}</div></div>`;
+      const formattedDate = commitDate && Number.isFinite(Date.parse(commitDate)) ? new Date(commitDate).toLocaleString() : "Not recorded";
+      document.getElementById("fd-exposure-dates").innerHTML = exposureFact("Commit date", formattedDate) + exposureFact("Recorded commit author", [author.name, author.email].filter(Boolean).join(" · "));
       document.getElementById("fd-rule-id").textContent = rule.id || "";
       const fpEl = document.getElementById("fd-fingerprint");
       const fpVal = finding.fingerprint || "";
@@ -7735,13 +8296,9 @@
     }
 
     function countResources(entries) {
-      let total = 0;
-      entries.forEach((entry) => {
-        (entry.groups || []).forEach((group) => {
-          total += (group.resources || []).length;
-        });
-      });
-      return total;
+      return entries.reduce((total, entry) => total + new Set(
+        (entry.groups || []).flatMap((group) => group.resources || [])
+      ).size, 0);
     }
 
     function countPermissions(entries) {
@@ -7789,8 +8346,7 @@
       // Categorize resources
       const resourceTypes = {};
       accessEntries.forEach((entry) => {
-        (entry.groups || []).forEach((group) => {
-          (group.resources || []).forEach((r) => {
+        new Set((entry.groups || []).flatMap((group) => group.resources || [])).forEach((r) => {
             const rStr = String(r);
             let type = "resource";
             if (/s3|bucket|storage|blob/i.test(rStr)) type = "storage bucket";
@@ -7801,7 +8357,6 @@
             else if (/dynamodb|database|rds|sql/i.test(rStr)) type = "database";
             else if (/repo|repository/i.test(rStr)) type = "repository";
             resourceTypes[type] = (resourceTypes[type] || 0) + 1;
-          });
         });
       });
 
@@ -7913,72 +8468,99 @@
 
         identity.appendChild(header);
 
-        const resList = document.createElement("ul");
-        resList.className = "blast-resource-list";
-
-        (entry.groups || []).forEach((group) => {
-          const resources = group.resources || [];
-          const perms = group.permissions || [];
-
-          if (resources.length === 0 && perms.length > 0) {
-            const item = document.createElement("li");
-            item.className = "blast-resource-item";
-            const name = document.createElement("div");
-            name.className = "blast-resource-name";
-            name.textContent = "Project-wide / Unscoped";
-            item.appendChild(name);
-            const permDiv = document.createElement("div");
-            permDiv.className = "blast-perms";
-            perms.forEach((p) => {
-              const tag = document.createElement("span");
-              tag.className = "blast-perm-tag";
-              tag.textContent = p;
-              permDiv.appendChild(tag);
-            });
-            item.appendChild(permDiv);
-            resList.appendChild(item);
-          }
-
-          resources.forEach((resName) => {
-            const item = document.createElement("li");
-            item.className = "blast-resource-item";
-            const name = document.createElement("div");
-            name.className = "blast-resource-name";
-            name.textContent = String(resName);
-
-            // Add console link if available
-            const { resourceType, resourceName } = extractResourceParts(String(resName));
-            const consoleLink = buildResourceConsoleLink(entry.provider, resourceType, resourceName);
-            if (consoleLink) {
-              const a = document.createElement("a");
-              a.href = consoleLink;
-              a.target = "_blank";
-              a.rel = "noopener noreferrer";
-              a.textContent = " (open in console)";
-              a.style.fontSize = "11px";
-              a.style.fontFamily = "inherit";
-              a.style.color = "var(--brand)";
-              name.appendChild(a);
-            }
-
-            item.appendChild(name);
-
-            if (perms.length > 0) {
-              const permDiv = document.createElement("div");
-              permDiv.className = "blast-perms";
-              perms.forEach((p) => {
-                const tag = document.createElement("span");
-                tag.className = "blast-perm-tag";
-                tag.textContent = p;
-                permDiv.appendChild(tag);
-              });
-              item.appendChild(permDiv);
-            }
-            resList.appendChild(item);
-          });
+        const stats = document.createElement("p");
+        stats.className = "blast-coverage";
+        const groups = entry.groups || [];
+        const resources = new Set(groups.flatMap((group) => group.resources || []));
+        const permissions = new Set(groups.flatMap((group) => group.permissions || []));
+        stats.textContent = `${resources.size} recorded resources · ${permissions.size} unique permissions · ${groups.length} access groups`;
+        identity.appendChild(stats);
+        const severity = document.createElement("div");
+        severity.className = "blast-perms";
+        Object.entries(entry.permissions_by_severity || {}).forEach(([name, values]) => {
+          if (!Array.isArray(values) || !values.length) return;
+          const tag = document.createElement("span");
+          tag.className = "blast-perm-tag";
+          tag.textContent = `${name.replace(/_/g, " ")}: ${values.length}`;
+          severity.appendChild(tag);
         });
-
-        identity.appendChild(resList);
+        identity.appendChild(severity);
+        const paths = document.createElement("ol");
+        paths.className = "blast-access-paths";
+        groups.forEach((group) => {
+          const path = document.createElement("li");
+          path.className = "blast-access-path";
+          const grants = document.createElement("div");
+          const heading = document.createElement("h4");
+          heading.textContent = "Permissions";
+          grants.appendChild(heading);
+          const tags = document.createElement("div");
+          tags.className = "blast-perms";
+          (group.permissions || []).forEach((permission) => {
+            const tag = document.createElement("span");
+            tag.className = "blast-perm-tag";
+            tag.textContent = permission;
+            tags.appendChild(tag);
+          });
+          if (!tags.children.length) tags.textContent = "Not recorded";
+          grants.appendChild(tags);
+          const arrow = document.createElement("span");
+          arrow.className = "blast-access-arrow";
+          arrow.textContent = "→";
+          arrow.setAttribute("aria-label", "apply to");
+          const targets = document.createElement("div");
+          const title = document.createElement("h4");
+          title.textContent = `Resources · ${(group.resources || []).length}`;
+          targets.appendChild(title);
+          const details = document.createElement("details");
+          details.open = (group.resources || []).length <= 6;
+          const summary = document.createElement("summary");
+          summary.textContent = "Recorded resources";
+          details.appendChild(summary);
+          const list = document.createElement("ul");
+          (group.resources || []).forEach((resource) => {
+            const item = document.createElement("li");
+            item.textContent = String(resource);
+            const { resourceType, resourceName } = extractResourceParts(String(resource));
+            const href = buildResourceConsoleLink(entry.provider, resourceType, resourceName);
+            if (href) {
+              const link = document.createElement("a");
+              link.href = href;
+              link.target = "_blank";
+              link.rel = "noopener noreferrer";
+              link.textContent = " (open in console)";
+              item.appendChild(link);
+            }
+            list.appendChild(item);
+          });
+          if (list.children.length) {
+            details.appendChild(list);
+            targets.appendChild(details);
+          } else {
+            const empty = document.createElement("p");
+            empty.textContent = "Scope not recorded";
+            targets.appendChild(empty);
+          }
+          path.append(grants, arrow, targets);
+          paths.appendChild(path);
+        });
+        identity.appendChild(paths);
+        const coverage = document.createElement("p");
+        coverage.className = "blast-coverage";
+        coverage.textContent = "Snapshot of recorded access. Unlisted resources are not proof of no access.";
+        identity.appendChild(coverage);
+        const limitations = entry.provider_metadata?.authorization_evidence?.limitations || [];
+        if (limitations.length) {
+          const heading = document.createElement("h4");
+          heading.textContent = "Coverage limitations";
+          const list = document.createElement("ul");
+          limitations.forEach((note) => {
+            const item = document.createElement("li");
+            item.textContent = note;
+            list.appendChild(item);
+          });
+          identity.append(heading, list);
+        }
         blastEntries.appendChild(identity);
       });
     }
@@ -8104,7 +8686,7 @@
   `}
 
   <div class="no-print" style="margin-top:24px;text-align:center;">
-    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#0e7c56;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">
       Print / Save as PDF
     </button>
   </div>
@@ -8265,7 +8847,7 @@
   ${findingSections}
 
   <div class="no-print" style="margin-top:24px;text-align:center;">
-    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#0e7c56;color:#fff;border:none;border-radius:8px;cursor:pointer;">Print / Save as PDF</button>
+    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">Print / Save as PDF</button>
   </div>
 </body>
 </html>`;
@@ -8923,8 +9505,8 @@
       let identitiesWithAdmin = 0;
       accessMap.forEach((entry) => {
         providerSet.add((entry.provider || "unknown").toUpperCase());
+        totalRes += countResources([entry]);
         (entry.groups || []).forEach((g) => {
-          totalRes += (g.resources || []).length;
           (g.permissions || []).forEach((p) => permSet.add(p));
         });
         const s = summarizeSeverity({ identity: entry, groups: entry.groups || [] });
