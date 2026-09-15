@@ -769,7 +769,11 @@ check-rust:
 	  echo "Rust version $$version is acceptable."; \
 	fi
 
-tests:
+.PHONY: viewer-tests
+viewer-tests:
+	node tests/viewer_import_grouping.cjs
+
+tests: viewer-tests
 	@echo "🔍 checking for cargo-nextest …"
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 	    echo "✅ cargo-nextest already present"; \

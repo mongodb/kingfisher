@@ -891,10 +891,14 @@ pub async fn validate_single_match(
     // Keep the unwind boundary inside this module so the process-wide
     // validation de-dupe state is cleared before the caller observes a panic.
     // The panic branch below overwrites the match with a deterministic failure.
+    // A waiter can time out before the owner; only the owner may publish a failure
+    // and remove the shared entry. Keep ownership outside the canceled future.
+    let mut owns_in_flight = false;
     let timeout_result = time::timeout(
         validation_timeout,
         AssertUnwindSafe(
             timed_validate_single_match(
+                &mut owns_in_flight,
                 m,
                 parser,
                 clients,
@@ -926,8 +930,10 @@ pub async fn validate_single_match(
                 m.rule.syntax().id
             ));
             m.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
-            cache_validation_result(fp, m);
-            clear_in_flight_validation(fp);
+            if owns_in_flight {
+                cache_validation_result(fp, m);
+                clear_in_flight_validation(fp);
+            }
         }
         Err(_) => {
             m.validation_success = false;
@@ -936,8 +942,10 @@ pub async fn validate_single_match(
                 validation_timeout.as_secs()
             ));
             m.validation_response_status = StatusCode::REQUEST_TIMEOUT;
-            cache_validation_result(fp, m);
-            clear_in_flight_validation(fp);
+            if owns_in_flight {
+                cache_validation_result(fp, m);
+                clear_in_flight_validation(fp);
+            }
         }
     }
     m.refresh_validation_outcome();
@@ -948,6 +956,7 @@ pub async fn validate_single_match(
 /// even when `--no-dedup` is used.
 #[allow(clippy::too_many_arguments)]
 async fn timed_validate_single_match(
+    owns_in_flight: &mut bool,
     m: &mut OwnedBlobMatch,
     parser: &liquid::Parser,
     clients: &ValidationClients,
@@ -987,6 +996,7 @@ async fn timed_validate_single_match(
         dashmap::mapref::entry::Entry::Occupied(entry) => Some(entry.get().clone()),
         dashmap::mapref::entry::Entry::Vacant(entry) => {
             entry.insert(Arc::clone(&in_flight));
+            *owns_in_flight = true;
             None
         }
     };
@@ -2732,6 +2742,76 @@ mod tests {
             authoritative: true,
             vectorscan_compatible: true,
         })
+    }
+
+    #[tokio::test]
+    async fn waiter_timeout_preserves_owner_and_cached_result() {
+        let mut matched = OwnedBlobMatch {
+            rule: Arc::new(aws_rule("test.waiter-timeout", false)),
+            blob_id: crate::blob::BlobId::new(b"waiter-timeout"),
+            finding_fingerprint: 1,
+            matching_input_offset_span: OffsetSpan::from_range(0..6),
+            captures: crate::matcher::SerializableCaptures { captures: Default::default() },
+            validation_response_body: None,
+            validation_response_status: StatusCode::CONTINUE,
+            validation_success: false,
+            validation_outcome: ValidationOutcome::NotAttempted,
+            calculated_entropy: 0.0,
+            is_base64: false,
+            dependent_captures: Default::default(),
+        };
+        let variables = FxHashMap::default();
+        let fp = validation_dedup_key(&matched, &variables);
+        let owner = Arc::new(InFlightValidation {
+            notify: Notify::new(),
+            completed: AtomicBool::new(false),
+        });
+        IN_FLIGHT.get_or_init(DashMap::new).insert(fp, owner.clone());
+        let parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
+        let clients = ValidationClients::new(TlsMode::Strict, true).unwrap();
+        validate_single_match(
+            &mut matched,
+            &parser,
+            &clients,
+            &variables,
+            &FxHashMap::default(),
+            &Cache::default(),
+            Duration::from_millis(10),
+            0,
+            None,
+            &ProviderEndpointOverrides::default(),
+            1024,
+        )
+        .await;
+        assert_eq!(matched.validation_response_status, StatusCode::REQUEST_TIMEOUT);
+        assert!(Arc::ptr_eq(IN_FLIGHT.get().unwrap().get(&fp).unwrap().value(), &owner));
+        assert!(!owner.completed.load(Ordering::Acquire));
+        assert!(!VALIDATION_CACHE.get().unwrap().contains_key(&fp));
+
+        // The owner can still publish its result, which a later occurrence reuses.
+        matched.validation_success = true;
+        matched.validation_response_status = StatusCode::OK;
+        matched.refresh_validation_outcome();
+        cache_validation_result(fp, &matched);
+        clear_in_flight_validation(fp);
+        matched.validation_success = false;
+        validate_single_match(
+            &mut matched,
+            &parser,
+            &clients,
+            &variables,
+            &FxHashMap::default(),
+            &Cache::default(),
+            Duration::from_millis(10),
+            0,
+            None,
+            &ProviderEndpointOverrides::default(),
+            1024,
+        )
+        .await;
+        assert!(matched.validation_success);
+        assert_eq!(matched.validation_response_status, StatusCode::OK);
+        VALIDATION_CACHE.get().unwrap().remove(&fp);
     }
 
     #[test]

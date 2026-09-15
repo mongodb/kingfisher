@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const html = fs.readFileSync(require("node:path").join(__dirname, "../docs/viewer/index.html"), "utf8");
-const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script>/gi)].map(m => m[1]);
+const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)].map(m => m[1]);
 for (const script of scripts) new vm.Script(script);
 // Load top-level function declarations without running browser initialization.
 const functions = scripts.join("\n").match(/^    function \w+\([^]*?^    }/gm);

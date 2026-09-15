@@ -39,6 +39,11 @@ use wiremock::{
 
 #[tokio::test]
 async fn test_validation_cache_and_depvars() -> Result<()> {
+    check_validation_cache_and_depvars(false).await?;
+    check_validation_cache_and_depvars(true).await
+}
+
+async fn check_validation_cache_and_depvars(different_dependencies: bool) -> Result<()> {
     /* --------------------------------------------------------- *
      * 1. Spin-up Wiremock and count incoming validation calls  *
      * --------------------------------------------------------- */
@@ -48,9 +53,14 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
 
     Mock::given(method("GET"))
         .and(path("/validate"))
-        .respond_with(move |_req: &Request| {
+        .respond_with(move |req: &Request| {
             counter_clone.fetch_add(1, Ordering::SeqCst);
-            ResponseTemplate::new(200).set_body_string("ok")
+            let rejected = req.url.query_pairs().any(|(_, value)| value == "component_rejected");
+            ResponseTemplate::new(200).set_body_string(if rejected {
+                "{\"error_code\":\"403003\"}"
+            } else {
+                "ok"
+            })
         })
         .mount(&server)
         .await;
@@ -58,12 +68,16 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
     /* --------------------------------------------------------- *
      * 2. Synthetic rules exercising depends_on_rule + HTTP val *
      * --------------------------------------------------------- */
+    let helper_pattern =
+        if different_dependencies { "(component_[a-z]+)" } else { "(demokey_[a-z0-9]{8})" };
+    let validation_variable =
+        if different_dependencies { "{{ COMPONENT }}" } else { "{{ TOKEN }}" };
     let rules_yaml = format!(
         r#"
     rules:
       - name: Demo API Key
         id: demo.key.1
-        pattern: '(demokey_[a-z0-9]{{8}})'
+        pattern: '{helper_pattern}'
         confidence: low
         min_entropy: 0.0
     
@@ -79,7 +93,7 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
           content:
             request:
               method: GET
-              url: '{base}/validate?token={{ {{ TOKEN }} }}'
+              url: '{base}/validate?token={validation_variable}'
               response_matcher:
                   - report_response: true
                   - type: WordMatch
@@ -98,7 +112,15 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
     fs::write(&rules_file, rules_yaml)?;
 
     let secret_file = work_dir.path().join("secrets.txt");
-    fs::write(&secret_file, "demokey_abcdefgh\ndemokey_abcdefgh")?;
+    let mut input_files = vec![secret_file.clone()];
+    if different_dependencies {
+        fs::write(&secret_file, "demokey_abcdefgh\ncomponent_accepted")?;
+        let other_file = work_dir.path().join("other.txt");
+        fs::write(&other_file, "demokey_abcdefgh\ncomponent_rejected")?;
+        input_files.push(other_file);
+    } else {
+        fs::write(&secret_file, "demokey_abcdefgh\ndemokey_abcdefgh")?;
+    }
 
     /* --------------------------------------------------------- *
      * 4. Build Scan / Global args (no_dedup=true to keep dups) *
@@ -113,7 +135,7 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
         },
         rule_cache: RuleCacheArgs::default(),
         input_specifier_args: InputSpecifierArgs {
-            path_inputs: vec![secret_file.clone()],
+            path_inputs: input_files,
             git_url: Vec::new(),
             git_clone_dir: None,
             keep_clones: false,
@@ -309,17 +331,27 @@ async fn test_validation_cache_and_depvars() -> Result<()> {
     /* --------------------------------------------------------- *
      * 6. Assertions                                             *
      * --------------------------------------------------------- */
-    // There are two matches for demo.key.validation.1, but the validator
-    // should have been called only once thanks to SkipMap caching.
+    // Repeated credentials share a request only when their dependencies also match.
     assert_eq!(
         hit_counter.load(Ordering::SeqCst),
-        1,
-        "validator endpoint should be hit exactly once"
+        if different_dependencies { 2 } else { 1 },
+        "each distinct credential and dependency pair should be validated once"
     );
 
     let ds = datastore.lock().unwrap();
     for entry in ds.get_matches() {
         if entry.2.rule.syntax().id == "demo.key.validation.1" {
+            if different_dependencies {
+                let accepted_blob =
+                    kingfisher::blob::BlobId::new(b"demokey_abcdefgh\ncomponent_accepted");
+                let accepted = entry.2.blob_id == accepted_blob;
+                assert_eq!(entry.2.validation_success, accepted);
+                assert_eq!(
+                    entry.2.dependent_captures.get("COMPONENT").map(String::as_str),
+                    Some(if accepted { "component_accepted" } else { "component_rejected" }),
+                );
+                continue;
+            }
             assert_eq!(
                 entry.2.dependent_captures.get("COMPONENT").map(String::as_str),
                 Some("demokey_abcdefgh"),

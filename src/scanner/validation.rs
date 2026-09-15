@@ -823,7 +823,8 @@ pub async fn run_secret_validation(
         let val_cache = Arc::new(DashMap::<String, CachedResponse>::new());
         let in_flight = Arc::new(DashMap::<String, Arc<ValidationInFlight>>::new());
 
-        // Collect validation results keyed by finding_fingerprint:
+        // Collect validation results by occurrence; the same secret can have different
+        // dependency values in different blobs or at different offsets.
         // (validation_success, response_body, response_status_u16, dependent_captures)
         type DepUpdate = (
             bool,
@@ -832,7 +833,8 @@ pub async fn run_secret_validation(
             kingfisher_core::ValidationOutcome,
             std::collections::BTreeMap<String, String>,
         );
-        let mut dep_updates: FxHashMap<u64, DepUpdate> = FxHashMap::default();
+        let mut dep_updates: FxHashMap<(BlobId, OffsetSpan, String), DepUpdate> =
+            FxHashMap::default();
 
         for chunk in blob_ids.chunks(chunk_size) {
             // Lazy iterator — futures are created on-demand by buffer_unordered,
@@ -943,7 +945,7 @@ pub async fn run_secret_validation(
             for blob_vec in validated_blobs {
                 for om in blob_vec {
                     dep_updates.insert(
-                        om.finding_fingerprint,
+                        (om.blob_id, om.matching_input_offset_span, om.rule.id().to_string()),
                         (
                             om.validation_success,
                             om.validation_response_body.clone(),
@@ -970,8 +972,13 @@ pub async fn run_secret_validation(
                 matches.as_mut_slice()
             };
             for match_arc in slice.iter_mut() {
-                if let Some((success, body, status, outcome, dep_caps)) =
-                    dep_updates.get(&match_arc.2.finding_fingerprint).cloned()
+                if let Some((success, body, status, outcome, dep_caps)) = dep_updates
+                    .get(&(
+                        match_arc.2.blob_id,
+                        match_arc.2.location.offset_span,
+                        match_arc.2.rule.id().to_string(),
+                    ))
+                    .cloned()
                 {
                     let (_, _, existing) = Arc::make_mut(match_arc);
                     existing.validation_success = success;

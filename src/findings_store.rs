@@ -102,9 +102,9 @@ pub struct FindingsStore {
     blobs: FxHashSet<BlobId>,
     clone_dir: PathBuf,
     dedup_filter: DedupBloomSet,
-    // The Bloom filter is only an acceleration hint. Exact keys are authoritative so a
-    // probabilistic false positive can never discard a unique credential.
-    dedup_exact: FxHashSet<String>,
+    // Confirm Bloom hits with full cryptographic digests, without retaining another
+    // copy of each secret. Storage is fixed-size per unique finding.
+    dedup_exact: FxHashSet<[u8; 32]>,
     blob_scoped_dependency_rule_ids: FxHashSet<String>,
     blob_meta: FxHashMap<BlobId, Arc<BlobMetadata>>,
     origin_meta: FxHashMap<u64, Arc<OriginSet>>,
@@ -270,12 +270,13 @@ impl FindingsStore {
                     format!("{}|{}|{}", rule_id, origin_kind, snippet)
                 };
                 let key = xxh3_64(key_string.as_bytes());
+                let digest = *blake3::hash(key_string.as_bytes()).as_bytes();
                 let bloom_match = self.dedup_filter.contains_or_insert(key);
 
-                if bloom_match && self.dedup_exact.contains(&key_string) {
-                    continue; // very likely a duplicate
+                if bloom_match && self.dedup_exact.contains(&digest) {
+                    continue; // duplicate confirmed by its cryptographic digest
                 }
-                self.dedup_exact.insert(key_string);
+                self.dedup_exact.insert(digest);
             }
 
             /*───────────────────────────────────────────────────────────────┐
@@ -340,7 +341,7 @@ impl FindingsStore {
 
     //             // Bloom gate: 1. check, 2. insert (if new)
     //             if self.seen_bloom.check(&key) {
-    //                 continue; // very likely a duplicate
+    //                 continue; // duplicate confirmed by its cryptographic digest
     //             }
     //             self.seen_bloom.set(&key);
     //             self.bloom_items += 1;
