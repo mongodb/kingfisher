@@ -174,6 +174,8 @@ kingfisher scan /path/to/repository --view-report
 
 ### Scan files and Git history
 
+See [documentation](docs/INTEGRATIONS.md) for full detailed examples.
+
 ```bash
 # Clone a remote repository and scan its Git history
 kingfisher scan https://github.com/my-org/my-repo.git
@@ -269,7 +271,7 @@ Credentials, or an explicit `--service-account /path/to/key.json`. See the [S3](
 
 ```bash
 # Scan a registry image
-kingfisher scan docker ghcr.io/my-org/my-image:latest
+kingfisher scan docker ghcr.io/owasp/wrongsecrets/wrongsecrets-master:latest-master
 
 # Scan an image exported with docker save
 kingfisher scan docker --archive image.tar
