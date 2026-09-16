@@ -616,10 +616,10 @@ async fn execute_grpc_validation(
     })
 }
 
-/// Run direct validation of a secret against one or more rules.
+/// Run direct validation of a secret against a single rule.
 ///
-/// If the rule selector matches multiple rules, all matching rules are tried.
-/// Returns results for all rules that have validation defined.
+/// Resolve an exact rule ID or an unambiguous prefix; reject ambiguous selectors.
+/// Return a single result for the selected rule.
 pub async fn run_direct_validation(
     args: &ValidateArgs,
     global_args: &GlobalArgs,

@@ -32,7 +32,7 @@ use crate::{
     validation::{
         CachedResponse, CredentialUriTarget, classify_credential_uri,
         collect_variables_and_dependencies, utils, validate_single_match,
-        validation_dependency_values,
+        validation_context_values,
     },
     validation_body,
     validation_rate_limit::ValidationRateLimiter,
@@ -619,7 +619,7 @@ pub async fn run_secret_validation(
 
     // ── Phase 1: simple, global de-dupe ──────────────────────────────────────
     if !simple_matches.is_empty() {
-        // Keep only ONE representative per (rule_id, secret) group.
+        // Keep only ONE representative per rule, secret, and validator capture context.
         // Previous code stored ALL matches per group — holding thousands of
         // Arc clones alive for the entire duration of the concurrent stream.
         let total_simple = simple_matches.len();
@@ -639,7 +639,7 @@ pub async fn run_secret_validation(
             // like (?<REGEX>...(ABC|DEF)...), causing all matches to share the same
             // validation result.
             let secret = validation_input(&arc_msg.2.rule, &arc_msg.2.groups);
-            let group_key = validation_group_key(arc_msg.2.rule.id(), secret);
+            let group_key = validation_group_key(arc_msg.2.rule.id(), secret, &arc_msg.2.groups);
             trace!(
                 rule_id = %arc_msg.2.rule.id(),
                 external_fingerprint = arc_msg.2.finding_fingerprint,
@@ -700,7 +700,7 @@ pub async fn run_secret_validation(
                 // CredentialUri, otherwise the first capture).
                 // See comment above for why this differs from fingerprint/reporting code.
                 let secret = validation_input(&rep_arc.2.rule, &rep_arc.2.groups);
-                let key = validation_group_key(rep_arc.2.rule.id(), secret);
+                let key = validation_group_key(rep_arc.2.rule.id(), secret, &rep_arc.2.groups);
 
                 match val_res.entry(key.clone()) {
                     dashmap::mapref::entry::Entry::Occupied(_) => return,
@@ -771,7 +771,7 @@ pub async fn run_secret_validation(
                     continue;
                 }
                 let secret = validation_input(&match_arc.2.rule, &match_arc.2.groups);
-                let key = validation_group_key(match_arc.2.rule.id(), secret);
+                let key = validation_group_key(match_arc.2.rule.id(), secret, &match_arc.2.groups);
                 if let Some(cr) = validation_results.get(&key) {
                     let (_, _, existing) = Arc::make_mut(match_arc);
                     existing.validation_success = cr.is_valid;
@@ -1295,7 +1295,7 @@ fn build_cache_key(om: &OwnedBlobMatch) -> String {
         hash_cache_key_part(&mut hasher, &count.to_le_bytes());
     }
 
-    for (variable, value) in validation_dependency_values(om) {
+    for (variable, value) in validation_context_values(om) {
         hash_cache_key_part(&mut hasher, variable.as_bytes());
         if let Some(value) = value {
             hash_cache_key_part(&mut hasher, value.as_bytes());
@@ -1307,11 +1307,20 @@ fn build_cache_key(om: &OwnedBlobMatch) -> String {
     hasher.finalize().to_hex().to_string()
 }
 
-fn validation_group_key(rule_id: &str, secret: &str) -> String {
+fn validation_group_key(rule_id: &str, secret: &str, captures: &SerializableCaptures) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"kingfisher.validation-group.v1\0");
     hash_cache_key_part(&mut hasher, rule_id.as_bytes());
     hash_cache_key_part(&mut hasher, secret.as_bytes());
+    // Simple rules can still use named captures in their validator requests.
+    let values: BTreeMap<_, _> = crate::validation::utils::process_captures(captures)
+        .into_iter()
+        .map(|(name, value, ..)| (name, value))
+        .collect();
+    for (name, value) in values {
+        hash_cache_key_part(&mut hasher, name.as_bytes());
+        hash_cache_key_part(&mut hasher, value.as_bytes());
+    }
     hasher.finalize().to_hex().to_string()
 }
 

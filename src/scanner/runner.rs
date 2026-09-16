@@ -122,7 +122,8 @@ pub async fn run_async_scan(
     update_status: &crate::update::UpdateStatus,
     auto_cleanup_clones: bool,
 ) -> Result<()> {
-    let _validation_cache_lifetime = ValidationCacheLifetime::begin().await;
+    let _validation_cache_lifetime =
+        if args.no_validate { None } else { Some(ValidationCacheLifetime::begin().await) };
 
     // ── Phase 1: Input validation and environment setup ──────────────────
     validate_inputs(args)?;

@@ -59,3 +59,32 @@ for (const statuses of [
   assert.deepEqual([...labels].sort(), expected.sort());
 }
 console.log("Collapsed group validation status regressions passed.");
+
+// Native SARIF commands remain usable when a third-party import disables global capabilities.
+ctx.scanMetadata = { capabilities: { validateCommandSupported: false, revokeCommandSupported: false } };
+for (const kind of ["validation", "revocation"]) {
+  const field = kind === "revocation" ? "revoke_command" : "validate_command";
+  const native = { finding: { viewer_import: { kingfisher_native: true }, [field]: "native-command" } };
+  assert.equal(ctx.viewerActionCommand(native, kind), "native-command");
+  native.finding.viewer_import.kingfisher_native = false;
+  assert.equal(ctx.viewerActionCommand(native, kind), "");
+
+  // A commit/path/line match can still refer to a different credential on that line.
+  const source = { rule: { id: "demo" }, finding: {
+    path: "config.txt", line: 1, snippet: "secret-A", git_metadata: { commit: { id: "abc" } },
+    [field]: "command-for-secret-A",
+  } };
+  const imported = { finding: {
+    path: "config.txt", line: 1, snippet: "secret-B", git_metadata: { commit: { id: "abc" } },
+    viewer_import: { source_tool: "gitleaks" },
+  } };
+  ctx.enrichImportedFindings([source, imported]);
+  assert.equal(imported.finding.kingfisher_enrichment.match_strength, "commit");
+  assert.equal(ctx.viewerActionCommand(imported, kind), "");
+  const copied = [];
+  ctx.document = { getElementById: () => ({ classList: { add() {}, remove() {} } }) };
+  ctx.wireKfEnrichmentCopyButton = (...args) => copied.push(args[3]);
+  ctx.renderKingfisherEnrichment(imported.finding);
+  assert.deepEqual(copied, ["", ""]);
+}
+console.log("Viewer native command and unsafe enrichment regressions passed.");

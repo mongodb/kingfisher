@@ -39,11 +39,15 @@ use wiremock::{
 
 #[tokio::test]
 async fn test_validation_cache_and_depvars() -> Result<()> {
-    check_validation_cache_and_depvars(false).await?;
-    check_validation_cache_and_depvars(true).await
+    check_validation_cache_and_depvars(false, false).await?;
+    check_validation_cache_and_depvars(true, false).await?;
+    check_validation_cache_and_depvars(true, true).await
 }
 
-async fn check_validation_cache_and_depvars(different_dependencies: bool) -> Result<()> {
+async fn check_validation_cache_and_depvars(
+    different_dependencies: bool,
+    named_context: bool,
+) -> Result<()> {
     /* --------------------------------------------------------- *
      * 1. Spin-up Wiremock and count incoming validation calls  *
      * --------------------------------------------------------- */
@@ -72,6 +76,16 @@ async fn check_validation_cache_and_depvars(different_dependencies: bool) -> Res
         if different_dependencies { "(component_[a-z]+)" } else { "(demokey_[a-z0-9]{8})" };
     let validation_variable =
         if different_dependencies { "{{ COMPONENT }}" } else { "{{ TOKEN }}" };
+    let dependencies = if named_context {
+        ""
+    } else {
+        "        depends_on_rule:\n          - rule_id: demo.key.1\n            variable: COMPONENT\n"
+    };
+    let primary_pattern = if named_context {
+        r"(demokey_[a-z0-9]{8})\s+(?P<COMPONENT>component_[a-z]+)"
+    } else {
+        r"(demokey_[a-z0-9]{8})"
+    };
     let rules_yaml = format!(
         r#"
     rules:
@@ -83,10 +97,7 @@ async fn check_validation_cache_and_depvars(different_dependencies: bool) -> Res
     
       - name: Demo API Key Validation
         id: demo.key.validation.1
-        depends_on_rule:
-          - rule_id: demo.key.1
-            variable: COMPONENT
-        pattern: '(demokey_[a-z0-9]{{8}})'
+{dependencies}        pattern: '{primary_pattern}'
         confidence: low
         validation:
           type: Http
@@ -347,7 +358,17 @@ async fn check_validation_cache_and_depvars(different_dependencies: bool) -> Res
                 let accepted = entry.2.blob_id == accepted_blob;
                 assert_eq!(entry.2.validation_success, accepted);
                 assert_eq!(
-                    entry.2.dependent_captures.get("COMPONENT").map(String::as_str),
+                    if named_context {
+                        entry
+                            .2
+                            .groups
+                            .captures
+                            .iter()
+                            .find(|capture| capture.name == Some("COMPONENT"))
+                            .map(|capture| capture.raw_value())
+                    } else {
+                        entry.2.dependent_captures.get("COMPONENT").map(String::as_str)
+                    },
                     Some(if accepted { "component_accepted" } else { "component_rejected" }),
                 );
                 continue;

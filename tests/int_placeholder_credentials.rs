@@ -7,7 +7,10 @@ fn excludes_short_private_keys_and_unresolved_mongodb_passwords() {
     let input = dir.path().join("fixtures.txt");
     fs::write(
         &input,
-        r#"-----BEGIN PRIVATE KEY-----\\n"
+        r#"-----BEGIN PRIVATE KEY-----
+PRIVATE_KEY
+-----END PRIVATE KEY-----
+-----BEGIN PRIVATE KEY-----\\n"
               + "PRIVATE_KEY\\n"
               + "-----END PRIVATE KEY-----
 mongodb+srv://$(AWS_ACCESS_KEY_ID):$(AWS_SECRET_ACCESS_KEY)@ia-staging-metering-pl-0.nrs6h.mongo.com/mmsdbmetering

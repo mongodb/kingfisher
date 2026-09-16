@@ -7703,9 +7703,10 @@ function createFindingFilters(container, fields, onChange, onClear) {
       const capability = kind === "revocation" ? "revokeCommandSupported" : "validateCommandSupported";
       const finding = entry.finding || {};
       const imported = finding.viewer_import;
-      if (finding[field] && (!imported || scanMetadata.capabilities[capability])) return finding[field];
+      if (finding[field] && (!imported || imported.kingfisher_native || scanMetadata.capabilities[capability])) return finding[field];
       // Only credential-content matches are safe for batch commands; path/line matches
-      // can describe a different secret found at the same location in another scan.
+      // can describe a different secret, even at the same commit and line.
+      // Current enrichment emits only commit/path-line, so neither enables commands.
       const enrichment = finding.kingfisher_enrichment;
       if (enrichment && ["snippet", "fingerprint"].includes(enrichment.match_strength)) return enrichment[field] || "";
       return "";
@@ -8131,7 +8132,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       const validateBox = document.getElementById("fd-validate-box");
       const validateCmd = document.getElementById("fd-validate-cmd");
       const validateCopyBtn = document.getElementById("fd-validate-copy");
-      if (finding.validate_command && (!importInfo || scanMetadata.capabilities.validateCommandSupported)) {
+      if (finding.validate_command && (!importInfo || importInfo.kingfisher_native || scanMetadata.capabilities.validateCommandSupported)) {
         validateBox.classList.remove("hidden");
         validateCmd.textContent = finding.validate_command;
         
@@ -8159,7 +8160,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       const revokeBox = document.getElementById("fd-revoke-box");
       const revokeCmd = document.getElementById("fd-revoke-cmd");
       const revokeCopyBtn = document.getElementById("fd-revoke-copy");
-      if (finding.revoke_command && (!importInfo || scanMetadata.capabilities.revokeCommandSupported)) {
+      if (finding.revoke_command && (!importInfo || importInfo.kingfisher_native || scanMetadata.capabilities.revokeCommandSupported)) {
         revokeBox.classList.remove("hidden");
         revokeCmd.textContent = finding.revoke_command;
         
@@ -8275,8 +8276,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
         }
       }
 
-      wireKfEnrichmentCopyButton("fd-kf-validate-wrap", "fd-kf-validate-cmd", "fd-kf-validate-copy", enr.validate_command);
-      wireKfEnrichmentCopyButton("fd-kf-revoke-wrap", "fd-kf-revoke-cmd", "fd-kf-revoke-copy", enr.revoke_command);
+      wireKfEnrichmentCopyButton("fd-kf-validate-wrap", "fd-kf-validate-cmd", "fd-kf-validate-copy", viewerActionCommand({ finding }, "validation"));
+      wireKfEnrichmentCopyButton("fd-kf-revoke-wrap", "fd-kf-revoke-cmd", "fd-kf-revoke-copy", viewerActionCommand({ finding }, "revocation"));
 
       const matchKeyEl = document.getElementById("fd-kf-match-key");
       if (matchKeyEl) {

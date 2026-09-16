@@ -300,21 +300,27 @@ pub(crate) fn build_credential_uri_client(timeout: Duration, use_lax_tls: bool) 
 // Use SkipMap-based cache instead of a mutex-wrapped FxHashMap.
 type Cache = kingfisher_scanner::validation::Cache;
 
-/// Return the per-finding context resolved by the matcher, before storage deduplication.
-/// Never borrow another rule's variable merely because it has the same name.
-pub(crate) fn validation_dependency_values(m: &OwnedBlobMatch) -> Vec<(String, Option<String>)> {
-    m.rule
-        .syntax()
-        .depends_on_rule
-        .iter()
-        .flatten()
-        .filter(|dep| !dep.variable.eq_ignore_ascii_case("TOKEN"))
-        .map(|dep| {
-            let variable = dep.variable.to_uppercase();
-            let value = m.dependent_captures.get(&variable).cloned();
-            (variable, value)
-        })
-        .collect()
+/// Return validator capture context before storage deduplication.
+/// Include primary-rule captures as well as nearby dependency values, using the
+/// same dependency precedence as request rendering. Do not include source offsets.
+pub(crate) fn validation_context_values(m: &OwnedBlobMatch) -> Vec<(String, Option<String>)> {
+    let mut values: std::collections::BTreeMap<String, Option<String>> =
+        utils::process_captures(&m.captures)
+            .into_iter()
+            .map(|(name, value, ..)| (name, Some(value)))
+            .collect();
+    for dep in m.rule.syntax().depends_on_rule.iter().flatten() {
+        if dep.variable.eq_ignore_ascii_case("TOKEN") {
+            continue;
+        }
+        let variable = dep.variable.to_uppercase();
+        if let Some(value) = m.dependent_captures.get(&variable) {
+            values.insert(variable, Some(value.clone()));
+        } else {
+            values.entry(variable).or_insert(None);
+        }
+    }
+    values.into_iter().collect()
 }
 
 /// Refuse to guess which credential component or endpoint belongs to a secret.
@@ -342,7 +348,7 @@ pub(crate) fn skip_ambiguous_dependencies(m: &mut OwnedBlobMatch) -> bool {
 ///
 /// This is an INTERNAL key used only for validation deduplication within a single scan.
 /// It uses `captures.get(0)` to get the primary secret value and includes the
-/// selected dependent values when validation uses nearby context.
+/// primary named captures and selected dependent values used by validation.
 ///
 /// **Important**: This is distinct from the EXTERNAL `finding_fingerprint` used for:
 /// - Baseline comparisons across scans
@@ -377,7 +383,7 @@ fn validation_dedup_key(m: &OwnedBlobMatch) -> [u8; 32] {
         hash_key_part(&mut hasher, &count.to_le_bytes());
     }
 
-    for (variable, value) in validation_dependency_values(m) {
+    for (variable, value) in validation_context_values(m) {
         hash_key_part(&mut hasher, variable.as_bytes());
         if let Some(value) = value {
             hash_key_part(&mut hasher, value.as_bytes());
