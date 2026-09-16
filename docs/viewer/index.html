@@ -2,6 +2,8 @@
 <html lang="en" data-theme="dark">
 <head>
   <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; script-src-attr 'none'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'" />
+  <meta name="referrer" content="no-referrer" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <meta name="theme-color" content="#001e2b" />
   <title>Kingfisher Report Viewer &amp; Triager — Local reports</title>
@@ -4693,7 +4695,13 @@ function createFindingFilters(container, fields, onChange, onClear) {
     }
 
     function isHttpUrl(value) {
-      return typeof value === "string" && /^https?:\/\//i.test(value);
+      if (typeof value !== "string" || !/^https?:\/\//i.test(value)) return false;
+      try {
+        const url = new URL(value);
+        return (url.protocol === "https:" || url.protocol === "http:") && !url.username && !url.password;
+      } catch (_) {
+        return false;
+      }
     }
 
     function buildViewerImportMetadata(toolName, options = {}) {
@@ -7254,7 +7262,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       const scopeLabel = (scope === "filtered" ? "Filtered findings" : "All findings") + (activeOnly ? " (active only)" : "");
 
       // Gather unique rules for summary
-      const ruleSummary = {};
+      const ruleSummary = Object.create(null);
       baseFindings.forEach((entry) => {
         const rule = entry.rule || {};
         const finding = entry.finding || {};
@@ -7292,7 +7300,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
                   <td style="font-size:10px;">${escapeHtml(finding.path || "")}</td>
                   <td style="color:${statusColor};font-weight:600;">${escapeHtml(statusRaw)}</td>
                   <td>${escapeHtml(finding.confidence || "")}</td>
-                  <td>${finding.line != null ? finding.line : ""}</td>
+                  <td>${finding.line != null ? escapeHtml(finding.line) : ""}</td>
                   ${gitUrl ? `<td style="font-size:10px;"><a href="${escapeHtml(gitUrl)}" style="color:#1d4ed8;">${escapeHtml(gitUrl.length > 50 ? gitUrl.substring(0, 50) + "…" : gitUrl)}</a></td>` : "<td></td>"}
                 </tr>
               `;
@@ -7509,7 +7517,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
   </div>
 
   <div class="no-print" style="margin-top:24px;text-align:center;">
-    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+    <button id="report-print" type="button" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">
       Print / Save as PDF
     </button>
   </div>
@@ -7523,6 +7531,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
       }
       win.document.write(pdfHtml);
       win.document.close();
+      win.document.getElementById("report-print").addEventListener("click", () => win.print());
+      win.opener = null;
       win.focus();
       setTimeout(() => win.print(), 400);
     }
@@ -7680,7 +7690,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
   </div>
 
   <div class="no-print" style="margin-top:24px;text-align:center;">
-    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+    <button id="report-print" type="button" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">
       Print / Save as PDF
     </button>
   </div>
@@ -7694,6 +7704,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
       }
       win.document.write(pdfHtml);
       win.document.close();
+      win.document.getElementById("report-print").addEventListener("click", () => win.print());
+      win.opener = null;
       win.focus();
       setTimeout(() => win.print(), 400);
     }
@@ -7831,7 +7843,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         </td>
         <td>${escapeHtml(finding.confidence || "")}</td>
         <td style="font-family:ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;">
-          ${finding.line != null ? finding.line : ""}
+          ${finding.line != null ? escapeHtml(finding.line) : ""}
         </td>
       `;
       tr.tabIndex = 0;
@@ -8194,7 +8206,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       if (!finding || !finding.git_metadata) return "";
       const fileObj = finding.git_metadata.file || {};
       const url = fileObj.url || "";
-      if (url && /^https?:\/\//i.test(url)) return url;
+      if (isHttpUrl(url)) return url;
       const repoObj = finding.git_metadata.repository || {};
       const repoUrl = repoObj.url || "";
       const commitId = finding.git_metadata.commit && finding.git_metadata.commit.id
@@ -8339,7 +8351,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         };
       }
 
-      const providers = [...new Set(accessEntries.map((e) => (e.provider || "").toUpperCase()).filter(Boolean))];
+      const providers = [...new Set(accessEntries.map((e) => escapeHtml(String(e.provider || "").toUpperCase())).filter(Boolean))];
       const resourceCount = countResources(accessEntries);
       const permCount = countPermissions(accessEntries);
       const identityCount = accessEntries.length;
@@ -8670,7 +8682,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
     <div class="detail-item"><label>Confidence</label><div>${escapeHtml(finding.confidence || "")}</div></div>
     <div class="detail-item"><label>Entropy</label><div>${finding.entropy != null ? escapeHtml(String(finding.entropy)) : "—"}</div></div>
     <div class="detail-item" style="grid-column:span 2;"><label>File Path</label><div>${escapeHtml(finding.path || "")}</div></div>
-    ${gitUrl ? `<div class="detail-item" style="grid-column:span 2;"><label>Git URL</label><div><a href="${escapeHtml(gitUrl)}" target="_blank">${escapeHtml(gitUrl)}</a></div></div>` : ""}
+    ${gitUrl ? `<div class="detail-item" style="grid-column:span 2;"><label>Git URL</label><div><a href="${escapeHtml(gitUrl)}" target="_blank" rel="noopener noreferrer">${escapeHtml(gitUrl)}</a></div></div>` : ""}
     ${finding.git_metadata && finding.git_metadata.commit ? `<div class="detail-item"><label>Commit</label><div>${escapeHtml(finding.git_metadata.commit.id ? finding.git_metadata.commit.id.substring(0, 8) : "")}</div></div>` : ""}
     ${finding.git_metadata && finding.git_metadata.commit && finding.git_metadata.commit.committer ? `<div class="detail-item"><label>Committer</label><div>${escapeHtml(finding.git_metadata.commit.committer.email || "")}</div></div>` : ""}
   </div>
@@ -8687,7 +8699,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
   `}
 
   <div class="no-print" style="margin-top:24px;text-align:center;">
-    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">
+    <button id="report-print" type="button" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">
       Print / Save as PDF
     </button>
   </div>
@@ -8701,6 +8713,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
       }
       win.document.write(reportHtml);
       win.document.close();
+      win.document.getElementById("report-print").addEventListener("click", () => win.print());
+      win.opener = null;
       win.focus();
     }
 
@@ -8798,7 +8812,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
             </div>
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px;margin-bottom:10px;">
               <div><strong>Path:</strong> ${escapeHtml(finding.path || "—")}</div>
-              <div><strong>Line:</strong> ${finding.line != null ? finding.line : "—"}</div>
+              <div><strong>Line:</strong> ${finding.line != null ? escapeHtml(finding.line) : "—"}</div>
               <div><strong>Tool:</strong> ${escapeHtml(sourceTool)}</div>
               <div><strong>Validation:</strong> ${escapeHtml(statusRaw)}</div>
               <div><strong>Confidence:</strong> ${escapeHtml(finding.confidence || "—")}</div>
@@ -8848,7 +8862,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
   ${findingSections}
 
   <div class="no-print" style="margin-top:24px;text-align:center;">
-    <button onclick="window.print()" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">Print / Save as PDF</button>
+    <button id="report-print" type="button" style="padding:10px 24px;font-size:14px;font-weight:600;background:#00684a;color:#fff;border:none;border-radius:8px;cursor:pointer;">Print / Save as PDF</button>
   </div>
 </body>
 </html>`;
@@ -8860,6 +8874,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
       }
       win.document.write(reportHtml);
       win.document.close();
+      win.document.getElementById("report-print").addEventListener("click", () => win.print());
+      win.opener = null;
       win.focus();
     }
 
@@ -8910,10 +8926,10 @@ function createFindingFilters(container, fields, onChange, onClear) {
       const byClass = entry.identity && entry.identity.permissions_by_severity;
       if (byClass) {
         return {
-          admin: (byClass.admin || []).length,
-          privilege_escalation: (byClass.privilege_escalation || []).length,
-          risky: (byClass.risky || []).length,
-          read_only: (byClass.read_only || []).length,
+          admin: Array.isArray(byClass.admin) ? byClass.admin.length : 0,
+          privilege_escalation: Array.isArray(byClass.privilege_escalation) ? byClass.privilege_escalation.length : 0,
+          risky: Array.isArray(byClass.risky) ? byClass.risky.length : 0,
+          read_only: Array.isArray(byClass.read_only) ? byClass.read_only.length : 0,
         };
       }
       const all = new Set();
@@ -9975,7 +9991,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         }
 
         // Profile URL
-        if (td.url) {
+        if (isHttpUrl(td.url)) {
           const urlDiv = document.createElement("div");
           urlDiv.style.marginTop = "6px";
           urlDiv.style.fontSize = "12px";

@@ -143,6 +143,10 @@ impl Scanner {
 
     /// Scan a blob while supplying the source path used by path-aware rules and filters.
     pub fn scan_blob_at_path(&self, blob: &Blob, path: &str) -> Result<Vec<Finding>> {
+        self.scan_blob_at_path_impl(blob, path)
+    }
+
+    fn scan_blob_at_path_impl(&self, blob: &Blob, path: &str) -> Result<Vec<Finding>> {
         // Check for dedup
         if self.config.enable_dedup {
             let blob_id = blob.id();
@@ -810,6 +814,63 @@ mod tests {
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].secret, "secret_abcd1234");
         assert!(findings[0].is_base64_encoded);
+    }
+
+    #[test]
+    fn scans_utf16_and_utf32_with_or_without_bom() {
+        let scanner = create_test_scanner();
+        let source = b"my secret_abcd1234 is here";
+        let cases = [
+            (encode_utf16(source, true, true), "UTF-16 LE BOM"),
+            (encode_utf16(source, false, true), "UTF-16 BE BOM"),
+            (encode_utf16(source, true, false), "UTF-16 LE"),
+            (encode_utf16(source, false, false), "UTF-16 BE"),
+            (encode_utf32(source, true, true), "UTF-32 LE BOM"),
+            (encode_utf32(source, false, true), "UTF-32 BE BOM"),
+            (encode_utf32(source, true, false), "UTF-32 LE"),
+            (encode_utf32(source, false, false), "UTF-32 BE"),
+        ];
+        for (encoded, name) in cases {
+            let findings = scanner.scan_bytes(&encoded);
+            assert_eq!(findings.len(), 1, "{name} should be scanned");
+            assert_eq!(findings[0].secret, "secret_abcd1234", "{name}");
+        }
+    }
+
+    fn encode_utf16(input: &[u8], little_endian: bool, bom: bool) -> Vec<u8> {
+        let mut output = Vec::new();
+        if bom {
+            output.extend_from_slice(if little_endian { &[0xff, 0xfe] } else { &[0xfe, 0xff] });
+        }
+        for &byte in input {
+            let encoded = if little_endian {
+                (byte as u16).to_le_bytes()
+            } else {
+                (byte as u16).to_be_bytes()
+            };
+            output.extend_from_slice(&encoded);
+        }
+        output
+    }
+
+    fn encode_utf32(input: &[u8], little_endian: bool, bom: bool) -> Vec<u8> {
+        let mut output = Vec::new();
+        if bom {
+            output.extend_from_slice(if little_endian {
+                &[0xff, 0xfe, 0, 0]
+            } else {
+                &[0, 0, 0xfe, 0xff]
+            });
+        }
+        for &byte in input {
+            let encoded = if little_endian {
+                (byte as u32).to_le_bytes()
+            } else {
+                (byte as u32).to_be_bytes()
+            };
+            output.extend_from_slice(&encoded);
+        }
+        output
     }
 
     #[test]
