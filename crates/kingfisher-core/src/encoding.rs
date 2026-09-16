@@ -14,18 +14,15 @@ pub(crate) fn decode(input: &[u8]) -> Option<Vec<u8>> {
     let mut output = Vec::new();
     match encoding {
         Encoding::Utf16Le | Encoding::Utf16Be => {
-            for chunk in input[start..].chunks_exact(2) {
-                let value = if encoding == Encoding::Utf16Le {
+            let units = input[start..].chunks_exact(2).map(|chunk| {
+                if encoding == Encoding::Utf16Le {
                     u16::from_le_bytes([chunk[0], chunk[1]])
                 } else {
                     u16::from_be_bytes([chunk[0], chunk[1]])
-                };
-                output.extend(
-                    char::decode_utf16([value])
-                        .map(|c| c.unwrap_or('\u{fffd}'))
-                        .collect::<String>()
-                        .as_bytes(),
-                );
+                }
+            });
+            for character in char::decode_utf16(units) {
+                output.extend(character.unwrap_or('\u{fffd}').encode_utf8(&mut [0; 4]).as_bytes());
             }
         }
         Encoding::Utf32Le | Encoding::Utf32Be => {
@@ -79,4 +76,41 @@ fn guess(input: &[u8]) -> Option<(Encoding, usize)> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::decode;
+
+    #[test]
+    fn utf16_preserves_surrogate_pairs() {
+        let text = "credential=abc\u{1f511}\u{1d11e}xyz";
+        for little_endian in [true, false] {
+            for with_bom in [true, false] {
+                let units = with_bom.then_some(0xfeff).into_iter().chain(text.encode_utf16());
+                let input: Vec<u8> =
+                    units
+                        .flat_map(|unit| {
+                            if little_endian { unit.to_le_bytes() } else { unit.to_be_bytes() }
+                        })
+                        .collect();
+                assert_eq!(decode(&input).unwrap(), text.as_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn utf16_replaces_unpaired_surrogates_without_losing_adjacent_text() {
+        for little_endian in [true, false] {
+            let input: Vec<u8> = [0xfeff_u16, 0xdc00, 0x0041, 0xd800, 0x0042, 0xd800]
+                .into_iter()
+                .flat_map(
+                    |unit| {
+                        if little_endian { unit.to_le_bytes() } else { unit.to_be_bytes() }
+                    },
+                )
+                .collect();
+            assert_eq!(decode(&input).unwrap(), "\u{fffd}A\u{fffd}B\u{fffd}".as_bytes());
+        }
+    }
 }
