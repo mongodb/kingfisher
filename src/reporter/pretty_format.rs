@@ -34,7 +34,9 @@ impl DetailsReporter {
         if let Some(access_map) = envelope.access_map {
             self.write_access_map(&mut writer, &access_map)?;
         }
-        if let Some(audit) = envelope.audit {
+        if args.audit_log.is_some()
+            && let Some(audit) = envelope.audit
+        {
             self.write_repository_audit(&mut writer, &audit)?;
         }
         Ok(())
@@ -368,6 +370,8 @@ mod tests {
                 description: "PEM private key".to_string(),
             },
             finding: FindingRecordData {
+                dependent_captures: Default::default(),
+                ambiguous_dependencies: Default::default(),
                 snippet: "secret".to_string(),
                 fingerprint: "123".to_string(),
                 confidence: "high".to_string(),

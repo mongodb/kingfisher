@@ -731,10 +731,10 @@ all: linux-all darwin-all
 
 dockerfile:
 # Build for the host architecture (default)
-	docker build -f docker/Dockerfile -t kingfisher:latest .
+	docker build -f docker/Dockerfile.source -t kingfisher:latest .
 
 # Cross‑build for arm64 from an x64 machine
-	docker buildx build -f docker/Dockerfile --platform linux/arm64 -t kingfisher:arm64 .
+	docker buildx build -f docker/Dockerfile.source --platform linux/arm64 -t kingfisher:arm64 .
 
 list-archives:
 	@echo -e "\n=== Built archives ==="
@@ -769,7 +769,11 @@ check-rust:
 	  echo "Rust version $$version is acceptable."; \
 	fi
 
-tests:
+.PHONY: viewer-tests
+viewer-tests:
+	node tests/viewer_import_grouping.cjs
+
+tests: viewer-tests
 	@echo "🔍 checking for cargo-nextest …"
 	@if command -v cargo-nextest >/dev/null 2>&1; then \
 	    echo "✅ cargo-nextest already present"; \

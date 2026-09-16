@@ -204,7 +204,7 @@ pub fn enumerate_filesystem_inputs(
         .filter_map(|input| match (&enum_cfg, input).into_blob_iter() {
             Err(e) => {
                 had_errors_for_enumeration.store(true, Ordering::Relaxed);
-                debug!("Error enumerating input: {e:#}");
+                error!("Error enumerating input: {e:#}");
                 None
             }
             Ok(blob_iter) => blob_iter,

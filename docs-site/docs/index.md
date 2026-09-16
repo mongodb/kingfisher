@@ -1,5 +1,5 @@
 ---
-title: Kingfisher — The Batteries-Included Open Source Secret Scanner
+title: Kingfisher — Detect, Validate, Map, Triage, Revoke
 description: >-
   Find exposed credentials, verify which are active, map what they can reach, triage findings
   visually, and revoke supported secrets. Kingfisher brings the end-to-end defender workflow

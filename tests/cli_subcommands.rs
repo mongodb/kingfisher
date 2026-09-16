@@ -300,6 +300,29 @@ mod github {
     }
 
     #[test]
+    fn scan_github_public_events_rejects_tilde_audit_log_collision() {
+        let home = tempfile::tempdir().expect("create home directory");
+        let users = home.path().join("users");
+        std::fs::write(&users, "alice\n").expect("write user file");
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .env("HOME", home.path())
+            .env("USERPROFILE", home.path())
+            .args([
+                "scan",
+                "github",
+                "--public-events",
+                "--user-file",
+                users.to_str().expect("utf-8 path"),
+                "--audit-log=~/users",
+                "--no-update-check",
+            ])
+            .assert()
+            .failure()
+            .stderr(contains("--audit-log must not overwrite the GitHub public-event user file"));
+        assert_eq!(std::fs::read_to_string(users).unwrap(), "alice\n");
+    }
+
+    #[test]
     fn scan_github_public_events_rejects_invalid_user() {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args(["scan", "github", "--public-events", "--user", "bad/user", "--no-update-check"])

@@ -1,3 +1,8 @@
+---
+title: "Imported Rule Capabilities"
+description: "Built-in rule capabilities, validation bindings, bare-token detection, and placeholder exclusions."
+---
+
 # Imported Rule Capabilities
 
 `imported-rules-capabilities.yml` is Kingfisher's operational overlay for Betterleaks and Veles rules.

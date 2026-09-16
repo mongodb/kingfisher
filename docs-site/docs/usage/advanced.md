@@ -516,7 +516,7 @@ scanner pool must use the same explicit value; see [Project Configuration caveat
 ## Notable Scan Options
 
 - `--jobs <N>`: Set the number of parallel scanner workers; see [Control Scan Concurrency](#control-scan-concurrency).
-- `--no-dedup`: Report every occurrence of a finding (disable the default de-duplicate behavior)
+- `--no-dedup`: Report every occurrence of a finding instead of grouping repeated credential content
 - `--include-hidden-findings`: Include hidden helper-rule matches in reports and scan summary counts (diagnostic use)
 - `--no-base64`: By default, Kingfisher finds and decodes base64 blobs and scans them for secrets. This adds a slight performance overhead; use this flag to disable
 - `--confidence <LEVEL>`: (low|medium|high)
@@ -594,7 +594,10 @@ When omitted, Kingfisher defaults to `kingfisher/<version> Mozilla/5.0 ...`. The
 
 ## Finding Fingerprints
 
-The document below details the four-field formula (rule SHA-1, origin label, start & end offsets) hashed with XXH3-64 to create Kingfisher's 64-bit finding fingerprint, and explains how this ID powers safe deduplication; plus how `--no-dedup` can be used shows every raw match.
+Kingfisher separates its location-sensitive reported fingerprint from its default,
+credential-focused scan deduplication. The document below explains both identities, why repeated
+locations are normally grouped into one actionable credential, and how `--no-dedup` reports every
+individual occurrence.
 
 See [FINGERPRINT.md](../features/fingerprints.md) for complete details.
 

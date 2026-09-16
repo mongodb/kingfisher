@@ -78,7 +78,7 @@ See the [binary-size comparison](docs/COMPARISON.md#binary-size-comparison-macos
 | **Triage** | A local and hosted browser viewer for filtering, deduplication, prioritization, blast-radius inspection, and export | [Viewer usage](docs/USAGE.md#report-viewer-local-and-hosted), [hosted guide](https://mongodb.github.io/kingfisher/features/report-viewer/) |
 | **Revoke** | Conservative provider-specific containment workflows for supported credentials | [Revocation](docs/REVOCATION_PROVIDERS.md) |
 
-**Batteries Included** with live validation, advanced cloud blast-radius analysis, visual triage,
+Live validation, advanced cloud blast-radius analysis, visual triage,
 and supported revocation all ship in the free, open source Kingfisher. There is no separate paid or
 enterprise tier.
 

@@ -258,6 +258,12 @@ pub(crate) fn find_rules_by_selector<'a>(
         selectors_to_try.push(std::borrow::Cow::Owned(format!("kingfisher.{selector}")));
     }
 
+    for exact in &selectors_to_try {
+        if let Some(rule) = rules.get(exact.as_ref()) {
+            return Ok(vec![rule]);
+        }
+    }
+
     for try_selector in &selectors_to_try {
         for (id, rule) in rules {
             // Exact match, or a namespace/provider-family prefix.
@@ -282,6 +288,18 @@ pub(crate) fn find_rules_by_selector<'a>(
     }
 
     Ok(matches)
+}
+
+fn find_validation_rule<'a>(selector: &str, rules: &'a BTreeMap<String, Rule>) -> Result<&'a Rule> {
+    let matches = find_rules_by_selector(selector, rules)?;
+    if matches.len() > 1 {
+        bail!(
+            "Ambiguous rule selector '{}': {}. Use a full rule id.",
+            selector,
+            matches.iter().map(|rule| rule.id()).collect::<Vec<_>>().join(", ")
+        );
+    }
+    Ok(matches[0])
 }
 
 /// Extract a string value from the globals object.
@@ -598,10 +616,10 @@ async fn execute_grpc_validation(
     })
 }
 
-/// Run direct validation of a secret against one or more rules.
+/// Run direct validation of a secret against a single rule.
 ///
-/// If the rule selector matches multiple rules, all matching rules are tried.
-/// Returns results for all rules that have validation defined.
+/// Resolve an exact rule ID or an unambiguous prefix; reject ambiguous selectors.
+/// Return a single result for the selected rule.
 pub async fn run_direct_validation(
     args: &ValidateArgs,
     global_args: &GlobalArgs,
@@ -622,14 +640,8 @@ pub async fn run_direct_validation(
     let scan_args = create_minimal_scan_args();
     let loaded = loader.load(&scan_args)?;
 
-    // Find all matching rules
-    let matching_rules = find_rules_by_selector(&args.rule, loaded.id_to_rule())?;
-    let num_matching_rules = matching_rules.len();
-
-    if num_matching_rules > 1 {
-        debug!("Rule selector '{}' matches {} rules, trying all", args.rule, num_matching_rules);
-    }
-
+    // Resolve one rule before creating clients or sending credentials
+    let matching_rules = vec![find_validation_rule(&args.rule, loaded.id_to_rule())?];
     // Determine if we should use lax TLS for non-HTTP validators
     // For direct validation (explicit user command), lax mode applies globally
     let use_lax_tls = matches!(
@@ -652,9 +664,11 @@ pub async fn run_direct_validation(
         .brotli(true)
         .build()
         .context("Failed to build HTTP client")?;
-    let credential_uri_client =
-        crate::validation::build_credential_uri_client(Duration::from_secs(args.timeout))
-            .context("Failed to build credential URI HTTP client")?;
+    let credential_uri_client = crate::validation::build_credential_uri_client(
+        Duration::from_secs(args.timeout),
+        use_lax_tls,
+    )
+    .context("Failed to build credential URI HTTP client")?;
 
     // Build Liquid parser
     let parser = register_all(liquid::ParserBuilder::with_stdlib()).build()?;
@@ -667,7 +681,7 @@ pub async fn run_direct_validation(
 
     let mut results = Vec::new();
 
-    // Try each matching rule
+    // Run the selected validator
     for rule in matching_rules {
         let rule_id = rule.id().to_string();
         let rule_name = rule.name().to_string();
@@ -706,30 +720,18 @@ pub async fn run_direct_validation(
         // Check if --arg values can be assigned to this rule's variables
         let non_token_vars: Vec<&String> = template_vars.iter().filter(|v| *v != "TOKEN").collect();
 
-        // If more --arg values than variables, skip this rule when trying multiple rules
         if args.args.len() > non_token_vars.len() {
-            if num_matching_rules > 1 {
-                debug!(
-                    "Rule '{}' expects {} variable(s) but {} --arg value(s) provided, skipping",
-                    rule_id,
-                    non_token_vars.len(),
-                    args.args.len()
-                );
-                continue;
+            let var_list = if non_token_vars.is_empty() {
+                "none".to_string()
             } else {
-                // Single rule match - give a clear error
-                let var_list = if non_token_vars.is_empty() {
-                    "none".to_string()
-                } else {
-                    non_token_vars.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
-                };
-                bail!(
-                    "Too many --arg values provided. Rule '{}' expects {} additional variable(s): {}",
-                    rule_id,
-                    non_token_vars.len(),
-                    var_list
-                );
-            }
+                non_token_vars.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+            };
+            bail!(
+                "Too many --arg values provided. Rule '{}' expects {} additional variable(s): {}",
+                rule_id,
+                non_token_vars.len(),
+                var_list
+            );
         }
 
         let globals = build_globals(
@@ -1506,6 +1508,24 @@ mod tests {
             authoritative: true,
             vectorscan_compatible: true,
         })
+    }
+
+    #[test]
+    fn ambiguous_selector_lists_matches_and_exact_id_wins() {
+        let rules = BTreeMap::from_iter([
+            ("betterleaks.github-pat".into(), selector_test_rule("betterleaks.github-pat")),
+            (
+                "betterleaks.github-pat-extra".into(),
+                selector_test_rule("betterleaks.github-pat-extra"),
+            ),
+        ]);
+        let error = find_validation_rule("github", &rules).unwrap_err().to_string();
+        assert!(error.contains("Ambiguous rule selector"));
+        assert!(error.contains("betterleaks.github-pat-extra"));
+        assert_eq!(
+            find_rules_by_selector("github-pat", &rules).unwrap()[0].id(),
+            "betterleaks.github-pat"
+        );
     }
 
     #[test]

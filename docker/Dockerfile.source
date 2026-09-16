@@ -1,0 +1,61 @@
+# syntax=docker/dockerfile:1
+FROM rust:1.96-alpine AS builder
+
+RUN apk add --no-cache \
+    boost-dev \
+    bzip2-dev \
+    bzip2-static \
+    cmake \
+    curl \
+    g++ \
+    gcc \
+    git \
+    linux-headers \
+    make \
+    musl-dev \
+    openssl-dev \
+    openssl-libs-static \
+    patch \
+    perl \
+    pkgconfig \
+    ragel \
+    xz-dev \
+    xz-static \
+    zlib-dev \
+    zlib-static
+
+WORKDIR /src
+COPY . .
+
+ARG TARGETARCH
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/src/target \
+    set -eux; \
+    case "$TARGETARCH" in \
+        amd64) target=x86_64-unknown-linux-musl ;; \
+        arm64) target=aarch64-unknown-linux-musl ;; \
+        *) echo "unsupported architecture: $TARGETARCH" >&2; exit 1 ;; \
+    esac; \
+    rustup target add "$target"; \
+    CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+    CARGO_PROFILE_RELEASE_LTO=false \
+    RUSTFLAGS="-C target-feature=+crt-static" \
+        cargo build --locked --release --bin kingfisher --target "$target"; \
+    install -D -m 0755 "target/$target/release/kingfisher" /out/kingfisher
+
+FROM alpine:latest@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+
+RUN apk add --no-cache curl git tar \
+    && addgroup -S -g 10001 app \
+    && adduser -S -D -H -u 10001 -G app -h /app app \
+    && install -d -o app -g app /app /var/lib/kingfisher
+
+COPY --from=builder /out/kingfisher /usr/local/bin/kingfisher
+
+WORKDIR /app
+USER 10001:10001
+
+RUN kingfisher --version
+
+ENTRYPOINT ["kingfisher"]

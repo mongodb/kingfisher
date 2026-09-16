@@ -29,6 +29,11 @@ VIEWER_STATIC_BOOTSTRAP = (
 
 # Mapping: source filename -> (destination path, title, description)
 DOC_MAP = {
+    "../crates/kingfisher-rules/data/imported-rules-capabilities.md": (
+        "rules/imported-capabilities.md",
+        "Imported Rule Capabilities",
+        "Built-in rule capabilities, validation bindings, bare-token detection, and placeholder exclusions.",
+    ),
     "INDEX.md": (
         "reference/documentation-index.md",
         "Documentation Index",
@@ -97,12 +102,12 @@ DOC_MAP = {
     "PARSING.md": (
         "features/parsing.md",
         "Source Code Parsing",
-        "Language-aware secret detection using lightweight parser-based context verification across 16 supported source and config languages.",
+        "Available language parser backends and the scan-time context verification gate for eligible HTML and CSS files.",
     ),
     "CONTEXT_VERIFICATION.md": (
         "features/context-verification.md",
         "Parser-Based Context Verification",
-        "Reduce false positives with lightweight, language-aware verification of assignment-style secret matches.",
+        "Understand parser-based verification of contextual secret matches in eligible HTML and CSS files.",
     ),
     "FINGERPRINT.md": (
         "features/fingerprints.md",
@@ -154,6 +159,7 @@ DOC_MAP = {
 # Link rewriting rules: old link target -> new relative path
 # These are approximate; the script handles common patterns
 LINK_REWRITES = {
+    "../crates/kingfisher-rules/data/imported-rules-capabilities.md": "../rules/imported-capabilities.md",
     "INDEX.md": "../reference/documentation-index.md",
     "INSTALLATION.md": "../getting-started/installation.md",
     "USAGE.md": "../usage/basic-scanning.md",
@@ -340,6 +346,12 @@ def copy_report_viewer():
     with open(dst_index, "w", encoding="utf-8") as f:
         f.write(transformed)
     print("  viewer/index.html -> viewer/index.html")
+
+    shutil.copy2(
+        os.path.join(VIEWER_SRC_DIR, "kingfisher_logo.png"),
+        os.path.join(VIEWER_DST_DIR, "kingfisher_logo.png"),
+    )
+    print("  viewer/kingfisher_logo.png -> viewer/kingfisher_logo.png")
 
     sample_src = os.path.join(VIEWER_SRC_DIR, "sample-report.json")
     sample_dst = os.path.join(VIEWER_DST_DIR, "sample-report.json")

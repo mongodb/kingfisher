@@ -4,6 +4,68 @@ use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+/// Relax assignment context without copying provider token formats into the overlay.
+/// Only a single mandatory, top-level capture is supported: retaining its index/name
+/// keeps the reported secret and capture-based expressions stable. Parsing the whole
+/// pattern before extracting nodes preserves scoped flags (notably Voyage's prefix).
+fn bare_pattern(pattern: &str, secret_group: usize) -> Result<String> {
+    use regex_syntax::hir::{Hir, HirKind};
+
+    let compiled = regex::bytes::RegexBuilder::new(pattern).unicode(false).build()?;
+    if compiled.captures_len() != 2 || secret_group > 1 {
+        bail!("bare requires exactly one secret capture (group 1)");
+    }
+    let hir =
+        regex_syntax::ParserBuilder::new().unicode(false).utf8(false).build().parse(pattern)?;
+    let nodes = match hir.kind() {
+        HirKind::Concat(nodes) => nodes.as_slice(),
+        HirKind::Capture(_) => std::slice::from_ref(&hir),
+        _ => bail!("bare requires a mandatory top-level secret capture"),
+    };
+    let index = nodes
+        .iter()
+        .position(|node| matches!(node.kind(), HirKind::Capture(_)))
+        .ok_or_else(|| anyhow!("bare requires a mandatory top-level secret capture"))?;
+    if nodes[index].properties().minimum_len().is_none_or(|len| len == 0) {
+        bail!("bare requires a nonempty secret capture");
+    }
+
+    // Preserve assertion-only prefixes on already-bare rules. Otherwise replace
+    // assignment context with an ASCII token boundary. Consume the delimiter since
+    // Vectorscan does not support lookbehind; the secret remains capture group 1.
+    let prefix = &nodes[..index];
+    let mut bare = if !prefix.is_empty()
+        && prefix.iter().all(|node| matches!(node.kind(), HirKind::Look(_)))
+    {
+        prefix.to_vec()
+    } else {
+        vec![
+            regex_syntax::ParserBuilder::new()
+                .unicode(false)
+                .utf8(false)
+                .build()
+                .parse(r"(?:\A|[^A-Za-z0-9_-])")?,
+        ]
+    };
+    bare.extend_from_slice(&nodes[index..]);
+    let bare = Hir::concat(bare);
+    // HIR's printer emits (?-u:...) around byte classes/assertions. Both Kingfisher
+    // engines already run in byte mode, and Vectorscan rejects Rust's `u` flag.
+    // This replacement only touches printer-generated syntax (literal metacharacters
+    // are escaped). Reparse and compare trees to enforce semantic equivalence.
+    let result = bare.to_string().replace("(?-u:", "(?:");
+    let reparsed =
+        regex_syntax::ParserBuilder::new().unicode(false).utf8(false).build().parse(&result)?;
+    if reparsed != bare {
+        bail!("bare serialization changed regex semantics");
+    }
+    regex::bytes::RegexBuilder::new(&result)
+        .unicode(false)
+        .build()
+        .context("bare generated an invalid byte regex")?;
+    Ok(result)
+}
+
 const OMITTED_BUILTIN_RULE_IDS: &[&str] =
     &["generic-api-key", "generic-password", "generic-username"];
 
@@ -65,6 +127,8 @@ struct RuleCapabilities {
     authoritative: Option<bool>,
     confidence: Option<String>,
     tls_mode: Option<String>,
+    #[serde(default)]
+    bare: bool,
 }
 
 /// Kingfisher validators that can be bound directly to a Betterleaks detector.
@@ -370,6 +434,9 @@ fn import_config_with_namespace(
         let rule_capabilities =
             capability_overlay.rules.remove(&source_rule.id).unwrap_or_default();
         let Some(source_pattern) = source_rule.regex else {
+            if rule_capabilities.bare {
+                bail!("bare on {} requires a regex", source_rule.id);
+            }
             if rule_capabilities.access_map.is_some()
                 || rule_capabilities.revocation.is_some()
                 || rule_capabilities.validation.is_some()
@@ -396,6 +463,12 @@ fn import_config_with_namespace(
                 compiled_pattern.captures_len().saturating_sub(1)
             );
         }
+        let source_pattern = if rule_capabilities.bare {
+            bare_pattern(&source_pattern, source_rule.secret_group)
+                .with_context(|| format!("cannot apply bare to {}", source_rule.id))?
+        } else {
+            source_pattern
+        };
         if let Some(path) = source_rule.path.as_deref() {
             Regex::new(path)
                 .with_context(|| format!("invalid path regex on {}", source_rule.id))?;
@@ -1456,6 +1529,103 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bare_preserves_flags_names_and_boundaries() {
+        let generated =
+            bare_pattern(r"(?i:provider)=(?P<secret>(?:pa|al)-[A-Z]{3})(?:[\s;]|$)", 1).unwrap();
+        let re = regex::bytes::RegexBuilder::new(&generated).unicode(false).build().unwrap();
+        for input in ["pa-ABC", "OTHER=pa-ABC", "pa-ABC # provider"] {
+            assert_eq!(
+                re.captures(input.as_bytes()).unwrap().name("secret").unwrap().as_bytes(),
+                b"pa-ABC"
+            );
+        }
+        for input in ["pa-abc", "PA-ABC", "xpa-ABC", "_pa-ABC", "-pa-ABC", "pa-ABCD", "pa-ABC_"] {
+            assert!(!re.is_match(input.as_bytes()), "{input}");
+        }
+        let global = bare_pattern(r"(?i)provider=(sk-[a-f]{3})(?:[\s;]|$)", 0).unwrap();
+        assert!(
+            regex::bytes::RegexBuilder::new(&global)
+                .unicode(false)
+                .build()
+                .unwrap()
+                .is_match(b"SK-ABC")
+        );
+    }
+
+    #[test]
+    fn bare_preserves_already_bare_assertions() {
+        let pattern = r"\b(token_[A-Za-z]{3})\b";
+        let original = regex::bytes::Regex::new(pattern).unwrap();
+        let bare = regex::bytes::RegexBuilder::new(&bare_pattern(pattern, 0).unwrap())
+            .unicode(false)
+            .build()
+            .unwrap();
+        for input in ["token_Abc", " token_Abc ", "-token_Abc", "xtoken_Abc", "token_Abcd"] {
+            assert_eq!(
+                original.is_match(input.as_bytes()),
+                bare.is_match(input.as_bytes()),
+                "{input}"
+            );
+        }
+    }
+
+    #[test]
+    fn bare_rejects_unsupported_capture_layouts() {
+        for pattern in [
+            r"token_[a-z]+",
+            r"(prefix)(secret)",
+            r"prefix(?:(secret))?",
+            r"prefix(?:(secret))+",
+            r"prefix(secret)|other",
+            r"prefix(a*)",
+        ] {
+            assert!(bare_pattern(pattern, 0).is_err(), "{pattern}");
+        }
+        assert!(bare_pattern(r"prefix(secret)", 2).is_err());
+    }
+
+    #[test]
+    fn bare_overlay_only_changes_opted_in_patterns() {
+        let source = r#"
+[[rules]]
+id = "example"
+description = "Example"
+regex = '''provider=(token_[a-z]{3})(?:\s|$)'''
+secretGroup = 1
+filter = '''entropy(finding["secret"]) <= 3.5'''
+validate = '''{"result": "unknown"}'''
+"#;
+        let overlay = "version: 1\nrules:\n  example:\n    bare: true\n";
+        let imported: serde_yaml::Value =
+            serde_yaml::from_str(&import_config(source, "test", overlay).unwrap()).unwrap();
+        let original: serde_yaml::Value =
+            serde_yaml::from_str(&import_config(source, "test", EMPTY_CAPABILITIES).unwrap())
+                .unwrap();
+        let rule = &imported["rules"][0];
+        assert!(
+            regex::bytes::RegexBuilder::new(rule["pattern"].as_str().unwrap())
+                .unicode(false)
+                .build()
+                .unwrap()
+                .is_match(b"token_abc")
+        );
+        assert!(
+            !regex::bytes::Regex::new(original["rules"][0]["pattern"].as_str().unwrap())
+                .unwrap()
+                .is_match(b"token_abc")
+        );
+        assert_eq!(rule["betterleaks_secret_group"].as_u64(), Some(1));
+        for field in ["validation", "betterleaks_filter"] {
+            assert_eq!(rule[field], original["rules"][0][field]);
+        }
+        let unsupported = source.replace("(token_[a-z]{3})", "(token_)([a-z]{3})");
+        assert!(
+            format!("{:#}", import_config(&unsupported, "test", overlay).unwrap_err())
+                .contains("cannot apply bare to example")
+        );
+    }
 
     const EMPTY_CAPABILITIES: &str = "version: 1\nrules: {}\n";
 

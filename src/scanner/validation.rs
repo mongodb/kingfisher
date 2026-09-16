@@ -4,7 +4,7 @@ use std::{
     panic::AssertUnwindSafe,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicUsize, Ordering},
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -32,6 +32,7 @@ use crate::{
     validation::{
         CachedResponse, CredentialUriTarget, classify_credential_uri,
         collect_variables_and_dependencies, utils, validate_single_match,
+        validation_context_values,
     },
     validation_body,
     validation_rate_limit::ValidationRateLimiter,
@@ -41,6 +42,11 @@ use crate::{
 pub struct AccessMapCollector {
     inner: Arc<DashMap<u64, AccessMapRequest>>,
     finding_fingerprints: Arc<DashMap<u64, FxHashSet<String>>>,
+}
+
+struct ValidationInFlight {
+    notify: Notify,
+    completed: AtomicBool,
 }
 
 /// Build the same access-map request used by scanning for one known finding.
@@ -80,6 +86,7 @@ pub(crate) fn direct_access_map_requests(
         calculated_entropy: 0.0,
         is_base64: false,
         dependent_captures,
+        ambiguous_dependencies: Default::default(),
     };
     maybe_record_access_map(&owned, Some(&collector));
     collector.into_collected_requests().into_iter().map(|item| item.request).collect()
@@ -612,7 +619,7 @@ pub async fn run_secret_validation(
 
     // ── Phase 1: simple, global de-dupe ──────────────────────────────────────
     if !simple_matches.is_empty() {
-        // Keep only ONE representative per (rule_id, secret) group.
+        // Keep only ONE representative per rule, secret, and validator capture context.
         // Previous code stored ALL matches per group — holding thousands of
         // Arc clones alive for the entire duration of the concurrent stream.
         let total_simple = simple_matches.len();
@@ -632,7 +639,7 @@ pub async fn run_secret_validation(
             // like (?<REGEX>...(ABC|DEF)...), causing all matches to share the same
             // validation result.
             let secret = validation_input(&arc_msg.2.rule, &arc_msg.2.groups);
-            let group_key = validation_group_key(arc_msg.2.rule.id(), secret);
+            let group_key = validation_group_key(arc_msg.2.rule.id(), secret, &arc_msg.2.groups);
             trace!(
                 rule_id = %arc_msg.2.rule.id(),
                 external_fingerprint = arc_msg.2.finding_fingerprint,
@@ -666,7 +673,8 @@ pub async fn run_secret_validation(
         let empty_dep_vars: FxHashMap<String, Vec<(String, OffsetSpan)>> = FxHashMap::default();
         let empty_missing: FxHashMap<String, Vec<String>> = FxHashMap::default();
         let empty_cache: Arc<DashMap<String, CachedResponse>> = Arc::new(DashMap::new());
-        let empty_inflight: Arc<DashMap<String, ()>> = Arc::new(DashMap::new());
+        let empty_inflight: Arc<DashMap<String, Arc<ValidationInFlight>>> =
+            Arc::new(DashMap::new());
 
         stream::iter(
             representatives.into_values(), // consumes map, dropping keys
@@ -692,7 +700,7 @@ pub async fn run_secret_validation(
                 // CredentialUri, otherwise the first capture).
                 // See comment above for why this differs from fingerprint/reporting code.
                 let secret = validation_input(&rep_arc.2.rule, &rep_arc.2.groups);
-                let key = validation_group_key(rep_arc.2.rule.id(), secret);
+                let key = validation_group_key(rep_arc.2.rule.id(), secret, &rep_arc.2.groups);
 
                 match val_res.entry(key.clone()) {
                     dashmap::mapref::entry::Entry::Occupied(_) => return,
@@ -763,7 +771,7 @@ pub async fn run_secret_validation(
                     continue;
                 }
                 let secret = validation_input(&match_arc.2.rule, &match_arc.2.groups);
-                let key = validation_group_key(match_arc.2.rule.id(), secret);
+                let key = validation_group_key(match_arc.2.rule.id(), secret, &match_arc.2.groups);
                 if let Some(cr) = validation_results.get(&key) {
                     let (_, _, existing) = Arc::make_mut(match_arc);
                     existing.validation_success = cr.is_valid;
@@ -814,9 +822,10 @@ pub async fn run_secret_validation(
         pb.enable_steady_tick(Duration::from_millis(100));
 
         let val_cache = Arc::new(DashMap::<String, CachedResponse>::new());
-        let in_flight = Arc::new(DashMap::<String, ()>::new());
+        let in_flight = Arc::new(DashMap::<String, Arc<ValidationInFlight>>::new());
 
-        // Collect validation results keyed by finding_fingerprint:
+        // Collect validation results by occurrence; the same secret can have different
+        // dependency values in different blobs or at different offsets.
         // (validation_success, response_body, response_status_u16, dependent_captures)
         type DepUpdate = (
             bool,
@@ -825,7 +834,8 @@ pub async fn run_secret_validation(
             kingfisher_core::ValidationOutcome,
             std::collections::BTreeMap<String, String>,
         );
-        let mut dep_updates: FxHashMap<u64, DepUpdate> = FxHashMap::default();
+        let mut dep_updates: FxHashMap<(BlobId, OffsetSpan, String), DepUpdate> =
+            FxHashMap::default();
 
         for chunk in blob_ids.chunks(chunk_size) {
             // Lazy iterator — futures are created on-demand by buffer_unordered,
@@ -843,6 +853,7 @@ pub async fn run_secret_validation(
                     let access_map = access_map.clone();
                     let rate_limiter = rate_limiter.clone();
                     let provider_endpoints = provider_endpoints.clone();
+                    let pb = pb.clone();
                     async move {
                         let owned = matches_for_blob
                             .iter()
@@ -919,6 +930,10 @@ pub async fn run_secret_validation(
                             .collect()
                             .await;
 
+                        // Report progress per blob. Dependent validation can
+                        // take long enough that waiting for the whole chunk
+                        // to finish makes an active scan look hung at 0%.
+                        pb.inc(1);
                         validated.into_iter().flatten().collect::<Vec<_>>()
                     }
                     .boxed()
@@ -930,7 +945,7 @@ pub async fn run_secret_validation(
             for blob_vec in validated_blobs {
                 for om in blob_vec {
                     dep_updates.insert(
-                        om.finding_fingerprint,
+                        (om.blob_id, om.matching_input_offset_span, om.rule.id().to_string()),
                         (
                             om.validation_success,
                             om.validation_response_body.clone(),
@@ -941,7 +956,6 @@ pub async fn run_secret_validation(
                     );
                 }
             }
-            pb.inc(chunk.len() as u64);
         }
         pb.finish();
 
@@ -958,8 +972,13 @@ pub async fn run_secret_validation(
                 matches.as_mut_slice()
             };
             for match_arc in slice.iter_mut() {
-                if let Some((success, body, status, outcome, dep_caps)) =
-                    dep_updates.get(&match_arc.2.finding_fingerprint).cloned()
+                if let Some((success, body, status, outcome, dep_caps)) = dep_updates
+                    .get(&(
+                        match_arc.2.blob_id,
+                        match_arc.2.location.offset_span,
+                        match_arc.2.rule.id().to_string(),
+                    ))
+                    .cloned()
                 {
                     let (_, _, existing) = Arc::make_mut(match_arc);
                     existing.validation_success = success;
@@ -1000,9 +1019,6 @@ pub async fn run_secret_validation(
         }
     }
 
-    // Reclaim memory from static caches that accumulated during validation
-    crate::validation::clear_validation_caches();
-
     Ok(())
 }
 
@@ -1017,7 +1033,7 @@ async fn validate_single(
     dep_vars: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
     missing_deps: &FxHashMap<String, Vec<String>>,
     cache: &DashMap<String, CachedResponse>,
-    in_progress: &DashMap<String, ()>,
+    in_progress: &DashMap<String, Arc<ValidationInFlight>>,
     success_count: &AtomicUsize,
     fail_count: &AtomicUsize,
     cache2: &Arc<SkipMap<String, CachedResponse>>,
@@ -1036,6 +1052,9 @@ async fn validate_single(
         return;
     }
 
+    if crate::validation::skip_ambiguous_dependencies(om) {
+        return;
+    }
     let cache_key = build_cache_key(om);
     // Check cache first
     if let Some(cached) = cache.get(&cache_key) {
@@ -1060,13 +1079,27 @@ async fn validate_single(
         return;
     }
 
-    static NOTIFY: std::sync::LazyLock<DashMap<String, Arc<Notify>>> =
-        std::sync::LazyLock::new(DashMap::new);
-
-    let notify = NOTIFY.entry(cache_key.clone()).or_insert_with(|| Arc::new(Notify::new())).clone();
-    let first = in_progress.insert(cache_key.clone(), ()).is_none();
-    if !first {
-        notify.notified().await; // suspend with zero polling
+    let in_flight =
+        Arc::new(ValidationInFlight { notify: Notify::new(), completed: AtomicBool::new(false) });
+    let wait = match in_progress.entry(cache_key.clone()) {
+        dashmap::mapref::entry::Entry::Occupied(entry) => Some(entry.get().clone()),
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
+            entry.insert(Arc::clone(&in_flight));
+            None
+        }
+    };
+    if let Some(wait) = wait {
+        // Make completion durable across the race where the validator finishes
+        // before this task registers with Notify.
+        loop {
+            let notified = wait.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if wait.completed.load(Ordering::Acquire) {
+                break;
+            }
+            notified.await;
+        }
         // cached result now present
         if let Some(cached) = cache.get(&cache_key) {
             om.validation_success = cached.is_valid;
@@ -1116,9 +1149,9 @@ async fn validate_single(
     maybe_record_access_map(om, access_map);
     // Remove from `in_progress`
     // in_progress.remove(&cache_key);
-    in_progress.remove(&cache_key);
-    if let Some(n) = NOTIFY.remove(&cache_key) {
-        n.1.notify_waiters(); // wake everyone
+    if let Some((_, in_flight)) = in_progress.remove(&cache_key) {
+        in_flight.completed.store(true, Ordering::Release);
+        in_flight.notify.notify_waiters();
     }
 }
 
@@ -1257,27 +1290,37 @@ fn build_cache_key(om: &OwnedBlobMatch) -> String {
     hash_cache_key_part(&mut hasher, om.rule.id().as_bytes());
     hash_cache_key_part(&mut hasher, validation_input.as_bytes());
 
-    let has_context_dependency = om
-        .rule
-        .syntax()
-        .depends_on_rule
-        .iter()
-        .flatten()
-        .any(|dep| !dep.variable.eq_ignore_ascii_case("TOKEN"));
-    if has_context_dependency {
-        hash_cache_key_part(&mut hasher, om.blob_id.to_string().as_bytes());
-        hash_cache_key_part(&mut hasher, &om.matching_input_offset_span.start.to_le_bytes());
-        hash_cache_key_part(&mut hasher, &om.matching_input_offset_span.end.to_le_bytes());
+    for (variable, count) in &om.ambiguous_dependencies {
+        hash_cache_key_part(&mut hasher, variable.as_bytes());
+        hash_cache_key_part(&mut hasher, &count.to_le_bytes());
+    }
+
+    for (variable, value) in validation_context_values(om) {
+        hash_cache_key_part(&mut hasher, variable.as_bytes());
+        if let Some(value) = value {
+            hash_cache_key_part(&mut hasher, value.as_bytes());
+        } else {
+            hash_cache_key_part(&mut hasher, b"<missing>");
+        }
     }
 
     hasher.finalize().to_hex().to_string()
 }
 
-fn validation_group_key(rule_id: &str, secret: &str) -> String {
+fn validation_group_key(rule_id: &str, secret: &str, captures: &SerializableCaptures) -> String {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"kingfisher.validation-group.v1\0");
     hash_cache_key_part(&mut hasher, rule_id.as_bytes());
     hash_cache_key_part(&mut hasher, secret.as_bytes());
+    // Simple rules can still use named captures in their validator requests.
+    let values: BTreeMap<_, _> = crate::validation::utils::process_captures(captures)
+        .into_iter()
+        .map(|(name, value, ..)| (name, value))
+        .collect();
+    for (name, value) in values {
+        hash_cache_key_part(&mut hasher, name.as_bytes());
+        hash_cache_key_part(&mut hasher, value.as_bytes());
+    }
     hasher.finalize().to_hex().to_string()
 }
 
@@ -1909,7 +1952,7 @@ mod tests {
     use crate::{
         blob::BlobId,
         matcher::{OwnedBlobMatch, SerializableCapture, SerializableCaptures},
-        rules::rule::{Confidence, Rule, RuleSyntax},
+        rules::rule::{Confidence, DependsOnRule, Rule, RuleSyntax},
         util::intern,
     };
     use smallvec::smallvec;
@@ -1957,6 +2000,7 @@ mod tests {
             calculated_entropy: 0.0,
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
+            ambiguous_dependencies: Default::default(),
         }
     }
 
@@ -1993,6 +2037,27 @@ mod tests {
         let mut second = first.clone();
         second.captures.captures[1].value = intern("postgresql://alice:hunter2@two.internal/app");
 
+        assert_ne!(build_cache_key(&first), build_cache_key(&second));
+    }
+
+    #[test]
+    fn dependent_cache_key_uses_values_instead_of_source_location() {
+        let mut first = make_owned_blob_match();
+        Arc::make_mut(&mut first.rule).syntax.depends_on_rule = vec![Some(DependsOnRule {
+            rule_id: "test.component".to_string(),
+            variable: "COMPONENT".to_string(),
+            optional: false,
+            within: None,
+        })];
+        first.dependent_captures.insert("COMPONENT".to_string(), "same-context".to_string());
+
+        let mut second = first.clone();
+        second.blob_id = BlobId::new(b"different-blob");
+        second.matching_input_offset_span = OffsetSpan { start: 100, end: 105 };
+
+        assert_eq!(build_cache_key(&first), build_cache_key(&second));
+
+        second.dependent_captures.insert("COMPONENT".to_string(), "different-context".to_string());
         assert_ne!(build_cache_key(&first), build_cache_key(&second));
     }
 

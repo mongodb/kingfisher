@@ -71,6 +71,7 @@ fn make_match(fp: u64, rule_id: &str) -> Match {
         visible: true,
         is_base64: false,
         dependent_captures: std::collections::BTreeMap::new(),
+        ambiguous_dependencies: Default::default(),
     }
 }
 

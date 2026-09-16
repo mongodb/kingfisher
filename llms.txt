@@ -1,6 +1,6 @@
 # Kingfisher
 
-> Kingfisher is a batteries-included open source secret scanner and credential-response tool. It
+> Kingfisher is an open source secret scanner and credential-response tool. It
 > detects exposed credentials, validates which are active, maps blast radius, supports visual
 > triage, and revokes supported secrets.
 

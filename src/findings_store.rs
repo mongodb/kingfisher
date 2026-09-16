@@ -102,6 +102,9 @@ pub struct FindingsStore {
     blobs: FxHashSet<BlobId>,
     clone_dir: PathBuf,
     dedup_filter: DedupBloomSet,
+    // Confirm Bloom hits with full cryptographic digests, without retaining another
+    // copy of each secret. Storage is fixed-size per unique finding.
+    dedup_exact: FxHashSet<[u8; 32]>,
     blob_scoped_dependency_rule_ids: FxHashSet<String>,
     blob_meta: FxHashMap<BlobId, Arc<BlobMetadata>>,
     origin_meta: FxHashMap<u64, Arc<OriginSet>>,
@@ -127,6 +130,7 @@ impl FindingsStore {
             origin_meta: FxHashMap::default(),
             clone_dir,
             dedup_filter: DedupBloomSet::new(),
+            dedup_exact: FxHashSet::default(),
             blob_scoped_dependency_rule_ids: FxHashSet::default(),
             docker_images: FxHashMap::default(),
             slack_links: FxHashMap::default(),
@@ -260,16 +264,27 @@ impl FindingsStore {
                 let origin_kind = dedup_origin_kind(&origin);
 
                 let rule_id = m.rule.id().to_uppercase();
-                let key_string = if self.blob_scoped_dependency_rule_ids.contains(&rule_id) {
+                let mut key_string = if self.blob_scoped_dependency_rule_ids.contains(&rule_id) {
                     format!("{}|{}|{}|{}", rule_id, origin_kind, snippet, blob_md.id.hex())
                 } else {
                     format!("{}|{}|{}", rule_id, origin_kind, snippet)
                 };
-                let key = xxh3_64(key_string.as_bytes());
-
-                if self.dedup_filter.contains_or_insert(key) {
-                    continue; // very likely a duplicate
+                // Association is resolved before storage: keep distinct validation contexts,
+                // including a bare occurrence followed by a fully paired occurrence.
+                if !m.rule.syntax().depends_on_rule.is_empty() {
+                    key_string.push_str(
+                        &serde_json::to_string(&(&m.dependent_captures, &m.ambiguous_dependencies))
+                            .expect("dependency maps serialize"),
+                    );
                 }
+                let key = xxh3_64(key_string.as_bytes());
+                let digest = *blake3::hash(key_string.as_bytes()).as_bytes();
+                let bloom_match = self.dedup_filter.contains_or_insert(key);
+
+                if bloom_match && self.dedup_exact.contains(&digest) {
+                    continue; // duplicate confirmed by its cryptographic digest
+                }
+                self.dedup_exact.insert(digest);
             }
 
             /*───────────────────────────────────────────────────────────────┐
@@ -334,7 +349,7 @@ impl FindingsStore {
 
     //             // Bloom gate: 1. check, 2. insert (if new)
     //             if self.seen_bloom.check(&key) {
-    //                 continue; // very likely a duplicate
+    //                 continue; // duplicate confirmed by its cryptographic digest
     //             }
     //             self.seen_bloom.set(&key);
     //             self.bloom_items += 1;

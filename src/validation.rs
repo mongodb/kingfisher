@@ -6,7 +6,10 @@ use std::{
     time::{Duration, Instant},
 };
 
-use std::sync::{LazyLock, OnceLock};
+use std::sync::{
+    LazyLock, OnceLock,
+    atomic::{AtomicBool, Ordering},
+};
 
 use anyhow::{Result, anyhow};
 use dashmap::DashMap;
@@ -125,6 +128,7 @@ pub struct ValidationClients {
     strict: Client,
     /// Strict-TLS client that never follows redirects, used when sending URI credentials.
     credential_uri: Client,
+    credential_uri_lax: Client,
     /// Client that accepts self-signed or invalid certificates.
     /// Used when `--tls-mode=lax` AND the rule opts into lax validation,
     /// or when `--tls-mode=off`.
@@ -228,9 +232,17 @@ impl ValidationClients {
             .timeout(timeout)
             .build()?;
 
-        let credential_uri = build_credential_uri_client(timeout)?;
+        let credential_uri = build_credential_uri_client(timeout, false)?;
 
-        Ok(Self { strict, credential_uri, lax, global_mode, allow_internal_ips })
+        let credential_uri_lax = build_credential_uri_client(timeout, true)?;
+        Ok(Self {
+            strict,
+            credential_uri,
+            credential_uri_lax,
+            lax,
+            global_mode,
+            allow_internal_ips,
+        })
     }
 
     /// Get the appropriate client for a given rule's TLS mode.
@@ -251,9 +263,16 @@ impl ValidationClients {
         }
     }
 
-    /// Get the strict-TLS, redirect-disabled client for credential-bearing URI validation.
-    pub fn credential_uri_client(&self) -> &Client {
-        &self.credential_uri
+    /// Get a redirect-disabled URI client using the same TLS policy as other validators.
+    pub fn credential_uri_client(
+        &self,
+        rule_tls_mode: Option<kingfisher_rules::TlsMode>,
+    ) -> &Client {
+        if self.should_use_lax(rule_tls_mode) {
+            &self.credential_uri_lax
+        } else {
+            &self.credential_uri
+        }
     }
 
     /// Check if lax TLS should be used for a rule.
@@ -269,20 +288,67 @@ impl ValidationClients {
     }
 }
 
-/// Build a strict-TLS client that cannot forward URI credentials through an automatic redirect.
-pub(crate) fn build_credential_uri_client(timeout: Duration) -> Result<Client> {
-    Ok(Client::builder().redirect(reqwest::redirect::Policy::none()).timeout(timeout).build()?)
+/// Build a client that cannot forward URI credentials through an automatic redirect.
+pub(crate) fn build_credential_uri_client(timeout: Duration, use_lax_tls: bool) -> Result<Client> {
+    Ok(Client::builder()
+        .danger_accept_invalid_certs(use_lax_tls)
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(timeout)
+        .build()?)
 }
 
 // Use SkipMap-based cache instead of a mutex-wrapped FxHashMap.
 type Cache = kingfisher_scanner::validation::Cache;
 
+/// Return validator capture context before storage deduplication.
+/// Include primary-rule captures as well as nearby dependency values, using the
+/// same dependency precedence as request rendering. Do not include source offsets.
+pub(crate) fn validation_context_values(m: &OwnedBlobMatch) -> Vec<(String, Option<String>)> {
+    let mut values: std::collections::BTreeMap<String, Option<String>> =
+        utils::process_captures(&m.captures)
+            .into_iter()
+            .map(|(name, value, ..)| (name, Some(value)))
+            .collect();
+    for dep in m.rule.syntax().depends_on_rule.iter().flatten() {
+        if dep.variable.eq_ignore_ascii_case("TOKEN") {
+            continue;
+        }
+        let variable = dep.variable.to_uppercase();
+        if let Some(value) = m.dependent_captures.get(&variable) {
+            values.insert(variable, Some(value.clone()));
+        } else {
+            values.entry(variable).or_insert(None);
+        }
+    }
+    values.into_iter().collect()
+}
+
+/// Refuse to guess which credential component or endpoint belongs to a secret.
+/// Run before consulting caches so an unrelated successful pair cannot mask ambiguity.
+pub(crate) fn skip_ambiguous_dependencies(m: &mut OwnedBlobMatch) -> bool {
+    if m.ambiguous_dependencies.is_empty() {
+        return false;
+    }
+    let details = m
+        .ambiguous_dependencies
+        .iter()
+        .map(|(variable, count)| format!("{variable}: {count} distinct candidates"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    m.validation_success = false;
+    m.validation_response_status = StatusCode::PRECONDITION_REQUIRED;
+    m.validation_response_body = validation_body::from_string(format!(
+        "Validation skipped - ambiguous dependency: {details}. Narrow the rule's within window or provide explicit context."
+    ));
+    m.refresh_validation_outcome();
+    true
+}
+
 /// Returns an opaque key for internal validation deduplication.
 ///
 /// This is an INTERNAL key used only for validation deduplication within a single scan.
-/// It uses `captures.get(0)` to get the primary secret value. Rules with dependent
-/// variables also include blob location because validation can depend on nearby context
-/// such as an AWS access-key ID paired with a secret access key.
+/// It uses `captures.get(0)` to get the primary secret value and includes the
+/// primary named captures and selected dependent values used by validation.
 ///
 /// **Important**: This is distinct from the EXTERNAL `finding_fingerprint` used for:
 /// - Baseline comparisons across scans
@@ -312,10 +378,18 @@ fn validation_dedup_key(m: &OwnedBlobMatch) -> [u8; 32] {
         hash_key_part(&mut hasher, val.as_bytes());
     }
 
-    if !m.rule.syntax().depends_on_rule.is_empty() {
-        hash_key_part(&mut hasher, m.blob_id.to_string().as_bytes());
-        hash_key_part(&mut hasher, &m.matching_input_offset_span.start.to_le_bytes());
-        hash_key_part(&mut hasher, &m.matching_input_offset_span.end.to_le_bytes());
+    for (variable, count) in &m.ambiguous_dependencies {
+        hash_key_part(&mut hasher, variable.as_bytes());
+        hash_key_part(&mut hasher, &count.to_le_bytes());
+    }
+
+    for (variable, value) in validation_context_values(m) {
+        hash_key_part(&mut hasher, variable.as_bytes());
+        if let Some(value) = value {
+            hash_key_part(&mut hasher, value.as_bytes());
+        } else {
+            hash_key_part(&mut hasher, b"<missing>");
+        }
     }
 
     *hasher.finalize().as_bytes()
@@ -327,7 +401,13 @@ fn hash_key_part(hasher: &mut blake3::Hasher, part: &[u8]) {
 }
 
 static VALIDATION_CACHE: OnceLock<DashMap<[u8; 32], CachedResponse>> = OnceLock::new();
-static IN_FLIGHT: OnceLock<DashMap<[u8; 32], Arc<Notify>>> = OnceLock::new();
+
+struct InFlightValidation {
+    notify: Notify,
+    completed: AtomicBool,
+}
+
+static IN_FLIGHT: OnceLock<DashMap<[u8; 32], Arc<InFlightValidation>>> = OnceLock::new();
 
 fn cache_validation_result(fp: [u8; 32], m: &OwnedBlobMatch) {
     VALIDATION_CACHE.get_or_init(DashMap::new).insert(
@@ -343,8 +423,9 @@ fn cache_validation_result(fp: [u8; 32], m: &OwnedBlobMatch) {
 }
 
 fn clear_in_flight_validation(fp: [u8; 32]) {
-    if let Some((_, notify)) = IN_FLIGHT.get_or_init(DashMap::new).remove(&fp) {
-        notify.notify_waiters();
+    if let Some((_, in_flight)) = IN_FLIGHT.get_or_init(DashMap::new).remove(&fp) {
+        in_flight.completed.store(true, Ordering::Release);
+        in_flight.notify.notify_waiters();
     }
 }
 
@@ -355,7 +436,8 @@ pub fn init_validation_caches() {
     aws::set_aws_validation_concurrency(15);
 }
 
-/// Clear the static validation caches to reclaim memory after validation completes.
+/// Clear the static validation caches at a scan boundary to reclaim memory and
+/// prevent validation results from leaking into a later scan.
 pub fn clear_validation_caches() {
     if let Some(c) = VALIDATION_CACHE.get() {
         c.clear();
@@ -705,7 +787,9 @@ pub fn collect_variables_and_dependencies(
     for m in matches {
         let rule_id = m.rule.syntax().id.clone();
         for dependency in m.rule.syntax().depends_on_rule.iter().flatten() {
-            if dependency.within.is_some() {
+            if dependency.within.is_some()
+                || m.dependent_captures.contains_key(&dependency.variable.to_uppercase())
+            {
                 let variable = dependency.variable.to_uppercase();
                 if let Some(value) = m.dependent_captures.get(&variable) {
                     variable_map
@@ -829,14 +913,21 @@ pub async fn validate_single_match(
         return;
     }
 
+    if skip_ambiguous_dependencies(m) {
+        return;
+    }
     let fp = validation_dedup_key(m);
     // Keep the unwind boundary inside this module so the process-wide
     // validation de-dupe state is cleared before the caller observes a panic.
     // The panic branch below overwrites the match with a deterministic failure.
+    // A waiter can time out before the owner; only the owner may publish a failure
+    // and remove the shared entry. Keep ownership outside the canceled future.
+    let mut owns_in_flight = false;
     let timeout_result = time::timeout(
         validation_timeout,
         AssertUnwindSafe(
             timed_validate_single_match(
+                &mut owns_in_flight,
                 m,
                 parser,
                 clients,
@@ -868,8 +959,10 @@ pub async fn validate_single_match(
                 m.rule.syntax().id
             ));
             m.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
-            cache_validation_result(fp, m);
-            clear_in_flight_validation(fp);
+            if owns_in_flight {
+                cache_validation_result(fp, m);
+                clear_in_flight_validation(fp);
+            }
         }
         Err(_) => {
             m.validation_success = false;
@@ -878,22 +971,25 @@ pub async fn validate_single_match(
                 validation_timeout.as_secs()
             ));
             m.validation_response_status = StatusCode::REQUEST_TIMEOUT;
-            cache_validation_result(fp, m);
-            clear_in_flight_validation(fp);
+            if owns_in_flight {
+                cache_validation_result(fp, m);
+                clear_in_flight_validation(fp);
+            }
         }
     }
     m.refresh_validation_outcome();
 }
 
 /// Perform the actual validation of a match.
-/// Guarantees that each <RULE-ID>|<secret> is validated only once per process,
+/// Guarantees that each <RULE-ID>|<secret> is validated only once per scan,
 /// even when `--no-dedup` is used.
 #[allow(clippy::too_many_arguments)]
 async fn timed_validate_single_match(
+    owns_in_flight: &mut bool,
     m: &mut OwnedBlobMatch,
     parser: &liquid::Parser,
     clients: &ValidationClients,
-    dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
+    _dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
     missing_dependencies: &FxHashMap<String, Vec<String>>,
     cache: &Cache,
     validation_timeout: Duration,
@@ -911,19 +1007,42 @@ async fn timed_validate_single_match(
     // ──────────────────────────────────────────────────────────
     let fp = validation_dedup_key(m);
 
-    if let Some(entry) = VALIDATION_CACHE.get_or_init(DashMap::new).get(&fp)
-        && entry.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS)
-    {
+    // This cache is cleared at the start and end of every scan, so entries
+    // remain valid for the full scan even when a large scan runs longer than
+    // the provider-specific cache TTL.
+    if let Some(entry) = VALIDATION_CACHE.get_or_init(DashMap::new).get(&fp) {
         m.validation_success = entry.is_valid;
         m.validation_response_body = entry.body.clone();
         m.validation_response_status = entry.status;
         m.validation_outcome = entry.outcome;
         return;
     }
-    if let Some(wait) =
-        IN_FLIGHT.get_or_init(DashMap::new).get(&fp).map(|entry| entry.value().clone())
-    {
-        wait.notified().await;
+    // Claim the key atomically. A separate get followed by insert allows two
+    // parallel repository phases to observe a miss and both hit the provider.
+    let in_flight =
+        Arc::new(InFlightValidation { notify: Notify::new(), completed: AtomicBool::new(false) });
+    let wait = match IN_FLIGHT.get_or_init(DashMap::new).entry(fp) {
+        dashmap::mapref::entry::Entry::Occupied(entry) => Some(entry.get().clone()),
+        dashmap::mapref::entry::Entry::Vacant(entry) => {
+            entry.insert(Arc::clone(&in_flight));
+            *owns_in_flight = true;
+            None
+        }
+    };
+    if let Some(wait) = wait {
+        // `Notify::notify_waiters` does not retain a permit when nobody is
+        // waiting yet. Track completion separately and enable the Notified
+        // future before checking it so an owner finishing concurrently cannot
+        // strand this waiter.
+        loop {
+            let notified = wait.notify.notified();
+            tokio::pin!(notified);
+            notified.as_mut().enable();
+            if wait.completed.load(Ordering::Acquire) {
+                break;
+            }
+            notified.await;
+        }
         if let Some(entry) = VALIDATION_CACHE.get().unwrap().get(&fp) {
             m.validation_success = entry.is_valid;
             m.validation_response_body = entry.body.clone();
@@ -932,7 +1051,6 @@ async fn timed_validate_single_match(
         }
         return;
     }
-    IN_FLIGHT.get().unwrap().insert(fp, Arc::new(Notify::new()));
 
     // helper to persist result + notify waiters
     let commit_and_return = |m: &OwnedBlobMatch| {
@@ -944,6 +1062,11 @@ async fn timed_validate_single_match(
     // 2. dependency check
     if let Some(missing) = missing_dependencies.get(&m.rule.syntax().id)
         && !missing.is_empty()
+        && m.rule.syntax().depends_on_rule.iter().flatten().any(|dep| {
+            !dep.optional
+                && !m.dependent_captures.contains_key(&dep.variable.to_uppercase())
+                && missing.contains(&dep.rule_id)
+        })
     {
         m.validation_success = false;
         m.validation_response_body = validation_body::from_string(format!(
@@ -983,15 +1106,6 @@ async fn timed_validate_single_match(
                 m.matching_input_offset_span.end,
             ));
             continue;
-        }
-        if let Some(vals) = dependent_variables.get(&dep_name)
-            && let Some((val, span)) =
-                select_closest_dependency_value(vals, m.matching_input_offset_span)
-        {
-            captured_values.push((dep_name.clone(), val.clone(), span.start, span.end));
-            // Store the dependent capture for later use in reporting
-            // (e.g., generating validate/revoke commands)
-            m.dependent_captures.insert(dep_name, val);
         }
     }
 
@@ -1125,7 +1239,7 @@ async fn timed_validate_single_match(
             validate_credential_uri_rule(
                 m,
                 &captured_values,
-                clients.credential_uri_client(),
+                clients.credential_uri_client(rule_tls_mode),
                 cache,
                 use_lax_tls,
                 clients.allow_internal_ips,
@@ -1142,7 +1256,7 @@ async fn timed_validate_single_match(
             validate_jwt_rule(m, &captured_values, use_lax_tls, clients.allow_internal_ips).await;
         }
         Some(Validation::AWS) => {
-            validate_aws_rule(m, &captured_values, dependent_variables, cache).await;
+            validate_aws_rule(m, &captured_values, cache).await;
         }
         Some(Validation::GCP) => {
             validate_gcp_rule(m, &globals, cache).await;
@@ -1999,9 +2113,13 @@ async fn validate_jwt_rule(
 async fn validate_aws_rule(
     m: &mut OwnedBlobMatch,
     captured_values: &[(String, String, usize, usize)],
-    dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
     cache: &Cache,
 ) {
+    let dependent_variables: FxHashMap<_, _> = m
+        .dependent_captures
+        .iter()
+        .map(|(name, value)| (name.clone(), vec![(value.clone(), m.matching_input_offset_span)]))
+        .collect();
     let token = captured_values
         .iter()
         .find(|(n, ..)| n == "TOKEN")
@@ -2009,7 +2127,7 @@ async fn validate_aws_rule(
         .unwrap_or_default();
 
     let (secret, session_token) =
-        aws_credential_shape(&m.rule, token, dependent_variables, m.matching_input_offset_span);
+        aws_credential_shape(&m.rule, token, &dependent_variables, m.matching_input_offset_span);
 
     if secret.is_empty() {
         m.validation_success = false;
@@ -2339,56 +2457,6 @@ fn populate_globals_from_captures(
     }
 }
 
-fn select_closest_dependency_value(
-    values: &[(String, OffsetSpan)],
-    target_span: OffsetSpan,
-) -> Option<(String, OffsetSpan)> {
-    let mut best_before: Option<(usize, (String, OffsetSpan))> = None;
-    let mut best_overlap: Option<(usize, (String, OffsetSpan))> = None;
-    let mut best_after: Option<(usize, (String, OffsetSpan))> = None;
-
-    for (value, span) in values {
-        if span.end <= target_span.start {
-            let distance = target_span.start - span.end;
-            match &mut best_before {
-                Some((best_distance, best_value)) if distance < *best_distance => {
-                    *best_distance = distance;
-                    *best_value = (value.clone(), *span);
-                }
-                None => {
-                    best_before = Some((distance, (value.clone(), *span)));
-                }
-                _ => {}
-            }
-        } else if span.start >= target_span.end {
-            let distance = span.start - target_span.end;
-            match &mut best_after {
-                Some((best_distance, best_value)) if distance < *best_distance => {
-                    *best_distance = distance;
-                    *best_value = (value.clone(), *span);
-                }
-                None => {
-                    best_after = Some((distance, (value.clone(), *span)));
-                }
-                _ => {}
-            }
-        } else {
-            match &mut best_overlap {
-                Some((best_distance, best_value)) if 0 < *best_distance => {
-                    *best_distance = 0;
-                    *best_value = (value.clone(), *span);
-                }
-                None => {
-                    best_overlap = Some((0, (value.clone(), *span)));
-                }
-                _ => {}
-            }
-        }
-    }
-
-    best_before.or(best_overlap).or(best_after).map(|(_, value)| value)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2450,12 +2518,13 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
 
-        let client = build_credential_uri_client(Duration::from_secs(5)).unwrap();
-        let response = client.get(format!("http://{address}/challenge")).send().await.unwrap();
+        for use_lax_tls in [false, true] {
+            let client = build_credential_uri_client(Duration::from_secs(5), use_lax_tls).unwrap();
+            let response = client.get(format!("http://{address}/challenge")).send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+            assert_eq!(response.url().path(), "/challenge");
+        }
         server.abort();
-
-        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
-        assert_eq!(response.url().path(), "/challenge");
     }
 
     #[test]
@@ -2516,6 +2585,8 @@ mod tests {
 
     async fn run_https_basic_auth_flow(
         authenticated_status: StatusCode,
+        mode: TlsMode,
+        rule_mode: Option<kingfisher_rules::TlsMode>,
     ) -> ((bool, StatusCode, String), Vec<Option<String>>) {
         use rcgen::{CertifiedKey, generate_simple_self_signed};
         use rustls::{ServerConfig, pki_types::PrivatePkcs8KeyDer};
@@ -2541,7 +2612,9 @@ mod tests {
             let mut authorization_headers = Vec::new();
             for status in [StatusCode::UNAUTHORIZED, authenticated_status] {
                 let (socket, _) = listener.accept().await.unwrap();
-                let mut stream = acceptor.accept(socket).await.unwrap();
+                let Ok(mut stream) = acceptor.accept(socket).await else {
+                    break;
+                };
                 let mut request = Vec::new();
                 let mut buffer = [0_u8; 1024];
                 loop {
@@ -2581,29 +2654,28 @@ mod tests {
             authorization_headers
         });
 
-        let client = Client::builder()
-            .add_root_certificate(reqwest::Certificate::from_der(cert_der.as_ref()).unwrap())
-            .redirect(reqwest::redirect::Policy::none())
-            .timeout(Duration::from_secs(5))
-            .build()
-            .unwrap();
+        let clients = ValidationClients::new(mode, true).unwrap();
+        let client = clients.credential_uri_client(rule_mode);
         let result = validate_http_credential_uri(
             &format!("https://alice:hunter2@{address}/protected"),
-            &client,
+            client,
             Duration::from_secs(5),
             0,
             true,
         )
-        .await
-        .unwrap();
+        .await;
         let authorization_headers = server.await.unwrap();
+        let result = result.unwrap_or_else(|error| {
+            assert!(authorization_headers.is_empty());
+            (false, StatusCode::BAD_GATEWAY, error.to_string())
+        });
         (result, authorization_headers)
     }
 
     #[tokio::test]
     async fn http_credential_uri_sends_basic_auth_only_after_https_challenge() {
         let ((valid, status, _), authorization_headers) =
-            run_https_basic_auth_flow(StatusCode::OK).await;
+            run_https_basic_auth_flow(StatusCode::OK, TlsMode::Off, None).await;
 
         assert!(valid);
         assert_eq!(status, StatusCode::OK);
@@ -2612,9 +2684,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn http_credential_uri_rejects_untrusted_tls_without_opt_in() {
+        for (mode, rule_mode) in [
+            (TlsMode::Strict, None),
+            (TlsMode::Strict, Some(kingfisher_rules::TlsMode::Lax)),
+            (TlsMode::Lax, None),
+        ] {
+            let ((valid, status, message), headers) =
+                run_https_basic_auth_flow(StatusCode::OK, mode, rule_mode).await;
+            assert!(!valid);
+            assert_eq!(status, StatusCode::BAD_GATEWAY);
+            assert!(message.contains("challenge request failed"));
+            assert!(headers.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn http_credential_uri_honors_rule_lax_opt_in() {
+        let ((valid, _, _), headers) = run_https_basic_auth_flow(
+            StatusCode::OK,
+            TlsMode::Lax,
+            Some(kingfisher_rules::TlsMode::Lax),
+        )
+        .await;
+        assert!(valid);
+        assert_eq!(headers[0], None);
+        assert!(headers[1].is_some());
+    }
+
+    #[tokio::test]
     async fn http_credential_uri_treats_repeated_unauthorized_as_inactive() {
         let ((valid, status, _), authorization_headers) =
-            run_https_basic_auth_flow(StatusCode::UNAUTHORIZED).await;
+            run_https_basic_auth_flow(StatusCode::UNAUTHORIZED, TlsMode::Off, None).await;
 
         assert!(!valid);
         assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -2655,6 +2756,77 @@ mod tests {
         })
     }
 
+    #[tokio::test]
+    async fn waiter_timeout_preserves_owner_and_cached_result() {
+        let mut matched = OwnedBlobMatch {
+            rule: Arc::new(aws_rule("test.waiter-timeout", false)),
+            blob_id: crate::blob::BlobId::new(b"waiter-timeout"),
+            finding_fingerprint: 1,
+            matching_input_offset_span: OffsetSpan::from_range(0..6),
+            captures: crate::matcher::SerializableCaptures { captures: Default::default() },
+            validation_response_body: None,
+            validation_response_status: StatusCode::CONTINUE,
+            validation_success: false,
+            validation_outcome: ValidationOutcome::NotAttempted,
+            calculated_entropy: 0.0,
+            is_base64: false,
+            dependent_captures: Default::default(),
+            ambiguous_dependencies: Default::default(),
+        };
+        let variables = FxHashMap::default();
+        let fp = validation_dedup_key(&matched);
+        let owner = Arc::new(InFlightValidation {
+            notify: Notify::new(),
+            completed: AtomicBool::new(false),
+        });
+        IN_FLIGHT.get_or_init(DashMap::new).insert(fp, owner.clone());
+        let parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
+        let clients = ValidationClients::new(TlsMode::Strict, true).unwrap();
+        validate_single_match(
+            &mut matched,
+            &parser,
+            &clients,
+            &variables,
+            &FxHashMap::default(),
+            &Cache::default(),
+            Duration::from_millis(10),
+            0,
+            None,
+            &ProviderEndpointOverrides::default(),
+            1024,
+        )
+        .await;
+        assert_eq!(matched.validation_response_status, StatusCode::REQUEST_TIMEOUT);
+        assert!(Arc::ptr_eq(IN_FLIGHT.get().unwrap().get(&fp).unwrap().value(), &owner));
+        assert!(!owner.completed.load(Ordering::Acquire));
+        assert!(!VALIDATION_CACHE.get().unwrap().contains_key(&fp));
+
+        // The owner can still publish its result, which a later occurrence reuses.
+        matched.validation_success = true;
+        matched.validation_response_status = StatusCode::OK;
+        matched.refresh_validation_outcome();
+        cache_validation_result(fp, &matched);
+        clear_in_flight_validation(fp);
+        matched.validation_success = false;
+        validate_single_match(
+            &mut matched,
+            &parser,
+            &clients,
+            &variables,
+            &FxHashMap::default(),
+            &Cache::default(),
+            Duration::from_millis(10),
+            0,
+            None,
+            &ProviderEndpointOverrides::default(),
+            1024,
+        )
+        .await;
+        assert!(matched.validation_success);
+        assert_eq!(matched.validation_response_status, StatusCode::OK);
+        VALIDATION_CACHE.get().unwrap().remove(&fp);
+    }
+
     #[test]
     fn populate_globals_prefers_longest_token() {
         let captured_values = vec![
@@ -2679,35 +2851,6 @@ mod tests {
 
         assert!(globals.get("TOKEN").is_none());
         assert_eq!(globals.get("CHECKSUM"), Some(Value::scalar("123456")).as_ref());
-    }
-
-    #[test]
-    fn select_closest_dependency_value_prefers_nearest_preceding_dependency() {
-        let values = vec![
-            ("first".to_string(), OffsetSpan::from_range(10..20)),
-            ("second".to_string(), OffsetSpan::from_range(40..50)),
-            ("third".to_string(), OffsetSpan::from_range(80..90)),
-        ];
-
-        let selected =
-            select_closest_dependency_value(&values, OffsetSpan::from_range(55..60)).unwrap();
-
-        assert_eq!(selected.0, "second");
-        assert_eq!(selected.1, OffsetSpan::from_range(40..50));
-    }
-
-    #[test]
-    fn select_closest_dependency_value_falls_back_to_nearest_following_dependency() {
-        let values = vec![
-            ("first".to_string(), OffsetSpan::from_range(70..80)),
-            ("second".to_string(), OffsetSpan::from_range(90..100)),
-        ];
-
-        let selected =
-            select_closest_dependency_value(&values, OffsetSpan::from_range(55..60)).unwrap();
-
-        assert_eq!(selected.0, "first");
-        assert_eq!(selected.1, OffsetSpan::from_range(70..80));
     }
 
     #[test]
@@ -2748,6 +2891,7 @@ mod tests {
             calculated_entropy: 0.0,
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
+            ambiguous_dependencies: Default::default(),
         };
         primary.dependent_captures.insert("COMPONENT".into(), "associated".into());
 

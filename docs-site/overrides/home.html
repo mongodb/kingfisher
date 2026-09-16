@@ -14,7 +14,7 @@
       <div class="kf-hero__content">
         <img src="{{ 'assets/images/kingfisher_logo.png' | url }}" alt="Kingfisher Logo" class="kf-hero__logo" width="126" height="173">
         <h1 class="kf-hero__title">Kingfisher</h1>
-        <p class="kf-hero__subtitle">The Batteries-Included Open Source Secret Scanner</p>
+        <p class="kf-hero__subtitle">Detect and Validate Secrets Anywhere. Map Access. Revoke Fast.</p>
         <p class="kf-hero__tagline">
           Find exposed credentials, verify which are active, map what they can reach,
           triage findings visually, and revoke supported secrets.
@@ -85,9 +85,8 @@
         <div class="kf-feature">
           <h3>Live Validation</h3>
           <p>
-            Automatically validate discovered credentials against provider APIs.
-            Eliminate false positives by confirming which secrets are actually live
-            and active.
+            Check discovered credentials against provider APIs and distinguish verified active
+            credentials from inactive, assumed, and inconclusive findings.
           </p>
         </div>
 
@@ -112,25 +111,24 @@
         <div class="kf-feature">
           <h3>Direct Revocation</h3>
           <p>
-            Contain compromised credentials from the CLI across 34 rules and 15 provider
-            families—even when the original owner is unknown or has left the company.
+            Revoke supported credentials from the CLI with provider-specific workflows.
+            Follow the finding’s generated command and the provider’s permission requirements.
           </p>
         </div>
 
         <div class="kf-feature">
-          <h3>Batteries Included</h3>
+          <h3>Free and Open Source</h3>
           <p>
-            Validation, advanced AWS and GCP blast-radius analysis, visual triage, and supported
-            revocation ship in the Apache-2.0 release instead of a separate commercial tier.
+            Live validation, AWS and GCP blast-radius analysis, visual triage, and supported
+            revocation ship in the Apache-2.0 release.
           </p>
         </div>
 
         <div class="kf-feature">
           <h3>Built for Accuracy</h3>
           <p>
-            Lightweight parser-based context verification across 16 supported languages reduces false positives
-            at the detection layer. Combined with entropy filtering, checksum verification,
-            and live validation, Kingfisher delivers high-signal results you can act on.
+            Combine entropy filters, format checks, checksums, and live validation.
+            Eligible HTML and CSS files also receive parser-based context verification.
           </p>
         </div>
 
@@ -146,9 +144,8 @@
         <div class="kf-feature">
           <h3>Built for Speed</h3>
           <p>
-            Rust-powered with Intel Hyperscan SIMD-accelerated regex. Multithreaded
-            scanning handles massive codebases while making minimal network requests
-            through intelligent validation.
+            A multithreaded Vectorscan engine uses SIMD-accelerated regex matching.
+            Repeated credentials with the same validation context reuse validation results.
           </p>
         </div>
       </div>
@@ -160,9 +157,8 @@
     <div class="kf-benchmark__inner md-grid">
       <h2 class="kf-section__title">Performance</h2>
       <p class="kf-section__desc">
-        Kingfisher scans the Linux kernel in 205 seconds and the GitLab monorepo
-        with just 17 HTTP validation requests. Intelligent validation means fewer
-        API calls and faster results at scale.
+        Compare scan runtimes, validation requests, and binary sizes in the published
+        benchmark suite. The methodology documents tool versions, settings, and test hardware.
       </p>
       <img src="{{ 'assets/images/runtime-comparison.png' | url }}" alt="Kingfisher Runtime Comparison across major open source repositories" class="kf-benchmark__chart">
       <p class="kf-benchmark__link">
@@ -243,7 +239,7 @@
   <!-- Install -->
   <section class="kf-install">
     <div class="kf-install__inner md-grid">
-      <h2 class="kf-section__title">Install in Seconds</h2>
+      <h2 class="kf-section__title">Install Kingfisher</h2>
       <div class="kf-install__tabs">
         <div class="kf-install__tab">
           <h4>Homebrew</h4>

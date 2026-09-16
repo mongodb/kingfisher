@@ -384,6 +384,7 @@ fn content_type_for(path: &str) -> HeaderValue {
             "js" => "application/javascript; charset=utf-8",
             "css" => "text/css; charset=utf-8",
             "json" | "jsonl" => "application/json; charset=utf-8",
+            "png" => "image/png",
             _ => "application/octet-stream",
         };
         return HeaderValue::from_static(mime);

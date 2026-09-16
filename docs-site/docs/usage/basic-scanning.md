@@ -248,6 +248,17 @@ The same viewer that powers `kingfisher view` and `--view-report` also accepts *
 
    A static, upload-based copy of the same UI published on GitHub Pages. Drag a Kingfisher, SARIF, Gitleaks, or TruffleHog report into the page and triage it in your browser. Everything runs client-side — no reports leave your machine. Useful when you want to share a link rather than a binary, or triage a report on a machine that doesn't have Kingfisher installed.
 
+In the findings table, select one finding, several findings, or a secret group and choose
+**Copy revalidation commands** or **Copy revocation commands**. The viewer copies commands already supplied by supported reports,
+deduplicates identical commands, and reports selections without a usable command. Group selection
+includes its occurrences; the header checkbox selects all filtered findings across pages. Selection
+persists across filters until cleared or another report is loaded. Run the commands in a terminal
+and load fresh results afterward; this offline viewer does not execute provider actions.
+
+Search also matches rule IDs and recorded commit authors. Finding details show commit dates and
+authors, keep technical identifiers expandable, and explain the revoke-then-verify workflow.
+Commit dates are source evidence, not proof of when a repository became public.
+
 #### Why use a visual viewer / triager for Gitleaks, TruffleHog, and Kingfisher output?
 
 Raw JSON and SARIF output from Kingfisher, Gitleaks, and TruffleHog are excellent input for CI, ticketing systems, and SIEMs, but they're not how a human makes rotation and risk decisions. The viewer gives security engineers:
@@ -309,7 +320,7 @@ kingfisher scan ./repo \
   --validation-rps-rule pypi=0.5
 
 # Direct validation can use the same limiter options
-kingfisher validate --rule github "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
+kingfisher validate --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
   --validation-rps-rule github=1
 ```
 
@@ -318,7 +329,7 @@ kingfisher validate --rule github "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
 kingfisher validate --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 # Validate from stdin
-echo "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" | kingfisher validate --rule github -
+echo "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" | kingfisher validate --rule github-pat -
 
 # TOON output for LLMs and agent tooling
 kingfisher validate --rule github-pat "ghp_..." --format toon
@@ -357,6 +368,13 @@ kingfisher validate --rule aws-access-token \
   "AKIAEXAMPLE000000000"
 ```
 
+Direct validation requires a unique rule selector. Exact IDs take precedence over
+prefix matches; an ambiguous selector such as `validate --rule github` lists the
+matching IDs and exits before sending requests. Use `--rule betterleaks.github-pat`
+(or `--rule github-pat`) for a classic GitHub PAT.
+
+<a id="provider-endpoint-overrides"></a>
+
 **Provider endpoint overrides (`--endpoint` and `--endpoint-config`):**
 
 Rules for providers that can run outside the public SaaS control plane can be pointed at a different instance without editing rule YAML.
@@ -377,7 +395,7 @@ Supported provider keys for endpoint overrides are:
 
 ```bash
 # Validate a GitHub Enterprise token against a self-hosted instance
-kingfisher validate --rule github \
+kingfisher validate --rule github-pat \
   --endpoint github=https://ghe.corp.example.com \
   "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
@@ -976,7 +994,7 @@ KF_GITHUB_TOKEN="ghp_…" kingfisher scan github \
   --allow-internal-ips
 
 # 5. Validate a single PAT against GHE without scanning anything
-kingfisher validate --rule github \
+kingfisher validate --rule github-pat \
   --endpoint github=https://ghe.corp.example.com \
   "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
@@ -1100,7 +1118,7 @@ KF_GITLAB_TOKEN="glpat-…" kingfisher scan gitlab \
   --allow-internal-ips
 
 # 5. Validate a single PAT against self-hosted GitLab without scanning anything
-kingfisher validate --rule gitlab \
+kingfisher validate --rule gitlab-pat \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "glpat-xxxxxxxxxxxxxxxxxxxx"
 

@@ -299,6 +299,11 @@ impl ScanAuditCollector {
         root: &Path,
         snapshot: Option<GitAuditSnapshot>,
     ) -> Option<String> {
+        // Artifact fetchers produce ordinary directories (Docker, cloud exports, etc.).
+        // Register them on entry so their failures and completion count toward coverage.
+        if !self.roots.contains_key(root) {
+            self.discover_local(root);
+        }
         let key = self.roots.get(root)?.clone();
         self.scan_started.insert(key.clone(), Instant::now());
         if let Some(record) = self.records.get_mut(&key) {
@@ -666,6 +671,29 @@ mod tests {
         assert_eq!(manifest.summary.discovered, 1);
         assert_eq!(manifest.summary.fetch_succeeded, 0);
         assert_eq!(manifest.summary.fetch_failed, 0);
+    }
+
+    #[test]
+    fn streamed_non_git_roots_have_terminal_coverage() {
+        for partial in [false, true] {
+            let mut collector =
+                ScanAuditCollector::new("2026-01-01T00:00:00Z".into(), None).unwrap();
+            let root = tempfile::tempdir().unwrap();
+            let key = collector.scan_started_with_snapshot(root.path(), None).unwrap();
+            let stats = RepositoryScanStats { findings: 0, blobs_scanned: 1, bytes_scanned: 42 };
+            if partial {
+                collector.scan_partial(&key, stats, "unreadable input");
+            } else {
+                collector.scan_completed(&key, stats);
+            }
+            let manifest = collector.finish().unwrap();
+            assert!(manifest.completed_at.is_some());
+            assert_eq!(manifest.summary.discovered, 1);
+            assert_eq!(manifest.summary.pending, 0);
+            assert_eq!(manifest.summary.scan_partial, usize::from(partial));
+            assert_eq!(manifest.summary.scan_succeeded, usize::from(!partial));
+            assert!(manifest.repositories[0].git.is_none());
+        }
     }
 
     #[test]

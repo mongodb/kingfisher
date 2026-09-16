@@ -399,6 +399,7 @@ pub(crate) fn filter_match<'b>(
             calculated_entropy,
             is_base64,
             dependent_captures: std::collections::BTreeMap::new(),
+            ambiguous_dependencies: Default::default(),
         });
     }
     if let Some(t) = timer.take() {

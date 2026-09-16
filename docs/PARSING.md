@@ -35,6 +35,10 @@ The design supports many common source code languages. The Language enum (define
 - **Web-related languages:** CSS, HTML, JavaScript, TypeScript, YAML, TOML
 - **Others:** Go
 
+These are available parser backends. The scanner currently invokes its context
+verification gate only for HTML and CSS; other source languages, including Python,
+do not receive comment/docstring filtering from that gate.
+
 ## When Context Verification Is Not Called
 
 Context verification is skipped in certain cases:
@@ -46,6 +50,6 @@ Context verification is skipped in certain cases:
 
 ## Summary
 
-Parser-based context verification is conditional and complementary. It is called only when the scanned file is a supported source or config file, and its role is to reduce noisy strict-context findings by checking them against extracted code/config structure without unnecessarily dropping clear assignment-style secrets from raw text inputs.
+Parser-based context verification is conditional and complementary. The scan-time gate is called only for eligible HTML or CSS blobs, and its role is to reduce noisy strict-context findings by checking them against extracted code/config structure without unnecessarily dropping clear assignment-style secrets from raw text inputs.
 
 This layered approach helps improve the accuracy of secret detection while maintaining high performance.

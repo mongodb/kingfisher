@@ -33,7 +33,8 @@ defaults; pass `--load-builtins=false` for a custom-only scan.
 
 Kingfisher's `imported-rules-capabilities.yml` is not another rule format. Its source-specific
 sections may bind existing imported detectors to operational validation, access-map, revocation,
-confidence, authority, or narrow filter behavior, but must not contain detector regexes.
+confidence, authority, narrow filter behavior, or derive bare token patterns with `bare: true`,
+but must not contain detector regexes. See the [overlay reference](../crates/kingfisher-rules/data/imported-rules-capabilities.md#bare-token-detection-betterleaks-only).
 
 Veles support is built-in-only. `crates/kingfisher-rules/data/veles-rules.yml` pins an
 OSV-SCALIBR commit and selects upstream Veles plugin IDs that have explicit build-time adapters;
@@ -208,6 +209,17 @@ Kingfisher supports these validation types:
 2. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
 3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `CredentialUri`, `Ethereum`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`. `CredentialUri` dispatches a named `URI` capture (falling back to `TOKEN`) to HTTPS Basic Auth or a supported database validator while leaving other unsupported schemes unvalidated. `Ethereum` is deterministic and network-free; it validates key material and derives an address without claiming the address is active.
 4. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
+
+### Overlapping rules and validation deduplication
+
+A token can match multiple rules. Kingfisher keeps those findings separate and does not choose a
+winning provider. Each matching rule with a validator is validated independently; for example, a
+token matching both OpenAI and DeepSeek rules can produce one request and result for each provider.
+Repeated occurrences of the same rule and validation input are grouped into one request, while
+dependency values are included when relevant. Rules without validation, `Assumed` rules, and
+non-authoritative rules make no live validation request. Report deduplication also includes the
+rule ID, so different rules remain separate. `--no-dedup` controls reported occurrences and does
+not disable this internal validation grouping.
 
 Rules without a `validation` block produce `Not Attempted` findings. They are not treated as
 active, inactive, or skipped because no validation result was produced.
@@ -578,19 +590,69 @@ Authorization: Basic {{ "api:" | append: TOKEN | b64enc }}
   - **variable:** The name (typically in uppercase) that will be used to reference the captured value from the dependency rule.
 
 - **Chaining Captures:**  
-  When Kingfisher scans a file, it processes rules in a specific order. If a rule has a dependency, the engine first checks whether the dependent rule has already matched on the same input (or blob). If it did, the captured value (for example, an access key ID) is made available to the dependent rule.
+  After matching a blob, Kingfisher resolves each dependency against matches in that same blob. One distinct captured value (for example, an access key ID) is made available to the dependent rule. Repeated occurrences of the same value count as one candidate.
 
 - **Using the Captured Value:**  
   This captured value can then be used during the validation phase. For instance, if you have a rule for an Algolia Admin API Key that depends on an Algolia Application ID (captured as `APPID`), the validation logic can incorporate the `APPID` value to confirm that the secret matches the expected pattern or format for that specific account.
 
 - **Detection vs validation:**  
-  `depends_on_rule` is for capture chaining and validation context. It does not automatically hide the main secret finding, and it does not by itself mean the rule must be parser-verified before it can be reported from raw text.
+  `depends_on_rule` supplies capture chaining and validation context. A required dependency with `within` also gates detection, as described below. Dependencies do not require parser verification.
+
+### Dependency windows and ambiguous pairs
+
+```yaml
+depends_on_rule:
+  - rule_id: custom.service.url
+    variable: BASEURL
+    within: "2L"
+    optional: false
+```
+
+`within` limits candidates using full regex-match spans in the same blob. Line
+amounts include the primary line: `2L` allows one line before and one after a
+single-line primary match; it is not a radius of two lines.
+
+| Window | Candidate start may appear |
+| --- | --- |
+| `1L` | On a line covered by the primary match |
+| `2L` | Up to one line before or after the primary match |
+| `3L` | Up to two lines before or after |
+| `+2L` | On the primary line(s) or the next line |
+| `-2L` | On the primary line(s) or the preceding line |
+| `8C` | From 8 bytes before the primary start to less than 8 bytes after its end |
+
+`C` measures byte offsets, not Unicode characters. Directions also apply to `C`.
+Comma-separated limits such as `2L,20C` combine line and column constraints.
+`0` or an empty window allows the whole blob.
+
+A required dependency with `within` and no candidate removes the primary finding.
+Without `within`, a missing required dependency retains the finding and skips
+validation with status 428. `optional: true` permits an absent dependency.
+
+Multiple **distinct values** in the eligible window retain the finding but skip
+validation with status 428 and an `ambiguous dependency` explanation. Kingfisher
+does not send a credential to a guessed endpoint. Narrow the window or use direct
+validation with explicit variables to resolve the association. Comment and README
+matches can participate; dependency matching does not interpret imports or exclude
+comments. A lone comment candidate is therefore still eligible.
+
+Association happens before deduplication. Identical secrets with different resolved
+contexts remain separate findings, so a bare definition cannot hide a paired
+occurrence. Context is not inferred across files. JSON/JSONL findings expose
+`dependent_captures` (including `BASEURL` when captured) and
+`ambiguous_dependencies` (variable-to-candidate-count). Resolved values are omitted
+with `--redact` because components can themselves contain secrets.
+
+For self-hosted validation, see [provider endpoint overrides](USAGE.md#provider-endpoint-overrides).
+These global overrides apply to scanning as well as direct validation. CredentialUri
+HTTP validation honors `--tls-mode off`; scan-time `lax` requires the rule's
+`tls_mode: lax` opt-in, just like HTTP rules. Direct `validate` applies `lax` globally.
 
 ### Use depends_on_rule to require one rule before another runs:
 
 ```yaml
 depends_on_rule:
-  - rule_id: custom.algolia.app-id   # must match first
+  - rule_id: custom.algolia.app-id   # helper rule ID
     variable: APPID                     # captured as {{ APPID }}
 ```
 
@@ -1189,3 +1251,24 @@ rules:
       - rule_id: custom.alibabacloud.session-secret-key
         variable: SECURITY_TOKEN
 ```
+
+## Provider formats and context requirements
+
+Built-in DeepSeek, Kimi/Moonshot, ZAI, and Voyage AI rules use `bare: true` in the
+Betterleaks capability overlay to derive medium-confidence patterns without provider
+assignments. MiniMax already matches bare tokens upstream. Token formats, entropy filters,
+and validation remain sourced from upstream. Both detection-only and validating scans use
+these patterns; live validation runs only after detection. Other contextual rules may still
+require a provider assignment before the token; a trailing comment does not satisfy it.
+
+For extracted credential corpora, preserve provider assignments and required
+components or use `validate` with an explicit rule and endpoint. The pinned AWS access-token rule already recognizes `ASIA` IDs. AWS temporary
+credentials may require an access key ID, secret access key, and session token;
+a lone `ASIA` fragment does not establish a complete validatable credential.
+
+New provider formats and length variants belong in the upstream Betterleaks
+catalog. Redacted shape masks alone do not establish reliable token boundaries,
+length ranges, or provider-specific validation behavior. Do not widen shared
+`sk-` patterns across providers solely to increase recall: that can send a token
+to the wrong provider. Use documented formats and synthetic positive/negative
+fixtures when proposing upstream variants.

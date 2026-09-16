@@ -63,6 +63,37 @@ type ValidationDeps = Arc<(
     Arc<ProviderEndpointOverrides>,
 )>;
 
+static SCAN_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+/// Keep process-wide validation results alive for the duration of one scan.
+///
+/// Parallel repository scans run validation in separate phases. The findings
+/// remain intentionally duplicated when `--no-dedup` is set, but those
+/// duplicates should still share one validation request. Clearing this cache
+/// at the end of each phase would make the result unavailable to the next
+/// repository phase, so the lifetime is tied to the complete scan instead.
+struct ValidationCacheLifetime {
+    // Hold the lock until Drop has cleared the process-wide caches.
+    _scan_guard: tokio::sync::MutexGuard<'static, ()>,
+}
+
+impl ValidationCacheLifetime {
+    async fn begin() -> Self {
+        // Overlapping scans must not retire another scan's in-flight validators.
+        let scan_guard = SCAN_LOCK.lock().await;
+        // A caller may reuse the library in one process. Do not carry results
+        // from a previous scan into the current scan.
+        crate::validation::clear_validation_caches();
+        Self { _scan_guard: scan_guard }
+    }
+}
+
+impl Drop for ValidationCacheLifetime {
+    fn drop(&mut self) {
+        crate::validation::clear_validation_caches();
+    }
+}
+
 pub async fn run_scan(
     global_args: &global::GlobalArgs,
     scan_args: &scan::ScanArgs,
@@ -91,6 +122,9 @@ pub async fn run_async_scan(
     update_status: &crate::update::UpdateStatus,
     auto_cleanup_clones: bool,
 ) -> Result<()> {
+    let _validation_cache_lifetime =
+        if args.no_validate { None } else { Some(ValidationCacheLifetime::begin().await) };
+
     // ── Phase 1: Input validation and environment setup ──────────────────
     validate_inputs(args)?;
     register_safe_list_patterns(args)?;
@@ -771,30 +805,6 @@ fn audit_snapshot_for_root(
     combine_git_snapshots(snapshots)
 }
 
-fn repository_audit_applies(args: &scan::ScanArgs) -> bool {
-    let input = &args.input_specifier_args;
-    !input.path_inputs.is_empty()
-        || !input.git_url.is_empty()
-        || !input.github_user.is_empty()
-        || !input.github_organization.is_empty()
-        || input.all_github_organizations
-        || !input.github_event_user.is_empty()
-        || !input.gitlab_user.is_empty()
-        || !input.gitlab_group.is_empty()
-        || input.all_gitlab_groups
-        || !input.gitea_user.is_empty()
-        || !input.gitea_organization.is_empty()
-        || input.all_gitea_organizations
-        || !input.bitbucket_user.is_empty()
-        || !input.bitbucket_workspace.is_empty()
-        || !input.bitbucket_project.is_empty()
-        || input.all_bitbucket_workspaces
-        || !input.azure_organization.is_empty()
-        || !input.azure_project.is_empty()
-        || input.all_azure_projects
-        || input.repo_artifacts
-}
-
 /// Applies baseline filtering if configured.
 fn apply_baseline_if_configured(
     args: &scan::ScanArgs,
@@ -1104,9 +1114,8 @@ async fn run_sequential_scan(
     }
 
     let repository_audit = scan_audit.lock().unwrap().finish()?;
-    if repository_audit.summary.discovered > 0 || repository_audit_applies(args) {
-        datastore.lock().unwrap().set_scan_audit(repository_audit.clone());
-    }
+    // Every target needs terminal coverage, including non-Git and empty sources.
+    datastore.lock().unwrap().set_scan_audit(repository_audit.clone());
 
     let audit_context = build_scan_audit_context(
         args,
@@ -1603,9 +1612,8 @@ async fn run_parallel_scan(
     }
 
     let repository_audit = scan_audit.lock().unwrap().finish()?;
-    if repository_audit.summary.discovered > 0 || repository_audit_applies(args) {
-        datastore.lock().unwrap().set_scan_audit(repository_audit.clone());
-    }
+    // Every target needs terminal coverage, including non-Git and empty sources.
+    datastore.lock().unwrap().set_scan_audit(repository_audit.clone());
 
     if output_to_file && ran_repo_scan.load(Ordering::Relaxed) {
         let audit_context = build_scan_audit_context(
@@ -2067,6 +2075,20 @@ mod tests {
     use super::expand_repo_roots;
     use super::git_refs_for_github_event_selector;
     use crate::github::GitHubEventScanSelector;
+
+    #[tokio::test]
+    async fn validation_cache_lifetimes_serialize_overlapping_scans() {
+        let first = super::ValidationCacheLifetime::begin().await;
+        let second = super::ValidationCacheLifetime::begin();
+        tokio::pin!(second);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut second).await.is_err()
+        );
+        drop(first);
+        let _second = tokio::time::timeout(std::time::Duration::from_secs(1), second)
+            .await
+            .expect("next scan should acquire the cache after the previous scan ends");
+    }
 
     #[test]
     fn expand_repo_roots_discovers_nested_repositories() {

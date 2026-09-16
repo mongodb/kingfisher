@@ -4,6 +4,7 @@ FROM alpine:latest@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f
 RUN apk add --no-cache curl tar git
 
 ARG TARGETARCH
+ARG KINGFISHER_VERSION
 ENV TARGETARCH=${TARGETARCH}
 
 WORKDIR /app
@@ -16,7 +17,8 @@ RUN set -eux; \
         *)     echo "unsupported arch ${TARGETARCH}" >&2; exit 1 ;; \
     esac; \
     # download & unpack
-    LATEST_URL=$(curl -fsSL https://api.github.com/repos/mongodb/kingfisher/releases/latest \
+    test -n "${KINGFISHER_VERSION}"; \
+    LATEST_URL=$(curl -fsSL "https://api.github.com/repos/mongodb/kingfisher/releases/tags/v${KINGFISHER_VERSION}" \
         | grep -Eo "https://[^\"]*${SUFFIX}"); \
     if [ -z "$LATEST_URL" ]; then \
         echo "Failed to fetch the latest release URL for ${SUFFIX}" >&2; \
@@ -32,9 +34,11 @@ RUN set -eux; \
     # optional cleanup to keep the image small
     rm -rf /app/*
 
-RUN addgroup -S app && adduser -S -G app -h /app app && chown -R app:app /app
+RUN addgroup -S -g 10001 app \
+    && adduser -S -D -H -u 10001 -G app -h /app app \
+    && install -d -o app -g app /app /var/lib/kingfisher
 
-USER app
+USER 10001:10001
 
 # quick smoke-test so the build fails early if something’s wrong
 RUN kingfisher --version

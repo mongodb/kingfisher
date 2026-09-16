@@ -2,9 +2,22 @@
 #
 # This is deliberately not a detection-rule catalog. Regexes, components, and confidence come
 # from upstream at build time. Entries bind an unqualified upstream rule/plugin ID to
-# Kingfisher-specific validation, access-map, revocation, confidence, or filtering behavior.
+# Kingfisher-specific validation, access-map, revocation, confidence, filtering, or bare-token
+# derivation from upstream captures.
 version: 1
 betterleaks:
+  # Derive bare token patterns from upstream captures; keep formats and validators upstream.
+  deepseek-api-key:
+    bare: true
+    confidence: medium
+  kimi-api-key:
+    bare: true
+    confidence: medium
+  zai-api-key:
+    bare: true
+  voyageai-api-key:
+    bare: true
+    confidence: medium
   # These detector formats are live-validated by selected Veles adapters. Keep Betterleaks as the
   # catalog source for the remaining formats while suppressing only exact overlapping findings.
   cloudflare-api-key:
@@ -27,6 +40,9 @@ betterleaks:
   postman-api-token:
     filter_override: 'true'
   private-key:
+    # Even compact PKCS#8 Ed25519 keys have 64 base64 characters. Reject tiny
+    # PEM-shaped bodies (including short source-code placeholders), not key types.
+    filter_override: 'matchesAny(finding["secret"], [`(?s)^-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.{0,63}-----END `])'
     validation: Assumed
   sendgrid-api-token:
     filter_override: 'matchesAny(finding["secret"], [`^SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$`])'
@@ -225,6 +241,9 @@ betterleaks:
     tls_mode: lax
 
   mongodb-connection-string:
+    # Only a wholly unresolved password is excluded: a templated username/host
+    # alongside a literal password can still expose a credential.
+    filter_override: 'matchesAny(finding["secret"], [`(?i)^mongodb(?:\+srv)?://[^@]*:(?:\$\([A-Z_][A-Z0-9_]*\)|\$\{[A-Z_][A-Z0-9_]*\}|\$[A-Z_][A-Z0-9_]*|\{\{\s*[A-Z_][A-Z0-9_.]*\s*\}\})@`])'
     validation: MongoDB
     # Atlas is publicly trusted, but self-managed clusters and RDS-style
     # deployments routinely use self-signed or private-CA certificates.

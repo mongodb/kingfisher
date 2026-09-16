@@ -7,6 +7,19 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.3.0]
+- Improved report filtering, grouped selection, command copying, and finding details in the local viewer and standalone HTML reports.
+- Fixed probabilistic deduplication dropping unique findings by confirming duplicates with exact keys.
+- Recorded terminal scan coverage for streamed non-Git inputs, including Docker images.
+- Pinned release Docker images to the requested release version.
+- Limited the pretty report's `REPOSITORY COVERAGE` section to scans that request `--audit-log`.
+- Fixed `--no-dedup` scans to reuse validation results across duplicate findings and parallel scan phases.
+- Fixed dependent-secret validation stalls and duplicate provider requests caused by concurrent waiters.
+- Added overlay-derived bare detection for contextual Betterleaks API-key rules (DeepSeek, Kimi, ZAI, and Voyage AI).
+- Fixed CredentialUri TLS-mode handling, dependency-aware deduplication, and ambiguous dependency pairing so validation does not guess an endpoint. [#500](https://github.com/mongodb/kingfisher/issues/500)
+- Reused dependent validation when credential and dependency values match across source locations.
+- Made direct validation reject ambiguous short rule selectors instead of trying an unintended rule. [#500](https://github.com/mongodb/kingfisher/issues/500)
+
 ## [v2.2.0]
 - Added repository coverage manifests and incremental `--audit-log` JSONL events, including
   discovery, fetch, scan outcome, Git scope, and per-repository scan statistics.

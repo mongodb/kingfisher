@@ -313,6 +313,7 @@ mod tests {
             visible: true,
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
+            ambiguous_dependencies: Default::default(),
         }
     }
 
@@ -442,6 +443,12 @@ mod tests {
 
         let mut pretty = Cursor::new(Vec::new());
         reporter.pretty_format(&mut pretty, &args)?;
+        assert!(!String::from_utf8(pretty.into_inner())?.contains("REPOSITORY COVERAGE"));
+
+        let mut audit_args = create_default_args();
+        audit_args.audit_log = Some(PathBuf::from("audit.jsonl"));
+        let mut pretty = Cursor::new(Vec::new());
+        reporter.pretty_format(&mut pretty, &audit_args)?;
         assert!(String::from_utf8(pretty.into_inner())?.contains("REPOSITORY COVERAGE"));
 
         let mut html = Cursor::new(Vec::new());

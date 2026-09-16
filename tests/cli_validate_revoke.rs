@@ -419,12 +419,21 @@ rules:
     }
 
     #[test]
+    fn validate_rejects_ambiguous_provider_selector() {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args(["validate", "--rule", "github", "fake-secret", "--no-update-check"])
+            .assert()
+            .failure()
+            .stderr(contains("Ambiguous rule selector").and(contains("betterleaks.github-pat")));
+    }
+
+    #[test]
     fn validate_rejects_invalid_var_format() {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args([
                 "validate",
                 "--rule",
-                "aws",
+                "betterleaks.aws-access-token",
                 "--var",
                 "INVALID_FORMAT_NO_EQUALS",
                 "fake-secret",
@@ -508,12 +517,12 @@ rules:
 
     #[test]
     fn validate_missing_required_variable() {
-        // AWS validation requires AKID - should fail if not provided
+        // AWS access-key validation requires its secret component.
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args([
                 "validate",
                 "--rule",
-                "aws",
+                "betterleaks.aws-access-token",
                 "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
                 "--no-update-check",
             ])

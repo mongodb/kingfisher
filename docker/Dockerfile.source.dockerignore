@@ -1,0 +1,10 @@
+.git
+.dockerignore
+.vscode
+bin
+deploy/cloudflare-telemetry/node_modules
+docs-site/site
+target
+target-docker
+**/node_modules
+**/target

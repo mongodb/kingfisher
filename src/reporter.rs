@@ -1052,12 +1052,14 @@ impl DetailsReporter {
         }
 
         use std::collections::HashMap;
-        let mut by_fp: HashMap<(u64, String), ReportMatch> = HashMap::new();
+        let mut by_fp: HashMap<(u64, String, String), ReportMatch> = HashMap::new();
 
         for rm in matches {
             let key = (
                 Self::normalized_finding_fingerprint(&rm.m, &rm.origin),
                 rm.m.rule.id().to_string(),
+                serde_json::to_string(&(&rm.m.dependent_captures, &rm.m.ambiguous_dependencies))
+                    .expect("dependency maps serialize"),
             );
             if let Some(existing) = by_fp.get_mut(&key) {
                 *existing = Self::merge_origins_for_dedup(existing.clone(), rm);
@@ -1204,7 +1206,9 @@ impl DetailsReporter {
             .unwrap_or_else(|| format!("blob:{}", rm.blob_metadata.id.hex()));
 
         // Generate validate/revoke/blast-radius commands only if not redacting (they contain the secret)
-        let (validate_command, revoke_command, blast_radius_command) = if args.redact {
+        let (validate_command, revoke_command, blast_radius_command) = if args.redact
+            || !rm.m.ambiguous_dependencies.is_empty()
+        {
             (None, None, None)
         } else {
             // Try to find AKID from captures (for AWS)
@@ -1345,6 +1349,12 @@ impl DetailsReporter {
                 title: finding_title(rm.m.rule.id()),
             },
             finding: FindingRecordData {
+                dependent_captures: if args.redact {
+                    BTreeMap::new()
+                } else {
+                    rm.m.dependent_captures.clone()
+                },
+                ambiguous_dependencies: rm.m.ambiguous_dependencies.clone(),
                 snippet,
                 fingerprint: rm.m.finding_fingerprint.to_string(),
                 confidence: rm.match_confidence.to_string(),
@@ -1974,6 +1984,11 @@ pub struct ValidationInfo {
 
 #[derive(Serialize, JsonSchema, Clone, Debug)]
 pub struct FindingRecordData {
+    /// Resolved validation context, omitted from redacted reports.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub dependent_captures: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub ambiguous_dependencies: BTreeMap<String, usize>,
     pub snippet: String,
     pub fingerprint: String,
     pub confidence: String,
@@ -2626,6 +2641,7 @@ mod tests {
                 visible: true,
                 is_base64: false,
                 dependent_captures: std::collections::BTreeMap::new(),
+                ambiguous_dependencies: Default::default(),
             },
             comment: None,
             match_confidence: Confidence::Medium,

@@ -197,6 +197,8 @@ pub fn build_viewer_report_bytes(results: &[DirectAccessMapResult]) -> Result<Ve
                 description: result.rule_name.clone(),
             },
             finding: FindingRecordData {
+                dependent_captures: Default::default(),
+                ambiguous_dependencies: Default::default(),
                 snippet: "[credential supplied directly]".to_string(),
                 fingerprint: fingerprint.clone(),
                 confidence: "high".to_string(),

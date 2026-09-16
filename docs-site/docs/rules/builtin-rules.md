@@ -675,7 +675,7 @@ but does not provide that operation.
 </tr>
 <tr>
 <td><code>betterleaks.deepseek-api-key</code></td>
-<td>High</td>
+<td>Medium</td>
 <td>Yes</td>
 <td>None</td>
 </tr>
@@ -1371,7 +1371,7 @@ but does not provide that operation.
 </tr>
 <tr>
 <td><code>betterleaks.kimi-api-key</code></td>
-<td>High</td>
+<td>Medium</td>
 <td>Yes</td>
 <td>None</td>
 </tr>
