@@ -370,6 +370,8 @@ mod tests {
                 description: "PEM private key".to_string(),
             },
             finding: FindingRecordData {
+                dependent_captures: Default::default(),
+                ambiguous_dependencies: Default::default(),
                 snippet: "secret".to_string(),
                 fingerprint: "123".to_string(),
                 confidence: "high".to_string(),

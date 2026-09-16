@@ -101,6 +101,7 @@ pub struct BlobMatch<'a> {
     pub calculated_entropy: f32,
     pub is_base64: bool,
     pub dependent_captures: std::collections::BTreeMap<String, String>,
+    pub ambiguous_dependencies: std::collections::BTreeMap<String, usize>,
 }
 
 #[derive(Clone)]
@@ -766,20 +767,8 @@ fn component_is_within(
     true
 }
 
-fn span_distance(left: OffsetSpan, right: OffsetSpan) -> usize {
-    if left.end <= right.start {
-        right.start - left.end
-    } else if right.end <= left.start {
-        left.start.saturating_sub(right.end)
-    } else {
-        0
-    }
-}
-
 fn associate_betterleaks_components<'a>(bytes: &[u8], matches: &mut Vec<BlobMatch<'a>>) {
-    if !matches.iter().any(|finding| {
-        finding.rule.syntax().depends_on_rule.iter().flatten().any(|dep| dep.within.is_some())
-    }) {
+    if !matches.iter().any(|finding| !finding.rule.syntax().depends_on_rule.is_empty()) {
         return;
     }
     let mut line_starts = vec![0];
@@ -822,38 +811,34 @@ fn associate_betterleaks_components<'a>(bytes: &[u8], matches: &mut Vec<BlobMatc
     }
 
     let mut associated = vec![std::collections::BTreeMap::new(); matches.len()];
+    let mut ambiguous = vec![std::collections::BTreeMap::new(); matches.len()];
     for (primary_index, primary) in matches.iter().enumerate().filter(|(index, _)| keep[*index]) {
         for dependency in primary.rule.syntax().depends_on_rule.iter().flatten() {
-            let Some(within) = dependency.within.as_deref() else {
-                continue;
-            };
-            if let Some(component) = matches
-                .iter()
-                .enumerate()
-                .filter(|(index, candidate)| {
-                    keep[*index]
-                        && candidate.rule.id() == dependency.rule_id
-                        && component_is_within(
+            let mut values = std::collections::BTreeSet::new();
+            for (index, candidate) in matches.iter().enumerate() {
+                if keep[index]
+                    && candidate.rule.id() == dependency.rule_id
+                    && dependency.within.as_deref().is_none_or(|within| {
+                        component_is_within(
                             bytes,
                             &line_starts,
                             primary.association_offset_span,
                             candidate.association_offset_span,
                             within,
                         )
-                })
-                .map(|(_, candidate)| candidate)
-                .min_by_key(|candidate| {
-                    span_distance(
-                        primary.association_offset_span,
-                        candidate.association_offset_span,
-                    )
-                })
-            {
-                let value = component.captures.captures.first().map_or_else(
-                    || String::from_utf8_lossy(component.matching_input).into_owned(),
-                    |capture| capture.raw_value().to_string(),
-                );
-                associated[primary_index].insert(dependency.variable.to_uppercase(), value);
+                    })
+                {
+                    values.insert(candidate.captures.captures.first().map_or_else(
+                        || String::from_utf8_lossy(candidate.matching_input).into_owned(),
+                        |capture| capture.raw_value().to_string(),
+                    ));
+                }
+            }
+            let variable = dependency.variable.to_uppercase();
+            if values.len() > 1 {
+                ambiguous[primary_index].insert(variable, values.len());
+            } else if let Some(value) = values.into_iter().next() {
+                associated[primary_index].insert(variable, value);
             }
         }
     }
@@ -861,6 +846,7 @@ fn associate_betterleaks_components<'a>(bytes: &[u8], matches: &mut Vec<BlobMatc
     let mut index = 0;
     matches.retain_mut(|finding| {
         finding.dependent_captures.append(&mut associated[index]);
+        finding.ambiguous_dependencies.append(&mut ambiguous[index]);
         let retain = keep[index];
         index += 1;
         retain

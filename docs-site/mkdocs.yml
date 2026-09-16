@@ -1,7 +1,7 @@
 site_name: Kingfisher
 site_url: https://mongodb.github.io/kingfisher
 site_description: >-
-  The batteries-included open source secret scanner. Detect exposed credentials, validate which
+  An open source secret scanner built in Rust. Detect exposed credentials, validate which
   are active, map blast radius, triage findings visually, and revoke supported secrets.
   Built in Rust by MongoDB.
 site_author: MongoDB
@@ -115,6 +115,7 @@ nav:
     - LLM & Agent Integration: features/agents.md
   - Rules:
     - Built-in Rules: rules/builtin-rules.md
+    - Imported Rule Capabilities: rules/imported-capabilities.md
     - Kingfisher 1.x Custom Rules: rules/overview.md
   - Reference:
     - Documentation Index: reference/documentation-index.md

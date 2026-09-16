@@ -264,11 +264,19 @@ impl FindingsStore {
                 let origin_kind = dedup_origin_kind(&origin);
 
                 let rule_id = m.rule.id().to_uppercase();
-                let key_string = if self.blob_scoped_dependency_rule_ids.contains(&rule_id) {
+                let mut key_string = if self.blob_scoped_dependency_rule_ids.contains(&rule_id) {
                     format!("{}|{}|{}|{}", rule_id, origin_kind, snippet, blob_md.id.hex())
                 } else {
                     format!("{}|{}|{}", rule_id, origin_kind, snippet)
                 };
+                // Association is resolved before storage: keep distinct validation contexts,
+                // including a bare occurrence followed by a fully paired occurrence.
+                if !m.rule.syntax().depends_on_rule.is_empty() {
+                    key_string.push_str(
+                        &serde_json::to_string(&(&m.dependent_captures, &m.ambiguous_dependencies))
+                            .expect("dependency maps serialize"),
+                    );
+                }
                 let key = xxh3_64(key_string.as_bytes());
                 let digest = *blake3::hash(key_string.as_bytes()).as_bytes();
                 let bloom_match = self.dedup_filter.contains_or_insert(key);

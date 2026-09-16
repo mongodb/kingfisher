@@ -155,6 +155,116 @@ mod test {
     }
 
     #[test]
+    fn placeholder_private_keys_and_mongodb_passwords_are_filtered() {
+        let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        let key_rule = &rules.rules["betterleaks.private-key"];
+        for body in [
+            "",
+            "\nPRIVATE_KEY\n",
+            r#"\n"
+              + "PRIVATE_KEY\n"
+              + ""#,
+            "\nYWJjZA==\n",
+        ] {
+            let pem = format!("-----BEGIN PRIVATE KEY-----{body}-----END PRIVATE KEY-----");
+            assert!(filter_discards(key_rule, "fixture.java", &pem, &pem, &[]), "{pem}");
+        }
+        // A compact, synthetic Ed25519 PKCS#8 key must survive the length gate.
+        let body = "MC4CAQAwBQYDK2VwBCIEIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g";
+        for body in [
+            body.to_string(),
+            body.as_bytes()
+                .chunks(16)
+                .map(|chunk| std::str::from_utf8(chunk).unwrap())
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ] {
+            let pem = format!("-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----");
+            assert!(!filter_discards(key_rule, "fixture.pem", &pem, &pem, &[]), "{pem}");
+        }
+        let mongo = &rules.rules["betterleaks.mongodb-connection-string"];
+        for password in [
+            "$(AWS_SECRET_ACCESS_KEY)",
+            "$(MONGODB_PASSWORD)",
+            "${MONGODB_PASSWORD}",
+            "$MONGODB_PASSWORD",
+            "{{ MONGODB_PASSWORD }}",
+        ] {
+            let uri = format!("mongodb+srv://$(MONGODB_USERNAME):{password}@cluster.invalid/db");
+            assert!(filter_discards(mongo, "fixture.yml", &uri, &uri, &[]), "{uri}");
+        }
+        for uri in [
+            "mongodb://$(MONGODB_USERNAME):r4nd0mLiteralSecret@cluster.invalid/db",
+            "mongodb://alice:r4nd0mLiteralSecret@$(MONGODB_HOST)/db",
+            "mongodb://alice:literal$(suffix)@cluster.invalid/db",
+            "mongodb://alice:dollar%24literal@cluster.invalid/db",
+        ] {
+            assert!(!filter_discards(mongo, "fixture.yml", uri, uri, &[]), "{uri}");
+        }
+        // Compile both overlay regexes with the production Vectorscan filter engine.
+        let mut selected = Rules::new();
+        for rule in [key_rule, mongo] {
+            selected.rules.insert(rule.id.clone(), rule.clone());
+        }
+        crate::RulesDatabase::from_rule_collection(selected).unwrap();
+    }
+
+    #[test]
+    fn bare_provider_rules_detect_extracted_tokens_and_compile() {
+        let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        let cases = [
+            ("deepseek-api-key", format!("sk-{}", "0123456789abcdef".repeat(2))),
+            ("kimi-api-key", format!("sk-{}", "AbcD0123_-xy".repeat(4))),
+            ("zai-api-key", format!("{}.AbcD0123efGH4567", "0123456789abcdef".repeat(2))),
+            ("voyageai-api-key", format!("pa-{}QrstUv9", "AbcD0123_-xy".repeat(3))),
+        ];
+        let mut selected = Rules::new();
+        for (id, token) in &cases {
+            let rule = &rules.rules[&format!("betterleaks.{id}")];
+            let regex =
+                regex::bytes::RegexBuilder::new(&rule.pattern).unicode(false).build().unwrap();
+            for input in
+                [token.clone(), format!("VAR_0000 = \"{token}\""), format!("{token} # provider")]
+            {
+                let captures =
+                    regex.captures(input.as_bytes()).unwrap_or_else(|| panic!("{id}: {input}"));
+                assert_eq!(captures.get(1).unwrap().as_bytes(), token.as_bytes());
+            }
+            for input in [
+                format!("x{token}"),
+                format!("_{token}"),
+                format!("-{token}"),
+                format!("{token}x"),
+                format!("{token}_"),
+            ] {
+                assert!(!regex.is_match(input.as_bytes()), "{id}: {input}");
+            }
+            assert!(matches!(rule.validation, Some(Validation::Betterleaks(_))));
+            assert!(!filter_discards(rule, "fixture.txt", token, token, &[]), "{id}");
+            selected.rules.insert(rule.id.clone(), rule.clone());
+        }
+        let db = crate::RulesDatabase::from_rule_collection(selected).unwrap();
+        let mut scanner = vectorscan_rs::BlockScanner::new(db.vectorscan_db()).unwrap();
+        for (id, token) in cases {
+            let input = format!("{token}\n{token}");
+            let mut hits = 0;
+            scanner
+                .scan(input.as_bytes(), |index, from, to, _flags| {
+                    if db.get_rule(index as usize).unwrap().id() == format!("betterleaks.{id}") {
+                        let candidate = &input.as_bytes()[from as usize..to as usize];
+                        let captures =
+                            db.anchored_regexes()[index as usize].captures(candidate).unwrap();
+                        assert_eq!(captures.get(1).unwrap().as_bytes(), token.as_bytes());
+                        hits += 1;
+                    }
+                    vectorscan_rs::Scan::Continue
+                })
+                .unwrap();
+            assert!(hits >= 2, "{id}: missing adjacent bare tokens");
+        }
+    }
+
+    #[test]
     fn test_get_default_rules() {
         assert!(get_builtin_rules(None).unwrap().num_rules() >= 400);
     }

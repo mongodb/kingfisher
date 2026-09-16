@@ -7855,12 +7855,12 @@ function createFindingFilters(container, fields, onChange, onClear) {
       const finding = primary.finding || {};
       const ruleName = rule.name || rule.id || "(unknown rule)";
       const path = finding.path || "";
-      const status =
-        finding.validation && finding.validation.status
-          ? validationStatusLabel(finding.validation.status)
-          : "Not Attempted";
-      const normalizedStatus = normalizeValidationStatus(status);
-      const badgeClass = validationBadgeClass(normalizedStatus);
+      const statuses = new Set(group.items.map((entry) =>
+        normalizeValidationStatus(entry.finding?.validation?.status)));
+      const statusBadges = ["active", "assumed", "inconclusive", "not_attempted", "inactive"]
+        .filter((status) => statuses.has(status))
+        .map((status) => `<span class="status-badge ${validationBadgeClass(status)}">${escapeHtml(validationStatusLabel(status))}</span>`)
+        .join(" ");
       const sourceTool = getFindingSourceTool(finding);
       const sourceBadge = `<span class="badge ${getSourceBadgeClass(sourceTool)}">${escapeHtml(getSourceDisplayName(sourceTool))}</span>`;
       const count = group.items.length;
@@ -7879,7 +7879,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
           ${viewerCommitContext(finding)}
         </td>
         <td>
-          <span class="status-badge ${badgeClass}">${escapeHtml(status)}</span>
+          ${statusBadges}
         </td>
         <td>${escapeHtml(finding.confidence || "")}</td>
         <td style="text-align:right; white-space:nowrap;">

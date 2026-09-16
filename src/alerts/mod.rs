@@ -600,6 +600,8 @@ pub(crate) fn make_test_record(
             description: rule_id.to_string(),
         },
         finding: FindingRecordData {
+            dependent_captures: Default::default(),
+            ambiguous_dependencies: Default::default(),
             snippet: "AKIAEXAMPLE_REDACTED_TOKEN_12345".to_string(),
             fingerprint: fingerprint.to_string(),
             confidence: "Medium".to_string(),
@@ -846,6 +848,8 @@ mod tests {
                 description: rule_id.to_string(),
             },
             finding: FindingRecordData {
+                dependent_captures: Default::default(),
+                ambiguous_dependencies: Default::default(),
                 snippet: "AKIAEXAMPLE_REDACTED_TOKEN_12345".to_string(),
                 fingerprint: fingerprint.to_string(),
                 confidence: confidence.to_string(),

@@ -822,6 +822,8 @@ mod tests {
                 description: "Test rule description".to_string(),
             },
             finding: FindingRecordData {
+                dependent_captures: Default::default(),
+                ambiguous_dependencies: Default::default(),
                 snippet: "secret".to_string(),
                 fingerprint: "fingerprint".to_string(),
                 confidence: "high".to_string(),

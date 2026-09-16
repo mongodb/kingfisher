@@ -4,7 +4,7 @@ use std::path::PathBuf;
 /// Directly validate a known secret against a rule's validator
 #[derive(Args, Debug, Clone)]
 pub struct ValidateArgs {
-    /// Rule ID or prefix to use for validation (e.g. github or betterleaks.github-pat).
+    /// Rule ID or unambiguous prefix for validation (e.g. betterleaks.github-pat).
     /// The `betterleaks.` prefix is optional for built-in rules.
     #[arg(long, required = true)]
     pub rule: String,

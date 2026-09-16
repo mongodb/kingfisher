@@ -27,6 +27,7 @@ thiserror.workspace = true
 
 # Regex
 regex.workspace = true
+regex-syntax = "0.8"
 
 # Hashing
 xxhash-rust.workspace = true
@@ -69,6 +70,7 @@ flate2 = "1.1"
 anyhow.workspace = true
 flate2 = "1.1"
 regex.workspace = true
+regex-syntax = "0.8"
 serde.workspace = true
 serde_yaml = "0.9"
 toml = "0.8"

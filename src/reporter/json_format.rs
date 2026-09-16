@@ -313,6 +313,7 @@ mod tests {
             visible: true,
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
+            ambiguous_dependencies: Default::default(),
         }
     }
 

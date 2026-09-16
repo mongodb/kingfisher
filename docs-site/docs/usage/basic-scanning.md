@@ -320,7 +320,7 @@ kingfisher scan ./repo \
   --validation-rps-rule pypi=0.5
 
 # Direct validation can use the same limiter options
-kingfisher validate --rule github "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
+kingfisher validate --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
   --validation-rps-rule github=1
 ```
 
@@ -329,7 +329,7 @@ kingfisher validate --rule github "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" \
 kingfisher validate --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
 # Validate from stdin
-echo "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" | kingfisher validate --rule github -
+echo "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx" | kingfisher validate --rule github-pat -
 
 # TOON output for LLMs and agent tooling
 kingfisher validate --rule github-pat "ghp_..." --format toon
@@ -368,6 +368,13 @@ kingfisher validate --rule aws-access-token \
   "AKIAEXAMPLE000000000"
 ```
 
+Direct validation requires a unique rule selector. Exact IDs take precedence over
+prefix matches; an ambiguous selector such as `validate --rule github` lists the
+matching IDs and exits before sending requests. Use `--rule betterleaks.github-pat`
+(or `--rule github-pat`) for a classic GitHub PAT.
+
+<a id="provider-endpoint-overrides"></a>
+
 **Provider endpoint overrides (`--endpoint` and `--endpoint-config`):**
 
 Rules for providers that can run outside the public SaaS control plane can be pointed at a different instance without editing rule YAML.
@@ -388,7 +395,7 @@ Supported provider keys for endpoint overrides are:
 
 ```bash
 # Validate a GitHub Enterprise token against a self-hosted instance
-kingfisher validate --rule github \
+kingfisher validate --rule github-pat \
   --endpoint github=https://ghe.corp.example.com \
   "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
@@ -987,7 +994,7 @@ KF_GITHUB_TOKEN="ghp_…" kingfisher scan github \
   --allow-internal-ips
 
 # 5. Validate a single PAT against GHE without scanning anything
-kingfisher validate --rule github \
+kingfisher validate --rule github-pat \
   --endpoint github=https://ghe.corp.example.com \
   "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
@@ -1111,7 +1118,7 @@ KF_GITLAB_TOKEN="glpat-…" kingfisher scan gitlab \
   --allow-internal-ips
 
 # 5. Validate a single PAT against self-hosted GitLab without scanning anything
-kingfisher validate --rule gitlab \
+kingfisher validate --rule gitlab-pat \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "glpat-xxxxxxxxxxxxxxxxxxxx"
 

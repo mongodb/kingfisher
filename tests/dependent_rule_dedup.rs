@@ -69,6 +69,7 @@ fn make_match(rule: Arc<Rule>, blob_id: BlobId, value: &str) -> Match {
         visible: true,
         is_base64: false,
         dependent_captures: std::collections::BTreeMap::new(),
+        ambiguous_dependencies: Default::default(),
     }
 }
 

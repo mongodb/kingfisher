@@ -15,9 +15,13 @@ Kingfisher starts with a fast regex pass powered by Vectorscan/Hyperscan. For ru
 
 1. `BlobProcessor::run` decides whether to compute a language hint.
 2. `Matcher::scan_blob` performs the primary regex scan and other filtering.
-3. `maybe_apply_context_verification` streams parser candidates near the end of `scan_blob`.
+3. `maybe_apply_markup_context_gate` streams parser candidates near the end of `scan_blob`.
 4. Only context-dependent, non-Base64 matches are checked.
 5. Candidates whose match profile strictly requires parser confirmation are removed if they cannot be verified.
+
+The scan-time gate currently applies only to **HTML and CSS** blobs. Other language
+backends exist, but are not wired into this gate. Python comments and docstrings,
+for example, are not suppressed by parser-based context verification.
 
 ## Gates
 
@@ -25,7 +29,7 @@ Context verification runs only when all of these are true:
 
 - Blob length is between `0 KiB` and `2 MiB` (`should_attempt_context_verification`).
 - Turbo mode is disabled.
-- A supported language hint is available.
+- An HTML or CSS language hint is available.
 
 If any gate fails, only strict contextual matches are suppressed. Assignment-style contextual rules may still fall back to their raw regex hit when the parser cannot run.
 

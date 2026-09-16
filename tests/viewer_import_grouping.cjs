@@ -38,3 +38,24 @@ const originalSarif = sarif("a.txt");
 originalSarif.finding.fingerprint = otherSarif.finding.fingerprint = "shared";
 assert.equal(ctx.deduplicateFindings([originalSarif, otherSarif]).findings.length, 2);
 console.log("Viewer script syntax and import grouping regressions passed.");
+
+// Render a collapsed group: every distinct status must remain visible regardless of order.
+ctx.expandedSecretGroups = new Set();
+ctx.document = { createElement: () => ({ setAttribute() {}, addEventListener() {} }) };
+vm.runInContext("addViewerSelection = () => {};", ctx);
+const occurrence = status => ({ rule: { id: "demo" }, finding: {
+  snippet: "same-secret", validation: { status },
+} });
+for (const statuses of [
+  ["Inactive Credential", "Active Credential"],
+  ["Active Credential", "Inactive Credential"],
+  ["Inactive Credential", undefined],
+  ["Active Credential", "verified active credential"],
+]) {
+  const group = ctx.groupFindingsBySecret(statuses.map(occurrence))[0];
+  const row = ctx.buildGroupRow(group);
+  const labels = [...row.innerHTML.matchAll(/class="status-badge [^"]+">([^<]+)<\/span>/g)].map(m => m[1]);
+  const expected = [...new Set(statuses.map(status => ctx.validationStatusLabel(status)))];
+  assert.deepEqual([...labels].sort(), expected.sort());
+}
+console.log("Collapsed group validation status regressions passed.");

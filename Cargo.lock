@@ -5591,6 +5591,7 @@ dependencies = [
  "proptest",
  "rand 0.10.2",
  "regex",
+ "regex-syntax",
  "schemars 1.2.2",
  "serde",
  "serde_json",

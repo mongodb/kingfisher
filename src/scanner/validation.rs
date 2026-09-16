@@ -31,8 +31,8 @@ use crate::{
     rules::rule::{BetterleaksAccessMapHandler, Rule, Validation},
     validation::{
         CachedResponse, CredentialUriTarget, classify_credential_uri,
-        collect_variables_and_dependencies, materialize_dependency_captures, utils,
-        validate_single_match, validation_dependency_values,
+        collect_variables_and_dependencies, utils, validate_single_match,
+        validation_dependency_values,
     },
     validation_body,
     validation_rate_limit::ValidationRateLimiter,
@@ -86,6 +86,7 @@ pub(crate) fn direct_access_map_requests(
         calculated_entropy: 0.0,
         is_base64: false,
         dependent_captures,
+        ambiguous_dependencies: Default::default(),
     };
     maybe_record_access_map(&owned, Some(&collector));
     collector.into_collected_requests().into_iter().map(|item| item.request).collect()
@@ -872,7 +873,7 @@ pub async fn run_secret_validation(
                         let mut by_key: FxHashMap<String, Vec<OwnedBlobMatch>> =
                             FxHashMap::default();
                         for om in owned {
-                            by_key.entry(build_cache_key(&om, &dep_vars)).or_default().push(om);
+                            by_key.entry(build_cache_key(&om)).or_default().push(om);
                         }
                         let reps: Vec<_> =
                             by_key.into_values().map(|mut v| (v.remove(0), v)).collect();
@@ -912,7 +913,6 @@ pub async fn run_secret_validation(
                                     )
                                     .await;
                                     for d in &mut dups {
-                                        materialize_dependency_captures(d, &dep_vars);
                                         d.validation_success = rep.validation_success;
                                         d.validation_response_body =
                                             rep.validation_response_body.clone();
@@ -1052,8 +1052,10 @@ async fn validate_single(
         return;
     }
 
-    materialize_dependency_captures(om, dep_vars);
-    let cache_key = build_cache_key(om, dep_vars);
+    if crate::validation::skip_ambiguous_dependencies(om) {
+        return;
+    }
+    let cache_key = build_cache_key(om);
     // Check cache first
     if let Some(cached) = cache.get(&cache_key) {
         om.validation_success = cached.is_valid;
@@ -1281,17 +1283,19 @@ fn validation_input<'a>(
 }
 
 // Helper to compute the cache key for an OwnedBlobMatch.
-fn build_cache_key(
-    om: &OwnedBlobMatch,
-    dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
-) -> String {
+fn build_cache_key(om: &OwnedBlobMatch) -> String {
     let validation_input = validation_input(&om.rule, &om.captures);
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"kingfisher.validation-cache.v1\0");
     hash_cache_key_part(&mut hasher, om.rule.id().as_bytes());
     hash_cache_key_part(&mut hasher, validation_input.as_bytes());
 
-    for (variable, value) in validation_dependency_values(om, dependent_variables) {
+    for (variable, count) in &om.ambiguous_dependencies {
+        hash_cache_key_part(&mut hasher, variable.as_bytes());
+        hash_cache_key_part(&mut hasher, &count.to_le_bytes());
+    }
+
+    for (variable, value) in validation_dependency_values(om) {
         hash_cache_key_part(&mut hasher, variable.as_bytes());
         if let Some(value) = value {
             hash_cache_key_part(&mut hasher, value.as_bytes());
@@ -1987,6 +1991,7 @@ mod tests {
             calculated_entropy: 0.0,
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
+            ambiguous_dependencies: Default::default(),
         }
     }
 
@@ -2023,11 +2028,7 @@ mod tests {
         let mut second = first.clone();
         second.captures.captures[1].value = intern("postgresql://alice:hunter2@two.internal/app");
 
-        let empty_dep_vars = FxHashMap::default();
-        assert_ne!(
-            build_cache_key(&first, &empty_dep_vars),
-            build_cache_key(&second, &empty_dep_vars)
-        );
+        assert_ne!(build_cache_key(&first), build_cache_key(&second));
     }
 
     #[test]
@@ -2045,17 +2046,10 @@ mod tests {
         second.blob_id = BlobId::new(b"different-blob");
         second.matching_input_offset_span = OffsetSpan { start: 100, end: 105 };
 
-        let empty_dep_vars = FxHashMap::default();
-        assert_eq!(
-            build_cache_key(&first, &empty_dep_vars),
-            build_cache_key(&second, &empty_dep_vars)
-        );
+        assert_eq!(build_cache_key(&first), build_cache_key(&second));
 
         second.dependent_captures.insert("COMPONENT".to_string(), "different-context".to_string());
-        assert_ne!(
-            build_cache_key(&first, &empty_dep_vars),
-            build_cache_key(&second, &empty_dep_vars)
-        );
+        assert_ne!(build_cache_key(&first), build_cache_key(&second));
     }
 
     #[test]
@@ -2491,7 +2485,7 @@ mod tests {
     #[tokio::test]
     async fn panic_outcome_is_reported_as_unavailable_and_cached() {
         let mut om = make_owned_blob_match();
-        let cache_key = build_cache_key(&om, &FxHashMap::default());
+        let cache_key = build_cache_key(&om);
         let cache = DashMap::new();
         let success_count = AtomicUsize::new(0);
         let fail_count = AtomicUsize::new(0);

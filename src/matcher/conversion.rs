@@ -58,6 +58,7 @@ pub struct OwnedBlobMatch {
     /// Variables captured from dependent rules (from depends_on_rule).
     /// Maps variable name (uppercase) to captured value.
     pub dependent_captures: std::collections::BTreeMap<String, String>,
+    pub ambiguous_dependencies: std::collections::BTreeMap<String, usize>,
 }
 
 impl OwnedBlobMatch {
@@ -101,6 +102,7 @@ impl OwnedBlobMatch {
             calculated_entropy: m.calculated_entropy,
             is_base64: m.is_base64,
             dependent_captures: m.dependent_captures.clone(),
+            ambiguous_dependencies: m.ambiguous_dependencies.clone(),
         }
     }
 
@@ -120,6 +122,7 @@ impl OwnedBlobMatch {
             finding_fingerprint: 0, //default
             is_base64: blob_match.is_base64,
             dependent_captures: blob_match.dependent_captures,
+            ambiguous_dependencies: blob_match.ambiguous_dependencies,
         };
 
         // Use blob_id as the file/commit identifier
@@ -189,6 +192,8 @@ pub struct Match {
     /// Maps variable name (uppercase) to captured value.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub dependent_captures: std::collections::BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub ambiguous_dependencies: std::collections::BTreeMap<String, usize>,
 }
 
 impl Match {
@@ -257,6 +262,7 @@ impl Match {
             calculated_entropy: owned_blob_match.calculated_entropy,
             is_base64: owned_blob_match.is_base64,
             dependent_captures: owned_blob_match.dependent_captures.clone(),
+            ambiguous_dependencies: owned_blob_match.ambiguous_dependencies.clone(),
         }
     }
 
@@ -367,6 +373,7 @@ mod tests {
             calculated_entropy: 0.0,
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
+            ambiguous_dependencies: Default::default(),
         })
     }
 

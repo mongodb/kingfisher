@@ -1,11 +1,11 @@
 ---
 title: "Quick Start"
-description: "Get up and running with Kingfisher in under a minute. Scan files, Git repos, and cloud platforms for leaked secrets."
+description: "Install Kingfisher and run your first scan. Scan files, Git repos, and cloud platforms for leaked secrets."
 ---
 
 # Quick Start
 
-Get scanning in under a minute.
+Install Kingfisher, scan a target, and inspect the results.
 
 ## 1. Install Kingfisher
 
@@ -78,7 +78,7 @@ kingfisher scan /path/to/code --validation-filter actionable
 
 ## 5. Map the Blast Radius (aka Access Map)
 
-See exactly what resources a leaked credential can access:
+Inspect the identities, permissions, and resources visible to a supported credential:
 
 ```bash
 kingfisher scan /path/to/code --blast-radius --view-report
@@ -86,8 +86,7 @@ kingfisher scan /path/to/code --blast-radius --view-report
 
 ## 6. Revoke a Compromised Secret
 
-Kingfisher joins selected imported detectors to safe revocation actions in a build-validated
-capability overlay:
+Use a finding’s generated revoke command for supported credentials:
 
 ```bash
 kingfisher revoke --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
