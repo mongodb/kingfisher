@@ -87,7 +87,7 @@ A few examples:
 ```bash
 kingfisher scan /path/to/code --only-valid --blast-radius --view-report  # a local repo and its Git history
 kingfisher scan s3 some-example-bucket --prefix path/to/data/           # an S3 bucket
-kingfisher scan gcs bucket-name                                         # a GCS bucket
+kingfisher scan gcs bucket-name --prefix path/to/data/                  # a GCS bucket
 kingfisher scan docker ghcr.io/owasp/wrongsecrets/wrongsecrets-master:latest-master  # a container image from any registry
 kingfisher scan docker --archive image.tar                              # a saved image archive
 kingfisher scan github --organization my-org                            # a GitHub organization
@@ -171,6 +171,154 @@ Open the results in the bundled local viewer:
 ```bash
 kingfisher scan /path/to/repository --view-report
 ```
+
+### Scan files and Git history
+
+```bash
+# Clone a remote repository and scan its Git history
+kingfisher scan https://github.com/my-org/my-repo.git
+
+# Scan checked-out files without Git history or live validation
+kingfisher scan /path/to/repository --git-history none --no-validate
+
+# Check staged changes before committing
+kingfisher scan . --staged
+
+# Scan an archive or an office document
+kingfisher scan backup.tar.gz credentials.xlsx
+
+# Show only live credentials and map their access
+kingfisher scan /path/to/repository --only-valid --blast-radius
+
+# Include active credentials and high-confidence assumed or locally derived secrets
+kingfisher scan /path/to/repository --validation-filter actionable
+```
+
+### Save and combine reports
+
+```bash
+# Save a JSON report and open it later
+kingfisher scan /path/to/repository --format json --output findings.json
+kingfisher view findings.json
+
+# Export SARIF for code-scanning integrations
+kingfisher scan /path/to/repository --format sarif --output findings.sarif
+
+# Generate a standalone HTML audit report
+kingfisher scan /path/to/repository --format html --output audit.html
+
+# Import and combine Kingfisher, Gitleaks, and TruffleHog reports
+kingfisher view findings.json gitleaks.json trufflehog.jsonl
+
+# Load every supported report in a directory
+kingfisher view ./reports/
+```
+
+### Scan source-hosting organizations
+
+Set the relevant authentication variables from the [integration guide](docs/INTEGRATIONS.md#environment-variables),
+then choose a target:
+
+```bash
+# GitHub organization
+kingfisher scan github --organization my-org
+
+# GitLab group, including nested subgroups
+kingfisher scan gitlab --group my-group --include-subgroups
+
+# Azure Repos organization
+kingfisher scan azure --azure-organization my-org
+
+# Bitbucket workspace
+kingfisher scan bitbucket --workspace my-team
+
+# Gitea organization
+kingfisher scan gitea --organization my-org
+
+# Hugging Face organization
+kingfisher scan huggingface --huggingface-organization my-org
+
+# Preview the GitHub repository scope without scanning
+kingfisher scan github --organization my-org --list-only
+```
+
+### Scan S3 and GCS buckets
+
+Scan a whole bucket, or use `--prefix` to limit scanning to objects whose names start with the
+given prefix. Use a bucket name without `s3://` or `gs://`; omit `--prefix` to scan the whole bucket.
+
+```bash
+# AWS S3: whole bucket
+kingfisher scan s3 my-bucket
+
+# AWS S3: only objects under backups/production/, using a named AWS profile
+kingfisher scan s3 my-bucket --prefix backups/production/ --profile security
+
+# Google Cloud Storage: whole bucket
+kingfisher scan gcs my-bucket
+
+# Google Cloud Storage: only objects under exports/daily/
+kingfisher scan gcs my-bucket --prefix exports/daily/
+```
+
+Authenticate to S3 with `KF_AWS_KEY` / `KF_AWS_SECRET` or `--profile`; GCS uses Application Default
+Credentials, or an explicit `--service-account /path/to/key.json`. See the [S3](docs/INTEGRATIONS.md#aws-s3) and
+[GCS](docs/INTEGRATIONS.md#google-cloud-storage) guides for authentication and public-bucket examples.
+
+### Scan containers or run Kingfisher in Docker
+
+```bash
+# Scan a registry image
+kingfisher scan docker ghcr.io/my-org/my-image:latest
+
+# Scan an image exported with docker save
+kingfisher scan docker --archive image.tar
+
+# Run Kingfisher against the current directory without installing it
+docker run --rm -v "$PWD":/src ghcr.io/mongodb/kingfisher:latest scan /src
+
+# Run in Docker and serve the report viewer to the host
+docker run --rm -v "$PWD":/src -p 127.0.0.1:7890:7890 \
+  ghcr.io/mongodb/kingfisher:latest scan /src \
+  --view-report --view-report-address 0.0.0.0
+```
+
+For the Docker viewer, open [localhost:7890](http://localhost:7890) in your browser.
+
+### Scan issues, documents, and messages
+
+These commands use the platform credentials described in the
+[integration guide](docs/INTEGRATIONS.md#environment-variables).
+
+```bash
+# Jira: search a project and include issue comments
+kingfisher scan jira --url https://jira.example.com --jql "project = SEC" --include-comments
+
+# Confluence: scan pages in a space
+kingfisher scan confluence --url https://confluence.example.com --cql 'space = "ENG"'
+
+# Slack: search messages and associated files
+kingfisher scan slack "api_key OR password"
+
+# Microsoft Teams: search messages
+kingfisher scan teams "api_key OR password"
+
+# Postman: scan a workspace's collections and environments
+kingfisher scan postman --workspace my-workspace-id
+```
+
+### Validate or revoke a known credential
+
+```bash
+# Validate a GitHub personal access token directly
+kingfisher validate --rule github-pat "$GITHUB_PAT"
+
+# Revoke that token when ready to contain the exposure
+kingfisher revoke --rule github-pat "$GITHUB_PAT"
+```
+
+See [direct validation](docs/USAGE.md#direct-secret-validation-with-kingfisher-validate) and
+[supported revocation providers](docs/REVOCATION_PROVIDERS.md) for other credential types.
 
 See the [installation guide](docs/INSTALLATION.md) for pre-built binaries, Docker, mise, Windows,
 pre-commit hooks, release verification, and source builds. See the [usage guide](docs/USAGE.md) for
