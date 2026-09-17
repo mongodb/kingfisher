@@ -772,6 +772,7 @@ check-rust:
 .PHONY: viewer-tests
 viewer-tests:
 	node tests/viewer_import_grouping.cjs
+	node tests/viewer_hardening.cjs
 
 tests: viewer-tests
 	@echo "🔍 checking for cargo-nextest …"

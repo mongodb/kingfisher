@@ -7,6 +7,10 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.4.0]
+- Fixed scans missing secrets in UTF-16 and UTF-32 files, including little-/big-endian files with or without a BOM.
+- Hardened the HTML report viewer with safer imported-data rendering, restricted external links, and a tighter browser security policy.
+
 ## [v2.3.0]
 - Improved report filtering, grouped selection, command copying, and finding details in the local viewer and standalone HTML reports.
 - Fixed probabilistic deduplication dropping unique findings by confirming duplicates with exact keys.

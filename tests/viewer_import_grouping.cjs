@@ -2,7 +2,7 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
 const html = fs.readFileSync(require("node:path").join(__dirname, "../docs/viewer/index.html"), "utf8");
-const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)].map(m => m[1]);
+const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map(m => m[1]);
 for (const script of scripts) new vm.Script(script);
 // Load top-level function declarations without running browser initialization.
 const functions = scripts.join("\n").match(/^    function \w+\([^]*?^    }/gm);
@@ -88,3 +88,37 @@ for (const kind of ["validation", "revocation"]) {
   assert.deepEqual(copied, ["", ""]);
 }
 console.log("Viewer native command and unsafe enrichment regressions passed.");
+
+// Provider labels remain text in rationale HTML for native and SARIF reports.
+for (const [provider, expected] of [
+  ["aws", "AWS"],
+  ['<em title="example">a&b</em>', "&lt;EM TITLE=&quot;EXAMPLE&quot;&gt;A&amp;B&lt;/EM&gt;"],
+  ["&#60;em&#62;example&#60;/em&#62;", "&amp;#60;EM&amp;#62;EXAMPLE&amp;#60;/EM&amp;#62;"],
+  [42, "42"],
+]) {
+  const access = { fingerprint: "provider-label", provider, groups: [
+    { resources: ["example-resource"], permissions: ["read"] },
+  ] };
+  const native = { findings: [{ rule: { id: "example", name: "Example" }, finding: {
+    fingerprint: access.fingerprint, validation: { status: "Active Credential" },
+  } }], access_map: [access, access] };
+  const sarifReport = { version: "2.1.0", runs: [{
+    tool: { driver: { name: "Example" } },
+    properties: { access_map: [access, access] },
+    results: [{ ruleId: "example", message: { text: "Example" },
+      partialFingerprints: { fingerprint: access.fingerprint },
+      properties: { validation_status: "Active Credential" },
+    }],
+  }] };
+  for (const payload of [native, sarifReport]) {
+    const normalized = ctx.normalizeReportPayload(payload);
+    const finding = normalized.f[0];
+    const entries = normalized.am.filter(entry => entry.fingerprint === finding.finding.fingerprint);
+    assert.equal(entries.length, 2);
+    const { text } = ctx.generateRiskRationale(finding, entries);
+    assert.ok(text.includes(` on ${expected}.`), text);
+    assert.ok(text.includes("<strong>"), "Intentional rationale formatting is preserved");
+    assert.ok(!text.includes("<EM"), "Provider labels cannot introduce HTML elements");
+  }
+}
+console.log("Viewer provider label rendering regressions passed.");

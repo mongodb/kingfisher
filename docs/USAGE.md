@@ -28,6 +28,11 @@ This guide covers all scan targets and usage patterns for Kingfisher.
 
 ## Basic Examples
 
+Kingfisher scans UTF-8 and common binary inputs directly, and automatically decodes UTF-16 and
+UTF-32 files (little- or big-endian, with or without a BOM) before applying secret rules. This
+covers common Windows-produced files such as PowerShell output and `.reg` files. ASCII-compatible
+encodings such as Latin-1, GBK, and Shift-JIS do not require transcoding for ASCII secrets.
+
 > **Note:** `kingfisher scan` detects whether the input is a Git repository or a plain directory, no extra flags required.
 
 ### Scan with secret validation

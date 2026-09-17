@@ -30,6 +30,7 @@ use serde_json::json;
 use sha1::{Digest, Sha1};
 use smallvec::SmallVec;
 
+use crate::encoding;
 use crate::error::Result;
 use crate::git_commit_metadata::CommitMetadata;
 
@@ -135,7 +136,14 @@ impl Blob<'_> {
         if file_size > LARGE_FILE_THRESHOLD {
             // Large files: one mmap, zero extra copies.
             let mmap = unsafe { memmap2::Mmap::map(&file)? };
-            Ok(Blob { id: OnceLock::new(), data: BlobData::Mapped(mmap), temp_id })
+            let id = BlobId::new(&mmap);
+            if let Some(decoded) = encoding::decode(&mmap) {
+                let cell = OnceLock::new();
+                let _ = cell.set(id);
+                Ok(Blob { id: cell, data: BlobData::Owned(decoded), temp_id })
+            } else {
+                Ok(Blob { id: OnceLock::new(), data: BlobData::Mapped(mmap), temp_id })
+            }
         } else {
             // Small files: read into memory.
             let mut bytes = Vec::with_capacity(file_size as usize);
@@ -148,7 +156,11 @@ impl Blob<'_> {
     #[inline]
     pub fn from_bytes(bytes: Vec<u8>) -> Self {
         let temp_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        Blob { id: OnceLock::new(), data: BlobData::Owned(bytes), temp_id }
+        let id = BlobId::new(&bytes);
+        let data = BlobData::Owned(encoding::decode(&bytes).unwrap_or(bytes));
+        let cell = OnceLock::new();
+        let _ = cell.set(id);
+        Blob { id: cell, data, temp_id }
     }
 
     /// Create a new `Blob` with a pre-computed ID and owned data.
@@ -157,7 +169,8 @@ impl Blob<'_> {
         let temp_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let cell = OnceLock::new();
         let _ = cell.set(id);
-        Blob { id: cell, data: BlobData::Owned(bytes), temp_id }
+        let data = BlobData::Owned(encoding::decode(&bytes).unwrap_or(bytes));
+        Blob { id: cell, data, temp_id }
     }
 
     /// Returns the blob's content as a byte slice.
@@ -205,7 +218,14 @@ impl<'a> Blob<'a> {
     #[inline]
     pub fn from_borrowed(bytes: &'a [u8]) -> Self {
         let temp_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-        Blob { id: OnceLock::new(), data: BlobData::Borrowed(bytes), temp_id }
+        let id = BlobId::new(bytes);
+        if let Some(decoded) = encoding::decode(bytes) {
+            let cell = OnceLock::new();
+            let _ = cell.set(id);
+            Blob { id: cell, data: BlobData::Owned(decoded), temp_id }
+        } else {
+            Blob { id: OnceLock::new(), data: BlobData::Borrowed(bytes), temp_id }
+        }
     }
 }
 

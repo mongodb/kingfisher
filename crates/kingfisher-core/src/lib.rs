@@ -10,6 +10,7 @@
 pub mod blob;
 pub mod bstring_escape;
 pub mod content_type;
+mod encoding;
 pub mod entropy;
 pub mod error;
 pub mod git_commit_metadata;
