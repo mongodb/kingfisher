@@ -3,7 +3,21 @@
 /// Decode UTF-16 or UTF-32 text when a BOM or a strong zero-byte pattern identifies it.
 pub(crate) fn decode(input: &[u8]) -> Option<Vec<u8>> {
     let (encoding, start) = match input.get(..4) {
-        Some([0xff, 0xfe, 0, 0]) => (Encoding::Utf32Le, 4),
+        Some([0xff, 0xfe, 0, 0]) => {
+            // UTF-16 LE with a leading NUL shares this prefix. Prefer UTF-32 only
+            // when the payload consists of complete, valid Unicode scalars.
+            // If both interpretations are valid, retain UTF-32 BOM precedence.
+            let payload = &input[4..];
+            if payload.len() % 4 == 0
+                && payload.chunks_exact(4).all(|chunk| {
+                    char::from_u32(u32::from_le_bytes(chunk.try_into().unwrap())).is_some()
+                })
+            {
+                (Encoding::Utf32Le, 4)
+            } else {
+                (Encoding::Utf16Le, 2)
+            }
+        }
         Some([0, 0, 0xfe, 0xff]) => (Encoding::Utf32Be, 4),
         _ => match input.get(..2) {
             Some([0xff, 0xfe]) => (Encoding::Utf16Le, 2),
@@ -81,6 +95,38 @@ fn guess(input: &[u8]) -> Option<(Encoding, usize)> {
 #[cfg(test)]
 mod tests {
     use super::decode;
+
+    #[test]
+    fn utf16_with_leading_nul_preserves_text() {
+        for text in ["\0a", "\0ab", "\0credential=secret", "\0credential=secret!"] {
+            for little_endian in [true, false] {
+                let input: Vec<u8> =
+                    std::iter::once(0xfeff)
+                        .chain(text.encode_utf16())
+                        .flat_map(|unit| {
+                            if little_endian { unit.to_le_bytes() } else { unit.to_be_bytes() }
+                        })
+                        .collect();
+                assert_eq!(decode(&input).unwrap(), text.as_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn utf32_bom_preserves_text() {
+        for text in ["a", "\0", "\0credential=secret", "\u{1f511}credential=secret"] {
+            for little_endian in [true, false] {
+                let input: Vec<u8> =
+                    std::iter::once(0xfeff)
+                        .chain(text.chars().map(u32::from))
+                        .flat_map(|unit| {
+                            if little_endian { unit.to_le_bytes() } else { unit.to_be_bytes() }
+                        })
+                        .collect();
+                assert_eq!(decode(&input).unwrap(), text.as_bytes());
+            }
+        }
+    }
 
     #[test]
     fn utf16_preserves_surrogate_pairs() {
