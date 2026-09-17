@@ -73,19 +73,21 @@ fn guess(input: &[u8]) -> Option<(Encoding, usize)> {
             bytes.fold((0, 0), |(total, zeros), &byte| (total + 1, zeros + usize::from(byte == 0)));
         total > 1 && zeros * 100 / total >= 60
     };
+    // Text has zero padding in specific byte lanes, not in every lane.
+    // Otherwise zero-filled binary headers (such as .pyc files) look like text.
     if input.len() % 4 == 0 {
-        if score(1, 4) && score(2, 4) && score(3, 4) {
+        if !score(0, 4) && score(1, 4) && score(2, 4) && score(3, 4) {
             return Some((Encoding::Utf32Le, 0));
         }
-        if score(0, 4) && score(1, 4) && score(2, 4) {
+        if score(0, 4) && score(1, 4) && score(2, 4) && !score(3, 4) {
             return Some((Encoding::Utf32Be, 0));
         }
     }
     if input.len() % 2 == 0 {
-        if score(1, 2) {
+        if !score(0, 2) && score(1, 2) {
             return Some((Encoding::Utf16Le, 0));
         }
-        if score(0, 2) {
+        if score(0, 2) && !score(1, 2) {
             return Some((Encoding::Utf16Be, 0));
         }
     }
@@ -95,6 +97,30 @@ fn guess(input: &[u8]) -> Option<(Encoding, usize)> {
 #[cfg(test)]
 mod tests {
     use super::decode;
+
+    #[test]
+    fn zero_filled_binary_headers_are_not_unicode_text() {
+        let mut pyc_header = vec![0x55, 0x0d, b'\r', b'\n'];
+        pyc_header.extend_from_slice(&[0; 12]);
+        for input in [pyc_header, vec![0; 16], vec![0; 10]] {
+            assert_eq!(decode(&input), None);
+        }
+    }
+
+    #[test]
+    fn utf32_without_bom_preserves_text() {
+        let text = "credential=secret\u{1f511}";
+        for little_endian in [true, false] {
+            let input: Vec<u8> = text
+                .chars()
+                .flat_map(|character| {
+                    let value = u32::from(character);
+                    if little_endian { value.to_le_bytes() } else { value.to_be_bytes() }
+                })
+                .collect();
+            assert_eq!(decode(&input).unwrap(), text.as_bytes());
+        }
+    }
 
     #[test]
     fn utf16_with_leading_nul_preserves_text() {

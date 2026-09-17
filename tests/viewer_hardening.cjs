@@ -3,7 +3,13 @@ const fs = require('node:fs');
 const vm = require('node:vm');
 const path = require('node:path');
 const html = fs.readFileSync(path.join(__dirname, '../docs/viewer/index.html'), 'utf8');
-const scripts = [...html.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/gi)].map(m => m[1]);
+function extractScripts(source) {
+  return [...source.matchAll(/<script\b[^>]*>([\s\S]*?)<\/script\b[^>]*>/gi)].map(m => m[1]);
+}
+for (const closingTag of ['</script>', '</SCRIPT >', '</script\t\n bar>']) {
+  assert.deepEqual(extractScripts(`<script>example();${closingTag}<p>after</p>`), ['example();']);
+}
+const scripts = extractScripts(html);
 for (const script of scripts) new vm.Script(script);
 const ctx = vm.createContext({ URL });
 vm.runInContext(scripts.join('\n').match(/^    function \w+\([^]*?^    }/gm).join('\n'), ctx);
