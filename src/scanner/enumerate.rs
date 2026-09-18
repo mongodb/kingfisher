@@ -1,4 +1,5 @@
 use std::{
+    collections::{HashMap, HashSet},
     io::Read,
     marker::PhantomData,
     path::Path,
@@ -1198,14 +1199,29 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
 
                 let deadline = Instant::now() + timeout;
                 let git_result = if let Some(diff_cfg) = cfg.git_diff.clone() {
-                    enumerate_git_diff_repo(
-                        path,
-                        repository,
-                        diff_cfg,
-                        cfg.exclude_globset.clone(),
-                        collect_git_metadata,
-                        deadline,
-                    )
+                    if cfg.enumerate_git_history
+                        && !diff_cfg.staged
+                        && diff_cfg.since_ref.is_none()
+                        && diff_cfg.branch_root.is_none()
+                    {
+                        enumerate_git_branch_history(
+                            path,
+                            repository,
+                            &diff_cfg.branch_ref,
+                            cfg.exclude_globset.clone(),
+                            collect_git_metadata,
+                            deadline,
+                        )
+                    } else {
+                        enumerate_git_diff_repo(
+                            path,
+                            repository,
+                            diff_cfg,
+                            cfg.exclude_globset.clone(),
+                            collect_git_metadata,
+                            deadline,
+                        )
+                    }
                 } else if collect_git_metadata {
                     GitRepoWithMetadataEnumerator::new(
                         path,
@@ -1251,6 +1267,83 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
             }
         }
     }
+}
+
+/// Scan every commit reachable from the selected ref, including merge parents.
+/// Diffing each commit against its first parent avoids enumerating unchanged trees.
+fn enumerate_git_branch_history(
+    path: &Path,
+    mut repository: gix::Repository,
+    branch_ref: &str,
+    exclude_globset: Option<Arc<globset::GlobSet>>,
+    collect_commit_metadata: bool,
+    deadline: Instant,
+) -> Result<GitRepoResult> {
+    check_repo_deadline(deadline, path, "git branch history setup")?;
+    let tip = resolve_diff_ref(&repository, path, branch_ref).with_context(|| {
+        format!("Failed to resolve --branch '{}' in repository {}", branch_ref, path.display())
+    })?;
+    let tip = tip.object()?.peel_to_commit()?.id;
+    let mut commits = Vec::new();
+    for commit in repository.rev_walk([tip]).all()? {
+        check_repo_deadline(deadline, path, "git branch history traversal")?;
+        let commit = commit?;
+        commits.push((commit.id, commit.parent_ids.first().copied()));
+    }
+    let reachable: HashSet<_> = commits.iter().map(|(id, _)| *id).collect();
+    let mut blobs: HashMap<gix::ObjectId, GitBlobMetadata> = HashMap::new();
+    for (commit, parent) in commits {
+        check_repo_deadline(deadline, path, "git branch history enumeration")?;
+        let result = enumerate_git_diff_repo(
+            path,
+            repository,
+            GitDiffConfig {
+                // Shallow boundaries have no available parent tree: scan their full tree.
+                since_ref: parent.filter(|id| reachable.contains(id)).map(|id| id.to_string()),
+                branch_ref: commit.to_string(),
+                branch_root: None,
+                staged: false,
+            },
+            exclude_globset.clone(),
+            collect_commit_metadata,
+            deadline,
+        )
+        .with_context(|| {
+            format!("While enumerating commit {commit} in history of '{branch_ref}'")
+        })?;
+        repository = result.repository;
+        let GitBlobSource::Precomputed(commit_blobs) = result.blobs else {
+            unreachable!("git diff enumeration always precomputes blobs");
+        };
+        for blob in commit_blobs {
+            check_repo_deadline(deadline, path, "git branch blob assembly")?;
+            match blobs.entry(blob.blob_oid) {
+                std::collections::hash_map::Entry::Occupied(mut entry) => {
+                    entry.get_mut().first_seen.extend(blob.first_seen);
+                }
+                std::collections::hash_map::Entry::Vacant(entry) => {
+                    entry.insert(blob);
+                }
+            }
+        }
+    }
+    let mut blobs: Vec<_> = blobs.into_values().collect();
+    // Hash iteration and revision-walk order must not determine enumeration order.
+    for blob in &mut blobs {
+        check_repo_deadline(deadline, path, "git branch blob ordering")?;
+        blob.first_seen.sort_unstable_by(|a, b| {
+            a.path
+                .cmp(&b.path)
+                .then_with(|| a.commit_metadata.commit_id.cmp(&b.commit_metadata.commit_id))
+        });
+    }
+    blobs.sort_unstable_by_key(|blob| blob.blob_oid);
+    check_repo_deadline(deadline, path, "git branch blob ordering")?;
+    Ok(GitRepoResult {
+        repository,
+        path: path.to_owned(),
+        blobs: GitBlobSource::Precomputed(blobs),
+    })
 }
 
 fn enumerate_git_diff_repo(
@@ -1538,7 +1631,7 @@ fn resolve_diff_ref<'repo>(
     })
 }
 
-fn reference_candidates(reference: &str) -> Vec<String> {
+pub(crate) fn reference_candidates(reference: &str) -> Vec<String> {
     fn push_unique(vec: &mut Vec<String>, candidate: String) {
         if !vec.iter().any(|existing| existing == &candidate) {
             vec.push(candidate);
@@ -1590,8 +1683,9 @@ mod tests {
     };
 
     use super::{
-        FileResult, GitBlobSource, GitDiffConfig, ParallelBlobIterator, enumerate_git_diff_repo,
-        recursively_extract_archive_entries, reference_candidates,
+        FileResult, GitBlobSource, GitDiffConfig, ParallelBlobIterator,
+        enumerate_git_branch_history, enumerate_git_diff_repo, recursively_extract_archive_entries,
+        reference_candidates,
     };
     use anyhow::Result;
     use bstr::ByteSlice;
@@ -1698,6 +1792,97 @@ mod tests {
         let appearance_path = blob.first_seen[0].path.to_str_lossy();
         assert_eq!(appearance_path, "secret.txt");
 
+        Ok(())
+    }
+
+    #[test]
+    fn branch_history_deduplicates_reintroduced_blobs_and_preserves_appearances() -> Result<()> {
+        let temp = tempdir()?;
+        let repo = Git2Repository::init(temp.path())?;
+        let signature = Signature::now("tester", "tester@example.com")?;
+        let mut index = repo.index()?;
+        for (path, content) in
+            [("a.txt", "first historical secret"), ("b.txt", "second historical secret")]
+        {
+            fs::write(temp.path().join(path), content)?;
+            index.add_path(Path::new(path))?;
+        }
+        let tree = repo.find_tree(index.write_tree()?)?;
+        let root_id = repo.commit(None, &signature, &signature, "introduce", &tree, &[])?;
+        let root = repo.find_commit(root_id)?;
+        index.clear()?;
+        let empty_tree = repo.find_tree(index.write_tree()?)?;
+        let deleted_id =
+            repo.commit(None, &signature, &signature, "delete", &empty_tree, &[&root])?;
+        let deleted = repo.find_commit(deleted_id)?;
+        let tip_id =
+            repo.commit(Some("HEAD"), &signature, &signature, "restore", &tree, &[&deleted])?;
+
+        let result = enumerate_git_branch_history(
+            temp.path(),
+            open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
+            "HEAD",
+            None,
+            true,
+            Instant::now() + Duration::from_secs(60),
+        )?;
+        let GitBlobSource::Precomputed(blobs) = result.blobs else {
+            panic!("expected precomputed history blobs");
+        };
+        assert_eq!(blobs.len(), 2, "each blob must be scanned only once");
+        assert!(blobs[0].blob_oid < blobs[1].blob_oid, "blob order must be deterministic");
+        let mut expected_commits = vec![root_id.to_string(), tip_id.to_string()];
+        expected_commits.sort();
+        for blob in blobs {
+            let commits: Vec<_> = blob
+                .first_seen
+                .iter()
+                .map(|appearance| appearance.commit_metadata.commit_id.to_string())
+                .collect();
+            assert_eq!(commits, expected_commits, "preserve both introductions in stable order");
+            let path = blob.first_seen[0].path.to_str_lossy();
+            assert!(path == "a.txt" || path == "b.txt");
+            assert!(
+                blob.first_seen.iter().all(|appearance| appearance.path.to_str_lossy() == path)
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn branch_history_scans_annotated_tag_at_shallow_boundary() -> Result<()> {
+        let temp = tempdir()?;
+        let repo = Git2Repository::init(temp.path())?;
+        let signature = Signature::now("tester", "tester@example.com")?;
+        fs::write(temp.path().join("secret.txt"), "a secret inherited from missing history")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("secret.txt"))?;
+        let tree = repo.find_tree(index.write_tree()?)?;
+        let root_id = repo.commit(None, &signature, &signature, "root", &tree, &[])?;
+        let root = repo.find_commit(root_id)?;
+        let tip_id = repo.commit(Some("HEAD"), &signature, &signature, "tip", &tree, &[&root])?;
+        let tip = repo.find_commit(tip_id)?;
+        repo.tag("release", tip.as_object(), &signature, "annotated tag", false)?;
+        fs::write(repo.path().join("shallow"), format!("{tip_id}\n"))?;
+
+        let result = enumerate_git_branch_history(
+            temp.path(),
+            open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
+            "release",
+            None,
+            true,
+            Instant::now() + Duration::from_secs(60),
+        )?;
+        let GitBlobSource::Precomputed(blobs) = result.blobs else {
+            panic!("expected precomputed history blobs");
+        };
+        assert_eq!(blobs.len(), 1);
+        assert_eq!(blobs[0].first_seen.len(), 1);
+        assert_eq!(
+            blobs[0].first_seen[0].commit_metadata.commit_id.to_string(),
+            tip_id.to_string()
+        );
+        assert_eq!(blobs[0].first_seen[0].path.to_str_lossy(), "secret.txt");
         Ok(())
     }
 

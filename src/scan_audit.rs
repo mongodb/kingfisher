@@ -469,7 +469,7 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
     } else if branch_root_enabled {
         "inclusive_root_tree_diff"
     } else if input.branch.is_some() {
-        "git_tree"
+        if input.git_history == GitHistoryMode::Full { "branch_history" } else { "git_tree" }
     } else if input.git_history == GitHistoryMode::None {
         "working_tree"
     } else {
@@ -515,6 +515,11 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
     let fetched_commit_count = if scope == "all_fetched_git_objects" {
         git_output(root, deadline, &["rev-list", "--all", "--count"])
             .and_then(|value| value.parse().ok())
+    } else if scope == "branch_history" {
+        tip_sha.as_deref().and_then(|tip| {
+            git_output(root, deadline, &["rev-list", "--count", tip])
+                .and_then(|value| value.parse().ok())
+        })
     } else {
         None
     };
@@ -576,7 +581,13 @@ pub fn combine_git_snapshots(
 /// escape character in cmd.exe-style argument processing, which mangles the
 /// argument on Windows and breaks resolution.
 fn git_commit_sha(root: &Path, deadline: Instant, ref_name: &str) -> Option<String> {
-    git_output(root, deadline, &["rev-list", "-n", "1", ref_name])
+    crate::scanner::reference_candidates(ref_name).into_iter().find_map(|candidate| {
+        git_output(
+            root,
+            deadline,
+            &["rev-parse", "--verify", "--end-of-options", &format!("{candidate}^{{commit}}")],
+        )
+    })
 }
 
 fn git_output(root: &Path, deadline: Instant, args: &[&str]) -> Option<String> {

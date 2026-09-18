@@ -385,7 +385,8 @@ pub struct InputSpecifierArgs {
     #[arg(long, default_value_t=GitCloneMode::Bare, alias="git-clone-mode")]
     pub git_clone: GitCloneMode,
 
-    /// Select whether to scan full Git history or not
+    /// Scan full Git history (restricted to --branch when set), or only the selected
+    /// snapshot/working tree with "none". Explicit diff options retain their diff scope.
     #[arg(long, default_value_t=GitHistoryMode::Full)]
     pub git_history: GitHistoryMode,
 
@@ -416,7 +417,8 @@ pub struct InputSpecifierArgs {
     )]
     pub staged: bool,
 
-    /// Branch, tag, or commit to scan or compare against (defaults to HEAD)
+    /// Branch, tag, or commit whose reachable history to scan or to compare against.
+    /// Use --git-history none to scan only its snapshot. Diff comparisons default to HEAD.
     #[arg(
         long,
         value_name = "GIT-REF",
