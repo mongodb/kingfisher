@@ -89,7 +89,8 @@ eligible). The available scopes are:
 | `git.scope` | Meaning |
 |---|---|
 | `all_fetched_git_objects` | Every eligible file-content object (Git blob) available in the fetched object database, including history objects—not only the tip's files |
-| `git_tree` | The tree resolved from `--branch` |
+| `branch_history` | All commits reachable from `--branch` with `--git-history full` (the default), including merged history |
+| `git_tree` | The tree resolved from `--branch` with `--git-history none` |
 | `working_tree` | The checked-out files used with `--git-history none` |
 | `tree_diff` | The change set between `--since-commit` and the resolved tip |
 | `inclusive_root_tree_diff` | Changes beginning at `--branch-root-commit` or the computed branch root |
@@ -97,7 +98,7 @@ eligible). The available scopes are:
 
 `tip_ref` and `tip_sha` identify the starting tip. Range scans also record `base_ref`/`base_sha` or
 `inclusive_root_ref`/`inclusive_root_sha`. Full-history scans include `fetched_commit_count` when
-Git can compute it, plus the clone mode and whether the repository is shallow. These fields
+Git can compute it (restricted to the selected ref’s reachable commits for `branch_history`), plus the clone mode and whether the repository is shallow. These fields
 describe what was locally available and eligible; they do not pretend that a Git graph has one
 chronological “last” commit.
 

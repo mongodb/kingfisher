@@ -235,9 +235,9 @@ git checkout feature-1
 kingfisher scan /tmp/SecretsTest --branch feature-1 \
   --since-commit=$(git -C /tmp/SecretsTest merge-base main feature-1)
 #
-# scan only a specific commit
+# scan only the snapshot of a specific commit
 kingfisher scan /tmp/SecretsTest \
-  --branch baba6ccb453963d3f6136d1ace843e48d7007c3f
+  --branch baba6ccb453963d3f6136d1ace843e48d7007c3f --git-history none
 #
 # scan feature-1 starting at a specific commit (inclusive)
 kingfisher scan /tmp/SecretsTest --branch feature-1 \
@@ -270,7 +270,7 @@ kingfisher scan https://github.com/org/repo.git \
   --branch development
 ```
 
-When `--since-commit` is omitted, specifying `--branch` scans the requested ref directly. This makes it easy to analyze a feature branch without checking it out locally.
+When no explicit diff options (`--since-commit`, `--branch-root`, `--branch-root-commit`, or `--staged`) are supplied, `--branch` scans all history reachable from the requested ref, including merged branches. This is the default `--git-history full` behavior and finds secrets deleted in later commits without scanning unrelated branches or checking out the selected ref. Use `--git-history none` to scan only the selected ref’s snapshot. Full-history enumeration takes more time and buffers blob metadata before scanning; the revision walk and commit diffs share one `--git-repo-timeout` budget. Increase that timeout for large histories when needed.
 
 ```bash
 # Scan a branch from an existing checkout

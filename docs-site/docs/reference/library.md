@@ -93,6 +93,10 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
+`scan_file` and `scan_bytes` automatically decode UTF-16 and UTF-32 input in either byte order,
+with or without a BOM, before applying rules. This includes common Windows-generated credential
+files; ASCII-compatible encodings such as Latin-1 and GBK remain byte-compatible for ASCII secrets.
+
 ### Scanning In-Memory Content
 
 ```rust

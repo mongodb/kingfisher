@@ -576,17 +576,15 @@ pub fn combine_git_snapshots(
 
 /// Resolves a ref (branch, tag, or commit SHA) to its commit SHA.
 ///
-/// Uses `rev-list -n 1` instead of `rev-parse --verify <ref>^{commit}`: both
-/// peel tags to the underlying commit, but the caret in the peel syntax is an
-/// escape character in cmd.exe-style argument processing, which mangles the
-/// argument on Windows and breaks resolution.
+/// Verifies each local or remote-tracking candidate with `rev-parse --verify
+/// --end-of-options`, so user input cannot be interpreted as command options.
+/// Then `rev-list -n 1` peels the verified object ID to a commit without adding
+/// caret syntax, which Windows command wrappers can mangle.
 fn git_commit_sha(root: &Path, deadline: Instant, ref_name: &str) -> Option<String> {
     crate::scanner::reference_candidates(ref_name).into_iter().find_map(|candidate| {
-        git_output(
-            root,
-            deadline,
-            &["rev-parse", "--verify", "--end-of-options", &format!("{candidate}^{{commit}}")],
-        )
+        let oid =
+            git_output(root, deadline, &["rev-parse", "--verify", "--end-of-options", &candidate])?;
+        git_output(root, deadline, &["rev-list", "-n", "1", &oid, "--"])
     })
 }
 
@@ -658,6 +656,37 @@ fn git_output(root: &Path, deadline: Instant, args: &[&str]) -> Option<String> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn audit_commit_resolution_handles_refs_tags_and_invalid_input() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let repo = git2::Repository::init(&root).unwrap();
+        let signature = git2::Signature::now("tester", "tester@example.com").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let commit =
+            repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[]).unwrap();
+        let object = repo.find_object(commit, None).unwrap();
+        repo.tag("release", &object, &signature, "annotated tag", false).unwrap();
+        repo.reference("refs/remotes/origin/feature", commit, false, "remote branch").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+
+        for reference in ["HEAD", "release", "feature", "origin/feature", &commit.to_string()] {
+            assert_eq!(
+                git_commit_sha(&root, deadline, reference),
+                Some(commit.to_string()),
+                "failed to resolve {reference}"
+            );
+        }
+        for reference in ["missing", "--all", "--help", "HEAD..HEAD", &tree_id.to_string()] {
+            assert_eq!(
+                git_commit_sha(&root, deadline, reference),
+                None,
+                "unexpected commit for {reference}"
+            );
+        }
+    }
 
     #[test]
     fn manifest_summary_counts_repository_outcomes() {
