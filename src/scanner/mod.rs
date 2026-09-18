@@ -1,6 +1,6 @@
 //! Public façade for the scanner subsystem.
 pub(crate) use docker::{save_docker_archives, save_docker_images};
-pub(crate) use enumerate::enumerate_filesystem_inputs;
+pub(crate) use enumerate::{enumerate_filesystem_inputs, reference_candidates};
 pub(crate) use repos::{
     clone_or_update_git_repos_streaming, enumerate_azure_repos, enumerate_bitbucket_repos,
     enumerate_github_event_targets, enumerate_github_repos, enumerate_huggingface_repos,

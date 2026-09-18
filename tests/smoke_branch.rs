@@ -280,3 +280,124 @@ fn scan_branch_tip_with_branch_root_commit() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn scan_branch_history_finds_deleted_secrets_only_in_reachable_commits() -> Result<()> {
+    let dir = tempdir()?;
+    let repo_dir = dir.path().join("repo");
+    let repo = Repository::init(&repo_dir)?;
+    let sig = Signature::now("tester", "tester@example.com")?;
+    let mut index = repo.index()?;
+    index.clear()?;
+    let empty_tree = repo.find_tree(index.write_tree()?)?;
+    let root_id = repo.commit(Some("HEAD"), &sig, &sig, "root", &empty_tree, &[])?;
+    let root = repo.find_commit(root_id)?;
+
+    // The checked-out branch stays clean. The selected branch introduces a secret,
+    // then removes the file entirely.
+    fs::write(repo_dir.join("deleted.txt"), GITHUB_TOKEN_LINE)?;
+    index.add_path(Path::new("deleted.txt"))?;
+    let secret_tree = repo.find_tree(index.write_tree()?)?;
+    let secret_id = repo.commit(None, &sig, &sig, "secret", &secret_tree, &[&root])?;
+    let secret = repo.find_commit(secret_id)?;
+    let removed_id = repo.commit(None, &sig, &sig, "remove secret", &empty_tree, &[&secret])?;
+    let removed = repo.find_commit(removed_id)?;
+
+    // A merged side branch also deletes its secret before the merge. Traversing
+    // only first parents would miss it.
+    fs::write(repo_dir.join("deleted.txt"), GCP_API_KEY_LINE)?;
+    index.add_path(Path::new("deleted.txt"))?;
+    let side_tree = repo.find_tree(index.write_tree()?)?;
+    let side_id = repo.commit(None, &sig, &sig, "side secret", &side_tree, &[&root])?;
+    let side = repo.find_commit(side_id)?;
+    let side_removed_id = repo.commit(None, &sig, &sig, "remove side", &empty_tree, &[&side])?;
+    let side_removed = repo.find_commit(side_removed_id)?;
+    let merge_id = repo.commit(
+        Some("refs/heads/selected"),
+        &sig,
+        &sig,
+        "merge",
+        &empty_tree,
+        &[&removed, &side_removed],
+    )?;
+
+    // Neither an unrelated branch nor the working tree belongs to this scan.
+    fs::write(repo_dir.join("deleted.txt"), SLACK_TOKEN_LINE)?;
+    index.add_path(Path::new("deleted.txt"))?;
+    let unrelated_tree = repo.find_tree(index.write_tree()?)?;
+    repo.commit(Some("refs/heads/unrelated"), &sig, &sig, "unrelated", &unrelated_tree, &[&root])?;
+
+    let bare_dir = dir.path().join("bare.git");
+    git2::build::RepoBuilder::new().bare(true).clone(repo_dir.to_str().unwrap(), &bare_dir)?;
+    for path in [&repo_dir, &bare_dir] {
+        for extra_args in [vec![], vec!["--git-history", "full"], vec!["--commit-metadata=false"]] {
+            let assertion = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+                .args([
+                    "scan",
+                    path.to_str().unwrap(),
+                    "--branch",
+                    "selected",
+                    "--format",
+                    "toon",
+                    "--no-validate",
+                    "--no-update-check",
+                ])
+                .args(extra_args)
+                .assert()
+                .code(200)
+                .stdout(
+                    contains(GITHUB_TOKEN_VALUE)
+                        .and(contains(GCP_API_KEY_VALUE))
+                        .and(contains("branch_history")),
+                )
+                .stdout(contains(SLACK_TOKEN_VALUE).not());
+            let output = std::str::from_utf8(&assertion.get_output().stdout)?;
+            let report: serde_json::Value = toon_format::decode_default(output)?;
+            // Six reachable commits, excluding the unrelated branch's extra commit.
+            assert_eq!(
+                report["audit"]["repositories"][0]["git"]["fetched_commit_count"], 6,
+                "{}",
+                report["audit"]
+            );
+        }
+        // Snapshot mode and explicit diff mode still scan the clean tip only.
+        for extra_args in [
+            vec!["--git-history", "none"],
+            vec!["--since-commit", "HEAD"],
+            vec!["--exclude", "deleted.txt"],
+        ] {
+            Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+                .args([
+                    "scan",
+                    path.to_str().unwrap(),
+                    "--branch",
+                    "selected",
+                    "--format",
+                    "toon",
+                    "--no-validate",
+                    "--no-update-check",
+                ])
+                .args(extra_args)
+                .assert()
+                .success()
+                .stdout(contains(GITHUB_TOKEN_VALUE).not().and(contains(GCP_API_KEY_VALUE).not()));
+        }
+    }
+
+    // Commit refs obey the same history scope and retain the introducing commit.
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .args([
+            "scan",
+            repo_dir.to_str().unwrap(),
+            "--branch",
+            &merge_id.to_string(),
+            "--format",
+            "toon",
+            "--no-validate",
+            "--no-update-check",
+        ])
+        .assert()
+        .code(200)
+        .stdout(contains(secret_id.to_string()).and(contains(side_id.to_string())));
+    Ok(())
+}

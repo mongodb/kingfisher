@@ -469,7 +469,7 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
     } else if branch_root_enabled {
         "inclusive_root_tree_diff"
     } else if input.branch.is_some() {
-        "git_tree"
+        if input.git_history == GitHistoryMode::Full { "branch_history" } else { "git_tree" }
     } else if input.git_history == GitHistoryMode::None {
         "working_tree"
     } else {
@@ -515,6 +515,11 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
     let fetched_commit_count = if scope == "all_fetched_git_objects" {
         git_output(root, deadline, &["rev-list", "--all", "--count"])
             .and_then(|value| value.parse().ok())
+    } else if scope == "branch_history" {
+        tip_sha.as_deref().and_then(|tip| {
+            git_output(root, deadline, &["rev-list", "--count", tip])
+                .and_then(|value| value.parse().ok())
+        })
     } else {
         None
     };
@@ -571,20 +576,41 @@ pub fn combine_git_snapshots(
 
 /// Resolves a ref (branch, tag, or commit SHA) to its commit SHA.
 ///
-/// Uses `rev-list -n 1` instead of `rev-parse --verify <ref>^{commit}`: both
-/// peel tags to the underlying commit, but the caret in the peel syntax is an
-/// escape character in cmd.exe-style argument processing, which mangles the
-/// argument on Windows and breaks resolution.
+/// Verifies each local or remote-tracking candidate with `rev-parse --verify
+/// --end-of-options`, so user input cannot be interpreted as command options.
+/// Then `rev-list -n 1` peels the verified object ID to a commit without adding
+/// caret syntax, which Windows command wrappers can mangle.
 fn git_commit_sha(root: &Path, deadline: Instant, ref_name: &str) -> Option<String> {
-    git_output(root, deadline, &["rev-list", "-n", "1", ref_name])
+    crate::scanner::reference_candidates(ref_name).into_iter().find_map(|candidate| {
+        let oid =
+            git_output(root, deadline, &["rev-parse", "--verify", "--end-of-options", &candidate])?;
+        git_output(root, deadline, &["rev-list", "-n", "1", &oid, "--"])
+    })
+}
+
+/// Git for Windows does not accept the extended-length path prefix returned by
+/// `std::fs::canonicalize`, even though the Windows filesystem APIs do.
+fn git_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.as_os_str().to_string_lossy();
+        if let Some(unc_path) = text.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{unc_path}"));
+        }
+        if let Some(dos_path) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(dos_path);
+        }
+    }
+    path.to_path_buf()
 }
 
 fn git_output(root: &Path, deadline: Instant, args: &[&str]) -> Option<String> {
+    let git_root = git_path(root);
     let mut command = Command::new("git");
     if root.join("HEAD").is_file() && root.join("objects").is_dir() {
-        command.arg("--git-dir").arg(root);
+        command.arg("--git-dir").arg(&git_root);
     } else {
-        command.arg("-C").arg(root);
+        command.arg("-C").arg(&git_root);
     }
     command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = match command.spawn() {
@@ -647,6 +673,47 @@ fn git_output(root: &Path, deadline: Instant, args: &[&str]) -> Option<String> {
 mod tests {
     use super::*;
     use tempfile::tempdir;
+
+    #[test]
+    fn audit_commit_resolution_handles_refs_tags_and_invalid_input() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let repo = git2::Repository::init(&root).unwrap();
+        let signature = git2::Signature::now("tester", "tester@example.com").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let commit =
+            repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[]).unwrap();
+        let object = repo.find_object(commit, None).unwrap();
+        repo.tag("release", &object, &signature, "annotated tag", false).unwrap();
+        repo.reference("refs/remotes/origin/feature", commit, false, "remote branch").unwrap();
+        let deadline = Instant::now() + Duration::from_secs(30);
+
+        for reference in ["HEAD", "release", "feature", "origin/feature", &commit.to_string()] {
+            assert_eq!(
+                git_commit_sha(&root, deadline, reference),
+                Some(commit.to_string()),
+                "failed to resolve {reference}"
+            );
+        }
+        for reference in ["missing", "--all", "--help", "HEAD..HEAD", &tree_id.to_string()] {
+            assert_eq!(
+                git_commit_sha(&root, deadline, reference),
+                None,
+                "unexpected commit for {reference}"
+            );
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn git_path_removes_windows_extended_length_prefix() {
+        assert_eq!(git_path(Path::new(r"\\?\C:\repo")), PathBuf::from(r"C:\repo"));
+        assert_eq!(
+            git_path(Path::new(r"\\?\UNC\server\share\repo")),
+            PathBuf::from(r"\\server\share\repo")
+        );
+    }
 
     #[test]
     fn manifest_summary_counts_repository_outcomes() {

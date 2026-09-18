@@ -7,6 +7,9 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.5.0]
+- **Behavior change:** `scan --branch <ref>` now scans all reachable history by default, finding secrets deleted in later commits, including merged history. Use `--git-history none` to retain snapshot-only scanning; explicit diff options keep their existing scope. Full-history scans may need more time and memory, and history enumeration shares the repository’s `--git-repo-timeout` budget. [#503](https://github.com/mongodb/kingfisher/issues/503)
+
 ## [v2.4.0]
 - Fixed scans missing secrets in UTF-16 and UTF-32 files, including little-/big-endian files with or without a BOM.
 - Hardened the HTML report viewer with safer imported-data rendering, restricted external links, and a tighter browser security policy.
