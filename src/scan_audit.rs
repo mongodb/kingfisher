@@ -588,12 +588,29 @@ fn git_commit_sha(root: &Path, deadline: Instant, ref_name: &str) -> Option<Stri
     })
 }
 
+/// Git for Windows does not accept the extended-length path prefix returned by
+/// `std::fs::canonicalize`, even though the Windows filesystem APIs do.
+fn git_path(path: &Path) -> PathBuf {
+    #[cfg(windows)]
+    {
+        let text = path.as_os_str().to_string_lossy();
+        if let Some(unc_path) = text.strip_prefix(r"\\?\UNC\") {
+            return PathBuf::from(format!(r"\\{unc_path}"));
+        }
+        if let Some(dos_path) = text.strip_prefix(r"\\?\") {
+            return PathBuf::from(dos_path);
+        }
+    }
+    path.to_path_buf()
+}
+
 fn git_output(root: &Path, deadline: Instant, args: &[&str]) -> Option<String> {
+    let git_root = git_path(root);
     let mut command = Command::new("git");
     if root.join("HEAD").is_file() && root.join("objects").is_dir() {
-        command.arg("--git-dir").arg(root);
+        command.arg("--git-dir").arg(&git_root);
     } else {
-        command.arg("-C").arg(root);
+        command.arg("-C").arg(&git_root);
     }
     command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = match command.spawn() {
@@ -686,6 +703,16 @@ mod tests {
                 "unexpected commit for {reference}"
             );
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn git_path_removes_windows_extended_length_prefix() {
+        assert_eq!(git_path(Path::new(r"\\?\C:\repo")), PathBuf::from(r"C:\repo"));
+        assert_eq!(
+            git_path(Path::new(r"\\?\UNC\server\share\repo")),
+            PathBuf::from(r"\\server\share\repo")
+        );
     }
 
     #[test]
