@@ -332,7 +332,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
     format!(
         "<div class=\"table-toolbar\" data-table-controls=\"detailed-findings-table\">
           <label class=\"search-control\"><span>Filter findings</span><input type=\"search\" data-table-search=\"detailed-findings-table\" aria-controls=\"detailed-findings-table\" placeholder=\"Rule, path, repository, command…\"></label>
-          <label class=\"select-control\"><span>Validation</span><select data-table-column-filter=\"detailed-findings-table\" data-column=\"5\"><option value=\"\">All validation states</option><option value=\"active credential\">Active</option><option value=\"assumed valid\">Assumed valid</option><option value=\"locally derived\">Locally derived</option><option value=\"inactive credential\">Inactive</option><option value=\"inconclusive validation\">Inconclusive</option><option value=\"validation skipped\">Skipped</option><option value=\"not attempted\">Not attempted</option></select></label>
+          <label class=\"select-control\"><span>Validation</span><select data-table-column-filter=\"detailed-findings-table\" data-column=\"5\"><option value=\"\">All validation states</option><option value=\"active credential\">Active</option><option value=\"assumed valid (not live-validated)\">Assumed valid</option><option value=\"locally derived\">Locally derived</option><option value=\"invalid cryptographic material\">Invalid material</option><option value=\"inactive credential\">Inactive</option><option value=\"inconclusive validation\">Inconclusive</option><option value=\"validation skipped\">Skipped</option><option value=\"canary token (skipped)\">Canary (skipped)</option><option value=\"not attempted\">Not attempted</option></select></label>
           <label class=\"select-control\"><span>Confidence</span><select data-table-column-filter=\"detailed-findings-table\" data-column=\"6\"><option value=\"\">All confidence levels</option><option value=\"high\">High</option><option value=\"medium\">Medium</option><option value=\"low\">Low</option></select></label>
           <button type=\"button\" class=\"secondary-button\" data-table-reset=\"detailed-findings-table\">Clear</button>
           <span class=\"table-count\" data-table-count=\"detailed-findings-table\" aria-live=\"polite\"></span>
@@ -493,10 +493,8 @@ const INTERACTIVE_TABLE_SCRIPT: &str = r#"<script>
         const matchesColumns = filters.every((filter) => {
           if (!filter.value) return true;
           const cell = row.cells[Number(filter.dataset.column)];
-          const explicitValue = cell?.dataset.filterValue;
-          const actual = (explicitValue ?? cell?.textContent ?? "").trim().toLocaleLowerCase();
-          const expected = filter.value.toLocaleLowerCase();
-          return explicitValue === undefined ? actual.includes(expected) : actual === expected;
+          const actual = (cell?.dataset.filterValue ?? cell?.textContent ?? "").trim().toLocaleLowerCase();
+          return actual === filter.value.toLocaleLowerCase();
         });
         row.hidden = !(matchesSearch && matchesColumns && (!advancedFilters || advancedFilters.matches(row)));
         if (!row.hidden) visible += 1;
@@ -949,6 +947,7 @@ mod tests {
         assert!(html.contains("data-table-search=\"repository-coverage-table\""));
         assert!(!html.contains("INTERACTIVE_TABLE_SCRIPT"));
         assert!(html.contains("document.querySelectorAll(\"table.interactive-table\")"));
+        assert!(html.contains("return actual === filter.value.toLocaleLowerCase();"));
         assert!(html.contains("@page { size: landscape;"));
         assert!(html.contains("display: contents; overflow: visible"));
         assert!(html.contains("display: table-header-group"));
@@ -959,10 +958,17 @@ mod tests {
 
     #[test]
     fn findings_table_is_readable_sortable_and_filterable() {
-        let html = render_findings_table(&[sample_finding()]);
+        let mut inactive = sample_finding();
+        inactive.finding.validation.outcome = kingfisher_core::ValidationOutcome::VerifiedInactive;
+        inactive.finding.validation.status = "Inactive Credential".to_string();
+        let html = render_findings_table(&[sample_finding(), inactive]);
 
         assert!(html.contains("data-table-search=\"detailed-findings-table\""));
         assert!(html.contains("data-table-column-filter=\"detailed-findings-table\""));
+        // Filter options must equal the rendered label, which is matched exactly.
+        assert!(html.contains("<span class=\"status status-active\">Active Credential</span>"));
+        assert!(html.contains("<span class=\"status status-inactive\">Inactive Credential</span>"));
+        assert!(html.contains("<option value=\"active credential\">"));
         assert!(html.contains("data-sort-type=\"number\""));
         assert!(html.contains("View source"));
         assert!(html.contains("<details class=\"commands\"><summary>2 commands</summary>"));
