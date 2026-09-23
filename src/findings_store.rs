@@ -5,10 +5,10 @@ use std::{
     sync::Arc,
 };
 
-use anyhow::Result;
-use bloomfilter::Bloom;
+use anyhow::{Context, Result};
+
+mod spill;
 use rustc_hash::{FxHashMap, FxHashSet, FxHasher};
-use xxhash_rust::xxh3::xxh3_64;
 
 use crate::{
     access_map::ScanAccessMapResult,
@@ -49,60 +49,14 @@ fn dedup_origin_kind(origin: &OriginSet) -> &'static str {
     if origin.iter().any(|o| matches!(o, Origin::Extended(_))) { "ext" } else { "file_git" }
 }
 
-const DEDUP_BLOOM_FP_RATE: f64 = 0.001;
-const INITIAL_BLOOM_CAPACITY: usize = 5_000_000;
-const MAX_BLOOM_CAPACITY: usize = 10_000_000;
-
-struct DedupBloomSet {
-    filters: Vec<Bloom<u64>>,
-    active_items: usize,
-    active_capacity: usize,
-}
-
-impl DedupBloomSet {
-    fn new() -> Self {
-        Self::with_capacity(INITIAL_BLOOM_CAPACITY)
-    }
-
-    fn with_capacity(initial_capacity: usize) -> Self {
-        let capacity = initial_capacity.max(1);
-        let first = Bloom::new_for_fp_rate(capacity, DEDUP_BLOOM_FP_RATE)
-            .expect("Bloom filter size params are valid");
-        Self { filters: vec![first], active_items: 0, active_capacity: capacity }
-    }
-
-    fn contains_or_insert(&mut self, key: u64) -> bool {
-        if self.filters.iter().any(|filter| filter.check(&key)) {
-            return true;
-        }
-
-        if self.active_items >= self.active_capacity {
-            self.grow();
-        }
-
-        let active = self.filters.last_mut().expect("at least one Bloom filter exists");
-        active.set(&key);
-        self.active_items += 1;
-        false
-    }
-
-    fn grow(&mut self) {
-        self.active_capacity = std::cmp::min(self.active_capacity * 2, MAX_BLOOM_CAPACITY);
-        let next = Bloom::new_for_fp_rate(self.active_capacity, DEDUP_BLOOM_FP_RATE)
-            .expect("Bloom filter size params are valid");
-        self.filters.push(next);
-        self.active_items = 0;
-    }
-}
-
 pub struct FindingsStore {
+    spill: Option<spill::FindingsSpill>,
     rules: Vec<Arc<Rule>>,
     matches: Vec<Arc<FindingsStoreMessage>>,
     index_map: FxHashMap<(BlobId, OffsetSpan), usize>,
     blobs: FxHashSet<BlobId>,
     clone_dir: PathBuf,
-    dedup_filter: DedupBloomSet,
-    // Confirm Bloom hits with full cryptographic digests, without retaining another
+    // Deduplicate with full cryptographic digests, without retaining another
     // copy of each secret. Storage is fixed-size per unique finding.
     dedup_exact: FxHashSet<[u8; 32]>,
     blob_scoped_dependency_rule_ids: FxHashSet<String>,
@@ -122,6 +76,7 @@ pub struct FindingsStore {
 impl FindingsStore {
     pub fn new(clone_dir: PathBuf) -> Self {
         Self {
+            spill: None,
             rules: Vec::new(),
             matches: Vec::new(),
             blobs: FxHashSet::default(),
@@ -129,7 +84,6 @@ impl FindingsStore {
             blob_meta: FxHashMap::default(),
             origin_meta: FxHashMap::default(),
             clone_dir,
-            dedup_filter: DedupBloomSet::new(),
             dedup_exact: FxHashSet::default(),
             blob_scoped_dependency_rule_ids: FxHashSet::default(),
             docker_images: FxHashMap::default(),
@@ -144,7 +98,95 @@ impl FindingsStore {
         }
     }
 
+    /// Opt-in storage for findings accumulated between repository scans. Working
+    /// sets for validation, deduplication, and reporting are restored explicitly.
+    pub fn enable_spilling(&mut self) -> Result<()> {
+        if self.spill.is_none() {
+            match spill::FindingsSpill::new() {
+                Ok(file) => self.spill = Some(file),
+                Err(error) if spill::is_storage_full(&error) => {
+                    tracing::warn!(
+                        "Temporary storage is full; --disk-offload is disabled for this scan. Continuing in memory; memory use may increase."
+                    );
+                }
+                Err(error) => {
+                    return Err(error.context("Failed to create temporary findings storage"));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    pub fn spill_pending(&mut self) -> Result<()> {
+        let Some(spill) = &mut self.spill else {
+            return Ok(());
+        };
+        if self.matches.is_empty() {
+            return Ok(());
+        }
+        if matches!(
+            spill.append(&self.matches).context("Failed to store accumulated findings on disk")?,
+            spill::AppendOutcome::StorageFull
+        ) {
+            tracing::warn!(
+                "Temporary storage is full; restoring accumulated findings to memory and disabling --disk-offload for the remainder of this scan. Memory use may increase."
+            );
+            self.restore_spilled_with_cleanup(false).context(
+                "Temporary storage filled up and findings could not be restored to memory",
+            )?;
+            self.spill = None;
+            return Ok(());
+        }
+        self.matches = Vec::new();
+        self.index_map = FxHashMap::default();
+        self.blob_meta = FxHashMap::default();
+        self.origin_meta = FxHashMap::default();
+        // Keep digest and blob sets so later repositories retain global dedup semantics.
+        Ok(())
+    }
+
+    pub fn restore_spilled(&mut self) -> Result<()> {
+        self.restore_spilled_with_cleanup(true)
+    }
+
+    fn restore_spilled_with_cleanup(&mut self, truncate: bool) -> Result<()> {
+        let Some(spill) = &mut self.spill else {
+            return Ok(());
+        };
+        if spill.is_empty() {
+            return Ok(());
+        }
+        // Build a replacement working set in batches, pooling metadata as it is
+        // read. On any read error both the original spill and pending rows survive.
+        let mut restored = Self::new(self.clone_dir.clone());
+        spill
+            .read_batches(&self.rules, |batch| {
+                restored.record(batch, false);
+            })
+            .context("Failed to restore accumulated findings")?;
+        if truncate {
+            spill.clear()?;
+        }
+        let pending = std::mem::take(&mut self.matches);
+        for message in pending {
+            restored.record(vec![Arc::unwrap_or_clone(message)], false);
+        }
+        self.matches = restored.matches;
+        self.index_map = restored.index_map;
+        self.blob_meta = restored.blob_meta;
+        self.origin_meta = restored.origin_meta;
+        Ok(())
+    }
+
+    fn assert_restored(&self) {
+        assert!(
+            self.spill.as_ref().is_none_or(spill::FindingsSpill::is_empty),
+            "restore spilled findings before reading or modifying the working set"
+        );
+    }
+
     pub fn update_matches_in_place(&mut self, updated_matches: Vec<Arc<FindingsStoreMessage>>) {
+        self.assert_restored();
         for updated_match in updated_matches {
             let (_, _, updated) = &*updated_match;
             // Construct the same key used in record()
@@ -166,6 +208,7 @@ impl FindingsStore {
     /// Replaces all stored matches with the new deduplicated matches.
     /// It also rebuilds the index map and the blobs set accordingly.
     pub fn replace_matches(&mut self, new_matches: Vec<Arc<FindingsStoreMessage>>) {
+        self.assert_restored();
         self.matches = new_matches;
         self.index_map.clear();
         self.blobs.clear();
@@ -182,10 +225,12 @@ impl FindingsStore {
     }
 
     pub fn get_matches(&self) -> &[Arc<FindingsStoreMessage>] {
+        self.assert_restored();
         &self.matches
     }
 
     pub fn get_matches_mut(&mut self) -> &mut Vec<Arc<FindingsStoreMessage>> {
+        self.assert_restored();
         &mut self.matches
     }
 
@@ -232,7 +277,7 @@ impl FindingsStore {
     /// Insert a batch of findings.  
     /// Returns the number of *new blobs* discovered in this batch.
     ///
-    /// * `dedup == true` -- Bloom-filter gate is applied.
+    /// * `dedup == true` -- full cryptographic digests suppress duplicate findings.
     /// * Side-tables (`blob_meta`, `origin_meta`) guarantee only one Arc per distinct
     ///   `BlobMetadata` / `OriginSet`, so no more huge copies.
     pub fn record(&mut self, batch: Vec<FindingsStoreMessage>, dedup: bool) -> usize {
@@ -240,7 +285,7 @@ impl FindingsStore {
 
         for (origin, blob_md, m) in batch {
             /*───────────────────────────────────────────────────────────────┐
-            │ 1. Optional duplicate filter (unchanged)                      │
+            │ 1. Optional duplicate filter                                  │
             └───────────────────────────────────────────────────────────────*/
             if dedup {
                 // Prefer the full unnamed match (index 0). Fall back to a named TOKEN capture
@@ -277,14 +322,11 @@ impl FindingsStore {
                             .expect("dependency maps serialize"),
                     );
                 }
-                let key = xxh3_64(key_string.as_bytes());
                 let digest = *blake3::hash(key_string.as_bytes()).as_bytes();
-                let bloom_match = self.dedup_filter.contains_or_insert(key);
 
-                if bloom_match && self.dedup_exact.contains(&digest) {
+                if !self.dedup_exact.insert(digest) {
                     continue; // duplicate confirmed by its cryptographic digest
                 }
-                self.dedup_exact.insert(digest);
             }
 
             /*───────────────────────────────────────────────────────────────┐
@@ -317,65 +359,8 @@ impl FindingsStore {
         added
     }
 
-    // pub fn record(&mut self, batch: Vec<FindingsStoreMessage>, dedup: bool) -> usize {
-    //     let mut added = 0;
-
-    //     for message in batch {
-    //         if dedup {
-    //             let snippet = message
-    //                 .2
-    //                 .groups
-    //                 .captures
-    //                 .get(1)
-    //                 .or_else(|| message.2.groups.captures.get(0))
-    //                 .map_or("", |c| c.value.as_ref());
-
-    //             let origin_kind = match message.0.first() {
-    //                 Origin::GitRepo(_) => "git",
-    //                 Origin::File(_) => "file",
-    //                 Origin::Extended(_) => "ext",
-    //             };
-
-    //             // 64-bit key (turbo, cheap, good dispersion)
-    //             let key = xxh3_64(
-    //                 format!(
-    //                     "{}|{}|{}",
-    //                     message.2.rule_text_id.to_uppercase(),
-    //                     origin_kind,
-    //                     snippet
-    //                 )
-    //                 .as_bytes(),
-    //             );
-
-    //             // Bloom gate: 1. check, 2. insert (if new)
-    //             if self.seen_bloom.check(&key) {
-    //                 continue; // duplicate confirmed by its cryptographic digest
-    //             }
-    //             self.seen_bloom.set(&key);
-    //             self.bloom_items += 1;
-    //         }
-
-    //         // ── existing blob / index bookkeeping ───────────
-    //         if self.blobs.insert(message.1.id) {
-    //             added += 1;
-    //         }
-    //         self.matches.push(Arc::new(message));
-    //         let idx = self.matches.len() - 1;
-    //         let blob_id = self.matches[idx].1.id;
-    //         let offset_span = self.matches[idx].2.location.offset_span;
-    //         self.index_map.insert((blob_id, offset_span), idx);
-    //     }
-
-    //     // Optional : re-create filter after N inserts to bound FP rate
-    //     if dedup && self.bloom_items > 5_000_000 {
-    //         self.seen_bloom = Bloom::new_for_fp_rate(5_000_000, 0.001).unwrap();
-    //         self.bloom_items = 0;
-    //     }
-
-    //     added
-    // }
-
     pub fn get_num_matches(&self) -> usize {
+        self.assert_restored();
         // only count visible matches
         self.matches
             .iter()
@@ -387,6 +372,7 @@ impl FindingsStore {
     }
 
     pub fn get_summary(&self, include_hidden_findings: bool) -> FxHashMap<&'static str, usize> {
+        self.assert_restored();
         self.matches
             .iter()
             .filter(|msg| {
@@ -499,21 +485,22 @@ impl FindingsStore {
             self.postman_links.entry(dir.clone()).or_insert_with(|| link.clone());
         }
 
-        let batch: Vec<_> = other
-            .get_matches()
-            .iter()
-            .map(|msg| {
-                let (origin, blob_md, m) = msg.as_ref();
-                (origin.clone(), blob_md.clone(), m.clone())
-            })
-            .collect();
-
-        self.record(batch, dedup);
+        for chunk in other.get_matches().chunks(1024) {
+            let batch = chunk
+                .iter()
+                .map(|msg| {
+                    let (origin, blob_md, m) = msg.as_ref();
+                    (Arc::clone(origin), Arc::clone(blob_md), m.clone())
+                })
+                .collect();
+            self.record(batch, dedup);
+        }
     }
 
     pub fn get_finding_data_iter(
         &self,
     ) -> impl Iterator<Item = finding_data::FindingMetadata> + '_ {
+        self.assert_restored();
         self.matches.iter().map(|msg| {
             let (_, _, match_item) = &**msg;
             finding_data::FindingMetadata {
@@ -533,6 +520,7 @@ impl FindingsStore {
         metadata: &finding_data::FindingMetadata,
         _max_matches: Option<usize>,
     ) -> Result<Vec<finding_data::FindingDataEntry>> {
+        self.assert_restored();
         self.matches
             .iter()
             .filter(|msg| {
@@ -564,6 +552,7 @@ impl FindingsStore {
         &self,
         chunk_size: usize,
     ) -> impl Iterator<Item = Vec<std::sync::Arc<FindingsStoreMessage>>> + '_ {
+        self.assert_restored();
         self.matches.chunks(chunk_size).map(|slice| slice.to_vec()) // keep Arc pointers
     }
 }
@@ -572,7 +561,7 @@ impl FindingsStore {
 mod tests {
     use std::sync::Arc;
 
-    use super::{DedupBloomSet, FindingsStore};
+    use super::FindingsStore;
     use crate::rules::rule::{DependsOnRule, Rule, RuleSyntax};
 
     fn rule(id: &str, visible: bool, depends_on_rule: Vec<Option<DependsOnRule>>) -> Arc<Rule> {
@@ -629,37 +618,219 @@ mod tests {
         assert!(!store.blob_scoped_dependency_rule_ids.contains("CUSTOM.TEST.SECRET"));
     }
 
+    fn spill_message(rule: Arc<Rule>, token: &str, offset: usize) -> super::FindingsStoreMessage {
+        use crate::{
+            blob::{BlobId, BlobMetadata},
+            location::{Location, OffsetSpan},
+            matcher::{Match, SerializableCapture, SerializableCaptures},
+            origin::{Origin, OriginSet},
+        };
+        let id = BlobId::new(token.as_bytes());
+        (
+            Arc::new(OriginSet::single(Origin::from_file("fixture.txt".into()))),
+            Arc::new(BlobMetadata {
+                id,
+                num_bytes: token.len(),
+                mime_essence: Some("text/plain".into()),
+                language: None,
+            }),
+            Match {
+                rule,
+                blob_id: id,
+                location: Location {
+                    offset_span: OffsetSpan { start: offset, end: offset + token.len() },
+                    source_span: None,
+                },
+                groups: SerializableCaptures {
+                    captures: smallvec::smallvec![SerializableCapture {
+                        name: Some("TOKEN"),
+                        match_number: 0,
+                        start: offset,
+                        end: offset + token.len(),
+                        value: token.into()
+                    }],
+                },
+                finding_fingerprint: 123,
+                validation_response_body: Some("response body".into()),
+                validation_response_status: 200,
+                validation_success: true,
+                validation_outcome: kingfisher_core::ValidationOutcome::VerifiedActive,
+                calculated_entropy: 4.5,
+                visible: true,
+                is_base64: true,
+                dependent_captures: [("HOST".into(), "fixture.invalid".into())].into(),
+                ambiguous_dependencies: [("USER".into(), 2)].into(),
+            },
+        )
+    }
+
     #[test]
-    fn dedup_filter_remains_monotonic_across_growth() {
-        // The invariant under test is *monotonicity*: an item recorded
-        // before a filter rotation must still be reported as contained
-        // afterwards. Bloom filters never produce false negatives, so the
-        // bug this guards against is `contains_or_insert` failing to
-        // consult older filters after `grow()` swaps in a new active one.
-        //
-        // We do NOT assert "new" on insertions into a non-empty filter:
-        // with capacity=2 the Bloom filter is only ~29 bits wide and can
-        // legitimately false-positive on small keys, which would also
-        // prevent `active_items` from ever reaching capacity and thus
-        // never trigger growth via the public API. Calling the private
-        // `grow()` directly makes the rotation deterministic.
-        let mut filter = DedupBloomSet::with_capacity(2);
+    fn spill_round_trip_releases_payloads_and_preserves_dedup_and_validation() -> anyhow::Result<()>
+    {
+        let rule = rule("custom.spill", true, Vec::new());
+        let mut store = FindingsStore::new(std::env::temp_dir());
+        store.record_rules(&[Arc::clone(&rule)]);
+        store.enable_spilling()?;
+        let message = spill_message(Arc::clone(&rule), "private-test-token", 3);
+        let value = Arc::downgrade(&message.2.groups.captures[0].value);
+        store.record(vec![message], true);
+        store.spill_pending()?;
+        assert!(store.matches.is_empty());
+        assert!(value.upgrade().is_none(), "spilling must actually release captured values");
+        // Same credential in a later repository stays deduplicated across spill boundaries.
+        store.record(vec![spill_message(Arc::clone(&rule), "private-test-token", 9)], true);
+        assert!(store.matches.is_empty());
+        store.record(vec![spill_message(Arc::clone(&rule), "second-test-token", 20)], true);
+        store.spill_pending()?;
+        store.restore_spilled()?;
+        assert_eq!(store.get_matches().len(), 2);
+        let restored = &store.get_matches()[0].2;
+        assert_eq!(restored.groups.captures[0].raw_value(), "private-test-token");
+        assert_eq!(restored.location.offset_span.start, 3);
+        assert!(restored.location.source_span.is_none());
+        assert_eq!(restored.finding_fingerprint, 123);
+        assert_eq!(restored.validation_response_body.as_deref(), Some("response body"));
+        assert_eq!(restored.validation_outcome, kingfisher_core::ValidationOutcome::VerifiedActive);
+        assert_eq!(restored.validation_response_status, 200);
+        assert!(restored.validation_success && restored.is_base64);
+        assert_eq!(restored.dependent_captures["HOST"], "fixture.invalid");
+        assert_eq!(restored.ambiguous_dependencies["USER"], 2);
+        assert!(Arc::ptr_eq(&restored.rule, &rule));
+        store.restore_spilled()?;
+        assert_eq!(store.get_matches().len(), 2, "restoring twice must not duplicate findings");
+        Ok(())
+    }
 
-        // An insertion into an *empty* filter is guaranteed genuine — no
-        // bits are set, so `check` cannot return true — so the sentinel is
-        // definitely stored in the (soon-to-be-retired) first filter.
-        assert!(!filter.contains_or_insert(11), "insert into empty filter must be new");
-        let sentinel = 11u64;
+    #[test]
+    fn spill_preserves_git_commit_context_and_rebuilds_metadata_sharing() -> anyhow::Result<()> {
+        let rule = rule("private.spill.git", true, Vec::new());
+        let mut store = FindingsStore::new(std::env::temp_dir());
+        store.record_rules(&[Arc::clone(&rule)]);
+        store.enable_spilling()?;
+        let mut message = spill_message(Arc::clone(&rule), "git-test-token", 7);
+        message.0 = Arc::new(crate::origin::OriginSet::single(
+            crate::origin::Origin::from_git_repo_with_first_commit(
+                Arc::new("repository".into()),
+                Arc::new(crate::git_commit_metadata::CommitMetadata {
+                    commit_id: gix::ObjectId::from_hex(
+                        b"0123456789abcdef0123456789abcdef01234567",
+                    )?,
+                    committer_name: "Fixture Author".into(),
+                    committer_email: "fixture@example.invalid".into(),
+                    committer_timestamp: gix::date::Time::new(1_700_000_000, -25_200),
+                }),
+                "nested/credential.txt".into(),
+            ),
+        ));
+        let expected_origin = serde_json::to_value(&message.0)?;
+        store.record(vec![message.clone(), message], false);
+        store.spill_pending()?;
+        store.restore_spilled()?;
+        let messages = store.get_matches();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(serde_json::to_value(&messages[0].0)?, expected_origin);
+        assert!(Arc::ptr_eq(&messages[0].0, &messages[1].0));
+        assert!(Arc::ptr_eq(&messages[0].1, &messages[1].1));
+        Ok(())
+    }
 
-        // Force the filter rotation that the test name promises.
-        filter.grow();
-        assert_eq!(filter.filters.len(), 2, "grow() must add a second filter");
+    #[test]
+    fn failed_spill_restore_keeps_the_original_records() -> anyhow::Result<()> {
+        let rule = rule("custom.spill", true, Vec::new());
+        let mut store = FindingsStore::new(std::env::temp_dir());
+        store.enable_spilling()?;
+        store.record(vec![spill_message(Arc::clone(&rule), "test-token", 0)], false);
+        store.spill_pending()?;
+        assert!(store.restore_spilled().is_err());
+        store.record_rules(&[rule]);
+        store.restore_spilled()?;
+        assert_eq!(store.get_matches().len(), 1);
+        Ok(())
+    }
+    #[test]
+    fn disk_full_restores_completed_batches_and_keeps_pending_findings() -> anyhow::Result<()> {
+        for dedup in [false, true] {
+            for bytes_before_failure in [0, 16, 10_000] {
+                let rule = rule("custom.disk-full", true, Vec::new());
+                let mut store = FindingsStore::new(std::env::temp_dir());
+                store.record_rules(&[Arc::clone(&rule)]);
+                store.enable_spilling()?;
+                for index in 0..1025 {
+                    store.record(
+                        vec![spill_message(Arc::clone(&rule), &format!("saved-{index}"), index)],
+                        dedup,
+                    );
+                }
+                store.spill_pending()?;
+                let token = "pending-value-".repeat(2000);
+                store.record(vec![spill_message(Arc::clone(&rule), &token, 2000)], dedup);
+                store.spill.as_mut().unwrap().write_failure =
+                    Some((bytes_before_failure, std::io::ErrorKind::StorageFull));
+                store.spill_pending()?;
+                assert!(store.spill.is_none(), "disk writes must stay disabled after fallback");
+                assert_eq!(store.get_matches().len(), 1026);
+                assert_eq!(store.get_matches()[0].2.groups.captures[0].raw_value(), "saved-0");
+                assert_eq!(store.get_matches()[1025].2.groups.captures[0].raw_value(), token);
+                assert_eq!(store.get_matches()[0].2.dependent_captures["HOST"], "fixture.invalid");
+                assert!(store.get_matches()[0].2.validation_success);
+                store.record(vec![spill_message(Arc::clone(&rule), "saved-0", 3000)], dedup);
+                store.spill_pending()?;
+                store.restore_spilled()?;
+                assert_eq!(store.get_matches().len(), if dedup { 1026 } else { 1027 });
+            }
+        }
+        Ok(())
+    }
 
-        // After rotation the sentinel lives only in the older filter,
-        // which `contains_or_insert` must still consult.
-        assert!(
-            filter.contains_or_insert(sentinel),
-            "item inserted before growth must still be found afterwards"
-        );
+    #[test]
+    fn disk_full_on_first_write_keeps_findings_in_memory() -> anyhow::Result<()> {
+        let rule = rule("custom.disk-full", true, Vec::new());
+        let mut store = FindingsStore::new(std::env::temp_dir());
+        store.record_rules(&[Arc::clone(&rule)]);
+        store.enable_spilling()?;
+        store.record(vec![spill_message(rule, "pending-token", 0)], false);
+        store.spill.as_mut().unwrap().write_failure = Some((16, std::io::ErrorKind::StorageFull));
+        store.spill_pending()?;
+        assert!(store.spill.is_none());
+        assert_eq!(store.get_matches()[0].2.groups.captures[0].raw_value(), "pending-token");
+        Ok(())
+    }
+
+    #[test]
+    fn other_disk_errors_fail_without_losing_findings() -> anyhow::Result<()> {
+        let rule = rule("custom.disk-error", true, Vec::new());
+        let mut store = FindingsStore::new(std::env::temp_dir());
+        store.record_rules(&[Arc::clone(&rule)]);
+        store.enable_spilling()?;
+        store.record(vec![spill_message(Arc::clone(&rule), "saved-token", 0)], false);
+        store.spill_pending()?;
+        store.record(vec![spill_message(rule, "pending-token", 10)], false);
+        store.spill.as_mut().unwrap().write_failure =
+            Some((16, std::io::ErrorKind::PermissionDenied));
+        assert!(store.spill_pending().is_err());
+        assert!(store.spill.is_some());
+        store.restore_spilled()?;
+        assert_eq!(store.get_matches().len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn disk_full_with_failed_restore_does_not_discard_the_file_or_pending_findings()
+    -> anyhow::Result<()> {
+        let rule = rule("custom.disk-full", true, Vec::new());
+        let mut store = FindingsStore::new(std::env::temp_dir());
+        store.enable_spilling()?;
+        store.record(vec![spill_message(Arc::clone(&rule), "saved-token", 0)], false);
+        store.spill_pending()?;
+        store.record(vec![spill_message(Arc::clone(&rule), "pending-token", 10)], false);
+        store.spill.as_mut().unwrap().write_failure = Some((16, std::io::ErrorKind::StorageFull));
+        // Missing rule prevents decoding: fallback must fail instead of continuing with partial data.
+        assert!(store.spill_pending().is_err());
+        assert!(store.spill.is_some());
+        assert_eq!(store.matches.len(), 1);
+        store.record_rules(&[rule]);
+        store.restore_spilled()?;
+        assert_eq!(store.get_matches().len(), 2);
+        Ok(())
     }
 }

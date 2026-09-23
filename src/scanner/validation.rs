@@ -61,7 +61,7 @@ pub(crate) fn direct_access_map_requests(
         match_number: 0,
         start: 0,
         end: secret.len(),
-        value: crate::util::intern(secret),
+        value: secret.into(),
     }];
     synthetic_captures.extend(dependent_captures.iter().enumerate().map(
         |(index, (name, value))| crate::matcher::SerializableCapture {
@@ -69,7 +69,7 @@ pub(crate) fn direct_access_map_requests(
             match_number: index.saturating_add(1).try_into().unwrap_or(i32::MAX),
             start: 0,
             end: value.len(),
-            value: crate::util::intern(value),
+            value: value.as_str().into(),
         },
     ));
     let captures = SerializableCaptures { captures: synthetic_captures };
@@ -787,17 +787,18 @@ pub async fn run_secret_validation(
     //  Re-fetch dependent matches from the datastore so we don't hold two
     //  copies of the full match set in memory simultaneously.
     if !dependent_blob_ids.is_empty() {
-        let dependent_blobs: FxHashMap<BlobId, Vec<Arc<FindingsStoreMessage>>> = {
+        let dependent_blobs: FxHashMap<BlobId, Vec<usize>> = {
             let ds = datastore.lock().unwrap();
             let slice = if let Some(ref r) = range {
                 &ds.get_matches()[r.clone()]
             } else {
                 ds.get_matches()
             };
-            let mut map: FxHashMap<BlobId, Vec<Arc<FindingsStoreMessage>>> = FxHashMap::default();
-            for arc_msg in slice {
+            let mut map: FxHashMap<BlobId, Vec<usize>> = FxHashMap::default();
+            let start = range.as_ref().map_or(0, |r| r.start);
+            for (index, arc_msg) in slice.iter().enumerate() {
                 if dependent_blob_ids.contains(&arc_msg.1.id) {
-                    map.entry(arc_msg.1.id).or_default().push(arc_msg.clone());
+                    map.entry(arc_msg.1.id).or_default().push(start + index);
                 }
             }
             map
@@ -834,15 +835,20 @@ pub async fn run_secret_validation(
             kingfisher_core::ValidationOutcome,
             std::collections::BTreeMap<String, String>,
         );
-        let mut dep_updates: FxHashMap<(BlobId, OffsetSpan, String), DepUpdate> =
-            FxHashMap::default();
-
         for chunk in blob_ids.chunks(chunk_size) {
+            let mut dep_updates: FxHashMap<(BlobId, OffsetSpan, String), DepUpdate> =
+                FxHashMap::default();
             // Lazy iterator — futures are created on-demand by buffer_unordered,
             // not all at once via .collect().
             let validated_blobs: Vec<Vec<OwnedBlobMatch>> =
                 stream::iter(chunk.iter().map(|blob_id| {
-                    let matches_for_blob = dependent_blobs.get(blob_id).unwrap().clone();
+                    let matches_for_blob: Vec<_> = {
+                        let ds = datastore.lock().unwrap();
+                        dependent_blobs[blob_id]
+                            .iter()
+                            .map(|&index| Arc::clone(&ds.get_matches()[index]))
+                            .collect()
+                    };
                     let parser = parser.clone();
                     let clients = clients.clone();
                     let val_cache = val_cache.clone();
@@ -869,6 +875,8 @@ pub async fn run_secret_validation(
                         drop(matches_for_blob);
 
                         let (dep_vars, missing_deps) = collect_variables_and_dependencies(&owned);
+                        let dep_vars = Arc::new(dep_vars);
+                        let missing_deps = Arc::new(missing_deps);
 
                         let mut by_key: FxHashMap<String, Vec<OwnedBlobMatch>> =
                             FxHashMap::default();
@@ -948,47 +956,36 @@ pub async fn run_secret_validation(
                         (om.blob_id, om.matching_input_offset_span, om.rule.id().to_string()),
                         (
                             om.validation_success,
-                            om.validation_response_body.clone(),
+                            om.validation_response_body,
                             om.validation_response_status.as_u16(),
                             om.validation_outcome,
-                            om.dependent_captures.clone(),
+                            om.dependent_captures,
                         ),
                     );
                 }
             }
-        }
-        pb.finish();
 
-        // Drop dependent blob Arc clones so datastore Arcs reach refcount == 1
-        drop(dependent_blobs);
-
-        // Apply Phase 2 results in-place
-        if !dep_updates.is_empty() {
+            // Indices remain stable during validation. Update only this chunk's
+            // occurrences and release its response bodies before starting the next.
             let mut ds = datastore.lock().unwrap();
             let matches = ds.get_matches_mut();
-            let slice: &mut [Arc<FindingsStoreMessage>] = if let Some(ref r) = range {
-                &mut matches[r.clone()]
-            } else {
-                matches.as_mut_slice()
-            };
-            for match_arc in slice.iter_mut() {
-                if let Some((success, body, status, outcome, dep_caps)) = dep_updates
-                    .get(&(
-                        match_arc.2.blob_id,
-                        match_arc.2.location.offset_span,
-                        match_arc.2.rule.id().to_string(),
-                    ))
-                    .cloned()
-                {
+            for &index in chunk.iter().flat_map(|blob_id| &dependent_blobs[blob_id]) {
+                let match_arc = &mut matches[index];
+                if let Some((success, body, status, outcome, dep_caps)) = dep_updates.get(&(
+                    match_arc.2.blob_id,
+                    match_arc.2.location.offset_span,
+                    match_arc.2.rule.id().to_string(),
+                )) {
                     let (_, _, existing) = Arc::make_mut(match_arc);
-                    existing.validation_success = success;
-                    existing.validation_response_status = status;
-                    existing.validation_response_body = body;
-                    existing.validation_outcome = outcome;
-                    existing.dependent_captures = dep_caps;
+                    existing.validation_success = *success;
+                    existing.validation_response_status = *status;
+                    existing.validation_response_body = body.clone();
+                    existing.validation_outcome = *outcome;
+                    existing.dependent_captures = dep_caps.clone();
                 }
             }
         }
+        pb.finish();
     }
 
     // Validation intentionally executes once per unique credential, but alert correlation is
@@ -1990,7 +1987,7 @@ mod tests {
                     match_number: 0,
                     start: 0,
                     end: 5,
-                    value: intern("panic"),
+                    value: "panic".into(),
                 }],
             },
             validation_response_body: None,
@@ -2023,19 +2020,19 @@ mod tests {
                     match_number: 4,
                     start: 20,
                     end: 27,
-                    value: intern("hunter2"),
+                    value: "hunter2".into(),
                 },
                 SerializableCapture {
                     name: Some("URI"),
                     match_number: 1,
                     start: 0,
                     end: 45,
-                    value: intern("postgresql://alice:hunter2@one.internal/app"),
+                    value: "postgresql://alice:hunter2@one.internal/app".into(),
                 }
             ],
         };
         let mut second = first.clone();
-        second.captures.captures[1].value = intern("postgresql://alice:hunter2@two.internal/app");
+        second.captures.captures[1].value = "postgresql://alice:hunter2@two.internal/app".into();
 
         assert_ne!(build_cache_key(&first), build_cache_key(&second));
     }
@@ -2074,21 +2071,21 @@ mod tests {
                     match_number: 4,
                     start: 20,
                     end: 27,
-                    value: intern("hunter2"),
+                    value: "hunter2".into(),
                 },
                 SerializableCapture {
                     name: Some("URI"),
                     match_number: 1,
                     start: 0,
                     end: 45,
-                    value: intern("POSTGRESQL://alice:hunter2@db.internal/app"),
+                    value: "POSTGRESQL://alice:hunter2@db.internal/app".into(),
                 },
                 SerializableCapture {
                     name: Some("SCHEME"),
                     match_number: 2,
                     start: 0,
                     end: 10,
-                    value: intern("POSTGRESQL"),
+                    value: "POSTGRESQL".into(),
                 }
             ],
         };
@@ -2184,7 +2181,7 @@ mod tests {
                 match_number: 1,
                 start: 0,
                 end: access_key.len(),
-                value: intern(access_key),
+                value: access_key.into(),
             }],
         };
         matched.dependent_captures.insert(secret_variable, "secret-access-key".to_string());
@@ -2249,7 +2246,7 @@ mod tests {
                 match_number: 1,
                 start: 0,
                 end: "session-token".len(),
-                value: intern("session-token"),
+                value: "session-token".into(),
             }],
         };
         matched
@@ -2289,7 +2286,7 @@ mod tests {
                 match_number: 1,
                 start: 0,
                 end: token.len(),
-                value: intern(token),
+                value: token.into(),
             }],
         };
         matched.validation_success = true;
@@ -2360,7 +2357,7 @@ mod tests {
                 match_number: 1,
                 start: 0,
                 end: token.len(),
-                value: intern(token),
+                value: token.into(),
             }],
         };
         matched.validation_success = true;
@@ -2479,6 +2476,63 @@ mod tests {
             }
             other => panic!("unexpected request: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn dependent_validation_respects_nonzero_range_start() -> Result<()> {
+        use crate::{
+            blob::BlobMetadata,
+            matcher::Match,
+            origin::{Origin, OriginSet},
+        };
+        let mut owned = make_owned_blob_match();
+        let mut syntax = owned.rule.syntax().clone();
+        syntax.id = "private.validation.range".into();
+        syntax.validation = Some(Validation::Assumed);
+        syntax.depends_on_rule = vec![Some(DependsOnRule {
+            rule_id: "private.validation.optional".into(),
+            variable: "OPTIONAL".into(),
+            optional: true,
+            within: None,
+        })];
+        owned.rule = Arc::new(Rule::new(syntax));
+        let m = Match::convert_owned_blobmatch_to_match(None, &owned, "file");
+        let origin = Arc::new(OriginSet::single(Origin::from_file("range-fixture.txt".into())));
+        let metadata = Arc::new(BlobMetadata {
+            id: m.blob_id,
+            num_bytes: 5,
+            mime_essence: None,
+            language: None,
+        });
+        let mut store = FindingsStore::new(std::env::temp_dir());
+        store.record_rules(&[Arc::clone(&owned.rule)]);
+        store.record(
+            vec![(Arc::clone(&origin), Arc::clone(&metadata), m.clone()), (origin, metadata, m)],
+            false,
+        );
+        let store = Arc::new(Mutex::new(store));
+        let parser = liquid::ParserBuilder::with_stdlib().build()?;
+        let clients =
+            crate::validation::ValidationClients::new(crate::cli::global::TlsMode::Strict, false)?;
+        run_secret_validation(
+            Arc::clone(&store),
+            &parser,
+            &clients,
+            &Arc::new(SkipMap::new()),
+            2,
+            Some(1..2),
+            None,
+            None,
+            Arc::new(ProviderEndpointOverrides::default()),
+            Duration::from_secs(1),
+            0,
+            2048,
+        )
+        .await?;
+        let store = store.lock().unwrap();
+        assert_eq!(store.get_matches()[0].2.validation_outcome, ValidationOutcome::NotAttempted);
+        assert_eq!(store.get_matches()[1].2.validation_outcome, ValidationOutcome::Assumed);
+        Ok(())
     }
 
     #[tokio::test]

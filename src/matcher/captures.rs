@@ -4,7 +4,7 @@ use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use smallvec::SmallVec;
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 
 use crate::{snippet::Base64BString, util::intern};
 
@@ -42,20 +42,20 @@ pub struct SerializableCapture {
     pub match_number: i32,
     pub start: usize,
     pub end: usize,
-    /// Interned original (unredacted) value.
+    /// Shared original (unredacted) value, released with the last capture.
     #[serde(skip_serializing, skip_deserializing)]
-    pub value: &'static str,
+    pub value: Arc<str>,
 }
 
 impl SerializableCapture {
     /// Returns the original captured value.
-    pub fn raw_value(&self) -> &'static str {
-        self.value
+    pub fn raw_value(&self) -> &str {
+        &self.value
     }
 
     /// Returns the value that should be shown in user-facing output.
-    pub fn display_value(&self) -> std::borrow::Cow<'static, str> {
-        crate::util::display_value(self.value)
+    pub fn display_value(&self) -> std::borrow::Cow<'_, str> {
+        crate::util::display_value(&self.value)
     }
 }
 
@@ -97,7 +97,7 @@ impl SerializableCaptures {
                 // Start from 1
                 if let Some(cap) = captures.get(i) {
                     let raw_value = String::from_utf8_lossy(cap.as_bytes());
-                    let raw_interned = intern(raw_value.as_ref());
+                    let raw_shared = Arc::from(raw_value.as_ref());
                     let name = capture_names.get(i).and_then(|opt| *opt);
 
                     serialized_captures.push(SerializableCapture {
@@ -105,7 +105,7 @@ impl SerializableCaptures {
                         match_number: i32::try_from(i).unwrap_or(0),
                         start: cap.start(),
                         end: cap.end(),
-                        value: raw_interned,
+                        value: raw_shared,
                     });
                 }
             }
@@ -114,7 +114,7 @@ impl SerializableCaptures {
             // serialize just that full match (group 0) as the fallback.
             if let Some(cap) = captures.get(0) {
                 let raw_value = String::from_utf8_lossy(cap.as_bytes());
-                let raw_interned = intern(raw_value.as_ref());
+                let raw_shared = Arc::from(raw_value.as_ref());
                 let name = capture_names.first().and_then(|opt| *opt);
 
                 serialized_captures.push(SerializableCapture {
@@ -122,7 +122,7 @@ impl SerializableCaptures {
                     match_number: 0,
                     start: cap.start(),
                     end: cap.end(),
-                    value: raw_interned,
+                    value: raw_shared,
                 });
             }
         }
@@ -168,7 +168,12 @@ impl SerializableCaptures {
             return serialized;
         }
 
-        let value = String::from_utf8_lossy(secret.as_bytes());
+        let value = serialized
+            .captures
+            .iter()
+            .find(|capture| capture.match_number == i32::try_from(selected_group).unwrap_or(-1))
+            .map(|capture| Arc::clone(&capture.value))
+            .unwrap_or_else(|| Arc::from(String::from_utf8_lossy(secret.as_bytes()).as_ref()));
         serialized.captures.insert(
             0,
             SerializableCapture {
@@ -176,7 +181,7 @@ impl SerializableCaptures {
                 match_number: i32::try_from(selected_group).unwrap_or(-1),
                 start: secret.start(),
                 end: secret.end(),
-                value: intern(value.as_ref()),
+                value,
             },
         );
         serialized

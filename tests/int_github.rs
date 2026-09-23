@@ -65,6 +65,7 @@ fn test_github_remote_scan() -> Result<()> {
             repo_clone_limit: None,
             include_contributors: false,
             github_user: Vec::new(),
+            github_include_gists: false,
             github_organization: Vec::new(),
             github_exclude: Vec::new(),
             all_github_organizations: false,
@@ -74,6 +75,7 @@ fn test_github_remote_scan() -> Result<()> {
             github_event_lookback_hours: 24,
             // new GitLab defaults
             gitlab_user: Vec::new(),
+            gitlab_include_snippets: false,
             gitlab_group: Vec::new(),
             gitlab_exclude: Vec::new(),
             all_gitlab_groups: false,
@@ -97,6 +99,7 @@ fn test_github_remote_scan() -> Result<()> {
             gitea_repo_type: GiteaRepoType::Source,
 
             bitbucket_user: Vec::new(),
+            bitbucket_include_snippets: false,
             bitbucket_workspace: Vec::new(),
             bitbucket_project: Vec::new(),
             bitbucket_exclude: Vec::new(),
@@ -160,6 +163,7 @@ fn test_github_remote_scan() -> Result<()> {
             exclude: Vec::new(), // Exclude patterns
         },
         confidence: ConfidenceLevel::Medium,
+        disk_offload: false,
         no_validate: false,
         access_map: false,
         rule_stats: false,

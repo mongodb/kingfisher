@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.6.0]
+- Added opt-in GitHub gist scanning [#508](https://github.com/mongodb/kingfisher/issues/508), plus GitLab and Bitbucket Cloud snippet scanning, with full Git history.
+- Reduced peak scan memory: findings now deduplicate on exact cryptographic digests alone (the Bloom prefilter and its dependency were removed), the Git object index stores each object ID once, and raw matcher bookkeeping was slimmed.
+- Added opt-in `--disk-offload` to reduce accumulated finding memory across repositories; it falls back to memory with a warning when temporary storage fills up.
+- Fixed HTML report validation filters to match displayed states, including assumed-valid, invalid-material, and skipped-canary findings.
+
 ## [v2.5.0]
 - **Behavior change:** `scan --branch <ref>` now scans all reachable history by default, finding secrets deleted in later commits, including merged history. Use `--git-history none` to retain snapshot-only scanning; explicit diff options keep their existing scope. Full-history scans may need more time and memory, and history enumeration shares the repository’s `--git-repo-timeout` budget. [#503](https://github.com/mongodb/kingfisher/issues/503)
 

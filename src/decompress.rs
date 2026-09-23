@@ -297,68 +297,44 @@ pub fn extract_zip_archive_in_memory(
         );
     }
 
-    // Per-entry cap on decompressed bytes: bounds memory cost of zip bombs.
-    // Mirrors the disk-streaming variant's cap.
-    // nosemgrep: this is the defensive cap — do not flag for missing-limit rules.
-    const MAX_ZIP_ENTRY_DECOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
+    Ok(zip_entries(std::io::Cursor::new(data), archive_label.to_owned())?.collect())
+}
 
-    let cursor = std::io::Cursor::new(data);
-    let mut zip = ZipArchive::new(cursor)?;
-    let mut entries = Vec::with_capacity(zip.len());
-    let mut total_decompressed: u64 = 0;
-
-    for i in 0..zip.len() {
-        if total_decompressed >= MAX_INMEM_ZIP_DECOMPRESSED_BYTES {
-            tracing::debug!(
-                "in-memory zip {archive_label} exceeded {MAX_INMEM_ZIP_DECOMPRESSED_BYTES} byte aggregate cap at entry {i}/{}; truncating",
-                zip.len()
-            );
-            break;
-        }
-
-        let mut zipped_file = match zip.by_index(i) {
-            Ok(f) => f,
-            Err(e) => {
-                tracing::debug!("zip entry {i} read failed: {e}");
+/// Decode one ZIP entry at a time. The iterator owns its reader, so a caller can
+/// scan and release each entry before allocating the next decompressed buffer.
+pub(crate) fn zip_entries<R: std::io::Read + std::io::Seek>(
+    reader: R,
+    archive_label: String,
+) -> Result<impl Iterator<Item = (String, Vec<u8>)>> {
+    let mut zip = ZipArchive::new(reader)?;
+    let mut index = 0;
+    let mut total = 0u64;
+    Ok(std::iter::from_fn(move || {
+        while index < zip.len() && total < MAX_INMEM_ZIP_DECOMPRESSED_BYTES {
+            let i = index;
+            index += 1;
+            let mut file = match zip.by_index(i) {
+                Ok(file) => file,
+                Err(e) => {
+                    tracing::debug!("zip entry {i} read failed: {e}");
+                    continue;
+                }
+            };
+            if !file.is_file() || !is_safe_extract_path(Path::new(file.name())) {
                 continue;
             }
-        };
-        if !zipped_file.is_file() {
-            continue;
+            let logical = format!("{archive_label}!{}", file.name());
+            let remaining = MAX_INMEM_ZIP_DECOMPRESSED_BYTES - total;
+            let mut bytes = Vec::new();
+            if let Err(e) = (&mut file).take(remaining).read_to_end(&mut bytes) {
+                tracing::debug!("failed to decompress zip entry {logical}: {e}");
+                continue;
+            }
+            total += bytes.len() as u64;
+            return Some((logical, bytes));
         }
-        let name_in_zip = zipped_file.name().to_string();
-        // Defense in depth: refuse traversal-style names. The in-memory
-        // path never writes to disk, but downstream code may construct
-        // file URLs from these strings.
-        if !is_safe_extract_path(Path::new(&name_in_zip)) {
-            tracing::debug!("unsafe zip entry name in {archive_label}: {name_in_zip}");
-            continue;
-        }
-
-        // The remaining-budget cap on this read serves two purposes:
-        // (1) honor the aggregate budget exactly even if one entry would
-        //     individually push us over it, and (2) keep the existing
-        //     per-entry zip-bomb cap of 512 MB as a hard upper bound.
-        let remaining = MAX_INMEM_ZIP_DECOMPRESSED_BYTES.saturating_sub(total_decompressed);
-        let entry_cap = remaining.min(MAX_ZIP_ENTRY_DECOMPRESSED_BYTES);
-
-        let mut buf = Vec::new();
-        let mut limited = (&mut zipped_file).take(entry_cap);
-        if let Err(e) = limited.read_to_end(&mut buf) {
-            tracing::debug!(
-                "failed to decompress zip entry {name_in_zip} from {archive_label}: {e}"
-            );
-            continue;
-        }
-        if buf.len() as u64 == entry_cap && entry_cap == MAX_ZIP_ENTRY_DECOMPRESSED_BYTES {
-            tracing::debug!(
-                "zip entry {name_in_zip} in {archive_label} exceeded {MAX_ZIP_ENTRY_DECOMPRESSED_BYTES} byte cap; truncating"
-            );
-        }
-        total_decompressed += buf.len() as u64;
-        entries.push((format!("{archive_label}!{name_in_zip}"), buf));
-    }
-    Ok(entries)
+        None
+    }))
 }
 
 /// Return true if `data` begins with a standard ZIP signature. Used both to
@@ -1719,6 +1695,64 @@ mod tests {
             }
             other => panic!("expected RawFile, got {other:?}"),
         }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod streaming_tests {
+    use super::*;
+    use std::{
+        io::{Cursor, Read, Seek, SeekFrom, Write},
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+    };
+
+    struct CountReads {
+        inner: Cursor<Vec<u8>>,
+        read: Arc<AtomicUsize>,
+    }
+    impl Read for CountReads {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            let size = self.inner.read(buffer)?;
+            self.read.fetch_add(size, Ordering::Relaxed);
+            Ok(size)
+        }
+    }
+    impl Seek for CountReads {
+        fn seek(&mut self, position: SeekFrom) -> std::io::Result<u64> {
+            self.inner.seek(position)
+        }
+    }
+
+    #[test]
+    fn zip_entries_read_only_the_consumed_payload() -> Result<()> {
+        let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let payload = vec![b'x'; 1024 * 1024];
+        for index in 0..8 {
+            zip.start_file(
+                format!("entry-{index}.txt"),
+                zip::write::SimpleFileOptions::default()
+                    .compression_method(zip::CompressionMethod::Stored),
+            )?;
+            zip.write_all(&payload)?;
+        }
+        let data = zip.finish()?.into_inner();
+        let read = Arc::new(AtomicUsize::new(0));
+        let mut entries = zip_entries(
+            CountReads { inner: Cursor::new(data), read: Arc::clone(&read) },
+            "archive.zip".into(),
+        )?;
+        let (logical, first) = entries.next().expect("first entry");
+        assert_eq!(logical, "archive.zip!entry-0.txt");
+        assert_eq!(first, payload);
+        assert!(
+            read.load(Ordering::Relaxed) < 2 * payload.len(),
+            "later payloads must remain unread"
+        );
+        assert_eq!(entries.count(), 7);
         Ok(())
     }
 }

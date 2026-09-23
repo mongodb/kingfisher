@@ -1,4 +1,5 @@
 use std::{
+    hash::BuildHasher,
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -9,10 +10,8 @@ use bstr::ByteSlice;
 use gix::{
     ObjectId, Repository,
     date::{Time, parse as parse_time},
-    hashtable::HashMap,
     prelude::FindExt,
 };
-use smallvec::SmallVec;
 use tracing::{debug, debug_span};
 
 use crate::{
@@ -126,108 +125,85 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
             self.exclude_globset.as_deref(),
             deadline,
         );
-        let all_blobs = object_index.into_blobs();
-
-        // Assemble final blob list, preserving pack-ascending order for I/O locality
-        let blobs = match meta_result {
+        // Reuse the dense object index rather than building an appearances hash map
+        // alongside a second final blob collection. Pack order remains unchanged.
+        check_deadline(deadline, "git blob metadata assembly", self.path)?;
+        let (all_blobs, blob_index) = object_index.into_blob_parts();
+        let mut blobs: Vec<_> = all_blobs
+            .into_iter()
+            .map(|blob_oid| GitBlobMetadata { blob_oid, first_seen: Default::default() })
+            .collect();
+        check_deadline(deadline, "git blob metadata assembly", self.path)?;
+        match meta_result {
             Err(e) => {
                 debug!("Failed to compute reachable blobs; ignoring metadata: {e}");
-                let mut blobs = Vec::with_capacity(all_blobs.len());
-                for blob_oid in all_blobs {
-                    check_deadline(deadline, "git blob metadata assembly", self.path)?;
-                    blobs.push(GitBlobMetadata { blob_oid, first_seen: Default::default() });
-                }
-                blobs
             }
             Ok(metadata) => {
-                let mut commit_metadata: HashMap<ObjectId, Arc<CommitMetadata>> =
-                    HashMap::with_capacity_and_hasher(0, Default::default());
-                let mut blob_appearances: HashMap<ObjectId, SmallVec<_>> =
-                    HashMap::with_capacity_and_hasher(all_blobs.len(), Default::default());
-
                 for e in metadata {
                     check_deadline(deadline, "git commit metadata assembly", self.path)?;
                     if e.introduced_blobs.is_empty() {
                         continue;
                     }
-
-                    let cm = if let Some(cm) = commit_metadata.get(&e.commit_oid) {
-                        cm.clone()
-                    } else {
-                        let commit = match odb.find_commit(&e.commit_oid, &mut scratch) {
-                            Ok(commit) => commit,
-                            Err(err) => {
-                                debug!(
-                                    "Failed to load commit metadata for {}: {err}",
-                                    e.commit_oid
-                                );
-                                continue;
-                            }
-                        };
-                        let committer = match commit.committer() {
-                            Ok(committer) => committer,
-                            Err(err) => {
-                                debug!(
-                                    "Failed to decode committer metadata for {}: {err}",
-                                    e.commit_oid
-                                );
-                                continue;
-                            }
-                        };
-                        let parsed = Arc::new(CommitMetadata {
-                            commit_id: e.commit_oid,
-                            committer_name: intern_git_identity(
-                                String::from_utf8_lossy(committer.name.as_ref()).as_ref(),
-                            ),
-                            committer_email: intern_git_identity(
-                                String::from_utf8_lossy(committer.email.as_ref()).as_ref(),
-                            ),
-                            committer_timestamp: parse_sig_time(committer.time),
-                        });
-                        commit_metadata.insert(e.commit_oid, Arc::clone(&parsed));
-                        parsed
+                    let commit = match odb.find_commit(&e.commit_oid, &mut scratch) {
+                        Ok(commit) => commit,
+                        Err(err) => {
+                            debug!("Failed to load commit metadata for {}: {err}", e.commit_oid);
+                            continue;
+                        }
                     };
+                    let committer = match commit.committer() {
+                        Ok(committer) => committer,
+                        Err(err) => {
+                            debug!(
+                                "Failed to decode committer metadata for {}: {err}",
+                                e.commit_oid
+                            );
+                            continue;
+                        }
+                    };
+                    // Metadata traversal emits each commit once. Its appearances share
+                    // this Arc directly, without a redundant per-commit cache.
+                    let cm = Arc::new(CommitMetadata {
+                        commit_id: e.commit_oid,
+                        committer_name: intern_git_identity(
+                            String::from_utf8_lossy(committer.name.as_ref()).as_ref(),
+                        ),
+                        committer_email: intern_git_identity(
+                            String::from_utf8_lossy(committer.email.as_ref()).as_ref(),
+                        ),
+                        committer_timestamp: parse_sig_time(committer.time),
+                    });
                     for (blob_oid, path) in e.introduced_blobs {
-                        blob_appearances
-                            .entry(blob_oid)
-                            .or_default()
-                            .push(BlobAppearance { commit_metadata: Arc::clone(&cm), path });
+                        if let Some(idx) = blob_index
+                            .find(gix::hashtable::hash::Builder.hash_one(blob_oid), |idx| {
+                                blobs[idx.as_usize()].blob_oid == blob_oid
+                            })
+                        {
+                            blobs[idx.as_usize()]
+                                .first_seen
+                                .push(BlobAppearance { commit_metadata: Arc::clone(&cm), path });
+                        }
                     }
                 }
-
-                // Iterate in pack-ascending order (from RepositoryIndex) for I/O locality
-                let mut blobs = Vec::with_capacity(all_blobs.len());
-                for blob_oid in all_blobs {
-                    check_deadline(deadline, "git blob metadata assembly", self.path)?;
-                    let appearances = blob_appearances.remove(&blob_oid).unwrap_or_default();
-                    if appearances.is_empty() {
-                        blobs.push(GitBlobMetadata { blob_oid, first_seen: appearances });
-                        continue;
-                    }
-                    let filtered = appearances
-                        .into_iter()
-                        .filter(|entry| match entry.path.to_path() {
+                drop(blob_index);
+                check_deadline(deadline, "git blob metadata assembly", self.path)?;
+                blobs.retain_mut(|blob| {
+                    // Preserve the existing treatment of unreferenced objects while
+                    // removing blobs whose every known appearance is excluded.
+                    if !blob.first_seen.is_empty() {
+                        blob.first_seen.retain(|entry| match entry.path.to_path() {
                             Ok(p) => {
-                                if let Some(gs) = &self.exclude_globset {
-                                    let m = gs.is_match(p);
-                                    if m {
-                                        debug!("Skipping {} due to --exclude", p.display());
-                                    }
-                                    !m
-                                } else {
-                                    true
-                                }
+                                !self.exclude_globset.as_ref().is_some_and(|gs| gs.is_match(p))
                             }
                             Err(_) => true,
-                        })
-                        .collect::<SmallVec<_>>();
-                    if !filtered.is_empty() {
-                        blobs.push(GitBlobMetadata { blob_oid, first_seen: filtered });
+                        });
+                        return !blob.first_seen.is_empty();
                     }
-                }
-                blobs
+                    true
+                });
+                check_deadline(deadline, "git blob metadata assembly", self.path)?;
             }
-        };
+        }
 
         Ok(GitRepoResult {
             repository: self.repo,

@@ -24,6 +24,7 @@ struct SimpleUser {
 
 #[derive(Deserialize)]
 struct SimpleProject {
+    id: Option<u64>,
     http_url_to_repo: String,
 }
 
@@ -63,6 +64,7 @@ pub enum RepoType {
 #[derive(Debug, Clone)]
 pub struct RepoSpecifiers {
     pub user: Vec<String>,
+    pub include_snippets: bool,
     pub group: Vec<String>,
     pub all_groups: bool,
     pub include_subgroups: bool,
@@ -175,7 +177,7 @@ async fn fetch_paged_projects(
     base_url: Url,
     extra_query: &[(&str, String)],
     excludes: &git_host::ExcludeMatcher,
-) -> Result<Vec<String>> {
+) -> Result<Vec<SimpleProject>> {
     let mut page = 1u32;
     let mut projects = Vec::new();
 
@@ -199,13 +201,139 @@ async fn fetch_paged_projects(
             if should_exclude_repo(&project.http_url_to_repo, excludes) {
                 continue;
             }
-            projects.push(project.http_url_to_repo);
+            projects.push(project);
         }
 
         page += 1;
     }
 
     Ok(projects)
+}
+
+// GraphQL can scope snippets to an author or project; REST has no author filter.
+enum SnippetScope {
+    User(u64),
+    Project(u64),
+}
+
+impl std::fmt::Display for SnippetScope {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::User(id) => write!(f, "user {id}"),
+            Self::Project(id) => write!(f, "project {id}"),
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct SnippetResponse {
+    data: Option<SnippetData>,
+    #[serde(default)]
+    errors: Vec<SnippetError>,
+}
+
+#[derive(Deserialize)]
+struct SnippetError {
+    message: String,
+}
+
+#[derive(Deserialize)]
+struct SnippetData {
+    snippets: SnippetConnection,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SnippetConnection {
+    nodes: Vec<Option<Snippet>>,
+    page_info: SnippetPageInfo,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Snippet {
+    http_url_to_repo: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SnippetPageInfo {
+    has_next_page: bool,
+    end_cursor: Option<String>,
+}
+
+async fn fetch_snippet_urls(
+    client: &reqwest::Client,
+    token: Option<&str>,
+    api_base: &Url,
+    scope: SnippetScope,
+) -> Result<Vec<String>> {
+    const QUERY: &str = r#"
+        query KingfisherSnippets($authorId: UserID, $projectId: ProjectID, $type: TypeEnum!, $after: String) {
+            snippets(authorId: $authorId, projectId: $projectId, type: $type, first: 100, after: $after) {
+                nodes { httpUrlToRepo }
+                pageInfo { hasNextPage endCursor }
+            }
+        }
+    "#;
+    let (author_id, project_id, snippet_type) = match scope {
+        SnippetScope::User(id) => (Some(format!("gid://gitlab/User/{id}")), None, "personal"),
+        SnippetScope::Project(id) => (None, Some(format!("gid://gitlab/Project/{id}")), "project"),
+    };
+    let url = gitlab_api_url(api_base, "api/graphql")?;
+    let mut after: Option<String> = None;
+    let mut seen_cursors = HashSet::new();
+    let mut urls = Vec::new();
+    loop {
+        let mut request = client.post(url.clone()).json(&serde_json::json!({
+            "query": QUERY,
+            "variables": {"authorId": author_id, "projectId": project_id, "type": snippet_type, "after": after}
+        }));
+        if let Some(token) = token {
+            request = request.bearer_auth(token);
+        }
+        let response = request
+            .send()
+            .await
+            .with_context(|| format!("Failed to list GitLab snippets for {scope}"))?;
+        warn_on_rate_limit("GitLab", response.status(), &format!("listing snippets for {scope}"));
+        let response = response
+            .error_for_status()
+            .with_context(|| format!("Failed to list GitLab snippets for {scope}"))?;
+        let response: SnippetResponse = response
+            .json()
+            .await
+            .with_context(|| format!("Invalid GitLab snippets response for {scope}"))?;
+        if !response.errors.is_empty() {
+            anyhow::bail!(
+                "Failed to list GitLab snippets for {scope}: {}",
+                response.errors.into_iter().map(|e| e.message).collect::<Vec<_>>().join("; ")
+            );
+        }
+        let snippets = response
+            .data
+            .with_context(|| format!("GitLab snippets response is missing data for {scope}"))?
+            .snippets;
+        for snippet in snippets.nodes.into_iter().flatten() {
+            if let Some(url) = snippet.http_url_to_repo.filter(|url| !url.is_empty()) {
+                urls.push(url);
+            } else {
+                warn!("Skipping GitLab snippet without a Git clone URL for {scope}");
+            }
+        }
+        if !snippets.page_info.has_next_page {
+            break;
+        }
+        let cursor =
+            snippets.page_info.end_cursor.filter(|c| !c.is_empty()).with_context(|| {
+                format!("GitLab snippets pagination is missing a cursor for {scope}")
+            })?;
+        if !seen_cursors.insert(cursor.clone()) {
+            anyhow::bail!("GitLab snippets pagination repeated a cursor for {scope}");
+        }
+        after = Some(cursor);
+    }
+    Ok(urls)
 }
 
 pub async fn enumerate_repo_urls(
@@ -219,6 +347,7 @@ pub async fn enumerate_repo_urls(
     let api_base = normalize_api_base(&gitlab_url);
     let exclude_set = build_exclude_matcher(&repo_specifiers.exclude_repos);
     let mut repo_urls = Vec::new();
+    let mut projects = Vec::new();
 
     for username in &repo_specifiers.user {
         let mut users_url = gitlab_api_url(&api_base, "api/v4/users")?;
@@ -235,10 +364,22 @@ pub async fn enumerate_repo_urls(
             RepoType::Member => query.push(("membership", "true".to_string())),
             RepoType::All => {}
         }
-        repo_urls.extend(
+        projects.extend(
             fetch_paged_projects(&client, token.as_deref(), projects_url, &query, &exclude_set)
                 .await?,
         );
+
+        if repo_specifiers.include_snippets {
+            repo_urls.extend(
+                fetch_snippet_urls(
+                    &client,
+                    token.as_deref(),
+                    &api_base,
+                    SnippetScope::User(user.id),
+                )
+                .await?,
+            );
+        }
 
         if let Some(pb) = progress.as_ref() {
             pb.inc(1);
@@ -287,7 +428,7 @@ pub async fn enumerate_repo_urls(
             query.push(("include_subgroups", "true".to_string()));
         }
 
-        repo_urls.extend(
+        projects.extend(
             fetch_paged_projects(&client, token.as_deref(), projects_url, &query, &exclude_set)
                 .await?,
         );
@@ -297,6 +438,31 @@ pub async fn enumerate_repo_urls(
         }
     }
 
+    let mut seen_projects = HashSet::new();
+    for project in projects {
+        if !seen_projects.insert(project.http_url_to_repo.clone()) {
+            continue;
+        }
+        if repo_specifiers.include_snippets {
+            if let Some(id) = project.id {
+                repo_urls.extend(
+                    fetch_snippet_urls(
+                        &client,
+                        token.as_deref(),
+                        &api_base,
+                        SnippetScope::Project(id),
+                    )
+                    .await?,
+                );
+            } else {
+                warn!(
+                    "Skipping snippet enumeration for GitLab project without an ID: {}",
+                    project.http_url_to_repo
+                );
+            }
+        }
+        repo_urls.push(project.http_url_to_repo);
+    }
     repo_urls.sort_unstable();
     repo_urls.dedup();
     Ok(repo_urls)
@@ -519,6 +685,7 @@ pub async fn list_repositories(
     ignore_certs: bool,
     progress_enabled: bool,
     users: &[String],
+    include_snippets: bool,
     groups: &[String],
     all_groups: bool,
     include_subgroups: bool,
@@ -527,6 +694,7 @@ pub async fn list_repositories(
 ) -> Result<()> {
     let repo_specifiers = RepoSpecifiers {
         user: users.to_vec(),
+        include_snippets,
         group: groups.to_vec(),
         all_groups,
         include_subgroups,

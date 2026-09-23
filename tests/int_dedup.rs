@@ -78,6 +78,7 @@ rules:
             repo_clone_limit: None,
             include_contributors: false,
             github_user: Vec::new(),
+            github_include_gists: false,
             github_organization: Vec::new(),
             github_exclude: Vec::new(),
             all_github_organizations: false,
@@ -87,6 +88,7 @@ rules:
             github_event_lookback_hours: 24,
             // new GitLab defaults
             gitlab_user: Vec::new(),
+            gitlab_include_snippets: false,
             gitlab_group: Vec::new(),
             gitlab_exclude: Vec::new(),
             all_gitlab_groups: false,
@@ -110,6 +112,7 @@ rules:
             gitea_repo_type: GiteaRepoType::Source,
 
             bitbucket_user: Vec::new(),
+            bitbucket_include_snippets: false,
             bitbucket_workspace: Vec::new(),
             bitbucket_project: Vec::new(),
             bitbucket_exclude: Vec::new(),
@@ -173,6 +176,7 @@ rules:
             exclude: Vec::new(), // Exclude patterns
         },
         confidence: ConfidenceLevel::Low,
+        disk_offload: false,
         no_validate: true,
         access_map: false,
         rule_stats: false,

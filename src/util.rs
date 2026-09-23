@@ -125,7 +125,7 @@ pub fn redaction_enabled() -> bool {
 
 /// Returns either the original value or a redacted placeholder depending on
 /// the current redaction setting.
-pub fn display_value(value: &'static str) -> Cow<'static, str> {
+pub fn display_value(value: &str) -> Cow<'_, str> {
     if redaction_enabled() { Cow::Owned(redact_value(value)) } else { Cow::Borrowed(value) }
 }
 // Generate a random salt (16-character alphanumeric string)

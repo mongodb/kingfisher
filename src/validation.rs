@@ -2881,7 +2881,7 @@ mod tests {
                     match_number: 1,
                     start: 20,
                     end: 27,
-                    value: intern("primary"),
+                    value: "primary".into(),
                 }],
             },
             validation_response_body: None,

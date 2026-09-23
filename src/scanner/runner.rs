@@ -127,6 +127,9 @@ pub async fn run_async_scan(
 
     // ── Phase 1: Input validation and environment setup ──────────────────
     validate_inputs(args)?;
+    if args.disk_offload {
+        datastore.lock().unwrap().enable_spilling()?;
+    }
     register_safe_list_patterns(args)?;
 
     let start_time = Instant::now();
@@ -956,6 +959,7 @@ async fn run_sequential_scan(
                         .lock()
                         .unwrap()
                         .merge_from(&repo_datastore.lock().unwrap(), !args.no_dedup);
+                    datastore.lock().unwrap().spill_pending()?;
                     if let Some(key) = audit_key {
                         let stats = RepositoryScanStats {
                             findings,
@@ -1044,6 +1048,7 @@ async fn run_sequential_scan(
                     .lock()
                     .unwrap()
                     .merge_from(&repo_datastore.lock().unwrap(), !args.no_dedup);
+                datastore.lock().unwrap().spill_pending()?;
                 if let Some(key) = &audit_key {
                     let stats = RepositoryScanStats {
                         findings,
@@ -1096,6 +1101,10 @@ async fn run_sequential_scan(
     scan_result?;
     artifact_result.map_err(|e| e.context("artifact fetching failed"))?;
 
+    datastore
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Failed to lock datastore while restoring spilled findings"))?
+        .restore_spilled()?;
     deduplicate_new_matches(datastore, global_args, args, 0)?;
     apply_baseline_if_configured(args, datastore, baseline.as_ref(), input_roots)?;
     update_baseline_if_configured(
@@ -1544,6 +1553,7 @@ async fn run_parallel_scan(
                             {
                                 let mut ds = datastore.lock().unwrap();
                                 ds.merge_from(&repo_datastore.lock().unwrap(), !args.no_dedup);
+                                ds.spill_pending()?;
                             }
 
                             successful_roots.lock().unwrap().push(root.clone());
@@ -1596,6 +1606,10 @@ async fn run_parallel_scan(
         return Err(err);
     }
 
+    datastore
+        .lock()
+        .map_err(|_| anyhow::anyhow!("Failed to lock datastore while restoring spilled findings"))?
+        .restore_spilled()?;
     if ran_repo_scan.load(Ordering::Relaxed) {
         let scanned_roots = successful_roots.lock().unwrap().clone();
         update_baseline_if_configured(

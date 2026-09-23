@@ -24,6 +24,7 @@ This guide covers advanced Kingfisher features for power users.
     - [Check custom rules](#check-custom-rules)
     - [Scan using a rule family](#scan-using-a-rule-family)
   - [Rule Performance Profiling](#rule-performance-profiling)
+  - [Disk Offload](#disk-offload)
   - [Notable Scan Options](#notable-scan-options)
     - [Exclude specific paths](#exclude-specific-paths)
     - [Scan while ignoring likely test files](#scan-while-ignoring-likely-test-files)
@@ -510,9 +511,140 @@ kingfisher scan /path/to/large-repo --jobs 4
 For project config, set `scan.jobs`. Pass `--jobs` on the command line when the Tokio runtime and
 scanner pool must use the same explicit value; see [Project Configuration caveats](CONFIG.md#caveats).
 
+## Disk Offload
+
+`--disk-offload` trades temporary storage I/O for lower memory use while findings accumulate
+across repositories or input roots. It is **disabled by default**. It preserves captured values,
+commit metadata, dependency helpers, validation results, and global deduplication, without
+changing worker count or Git history coverage.
+
+```bash
+kingfisher scan /path/to/repos --scan-nested-repos --disk-offload --format toon
+```
+
+### When to use it
+
+Enable it for scans of many repositories or input roots when findings from completed inputs
+consume memory needed by the inputs still being scanned. It is most useful when those completed
+inputs produce many findings or large associated metadata or validation responses, and a fast
+local temporary-storage volume has sufficient free space. It lets you reduce that accumulation
+without reducing `--jobs` or narrowing history coverage.
+
+It is less useful for a single repository or scans with few findings. It does **not** limit the
+memory needed to scan an individual repository, hold concurrently active repositories, or
+perform final processing. All findings are restored to RAM before the final consumers run, so
+it cannot prevent an out-of-memory failure if that final working set is too large. Digest
+and blob-ID indexes also remain in memory throughout the scan.
+
+For example, when `kingfisher scan ~/mms --disk-offload --format toon` scans `~/mms`
+as a single repository, all of that repository's findings accumulate in RAM until its scan
+finishes. They are then written to disk and loaded back into RAM for final processing.
+**Similar memory usage with and without the flag is expected for this workload**, including
+similar peak memory. Offloading happens between completed repositories or input roots, not
+between files, commits, or finding batches within an active repository. The flag does not
+bound total scan memory or reduce Git scanning and worker memory.
+
+Disk-backed storage adds serialization, writes, and reads; it is not a speed optimization. Measure elapsed
+time and peak memory on your workload before enabling it routinely. A memory-backed temporary
+filesystem such as `tmpfs` still consumes system memory, so it may not relieve overall memory
+pressure even if the scanner's own resident memory falls.
+
+### How it works
+
+1. Kingfisher opens a temporary file when the option is enabled.
+2. After a completed repository or input root's results are merged into the accumulated store,
+   Kingfisher appends those findings as internal JSON Lines records and flushes the write buffer.
+   Only after the write succeeds does it release that accumulated in-memory batch and its
+   metadata maps. With parallel scans, active repositories still keep their own working sets.
+3. Before final processing, Kingfisher reads the records back in batches, reconstructing the
+   findings and shared metadata. Final deduplication, validation, and reporting still operate
+   on an in-memory store. After successful restoration, the temporary file is truncated to zero
+   bytes; its handle is closed when the store is dropped or the process exits.
+
+This internal representation is independent of report serialization. It contains **unredacted
+credentials**, including when `--redact` is used, so later processing receives the original
+values. It is not an exported report, saved scan, or resumable checkpoint. If temporary storage
+fills up, Kingfisher attempts the in-memory fallback described below.
+Other creation, write, or restore failures fail the scan explicitly rather than silently
+discarding findings.
+
+### If temporary storage fills up
+
+If the OS reports that temporary storage is full while creating the file, Kingfisher prints a
+warning and continues with findings in memory. If it fills up during a write, Kingfisher:
+
+1. Rolls back the incomplete append to the last successfully written batch. The current batch
+   is still in memory and has not been discarded.
+2. Prints a warning, restores all previously stored findings to memory, and keeps the pending
+   findings alongside them, preserving deduplication and metadata.
+3. Closes the temporary file and disables disk offload for the rest of that scan.
+   It does not repeatedly retry a full disk.
+
+This allows the scan to continue without losing findings, **provided enough RAM is available**.
+Memory use may increase substantially; the fallback cannot guarantee completion if RAM is also
+exhausted. The disk must still be readable. If rollback or restoration fails, Kingfisher stops
+with an error instead of continuing with an incomplete result. Other I/O errors, such as denied
+access or corrupt records, remain fatal. This fallback applies only to temporary findings
+storage; it does not recover failures writing reports, fetching repositories, or extracting
+archives.
+
+### Privacy and location
+
+The file is created with `tempfile::tempfile()` in the operating system's temporary directory.
+Kingfisher retains an open file handle, not a user-facing filename. It does not place the temporary file
+in the scanned repository, report output directory, or `--git-clone-dir`.
+
+“Private” and “anonymous” describe file access and lifetime, not encryption:
+
+- **Linux:** where supported, the file is created without a directory entry using `O_TMPFILE`.
+  Otherwise, it uses the Unix fallback below.
+- **macOS and the Unix fallback:** a randomly named file is created with owner-only read/write
+  permissions (`0600`, further restricted by the process umask), then immediately unlinked.
+  Unlinking removes its directory entry while the open handle keeps its contents available to
+  Kingfisher. After unlinking, another process cannot simply open it by its former pathname.
+- **Windows:** a randomly named temporary file is opened without file sharing and with
+  delete-on-close enabled. Its name can remain visible until the handle closes, so “anonymous”
+  does not mean an invisible directory entry on Windows. Ordinary attempts to open the file
+  while Kingfisher holds it are denied by the sharing mode.
+
+These protections do not isolate the data from an administrator or a process with sufficient
+rights to inspect Kingfisher or its open handles. The contents are not encrypted by Kingfisher,
+and deletion is not secure erasure. Use suitably protected temporary storage if captured
+credentials must be encrypted at rest.
+
+On Unix, set `TMPDIR` before launching Kingfisher to choose a different existing temporary
+directory, for example on a protected local disk with enough free space:
+
+```bash
+TMPDIR=/path/to/private-temp kingfisher scan /path/to/repos \
+  --scan-nested-repos --disk-offload --format toon
+```
+
+### Cleanup and crashes
+
+Normal completion truncates the temporary file after restoration and closes its handle when the store
+is released. On an error, closing the handle also releases the temporary file, even if its
+contents were never restored. No separate Kingfisher cleanup command or scheduled sweep is
+needed for the normal case.
+
+If Kingfisher panics, aborts, or is forcibly terminated (including `SIGKILL` on Unix), the OS
+closes its handles when the process exits. An already-unlinked Unix file is reclaimed after
+its last handle closes; Windows deletes the file through its delete-on-close setting. This
+cleanup does not depend on Rust destructors or a signal handler running. The temporarily stored findings
+are lost and cannot be used to resume the interrupted scan.
+
+There are limits to that guarantee. In the Unix named-file fallback, termination in the brief
+interval between creation and unlinking can leave a randomly named file behind; an unlink
+failure can also leave a name behind. A whole-machine crash or power loss additionally depends
+on filesystem recovery and is not a secure-erasure guarantee. Kingfisher does not run a startup
+sweep for such remnants. If a leftover is found in the chosen temporary directory, treat it as
+sensitive data and remove it after confirming it is no longer in use. Filesystem snapshots,
+backups, or recoverable storage blocks can also retain data after deletion.
+
 ## Notable Scan Options
 
 - `--jobs <N>`: Set the number of parallel scanner workers; see [Control Scan Concurrency](#control-scan-concurrency).
+- `--disk-offload`: Store accumulated repository findings in a private temporary file; see [Disk Offload](#disk-offload).
 - `--no-dedup`: Report every occurrence of a finding instead of grouping repeated credential content
 - `--include-hidden-findings`: Include hidden helper-rule matches in reports and scan summary counts (diagnostic use)
 - `--no-base64`: By default, Kingfisher finds and decodes base64 blobs and scans them for secrets. This adds a slight performance overhead; use this flag to disable
@@ -521,7 +653,7 @@ scanner pool must use the same explicit value; see [Project Configuration caveat
 - `--include-contributors`: When scanning GitHub or GitLab URLs, include contributor-owned repos in the scan
 - `--git-clone-dir <DIR>`: Choose the parent directory for cloned repos and scan artifacts (use with Git URL scans)
 - `--keep-clones`: Preserve cloned repositories on disk after a scan completes
-- `--repo-clone-limit <N>`: Cap the number of GitHub/GitLab repositories cloned when enumerating orgs/groups or contributor repos
+- `--repo-clone-limit <N>`: Cap GitHub and GitLab clone targets when enumerating users, orgs/groups, or contributor repos; this includes opted-in GitHub gists and GitLab snippets
 - `--no-binary`: Skip binary files
 - `--no-extract-archives`: Do not scan inside archives
 - `--extraction-depth <N>`: Specifies how deep nested archives should be extracted and scanned (default: 2)

@@ -57,6 +57,10 @@ pub struct InputSpecifierArgs {
     #[arg(long, hide = true)]
     pub github_user: Vec<String>,
 
+    /// Include public gists when enumerating GitHub users.
+    #[arg(skip)]
+    pub github_include_gists: bool,
+
     /// Scan repositories belonging to the specified GitHub organization
     #[arg(long, alias = "github-org", hide = true)]
     pub github_organization: Vec<String>,
@@ -99,6 +103,10 @@ pub struct InputSpecifierArgs {
     /// Scan repositories belonging to the specified GitLab user
     #[arg(long, hide = true)]
     pub gitlab_user: Vec<String>,
+
+    /// Include snippets when enumerating GitLab sources.
+    #[arg(skip)]
+    pub gitlab_include_snippets: bool,
 
     /// Scan repositories belonging to the specified GitLab group
     #[arg(long, alias = "gitlab-group", hide = true)]
@@ -202,6 +210,10 @@ pub struct InputSpecifierArgs {
     /// Scan repositories belonging to the specified Bitbucket users
     #[arg(long, hide = true)]
     pub bitbucket_user: Vec<String>,
+
+    /// Include snippets when enumerating Bitbucket sources.
+    #[arg(skip)]
+    pub bitbucket_include_snippets: bool,
 
     /// Scan repositories belonging to the specified Bitbucket workspaces or teams
     #[arg(long, alias = "bitbucket-workspace", alias = "bitbucket-team", hide = true)]

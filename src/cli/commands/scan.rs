@@ -96,6 +96,14 @@ pub struct ScanArgs {
     #[arg(global = true, long, short = 'c', default_value = "medium")]
     pub confidence: ConfidenceLevel,
 
+    /// Temporarily offload completed findings to disk with automatic cleanup.
+    /// Uses a private temporary file that is automatically removed when closed or the process exits.
+    /// Offloading starts only after a repository or input root finishes, so a single-repository
+    /// scan may use the same peak memory with or without this flag.
+    /// Final deduplication, validation, and reporting still use an in-memory working set.
+    #[arg(global = true, long, default_value_t = false)]
+    pub disk_offload: bool,
+
     /// Disable secret validation
     #[arg(global = true, long, short = 'n', default_value_t = false)]
     pub no_validate: bool,
@@ -674,6 +682,8 @@ impl ScanCommandArgs {
                     } else if args.list_only {
                         Some(ListRepositoriesCommand::Github { api_url: args.api_url, specifiers })
                     } else {
+                        scan_args.input_specifier_args.github_include_gists =
+                            specifiers.include_gists;
                         scan_args.input_specifier_args.github_user = specifiers.user;
                         scan_args.input_specifier_args.github_organization =
                             specifiers.organization;
@@ -700,6 +710,8 @@ impl ScanCommandArgs {
                             specifiers: args.specifiers,
                         })
                     } else {
+                        scan_args.input_specifier_args.gitlab_include_snippets =
+                            args.specifiers.include_snippets;
                         scan_args.input_specifier_args.gitlab_user = args.specifiers.user;
                         scan_args.input_specifier_args.gitlab_group = args.specifiers.group;
                         scan_args.input_specifier_args.gitlab_exclude =
@@ -752,6 +764,8 @@ impl ScanCommandArgs {
                             specifiers: args.specifiers,
                         })
                     } else {
+                        scan_args.input_specifier_args.bitbucket_include_snippets =
+                            args.specifiers.include_snippets;
                         scan_args.input_specifier_args.bitbucket_user = args.specifiers.user;
                         scan_args.input_specifier_args.bitbucket_workspace =
                             args.specifiers.workspace;
@@ -1137,7 +1151,12 @@ pub struct GithubScanArgs {
     pub specifiers: GitHubRepoSpecifiers,
 
     /// Scan recent public events for the specified --user actors
-    #[arg(long = "public-events", alias = "events", default_value_t = false)]
+    #[arg(
+        long = "public-events",
+        alias = "events",
+        default_value_t = false,
+        conflicts_with = "include_gists"
+    )]
     pub public_events: bool,
 
     /// Look back this many hours when scanning --public-events

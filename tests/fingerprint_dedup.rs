@@ -15,7 +15,6 @@ use kingfisher::{
     origin::{Origin, OriginSet},
     reporter::{DetailsReporter, ReportMatch, styles::Styles},
     rules::rule::{Confidence, Rule, RuleSyntax},
-    util::intern,
 };
 use smallvec::smallvec;
 // ---- helpers -------------------------------------------------------------------------------
@@ -57,7 +56,7 @@ fn make_match(fp: u64, rule_id: &str) -> Match {
                 match_number: 0,
                 start: 0,
                 end: 10,
-                value: intern("dummy"),
+                value: "dummy".into(),
             }],
         },
         blob_id: BlobId::new(b"dummy"),
