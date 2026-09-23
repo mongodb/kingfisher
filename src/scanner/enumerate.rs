@@ -1720,7 +1720,7 @@ mod tests {
     use super::{
         FileResult, GitBlobSource, GitDiffConfig, ParallelBlobIterator,
         enumerate_git_branch_history, enumerate_git_diff_repo, lazy_expand_entry,
-        recursively_extract_archive_entries, reference_candidates,
+        reference_candidates,
     };
     use anyhow::Result;
     use bstr::ByteSlice;

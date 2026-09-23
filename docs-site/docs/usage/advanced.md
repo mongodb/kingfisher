@@ -656,7 +656,7 @@ backups, or recoverable storage blocks can also retain data after deletion.
 - `--include-contributors`: When scanning GitHub or GitLab URLs, include contributor-owned repos in the scan
 - `--git-clone-dir <DIR>`: Choose the parent directory for cloned repos and scan artifacts (use with Git URL scans)
 - `--keep-clones`: Preserve cloned repositories on disk after a scan completes
-- `--repo-clone-limit <N>`: Cap the number of GitHub/GitLab repositories cloned when enumerating orgs/groups or contributor repos
+- `--repo-clone-limit <N>`: Cap GitHub and GitLab clone targets when enumerating users, orgs/groups, or contributor repos; this includes opted-in GitHub gists and GitLab snippets
 - `--no-binary`: Skip binary files
 - `--no-extract-archives`: Do not scan inside archives
 - `--extraction-depth <N>`: Specifies how deep nested archives should be extracted and scanned (default: 2)
