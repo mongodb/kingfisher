@@ -1,11 +1,14 @@
-use std::{collections::BinaryHeap, path::Path, time::Instant};
+use std::{collections::BinaryHeap, hash::BuildHasher, path::Path, time::Instant};
 
 use anyhow::{Context, Result, bail};
 use bstr::{BString, ByteSlice};
 use fixedbitset::FixedBitSet;
 use gix::{
     ObjectId, OdbHandle,
-    hashtable::{HashMap, hash_map},
+    hashtable::{
+        HashMap, hash_map,
+        hash_table::{self, HashTable},
+    },
     object::Kind,
     objs::tree::EntryKind,
     prelude::*,
@@ -94,22 +97,29 @@ impl SeenObjectSet {
 }
 
 struct ObjectIdBimap {
-    oid_to_idx: HashMap<ObjectId, ObjectIdx>,
+    // Store only indexes in the table; compare full IDs in the dense vector.
+    oid_to_idx: HashTable<ObjectIdx>,
     idx_to_oid: Vec<ObjectId>,
 }
 impl ObjectIdBimap {
     fn with_capacity(capacity: usize) -> Self {
         Self {
-            oid_to_idx: HashMap::with_capacity_and_hasher(capacity, Default::default()),
+            oid_to_idx: HashTable::with_capacity(capacity),
             idx_to_oid: Vec::with_capacity(capacity),
         }
     }
     fn insert(&mut self, oid: ObjectId) {
-        match self.oid_to_idx.entry(oid) {
-            hash_map::Entry::Occupied(_) => {}
-            hash_map::Entry::Vacant(e) => {
-                let idx = ObjectIdx::new(self.idx_to_oid.len());
-                self.idx_to_oid.push(*e.key());
+        let ids = &mut self.idx_to_oid;
+        let hasher = gix::hashtable::hash::Builder;
+        match self.oid_to_idx.entry(
+            hasher.hash_one(oid),
+            |idx| ids[idx.as_usize()] == oid,
+            |idx| hasher.hash_one(ids[idx.as_usize()]),
+        ) {
+            hash_table::Entry::Occupied(_) => {}
+            hash_table::Entry::Vacant(e) => {
+                let idx = ObjectIdx::new(ids.len());
+                ids.push(oid);
                 e.insert(idx);
             }
         }
@@ -118,7 +128,11 @@ impl ObjectIdBimap {
         self.idx_to_oid.get(idx.as_usize()).map(|v| v.as_ref())
     }
     fn get_idx(&self, oid: &gix::oid) -> Option<ObjectIdx> {
-        self.oid_to_idx.get(oid).copied()
+        self.oid_to_idx
+            .find(gix::hashtable::hash::Builder.hash_one(oid), |idx| {
+                self.idx_to_oid[idx.as_usize()].as_ref() == oid
+            })
+            .copied()
     }
     fn len(&self) -> usize {
         self.idx_to_oid.len()
@@ -202,8 +216,8 @@ impl RepositoryIndex {
     pub(crate) fn get_blob_index(&self, oid: &gix::oid) -> Option<ObjectIdx> {
         self.blobs.get_idx(oid)
     }
-    pub(crate) fn into_blobs(self) -> Vec<ObjectId> {
-        self.blobs.idx_to_oid
+    pub(crate) fn into_blob_parts(self) -> (Vec<ObjectId>, HashTable<ObjectIdx>) {
+        (self.blobs.idx_to_oid, self.blobs.oid_to_idx)
     }
     pub(crate) fn commits(&self) -> &[ObjectId] {
         &self.commits.idx_to_oid
@@ -257,7 +271,8 @@ impl GitMetadataGraph {
     }
 }
 
-pub(crate) type IntroducedBlobs = SmallVec<[(ObjectId, BString); 4]>;
+// Most commits introduce few blobs; keep the per-commit inline allocation small.
+pub(crate) type IntroducedBlobs = SmallVec<[(ObjectId, BString); 1]>;
 pub(crate) struct CommitBlobMetadata {
     pub(crate) commit_oid: ObjectId,
     pub(crate) introduced_blobs: IntroducedBlobs,
@@ -265,7 +280,7 @@ pub(crate) struct CommitBlobMetadata {
 
 impl GitMetadataGraph {
     pub(crate) fn get_repo_metadata_with_deadline(
-        self,
+        mut self,
         repo_index: &RepositoryIndex,
         repo: &gix::Repository,
         exclude_globset: Option<&GlobSet>,
@@ -274,6 +289,8 @@ impl GitMetadataGraph {
         let _span =
             error_span!("get_repo_metadata", path = repo.path().display().to_string()).entered();
         let t1 = Instant::now();
+        // Graph construction is complete; traversal addresses nodes by index.
+        drop(std::mem::take(&mut self.commit_oid_to_node_idx));
         let cg = &self.commits;
         let num_commits = cg.node_count();
         let mut seen_sets: Vec<Option<SeenObjectSet>> = vec![None; num_commits];
@@ -529,6 +546,35 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::git_repo_enumerator::{GitBlobSource, GitRepoWithMetadataEnumerator};
+
+    #[test]
+    fn object_index_preserves_ids_through_collisions_and_growth() {
+        use super::{ObjectIdBimap, ObjectIdx};
+
+        let mut index = ObjectIdBimap::with_capacity(0);
+        // gix hashes the first eight bytes. Keep those equal to exercise full-ID
+        // comparisons, including when growth rehashes the stored indexes.
+        let ids: Vec<_> = (0u32..1024)
+            .map(|i| {
+                let mut bytes = [0x42; 20];
+                bytes[16..].copy_from_slice(&i.to_be_bytes());
+                gix::ObjectId::from_bytes_or_panic(&bytes)
+            })
+            .collect();
+        for &oid in &ids {
+            index.insert(oid);
+            index.insert(oid);
+        }
+        assert_eq!(index.len(), ids.len());
+        for (i, oid) in ids.iter().enumerate() {
+            assert_eq!(index.get_idx(oid), Some(ObjectIdx::new(i)));
+            assert_eq!(index.get_oid(ObjectIdx::new(i)), Some(oid.as_ref()));
+        }
+        let mut missing = [0x42; 20];
+        missing[16..].copy_from_slice(&1024u32.to_be_bytes());
+        assert_eq!(index.get_idx(&gix::ObjectId::from_bytes_or_panic(&missing)), None);
+        assert_eq!(index.get_oid(ObjectIdx::new(ids.len())), None);
+    }
 
     #[test]
     fn commit_identities_are_interned_across_commits() -> Result<()> {

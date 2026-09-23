@@ -63,7 +63,6 @@ mod tests {
     use crate::cli::commands::rules::{RuleCacheArgs, RuleSpecifierArgs};
     use crate::matcher::{SerializableCapture, SerializableCaptures};
     use crate::rules::rule::{Confidence, Rule, RuleSyntax};
-    use crate::util::intern;
     use crate::{
         blob::BlobId,
         cli::commands::azure::AzureRepoType,
@@ -113,6 +112,7 @@ mod tests {
 
                 // GitHub
                 github_user: Vec::new(),
+                github_include_gists: false,
                 github_organization: Vec::new(),
                 github_exclude: Vec::new(),
                 all_github_organizations: false,
@@ -123,6 +123,7 @@ mod tests {
 
                 // GitLab
                 gitlab_user: Vec::new(),
+                gitlab_include_snippets: false,
                 gitlab_group: Vec::new(),
                 gitlab_exclude: Vec::new(),
                 all_gitlab_groups: false,
@@ -149,6 +150,7 @@ mod tests {
 
                 // Bitbucket
                 bitbucket_user: Vec::new(),
+                bitbucket_include_snippets: false,
                 bitbucket_workspace: Vec::new(),
                 bitbucket_project: Vec::new(),
                 bitbucket_exclude: Vec::new(),
@@ -215,6 +217,7 @@ mod tests {
                 no_binary: true,
             },
             confidence: ConfidenceLevel::Medium,
+            disk_offload: false,
             no_validate: false,
             access_map: false,
             rule_stats: false,
@@ -295,7 +298,7 @@ mod tests {
                     match_number: 1,
                     start: 10,
                     end: 20,
-                    value: intern("mock_token"),
+                    value: "mock_token".into(),
                 }],
             },
             blob_id: BlobId::new(b"mock_blob"),

@@ -178,7 +178,7 @@ fn run() -> anyhow::Result<()> {
         Command::Rules(_) => std::thread::available_parallelism().map_or(1, |n| n.get()), // Default for Rules commands
         Command::Validate(_) => 1, // Single validation request
         Command::Revoke(_) => 1,   // Single revocation request
-        Command::AccessMap(_) | Command::BlastRadius(_) => 1,
+        Command::BlastRadius(_) => 1,
         Command::View(_) => 1,
         Command::Config(_) => 1,
     };
@@ -1389,9 +1389,6 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
             Ok(AsyncMainOutcome::Done)
         }
         Command::View(view_args) => view::run(view_args).await.map(|_| AsyncMainOutcome::Done),
-        Command::AccessMap(identity_args) => {
-            access_map::run(identity_args).await.map(|_| AsyncMainOutcome::Done)
-        }
         Command::BlastRadius(blast_radius_args) => {
             if blast_radius_args.rule.is_none() {
                 let view_report = blast_radius_args.view_report;
@@ -1693,6 +1690,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                                 global_args.ignore_certs,
                                 global_args.use_progress(),
                                 &specifiers.user,
+                                specifiers.include_gists,
                                 &specifiers.organization,
                                 specifiers.all_organizations,
                                 &specifiers.exclude_repos,
@@ -1706,6 +1704,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                                 global_args.ignore_certs,
                                 global_args.use_progress(),
                                 &specifiers.user,
+                                specifiers.include_snippets,
                                 &specifiers.group,
                                 specifiers.all_groups,
                                 specifiers.include_subgroups,
@@ -1735,6 +1734,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                                 global_args.ignore_certs,
                                 global_args.use_progress(),
                                 &specifiers.user,
+                                specifiers.include_snippets,
                                 &specifiers.workspace,
                                 &specifiers.project,
                                 specifiers.all_workspaces,
@@ -1794,8 +1794,8 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                 Command::View(_) => {
                     anyhow::bail!("View command should not reach this branch")
                 }
-                Command::AccessMap(_) | Command::BlastRadius(_) => {
-                    anyhow::bail!("AccessMap command should not reach this branch")
+                Command::BlastRadius(_) => {
+                    anyhow::bail!("BlastRadius command should not reach this branch")
                 }
                 Command::Validate(_) => {
                     anyhow::bail!("Validate command should not reach this branch")
@@ -1838,6 +1838,7 @@ fn create_default_scan_args() -> cli::commands::scan::ScanArgs {
             repo_clone_limit: None,
             include_contributors: false,
             github_user: Vec::new(),
+            github_include_gists: false,
             github_organization: Vec::new(),
             github_exclude: Vec::new(),
             all_github_organizations: false,
@@ -1847,6 +1848,7 @@ fn create_default_scan_args() -> cli::commands::scan::ScanArgs {
             github_event_lookback_hours: 24,
             // new GitLab defaults
             gitlab_user: Vec::new(),
+            gitlab_include_snippets: false,
             gitlab_group: Vec::new(),
             gitlab_exclude: Vec::new(),
             all_gitlab_groups: false,
@@ -1870,6 +1872,7 @@ fn create_default_scan_args() -> cli::commands::scan::ScanArgs {
             gitea_repo_type: GiteaRepoType::Source,
 
             bitbucket_user: Vec::new(),
+            bitbucket_include_snippets: false,
             bitbucket_workspace: Vec::new(),
             bitbucket_project: Vec::new(),
             bitbucket_exclude: Vec::new(),
@@ -1938,6 +1941,7 @@ fn create_default_scan_args() -> cli::commands::scan::ScanArgs {
             no_binary: true,
         },
         confidence: ConfidenceLevel::Medium,
+        disk_offload: false,
         no_validate: true,
         access_map: false,
         rule_stats: false,

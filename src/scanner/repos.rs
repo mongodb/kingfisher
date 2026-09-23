@@ -459,6 +459,7 @@ pub async fn enumerate_github_repos(
 ) -> Result<Vec<GitUrl>> {
     let repo_specifiers = github::RepoSpecifiers {
         user: args.input_specifier_args.github_user.clone(),
+        include_gists: args.input_specifier_args.github_include_gists,
         organization: args.input_specifier_args.github_organization.clone(),
         all_organizations: args.input_specifier_args.all_github_organizations,
         repo_filter: args.input_specifier_args.github_repo_type.into(),
@@ -596,6 +597,7 @@ pub async fn enumerate_gitlab_repos(
 ) -> Result<Vec<GitUrl>> {
     let repo_specifiers = gitlab::RepoSpecifiers {
         user: args.input_specifier_args.gitlab_user.clone(),
+        include_snippets: args.input_specifier_args.gitlab_include_snippets,
         group: args.input_specifier_args.gitlab_group.clone(),
         all_groups: args.input_specifier_args.all_gitlab_groups,
         include_subgroups: args.input_specifier_args.gitlab_include_subgroups,
@@ -868,6 +870,7 @@ pub async fn enumerate_bitbucket_repos(
 ) -> Result<Vec<GitUrl>> {
     let repo_specifiers = bitbucket::RepoSpecifiers {
         user: args.input_specifier_args.bitbucket_user.clone(),
+        include_snippets: args.input_specifier_args.bitbucket_include_snippets,
         workspace: args.input_specifier_args.bitbucket_workspace.clone(),
         project: args.input_specifier_args.bitbucket_project.clone(),
         all_workspaces: args.input_specifier_args.all_bitbucket_workspaces,

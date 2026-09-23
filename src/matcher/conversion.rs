@@ -24,7 +24,7 @@ use kingfisher_scanner::primitives::compute_finding_fingerprint;
 ///
 /// Imported Betterleaks rules serialize their selected secret as `TOKEN`. Rules without
 /// Betterleaks capture metadata retain the historical second-entry fallback.
-fn external_fingerprint_value(rule: &Rule, captures: &SerializableCaptures) -> &'static str {
+fn external_fingerprint_value<'a>(rule: &Rule, captures: &'a SerializableCaptures) -> &'a str {
     let capture = if rule.betterleaks_secret_group().is_some() {
         captures
             .captures

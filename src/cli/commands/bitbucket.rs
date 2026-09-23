@@ -58,6 +58,10 @@ pub struct BitbucketRepoSpecifiers {
     #[arg(long, alias = "bitbucket-user")]
     pub user: Vec<String>,
 
+    /// Include accessible workspace snippets (Bitbucket Cloud only)
+    #[arg(long)]
+    pub include_snippets: bool,
+
     /// Repositories belonging to these workspaces or teams
     #[arg(long, alias = "bitbucket-workspace", alias = "bitbucket-team")]
     pub workspace: Vec<String>,

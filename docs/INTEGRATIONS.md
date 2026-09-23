@@ -221,6 +221,23 @@ KF_GITHUB_TOKEN="ghp_…" kingfisher scan github --public-events \
   --github-exclude alice/*-archive
 ```
 
+### Include a GitHub user's gists
+
+Add `--include-gists` to enumerate public gists for each specified user and clone
+and scan them with full Git history by default:
+
+```bash
+kingfisher scan github --user alice --include-gists --format toon
+kingfisher scan github --user alice --include-gists --list-only
+```
+
+Gists count toward `--repo-clone-limit` and use the same clone and history options
+as repositories. `--repo-type` and `--github-exclude` filter repositories, not
+gists. The flag requires `--user` and cannot be combined with `--public-events`.
+Enumeration uses GitHub's [public user gists endpoint](https://docs.github.com/en/rest/gists/gists#list-gists-for-a-user)
+and the configured API URL and authentication. Unlike the gist file snapshots
+fetched by `--repo-artifacts`, cloned gists include earlier revisions.
+
 ### Skip specific GitHub repositories during enumeration
 
 Repeat `--github-exclude` for every repository you want to ignore when scanning
@@ -360,6 +377,32 @@ kingfisher scan gitlab --group my-group --repo-clone-limit 500
 ```bash
 kingfisher scan gitlab --user johndoe
 ```
+
+### Include GitLab snippets and their history
+
+Add `--include-snippets` to include accessible personal snippets for each `--user`
+and project snippets from the repositories selected by users or groups:
+
+```bash
+kingfisher scan gitlab --user alice --include-snippets --format toon
+kingfisher scan gitlab --group my-group --include-subgroups --include-snippets --format toon
+kingfisher scan gitlab --user alice --include-snippets --list-only
+```
+
+Snippets are cloned as Git repositories and scanned with full history by default,
+including files deleted from the latest revision. Clone and history options apply
+to snippets too, and snippets count toward `--repo-clone-limit`. Project exclusions
+also exclude that project's snippets; they do not filter personal snippets.
+`--repo-type` selects projects, not personal snippets.
+
+Discovery uses the configured GitLab instance's [GraphQL snippets API](https://docs.gitlab.com/api/graphql/reference/#querysnippets)
+and `KF_GITLAB_TOKEN` when set. Only snippets visible to that caller are included;
+authenticated requests can include private snippets. Snippets without a Git clone
+URL are skipped with a warning. This adds historical coverage beyond the project
+snippet snapshots fetched by `--repo-artifacts`.
+
+Snippet discovery makes sequential, paginated GraphQL requests for each selected
+project. Large groups can take longer to enumerate and consume more API requests.
 
 ### Skip specific GitLab projects during enumeration
 
@@ -630,6 +673,31 @@ KF_BITBUCKET_TOKEN="$BITBUCKET_TOKEN" \
 ```bash
 kingfisher scan bitbucket --user johndoe
 ```
+
+### Include Bitbucket Cloud snippets and their history
+
+Add `--include-snippets` to clone and scan snippets owned by the selected
+workspaces, including personal workspaces selected with `--user`:
+
+```bash
+kingfisher scan bitbucket --workspace my-workspace --include-snippets --format toon
+kingfisher scan bitbucket --user alice --include-snippets --list-only
+```
+
+The option also works with `--all-workspaces`. Discovery uses the configured
+Bitbucket authentication and includes public snippets plus private snippets the
+caller can access. Tokens need snippet read access (`snippet` for OAuth or
+`read:snippet:bitbucket` for API tokens), as described in the
+[Bitbucket snippets API](https://developer.atlassian.com/cloud/bitbucket/rest/api-group-snippets/).
+
+Snippets use the normal Git clone and history options, with full history scanned
+by default. Repository type filters and `--bitbucket-exclude` do not filter
+workspace snippets. Bitbucket Server/Data Center does not support this option;
+Kingfisher reports an error if it is requested there.
+
+`--project` does not select snippet owners. Use `--workspace`, `--user`, or
+`--all-workspaces` for snippet discovery; project-only selections are skipped
+with a warning.
 
 ### Skip specific Bitbucket repositories during enumeration
 

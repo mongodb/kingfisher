@@ -8,7 +8,6 @@ use kingfisher::{
     matcher::{Match, SerializableCapture, SerializableCaptures},
     origin::{Origin, OriginSet},
     rules::rule::{Confidence, DependsOnRule, Rule, RuleSyntax},
-    util::intern,
 };
 use smallvec::smallvec;
 
@@ -55,7 +54,7 @@ fn make_match(rule: Arc<Rule>, blob_id: BlobId, value: &str) -> Match {
                 match_number: 0,
                 start: 0,
                 end: value.len(),
-                value: intern(value),
+                value: value.into(),
             }],
         },
         blob_id,
@@ -158,4 +157,37 @@ fn dedup_still_merges_non_dependency_rules_across_blobs() -> Result<()> {
     assert_eq!(store.get_matches().len(), 1);
 
     Ok(())
+}
+
+#[test]
+fn dedup_preserves_distinct_rules_and_values_across_batches_and_growth() {
+    let rule = make_rule("RULE.FIRST", true, vec![]);
+    let other_rule = make_rule("RULE.SECOND", true, vec![]);
+    let mut store = FindingsStore::new(PathBuf::from("/tmp"));
+    store.record_rules(&[rule.clone(), other_rule.clone()]);
+    let origin = Arc::new(OriginSet::single(Origin::from_file(PathBuf::from("growth.txt"))));
+    let blob = Arc::new(BlobMetadata {
+        id: BlobId::new(b"growth"),
+        num_bytes: 10,
+        mime_essence: None,
+        language: None,
+    });
+    const COUNT: usize = 4096;
+    let batch = |rule: &Arc<Rule>, start: usize, end: usize| {
+        (start..end)
+            .map(|i| {
+                record_match(
+                    &origin,
+                    &blob,
+                    make_match(rule.clone(), blob.id, &format!("synthetic-secret-{i}")),
+                )
+            })
+            .collect()
+    };
+    store.record(batch(&rule, 0, COUNT / 2), true);
+    store.record(batch(&rule, COUNT / 2, COUNT), true);
+    store.record(batch(&rule, 0, COUNT), true);
+    assert_eq!(store.get_matches().len(), COUNT);
+    store.record(batch(&other_rule, 0, COUNT), true);
+    assert_eq!(store.get_matches().len(), 2 * COUNT);
 }

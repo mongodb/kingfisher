@@ -262,7 +262,7 @@ mod tests {
                 match_number: 0, // This test is for a rule with *no* explicit captures
                 start: 1,
                 end: 4,
-                value: "abc",
+                value: "abc".into(),
             }],
         };
         let result = process_captures(&captures);
@@ -278,9 +278,15 @@ mod tests {
                     match_number: 2,
                     start: 2,
                     end: 4,
-                    value: "cd",
+                    value: "cd".into(),
                 },
-                SerializableCapture { name: None, match_number: 1, start: 0, end: 2, value: "ab" },
+                SerializableCapture {
+                    name: None,
+                    match_number: 1,
+                    start: 0,
+                    end: 2,
+                    value: "ab".into()
+                },
             ],
         };
 
@@ -303,7 +309,7 @@ mod tests {
                     match_number: 1, // Corrected match_number
                     start: 1,
                     end: 4,
-                    value: "bcd",
+                    value: "bcd".into(),
                 },
                 SerializableCapture {
                     // This is group 2 (named "foo")
@@ -311,7 +317,7 @@ mod tests {
                     match_number: 2, // Corrected match_number
                     start: 1,
                     end: 4,
-                    value: "bcd",
+                    value: "bcd".into(),
                 },
             ],
         };
@@ -344,7 +350,7 @@ mod tests {
                     match_number: 1, // Corrected match_number
                     start: 0,
                     end: 2,
-                    value: "aa",
+                    value: "aa".into(),
                 },
                 SerializableCapture {
                     // This is group 2 (unnamed)
@@ -352,7 +358,7 @@ mod tests {
                     match_number: 2, // Corrected match_number
                     start: 4,
                     end: 6,
-                    value: "cc",
+                    value: "cc".into(),
                 },
             ],
         };

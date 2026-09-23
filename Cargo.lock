@@ -1358,16 +1358,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bloomfilter"
-version = "3.0.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1f6d7f06817e48ea4e17532fa61bc4e8b9a101437f0623f69d2ea54284f3a817"
-dependencies = [
- "getrandom 0.2.17",
- "siphasher",
-]
-
-[[package]]
 name = "bollard"
 version = "0.21.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5408,7 +5398,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher"
-version = "2.5.0"
+version = "2.6.0"
 dependencies = [
  "anyhow",
  "asar",
@@ -5436,7 +5426,6 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "blake3",
- "bloomfilter",
  "bstr",
  "bytes",
  "bzip2-rs",

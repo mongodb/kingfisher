@@ -224,6 +224,20 @@ KF_GITHUB_TOKEN="ghp_…" kingfisher scan github --public-events \
   --github-exclude alice/*-archive
 ```
 
+### Include a GitHub user's gists
+
+Pass `--include-gists` with one or more `--user` values to clone and scan their
+public gists with full Git history. Gists also appear in `--list-only` output and
+count toward `--repo-clone-limit`.
+
+```bash
+kingfisher scan github --user alice --include-gists --format toon
+kingfisher scan github --user alice --include-gists --list-only
+```
+
+The option requires `--user` and cannot be combined with `--public-events`.
+Repository type and exclusion filters apply to repositories, not gists.
+
 ### Skip specific GitHub repositories during enumeration
 
 Repeat `--github-exclude` for every repository you want to ignore when scanning
@@ -363,6 +377,26 @@ kingfisher scan gitlab --group my-group --repo-clone-limit 500
 ```bash
 kingfisher scan gitlab --user johndoe
 ```
+
+### Include GitLab snippets and their history
+
+Use `--include-snippets` with a user or group to scan accessible personal
+snippets for selected users and project snippets for selected projects. Snippets
+are cloned and scanned with full Git history by default, and are included in
+`--list-only` output. Snippets count toward `--repo-clone-limit`.
+
+```bash
+kingfisher scan gitlab --user alice --include-snippets --format toon
+kingfisher scan gitlab --group my-group --include-subgroups --include-snippets
+kingfisher scan gitlab --user alice --include-snippets --list-only
+```
+
+GitLab uses the configured instance's GraphQL API. `KF_GITLAB_TOKEN` enables
+enumeration of private snippets visible to that token. Project exclusions also
+exclude that project's snippets; repository type filters do not filter snippets.
+
+Snippet discovery makes sequential, paginated GraphQL requests for each selected
+project. Large groups can take longer to enumerate and consume more API requests.
 
 ### Skip specific GitLab projects during enumeration
 
@@ -633,6 +667,25 @@ KF_BITBUCKET_TOKEN="$BITBUCKET_TOKEN" \
 ```bash
 kingfisher scan bitbucket --user johndoe
 ```
+
+### Include Bitbucket Cloud snippets and their history
+
+Use `--include-snippets` to clone workspace snippets the current caller can
+access, including private snippets permitted by their credentials. Snippets are
+scanned with full Git history and appear in `--list-only` output.
+
+```bash
+kingfisher scan bitbucket --workspace my-team --include-snippets --format toon
+kingfisher scan bitbucket --user alice --include-snippets --list-only
+kingfisher scan bitbucket --all-workspaces --include-snippets
+```
+
+The API token needs `read:snippet:bitbucket` access (or the OAuth `snippet`
+scope). Bitbucket Server and Data Center do not support this option.
+
+`--project` does not select snippet owners. Use `--workspace`, `--user`, or
+`--all-workspaces` for snippet discovery; project-only selections are skipped
+with a warning.
 
 ### Skip specific Bitbucket repositories during enumeration
 

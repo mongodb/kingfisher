@@ -59,10 +59,10 @@ pub(crate) fn should_attempt_context_verification(blob_len: usize) -> bool {
 ///
 /// When matching with Vectorscan, we simply collect all matches into a
 /// preallocated `Vec`, and then go through them all after scanning is complete.
+/// Block mode does not provide a reliable start offset; exact confirmation finds it.
 #[derive(PartialEq, Eq, Debug, Clone)]
 struct RawMatch {
     rule_id: u32,
-    start_idx: u64,
     end_idx: u64,
 }
 
@@ -228,13 +228,11 @@ impl<'a> Matcher<'a> {
             let slice = &input[offset..end];
             let base = offset as u64;
             self.scanner_pool.with(|scanner| {
-                scanner.scan(slice, |rule_id, from, to, _flags| {
+                scanner.scan(slice, |rule_id, _from, to, _flags| {
                     if (rule_id as usize) < self.rules_db.num_rules() {
-                        self.user_data.raw_matches_scratch.push(RawMatch {
-                            rule_id,
-                            start_idx: from + base,
-                            end_idx: to + base,
-                        });
+                        self.user_data
+                            .raw_matches_scratch
+                            .push(RawMatch { rule_id, end_idx: to + base });
                     }
                     vectorscan_rs::Scan::Continue
                 })
@@ -290,13 +288,11 @@ impl<'a> Matcher<'a> {
             self.user_data.raw_matches_scratch.clear();
             let base = range.start as u64;
             self.scanner_pool.with(|scanner| {
-                scanner.scan(&input[range], |rule_id, from, to, _flags| {
+                scanner.scan(&input[range], |rule_id, _from, to, _flags| {
                     if (rule_id as usize) < self.rules_db.num_rules() {
-                        self.user_data.raw_matches_scratch.push(RawMatch {
-                            rule_id,
-                            start_idx: from + base,
-                            end_idx: to + base,
-                        });
+                        self.user_data
+                            .raw_matches_scratch
+                            .push(RawMatch { rule_id, end_idx: to + base });
                     }
                     vectorscan_rs::Scan::Continue
                 })
@@ -340,9 +336,7 @@ impl<'a> Matcher<'a> {
         'a: 'b,
     {
         let rules_db = self.rules_db;
-        for &RawMatch { rule_id, start_idx, end_idx } in
-            self.user_data.raw_matches_scratch.iter().rev()
-        {
+        for &RawMatch { rule_id, end_idx } in self.user_data.raw_matches_scratch.iter().rev() {
             let rule_id_usize: usize = rule_id as usize;
             if betterleaks_path_prefiltered && rules_db.is_betterleaks_rule(rule_id_usize) {
                 continue;
@@ -350,7 +344,6 @@ impl<'a> Matcher<'a> {
             let rule = Arc::clone(&rules_db.rules()[rule_id_usize]);
             let re = &rules_db.anchored_regexes()[rule_id_usize];
             let end_idx_usize = end_idx as usize;
-            let _ = start_idx; // Vectorscan block mode does not provide a reliable start offset.
             let (mut scan_start, scan_end) = if rules_db.uses_vectorscan_prefilter(rule_id_usize) {
                 if !seen_prefilter_rules.insert(rule_id_usize) {
                     continue;
@@ -1306,17 +1299,19 @@ mod test {
             // ── run the scan ──────────────────────────────────────────────
             m.scan_bytes_raw(&noise, "buf").unwrap();
 
-            // ── property 1: dedup – each (rule,start,end) is unique ──────
+            // ── property 1: dedup – each (rule,end) is unique ──────
 
             let mut coords = FxHashSet::default();
-            for RawMatch{rule_id, start_idx, end_idx} in &m.user_data.raw_matches_scratch {
+            for RawMatch{rule_id, end_idx} in &m.user_data.raw_matches_scratch {
                 assert!(
-                    coords.insert((*rule_id, *start_idx, *end_idx)),
-                    "duplicate raw-match detected for coords ({rule_id},{start_idx},{end_idx})"
+                    coords.insert((*rule_id, *end_idx)),
+                    "duplicate raw-match detected for coords ({rule_id},{end_idx})"
                 );
 
                 // ── property 2: entropy gate held ────────────────────────
-                let slice = &noise[*start_idx as usize .. *end_idx as usize];
+                // This fixed-width test pattern lets us recover its start from the end.
+                let end = *end_idx as usize;
+                let slice = &noise[end - TOKEN.len() .. end];
                 let ent   = calculate_shannon_entropy(slice);
                 assert!(ent > 3.0, "entropy {ent} ≤ min_entropy, gate failed");
             }
@@ -1389,7 +1384,7 @@ mod test {
         matcher.scan_bytes_raw(input.as_bytes(), "fname")?;
         assert_eq!(
             matcher.user_data.raw_matches_scratch,
-            vec![RawMatch { rule_id: 0, start_idx: 0, end_idx: 9 },]
+            vec![RawMatch { rule_id: 0, end_idx: 9 },]
         );
         Ok(())
     }
@@ -2059,8 +2054,11 @@ line2
         let caps = re.captures(b"ghp_ABC12").expect("expected captures");
 
         let serialized = SerializableCaptures::from_captures(&caps, b"", &re);
-        let entries: Vec<(Option<&str>, i32, &str)> =
-            serialized.captures.iter().map(|cap| (cap.name, cap.match_number, cap.value)).collect();
+        let entries: Vec<(Option<&str>, i32, &str)> = serialized
+            .captures
+            .iter()
+            .map(|cap| (cap.name, cap.match_number, cap.raw_value()))
+            .collect();
 
         assert_eq!(entries.len(), 3);
 
@@ -2077,8 +2075,11 @@ line2
         let caps = re.captures(b"bc").expect("expected captures");
         let serialized =
             SerializableCaptures::from_captures_with_secret_group(&caps, b"bc", &re, Some(0));
-        let entries: Vec<(Option<&str>, i32, &str)> =
-            serialized.captures.iter().map(|cap| (cap.name, cap.match_number, cap.value)).collect();
+        let entries: Vec<(Option<&str>, i32, &str)> = serialized
+            .captures
+            .iter()
+            .map(|cap| (cap.name, cap.match_number, cap.raw_value()))
+            .collect();
 
         assert_eq!(entries[0], (Some("TOKEN"), 2, "c"));
         assert_eq!(entries[1], (Some("secret"), 2, "c"));

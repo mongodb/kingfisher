@@ -33,6 +33,11 @@ struct GitHubRepo {
 }
 
 #[derive(Deserialize)]
+struct GitHubGist {
+    git_pull_url: String,
+}
+
+#[derive(Deserialize)]
 struct GitHubOrg {
     login: String,
 }
@@ -87,6 +92,7 @@ pub enum GitHubEventScanSelector {
 #[derive(Debug)]
 pub struct RepoSpecifiers {
     pub user: Vec<String>,
+    pub include_gists: bool,
     pub organization: Vec<String>,
     pub all_organizations: bool,
     pub repo_filter: RepoType,
@@ -417,6 +423,44 @@ async fn fetch_github_repos(
     Ok(repos)
 }
 
+/// Enumerate clone URLs so gists use the same history scanner as repositories.
+async fn fetch_github_gist_urls(
+    client: &reqwest::Client,
+    api_base: &Url,
+    username: &str,
+    token: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut urls = Vec::new();
+    let mut seen_pages = HashSet::new();
+    let mut next_url = {
+        let mut url = api_base
+            .join(&format!("users/{username}/gists"))
+            .context("Failed to build GitHub user gists URL")?;
+        url.query_pairs_mut().append_pair("per_page", "100");
+        Some(url)
+    };
+    while let Some(url) = next_url {
+        if url.origin() != api_base.origin() {
+            anyhow::bail!("GitHub gists pagination points to a different origin");
+        }
+        if !seen_pages.insert(url.to_string()) {
+            anyhow::bail!("GitHub gists pagination repeated a page");
+        }
+        let resp = ensure_github_success(
+            github_get(client, url, token).send().await?,
+            "listing user gists",
+        )
+        .await?;
+        next_url = github_next_link(resp.headers());
+        let gists: Vec<GitHubGist> = resp.json().await?;
+        if gists.is_empty() {
+            break;
+        }
+        urls.extend(gists.into_iter().map(|gist| gist.git_pull_url));
+    }
+    Ok(urls)
+}
+
 pub async fn enumerate_contributor_repo_urls(
     repo_url: &GitUrl,
     github_api_url: &Url,
@@ -701,6 +745,11 @@ pub async fn enumerate_repo_urls(
             let clone_url = repo.clone_url;
             if should_exclude_repo(&clone_url, &exclude_set) { None } else { Some(clone_url) }
         }));
+        if repo_specifiers.include_gists {
+            repo_urls.extend(
+                fetch_github_gist_urls(&client, &api_base, username, token.as_deref()).await?,
+            );
+        }
         if let Some(progress) = progress.as_mut() {
             progress.inc(1);
         }
@@ -738,6 +787,7 @@ pub async fn list_repositories(
     ignore_certs: bool,
     progress_enabled: bool,
     users: &[String],
+    include_gists: bool,
     orgs: &[String],
     all_orgs: bool,
     exclude_repos: &[String],
@@ -745,6 +795,7 @@ pub async fn list_repositories(
 ) -> Result<()> {
     let repo_specifiers = RepoSpecifiers {
         user: users.to_vec(),
+        include_gists,
         organization: orgs.to_vec(),
         all_organizations: all_orgs,
         repo_filter,

@@ -137,7 +137,7 @@ flowchart LR
 - Regex helpers inside the combined Betterleaks finding filters are also compiled once into shared
   Vectorscan databases. `findMatch` uses start-of-match tracking; boolean helpers use normal block
   matching.
-- `FindingsStore` uses an in-memory store with a Bloom filter for deduplication, replacing the earlier SQLite-based storage model.
+- `FindingsStore` uses an in-memory store with cryptographic-digest deduplication, replacing the earlier SQLite-based storage model.
 - Betterleaks validation expressions run through a portable Rust AST evaluator. Kingfisher 1.x custom-rule
   validation and revocation templates use Liquid for HTTP request sequences, variable extraction,
   and multi-step flows.

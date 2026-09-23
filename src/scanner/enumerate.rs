@@ -55,6 +55,7 @@ use crate::{
 };
 
 type OwnedBlob = Blob<'static>;
+type LoadedGitBlobs<'a> = Box<dyn Iterator<Item = (OriginSet, Blob<'a>)> + Send + 'a>;
 
 #[allow(clippy::too_many_arguments)]
 pub fn enumerate_filesystem_inputs(
@@ -596,6 +597,62 @@ type OwnedArchiveEntry = (String, Vec<u8>);
 // their own per-entry limits; this cap also covers the final fan-out from each archive layer.
 const MAX_RECURSIVE_ARCHIVE_BYTES: u64 = 256 * 1024 * 1024;
 
+struct SharedArchive(Arc<Vec<u8>>);
+impl AsRef<[u8]> for SharedArchive {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+type ArchiveEntries = Box<dyn Iterator<Item = OwnedArchiveEntry> + Send>;
+
+fn lazy_expand_entries(entries: ArchiveEntries, remaining_depth: usize) -> ArchiveEntries {
+    let mut total = 0u64;
+    let mut expanded =
+        entries.flat_map(move |(logical, data)| lazy_expand_entry(logical, data, remaining_depth));
+    Box::new(std::iter::from_fn(move || {
+        if total >= MAX_RECURSIVE_ARCHIVE_BYTES {
+            return None;
+        }
+        let (logical, mut bytes) = expanded.next()?;
+        let remaining = MAX_RECURSIVE_ARCHIVE_BYTES - total;
+        bytes.truncate(bytes.len().min(remaining as usize));
+        total += bytes.len() as u64;
+        Some((logical, bytes))
+    }))
+}
+
+fn lazy_expand_entry(logical: String, data: Vec<u8>, remaining_depth: usize) -> ArchiveEntries {
+    if remaining_depth == 0 {
+        return Box::new(std::iter::once((logical, data)));
+    }
+    if looks_like_zip(&data) && data.len() <= MAX_INMEM_ZIP_ARCHIVE_BYTES {
+        // Arc<Vec<_>> preserves the original allocation for the raw fallback.
+        let data = Arc::new(data);
+        if let Ok(mut entries) = crate::decompress::zip_entries(
+            std::io::Cursor::new(SharedArchive(Arc::clone(&data))),
+            logical.clone(),
+        ) && let Some(first) = entries.next()
+        {
+            return lazy_expand_entries(
+                Box::new(std::iter::once(first).chain(entries)),
+                remaining_depth - 1,
+            );
+        }
+        return Box::new(std::iter::once((logical, Arc::unwrap_or_clone(data))));
+    }
+    match extract_archive_bytes(&logical, &data) {
+        Ok(Some(entries)) => {
+            lazy_expand_entries(Box::new(entries.into_iter()), remaining_depth - 1)
+        }
+        Ok(None) => Box::new(std::iter::once((logical, data))),
+        Err(error) => {
+            debug!("Failed to expand archive {logical}: {error:#}");
+            Box::new(std::iter::once((logical, data)))
+        }
+    }
+}
+
 fn archive_staged_name(logical: &str) -> String {
     let entry = logical.rsplit_once('!').map_or(logical, |(_, entry)| entry);
     Path::new(entry)
@@ -809,22 +866,6 @@ fn recursively_expand_archive_entries(
     Ok(expanded)
 }
 
-fn recursively_extract_archive_entries(
-    archive_label: &str,
-    data: &[u8],
-    extraction_depth: usize,
-) -> Result<Option<Vec<OwnedArchiveEntry>>> {
-    if extraction_depth == 0 {
-        return Ok(None);
-    }
-    let Some(entries) = extract_archive_bytes(archive_label, data)? else {
-        return Ok(None);
-    };
-
-    let expanded = recursively_expand_archive_entries(entries, extraction_depth.saturating_sub(1))?;
-    if expanded.is_empty() { Ok(None) } else { Ok(Some(expanded)) }
-}
-
 fn archive_entry_suffix<'a>(entry_logical: &'a str, archive_path: &str) -> Option<&'a str> {
     entry_logical.strip_prefix(archive_path).filter(|suffix| suffix.starts_with('!')).or_else(
         || entry_logical.split_once('!').map(|(archive, _)| &entry_logical[archive.len()..]),
@@ -877,17 +918,16 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
         let flag = Arc::new(AtomicBool::new(false)); // first-timeout gate
         let extract_archives = self.extract_archives;
         let extraction_depth = self.extraction_depth;
-
         // Loads one git blob and returns one *or more* `(OriginSet, Blob)`
         // tuples: a single tuple for normal blobs, multiple tuples for
         // archive blobs (zip/jar/apk/...) whose entries get unpacked into
         // synthetic per-entry blobs so pattern matchers can see the
-        // contents. See `recursively_extract_archive_entries` below.
+        // contents. Entries are expanded lazily as the matcher consumes them.
         let load_blob = {
             let repo_path = Arc::clone(&repo_path);
             let flag = Arc::clone(&flag);
 
-            move |repo: &mut GixRepo, md: GitBlobMetadata| -> Result<Vec<(OriginSet, Blob<'a>)>> {
+            move |repo: &mut GixRepo, md: GitBlobMetadata| -> Result<LoadedGitBlobs<'a>> {
                 if StdInstant::now() > deadline {
                     if flag.swap(true, Ordering::Relaxed) {
                         bail!("__timeout_silenced__");
@@ -924,47 +964,42 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                         });
 
                     if let Some(archive_path) = archive_path {
-                        match recursively_extract_archive_entries(
-                            &archive_path,
-                            data.as_slice(),
-                            extraction_depth,
-                        ) {
-                            Ok(Some(entries)) => {
-                                let mut out = Vec::with_capacity(entries.len());
-                                for (entry_logical, entry_bytes) in entries {
-                                    let entry_suffix =
-                                        archive_entry_suffix(&entry_logical, &archive_path);
-                                    let origin =
-                                        OriginSet::try_from_iter(md.first_seen.iter().map(|e| {
-                                            let repo_relative_path =
-                                                String::from_utf8_lossy(&e.path).to_string();
-                                            let per_appearance_logical = entry_suffix
-                                                .map(|suffix| {
-                                                    format!("{repo_relative_path}{suffix}")
-                                                })
-                                                .unwrap_or_else(|| entry_logical.clone());
-                                            Origin::from_git_repo_with_first_commit(
-                                                Arc::clone(&repo_path),
-                                                Arc::clone(&e.commit_metadata),
-                                                per_appearance_logical,
-                                            )
-                                        }))
-                                        .unwrap_or_else(
-                                            || Origin::from_git_repo(Arc::clone(&repo_path)).into(),
-                                        );
-                                    out.push((origin, Blob::from_bytes(entry_bytes)));
-                                }
-                                return Ok(out);
+                        let entries =
+                            lazy_expand_entry(archive_path.clone(), data, extraction_depth);
+                        let repo_path = Arc::clone(&repo_path);
+                        return Ok(Box::new(entries.map(move |(entry_logical, entry_bytes)| {
+                            // Invalid/empty archives keep the original blob identity and origins.
+                            if entry_logical == archive_path {
+                                let origin =
+                                    OriginSet::try_from_iter(md.first_seen.iter().map(|e| {
+                                        Origin::from_git_repo_with_first_commit(
+                                            Arc::clone(&repo_path),
+                                            Arc::clone(&e.commit_metadata),
+                                            String::from_utf8_lossy(&e.path).to_string(),
+                                        )
+                                    }))
+                                    .unwrap_or_else(|| {
+                                        Origin::from_git_repo(Arc::clone(&repo_path)).into()
+                                    });
+                                return (origin, Blob::new(BlobId::from(&blob_id), entry_bytes));
                             }
-                            Ok(None) => { /* not an archive we can crack — fall through */ }
-                            Err(e) => {
-                                debug!(
-                                    "Failed to extract git archive blob {} ({}): {e:#}",
-                                    blob_id, archive_path
-                                );
-                                // fall through and scan raw bytes
-                            }
-                        }
+                            let entry_suffix = archive_entry_suffix(&entry_logical, &archive_path);
+                            let origin = OriginSet::try_from_iter(md.first_seen.iter().map(|e| {
+                                let path = String::from_utf8_lossy(&e.path);
+                                let logical = entry_suffix
+                                    .map(|suffix| format!("{path}{suffix}"))
+                                    .unwrap_or_else(|| entry_logical.clone());
+                                Origin::from_git_repo_with_first_commit(
+                                    Arc::clone(&repo_path),
+                                    Arc::clone(&e.commit_metadata),
+                                    logical,
+                                )
+                            }))
+                            .unwrap_or_else(|| {
+                                Origin::from_git_repo(Arc::clone(&repo_path)).into()
+                            });
+                            (origin, Blob::from_bytes(entry_bytes))
+                        })));
                     }
                 }
 
@@ -979,7 +1014,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 }))
                 .unwrap_or_else(|| Origin::from_git_repo(Arc::clone(&repo_path)).into());
 
-                Ok(vec![(origin, blob)])
+                Ok(Box::new(std::iter::once((origin, blob))))
             }
         };
 
@@ -990,17 +1025,17 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
             !matches!(res, Err(e) if e.to_string() == "__timeout_silenced__")
         };
 
-        // Convert `Result<Vec<T>>` into a sequential iterator of `Result<T>`,
+        // Convert a lazy blob iterator into a sequential iterator of `Result<T>`,
         // suitable for rayon's `flat_map_iter`. A failed load yields a single
         // `Err`; a successful load fans out into one item per extracted blob.
         // A closure is used (rather than a free function) so the produced
         // `Blob<'static>` items can coerce into the iterator's
         // `Blob<'a>` Item type — Blob is covariant in its lifetime, but a
         // free fn would lose that link.
-        let fan_out = |res: Result<Vec<(OriginSet, Blob<'a>)>>|
+        let fan_out = |res: Result<LoadedGitBlobs<'a>>|
          -> Box<dyn Iterator<Item = Result<(OriginSet, Blob<'a>)>> + Send + 'a> {
             match res {
-                Ok(v) => Box::new(v.into_iter().map(Ok)),
+                Ok(v) => Box::new(v.map(Ok)),
                 Err(e) => Box::new(std::iter::once(Err(e))),
             }
         };
@@ -1684,8 +1719,8 @@ mod tests {
 
     use super::{
         FileResult, GitBlobSource, GitDiffConfig, ParallelBlobIterator,
-        enumerate_git_branch_history, enumerate_git_diff_repo, recursively_extract_archive_entries,
-        reference_candidates,
+        enumerate_git_branch_history, enumerate_git_diff_repo, lazy_expand_entry,
+        recursively_extract_archive_entries, reference_candidates,
     };
     use anyhow::Result;
     use bstr::ByteSlice;
@@ -1899,6 +1934,21 @@ mod tests {
     }
 
     #[test]
+    fn lazy_archive_fallback_preserves_unreadable_and_empty_inputs() -> Result<()> {
+        let empty_zip = ZipWriter::new(std::io::Cursor::new(Vec::new())).finish()?.into_inner();
+        for bytes in [
+            b"PK\x03\x04broken archive with raw content".to_vec(),
+            b"plain content".to_vec(),
+            empty_zip,
+        ] {
+            let entries =
+                lazy_expand_entry("fixture.zip".into(), bytes.clone(), 2).collect::<Vec<_>>();
+            assert_eq!(entries, vec![("fixture.zip".into(), bytes)]);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn git_blob_archive_extraction_preserves_repo_relative_paths() -> Result<()> {
         let mut cursor = std::io::Cursor::new(Vec::new());
         {
@@ -1912,8 +1962,7 @@ mod tests {
         }
 
         let entries =
-            recursively_extract_archive_entries("dir/payload.zip", &cursor.into_inner(), 1)?
-                .expect("zip blob should extract");
+            lazy_expand_entry("dir/payload.zip".into(), cursor.into_inner(), 1).collect::<Vec<_>>();
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "dir/payload.zip!nested/secret.txt");
@@ -1947,14 +1996,13 @@ mod tests {
         }
         let outer_bytes = outer_cursor.into_inner();
 
-        let shallow = recursively_extract_archive_entries("dir/outer.zip", &outer_bytes, 1)?
-            .expect("outer ZIP should extract");
+        let shallow =
+            lazy_expand_entry("dir/outer.zip".into(), outer_bytes.clone(), 1).collect::<Vec<_>>();
         assert_eq!(shallow.len(), 1);
         assert_eq!(shallow[0].0, "dir/outer.zip!inner.zip");
         assert_eq!(shallow[0].1, inner_bytes);
 
-        let deep = recursively_extract_archive_entries("dir/outer.zip", &outer_bytes, 2)?
-            .expect("nested ZIP should extract");
+        let deep = lazy_expand_entry("dir/outer.zip".into(), outer_bytes, 2).collect::<Vec<_>>();
         assert_eq!(deep.len(), 1);
         assert_eq!(deep[0].0, "dir/outer.zip!inner.zip!nested/secret.txt");
         assert_eq!(deep[0].1, b"nested archive content");

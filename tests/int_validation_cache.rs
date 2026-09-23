@@ -39,14 +39,16 @@ use wiremock::{
 
 #[tokio::test]
 async fn test_validation_cache_and_depvars() -> Result<()> {
-    check_validation_cache_and_depvars(false, false).await?;
-    check_validation_cache_and_depvars(true, false).await?;
-    check_validation_cache_and_depvars(true, true).await
+    check_validation_cache_and_depvars(false, false, false).await?;
+    check_validation_cache_and_depvars(true, false, false).await?;
+    check_validation_cache_and_depvars(true, true, false).await?;
+    check_validation_cache_and_depvars(false, false, true).await
 }
 
 async fn check_validation_cache_and_depvars(
     different_dependencies: bool,
     named_context: bool,
+    spill_across_chunks: bool,
 ) -> Result<()> {
     /* --------------------------------------------------------- *
      * 1. Spin-up Wiremock and count incoming validation calls  *
@@ -133,6 +135,16 @@ async fn check_validation_cache_and_depvars(
         fs::write(&secret_file, "demokey_abcdefgh\ndemokey_abcdefgh")?;
     }
 
+    if spill_across_chunks {
+        // num_jobs=2 uses validation chunks of 200 blobs. Cross the boundary
+        // with duplicates and dependency helpers in every blob.
+        for index in 1..205 {
+            let file = work_dir.path().join(format!("chunk-{index}.txt"));
+            fs::write(&file, format!("# fixture {index}\ndemokey_abcdefgh\ndemokey_abcdefgh"))?;
+            input_files.push(file);
+        }
+    }
+
     /* --------------------------------------------------------- *
      * 4. Build Scan / Global args (no_dedup=true to keep dups) *
      * --------------------------------------------------------- */
@@ -153,6 +165,7 @@ async fn check_validation_cache_and_depvars(
             repo_clone_limit: None,
             include_contributors: false,
             github_user: Vec::new(),
+            github_include_gists: false,
             github_organization: Vec::new(),
             github_exclude: Vec::new(),
             all_github_organizations: false,
@@ -163,6 +176,7 @@ async fn check_validation_cache_and_depvars(
 
             // new GitLab defaults
             gitlab_user: Vec::new(),
+            gitlab_include_snippets: false,
             gitlab_group: Vec::new(),
             gitlab_exclude: Vec::new(),
             all_gitlab_groups: false,
@@ -186,6 +200,7 @@ async fn check_validation_cache_and_depvars(
             gitea_repo_type: GiteaRepoType::Source,
 
             bitbucket_user: Vec::new(),
+            bitbucket_include_snippets: false,
             bitbucket_workspace: Vec::new(),
             bitbucket_project: Vec::new(),
             bitbucket_exclude: Vec::new(),
@@ -249,6 +264,7 @@ async fn check_validation_cache_and_depvars(
             exclude: Vec::new(), // Exclude patterns
         },
         confidence: ConfidenceLevel::Low,
+        disk_offload: spill_across_chunks,
         no_validate: false,
         access_map: false,
         rule_stats: false,
@@ -381,7 +397,11 @@ async fn check_validation_cache_and_depvars(
         }
     }
     let total_matches = ds.get_matches().len();
-    assert_eq!(total_matches, 4, "expected 2 matches per rule (dup secrets)"); // 2 for each rule
+    assert_eq!(
+        total_matches,
+        if spill_across_chunks { 4 * 205 } else { 4 },
+        "expected 2 matches per rule per blob (dup secrets)"
+    ); // 2 for each rule
 
     Ok(())
 }

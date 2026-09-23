@@ -224,15 +224,17 @@ then choose a target:
 ```bash
 # GitHub organization
 kingfisher scan github --organization my-org
+# GitHub user and their gist history
+kingfisher scan github --user alice --include-gists
 
 # GitLab group, including nested subgroups
-kingfisher scan gitlab --group my-group --include-subgroups
+kingfisher scan gitlab --group my-group --include-subgroups --include-snippets
 
 # Azure Repos organization
 kingfisher scan azure --azure-organization my-org
 
 # Bitbucket workspace
-kingfisher scan bitbucket --workspace my-team
+kingfisher scan bitbucket --workspace my-team --include-snippets
 
 # Gitea organization
 kingfisher scan gitea --organization my-org

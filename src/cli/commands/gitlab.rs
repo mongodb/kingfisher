@@ -45,6 +45,10 @@ pub struct GitLabRepoSpecifiers {
     #[arg(long, alias = "gitlab-user")]
     pub user: Vec<String>,
 
+    /// Include accessible personal snippets for users and snippets in selected projects
+    #[arg(long)]
+    pub include_snippets: bool,
+
     /// Repositories belonging to these groups
     #[arg(long, alias = "gitlab-group")]
     pub group: Vec<String>,

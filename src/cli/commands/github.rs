@@ -45,6 +45,10 @@ pub struct GitHubRepoSpecifiers {
     #[arg(long, alias = "github-user")]
     pub user: Vec<String>,
 
+    /// Include public gists belonging to the specified users
+    #[arg(long, requires = "user")]
+    pub include_gists: bool,
+
     /// Repositories belonging to these organizations
     #[arg(long, alias = "org", alias = "github-organization", alias = "github-org")]
     pub organization: Vec<String>,

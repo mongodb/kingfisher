@@ -53,7 +53,7 @@ thread_local = "1.1.10"
 
 [package]
 name = "kingfisher"
-version = "2.5.0"
+version = "2.6.0"
 description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -234,7 +234,6 @@ tokio-postgres-rustls = "0.14.0"
 rustls-native-certs = "0.8.4"
 mimalloc = { version = "0.1.52", features = ["override"] }
 thread_local = "1.1.10"
-bloomfilter = "3.0.1"
 uuid = "1.26.0"
 rand = "0.10.2"
 percent-encoding = "2.3.2"
@@ -319,7 +318,7 @@ incremental = false
 #
 # Hot-path crates kept at `s` include: vectorscan-rs, regex, bstr, memmap2,
 # memchr, ignore, walkdir, rayon, xxhash-rust, rustc-hash, crossbeam-*, smallvec,
-# dashmap, bloomfilter, globset, rusqlite, tree-magic-mini, content_inspector,
+# dashmap, globset, rusqlite, tree-magic-mini, content_inspector,
 # cssparser, tl, gix, petgraph, roaring, fixedbitset, path-dedot, serde_json,
 # serde_yaml, chrono, parking_lot, rustls, reqwest, tokio, hyper, and the
 # kingfisher-* workspace crates.

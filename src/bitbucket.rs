@@ -102,6 +102,7 @@ impl AuthConfig {
 #[derive(Debug)]
 pub struct RepoSpecifiers {
     pub user: Vec<String>,
+    pub include_snippets: bool,
     pub workspace: Vec<String>,
     pub project: Vec<String>,
     pub all_workspaces: bool,
@@ -313,6 +314,67 @@ async fn fetch_cloud_repositories(
     Ok(())
 }
 
+#[derive(Deserialize)]
+struct CloudSnippet {
+    links: CloudRepoLinks,
+}
+
+#[derive(Deserialize)]
+struct CloudSnippetList {
+    values: Vec<CloudSnippet>,
+    next: Option<String>,
+}
+
+async fn fetch_cloud_snippets(
+    client: &reqwest::Client,
+    base: &Url,
+    owner: &str,
+    auth: &AuthConfig,
+) -> Result<Vec<String>> {
+    let mut next = base.join("snippets/")?;
+    next.path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("Invalid Bitbucket API URL"))?
+        .pop_if_empty()
+        .push(owner);
+    next.query_pairs_mut().append_pair("pagelen", "100");
+    let mut seen_pages = HashSet::new();
+    let mut urls = Vec::new();
+    loop {
+        // Pagination links must not send provider credentials to another origin.
+        if next.origin() != base.origin() {
+            anyhow::bail!("Bitbucket snippets pagination points to a different origin");
+        }
+        if !seen_pages.insert(next.to_string()) {
+            anyhow::bail!("Bitbucket snippets pagination repeated a page");
+        }
+        let request = client.get(next.clone()).header("User-Agent", GLOBAL_USER_AGENT.as_str());
+        let response = auth
+            .apply(request)
+            .send()
+            .await?
+            .error_for_status()
+            .with_context(|| format!("Failed to list Bitbucket snippets for '{owner}'"))?;
+        let snippets: CloudSnippetList = response.json().await?;
+        for snippet in snippets.values {
+            let Some(clone) = snippet
+                .links
+                .clone
+                .iter()
+                .find(|link| matches!(link.name.as_deref(), Some("https" | "http")))
+            else {
+                warn!("Skipping Bitbucket snippet without an HTTP clone URL for '{owner}'");
+                continue;
+            };
+            urls.push(clone.href.clone());
+        }
+        let Some(next_url) = snippets.next else {
+            break;
+        };
+        next = next.join(&next_url)?;
+    }
+    Ok(urls)
+}
+
 async fn fetch_server_repositories(
     client: &reqwest::Client,
     base: &Url,
@@ -433,6 +495,15 @@ pub async fn enumerate_repo_urls(
         .timeout(Duration::from_secs(30))
         .build()?;
     let kind = BitbucketKind::from_url(&api_url);
+    if repo_specifiers.include_snippets && kind == BitbucketKind::Server {
+        anyhow::bail!(
+            "--include-snippets is supported only for Bitbucket Cloud, not Server/Data Center"
+        );
+    }
+    let mut api_url = api_url;
+    if !api_url.path().ends_with('/') {
+        api_url.set_path(&format!("{}/", api_url.path()));
+    }
     let excludes = build_exclude_matcher(&repo_specifiers.exclude_repos);
     let mut repo_urls = Vec::new();
 
@@ -441,12 +512,23 @@ pub async fn enumerate_repo_urls(
             let mut owners: HashSet<String> = HashSet::new();
             owners.extend(repo_specifiers.user.iter().cloned());
             owners.extend(repo_specifiers.workspace.iter().cloned());
-            owners.extend(repo_specifiers.project.iter().cloned());
             if repo_specifiers.all_workspaces {
                 match list_cloud_workspaces(&client, &api_url, auth).await {
                     Ok(ws) => owners.extend(ws),
+                    Err(err) if repo_specifiers.include_snippets => {
+                        return Err(err)
+                            .context("Failed to enumerate Bitbucket workspaces for snippets");
+                    }
                     Err(err) => warn!("Failed to enumerate Bitbucket workspaces: {err:#}"),
                 }
+            }
+            let snippet_owners = owners.clone();
+            // Project keys are not workspace identifiers for the snippets API.
+            owners.extend(repo_specifiers.project.iter().cloned());
+            if repo_specifiers.include_snippets && !repo_specifiers.project.is_empty() {
+                warn!(
+                    "Bitbucket Cloud snippet discovery ignores --project; select snippet owners with --workspace, --user, or --all-workspaces"
+                );
             }
             for owner in owners {
                 if let Err(err) = fetch_cloud_repositories(
@@ -461,6 +543,9 @@ pub async fn enumerate_repo_urls(
                 .await
                 {
                     warn!("Failed to fetch Bitbucket repositories for '{owner}': {err:#}");
+                }
+                if repo_specifiers.include_snippets && snippet_owners.contains(&owner) {
+                    repo_urls.extend(fetch_cloud_snippets(&client, &api_url, &owner, auth).await?);
                 }
                 if let Some(progress) = progress.as_mut() {
                     progress.inc(1);
@@ -530,6 +615,7 @@ pub async fn list_repositories(
     ignore_certs: bool,
     progress_enabled: bool,
     users: &[String],
+    include_snippets: bool,
     workspaces: &[String],
     projects: &[String],
     all_workspaces: bool,
@@ -549,6 +635,7 @@ pub async fn list_repositories(
     };
     let repo_specifiers = RepoSpecifiers {
         user: users.to_vec(),
+        include_snippets,
         workspace: workspaces.to_vec(),
         project: projects.to_vec(),
         all_workspaces,
