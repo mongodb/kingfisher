@@ -247,7 +247,11 @@ async fn enumerated_gist_is_cloned_and_scanned_for_deleted_secrets() -> anyhow::
         .stdout("https://gist.github.com/issue508.git\n");
 
     // Redirect only this fixture's clone URL to a local Git repository.
-    let rewrite = format!("url.{}.insteadOf", Url::from_directory_path(&repo_dir).unwrap());
+    // Use a local path: MSYS2 Git interprets file:///C:/... as the invalid path /C:/....
+    let local_repo = repo_dir.to_string_lossy();
+    #[cfg(windows)]
+    let local_repo = local_repo.replace('\\', "/");
+    let rewrite = format!("url.{local_repo}.insteadOf");
     for (extra, expected_code) in [
         (vec!["--include-gists"], 200),
         (vec![], 1),

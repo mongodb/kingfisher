@@ -56,6 +56,15 @@ Kingfisher is a Rust secret scanner, live credential validator, revocation helpe
 - After markdown/doc changes, verify local documentation links when practical.
 - After `docs-site/` source changes, rebuild with `docs-site/.venv/bin/mkdocs build -f docs-site/mkdocs.yml` when practical so generated output stays in sync.
 
+## Cross-Platform Tests
+
+- New and modified tests must work on Windows (x64 and arm64), macOS, and Linux. Review fixture setup and subprocess calls for platform assumptions even when developing on Unix.
+- Build filesystem paths with `Path`/`PathBuf` and pass subprocess arguments with `Command::arg`/`args`; avoid shell interpolation, hard-coded Unix paths, and assumptions about executable suffixes or available Unix utilities.
+- For Git fixture `url.<base>.insteadOf` rewrites, use an absolute local repository path. On Windows, normalize backslashes to forward slashes for Git. Avoid `file:///C:/...` URLs: MSYS2 Git can interpret them as `/C:/...` and fail to clone. See `tests/github_gists.rs` and `tests/provider_snippets.rs` for examples.
+- Account for Windows file locking, path separators, and line endings in fixtures and assertions. Close file handles before deleting or replacing files. Keep platform-specific behavior narrowly scoped; do not skip otherwise portable tests on Windows to hide failures.
+- Run the affected tests locally. For changes involving paths, Git, subprocesses, or filesystem behavior, also verify Windows CI on both architectures before claiming cross-platform success. Windows test commands are `make windows-test-x64` and `make windows-test-arm64` in the corresponding MSYS2 environments.
+- If Windows execution is unavailable, explicitly report that Windows verification is pending; passing macOS/Linux tests is not evidence that Windows passed.
+
 ## Architecture Notes
 
 - Kingfisher's candidate detector catalog is sourced from Betterleaks and selected Veles detectors.

@@ -513,7 +513,11 @@ async fn scan_deleted_secret(provider: &str) -> anyhow::Result<()> {
         .assert()
         .success()
         .stdout(format!("{clone_url}\n"));
-    let rewrite = format!("url.{}.insteadOf", Url::from_directory_path(&repo_dir).unwrap());
+    // Use a local path: MSYS2 Git interprets file:///C:/... as the invalid path /C:/....
+    let local_repo = repo_dir.to_string_lossy();
+    #[cfg(windows)]
+    let local_repo = local_repo.replace('\\', "/");
+    let rewrite = format!("url.{local_repo}.insteadOf");
     // Bitbucket's clone layer embeds its configured OAuth credentials in the URL.
     let clone_argument = if provider == "bitbucket" {
         clone_url.replace("https://", "https://x-token-auth:snippet-test-token@")
