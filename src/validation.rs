@@ -908,6 +908,31 @@ pub async fn validate_single_match(
 ) {
     if candidates::ready(m) {
         candidates::run(m, validation_timeout, |mut attempt, remaining| async move {
+            // Preserve endpoint inputs for generated commands on cache hits as well
+            // as misses. Fixed validation URLs may still use these in headers/body.
+            let mut globals = Object::new();
+            populate_globals_from_captures(
+                &mut globals,
+                &utils::process_captures(&attempt.captures),
+            );
+            for dep in attempt.rule.syntax().depends_on_rule.iter().flatten() {
+                let name = dep.variable.to_uppercase();
+                if name != "TOKEN"
+                    && let Some(value) = attempt.dependent_captures.get(&name)
+                {
+                    globals.insert(name.into(), Value::scalar(value.clone()));
+                }
+            }
+            hydrate_endpoint_globals_for_rule(attempt.rule.id(), &mut globals);
+            provider_endpoints.apply_scan_overrides(&mut globals);
+            for name in endpoint_var_names() {
+                if let Some(value) = globals.get(*name).and_then(|v| v.as_scalar()) {
+                    attempt
+                        .dependent_captures
+                        .entry((*name).to_string())
+                        .or_insert_with(|| value.to_kstr().to_string());
+                }
+            }
             validate_resolved_match(
                 &mut attempt,
                 parser,

@@ -201,9 +201,7 @@ where
                 .dependent_captures
                 .insert(variable.clone(), values[dimension][indices[dimension]].clone());
         }
-        // Keep the selected input context identical on cache hits and misses.
-        // The ordinary validator may attach unrelated default provider endpoints
-        // only on a cache miss; none are inputs to these fixed-destination searches.
+        // Retain the selected inputs even when validation returns from a cache.
         let mut selected_captures = attempt.dependent_captures.clone();
         for (name, value, ..) in super::utils::process_captures(&attempt.captures) {
             if name != "TOKEN" {
@@ -212,8 +210,12 @@ where
         }
         attempted += 1;
         let mut result = validate(attempt, remaining).await;
+        if result.validation_response_status.is_redirection() {
+            unresolved(m, attempted, "verification returned a redirect", true);
+            return;
+        }
         if result.validation_outcome.is_verified_active() {
-            result.dependent_captures = selected_captures;
+            result.dependent_captures.extend(selected_captures);
             *m = result;
             return;
         }
@@ -443,6 +445,45 @@ depends_on_rule:
         futures::future::join_all(searches).await;
         assert!(maximum.load(Ordering::SeqCst) <= 4);
         assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn successful_pair_preserves_validator_metadata() {
+        let mut m = finding();
+        run(&mut m, Duration::from_secs(5), |mut attempt, _| async move {
+            attempt
+                .dependent_captures
+                .insert("GITHUB_API_BASE_URL".into(), "https://api.github.com".into());
+            attempt.validation_outcome = ValidationOutcome::VerifiedActive;
+            attempt
+        })
+        .await;
+        assert_eq!(m.dependent_captures["SECRET"], "first");
+        assert_eq!(m.dependent_captures["GITHUB_API_BASE_URL"], "https://api.github.com");
+    }
+
+    #[tokio::test]
+    async fn redirects_stop_search_even_if_a_matcher_accepts_them() {
+        for status in [301, 302, 303, 307, 308] {
+            for outcome in [ValidationOutcome::VerifiedInactive, ValidationOutcome::VerifiedActive]
+            {
+                let mut m = finding();
+                let mut calls = 0;
+                run(&mut m, Duration::from_secs(5), |mut attempt, _| {
+                    calls += 1;
+                    async move {
+                        attempt.validation_response_status = StatusCode::from_u16(status).unwrap();
+                        attempt.validation_outcome = outcome;
+                        attempt
+                    }
+                })
+                .await;
+                assert_eq!(calls, 1);
+                assert_eq!(m.validation_outcome, ValidationOutcome::Unavailable);
+                assert!(m.dependent_captures.is_empty());
+                assert_eq!(m.ambiguous_dependencies["SECRET"], 2);
+            }
+        }
     }
 
     #[tokio::test]

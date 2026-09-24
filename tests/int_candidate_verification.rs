@@ -64,6 +64,7 @@ rules:
           headers:
             Authorization: 'Bearer {{{{ TOKEN }}}}'
             X-Secret: '{{{{ SECRET }}}}'
+            X-Endpoint: '{{{{ GITHUB_API_BASE_URL }}}}'
             X-Other: '{{{{ OTHER | default: "none" }}}}'
           response_matcher:
             - type: StatusMatch
@@ -200,10 +201,19 @@ async fn throttling_timeout_and_redirects_do_not_select_or_forward_candidates() 
         if status == 200 {
             response = response.set_delay(Duration::from_secs(2));
         }
-        Mock::given(method("GET")).respond_with(response).mount(&server).await;
+        Mock::given(method("GET"))
+            .respond_with(move |request: &Request| {
+                if status == 302 && request.headers.get("X-Secret").is_some_and(|v| v == GOOD) {
+                    ResponseTemplate::new(200)
+                } else {
+                    response.clone()
+                }
+            })
+            .mount(&server)
+            .await;
         let report = scan(
             &server,
-            &[format!("{TOKEN} {GOOD} {BAD}")],
+            &[format!("{TOKEN} {BAD} {GOOD}")],
             true,
             None,
             &["--validation-timeout", "1"],
@@ -215,9 +225,7 @@ async fn throttling_timeout_and_redirects_do_not_select_or_forward_candidates() 
         assert_ne!(f["validation"]["status"], "Active Credential", "{report}");
         assert_ne!(f["validation"]["status"], "Inactive Credential", "{report}");
         assert!(f.get("dependent_captures").is_none());
-        if status != 302 {
-            assert_eq!(server.received_requests().await.unwrap().len(), 1);
-        }
+        assert_eq!(server.received_requests().await.unwrap().len(), 1);
     }
 }
 
@@ -241,10 +249,19 @@ async fn cache_reuses_exact_pairs_and_does_not_consume_a_secret_for_other_ids() 
     let server = server().await;
     let inputs = vec![
         format!("{TOKEN} {BAD} {GOOD}"),
-        format!("prefix\n{TOKEN} {BAD} {GOOD}\n{TOKEN} {BAD} {GOOD}"),
+        // Different candidate order prevents representative grouping from hiding cache hits.
+        format!("prefix\n{TOKEN} {GOOD} {BAD}\n{TOKEN} {GOOD} {BAD}"),
         format!("token_vnpqjrxhmkwtzybs {BAD} {GOOD}"),
     ];
-    let report = scan(&server, &inputs, true, None, &["--no-dedup"], false).await;
+    let report = scan(
+        &server,
+        &inputs,
+        true,
+        None,
+        &["--no-dedup", "--endpoint", "github=https://github.example.test"],
+        false,
+    )
+    .await;
     let findings = report["findings"].as_array().unwrap();
     assert_eq!(findings.len(), 4, "{report}");
     assert!(
@@ -256,9 +273,26 @@ async fn cache_reuses_exact_pairs_and_does_not_consume_a_secret_for_other_ids() 
         "{report}"
     );
     for finding in findings {
-        assert_eq!(finding["finding"]["dependent_captures"], serde_json::json!({"SECRET": GOOD}));
+        assert_eq!(
+            finding["finding"]["dependent_captures"],
+            findings[0]["finding"]["dependent_captures"]
+        );
+        assert_eq!(
+            finding["finding"]["dependent_captures"]["GITHUB_API_BASE_URL"],
+            "https://github.example.test/api/v3"
+        );
+        assert!(
+            finding["finding"]["validate_command"]
+                .as_str()
+                .unwrap()
+                .contains("https://github.example.test/api/v3")
+        );
     }
-    assert_eq!(server.received_requests().await.unwrap().len(), 4);
+    let requests = server.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 4);
+    assert!(
+        requests.iter().all(|r| r.headers["X-Endpoint"] == "https://github.example.test/api/v3")
+    );
 }
 
 #[tokio::test]
