@@ -345,6 +345,10 @@ pub enum ResponseExtractor {
 /// Specifies that a rule depends on a variable from another rule.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub struct DependsOnRule {
+    /// Try ranked credential candidates against an explicitly supported fixed-endpoint validator.
+    /// Endpoint dependencies must never opt in. Defaults to strict association.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub verify_candidates: bool,
     pub rule_id: String,
     pub variable: String,
     /// Whether the dependency may be absent without preventing validation.

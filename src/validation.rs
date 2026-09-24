@@ -53,6 +53,7 @@ pub use kingfisher_scanner::validation::postgres::validate_postgres;
 pub use kingfisher_scanner::validation::{
     azure, coinbase, gcp, jdbc, jwt, mongodb, mysql, postgres,
 };
+pub(crate) mod candidates;
 pub mod utils;
 
 const VALIDATION_CACHE_SECONDS: u64 = 1200; // 20 minutes
@@ -905,6 +906,83 @@ pub async fn validate_single_match(
     provider_endpoints: &ProviderEndpointOverrides,
     max_body_len: usize,
 ) {
+    if candidates::ready(m) {
+        candidates::run(m, validation_timeout, |mut attempt, remaining| async move {
+            // Preserve endpoint inputs for generated commands on cache hits as well
+            // as misses. Fixed validation URLs may still use these in headers/body.
+            let mut globals = Object::new();
+            populate_globals_from_captures(
+                &mut globals,
+                &utils::process_captures(&attempt.captures),
+            );
+            for dep in attempt.rule.syntax().depends_on_rule.iter().flatten() {
+                let name = dep.variable.to_uppercase();
+                if name != "TOKEN"
+                    && let Some(value) = attempt.dependent_captures.get(&name)
+                {
+                    globals.insert(name.into(), Value::scalar(value.clone()));
+                }
+            }
+            hydrate_endpoint_globals_for_rule(attempt.rule.id(), &mut globals);
+            provider_endpoints.apply_scan_overrides(&mut globals);
+            for name in endpoint_var_names() {
+                if let Some(value) = globals.get(*name).and_then(|v| v.as_scalar()) {
+                    attempt
+                        .dependent_captures
+                        .entry((*name).to_string())
+                        .or_insert_with(|| value.to_kstr().to_string());
+                }
+            }
+            validate_resolved_match(
+                &mut attempt,
+                parser,
+                clients,
+                dependent_variables,
+                missing_dependencies,
+                cache,
+                remaining,
+                validation_retries,
+                rate_limiter,
+                provider_endpoints,
+                max_body_len,
+            )
+            .await;
+            attempt
+        })
+        .await;
+    } else {
+        validate_resolved_match(
+            m,
+            parser,
+            clients,
+            dependent_variables,
+            missing_dependencies,
+            cache,
+            validation_timeout,
+            validation_retries,
+            rate_limiter,
+            provider_endpoints,
+            max_body_len,
+        )
+        .await;
+    }
+}
+
+/// Validate a single match with a configurable timeout.
+#[allow(clippy::too_many_arguments)]
+async fn validate_resolved_match(
+    m: &mut OwnedBlobMatch,
+    parser: &liquid::Parser,
+    clients: &ValidationClients,
+    dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
+    missing_dependencies: &FxHashMap<String, Vec<String>>,
+    cache: &Cache,
+    validation_timeout: Duration,
+    validation_retries: u32,
+    rate_limiter: Option<&crate::validation_rate_limit::ValidationRateLimiter>,
+    provider_endpoints: &ProviderEndpointOverrides,
+    max_body_len: usize,
+) {
     if !m.rule.syntax().is_authoritative() {
         m.validation_success = false;
         m.validation_response_status = StatusCode::CONTINUE;
@@ -1000,7 +1078,12 @@ async fn timed_validate_single_match(
 ) {
     // Select the appropriate HTTP client based on rule's TLS mode preference
     let rule_tls_mode = m.rule.tls_mode();
-    let client = clients.client_for_rule(rule_tls_mode);
+    let client =
+        if m.rule.syntax().depends_on_rule.iter().flatten().any(|dep| dep.verify_candidates) {
+            clients.credential_uri_client(rule_tls_mode)
+        } else {
+            clients.client_for_rule(rule_tls_mode)
+        };
     let use_lax_tls = clients.should_use_lax(rule_tls_mode);
     // ──────────────────────────────────────────────────────────
     // 1. process-wide fingerprint de-dup
@@ -2739,6 +2822,7 @@ mod tests {
             depends_on_rule: secret_dependency
                 .then(|| DependsOnRule {
                     rule_id: "private.aws.secret".to_string(),
+                    verify_candidates: false,
                     variable: "AWS_SECRET_ACCESS_KEY".to_string(),
                     optional: false,
                     within: None,
@@ -2772,6 +2856,7 @@ mod tests {
             is_base64: false,
             dependent_captures: Default::default(),
             ambiguous_dependencies: Default::default(),
+            dependency_candidates: Default::default(),
         };
         let variables = FxHashMap::default();
         let fp = validation_dedup_key(&matched);
@@ -2866,6 +2951,7 @@ mod tests {
         syntax.validation = None;
         syntax.depends_on_rule = vec![Some(DependsOnRule {
             rule_id: "betterleaks.component".into(),
+            verify_candidates: false,
             variable: "COMPONENT".into(),
             optional: false,
             within: Some("5L".into()),
@@ -2892,6 +2978,7 @@ mod tests {
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
             ambiguous_dependencies: Default::default(),
+            dependency_candidates: Default::default(),
         };
         primary.dependent_captures.insert("COMPONENT".into(), "associated".into());
 

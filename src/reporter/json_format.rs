@@ -317,6 +317,7 @@ mod tests {
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
             ambiguous_dependencies: Default::default(),
+            dependency_candidates: Default::default(),
         }
     }
 

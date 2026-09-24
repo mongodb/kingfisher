@@ -318,8 +318,12 @@ impl FindingsStore {
                 // including a bare occurrence followed by a fully paired occurrence.
                 if !m.rule.syntax().depends_on_rule.is_empty() {
                     key_string.push_str(
-                        &serde_json::to_string(&(&m.dependent_captures, &m.ambiguous_dependencies))
-                            .expect("dependency maps serialize"),
+                        &serde_json::to_string(&(
+                            &m.dependent_captures,
+                            &m.ambiguous_dependencies,
+                            &m.dependency_candidates,
+                        ))
+                        .expect("dependency maps serialize"),
                     );
                 }
                 let digest = *blake3::hash(key_string.as_bytes()).as_bytes();
@@ -598,12 +602,14 @@ mod tests {
             vec![
                 Some(DependsOnRule {
                     rule_id: helper.id().to_owned(),
+                    verify_candidates: false,
                     variable: "HELPER".to_owned(),
                     optional: false,
                     within: None,
                 }),
                 Some(DependsOnRule {
                     rule_id: visible_secret.id().to_owned(),
+                    verify_candidates: false,
                     variable: "SECRET".to_owned(),
                     optional: false,
                     within: None,
@@ -660,6 +666,8 @@ mod tests {
                 is_base64: true,
                 dependent_captures: [("HOST".into(), "fixture.invalid".into())].into(),
                 ambiguous_dependencies: [("USER".into(), 2)].into(),
+                dependency_candidates: [("USER".into(), vec!["first".into(), "second".into()])]
+                    .into(),
             },
         )
     }
@@ -695,6 +703,7 @@ mod tests {
         assert!(restored.validation_success && restored.is_base64);
         assert_eq!(restored.dependent_captures["HOST"], "fixture.invalid");
         assert_eq!(restored.ambiguous_dependencies["USER"], 2);
+        assert_eq!(restored.dependency_candidates["USER"], ["first", "second"]);
         assert!(Arc::ptr_eq(&restored.rule, &rule));
         store.restore_spilled()?;
         assert_eq!(store.get_matches().len(), 2, "restoring twice must not duplicate findings");

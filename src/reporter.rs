@@ -1058,8 +1058,12 @@ impl DetailsReporter {
             let key = (
                 Self::normalized_finding_fingerprint(&rm.m, &rm.origin),
                 rm.m.rule.id().to_string(),
-                serde_json::to_string(&(&rm.m.dependent_captures, &rm.m.ambiguous_dependencies))
-                    .expect("dependency maps serialize"),
+                serde_json::to_string(&(
+                    &rm.m.dependent_captures,
+                    &rm.m.ambiguous_dependencies,
+                    &rm.m.dependency_candidates,
+                ))
+                .expect("dependency maps serialize"),
             );
             if let Some(existing) = by_fp.get_mut(&key) {
                 *existing = Self::merge_origins_for_dedup(existing.clone(), rm);
@@ -2646,6 +2650,7 @@ mod tests {
                 is_base64: false,
                 dependent_captures: std::collections::BTreeMap::new(),
                 ambiguous_dependencies: Default::default(),
+                dependency_candidates: Default::default(),
             },
             comment: None,
             match_confidence: Confidence::Medium,

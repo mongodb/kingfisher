@@ -118,6 +118,8 @@ struct CapabilityOverlay {
 
 #[derive(Clone, Default, Deserialize)]
 struct RuleCapabilities {
+    #[serde(default)]
+    verify_candidates: Vec<String>,
     access_map: Option<BetterleaksAccessMap>,
     revocation: Option<serde_yaml::Value>,
     revocation_bindings: Option<BetterleaksRevocationBindings>,
@@ -185,6 +187,8 @@ struct ImportedRule {
 
 #[derive(Serialize)]
 struct DependsOnRule {
+    #[serde(skip_serializing_if = "is_false")]
+    verify_candidates: bool,
     rule_id: String,
     variable: String,
     #[serde(skip_serializing_if = "is_false")]
@@ -437,7 +441,8 @@ fn import_config_with_namespace(
             if rule_capabilities.bare {
                 bail!("bare on {} requires a regex", source_rule.id);
             }
-            if rule_capabilities.access_map.is_some()
+            if !rule_capabilities.verify_candidates.is_empty()
+                || rule_capabilities.access_map.is_some()
                 || rule_capabilities.revocation.is_some()
                 || rule_capabilities.validation.is_some()
             {
@@ -480,10 +485,21 @@ fn import_config_with_namespace(
             .map(|component| (component.id.clone(), component_variable(&component.id)))
             .collect();
         validate_capability_sources(&source_rule.id, &components, &rule_capabilities)?;
+        for variable in &rule_capabilities.verify_candidates {
+            if !components.values().any(|name| name == variable) {
+                bail!(
+                    "candidate verification on {} references missing component variable {variable}",
+                    source_rule.id
+                );
+            }
+        }
         let depends_on_rule = source_components
             .iter()
             .map(|component| DependsOnRule {
                 rule_id: qualify_id(&component.id, namespace),
+                verify_candidates: rule_capabilities
+                    .verify_candidates
+                    .contains(&component_variable(&component.id)),
                 variable: component_variable(&component.id),
                 optional: component.optional,
                 // Preserve an explicit unconstrained marker so runtime association can distinguish
@@ -669,12 +685,14 @@ fn aws_session_token_rule(namespace: &str) -> ImportedRule {
         depends_on_rule: vec![
             DependsOnRule {
                 rule_id: qualify_id("aws-access-token", namespace),
+                verify_candidates: true,
                 variable: "AKID".to_string(),
                 optional: false,
                 within: Some("5L".to_string()),
             },
             DependsOnRule {
                 rule_id: qualify_id("aws-secret-access-key", namespace),
+                verify_candidates: true,
                 variable: "AWS_SECRET_ACCESS_KEY".to_string(),
                 optional: false,
                 within: Some("5L".to_string()),
@@ -1908,6 +1926,23 @@ filter = '''containsAny(finding["secret"], ["rule-filter"])'''
         assert!(finding_filter.contains("rule-filter"));
         assert!(!finding_filter.contains("vendor/"));
         assert!(!yaml.contains("keywords"));
+    }
+
+    #[test]
+    fn rejects_candidate_verification_component_drift() {
+        let error = import_config(
+            r#"
+[[rules]]
+id = "composite"
+description = "Composite"
+regex = 'token_([a-z]+)'
+validate = 'true'
+"#,
+            "test",
+            "version: 1\nrules:\n  composite:\n    verify_candidates: [MISSING_SECRET]\n",
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("missing component variable MISSING_SECRET"));
     }
 
     #[test]

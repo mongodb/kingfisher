@@ -321,7 +321,57 @@ mod test {
         );
 
         assert!(rules.betterleaks_prefilter.is_some());
+        assert!(
+            rules.rules["betterleaks.browserstack-access-key.1"]
+                .depends_on_rule
+                .iter()
+                .flatten()
+                .any(|dep| dep.variable == "BROWSERSTACK_USERNAME_1" && dep.verify_candidates)
+        );
+        assert!(
+            rules.rules["betterleaks.clickhouse-cloud-api-secret-key"]
+                .depends_on_rule
+                .iter()
+                .flatten()
+                .any(|dep| dep.variable == "CLICKHOUSE_CLOUD_KEY_ID" && dep.verify_candidates)
+        );
+        assert!(
+            rules.rules["betterleaks.mongodb-atlas-service-account-secret"]
+                .depends_on_rule
+                .iter()
+                .flatten()
+                .any(|dep| dep.variable == "MONGODB_ATLAS_SERVICE_ACCOUNT_ID"
+                    && dep.verify_candidates)
+        );
+        assert!(
+            rules.rules["betterleaks.planetscale-api-token"]
+                .depends_on_rule
+                .iter()
+                .flatten()
+                .any(|dep| dep.variable == "PLANETSCALE_ID" && dep.verify_candidates)
+        );
+        assert!(
+            rules.rules["betterleaks.razorpay-key-secret.1"]
+                .depends_on_rule
+                .iter()
+                .flatten()
+                .any(|dep| dep.variable == "RAZORPAY_KEY_ID_1" && dep.verify_candidates)
+        );
+        assert!(
+            rules.rules["betterleaks.wiz-client-secret.1"]
+                .depends_on_rule
+                .iter()
+                .flatten()
+                .any(|dep| dep.variable == "WIZ_CLIENT_ID_1" && dep.verify_candidates)
+        );
+
         let aws = rules.rules.get("betterleaks.aws-access-token").unwrap();
+        assert!(
+            aws.depends_on_rule
+                .iter()
+                .flatten()
+                .any(|dep| dep.variable == "AWS_SECRET_ACCESS_KEY" && dep.verify_candidates)
+        );
         assert!(matches!(aws.revocation, Some(Revocation::AWS)));
         let Some(Validation::Betterleaks(aws_validation)) = &aws.validation else {
             panic!("AWS should use Betterleaks validation");
@@ -339,6 +389,7 @@ mod test {
             .get("betterleaks.aws-session-token")
             .expect("AWS session-token compatibility rule should exist");
         assert_eq!(session.name, "AWS Session Token");
+        assert!(session.depends_on_rule.iter().flatten().all(|dep| dep.verify_candidates));
         assert!(matches!(session.validation, Some(Validation::AWS)));
         let session_regex = session.as_regex().unwrap();
         let session_captures = session_regex
