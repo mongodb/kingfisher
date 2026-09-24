@@ -668,6 +668,10 @@ policy consistent when ordinary validation and candidate searches share cached
 results. Discovered endpoint dependencies and
 unsupported validators retain strict ambiguity handling, even if opted in.
 Every ambiguous dependency must be eligible before a search starts.
+Variables or helper-rule IDs naming a URL, URI, host, domain, endpoint, address,
+port, or server are excluded from candidate verification even when opted in.
+Typed `AWS` validation additionally accepts only `AKID` and
+`AWS_SECRET_ACCESS_KEY`, the dependency variables that it consumes.
 
 Candidates remain restricted to the dependency window and are deduplicated by
 value. Matching assignment-name prefixes rank first (for example,

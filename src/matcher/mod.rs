@@ -823,7 +823,11 @@ fn associate_betterleaks_components<'a>(bytes: &[u8], matches: &mut Vec<BlobMatc
         for dependency in primary.rule.syntax().depends_on_rule.iter().flatten() {
             let mut values = std::collections::BTreeSet::new();
             let mut ranked = std::collections::BTreeMap::new();
-            let try_candidates = dependency.verify_candidates && supports_candidates;
+            let try_candidates = supports_candidates
+                && crate::validation::candidates::eligible_dependency(
+                    primary.rule.syntax(),
+                    dependency,
+                );
             let family = try_candidates
                 .then(|| {
                     candidate_context::assignment_family(bytes, primary.matching_input_offset_span)

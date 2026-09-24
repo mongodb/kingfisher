@@ -14,7 +14,7 @@ use tokio::{sync::Semaphore, time::Instant};
 
 use crate::{
     matcher::OwnedBlobMatch,
-    rules::rule::{RuleSyntax, Validation},
+    rules::rule::{DependsOnRule, RuleSyntax, Validation},
     validation_body,
 };
 
@@ -135,18 +135,46 @@ pub(crate) fn supported(rule: &RuleSyntax) -> bool {
     }
 }
 
+/// An opt-in cannot turn an endpoint into an authenticated credential component.
+/// Check both the variable and helper ID, including legacy concatenated names
+/// such as BASEURL and JIRADCDOMAIN. Typed validators additionally restrict inputs
+/// to the credential variables they actually consume.
+pub(crate) fn eligible_dependency(rule: &RuleSyntax, dep: &DependsOnRule) -> bool {
+    fn names_endpoint(name: &str) -> bool {
+        let name = name.to_ascii_lowercase();
+        let endpoint_word = name.split(|c: char| !c.is_ascii_alphabetic()).any(|part| {
+            ["url", "uri", "host", "hostname", "domain", "endpoint", "address", "port", "server"]
+                .contains(&part)
+        });
+        let name = name.trim_end_matches(|c: char| !c.is_ascii_alphabetic());
+        endpoint_word
+            || ["url", "uri", "hostname", "domain", "endpoint"]
+                .iter()
+                .any(|suffix| name.ends_with(suffix))
+    }
+
+    dep.verify_candidates
+        && !names_endpoint(&dep.variable)
+        && !names_endpoint(&dep.rule_id)
+        && match &rule.validation {
+            Some(Validation::AWS) => {
+                dep.variable.eq_ignore_ascii_case("AKID")
+                    || dep.variable.eq_ignore_ascii_case("AWS_SECRET_ACCESS_KEY")
+            }
+            _ => true,
+        }
+}
+
 pub(crate) fn ready(m: &OwnedBlobMatch) -> bool {
     !m.dependency_candidates.is_empty()
         && m.dependency_candidates.len() == m.ambiguous_dependencies.len()
         && supported(m.rule.syntax())
         && m.ambiguous_dependencies.keys().all(|variable| {
             m.dependency_candidates.get(variable).is_some_and(|v| !v.is_empty())
-                && m.rule
-                    .syntax()
-                    .depends_on_rule
-                    .iter()
-                    .flatten()
-                    .any(|dep| dep.verify_candidates && dep.variable.eq_ignore_ascii_case(variable))
+                && m.rule.syntax().depends_on_rule.iter().flatten().any(|dep| {
+                    eligible_dependency(m.rule.syntax(), dep)
+                        && dep.variable.eq_ignore_ascii_case(variable)
+                })
         })
 }
 
@@ -267,7 +295,14 @@ mod tests {
 name: Synthetic candidate test
 id: custom.candidate.test
 pattern: '(synthetic)'
-validation: { type: AWS }
+validation:
+  type: Http
+  content:
+    request:
+      method: GET
+      url: https://example.test/verify
+      headers: { X-Secret: '{{ SECRET }}' }
+      response_matcher: [{ type: StatusMatch, status: [200] }]
 depends_on_rule:
   - rule_id: custom.candidate.secret
     variable: SECRET
@@ -369,6 +404,10 @@ depends_on_rule:
         for rule in rules.rules.values() {
             if rule.depends_on_rule.iter().flatten().any(|dep| dep.verify_candidates) {
                 assert!(supported(rule), "opt-in must be usable: {}", rule.id);
+                for dep in rule.depends_on_rule.iter().flatten().filter(|dep| dep.verify_candidates)
+                {
+                    assert!(eligible_dependency(rule, dep), "{}: {}", rule.id, dep.variable);
+                }
             }
         }
     }
@@ -445,6 +484,68 @@ depends_on_rule:
         futures::future::join_all(searches).await;
         assert!(maximum.load(Ordering::SeqCst) <= 4);
         assert_eq!(active.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn endpoint_candidates_are_ineligible_even_when_explicitly_opted_in() {
+        for (variable, helper) in [
+            ("BASEURL", "custom.component"),
+            ("github_api_base_url", "custom.component"),
+            ("HOSTNAME", "custom.component"),
+            ("JIRADCDOMAIN", "custom.component"),
+            ("SERVICE_ENDPOINT", "custom.component"),
+            ("SERVER_ADDRESS", "custom.component"),
+            ("SECRET", "custom.service-url.1"),
+            ("SECRET", "custom.endpoint"),
+        ] {
+            let mut m = finding();
+            let mut rule = m.rule.syntax().clone();
+            let dep = rule.depends_on_rule.iter_mut().flatten().next().unwrap();
+            dep.variable = variable.into();
+            dep.rule_id = helper.into();
+            assert!(!eligible_dependency(
+                &rule,
+                rule.depends_on_rule.iter().flatten().next().unwrap()
+            ));
+            m.rule = Arc::new(crate::rules::rule::Rule::new(rule));
+            let variable = variable.to_ascii_uppercase();
+            m.ambiguous_dependencies = [(variable.clone(), 2)].into();
+            m.dependency_candidates = [(variable, vec!["first".into(), "second".into()])].into();
+            assert!(!ready(&m), "{helper}");
+        }
+    }
+
+    #[test]
+    fn typed_aws_only_accepts_consumed_credential_dependencies() {
+        for (variable, allowed) in
+            [("AKID", true), ("AWS_SECRET_ACCESS_KEY", true), ("OTHER", false), ("BASEURL", false)]
+        {
+            let mut m = finding();
+            let mut rule = m.rule.syntax().clone();
+            rule.validation = Some(Validation::AWS);
+            rule.depends_on_rule.iter_mut().flatten().next().unwrap().variable = variable.into();
+            m.rule = Arc::new(crate::rules::rule::Rule::new(rule));
+            m.ambiguous_dependencies = [(variable.into(), 2)].into();
+            m.dependency_candidates =
+                [(variable.into(), vec!["first".into(), "second".into()])].into();
+            assert_eq!(ready(&m), allowed, "{variable}");
+        }
+    }
+
+    #[test]
+    fn provider_names_containing_endpoint_fragments_are_not_endpoint_roles() {
+        for (variable, helper) in
+            [("GHOST_SECRET", "custom.ghost.secret"), ("SUPPORT_TOKEN", "custom.support.token")]
+        {
+            let mut rule = finding().rule.syntax().clone();
+            let dep = rule.depends_on_rule.iter_mut().flatten().next().unwrap();
+            dep.variable = variable.into();
+            dep.rule_id = helper.into();
+            assert!(eligible_dependency(
+                &rule,
+                rule.depends_on_rule.iter().flatten().next().unwrap()
+            ));
+        }
     }
 
     #[tokio::test]

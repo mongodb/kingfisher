@@ -177,6 +177,68 @@ async fn no_opt_in_or_dynamic_destination_makes_no_requests() {
 }
 
 #[tokio::test]
+async fn opted_in_endpoints_do_not_start_candidate_searches() {
+    for (variable, helper) in [
+        ("BASEURL", "custom.location"),
+        ("SERVICE_HOST", "custom.location"),
+        ("GITHUB_API_BASE_URL", "custom.location"),
+        ("LOCATION", "custom.service-endpoint.1"),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).respond_with(ResponseTemplate::new(200)).mount(&server).await;
+        let temp = TempDir::new().unwrap();
+        let rules = temp.path().join("rules.yml");
+        let input = temp.path().join("input.txt");
+        let primary = serde_json::json!({
+            "name": "Credential", "id": "custom.endpoint_pair", "pattern": "(token_[a-z]{16})", "min_entropy": 0,
+            "depends_on_rule": [
+                {"rule_id":"custom.secret", "variable":"SECRET", "within":"5L", "verify_candidates":true},
+                {"rule_id":helper, "variable":variable, "within":"5L", "verify_candidates":true}
+            ],
+            "validation": {"type":"Http", "content":{"request":{
+                "method":"GET", "url":server.uri(),
+                "headers":{"Authorization":"Bearer {{ TOKEN }}", "X-Secret":"{{ SECRET }}"},
+                "response_matcher":[{"type":"StatusMatch", "status":[200]}]
+            }}}
+        });
+        let secret = serde_json::json!({"name":"Secret", "id":"custom.secret", "pattern":"(secret_[a-z]{16})", "min_entropy":0, "visible":false});
+        let endpoint = serde_json::json!({"name":"Endpoint", "id":helper, "pattern":r"(https://[a-z]+\.invalid)", "min_entropy":0, "visible":false});
+        fs::write(
+            &rules,
+            serde_yaml::to_string(&serde_json::json!({"rules":[primary,secret,endpoint]})).unwrap(),
+        )
+        .unwrap();
+        // Both the credential and endpoint are ambiguous. The endpoint must block
+        // the entire search even though the fixed validator would accept any pair.
+        fs::write(
+            &input,
+            format!("{TOKEN} {BAD} {GOOD} https://first.invalid https://second.invalid"),
+        )
+        .unwrap();
+        let output = tokio::process::Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args(["--no-update-check", "--allow-internal-ips", "scan"])
+            .arg(input)
+            .args(["--load-builtins=false", "--rules-path"])
+            .arg(rules)
+            .args(["--format", "json", "--validation-retries", "0"])
+            .output()
+            .await
+            .unwrap();
+        let report = serde_json::Deserializer::from_slice(&output.stdout)
+            .into_iter::<Value>()
+            .next()
+            .unwrap_or_else(|| panic!("{}", String::from_utf8_lossy(&output.stderr)))
+            .unwrap();
+        assert!(server.received_requests().await.unwrap().is_empty(), "{variable}");
+        let finding = &report["findings"][0]["finding"];
+        assert_eq!(finding["validation"]["status"], "Validation Skipped", "{report}");
+        assert_eq!(finding["ambiguous_dependencies"][variable], 2, "{report}");
+        assert!(finding.get("dependent_captures").is_none(), "{report}");
+        assert!(finding.get("validate_command").is_none(), "{report}");
+    }
+}
+
+#[tokio::test]
 async fn combination_budget_exhaustion_is_unresolved() {
     let server = server().await;
     let input = format!(
