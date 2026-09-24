@@ -1,4 +1,5 @@
 mod base64_decode;
+mod candidate_context;
 mod captures;
 mod conversion;
 mod dedup;
@@ -102,6 +103,7 @@ pub struct BlobMatch<'a> {
     pub is_base64: bool,
     pub dependent_captures: std::collections::BTreeMap<String, String>,
     pub ambiguous_dependencies: std::collections::BTreeMap<String, usize>,
+    pub dependency_candidates: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 #[derive(Clone)]
@@ -803,11 +805,30 @@ fn associate_betterleaks_components<'a>(bytes: &[u8], matches: &mut Vec<BlobMatc
         }
     }
 
+    let scopes = if matches
+        .iter()
+        .any(|m| m.rule.syntax().depends_on_rule.iter().flatten().any(|d| d.verify_candidates))
+    {
+        candidate_context::scopes(bytes, matches.iter().map(|m| m.matching_input_offset_span.start))
+    } else {
+        Default::default()
+    };
+    let mut candidates = vec![std::collections::BTreeMap::new(); matches.len()];
     let mut associated = vec![std::collections::BTreeMap::new(); matches.len()];
     let mut ambiguous = vec![std::collections::BTreeMap::new(); matches.len()];
     for (primary_index, primary) in matches.iter().enumerate().filter(|(index, _)| keep[*index]) {
+        let supports_candidates =
+            primary.rule.syntax().depends_on_rule.iter().flatten().any(|dep| dep.verify_candidates)
+                && crate::validation::candidates::supported(primary.rule.syntax());
         for dependency in primary.rule.syntax().depends_on_rule.iter().flatten() {
             let mut values = std::collections::BTreeSet::new();
+            let mut ranked = std::collections::BTreeMap::new();
+            let try_candidates = dependency.verify_candidates && supports_candidates;
+            let family = try_candidates
+                .then(|| {
+                    candidate_context::assignment_family(bytes, primary.matching_input_offset_span)
+                })
+                .flatten();
             for (index, candidate) in matches.iter().enumerate() {
                 if keep[index]
                     && candidate.rule.id() == dependency.rule_id
@@ -821,14 +842,54 @@ fn associate_betterleaks_components<'a>(bytes: &[u8], matches: &mut Vec<BlobMatc
                         )
                     })
                 {
-                    values.insert(candidate.captures.captures.first().map_or_else(
+                    let value = candidate.captures.captures.first().map_or_else(
                         || String::from_utf8_lossy(candidate.matching_input).into_owned(),
                         |capture| capture.raw_value().to_string(),
-                    ));
+                    );
+                    if try_candidates {
+                        let matching_name = family.as_ref().is_some_and(|name| {
+                            candidate_context::assignment_family(
+                                bytes,
+                                candidate.matching_input_offset_span,
+                            )
+                            .as_ref()
+                                == Some(name)
+                        });
+                        let scope = scopes
+                            .get(&primary.matching_input_offset_span.start)
+                            .copied()
+                            .unwrap_or_default();
+                        let same_scope = scope != 0
+                            && scopes.get(&candidate.matching_input_offset_span.start)
+                                == Some(&scope);
+                        let distance = primary
+                            .matching_input_offset_span
+                            .start
+                            .abs_diff(candidate.matching_input_offset_span.start);
+                        let rank = (!matching_name, !same_scope, distance);
+                        ranked
+                            .entry(value.clone())
+                            .and_modify(|old| *old = std::cmp::min(*old, rank))
+                            .or_insert(rank);
+                    }
+                    values.insert(value);
                 }
             }
             let variable = dependency.variable.to_uppercase();
             if values.len() > 1 {
+                if try_candidates {
+                    let mut ranked: Vec<_> =
+                        ranked.into_iter().map(|(value, rank)| (rank, value)).collect();
+                    ranked.sort();
+                    candidates[primary_index].insert(
+                        variable.clone(),
+                        ranked
+                            .into_iter()
+                            .take(crate::validation::candidates::MAX_COMBINATIONS)
+                            .map(|(_, value)| value)
+                            .collect(),
+                    );
+                }
                 ambiguous[primary_index].insert(variable, values.len());
             } else if let Some(value) = values.into_iter().next() {
                 associated[primary_index].insert(variable, value);
@@ -840,6 +901,7 @@ fn associate_betterleaks_components<'a>(bytes: &[u8], matches: &mut Vec<BlobMatc
     matches.retain_mut(|finding| {
         finding.dependent_captures.append(&mut associated[index]);
         finding.ambiguous_dependencies.append(&mut ambiguous[index]);
+        finding.dependency_candidates.append(&mut candidates[index]);
         let retain = keep[index];
         index += 1;
         retain
@@ -1100,6 +1162,7 @@ mod test {
             None,
             vec![DependsOnRule {
                 rule_id: "betterleaks.component".into(),
+                verify_candidates: false,
                 variable: "COMPONENT".into(),
                 optional: false,
                 within: Some("5L".into()),
@@ -1131,6 +1194,7 @@ mod test {
             None,
             vec![DependsOnRule {
                 rule_id: "betterleaks.component".into(),
+                verify_candidates: false,
                 variable: "COMPONENT".into(),
                 optional: false,
                 within: Some("8C".into()),
@@ -1178,12 +1242,14 @@ mod test {
             vec![
                 DependsOnRule {
                     rule_id: "betterleaks.aws-access-token".into(),
+                    verify_candidates: false,
                     variable: "AKID".into(),
                     optional: false,
                     within: Some("5L".into()),
                 },
                 DependsOnRule {
                     rule_id: "betterleaks.aws-secret-access-key".into(),
+                    verify_candidates: false,
                     variable: "AWS_SECRET_ACCESS_KEY".into(),
                     optional: false,
                     within: Some("5L".into()),
@@ -1227,6 +1293,7 @@ mod test {
             None,
             vec![DependsOnRule {
                 rule_id: "custom.missing".into(),
+                verify_candidates: false,
                 variable: "COMPONENT".into(),
                 optional: false,
                 within: None,
@@ -1346,12 +1413,14 @@ mod test {
             depends_on_rule: vec![
                 Some(DependsOnRule {
                     rule_id: "d8f3c34b-015f-4cd6-b411-b1366493104c".to_string(),
+                    verify_candidates: false,
                     variable: "email".to_string(),
                     optional: false,
                     within: None,
                 }),
                 Some(DependsOnRule {
                     rule_id: "8910f364-7718-4a27-a435-d2da13e6ba9e".to_string(),
+                    verify_candidates: false,
                     variable: "domain".to_string(),
                     optional: false,
                     within: None,
@@ -2305,6 +2374,7 @@ line2
             revocation: None,
             depends_on_rule: vec![Some(DependsOnRule {
                 rule_id: "custom.livekit.url".into(),
+                verify_candidates: false,
                 variable: "API_KEY".into(),
                 optional: false,
                 within: None,

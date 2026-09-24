@@ -87,6 +87,7 @@ pub(crate) fn direct_access_map_requests(
         is_base64: false,
         dependent_captures,
         ambiguous_dependencies: Default::default(),
+        dependency_candidates: Default::default(),
     };
     maybe_record_access_map(&owned, Some(&collector));
     collector.into_collected_requests().into_iter().map(|item| item.request).collect()
@@ -834,6 +835,7 @@ pub async fn run_secret_validation(
             u16,
             kingfisher_core::ValidationOutcome,
             std::collections::BTreeMap<String, String>,
+            std::collections::BTreeMap<String, usize>,
         );
         for chunk in blob_ids.chunks(chunk_size) {
             let mut dep_updates: FxHashMap<(BlobId, OffsetSpan, String), DepUpdate> =
@@ -927,6 +929,10 @@ pub async fn run_secret_validation(
                                         d.validation_response_status =
                                             rep.validation_response_status;
                                         d.validation_outcome = rep.validation_outcome;
+                                        d.dependent_captures = rep.dependent_captures.clone();
+                                        d.ambiguous_dependencies =
+                                            rep.ambiguous_dependencies.clone();
+                                        d.dependency_candidates = rep.dependency_candidates.clone();
                                     }
                                     let mut out = vec![rep];
                                     out.extend(dups);
@@ -960,6 +966,7 @@ pub async fn run_secret_validation(
                             om.validation_response_status.as_u16(),
                             om.validation_outcome,
                             om.dependent_captures,
+                            om.ambiguous_dependencies,
                         ),
                     );
                 }
@@ -971,17 +978,23 @@ pub async fn run_secret_validation(
             let matches = ds.get_matches_mut();
             for &index in chunk.iter().flat_map(|blob_id| &dependent_blobs[blob_id]) {
                 let match_arc = &mut matches[index];
-                if let Some((success, body, status, outcome, dep_caps)) = dep_updates.get(&(
-                    match_arc.2.blob_id,
-                    match_arc.2.location.offset_span,
-                    match_arc.2.rule.id().to_string(),
-                )) {
+                if let Some((success, body, status, outcome, dep_caps, ambiguity)) = dep_updates
+                    .get(&(
+                        match_arc.2.blob_id,
+                        match_arc.2.location.offset_span,
+                        match_arc.2.rule.id().to_string(),
+                    ))
+                {
                     let (_, _, existing) = Arc::make_mut(match_arc);
                     existing.validation_success = *success;
                     existing.validation_response_status = *status;
                     existing.validation_response_body = body.clone();
                     existing.validation_outcome = *outcome;
                     existing.dependent_captures = dep_caps.clone();
+                    existing.ambiguous_dependencies = ambiguity.clone();
+                    if outcome.is_verified_active() {
+                        existing.dependency_candidates.clear();
+                    }
                 }
             }
         }
@@ -1049,6 +1062,31 @@ async fn validate_single(
         return;
     }
 
+    // Candidate searches cache each resolved tuple in validate_single_match.
+    // Do not cache an aggregate response without its selected dependencies.
+    // Each attempt contains validator panics in validate_resolved_match. An
+    // unresolved search is inconclusive, so it must not increment fail_count.
+    if crate::validation::candidates::ready(om) {
+        validate_single_match(
+            om,
+            parser,
+            clients,
+            dep_vars,
+            missing_deps,
+            cache2,
+            validation_timeout,
+            validation_retries,
+            rate_limiter,
+            provider_endpoints,
+            max_body_len,
+        )
+        .await;
+        if om.validation_outcome.is_verified_active() {
+            success_count.fetch_add(1, Ordering::Relaxed);
+        }
+        maybe_record_access_map(om, access_map);
+        return;
+    }
     if crate::validation::skip_ambiguous_dependencies(om) {
         return;
     }
@@ -1290,6 +1328,13 @@ fn build_cache_key(om: &OwnedBlobMatch) -> String {
     for (variable, count) in &om.ambiguous_dependencies {
         hash_cache_key_part(&mut hasher, variable.as_bytes());
         hash_cache_key_part(&mut hasher, &count.to_le_bytes());
+    }
+
+    for (variable, candidates) in &om.dependency_candidates {
+        hash_cache_key_part(&mut hasher, variable.as_bytes());
+        for candidate in candidates {
+            hash_cache_key_part(&mut hasher, candidate.as_bytes());
+        }
     }
 
     for (variable, value) in validation_context_values(om) {
@@ -1998,6 +2043,7 @@ mod tests {
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
             ambiguous_dependencies: Default::default(),
+            dependency_candidates: Default::default(),
         }
     }
 
@@ -2042,6 +2088,7 @@ mod tests {
         let mut first = make_owned_blob_match();
         Arc::make_mut(&mut first.rule).syntax.depends_on_rule = vec![Some(DependsOnRule {
             rule_id: "test.component".to_string(),
+            verify_candidates: false,
             variable: "COMPONENT".to_string(),
             optional: false,
             within: None,
@@ -2491,6 +2538,7 @@ mod tests {
         syntax.validation = Some(Validation::Assumed);
         syntax.depends_on_rule = vec![Some(DependsOnRule {
             rule_id: "private.validation.optional".into(),
+            verify_candidates: false,
             variable: "OPTIONAL".into(),
             optional: true,
             within: None,

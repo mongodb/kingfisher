@@ -896,3 +896,11 @@ These crates are currently internal to Kingfisher. The API may change between ve
 - [Main README](../README.md) - CLI usage and installation
 - [Rule Format](FINGERPRINT.md) - Rule definition details
 - [Changelog](../CHANGELOG.md) - Version history
+
+### Candidate-verification metadata
+
+`kingfisher_rules::DependsOnRule` includes `verify_candidates: bool`, defaulting
+to `false` when deserializing existing rules. Set it explicitly in Rust struct
+literals. The CLI uses this opt-in for bounded live verification of ambiguous
+credential components; it does not make the embeddable detection-only `Scanner`
+perform network requests. See [candidate verification](RULES.md#opt-in-candidate-verification).

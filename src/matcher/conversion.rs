@@ -59,6 +59,7 @@ pub struct OwnedBlobMatch {
     /// Maps variable name (uppercase) to captured value.
     pub dependent_captures: std::collections::BTreeMap<String, String>,
     pub ambiguous_dependencies: std::collections::BTreeMap<String, usize>,
+    pub dependency_candidates: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl OwnedBlobMatch {
@@ -103,6 +104,7 @@ impl OwnedBlobMatch {
             is_base64: m.is_base64,
             dependent_captures: m.dependent_captures.clone(),
             ambiguous_dependencies: m.ambiguous_dependencies.clone(),
+            dependency_candidates: m.dependency_candidates.clone(),
         }
     }
 
@@ -123,6 +125,7 @@ impl OwnedBlobMatch {
             is_base64: blob_match.is_base64,
             dependent_captures: blob_match.dependent_captures,
             ambiguous_dependencies: blob_match.ambiguous_dependencies,
+            dependency_candidates: blob_match.dependency_candidates,
         };
 
         // Use blob_id as the file/commit identifier
@@ -194,6 +197,9 @@ pub struct Match {
     pub dependent_captures: std::collections::BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub ambiguous_dependencies: std::collections::BTreeMap<String, usize>,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub dependency_candidates: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 impl Match {
@@ -263,6 +269,7 @@ impl Match {
             is_base64: owned_blob_match.is_base64,
             dependent_captures: owned_blob_match.dependent_captures.clone(),
             ambiguous_dependencies: owned_blob_match.ambiguous_dependencies.clone(),
+            dependency_candidates: owned_blob_match.dependency_candidates.clone(),
         }
     }
 
@@ -374,6 +381,7 @@ mod tests {
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
             ambiguous_dependencies: Default::default(),
+            dependency_candidates: Default::default(),
         })
     }
 

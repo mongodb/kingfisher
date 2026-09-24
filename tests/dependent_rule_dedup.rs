@@ -69,6 +69,7 @@ fn make_match(rule: Arc<Rule>, blob_id: BlobId, value: &str) -> Match {
         is_base64: false,
         dependent_captures: std::collections::BTreeMap::new(),
         ambiguous_dependencies: Default::default(),
+        dependency_candidates: Default::default(),
     }
 }
 
@@ -88,6 +89,7 @@ fn dedup_preserves_dependency_provider_matches_per_blob() -> Result<()> {
         true,
         vec![Some(DependsOnRule {
             rule_id: "RULE.PROVIDER".to_string(),
+            verify_candidates: false,
             variable: "TOKEN".into(),
             optional: false,
             within: None,

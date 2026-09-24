@@ -2,6 +2,10 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.7.0]
+- Added opt-in bounded verification for ambiguous credential components, with ranked candidates for AWS, BrowserStack, ClickHouse Cloud, MongoDB Atlas, PlanetScale, Razorpay, and Wiz.
+- Kept unresolved pairings inconclusive: searches try at most 16 combinations within 30 seconds, and only authoritative validation success selects a pair. Candidate verification requires supported fixed destinations, disables HTTP redirects, and keeps unselected secrets out of reports.
+
 ## [v2.6.0]
 - Added opt-in GitHub gist scanning [#508](https://github.com/mongodb/kingfisher/issues/508), plus GitLab and Bitbucket Cloud snippet scanning, with full Git history.
 - Reduced peak scan memory: findings now deduplicate on exact cryptographic digests alone (the Bloom prefilter and its dependency were removed), the Git object index stores each object ID once, and raw matcher bookkeeping was slimmed.

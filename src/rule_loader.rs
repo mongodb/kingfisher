@@ -677,6 +677,7 @@ mod tests {
             None,
             vec![DependsOnRule {
                 rule_id: "custom.leaf".into(),
+                verify_candidates: false,
                 variable: "LEAF".into(),
                 optional: false,
                 within: None,
@@ -688,6 +689,7 @@ mod tests {
             None,
             vec![DependsOnRule {
                 rule_id: "custom.helper".into(),
+                verify_candidates: false,
                 variable: "HELPER".into(),
                 optional: false,
                 within: None,

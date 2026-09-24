@@ -400,6 +400,7 @@ pub(crate) fn filter_match<'b>(
             is_base64,
             dependent_captures: std::collections::BTreeMap::new(),
             ambiguous_dependencies: Default::default(),
+            dependency_candidates: Default::default(),
         });
     }
     if let Some(t) = timer.take() {

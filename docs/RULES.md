@@ -629,12 +629,70 @@ A required dependency with `within` and no candidate removes the primary finding
 Without `within`, a missing required dependency retains the finding and skips
 validation with status 428. `optional: true` permits an absent dependency.
 
-Multiple **distinct values** in the eligible window retain the finding but skip
-validation with status 428 and an `ambiguous dependency` explanation. Kingfisher
+By default, multiple **distinct values** in the eligible window retain the finding
+but skip validation with status 428 and an `ambiguous dependency` explanation. Kingfisher
 does not send a credential to a guessed endpoint. Narrow the window or use direct
 validation with explicit variables to resolve the association. Comment and README
 matches can participate; dependency matching does not interpret imports or exclude
 comments. A lone comment candidate is therefore still eligible.
+
+### Opt-in candidate verification
+
+A dependency that supplies a **credential component** can opt into bounded
+try-and-verify pairing:
+
+```yaml
+depends_on_rule:
+  - rule_id: custom.service.secret
+    variable: CLIENT_SECRET
+    within: "5L"
+    verify_candidates: true
+```
+
+Built-in opt-ins cover AWS access keys and session tokens, BrowserStack,
+ClickHouse Cloud, MongoDB Atlas service accounts, PlanetScale, Razorpay, and Wiz.
+AWS session tokens may try both access-key IDs and secrets within the same total
+combination budget.
+
+Private YAML rules can enable it for typed `AWS` validation or `Http` validation
+with a literal, fixed HTTP(S) URL, no Host header override, and no multipart
+uploads. Supported Betterleaks expressions may call `aws.validate`, or `http.get`
+and `http.post` with a provably fixed HTTP(S) origin and literal header names
+without a Host override. URLs may concatenate dynamic values after a literal
+prefix containing the complete origin and a slash; dynamic hosts and indirect
+URL variables remain unsupported. Pure helper calls are limited to
+`validate.unknown`, `bytes`, `base64.encode`, and `strings.urlQueryEscape`.
+HTTP validation disables redirects for any rule with a `verify_candidates`
+dependency, including findings with an unambiguous component. This keeps redirect
+policy consistent when ordinary validation and candidate searches share cached
+results. Discovered endpoint dependencies and
+unsupported validators retain strict ambiguity handling, even if opted in.
+Every ambiguous dependency must be eligible before a search starts.
+
+Candidates remain restricted to the dependency window and are deduplicated by
+value. Matching assignment-name prefixes rank first (for example,
+`kms_aws_key` / `kms_aws_secret` or `production_client_id` /
+`production_client_secret`), then shared bracketed-object or INI-section context,
+then byte distance. These are ordering hints, not proof of association. Failed
+name matches fall back to other candidates. Multiple ambiguous components are
+combined in ranked order without materializing their full Cartesian product.
+
+A search tries at most **16 distinct combinations**, with a total time budget of
+**30 seconds or `--validation-timeout`, whichever is shorter** (10 seconds by
+default). At most four searches run concurrently across repositories, one
+combination at a time per search. Existing request retries and provider rate
+limits still apply; retries can make more than one request per combination.
+The time budget includes waiting for a search slot. Each complete credential
+combination uses the normal validation cache. A successful secret remains
+available for other access-key IDs.
+
+Only authoritative successful validation selects a pair and clears its ambiguity.
+Exhausted budgets and searches with no successful combination remain unresolved
+(status 428); timeouts, throttling, and unavailable verification remain inconclusive.
+They do not establish that the primary credential is inactive. `--no-validate`
+leaves multi-candidate findings ambiguous, even when assignment names match.
+Unselected candidate values are internal and never included in reports or generated
+validation commands; the selected values obey `--redact`.
 
 Association happens before deduplication. Identical secrets with different resolved
 contexts remain separate findings, so a bare definition cannot hide a paired

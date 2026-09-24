@@ -572,6 +572,7 @@ mod tests {
             is_base64: false,
             dependent_captures: std::collections::BTreeMap::new(),
             ambiguous_dependencies: Default::default(),
+            dependency_candidates: Default::default(),
         };
 
         let origin = OriginSet::from(Origin::from_file(file_path.to_path_buf()));

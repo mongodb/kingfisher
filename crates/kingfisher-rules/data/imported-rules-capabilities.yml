@@ -55,7 +55,21 @@ betterleaks:
   xai-api-key:
     filter_override: 'matchesAny(finding["secret"], [`^xai-[A-Za-z0-9]{80}$`])'
 
+  browserstack-access-key.1:
+    verify_candidates: [BROWSERSTACK_USERNAME_1]
+  clickhouse-cloud-api-secret-key:
+    verify_candidates: [CLICKHOUSE_CLOUD_KEY_ID]
+  mongodb-atlas-service-account-secret:
+    verify_candidates: [MONGODB_ATLAS_SERVICE_ACCOUNT_ID]
+  planetscale-api-token:
+    verify_candidates: [PLANETSCALE_ID]
+  razorpay-key-secret.1:
+    verify_candidates: [RAZORPAY_KEY_ID_1]
+  wiz-client-secret.1:
+    verify_candidates: [WIZ_CLIENT_ID_1]
+
   aws-access-token:
+    verify_candidates: [AWS_SECRET_ACCESS_KEY]
     access_map:
       handler: aws
       inputs:

@@ -181,6 +181,8 @@ struct Record {
     is_base64: bool,
     dependent_captures: std::collections::BTreeMap<String, String>,
     ambiguous_dependencies: std::collections::BTreeMap<String, usize>,
+    #[serde(default)]
+    dependency_candidates: std::collections::BTreeMap<String, Vec<String>>,
 }
 
 /// Serialize the internal values by reference. Report serializers can redact
@@ -212,7 +214,7 @@ impl Serialize for SpillMessage<'_> {
                 value: c.raw_value(),
             })
             .collect();
-        let mut record = serializer.serialize_struct("Record", 20)?;
+        let mut record = serializer.serialize_struct("Record", 21)?;
         record.serialize_field("origins", origins)?;
         record.serialize_field("blob_id", &blob.id)?;
         record.serialize_field("num_bytes", &blob.num_bytes)?;
@@ -233,6 +235,7 @@ impl Serialize for SpillMessage<'_> {
         record.serialize_field("is_base64", &m.is_base64)?;
         record.serialize_field("dependent_captures", &m.dependent_captures)?;
         record.serialize_field("ambiguous_dependencies", &m.ambiguous_dependencies)?;
+        record.serialize_field("dependency_candidates", &m.dependency_candidates)?;
         record.end()
     }
 }
@@ -278,6 +281,7 @@ impl Record {
             is_base64: self.is_base64,
             dependent_captures: self.dependent_captures,
             ambiguous_dependencies: self.ambiguous_dependencies,
+            dependency_candidates: self.dependency_candidates,
         };
         Ok((Arc::new(origins), Arc::new(blob), m))
     }
