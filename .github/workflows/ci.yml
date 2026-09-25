@@ -1,6 +1,7 @@
 name: CI Pull Request
 
 on:
+  workflow_call:
   pull_request:
     branches:
       - main
@@ -48,19 +49,21 @@ jobs:
 
       - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: kingfisher-${{ runner.os }}-${{ runner.arch }}
+          shared-key: kingfisher-tests-v2-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
 
+      # Vectorscan uses a prebuilt archive; CMake is retained for AWS-LC.
       - name: Install Linux test dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            cmake pkg-config libboost-all-dev patch perl ragel
+            cmake pkg-config perl curl
 
       - name: Run tests
         run: make tests
         env:
-          CARGO_BUILD_JOBS: 1
+          # Bound compiler memory while allowing two crates to build concurrently.
+          CARGO_BUILD_JOBS: 2
 
   linux-arm64:
     name: Linux arm64
@@ -84,23 +87,33 @@ jobs:
       
       - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: kingfisher-${{ runner.os }}-${{ runner.arch }}
+          shared-key: kingfisher-tests-v2-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
       
+      # Vectorscan uses a prebuilt archive; CMake is retained for AWS-LC.
       - name: Install Linux test dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
-            cmake pkg-config libboost-all-dev patch perl ragel
+            cmake pkg-config perl curl
 
       - name: Run tests
         run: make tests
         env:
-          CARGO_BUILD_JOBS: 1
+          # Bound compiler memory while allowing two crates to build concurrently.
+          CARGO_BUILD_JOBS: 2
 
-  macos-arm64:
-    name: macOS arm64
-    runs-on: macos-14
+  macos:
+    name: macOS ${{ matrix.arch }}
+    runs-on: ${{ matrix.runs_on }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runs_on: macos-14
+          - arch: x64
+            runs_on: macos-15-intel
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
@@ -108,15 +121,14 @@ jobs:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
       - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: kingfisher-${{ runner.os }}-${{ runner.arch }}
+          shared-key: kingfisher-tests-v2-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
 
+      # Retain CMake for AWS-LC; Vectorscan uses a prebuilt archive.
       - name: Install macOS test dependencies
         run: |
           brew list cmake >/dev/null 2>&1 || brew install cmake
-          brew list boost >/dev/null 2>&1 || brew install boost
           brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
-          brew list ragel >/dev/null 2>&1 || brew install ragel
 
       - name: Run tests
         run: make tests
@@ -152,7 +164,7 @@ jobs:
 
       - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: kingfisher-${{ runner.os }}-${{ runner.arch }}
+          shared-key: kingfisher-tests-v2-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
 
       - name: Prepare Windows dependencies

@@ -627,6 +627,15 @@ debug = true
 incremental = true
 codegen-units = 256
 
+# Optimized Windows tests without the production profile's costly LTO/linking.
+[profile.ci-test]
+inherits = "dev"
+opt-level = 1
+debug = false
+incremental = false
+lto = "off"
+codegen-units = 16
+
 [profile.profiling]
 inherits = "release"
 debug = true

@@ -87,12 +87,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "external project lockfile generation failed\nstdout:\n{lock_stdout}\nstderr:\n{lock_stderr}"
     );
 
+    // Keep dependency artifacts across test runs and inside the CI Rust cache.
+    // Use a separate target directory because this consumer has its own feature graph.
+    let target_root = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| repo_root.join("target"));
+    let target_dir = repo_root.join(target_root).join("external-consumer");
+
     let output = Command::new("cargo")
         .arg("run")
         .arg("--quiet")
         // The external dependency graph can include packages that the workspace build did not
         // download. Keep its generated lockfile fixed without requiring a warm Cargo cache.
         .arg("--locked")
+        .env("CARGO_TARGET_DIR", &target_dir)
         .current_dir(&project_dir)
         .output()?;
 

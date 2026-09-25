@@ -246,8 +246,8 @@ darwin-arm64: prepare-release-notices
 		brew install rust \
 	)
 	@brew list cmake >/dev/null 2>&1 || brew install cmake
-	@brew list boost >/dev/null 2>&1 || brew install boost
-	@brew install gcc libpcap pkg-config ragel sqlite coreutils gnu-tar
+	@if [ "$${VECTORSCAN_BUILD_FROM_SOURCE:-0}" = "1" ]; then brew install boost ragel; fi
+	@brew install gcc libpcap pkg-config sqlite coreutils gnu-tar
 	@rustup target add aarch64-apple-darwin
 	cargo build --release --target aarch64-apple-darwin --features system-alloc
 	@cd target/aarch64-apple-darwin/release && \
@@ -273,8 +273,8 @@ darwin-x64: prepare-release-notices
 		brew install rust \
 	)
 	@brew list cmake >/dev/null 2>&1 || brew install cmake
-	@brew list boost >/dev/null 2>&1 || brew install boost
-	@brew install gcc libpcap pkg-config ragel sqlite coreutils gnu-tar
+	@if [ "$${VECTORSCAN_BUILD_FROM_SOURCE:-0}" = "1" ]; then brew install boost ragel; fi
+	@brew install gcc libpcap pkg-config sqlite coreutils gnu-tar
 	@rustup target add x86_64-apple-darwin
 	source $$HOME/.cargo/env && cargo build --release --target x86_64-apple-darwin --features system-alloc
 	@cd target/x86_64-apple-darwin/release && \
@@ -297,6 +297,8 @@ else
 	$(error "This target can only run on Windows.")
 endif
 
+# Keep CMake/Python for other native dependencies (including AWS-LC).
+# Install Vectorscan source dependencies only when explicitly requested.
 # Windows x64 build path for MSYS2/MinGW (GNU toolchain + published Vectorscan archive)
 windows-x64: require-windows-host prepare-release-notices
 	@bash -eu -o pipefail -c '\
@@ -319,13 +321,14 @@ windows-x64: require-windows-host prepare-release-notices
 	  pacman --noconfirm --needed -S \
 	    mingw-w64-x86_64-toolchain \
 	    mingw-w64-x86_64-cmake \
-	    mingw-w64-x86_64-boost \
 	    mingw-w64-x86_64-pkgconf \
-	    mingw-w64-x86_64-ragel \
-	    mingw-w64-x86_64-pcre2 \
 	    mingw-w64-x86_64-zlib \
 	    mingw-w64-x86_64-python \
-	    git make zip; \
+	    git make zip curl; \
+	  if [ "$${VECTORSCAN_BUILD_FROM_SOURCE:-0}" = "1" ]; then \
+	    pacman --noconfirm --needed -S \
+	      mingw-w64-x86_64-boost mingw-w64-x86_64-ragel mingw-w64-x86_64-pcre2; \
+	  fi; \
 	  repo_root="$$(pwd)"; \
 	  if ! command -v rustup >/dev/null 2>&1 && ! command -v rustup.exe >/dev/null 2>&1; then \
 	    cargo_home_candidate=""; \
@@ -410,13 +413,14 @@ windows-arm64: require-windows-host prepare-release-notices
 	  pacman --noconfirm --needed -S \
 	    mingw-w64-clang-aarch64-toolchain \
 	    mingw-w64-clang-aarch64-cmake \
-	    mingw-w64-clang-aarch64-boost \
 	    mingw-w64-clang-aarch64-pkgconf \
-	    mingw-w64-clang-aarch64-ragel \
-	    mingw-w64-clang-aarch64-pcre2 \
 	    mingw-w64-clang-aarch64-zlib \
 	    mingw-w64-clang-aarch64-python \
-	    git make zip; \
+	    git make zip curl; \
+	  if [ "$${VECTORSCAN_BUILD_FROM_SOURCE:-0}" = "1" ]; then \
+	    pacman --noconfirm --needed -S \
+	      mingw-w64-clang-aarch64-boost mingw-w64-clang-aarch64-ragel mingw-w64-clang-aarch64-pcre2; \
+	  fi; \
 	  repo_root="$$(pwd)"; \
 	  if ! command -v rustup >/dev/null 2>&1 && ! command -v rustup.exe >/dev/null 2>&1; then \
 	    cargo_home_candidate=""; \
@@ -496,8 +500,8 @@ windows-test-x64: require-windows-host
 	    fi; \
 	  fi; \
 	  export RUSTFLAGS="$${RUSTFLAGS:-} $$extra_native_lib_dirs -C target-feature=+crt-static -C link-arg=-static"; \
-	  echo "▶ cargo test --release --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
-	  cargo test --release --workspace --all-targets --target "$$target_triple"; \
+	  echo "▶ cargo test --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
+	  cargo test --profile ci-test --workspace --all-targets --target "$$target_triple"; \
 	'
 
 windows-test-arm64: require-windows-host
@@ -515,8 +519,8 @@ windows-test-arm64: require-windows-host
 	    fi; \
 	  fi; \
 	  export RUSTFLAGS="$${RUSTFLAGS:-} -L native=$$toolchain_root/lib -C target-feature=+crt-static -C link-arg=-static"; \
-	  echo "▶ cargo test --release --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
-	  cargo test --release --workspace --all-targets --target "$$target_triple"; \
+	  echo "▶ cargo test --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
+	  cargo test --profile ci-test --workspace --all-targets --target "$$target_triple"; \
 	'
 
 windows-test: windows-test-x64 windows-test-arm64
