@@ -52,7 +52,7 @@ rand.workspace = true
 zeroize.workspace = true
 
 # Vectorscan for pattern matching
-vectorscan-rs.workspace = true
+kingfisher-vectorscan.workspace = true
 thread_local.workspace = true
 
 # Logging

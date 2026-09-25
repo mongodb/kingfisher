@@ -1464,7 +1464,8 @@ dependencies = [
 [[package]]
 name = "bson"
 version = "2.15.0"
-source = "git+https://github.com/mongodb/bson-rust?branch=2.15.x#f6f163095b5159ce175424b0e02f9bd7acfaddf2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7969a9ba84b0ff843813e7249eed1678d9b6607ce5a3b8f0a47af3fcf7978e6e"
 dependencies = [
  "ahash",
  "base64 0.22.1",
@@ -5398,7 +5399,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher"
-version = "2.7.0"
+version = "2.8.0"
 dependencies = [
  "anyhow",
  "asar",
@@ -5461,6 +5462,7 @@ dependencies = [
  "kingfisher-core",
  "kingfisher-rules",
  "kingfisher-scanner",
+ "kingfisher-vectorscan",
  "libc",
  "liquid",
  "liquid-core",
@@ -5526,7 +5528,6 @@ dependencies = [
  "tree_magic_mini",
  "url",
  "uuid",
- "vectorscan-rs",
  "wait-timeout",
  "walkdir",
  "webbrowser",
@@ -5573,6 +5574,7 @@ dependencies = [
  "hmac 0.13.0",
  "ignore",
  "kingfisher-core",
+ "kingfisher-vectorscan",
  "liquid",
  "liquid-core",
  "percent-encoding",
@@ -5595,7 +5597,6 @@ dependencies = [
  "tracing",
  "ureq",
  "uuid",
- "vectorscan-rs",
  "walkdir",
  "xxhash-rust",
  "zeroize",
@@ -5630,6 +5631,7 @@ dependencies = [
  "jsonwebtoken 11.0.0",
  "kingfisher-core",
  "kingfisher-rules",
+ "kingfisher-vectorscan",
  "ldap3",
  "liquid",
  "liquid-core",
@@ -5664,9 +5666,34 @@ dependencies = [
  "tokio-rustls",
  "tracing",
  "url",
- "vectorscan-rs",
  "xxhash-rust",
  "zeroize",
+]
+
+[[package]]
+name = "kingfisher-vectorscan"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e457ea5dc4befa749300687432526a2a2a2a2ea2615540384f1173799245dec4"
+dependencies = [
+ "bitflags 2.13.1",
+ "foreign-types 0.5.0",
+ "kingfisher-vectorscan-sys",
+ "libc",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "kingfisher-vectorscan-sys"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bcbf55f8bc473110c889bac1829701f71ecbbae6b6ac62356819140d8c82d58"
+dependencies = [
+ "cc",
+ "cmake",
+ "flate2",
+ "sha2 0.10.9",
+ "tar",
 ]
 
 [[package]]
@@ -6109,7 +6136,8 @@ dependencies = [
 [[package]]
 name = "mongocrypt"
 version = "0.4.0"
-source = "git+https://github.com/mongodb/libmongocrypt-rust.git?branch=main#852b788d2900fa11cffa9ca2efd91bf4dee55bdc"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8426a875ded61430d4a811dbfda7633b6b8af0225c547fc6c28b8b0aa7d79a13"
 dependencies = [
  "bson",
  "mongocrypt-sys",
@@ -6120,12 +6148,14 @@ dependencies = [
 [[package]]
 name = "mongocrypt-sys"
 version = "0.1.6+1.18.2"
-source = "git+https://github.com/mongodb/libmongocrypt-rust.git?branch=main#852b788d2900fa11cffa9ca2efd91bf4dee55bdc"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "851fac73f7fe22f6a3ab87f720ce509cae7c9fd08e7dd27866cc232dee07ccf4"
 
 [[package]]
 name = "mongodb"
 version = "3.8.0"
-source = "git+https://github.com/mongodb/mongo-rust-driver?rev=0f628f2a4b3102c4bff854a0da6938c691bd5871#0f628f2a4b3102c4bff854a0da6938c691bd5871"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b814038f367d212f55de0a630cb35102a9b8ca23785a86955d62c0087c93846d"
 dependencies = [
  "aws-config",
  "aws-credential-types",
@@ -6175,7 +6205,8 @@ dependencies = [
 [[package]]
 name = "mongodb-internal-macros"
 version = "3.8.0"
-source = "git+https://github.com/mongodb/mongo-rust-driver?rev=0f628f2a4b3102c4bff854a0da6938c691bd5871#0f628f2a4b3102c4bff854a0da6938c691bd5871"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f736d2fbc56e0011a341fbb9172bd822fda75c5f93b82fae1c7aab1e2613c810"
 dependencies = [
  "macro_magic",
  "proc-macro2",
@@ -9812,24 +9843,6 @@ name = "vcpkg"
 version = "0.2.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
-
-[[package]]
-name = "vectorscan-rs"
-version = "0.0.6"
-dependencies = [
- "bitflags 2.13.1",
- "foreign-types 0.5.0",
- "libc",
- "thiserror 1.0.69",
- "vectorscan-rs-sys",
-]
-
-[[package]]
-name = "vectorscan-rs-sys"
-version = "0.0.6"
-dependencies = [
- "cmake",
-]
 
 [[package]]
 name = "version_check"

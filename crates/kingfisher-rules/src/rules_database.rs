@@ -8,11 +8,13 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use kingfisher_vectorscan::{
+    BlockDatabase, BlockScanner, Error as VectorscanError, Flag, Pattern, Scan,
+};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
 use thread_local::ThreadLocal;
 use tracing::{debug, debug_span, error, warn};
-use vectorscan_rs::{BlockDatabase, BlockScanner, Error as VectorscanError, Flag, Pattern, Scan};
 use xxhash_rust::xxh3::xxh3_128;
 
 use crate::{
@@ -408,7 +410,7 @@ impl RulesDatabase {
             format_version: CACHE_FORMAT_VERSION,
             cache_key,
             rule_count: rules.len(),
-            vectorscan_version: vectorscan_rs::version(),
+            vectorscan_version: kingfisher_vectorscan::version(),
             target: cache_target(),
             database_kind: "block".to_string(),
             prefilter_rule_indices: Vec::new(),
@@ -628,7 +630,8 @@ fn compute_cache_key(rules: &[Arc<Rule>]) -> String {
 fn compute_cache_key_from_rules<'a>(rules: impl IntoIterator<Item = &'a Rule>) -> String {
     let mut input = Vec::new();
     input.extend_from_slice(format!("cache-format={CACHE_FORMAT_VERSION}\n").as_bytes());
-    input.extend_from_slice(format!("vectorscan={}\n", vectorscan_rs::version()).as_bytes());
+    input
+        .extend_from_slice(format!("vectorscan={}\n", kingfisher_vectorscan::version()).as_bytes());
     input.extend_from_slice(format!("target={}\n", cache_target()).as_bytes());
     input.extend_from_slice(b"mode=block\n");
     for (index, rule) in rules.into_iter().enumerate() {
@@ -971,7 +974,7 @@ mod test_vectorscan {
 
     #[test]
     pub fn test_vectorscan_sanity() -> Result<()> {
-        use vectorscan_rs::{BlockDatabase, BlockScanner, Pattern, Scan};
+        use kingfisher_vectorscan::{BlockDatabase, BlockScanner, Pattern, Scan};
         let input = b"some test data for vectorscan";
         let pattern = Pattern::new(b"test".to_vec(), Flag::CASELESS | Flag::SOM_LEFTMOST, None);
         let db: BlockDatabase = BlockDatabase::new(vec![pattern])?;
@@ -988,7 +991,7 @@ mod test_vectorscan {
 
     #[test]
     fn cached_vectorscan_database_round_trips() -> Result<()> {
-        use vectorscan_rs::{BlockScanner, Scan};
+        use kingfisher_vectorscan::{BlockScanner, Scan};
 
         let yaml = br#"
 rules:
@@ -1101,7 +1104,7 @@ rules:
 
     #[test]
     fn cached_vectorscan_database_refreshes_corrupt_entry() -> Result<()> {
-        use vectorscan_rs::{BlockScanner, Scan};
+        use kingfisher_vectorscan::{BlockScanner, Scan};
 
         let yaml = br#"
 rules:
@@ -1143,7 +1146,7 @@ rules:
 
     #[test]
     fn cached_vectorscan_database_refreshes_when_rule_pattern_changes() -> Result<()> {
-        use vectorscan_rs::{BlockScanner, Scan};
+        use kingfisher_vectorscan::{BlockScanner, Scan};
 
         fn rules_for(pattern: &str) -> Result<Vec<Rule>> {
             let yaml = format!(
@@ -1250,7 +1253,7 @@ rules:
             format_version: CACHE_FORMAT_VERSION,
             cache_key: cache_key.to_string(),
             rule_count: 1,
-            vectorscan_version: vectorscan_rs::version(),
+            vectorscan_version: kingfisher_vectorscan::version(),
             target: cache_target(),
             database_kind: "block".to_string(),
             prefilter_rule_indices: Vec::new(),

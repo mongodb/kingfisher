@@ -3,8 +3,8 @@
 use std::cell::UnsafeCell;
 use std::sync::Arc;
 
+use kingfisher_vectorscan::{BlockDatabase, BlockScanner};
 use thread_local::ThreadLocal;
-use vectorscan_rs::{BlockDatabase, BlockScanner};
 
 /// A pool of Vectorscan block scanners for efficient multi-threaded scanning.
 ///

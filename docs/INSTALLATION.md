@@ -411,9 +411,16 @@ make linux
 # macOS --- must build from a macOS host
 make darwin
 
-# Windows x64 --- requires building from a Windows host with Visual Studio installed
-./buildwin.bat -force
+# Windows x64 --- run from an MSYS2 MINGW64 shell
+make windows-x64
+
+# Windows ARM64 --- run from an MSYS2 CLANGARM64 shell
+make windows-arm64
 ```
+
+These Windows targets use the published GNU/LLVM Vectorscan archives. The
+Vectorscan crate does not support MSVC targets; use the matching MSYS2 target
+environment when building Kingfisher from source.
 
 ```bash
 # Build all targets

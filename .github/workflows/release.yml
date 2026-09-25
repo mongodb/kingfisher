@@ -27,10 +27,17 @@ env:
   RUST_TOOLCHAIN: "1.96.0"
 
 jobs:
+  # Tests save their own dependency caches, including Linux debug artifacts.
+  # Build jobs run in parallel; publishing waits for both tests and builds.
+  tests:
+    uses: ./.github/workflows/ci.yml
+
   # ──────────────── Linux (via Makefile) ────────────────
   linux-x64:
     name: Linux x64
     runs-on: ubuntu-24.04
+    env:
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -50,27 +57,17 @@ jobs:
 
       - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: kingfisher-${{ runner.os }}-${{ runner.arch }}
+          shared-key: kingfisher-release-v2-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
 
       - name: Install packaging tools
         run: cargo install cargo-deb cargo-generate-rpm
 
-      - name: Install Linux test dependencies
+      - name: Install Linux build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake pkg-config libboost-all-dev patch perl ragel
-
-      - name: Run tests
-        run: make tests
-        env:
-          CARGO_BUILD_JOBS: 1
-
-      - name: Reclaim test artifacts
-        run: |
-          rm -rf target/debug
-          df -h
 
       - name: Build (Makefile linux-x64)
         run: make ubuntu-x64
@@ -112,6 +109,8 @@ jobs:
   linux-arm64:
     name: Linux arm64
     runs-on: ubuntu-24.04-arm
+    env:
+      CARGO_BUILD_JOBS: 2
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
@@ -131,27 +130,17 @@ jobs:
 
       - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: kingfisher-${{ runner.os }}-${{ runner.arch }}
+          shared-key: kingfisher-release-v2-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
 
       - name: Install packaging tools
         run: cargo install cargo-deb cargo-generate-rpm
 
-      - name: Install Linux test dependencies
+      - name: Install Linux build dependencies
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends \
             cmake pkg-config libboost-all-dev patch perl ragel
-
-      - name: Run tests
-        run: make tests
-        env:
-          CARGO_BUILD_JOBS: 1
-
-      - name: Reclaim test artifacts
-        run: |
-          rm -rf target/debug
-          df -h
 
       - name: Build (Makefile linux-arm64)
         run: make ubuntu-arm64
@@ -202,18 +191,14 @@ jobs:
 
       - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: kingfisher-${{ runner.os }}-${{ runner.arch }}
+          shared-key: kingfisher-release-v2-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
 
-      - name: Install macOS test dependencies
+      # Retain CMake for AWS-LC; Vectorscan uses a prebuilt archive.
+      - name: Install macOS build dependencies
         run: |
           brew list cmake >/dev/null 2>&1 || brew install cmake
-          brew list boost >/dev/null 2>&1 || brew install boost
           brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
-          brew list ragel >/dev/null 2>&1 || brew install ragel
-
-      - name: Run tests
-        run: make tests
 
       - name: Build Darwin x64
         run: make darwin-x64
@@ -241,18 +226,15 @@ jobs:
 
       - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: kingfisher-${{ runner.os }}-${{ runner.arch }}
+          shared-key: kingfisher-release-v2-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
 
-      - name: Install macOS test dependencies
+      # Retain CMake for AWS-LC; Vectorscan uses a prebuilt archive.
+      - name: Install macOS build dependencies
         run: |
           brew list cmake >/dev/null 2>&1 || brew install cmake
-          brew list boost >/dev/null 2>&1 || brew install boost
           brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
-          brew list ragel >/dev/null 2>&1 || brew install ragel
 
-      - name: Run tests
-        run: make tests
       - name: Build Darwin arm64
         run: make darwin-arm64
 
@@ -299,16 +281,8 @@ jobs:
 
       - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          shared-key: kingfisher-${{ runner.os }}-${{ runner.arch }}
+          shared-key: kingfisher-release-v2-${{ runner.os }}-${{ runner.arch }}
           cache-on-failure: true
-
-      - name: Prepare Windows dependencies
-        shell: msys2 {0}
-        run: WINDOWS_ONLY_DEPS=1 make windows-${{ matrix.arch }}
-
-      - name: Run tests
-        shell: msys2 {0}
-        run: make windows-test-${{ matrix.arch }}
 
       - name: Build
         shell: msys2 {0}
@@ -327,7 +301,7 @@ jobs:
 
   release:
     name: Public GitHub Release
-    needs: [linux-x64, linux-arm64, windows, macos-x64, macos-arm64]
+    needs: [tests, linux-x64, linux-arm64, windows, macos-x64, macos-arm64]
     runs-on: ubuntu-latest
     outputs:
       tag: ${{ steps.version.outputs.tag }}

@@ -244,7 +244,7 @@ mod test {
             selected.rules.insert(rule.id.clone(), rule.clone());
         }
         let db = crate::RulesDatabase::from_rule_collection(selected).unwrap();
-        let mut scanner = vectorscan_rs::BlockScanner::new(db.vectorscan_db()).unwrap();
+        let mut scanner = kingfisher_vectorscan::BlockScanner::new(db.vectorscan_db()).unwrap();
         for (id, token) in cases {
             let input = format!("{token}\n{token}");
             let mut hits = 0;
@@ -257,7 +257,7 @@ mod test {
                         assert_eq!(captures.get(1).unwrap().as_bytes(), token.as_bytes());
                         hits += 1;
                     }
-                    vectorscan_rs::Scan::Continue
+                    kingfisher_vectorscan::Scan::Continue
                 })
                 .unwrap();
             assert!(hits >= 2, "{id}: missing adjacent bare tokens");

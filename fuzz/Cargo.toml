@@ -23,11 +23,6 @@ version = "0.22"
 [workspace]
 members = ["."]
 
-# Must mirror the root workspace patch so vectorscan-rs builds from the vendored copy
-[patch.crates-io]
-vectorscan-rs = { path = "../vendor/vectorscan-rs/vectorscan-rs" }
-vectorscan-rs-sys = { path = "../vendor/vectorscan-rs/vectorscan-rs-sys" }
-
 [[bin]]
 name = "fuzz_entropy"
 path = "fuzz_targets/fuzz_entropy.rs"

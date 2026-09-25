@@ -75821,9 +75821,9 @@ third_party_libraries:
   licenses:
   - license: MIT
     text: NOT FOUND
-- package_name: vectorscan-rs
-  package_version: 0.0.6
-  repository: https://github.com/bradlarsen/vectorscan-rs
+- package_name: kingfisher-vectorscan
+  package_version: 0.1.1
+  repository: https://github.com/micksmix/kingfisher-vectorscan
   license: Apache-2.0 OR MIT
   licenses:
   - license: Apache-2.0
@@ -76232,9 +76232,9 @@ third_party_libraries:
          WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
          See the License for the specific language governing permissions and
          limitations under the License.
-- package_name: vectorscan-rs-sys
-  package_version: 0.0.6
-  repository: https://github.com/bradlarsen/vectorscan-rs
+- package_name: kingfisher-vectorscan-sys
+  package_version: 0.1.1
+  repository: https://github.com/micksmix/kingfisher-vectorscan
   license: Apache-2.0 OR MIT
   licenses:
   - license: Apache-2.0

@@ -171,7 +171,7 @@ impl Scanner {
                 if (rule_id as usize) < self.rules_db.num_rules() {
                     raw_matches.push((rule_id as usize, from as usize, to as usize));
                 }
-                vectorscan_rs::Scan::Continue
+                kingfisher_vectorscan::Scan::Continue
             });
         });
         // Early exit if no matches
@@ -430,7 +430,7 @@ impl Scanner {
                     if rule_id < self.rules_db.num_rules() && seen_candidate_rules.insert(rule_id) {
                         candidate_rule_ids.push(rule_id);
                     }
-                    vectorscan_rs::Scan::Continue
+                    kingfisher_vectorscan::Scan::Continue
                 });
             });
             for rule_id in candidate_rule_ids {
