@@ -214,6 +214,7 @@ impl ValidationClients {
         let timeout = std::time::Duration::from_secs(30);
 
         let strict = Client::builder()
+            .user_agent(GLOBAL_USER_AGENT.as_str())
             .danger_accept_invalid_certs(false)
             .redirect(if allow_internal_ips {
                 reqwest::redirect::Policy::default()
@@ -224,6 +225,7 @@ impl ValidationClients {
             .build()?;
 
         let lax = Client::builder()
+            .user_agent(GLOBAL_USER_AGENT.as_str())
             .danger_accept_invalid_certs(true)
             .redirect(if allow_internal_ips {
                 reqwest::redirect::Policy::default()
@@ -2753,6 +2755,28 @@ mod tests {
             (false, StatusCode::BAD_GATEWAY, error.to_string())
         });
         (result, authorization_headers)
+    }
+
+    #[tokio::test]
+    async fn validation_clients_send_user_agent() {
+        use wiremock::{Mock, MockServer, Request, ResponseTemplate, matchers::method};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(|req: &Request| {
+                req.headers.get(header::USER_AGENT).and_then(|v| v.to_str().ok())
+                    == Some(GLOBAL_USER_AGENT.as_str())
+            })
+            .respond_with(ResponseTemplate::new(200))
+            .expect(3)
+            .mount(&server)
+            .await;
+
+        for mode in [TlsMode::Strict, TlsMode::Lax, TlsMode::Off] {
+            let clients = ValidationClients::new(mode, true).unwrap();
+            let response = clients.client_for_rule(None).get(server.uri()).send().await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+        }
     }
 
     #[tokio::test]
