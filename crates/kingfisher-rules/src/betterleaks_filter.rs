@@ -8,10 +8,10 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use kingfisher_vectorscan::{BlockDatabase, BlockScanner, Flag, Pattern, Scan};
 use regex::Regex;
 use thread_local::ThreadLocal;
 use tiktoken_rs::cl100k_base_singleton;
-use vectorscan_rs::{BlockDatabase, BlockScanner, Flag, Pattern, Scan};
 
 use crate::{BetterleaksExpr, Confidence};
 

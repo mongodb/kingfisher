@@ -13,11 +13,6 @@ fn library_crates_work_from_external_project() -> anyhow::Result<()> {
     let core_path = toml_escape_path(&repo_root.join("crates/kingfisher-core"));
     let rules_path = toml_escape_path(&repo_root.join("crates/kingfisher-rules"));
     let scanner_path = toml_escape_path(&repo_root.join("crates/kingfisher-scanner"));
-    let vectorscan_rs_path =
-        toml_escape_path(&repo_root.join("vendor/vectorscan-rs/vectorscan-rs"));
-    let vectorscan_rs_sys_path =
-        toml_escape_path(&repo_root.join("vendor/vectorscan-rs/vectorscan-rs-sys"));
-
     let temp = tempfile::tempdir()?;
     let project_dir = temp.path().join("external-kingfisher-consumer");
     fs::create_dir_all(project_dir.join("src"))?;
@@ -38,9 +33,6 @@ kingfisher-rules = {{ path = "{rules_path}" }}
 [target.'cfg(not(windows))'.dependencies]
 kingfisher-scanner = {{ path = "{scanner_path}" }}
 
-[patch.crates-io]
-vectorscan-rs = {{ path = "{vectorscan_rs_path}" }}
-vectorscan-rs-sys = {{ path = "{vectorscan_rs_sys_path}" }}
 "#
         ),
     )?;

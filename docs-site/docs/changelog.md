@@ -7,6 +7,11 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.8.0]
+- Switched to the published `kingfisher-vectorscan` crate and its checksum-verified prebuilt archives, removing the local Vectorscan CMake build on supported targets. Windows builds use GNU/LLVM MinGW; MSVC is unsupported.
+- Replaced the temporary MongoDB driver Git pin with crates.io 3.8.0, retaining SRV validation and the Hickory 0.26 DNS fix.
+- Fixed scan-time validation requests to send a User-Agent, preventing services such as GitHub from rejecting them. Thanks @wingc-canva. [#512](https://github.com/mongodb/kingfisher/pull/512)
+
 ## [v2.7.0]
 - Added opt-in bounded verification for ambiguous credential components, with ranked candidates for AWS, BrowserStack, ClickHouse Cloud, MongoDB Atlas, PlanetScale, Razorpay, and Wiz.
 - Kept unresolved pairings inconclusive: searches try at most 16 combinations within 30 seconds, and only authoritative validation success selects a pair. Candidate verification requires supported fixed destinations, disables HTTP redirects, and keeps unselected secrets out of reports.

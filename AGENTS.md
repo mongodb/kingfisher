@@ -25,7 +25,7 @@ Kingfisher is a Rust secret scanner, live credential validator, revocation helpe
 - `crates/kingfisher-scanner/`: embeddable scanning API and shared validators.
 - `tests/` and `testdata/`: integration tests and fixtures.
 - `docs/`, `docs/viewer/`, `docs-site/`: docs, report viewer assets, and generated MkDocs site.
-- `vendor/vectorscan-rs/`: vendored Vectorscan bindings.
+- `third-party/kingfisher-vectorscan/`: Vectorscan attribution and license files.
 
 ## Toolchain
 

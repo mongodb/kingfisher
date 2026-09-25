@@ -236,7 +236,7 @@ impl<'a> Matcher<'a> {
                             .raw_matches_scratch
                             .push(RawMatch { rule_id, end_idx: to + base });
                     }
-                    vectorscan_rs::Scan::Continue
+                    kingfisher_vectorscan::Scan::Continue
                 })
             })?;
 
@@ -296,7 +296,7 @@ impl<'a> Matcher<'a> {
                             .raw_matches_scratch
                             .push(RawMatch { rule_id, end_idx: to + base });
                     }
-                    vectorscan_rs::Scan::Continue
+                    kingfisher_vectorscan::Scan::Continue
                 })
             })?;
 
@@ -494,7 +494,7 @@ impl<'a> Matcher<'a> {
                         if rule_id < rules_db.num_rules() && seen_candidate_rules.insert(rule_id) {
                             candidate_rule_ids.push(rule_id);
                         }
-                        vectorscan_rs::Scan::Continue
+                        kingfisher_vectorscan::Scan::Continue
                     })
                 })?;
                 for rule_id_usize in candidate_rule_ids {
