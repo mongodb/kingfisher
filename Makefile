@@ -23,9 +23,10 @@ else
   endif
 endif
 
-# uname reports MSYS_NT*/MINGW*/CYGWIN* under Windows POSIX shells.
+# uname reports MSYS_NT*/MINGW*/CLANG*/UCRT64_NT*/CYGWIN* under Windows POSIX
+# shells, including the CLANGARM64 environment required for windows-arm64.
 IS_WINDOWS_HOST := 0
-ifneq (,$(filter Windows_NT MSYS_NT% MINGW% CYGWIN_NT%,$(OS)))
+ifneq (,$(filter Windows_NT MSYS_NT% MINGW% CLANG% UCRT64_NT% CYGWIN_NT%,$(OS)))
   IS_WINDOWS_HOST := 1
 endif
 
