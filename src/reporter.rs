@@ -652,6 +652,24 @@ const AZURE_QUERY_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b'}')
     .add(b'|');
 
+/// GitHub gist file anchors use a lowercased filename with non-alphanumeric
+/// characters (except `_`) replaced by `-`, e.g. `README.md` -> `file-readme-md`.
+fn gist_file_anchor(file_path: &str) -> String {
+    let normalized = file_path.replace('\\', "/");
+    let name = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    let slug: String = name
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c.to_ascii_lowercase()
+            } else {
+                '-'
+            }
+        })
+        .collect();
+    format!("file-{slug}")
+}
+
 fn build_git_urls(
     repo_url: &str,
     commit_id: &str,
@@ -677,7 +695,18 @@ fn build_git_urls(
                 .to_string()
         };
 
-        if host.eq_ignore_ascii_case("bitbucket.org") {
+        if host.eq_ignore_ascii_case("gist.github.com") {
+            // Gists do not use /blob/ or /commit/ paths. Point at the revision
+            // page and use GitHub's #file-...-L{line} fragment for the match.
+            repository_url = repo_url.to_string();
+            commit_url = format!("{repo_url}/{commit_id}");
+            let anchor = gist_file_anchor(file_path);
+            if line > 0 {
+                file_url = format!("{repo_url}/{commit_id}#{anchor}-L{line}");
+            } else {
+                file_url = format!("{repo_url}/{commit_id}#{anchor}");
+            }
+        } else if host.eq_ignore_ascii_case("bitbucket.org") {
             let joined = segments.join("/");
             let base = if joined.is_empty() {
                 format!("{scheme}://{host}")
@@ -2992,7 +3021,7 @@ mod tests {
         assert_eq!(metadata.kingfisher_version, env!("CARGO_PKG_VERSION"));
     }
 
-    use super::build_git_urls;
+    use super::{build_git_urls, gist_file_anchor};
 
     #[test]
     fn azure_commit_links_use_query_paths() {
@@ -3011,6 +3040,35 @@ mod tests {
         assert_eq!(
             file_url,
             "https://dev.azure.com/org/project/_git/repo/commit/0123456789abcdef?path=/dir/file.txt&line=7"
+        );
+    }
+
+    #[test]
+    fn gist_file_anchor_slugifies_filename() {
+        assert_eq!(gist_file_anchor("README.md"), "file-readme-md");
+        assert_eq!(gist_file_anchor("dir/hello_world.rb"), "file-hello_world-rb");
+    }
+
+    #[test]
+    fn gist_links_skip_blob_paths() {
+        let (repo_url, commit_url, file_url) = build_git_urls(
+            "https://gist.github.com/alice/0123456789abcdef0123456789abcdef",
+            "aabbccddeeff00112233445566778899aabbccdd",
+            "secrets/token.env",
+            12,
+        );
+
+        assert_eq!(
+            repo_url,
+            "https://gist.github.com/alice/0123456789abcdef0123456789abcdef"
+        );
+        assert_eq!(
+            commit_url,
+            "https://gist.github.com/alice/0123456789abcdef0123456789abcdef/aabbccddeeff00112233445566778899aabbccdd"
+        );
+        assert_eq!(
+            file_url,
+            "https://gist.github.com/alice/0123456789abcdef0123456789abcdef/aabbccddeeff00112233445566778899aabbccdd#file-token-env-L12"
         );
     }
 
