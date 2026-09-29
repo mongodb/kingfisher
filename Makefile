@@ -172,7 +172,8 @@ darwin-arm64: BUILD_TARGET := aarch64-apple-darwin
 linux-x64: DOCKER_PLATFORM := linux/amd64
 linux-arm64: DOCKER_PLATFORM := linux/arm64
 
-# Musl has no published Vectorscan archive; both Linux recipes build from source.
+# Zig uses libc++; the prebuilt musl Vectorscan archives use GCC libstdc++.
+# Keep source builds for Zig so the C++ ABI matches its toolchain.
 # Native static Linux builds via Zig (Ubuntu).
 ubuntu-x64 ubuntu-arm64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild exist
 	@echo "Checking Rust toolchain…"
@@ -475,10 +476,15 @@ windows-test: windows-test-x64 windows-test-arm64
 # =============  DOCKER-BASED BUILDS =============
 # #
 
+# Match the Alpine baseline used by the Vectorscan musl release archives.
+# A caller can still set VECTORSCAN_BUILD_FROM_SOURCE=1 for a source build.
 linux-x64 linux-arm64: check-docker create-dockerignore prepare-release-notices
 	@mkdir -p target/release
 	docker run --platform $(DOCKER_PLATFORM) --rm \
-          -v "$$(pwd):/src" -w /src rust:1.96-alpine sh -eu -c '\
+          -v "$$(pwd):/src" -w /src \
+          -e VECTORSCAN_BUILD_FROM_SOURCE -e CARGO_BUILD_JOBS \
+          -e CARGO_INCREMENTAL -e CARGO_PROFILE_DEV_DEBUG -e CARGO_PROFILE_TEST_DEBUG \
+          rust:1.96-alpine3.23 sh -eu -c '\
 		apk add --no-cache \
 		    bash \
 		    musl-dev \
@@ -490,16 +496,16 @@ linux-x64 linux-arm64: check-docker create-dockerignore prepare-release-notices
 		    patch perl ragel \
 	        git openssl-dev curl && \
 		\
-		export CARGO_TARGET_DIR=/src/target-docker VECTORSCAN_BUILD_FROM_SOURCE=1 && \
+		export CARGO_TARGET_DIR=/src/target && \
 		rustup target add $(BUILD_TARGET) && \
 		\
-		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --workspace --all-targets --jobs 1 --target $(BUILD_TARGET); fi ; \
+		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --locked --workspace --all-targets --jobs 1 --target $(BUILD_TARGET); fi && \
 		\
-		export PKG_CONFIG_ALLOW_CROSS=1 ; \
-		export RUSTFLAGS="-C target-feature=+crt-static" ; \
+		export PKG_CONFIG_ALLOW_CROSS=1 && \
+		export RUSTFLAGS="-C target-feature=+crt-static" && \
 		\
-		cargo build --release --target $(BUILD_TARGET) && \
-		cd target-docker/$(BUILD_TARGET)/release && \
+		cargo build --locked --release --target $(BUILD_TARGET) && \
+		cd target/$(BUILD_TARGET)/release && \
 	    sha256sum kingfisher > CHECKSUM.txt && \
 	    tar -czf /src/target/release/kingfisher-linux-$(BUILD_ARCH).tgz \
 	        kingfisher CHECKSUM.txt -C /src/target/release notices \

@@ -63,17 +63,24 @@ jobs:
       - name: Install packaging tools
         run: cargo install cargo-deb cargo-generate-rpm
 
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            cmake pkg-config libboost-all-dev patch perl ragel
-
+      # Alpine supplies the GCC musl runtime required by Vectorscan 0.1.2 archives.
+      # The reusable CI workflow runs tests separately.
       - name: Build (Makefile linux-x64)
-        run: make ubuntu-x64
+        run: make linux-x64 SKIP_TESTS=1
 
       - name: Fix permissions
         run: sudo chown -R "$(id -u):$(id -g)" target
+
+      - name: Verify static Linux executable
+        run: |
+          binary=target/x86_64-unknown-linux-musl/release/kingfisher
+          "$binary" --version
+          readelf --program-headers --dynamic "$binary" > target/elf-check.txt
+          if grep -Eq 'INTERP|NEEDED' target/elf-check.txt; then
+            cat target/elf-check.txt
+            echo "Expected a static musl executable without shared-library dependencies" >&2
+            exit 1
+          fi
 
       - name: Build Debian package
         run: |
@@ -136,17 +143,24 @@ jobs:
       - name: Install packaging tools
         run: cargo install cargo-deb cargo-generate-rpm
 
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends \
-            cmake pkg-config libboost-all-dev patch perl ragel
-
+      # Alpine supplies the GCC musl runtime required by Vectorscan 0.1.2 archives.
+      # The reusable CI workflow runs tests separately.
       - name: Build (Makefile linux-arm64)
-        run: make ubuntu-arm64
+        run: make linux-arm64 SKIP_TESTS=1
 
       - name: Fix permissions
         run: sudo chown -R "$(id -u):$(id -g)" target
+
+      - name: Verify static Linux executable
+        run: |
+          binary=target/aarch64-unknown-linux-musl/release/kingfisher
+          "$binary" --version
+          readelf --program-headers --dynamic "$binary" > target/elf-check.txt
+          if grep -Eq 'INTERP|NEEDED' target/elf-check.txt; then
+            cat target/elf-check.txt
+            echo "Expected a static musl executable without shared-library dependencies" >&2
+            exit 1
+          fi
 
       - name: Build Debian package
         run: |
