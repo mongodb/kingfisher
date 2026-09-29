@@ -262,11 +262,18 @@ def rewrite_links(content: str) -> str:
             "](" + guide,
             "](https://github.com/mongodb/kingfisher/blob/main/docs/" + guide,
         )
-    for directory in ("crates/", "examples/"):
-        content = content.replace(
-            "](../" + directory,
-            "](https://github.com/mongodb/kingfisher/blob/main/" + directory,
-        )
+
+    def source_link(match: re.Match) -> str:
+        path = match.group(1)
+        suffix = match.group(2)
+        view = "tree" if path.endswith("/") else "blob"
+        return f"](https://github.com/mongodb/kingfisher/{view}/main/{path}{suffix})"
+
+    content = re.sub(
+        r"\]\(\.\./((?:crates|examples)/[^)\s#?]*)([^)]*)\)",
+        source_link,
+        content,
+    )
     content = content.replace(
         "](../../../docs/RULES.md", "](overview.md"
     )
