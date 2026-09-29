@@ -330,7 +330,15 @@ fn scan_branch_history_finds_deleted_secrets_only_in_reachable_commits() -> Resu
     let bare_dir = dir.path().join("bare.git");
     git2::build::RepoBuilder::new().bare(true).clone(repo_dir.to_str().unwrap(), &bare_dir)?;
     for path in [&repo_dir, &bare_dir] {
-        for extra_args in [vec![], vec!["--git-history", "full"], vec!["--commit-metadata=false"]] {
+        for extra_args in [
+            vec![],
+            vec!["--git-history", "full"],
+            vec!["--commit-metadata=false"],
+            vec!["--since-commit", "HEAD"],
+            vec!["--since-commit", "HEAD", "--git-history", "full"],
+            vec!["--since-commit", "HEAD", "--commit-metadata=false"],
+        ] {
+            let range = extra_args.contains(&"--since-commit");
             let assertion = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
                 .args([
                     "scan",
@@ -348,22 +356,25 @@ fn scan_branch_history_finds_deleted_secrets_only_in_reachable_commits() -> Resu
                 .stdout(
                     contains(GITHUB_TOKEN_VALUE)
                         .and(contains(GCP_API_KEY_VALUE))
-                        .and(contains("branch_history")),
+                        .and(contains(if range { "commit_range" } else { "branch_history" })),
                 )
                 .stdout(contains(SLACK_TOKEN_VALUE).not());
             let output = std::str::from_utf8(&assertion.get_output().stdout)?;
             let report: serde_json::Value = toon_format::decode_default(output)?;
             // Six reachable commits, excluding the unrelated branch's extra commit.
-            assert_eq!(
-                report["audit"]["repositories"][0]["git"]["fetched_commit_count"], 6,
-                "{}",
-                report["audit"]
-            );
+            if !range {
+                assert_eq!(
+                    report["audit"]["repositories"][0]["git"]["fetched_commit_count"], 6,
+                    "{}",
+                    report["audit"]
+                );
+            }
         }
         // Snapshot mode and explicit diff mode still scan the clean tip only.
         for extra_args in [
             vec!["--git-history", "none"],
-            vec!["--since-commit", "HEAD"],
+            vec!["--since-commit", "selected"],
+            vec!["--since-commit", "HEAD", "--git-history", "none"],
             vec!["--exclude", "deleted.txt"],
         ] {
             Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
@@ -399,5 +410,195 @@ fn scan_branch_history_finds_deleted_secrets_only_in_reachable_commits() -> Resu
         .assert()
         .code(200)
         .stdout(contains(secret_id.to_string()).and(contains(side_id.to_string())));
+    Ok(())
+}
+
+#[test]
+fn scan_preserves_original_author_separately_from_committer() -> Result<()> {
+    let dir = tempdir()?;
+    let repo_dir = dir.path().join("repository with spaces");
+    let repo = Repository::init(&repo_dir)?;
+    let author = Signature::now("Original Author", "author@example.invalid")?;
+    let committer = Signature::now("Commit Bot", "bot@example.invalid")?;
+    fs::write(repo_dir.join("config.py"), GITHUB_TOKEN_LINE)?;
+    let mut index = repo.index()?;
+    index.add_path(Path::new("config.py"))?;
+    let tree_id = index.write_tree()?;
+    let tree = repo.find_tree(tree_id)?;
+    let commit_id = repo.commit(Some("HEAD"), &author, &committer, "fixture", &tree, &[])?;
+    let commit_id = commit_id.to_string();
+
+    // Retain both the working-tree and historical occurrences so the test inspects
+    // Git provenance regardless of which copy parallel scanning encounters first.
+    for selection in [["--git-history", "full"], ["--branch", commit_id.as_str()]] {
+        let output = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "scan",
+                "--format",
+                "json",
+                "--no-validate",
+                "--no-dedup",
+                "--no-update-check",
+                "--rule",
+                "github",
+            ])
+            .args(selection)
+            .arg("--")
+            .arg(&repo_dir)
+            .output()?;
+        assert_eq!(output.status.code(), Some(200), "{}", String::from_utf8_lossy(&output.stderr));
+        let documents = serde_json::Deserializer::from_slice(&output.stdout)
+            .into_iter::<serde_json::Value>()
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let commits: Vec<_> = documents
+            .iter()
+            .flat_map(|document| {
+                document["findings"]
+                    .as_array()
+                    .map(Vec::as_slice)
+                    .unwrap_or_else(|| std::slice::from_ref(document))
+            })
+            .map(|record| &record["finding"]["git_metadata"]["commit"])
+            .filter(|commit| commit.is_object())
+            .collect();
+        assert!(!commits.is_empty(), "missing Git provenance for {selection:?}");
+        for commit in commits {
+            assert_eq!(commit["author"]["name"], "Original Author");
+            assert_eq!(commit["author"]["email"], "author@example.invalid");
+            assert_eq!(commit["committer"]["name"], "Commit Bot");
+            assert_eq!(commit["id"], commit_id);
+            assert!(commit["date"].as_str().is_some_and(|date| !date.is_empty()));
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn remote_branch_scans_use_narrow_caches_separate_from_full_clones() -> Result<()> {
+    let (temp, repo_dir, commits) = setup_linear_repo_with_secrets()?;
+    let cache = temp.path().join("clones");
+    let url = "https://example.invalid/branch-scan.git";
+    let local = repo_dir.canonicalize()?.to_string_lossy().replace('\\', "/");
+    let run = |flags: &[&str]| {
+        let mut command = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
+        command
+            .args([
+                "scan",
+                url,
+                "--no-update-check",
+                "--no-validate",
+                "--format",
+                "toon",
+                "--rule",
+                "github",
+            ])
+            .arg("--git-clone-dir")
+            .arg(&cache)
+            .args(flags)
+            .env("GIT_CONFIG_COUNT", "1")
+            .env("GIT_CONFIG_KEY_0", format!("url.{local}.insteadOf"))
+            .env("GIT_CONFIG_VALUE_0", url)
+            .assert()
+            .code(200)
+            .stdout(contains(GITHUB_TOKEN_VALUE));
+    };
+    // Create and reuse a single-branch clone across full-history and snapshot scans,
+    // even when mirror cloning is otherwise requested.
+    for flags in [
+        vec!["--branch", "long-lived", "--git-clone", "mirror"],
+        vec!["--branch", "refs/heads/long-lived", "--git-clone", "bare"],
+        vec!["--branch", "long-lived", "--git-history", "none"],
+    ] {
+        run(&flags);
+    }
+    let selected: Vec<_> =
+        fs::read_dir(cache.join(".branch-clones"))?.collect::<std::io::Result<_>>()?;
+    assert_eq!(selected.len(), 1, "equivalent selectors should reuse one narrow cache");
+    {
+        let clone = Repository::open_bare(selected[0].path())?;
+        let branches: Vec<_> =
+            clone.branches(Some(BranchType::Local))?.collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(branches.len(), 1);
+        assert_eq!(clone.head()?.target(), commits.last().copied());
+        for commit in &commits {
+            assert!(clone.find_commit(*commit).is_ok());
+        }
+    }
+    // A subsequent unrestricted scan must get its own complete clone.
+    run(&[]);
+    let full = Repository::open_bare(cache.join(url.replace(['/', ':'], "_")))?;
+    assert!(full.branches(Some(BranchType::Local))?.count() >= 2);
+    Ok(())
+}
+
+#[test]
+fn since_commit_excludes_baseline_ancestry_and_keeps_intermediate_changes() -> Result<()> {
+    let temp = tempdir()?;
+    let repo = Repository::init_bare(temp.path())?;
+    let sig = Signature::now("tester", "tester@example.com")?;
+    let mut builder = repo.treebuilder(None)?;
+    builder.insert("baseline.txt", repo.blob(GCP_API_KEY_LINE.as_bytes())?, 0o100644)?;
+    let baseline_tree = repo.find_tree(builder.write()?)?;
+    let root_id = repo.commit(None, &sig, &sig, "root", &baseline_tree, &[])?;
+    let root = repo.find_commit(root_id)?;
+    // The baseline diverges from HEAD, so excluding only the baseline commit
+    // (instead of its ancestry) would report the unchanged GCP secret.
+    repo.commit(Some("refs/heads/baseline"), &sig, &sig, "baseline", &baseline_tree, &[&root])?;
+    builder.insert("temporary.txt", repo.blob(GITHUB_TOKEN_LINE.as_bytes())?, 0o100644)?;
+    let secret_tree = repo.find_tree(builder.write()?)?;
+    let secret_id = repo.commit(None, &sig, &sig, "add secret", &secret_tree, &[&root])?;
+    let secret = repo.find_commit(secret_id)?;
+    repo.commit(
+        Some("refs/heads/selected"),
+        &sig,
+        &sig,
+        "remove secret",
+        &baseline_tree,
+        &[&secret],
+    )?;
+    repo.set_head("refs/heads/selected")?;
+    repo.tag(
+        "baseline-tag",
+        repo.find_reference("refs/heads/baseline")?.peel_to_commit()?.as_object(),
+        &sig,
+        "baseline",
+        false,
+    )?;
+
+    for baseline in ["baseline", "baseline-tag", &root_id.to_string()] {
+        for flags in [vec![], vec!["--git-history", "full"], vec!["--commit-metadata=false"]] {
+            Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+                .arg("scan")
+                .arg(temp.path())
+                .args([
+                    "--since-commit",
+                    baseline,
+                    "--no-validate",
+                    "--no-update-check",
+                    "--format",
+                    "toon",
+                ])
+                .args(flags)
+                .assert()
+                .code(200)
+                .stdout(contains(GITHUB_TOKEN_VALUE).and(contains(GCP_API_KEY_VALUE).not()));
+        }
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .arg("scan")
+            .arg(temp.path())
+            .args([
+                "--since-commit",
+                baseline,
+                "--git-history",
+                "none",
+                "--no-validate",
+                "--no-update-check",
+                "--format",
+                "toon",
+            ])
+            .assert()
+            .success()
+            .stdout(contains(GITHUB_TOKEN_VALUE).not().and(contains(GCP_API_KEY_VALUE).not()));
+    }
     Ok(())
 }

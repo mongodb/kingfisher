@@ -3,6 +3,7 @@
 //! This module provides functionality to validate AWS access keys by making
 //! an STS GetCallerIdentity call.
 
+use kingfisher_core::ValidationOutcome;
 use std::{
     collections::HashSet,
     sync::{LazyLock, OnceLock, RwLock},
@@ -469,5 +470,76 @@ mod tests {
         );
 
         assert_ne!(static_key, session_key);
+    }
+}
+
+#[derive(Debug)]
+pub struct AwsCredentialValidation {
+    pub is_valid: bool,
+    pub status: StatusCode,
+    pub outcome: ValidationOutcome,
+    pub message: String,
+    pub identity: Option<String>,
+    pub account_id: Option<String>,
+}
+
+/// Validate one explicit AWS credential pair using the policy shared by scan and direct paths.
+pub async fn validate_aws_credential_pair(
+    access_key_id: &str,
+    secret_access_key: &str,
+    session_token: Option<&str>,
+) -> AwsCredentialValidation {
+    let account_id = aws_key_to_account_number(access_key_id).ok();
+
+    if let Some(account_id) = should_skip_aws_validation(access_key_id) {
+        return AwsCredentialValidation {
+            is_valid: false,
+            status: StatusCode::PRECONDITION_REQUIRED,
+            outcome: ValidationOutcome::Skipped,
+            message: format!(
+                "(skip list entry) AWS validation not attempted for account {}.",
+                account_id
+            ),
+            identity: None,
+            account_id: Some(account_id),
+        };
+    }
+
+    if let Err(message) = validate_aws_credentials_input(access_key_id, secret_access_key) {
+        return AwsCredentialValidation {
+            is_valid: false,
+            status: StatusCode::BAD_REQUEST,
+            outcome: ValidationOutcome::Unavailable,
+            message,
+            identity: None,
+            account_id,
+        };
+    }
+
+    match validate_aws_credentials(access_key_id, secret_access_key, session_token).await {
+        Ok((true, identity)) => AwsCredentialValidation {
+            is_valid: true,
+            status: StatusCode::OK,
+            outcome: ValidationOutcome::VerifiedActive,
+            message: identity.clone(),
+            identity: Some(identity),
+            account_id,
+        },
+        Ok((false, message)) => AwsCredentialValidation {
+            is_valid: false,
+            status: StatusCode::FORBIDDEN,
+            outcome: ValidationOutcome::VerifiedInactive,
+            message,
+            identity: None,
+            account_id,
+        },
+        Err(error) => AwsCredentialValidation {
+            is_valid: false,
+            status: StatusCode::BAD_GATEWAY,
+            outcome: ValidationOutcome::Unavailable,
+            message: error.to_string(),
+            identity: None,
+            account_id,
+        },
     }
 }

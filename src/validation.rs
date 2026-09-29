@@ -1,6 +1,4 @@
 use std::{
-    collections::BTreeMap,
-    fs,
     panic::AssertUnwindSafe,
     sync::Arc,
     time::{Duration, Instant},
@@ -11,22 +9,22 @@ use std::sync::{
     atomic::{AtomicBool, Ordering},
 };
 
-use anyhow::{Result, anyhow};
+use anyhow::Result;
 use dashmap::DashMap;
 use futures::FutureExt;
 use http::StatusCode;
 use kingfisher_core::ValidationOutcome;
 use liquid::Object;
 use liquid_core::{Value, ValueView};
-use percent_encoding::percent_decode_str;
+use reqwest::Client;
+#[cfg(test)]
 use reqwest::{
-    Client, Url, header,
+    header,
     header::{HeaderMap, HeaderValue},
-    multipart,
 };
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use tokio::{sync::Notify, time};
-use tracing::{debug, warn};
+use tracing::warn;
 
 use crate::{
     cli::global::TlsMode,
@@ -35,11 +33,10 @@ use crate::{
     provider_endpoints::{
         ProviderEndpointOverrides, endpoint_var_names, hydrate_endpoint_globals_for_rule,
     },
-    rules::rule::{Rule, Validation},
+    rules::rule::Validation,
     validation_body::{self},
 };
 
-use crate::grpc_validation;
 use crate::validation_rate_limit::should_rate_limit_validation;
 
 // Re-export TlsMode from kingfisher_rules for use in client_for_rule
@@ -55,8 +52,6 @@ pub use kingfisher_scanner::validation::{
 };
 pub(crate) mod candidates;
 pub mod utils;
-
-const VALIDATION_CACHE_SECONDS: u64 = 1200; // 20 minutes
 
 fn truncate_to_char_boundary(s: &mut String, max_len: usize) {
     if s.len() <= max_len {
@@ -77,11 +72,9 @@ fn truncate_preview(body: &str, max_len: usize) -> String {
     if max_len == 0 || body.len() <= max_len {
         return body.to_string();
     }
-    let mut end = max_len;
-    while end > 0 && !body.is_char_boundary(end) {
-        end -= 1;
-    }
-    body[..end].to_string()
+    let mut preview = body.to_string();
+    truncate_to_char_boundary(&mut preview, max_len);
+    preview
 }
 
 static USER_AGENT_SUFFIX: OnceLock<String> = OnceLock::new();
@@ -91,7 +84,7 @@ const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
          Chrome/140.0.0.0 Safari/537.36";
 
 fn build_user_agent() -> String {
-    let base = format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
+    let base = format!("kingfisher/{}", env!("CARGO_PKG_VERSION"));
     if let Some(suffix) = USER_AGENT_SUFFIX.get() {
         format!("{base} {suffix} {BROWSER_USER_AGENT}")
     } else {
@@ -140,74 +133,6 @@ pub struct ValidationClients {
     pub allow_internal_ips: bool,
 }
 
-/// Build a redirect policy that validates redirect targets against SSRF rules.
-///
-/// Each redirect hop is checked: IP-literal targets are validated directly via
-/// `is_ssrf_safe_ip`, and hostname targets are resolved synchronously via
-/// `std::net::ToSocketAddrs` so that all resolved IPs can be checked. This
-/// significantly reduces the hostname-redirect SSRF risk (e.g., a public URL
-/// that 302s to an attacker-controlled hostname resolving to `169.254.169.254`).
-/// This is a best-effort check: reqwest performs its own DNS resolution when
-/// connecting, so a malicious DNS server could return different IPs between
-/// this check and the actual request (DNS rebinding / TOCTOU). A future
-/// hardening step would be a pinned/custom resolver so that validated IPs are
-/// exactly those used for the outbound connection.
-///
-/// **Note:** reqwest runs redirect callbacks on Tokio worker threads. The DNS
-/// lookup uses `tokio::task::block_in_place` so the runtime can compensate
-/// (e.g., spawn additional worker threads) rather than silently stalling.
-pub(crate) fn ssrf_safe_redirect_policy() -> reqwest::redirect::Policy {
-    reqwest::redirect::Policy::custom(|attempt| {
-        // Cap redirect depth (reqwest default is 10)
-        if attempt.previous().len() >= 10 {
-            return attempt.error("too many redirects");
-        }
-        // Extract URL info before potentially moving `attempt`.
-        let url = attempt.url().clone();
-        if let Some(host) = url.host_str() {
-            if let Ok(ip) = host.parse::<std::net::IpAddr>() {
-                // IP-literal: check directly without DNS.
-                if !kingfisher_scanner::validation::is_ssrf_safe_ip(&ip) {
-                    return attempt.error(format!(
-                        "SSRF protection: redirect to non-public IP {} blocked",
-                        ip
-                    ));
-                }
-            } else {
-                // Hostname: resolve and check all resolved IPs. We use
-                // block_in_place to signal Tokio that this thread is about to
-                // block on synchronous DNS, so the runtime can compensate.
-                let port = url.port().unwrap_or(if url.scheme() == "https" { 443 } else { 80 });
-                let dns_result = tokio::task::block_in_place(|| {
-                    std::net::ToSocketAddrs::to_socket_addrs(&(host, port))
-                });
-                match dns_result {
-                    Ok(addrs) => {
-                        for addr in addrs {
-                            if !kingfisher_scanner::validation::is_ssrf_safe_ip(&addr.ip()) {
-                                return attempt.error(format!(
-                                    "SSRF protection: redirect to '{}' resolves to non-public IP {} — blocked",
-                                    host,
-                                    addr.ip()
-                                ));
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        // Fail closed: if we cannot resolve the hostname, we
-                        // cannot guarantee the redirect target is SSRF-safe.
-                        return attempt.error(format!(
-                            "SSRF protection: cannot resolve redirect host '{}' ({}) — blocked",
-                            host, e
-                        ));
-                    }
-                }
-            }
-        }
-        attempt.follow()
-    })
-}
-
 impl ValidationClients {
     /// Create validation clients based on the global TLS mode.
     pub fn new(global_mode: TlsMode, allow_internal_ips: bool) -> anyhow::Result<Self> {
@@ -216,22 +141,14 @@ impl ValidationClients {
         let strict = Client::builder()
             .user_agent(GLOBAL_USER_AGENT.as_str())
             .danger_accept_invalid_certs(false)
-            .redirect(if allow_internal_ips {
-                reqwest::redirect::Policy::default()
-            } else {
-                ssrf_safe_redirect_policy()
-            })
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .build()?;
 
         let lax = Client::builder()
             .user_agent(GLOBAL_USER_AGENT.as_str())
             .danger_accept_invalid_certs(true)
-            .redirect(if allow_internal_ips {
-                reqwest::redirect::Policy::default()
-            } else {
-                ssrf_safe_redirect_policy()
-            })
+            .redirect(reqwest::redirect::Policy::none())
             .timeout(timeout)
             .build()?;
 
@@ -460,325 +377,19 @@ where
     aws::set_aws_skip_account_ids(ids);
 }
 
-#[derive(Debug)]
-pub(crate) struct AwsCredentialValidation {
-    pub is_valid: bool,
-    pub status: StatusCode,
-    pub outcome: ValidationOutcome,
-    pub message: String,
-    pub identity: Option<String>,
-    pub account_id: Option<String>,
-}
+#[cfg(test)]
+use kingfisher_scanner::validation::aws::validate_aws_credential_pair;
 
-/// Validate one explicit AWS credential pair using the policy shared by scan and direct paths.
-pub(crate) async fn validate_aws_credential_pair(
-    access_key_id: &str,
-    secret_access_key: &str,
-    session_token: Option<&str>,
-) -> AwsCredentialValidation {
-    let account_id = aws::aws_key_to_account_number(access_key_id).ok();
-
-    if let Some(account_id) = aws::should_skip_aws_validation(access_key_id) {
-        return AwsCredentialValidation {
-            is_valid: false,
-            status: StatusCode::PRECONDITION_REQUIRED,
-            outcome: ValidationOutcome::Skipped,
-            message: format!(
-                "(skip list entry) AWS validation not attempted for account {}.",
-                account_id
-            ),
-            identity: None,
-            account_id: Some(account_id),
-        };
-    }
-
-    if let Err(message) = aws::validate_aws_credentials_input(access_key_id, secret_access_key) {
-        return AwsCredentialValidation {
-            is_valid: false,
-            status: StatusCode::BAD_REQUEST,
-            outcome: ValidationOutcome::Unavailable,
-            message,
-            identity: None,
-            account_id,
-        };
-    }
-
-    match aws::validate_aws_credentials(access_key_id, secret_access_key, session_token).await {
-        Ok((true, identity)) => AwsCredentialValidation {
-            is_valid: true,
-            status: StatusCode::OK,
-            outcome: ValidationOutcome::VerifiedActive,
-            message: identity.clone(),
-            identity: Some(identity),
-            account_id,
-        },
-        Ok((false, message)) => AwsCredentialValidation {
-            is_valid: false,
-            status: StatusCode::FORBIDDEN,
-            outcome: ValidationOutcome::VerifiedInactive,
-            message,
-            identity: None,
-            account_id,
-        },
-        Err(error) => AwsCredentialValidation {
-            is_valid: false,
-            status: StatusCode::BAD_GATEWAY,
-            outcome: ValidationOutcome::Unavailable,
-            message: error.to_string(),
-            identity: None,
-            account_id,
-        },
-    }
-}
-
-/// Returns `true` if the provided string can be parsed as a MongoDB connection URI.
-pub fn is_parseable_mongodb_uri(uri: &str) -> bool {
-    mongodb::looks_like_mongodb_uri(uri)
-}
-
-/// Returns `true` if the provided string can be parsed as a Postgres connection URI.
-pub fn is_parseable_postgres_uri(uri: &str) -> bool {
-    postgres::parse_postgres_url(uri).is_ok()
-}
-
-/// Returns `true` if the provided string can be parsed as a MySQL connection URI.
-pub fn is_parseable_mysql_uri(uri: &str) -> bool {
-    mysql::parse_mysql_url(uri).is_ok()
-}
-
-/// A validator target selected from a credential-bearing URI.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) enum CredentialUriTarget {
-    Http(String),
-    MongoDB(String),
-    MySQL(String),
-    Postgres(String),
-    Jdbc(String),
-    Unsupported(String),
-}
-
-impl CredentialUriTarget {
-    pub(crate) fn scheme(&self) -> &str {
-        match self {
-            Self::Http(uri) => uri.split_once("://").map(|(scheme, _)| scheme).unwrap_or("http"),
-            Self::MongoDB(_) => "mongodb",
-            Self::MySQL(_) => "mysql",
-            Self::Postgres(_) => "postgresql",
-            Self::Jdbc(_) => "jdbc",
-            Self::Unsupported(scheme) => scheme,
-        }
-    }
-
-    pub(crate) fn is_parseable(&self) -> bool {
-        match self {
-            Self::Http(uri) => Url::parse(uri).is_ok_and(|url| {
-                url.host_str().is_some_and(|host| !host.is_empty())
-                    && !url.username().is_empty()
-                    && url.password().is_some_and(|password| !password.is_empty())
-            }),
-            Self::MongoDB(uri) => is_parseable_mongodb_uri(uri),
-            Self::MySQL(uri) => is_parseable_mysql_uri(uri),
-            Self::Postgres(uri) => is_parseable_postgres_uri(uri),
-            // The JDBC validator performs subprotocol-specific parsing. Treat the outer prefix as
-            // structurally valid here so direct validation can return its precise diagnostic.
-            Self::Jdbc(uri) => uri.len() > "jdbc:".len(),
-            Self::Unsupported(_) => true,
-        }
-    }
-}
-
-fn normalize_uri_scheme(uri: &str, scheme: &str) -> Option<String> {
-    let (_, rest) = uri.split_once("://")?;
-    Some(format!("{scheme}://{rest}"))
-}
-
-/// Classify a credential URI without performing network I/O.
-///
-/// The scheme is normalized before it reaches case-sensitive database drivers. MariaDB URLs use
-/// the MySQL wire protocol and are normalized to the `mysql://` spelling accepted by
-/// `mysql_async`.
-pub(crate) fn classify_credential_uri(uri: &str, scheme_hint: Option<&str>) -> CredentialUriTarget {
-    let uri = uri.trim();
-    let scheme = scheme_hint
-        .map(str::trim)
-        .filter(|scheme| !scheme.is_empty())
-        .map(str::to_ascii_lowercase)
-        .or_else(|| {
-            uri.split_once("://").map(|(scheme, _)| scheme.to_ascii_lowercase()).or_else(|| {
-                uri.get(..5)
-                    .filter(|prefix| prefix.eq_ignore_ascii_case("jdbc:"))
-                    .map(|_| "jdbc".to_string())
-            })
-        })
-        .unwrap_or_default();
-
-    match scheme.as_str() {
-        "http" | "https" => normalize_uri_scheme(uri, &scheme)
-            .map(CredentialUriTarget::Http)
-            .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
-        "mongodb" => normalize_uri_scheme(uri, "mongodb")
-            .map(CredentialUriTarget::MongoDB)
-            .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
-        "mongodb+srv" => normalize_uri_scheme(uri, "mongodb+srv")
-            .map(CredentialUriTarget::MongoDB)
-            .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
-        "mysql" | "mariadb" => normalize_uri_scheme(uri, "mysql")
-            .map(CredentialUriTarget::MySQL)
-            .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
-        "postgres" => normalize_uri_scheme(uri, "postgres")
-            .map(CredentialUriTarget::Postgres)
-            .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
-        "postgresql" => normalize_uri_scheme(uri, "postgresql")
-            .map(CredentialUriTarget::Postgres)
-            .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
-        "jdbc" => CredentialUriTarget::Jdbc(uri.to_string()),
-        _ => CredentialUriTarget::Unsupported(scheme),
-    }
-}
-
-/// Return whether a supported credential URI can be parsed by its target database driver.
-/// Unsupported schemes remain reportable and are intentionally left unvalidated.
-pub(crate) fn is_parseable_credential_uri(uri: &str, scheme: Option<&str>) -> bool {
-    classify_credential_uri(uri, scheme).is_parseable()
-}
-
-fn has_basic_auth_challenge(headers: &HeaderMap) -> bool {
-    headers.get_all(header::WWW_AUTHENTICATE).iter().filter_map(|value| value.to_str().ok()).any(
-        |value| {
-            // A comma can separate either challenges or parameters within one challenge. Only
-            // accept Basic when it is the unambiguous first scheme in a field value; rejecting a
-            // valid later challenge is safer than sending credentials in response to a parameter
-            // that happens to start with "basic".
-            let challenge = value.trim_start();
-            challenge.get(..5).is_some_and(|scheme| scheme.eq_ignore_ascii_case("basic"))
-                && challenge.as_bytes().get(5).is_none_or(|byte| byte.is_ascii_whitespace())
-        },
-    )
-}
-
-fn received_basic_auth_challenge(status: StatusCode, headers: &HeaderMap) -> bool {
-    status == StatusCode::UNAUTHORIZED && has_basic_auth_challenge(headers)
-}
-
-/// Validate an HTTPS credential URI using the username and password as HTTP Basic Auth.
-///
-/// The credentials are removed from the request URL before dispatch so they cannot be echoed in
-/// request errors, redirects, or debug output. Credentials are sent only after an unauthenticated
-/// request receives an explicit Basic Auth challenge. A subsequent successful response proves that
-/// the endpoint accepted them; only HTTP 401 is authoritative rejection, while other response
-/// statuses are reported as inconclusive by the caller.
-pub(crate) async fn validate_http_credential_uri(
-    uri: &str,
-    client: &Client,
-    timeout: Duration,
-    retries: u32,
-    allow_internal_ips: bool,
-) -> Result<(bool, StatusCode, String)> {
-    let mut url =
-        Url::parse(uri).map_err(|error| anyhow!("Invalid HTTP credential URI: {error}"))?;
-    if url.scheme() != "https" {
-        return Err(anyhow!("HTTP credential URI validation requires HTTPS"));
-    }
-
-    let username = percent_decode_str(url.username())
-        .decode_utf8()
-        .map_err(|_| anyhow!("HTTP credential URI username is not valid UTF-8"))?
-        .into_owned();
-    let password = url
-        .password()
-        .filter(|password| !password.is_empty())
-        .ok_or_else(|| anyhow!("HTTP credential URI is missing a password"))?;
-    let password = percent_decode_str(password)
-        .decode_utf8()
-        .map_err(|_| anyhow!("HTTP credential URI password is not valid UTF-8"))?
-        .into_owned();
-    if username.is_empty() {
-        return Err(anyhow!("HTTP credential URI is missing a username"));
-    }
-    if username.contains(':') {
-        return Err(anyhow!("HTTP Basic Auth usernames cannot contain ':'"));
-    }
-
-    httpvalidation::check_url_resolvable(&url, allow_internal_ips)
-        .await
-        .map_err(|error| anyhow!("HTTP credential URI resolution failed: {error}"))?;
-
-    url.set_username("").map_err(|_| anyhow!("Failed to remove HTTP URI username"))?;
-    url.set_password(None).map_err(|_| anyhow!("Failed to remove HTTP URI password"))?;
-
-    let unauthenticated = httpvalidation::retry_request(
-        client
-            .get(url.clone())
-            .header(header::USER_AGENT, GLOBAL_USER_AGENT.as_str())
-            .timeout(timeout),
-        retries,
-        Duration::from_millis(500),
-        Duration::from_secs(2),
-    )
-    .await
-    .map_err(|error| anyhow!("HTTP credential URI challenge request failed: {error}"))?;
-
-    let challenge_status = unauthenticated.status();
-    if unauthenticated.url() != &url {
-        return Ok((
-            false,
-            StatusCode::BAD_GATEWAY,
-            "HTTP Basic Auth validation was inconclusive: challenge request was redirected"
-                .to_string(),
-        ));
-    }
-    if !received_basic_auth_challenge(challenge_status, unauthenticated.headers()) {
-        return Ok((
-            false,
-            StatusCode::BAD_GATEWAY,
-            format!(
-                "HTTP Basic Auth validation was inconclusive: unauthenticated request did not receive a Basic challenge (HTTP {challenge_status})"
-            ),
-        ));
-    }
-    drop(unauthenticated);
-
-    let authenticated = httpvalidation::retry_request(
-        client
-            .get(url.clone())
-            .basic_auth(username, Some(password))
-            .header(header::USER_AGENT, GLOBAL_USER_AGENT.as_str())
-            .timeout(timeout),
-        retries,
-        Duration::from_millis(500),
-        Duration::from_secs(2),
-    )
-    .await
-    .map_err(|error| anyhow!("HTTP credential URI request failed: {error}"))?;
-
-    let response_status = authenticated.status();
-    if authenticated.url() != &url {
-        return Ok((
-            false,
-            StatusCode::BAD_GATEWAY,
-            format!(
-                "HTTP Basic Auth validation was inconclusive: authenticated request was redirected (HTTP {response_status})"
-            ),
-        ));
-    }
-    let valid = response_status.is_success();
-    let status = if valid || response_status == StatusCode::UNAUTHORIZED {
-        response_status
-    } else {
-        // A generic endpoint cannot distinguish a bad credential from a missing route,
-        // authorization policy, or a server failure. Keep those responses inconclusive.
-        StatusCode::BAD_GATEWAY
-    };
-    let message = if valid {
-        format!("HTTP Basic Auth accepted (HTTP {status})")
-    } else if response_status == StatusCode::UNAUTHORIZED {
-        "HTTP Basic Auth rejected (HTTP 401 Unauthorized)".to_string()
-    } else {
-        format!("HTTP Basic Auth validation was inconclusive (HTTP {})", response_status)
-    };
-    Ok((valid, status, message))
-}
-
+pub(crate) use kingfisher_scanner::validation::credential_uri::{
+    CredentialUriTarget, classify_credential_uri, is_parseable_credential_uri,
+};
+pub use kingfisher_scanner::validation::credential_uri::{
+    is_parseable_mongodb_uri, is_parseable_mysql_uri, is_parseable_postgres_uri,
+};
+#[cfg(test)]
+use kingfisher_scanner::validation::credential_uri::{
+    received_basic_auth_challenge, validate_http_credential_uri,
+};
 /// Collect dependent variables and missing dependencies from the provided matches.
 #[allow(clippy::type_complexity)]
 pub fn collect_variables_and_dependencies(
@@ -838,62 +449,7 @@ pub fn collect_variables_and_dependencies(
     (variable_map, missing_deps)
 }
 
-/// Render a template and parse the resulting string as a URL.
-async fn render_and_parse_url(
-    parser: &liquid::Parser,
-    globals: &liquid::Object,
-    rule_name: &str,
-    template_url: &str,
-    allow_internal_ips: bool,
-) -> Result<Url, String> {
-    let rendered_url_str =
-        render_template(parser, globals, rule_name, template_url).await.map_err(|e| {
-            let error_msg = format!("Error rendering URL template: <{}> {}", rule_name, e);
-            debug!("{}", error_msg);
-            error_msg
-        })?;
-
-    let url = Url::parse(&rendered_url_str).map_err(|e| {
-        let error_msg = format!("Error parsing rendered URL: {}", e);
-        debug!("{}", error_msg);
-        error_msg
-    })?;
-
-    // Check if the URL is resolvable (with SSRF protection).
-    utils::check_url_resolvable(&url, allow_internal_ips).await.map_err(|e| {
-        // Rendered URLs can carry the candidate secret in a query string.
-        // This error is persisted in reports, so do not include the URL.
-        let error_msg = format!("Validation endpoint resolution failed: {}", e);
-        error_msg
-    })?;
-
-    Ok(url)
-}
-
-/// Render a template string using Liquid.
-async fn render_template(
-    parser: &liquid::Parser,
-    globals: &liquid::Object,
-    rule_name: &str,
-    template_str: &str,
-) -> Result<String, String> {
-    parser
-        .parse(template_str)
-        .map_err(|e| {
-            let msg = format!("Error parsing template for rule <{}>: {}", rule_name, e);
-            debug!("{}", msg);
-            msg
-        })
-        .and_then(|template| {
-            template.render(globals).map_err(|e| {
-                let msg = format!("Error rendering template for rule <{}>: {}", rule_name, e);
-                debug!("{}", msg);
-                msg
-            })
-        })
-}
-
-/// Validate a single match with a configurable timeout.
+/// Resolve candidate inputs and run the shared validation engine with scan-scoped caching.
 #[allow(clippy::too_many_arguments)]
 pub async fn validate_single_match(
     m: &mut OwnedBlobMatch,
@@ -1039,6 +595,7 @@ async fn validate_resolved_match(
                 m.rule.syntax().id
             ));
             m.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
+            m.validation_outcome = ValidationOutcome::Unavailable;
             if owns_in_flight {
                 cache_validation_result(fp, m);
                 clear_in_flight_validation(fp);
@@ -1051,13 +608,13 @@ async fn validate_resolved_match(
                 validation_timeout.as_secs()
             ));
             m.validation_response_status = StatusCode::REQUEST_TIMEOUT;
+            m.validation_outcome = ValidationOutcome::Unavailable;
             if owns_in_flight {
                 cache_validation_result(fp, m);
                 clear_in_flight_validation(fp);
             }
         }
     }
-    m.refresh_validation_outcome();
 }
 
 /// Perform the actual validation of a match.
@@ -1071,7 +628,7 @@ async fn timed_validate_single_match(
     clients: &ValidationClients,
     _dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
     missing_dependencies: &FxHashMap<String, Vec<String>>,
-    cache: &Cache,
+    _cache: &Cache,
     validation_timeout: Duration,
     validation_retries: u32,
     rate_limiter: Option<&crate::validation_rate_limit::ValidationRateLimiter>,
@@ -1159,6 +716,7 @@ async fn timed_validate_single_match(
             missing.join(", ")
         ));
         m.validation_response_status = StatusCode::PRECONDITION_REQUIRED;
+        m.validation_outcome = ValidationOutcome::Skipped;
         commit_and_return(m);
         return;
     }
@@ -1172,6 +730,7 @@ async fn timed_validate_single_match(
             m.validation_response_body =
                 validation_body::from_string(format!("Regex error: {}", e));
             m.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
+            m.validation_outcome = ValidationOutcome::Unavailable;
             commit_and_return(m);
             return;
         }
@@ -1224,1302 +783,37 @@ async fn timed_validate_single_match(
         }
     }
 
-    // ──────────────────────────────────────────────────────────
-    // 4. validator dispatch
-    //
-    // Each validator lives in its own async fn so LLVM compiles
-    // a separate, smaller poll function for each one.  This
-    // prevents the combined stack frame from blowing the stack
-    // on large concurrent workloads.
-    //
-    // We clone the validation enum to release the immutable
-    // borrow on `m` before passing `m` mutably to each helper.
-    // ──────────────────────────────────────────────────────────
-    let rule_name = m.rule.syntax().name.clone();
-    let validation = m.rule.syntax().validation.clone();
-    let rule_tls_mode_for_raw = m.rule.syntax().tls_mode;
-
-    match &validation {
-        Some(Validation::Assumed) => {
-            // Assumed validation intentionally produces no live validation result.
-        }
-        Some(Validation::Ethereum(kind)) => {
-            let token = captured_values
-                .iter()
-                .find(|(name, ..)| name.eq_ignore_ascii_case("TOKEN"))
-                .or_else(|| captured_values.first())
-                .map(|(_, value, ..)| value.as_str());
-            if let Some(token) = token {
-                let result = kingfisher_scanner::validation::ethereum::validate(*kind, token);
-                m.validation_success = false;
-                m.validation_response_body = validation_body::from_string(result.body);
-                m.validation_response_status = StatusCode::CONTINUE;
-                m.validation_outcome = result.outcome;
-            } else {
-                m.validation_success = false;
-                m.validation_response_body =
-                    validation_body::from_string("Ethereum validation requires TOKEN capture");
-                m.validation_response_status = StatusCode::BAD_REQUEST;
-                m.validation_outcome = ValidationOutcome::Unavailable;
-            }
-        }
-        Some(Validation::Http(http_validation)) => {
-            validate_http(
-                m,
-                http_validation,
-                client,
-                parser,
-                &globals,
-                cache,
-                &rule_name,
-                clients.allow_internal_ips,
-                validation_timeout,
-                validation_retries,
-                max_body_len,
-            )
-            .await;
-        }
-        Some(Validation::Betterleaks(betterleaks_validation)) => {
-            let outcome = crate::betterleaks_validation::validate(
-                betterleaks_validation,
-                &captured_values,
-                &globals,
-                client,
-                clients.allow_internal_ips,
-            )
-            .await;
-            m.validation_success = outcome.valid;
-            m.validation_response_status = outcome.status;
-            m.validation_response_body = validation_body::from_string(outcome.body);
-            m.validation_outcome = outcome.outcome;
-        }
-        Some(Validation::Grpc(grpc_validation_cfg)) => {
-            validate_grpc(
-                m,
-                grpc_validation_cfg,
-                parser,
-                &globals,
-                &rule_name,
-                clients.allow_internal_ips,
-                validation_timeout,
-                max_body_len,
-            )
-            .await;
-        }
-        Some(Validation::MongoDB) => {
-            validate_mongodb_rule(m, &globals, cache, use_lax_tls, clients.allow_internal_ips)
-                .await;
-        }
-        Some(Validation::MySQL) => {
-            validate_mysql_rule(m, &globals, cache, use_lax_tls, clients.allow_internal_ips).await;
-        }
-        Some(Validation::AzureStorage) => {
-            validate_azure_storage(m, &captured_values, cache).await;
-        }
-        Some(Validation::Jdbc) => {
-            validate_jdbc_rule(m, &captured_values, cache, use_lax_tls, clients.allow_internal_ips)
-                .await;
-        }
-        Some(Validation::CredentialUri) => {
-            validate_credential_uri_rule(
-                m,
-                &captured_values,
-                clients.credential_uri_client(rule_tls_mode),
-                cache,
-                use_lax_tls,
-                clients.allow_internal_ips,
-                validation_timeout,
-                validation_retries,
-            )
-            .await;
-        }
-        Some(Validation::Postgres) => {
-            validate_postgres_rule(m, &globals, cache, use_lax_tls, clients.allow_internal_ips)
-                .await;
-        }
-        Some(Validation::JWT) => {
-            validate_jwt_rule(m, &captured_values, use_lax_tls, clients.allow_internal_ips).await;
-        }
-        Some(Validation::AWS) => {
-            validate_aws_rule(m, &captured_values, cache).await;
-        }
-        Some(Validation::GCP) => {
-            validate_gcp_rule(m, &globals, cache).await;
-        }
-        Some(Validation::Coinbase) => {
-            validate_coinbase_rule(m, &globals, client, parser, cache).await;
-        }
-        Some(Validation::Raw(raw)) => {
-            validate_raw_rule(
-                m,
-                raw,
-                &globals,
-                client,
-                clients.should_use_lax(rule_tls_mode_for_raw),
-                clients.allow_internal_ips,
-            )
-            .await;
-        }
-        None => { /* no validation specified */ }
-    }
+    let result = kingfisher_scanner::validation::ValidationEngine::new(client, parser)
+        .credential_uri_client(clients.credential_uri_client(rule_tls_mode))
+        .timeout(validation_timeout)
+        .retries(validation_retries)
+        .allow_internal_ips(clients.allow_internal_ips)
+        .use_lax_tls(use_lax_tls)
+        .validate(&m.rule, &globals)
+        .await;
+    m.validation_outcome = result.outcome;
+    m.validation_success = result.outcome.is_verified_active();
+    m.validation_response_status = result
+        .http_status
+        .and_then(|s| StatusCode::from_u16(s).ok())
+        .unwrap_or(StatusCode::CONTINUE);
+    let body = if result.response_body.is_empty() {
+        result.reason.map(|reason| format!("Validation {:?}", reason)).unwrap_or_default()
+    } else {
+        result.response_body
+    };
+    let response_is_html = matches!(m.rule.syntax().validation.as_ref(), Some(Validation::Http(config)) if config.request.response_is_html);
+    m.validation_response_body = validation_body::from_string(if response_is_html {
+        utils::format_response_body_for_display(&body, max_body_len, true)
+    } else {
+        truncate_preview(&body, max_body_len)
+    });
 
     // 5. persist result for success path
     commit_and_return(m);
 }
 
-// ═══════════════════════════════════════════════════════════════
-// Extracted validator functions
-// ═══════════════════════════════════════════════════════════════
-
-#[allow(clippy::too_many_arguments)]
-async fn validate_http(
-    m: &mut OwnedBlobMatch,
-    http_validation: &kingfisher_rules::rule::HttpValidation,
-    client: &Client,
-    parser: &liquid::Parser,
-    globals: &Object,
-    cache: &Cache,
-    rule_name: &str,
-    allow_internal_ips: bool,
-    validation_timeout: Duration,
-    validation_retries: u32,
-    max_body_len: usize,
-) {
-    let request_timeout = validation_timeout;
-    let multipart_timeout = validation_timeout;
-    let max_retries: u32 = validation_retries;
-    let request_globals = httpvalidation::with_request_template_globals(globals);
-    let cache_globals = httpvalidation::with_cache_key_template_globals(globals);
-
-    let url = match render_and_parse_url(
-        parser,
-        &request_globals,
-        rule_name,
-        &http_validation.request.url,
-        allow_internal_ips,
-    )
-    .await
-    {
-        Ok(u) => u,
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body = validation_body::from_string(e);
-            m.validation_response_status = StatusCode::BAD_REQUEST;
-            return;
-        }
-    };
-
-    let request_builder = match httpvalidation::build_request_builder(
-        client,
-        &http_validation.request.method,
-        &url,
-        &http_validation.request.headers,
-        &http_validation.request.body,
-        request_timeout,
-        parser,
-        &request_globals,
-    ) {
-        Ok(rb) => rb,
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body = validation_body::from_string(e);
-            m.validation_response_status = StatusCode::BAD_REQUEST;
-            return;
-        }
-    };
-
-    let is_multipart = http_validation.request.multipart.is_some();
-    let mut cache_key = String::new();
-
-    if !is_multipart {
-        let cache_url =
-            render_template(parser, &cache_globals, rule_name, &http_validation.request.url)
-                .await
-                .unwrap_or_else(|_| http_validation.request.url.clone());
-
-        let rendered_headers = httpvalidation::process_headers(
-            &http_validation.request.headers,
-            parser,
-            &cache_globals,
-            &url,
-        )
-        .unwrap_or_default();
-
-        let mut header_map = BTreeMap::new();
-        for (name, value) in rendered_headers.iter() {
-            if let Ok(v) = value.to_str() {
-                header_map.insert(name.as_str().to_string(), v.to_string());
-            }
-        }
-
-        let rendered_body = http_validation.request.body.as_ref().and_then(|body_template| {
-            parser
-                .parse(body_template)
-                .ok()
-                .and_then(|template| template.render(&cache_globals).ok())
-        });
-
-        cache_key = httpvalidation::generate_http_cache_key_parts(
-            http_validation.request.method.as_str(),
-            &cache_url,
-            &header_map,
-            rendered_body.as_deref(),
-        );
-        if let Some(cached) = cache.get(&cache_key) {
-            let c = cached.value();
-            if c.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
-                m.validation_success = c.is_valid;
-                m.validation_response_body = c.body.clone();
-                m.validation_response_status = c.status;
-                return;
-            }
-        }
-    }
-
-    let exec_single = |builder: reqwest::RequestBuilder| async {
-        httpvalidation::retry_request(
-            builder,
-            max_retries,
-            Duration::from_millis(500),
-            Duration::from_secs(2),
-        )
-        .await
-    };
-
-    let resp_res = if is_multipart {
-        let build_request = || async {
-            let method = httpvalidation::parse_http_method(&http_validation.request.method)
-                .unwrap_or(reqwest::Method::GET);
-
-            let mut fresh_builder = client.request(method, url.clone()).timeout(multipart_timeout);
-
-            if let Ok(mut headers) = httpvalidation::process_headers(
-                &http_validation.request.headers,
-                parser,
-                &request_globals,
-                &url,
-            ) {
-                let std_headers = [
-                    (header::USER_AGENT, GLOBAL_USER_AGENT.as_str()),
-                    (
-                        header::ACCEPT,
-                        "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                    ),
-                    (header::ACCEPT_LANGUAGE, "en-US,en;q=0.5"),
-                    (header::ACCEPT_ENCODING, "gzip, deflate, br"),
-                    (header::CONNECTION, "keep-alive"),
-                ];
-                for (hn, hv) in &std_headers {
-                    if let Ok(v) = HeaderValue::from_str(hv) {
-                        headers.insert(hn.clone(), v);
-                    }
-                }
-                fresh_builder = fresh_builder.headers(headers);
-            }
-
-            let mut form = multipart::Form::new();
-            for part in http_validation.request.multipart.as_ref().unwrap().parts.iter() {
-                match part.part_type.as_str() {
-                    "file" => {
-                        let path =
-                            render_template(parser, &request_globals, rule_name, &part.content)
-                                .await
-                                .unwrap_or_default();
-                        let bytes = fs::read(path).unwrap_or_default();
-                        let p = multipart::Part::bytes(bytes)
-                            .mime_str(
-                                part.content_type.as_deref().unwrap_or("application/octet-stream"),
-                            )
-                            .unwrap_or_else(|_| multipart::Part::text("invalid"));
-                        form = form.part(part.name.clone(), p);
-                    }
-                    "text" => {
-                        let txt =
-                            render_template(parser, &request_globals, rule_name, &part.content)
-                                .await
-                                .unwrap_or_default();
-                        let p = multipart::Part::text(txt)
-                            .mime_str(part.content_type.as_deref().unwrap_or("text/plain"))
-                            .unwrap_or_else(|_| multipart::Part::text("invalid"));
-                        form = form.part(part.name.clone(), p);
-                    }
-                    _ => { /* ignore */ }
-                }
-            }
-            fresh_builder.multipart(form)
-        };
-
-        httpvalidation::retry_multipart_request(
-            build_request,
-            max_retries as usize,
-            Duration::from_millis(500),
-            Duration::from_secs(2),
-        )
-        .await
-    } else {
-        exec_single(request_builder).await
-    };
-
-    match resp_res {
-        Ok(resp) => {
-            let status = resp.status();
-            let headers = resp.headers().clone();
-            let body = match resp.text().await {
-                Ok(b) => b,
-                Err(e) => {
-                    m.validation_success = false;
-                    m.validation_response_body =
-                        validation_body::from_string(format!("Error reading response: {}", e));
-                    m.validation_response_status = StatusCode::BAD_GATEWAY;
-                    return;
-                }
-            };
-            let display_body = if http_validation.request.response_is_html {
-                utils::format_response_body_for_display(&body, max_body_len, true)
-            } else {
-                truncate_preview(&body, max_body_len)
-            };
-
-            m.validation_response_status = status;
-            let body_opt = validation_body::from_string(display_body.clone());
-            m.validation_response_body = body_opt.clone();
-            let matchers = match http_validation.request.response_matcher.as_ref() {
-                Some(m) => m,
-                None => {
-                    m.validation_success = false;
-                    m.validation_response_body = validation_body::from_string(format!(
-                        "HTTP validation for rule '{}' is missing `response_matcher`",
-                        rule_name
-                    ));
-                    m.validation_response_status = StatusCode::BAD_REQUEST;
-                    return;
-                }
-            };
-
-            m.validation_success = httpvalidation::validate_response(
-                matchers,
-                &body,
-                &status,
-                &headers,
-                http_validation.request.response_is_html,
-            );
-
-            let cacheable_status = !(status.is_server_error()
-                || status == StatusCode::TOO_MANY_REQUESTS
-                || status == StatusCode::REQUEST_TIMEOUT);
-            if !is_multipart && !cache_key.is_empty() && cacheable_status {
-                cache.insert(
-                    cache_key,
-                    CachedResponse {
-                        body: body_opt,
-                        status,
-                        is_valid: m.validation_success,
-                        outcome: ValidationOutcome::from_legacy(
-                            false,
-                            m.validation_success,
-                            status.as_u16(),
-                        ),
-                        timestamp: Instant::now(),
-                    },
-                );
-            }
-        }
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("HTTP error: {:?}", e));
-            m.validation_response_status = StatusCode::BAD_GATEWAY;
-        }
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn validate_grpc(
-    m: &mut OwnedBlobMatch,
-    grpc_validation_cfg: &kingfisher_rules::rule::GrpcValidation,
-    parser: &liquid::Parser,
-    globals: &Object,
-    rule_name: &str,
-    allow_internal_ips: bool,
-    validation_timeout: Duration,
-    max_body_len: usize,
-) {
-    let request_globals = httpvalidation::with_request_template_globals(globals);
-
-    let url = match render_and_parse_url(
-        parser,
-        &request_globals,
-        rule_name,
-        &grpc_validation_cfg.request.url,
-        allow_internal_ips,
-    )
-    .await
-    {
-        Ok(u) => u,
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body = validation_body::from_string(e);
-            m.validation_response_status = StatusCode::BAD_REQUEST;
-            return;
-        }
-    };
-
-    let res = match grpc_validation::grpc_unary_call_from_rule(
-        &url,
-        &grpc_validation_cfg.request.headers,
-        &grpc_validation_cfg.request.body,
-        parser,
-        &request_globals,
-        validation_timeout,
-    )
-    .await
-    {
-        Ok(r) => r,
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body = validation_body::from_string(format!("gRPC error: {}", e));
-            m.validation_response_status = StatusCode::BAD_GATEWAY;
-            return;
-        }
-    };
-
-    let status = StatusCode::from_u16(res.http_status.as_u16()).unwrap_or(StatusCode::OK);
-    let headers = res.headers;
-    let mut body = String::from_utf8_lossy(&res.body_bytes).to_string();
-
-    let grpc_status =
-        headers.get("grpc-status").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-    let grpc_message =
-        headers.get("grpc-message").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-    if grpc_status == "0" {
-        body = "grpc-status=0".to_string();
-    } else if (body.trim().is_empty() && (!grpc_status.is_empty() || !grpc_message.is_empty()))
-        || body.as_bytes().contains(&0)
-    {
-        body = format!("grpc-status={grpc_status} grpc-message={grpc_message}");
-    }
-    if max_body_len > 0 {
-        truncate_to_char_boundary(&mut body, max_body_len);
-    }
-
-    m.validation_response_status = status;
-    m.validation_response_body = validation_body::from_string(body.clone());
-
-    let matchers = match grpc_validation_cfg.request.response_matcher.as_ref() {
-        Some(m) => m,
-        None => {
-            m.validation_success = false;
-            m.validation_response_body = validation_body::from_string(format!(
-                "gRPC validation for rule '{}' is missing `response_matcher`",
-                rule_name
-            ));
-            m.validation_response_status = StatusCode::BAD_REQUEST;
-            return;
-        }
-    };
-
-    m.validation_success =
-        httpvalidation::validate_response(matchers, &body, &status, &headers, false);
-}
-
-async fn validate_mongodb_rule(
-    m: &mut OwnedBlobMatch,
-    globals: &Object,
-    cache: &Cache,
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-) {
-    let uri = globals
-        .get("TOKEN")
-        .and_then(|v| v.as_scalar())
-        .map(|s| s.into_owned().to_kstr().to_string())
-        .unwrap_or_default();
-
-    validate_mongodb_uri(m, &uri, cache, use_lax_tls, allow_internal_ips).await;
-}
-
-async fn validate_mongodb_uri(
-    m: &mut OwnedBlobMatch,
-    uri: &str,
-    cache: &Cache,
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-) {
-    if uri.is_empty() {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string("MongoDB URI not found.".to_string());
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    }
-
-    let cache_key = mongodb::generate_mongodb_cache_key(uri);
-    if let Some(cached) = cache.get(&cache_key) {
-        let c = cached.value();
-        if c.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
-            m.validation_success = c.is_valid;
-            m.validation_response_body = c.body.clone();
-            m.validation_response_status = c.status;
-            return;
-        }
-    }
-
-    match mongodb::validate_mongodb(uri, use_lax_tls, allow_internal_ips).await {
-        Ok((ok, msg)) => {
-            m.validation_success = ok;
-            m.validation_response_body = validation_body::from_string(msg);
-            m.validation_response_status =
-                if ok { StatusCode::OK } else { StatusCode::UNAUTHORIZED };
-        }
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("MongoDB validation error: {}", e));
-            m.validation_response_status = StatusCode::BAD_GATEWAY;
-        }
-    }
-}
-
-async fn validate_mysql_rule(
-    m: &mut OwnedBlobMatch,
-    globals: &Object,
-    cache: &Cache,
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-) {
-    let mysql_url = globals
-        .get("TOKEN")
-        .and_then(|v| v.as_scalar())
-        .map(|s| s.into_owned().to_kstr().to_string())
-        .unwrap_or_default();
-
-    validate_mysql_uri(m, &mysql_url, cache, use_lax_tls, allow_internal_ips).await;
-}
-
-async fn validate_mysql_uri(
-    m: &mut OwnedBlobMatch,
-    mysql_url: &str,
-    cache: &Cache,
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-) {
-    if mysql_url.is_empty() {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string("MySQL URL not found.".to_string());
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    }
-
-    let cache_key = mysql::generate_mysql_cache_key(mysql_url);
-    if let Some(cached) = cache.get(&cache_key) {
-        let c = cached.value();
-        if c.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
-            m.validation_success = c.is_valid;
-            m.validation_response_body = c.body.clone();
-            m.validation_response_status = c.status;
-            return;
-        }
-    }
-
-    match mysql::validate_mysql(mysql_url, use_lax_tls, allow_internal_ips).await {
-        Ok((ok, meta)) => {
-            m.validation_success = ok;
-            m.validation_response_body = validation_body::from_string(if ok {
-                format!("MySQL connection is valid. Metadata: {:?}", meta)
-            } else {
-                "MySQL connection failed.".to_string()
-            });
-            m.validation_response_status =
-                if ok { StatusCode::OK } else { StatusCode::UNAUTHORIZED };
-        }
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("MySQL error: {}", e));
-            m.validation_response_status = StatusCode::BAD_GATEWAY;
-        }
-    }
-
-    cache.insert(
-        cache_key,
-        CachedResponse {
-            body: m.validation_response_body.clone(),
-            status: m.validation_response_status,
-            is_valid: m.validation_success,
-            outcome: ValidationOutcome::from_legacy(
-                false,
-                m.validation_success,
-                m.validation_response_status.as_u16(),
-            ),
-            timestamp: Instant::now(),
-        },
-    );
-}
-
-async fn validate_azure_storage(
-    m: &mut OwnedBlobMatch,
-    captured_values: &[(String, String, usize, usize)],
-    cache: &Cache,
-) {
-    let storage_key = captured_values
-        .iter()
-        .find(|(n, ..)| n == "TOKEN")
-        .map(|(_, v, ..)| v.clone())
-        .unwrap_or_default();
-    let storage_account =
-        utils::find_closest_variable(captured_values, storage_key.as_str(), "TOKEN", "AZURENAME")
-            .unwrap_or_default();
-
-    if storage_account.is_empty() || storage_key.is_empty() {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string("Missing Azure Storage account or key.".to_string());
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    }
-
-    let creds_json =
-        format!(r#"{{"storage_account":"{}","storage_key":"{}"}}"#, storage_account, storage_key);
-    let cache_key = azure::generate_azure_cache_key(&creds_json);
-
-    if let Some(cached) = cache.get(&cache_key) {
-        let c = cached.value();
-        if c.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
-            m.validation_success = c.is_valid;
-            m.validation_response_body = c.body.clone();
-            m.validation_response_status = c.status;
-            return;
-        }
-    }
-
-    match azure::validate_azure_storage_credentials(&creds_json, cache).await {
-        Ok((ok, msg)) => {
-            m.validation_success = ok;
-            m.validation_response_body = msg;
-            m.validation_response_status =
-                if ok { StatusCode::OK } else { StatusCode::UNAUTHORIZED };
-        }
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("Azure Storage error: {}", e));
-            m.validation_response_status = StatusCode::BAD_GATEWAY;
-        }
-    }
-    cache.insert(
-        cache_key,
-        CachedResponse {
-            body: m.validation_response_body.clone(),
-            status: m.validation_response_status,
-            is_valid: m.validation_success,
-            outcome: ValidationOutcome::from_legacy(
-                false,
-                m.validation_success,
-                m.validation_response_status.as_u16(),
-            ),
-            timestamp: Instant::now(),
-        },
-    );
-}
-
-fn captured_value<'a>(
-    captured_values: &'a [(String, String, usize, usize)],
-    name: &str,
-) -> Option<&'a str> {
-    captured_values
-        .iter()
-        .find(|(capture_name, ..)| capture_name.eq_ignore_ascii_case(name))
-        .map(|(_, value, ..)| value.as_str())
-        .filter(|value| !value.is_empty())
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn validate_credential_uri_rule(
-    m: &mut OwnedBlobMatch,
-    captured_values: &[(String, String, usize, usize)],
-    client: &Client,
-    cache: &Cache,
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-    validation_timeout: Duration,
-    validation_retries: u32,
-) {
-    let Some(uri) =
-        captured_value(captured_values, "URI").or_else(|| captured_value(captured_values, "TOKEN"))
-    else {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string("Credential URI not found.".to_string());
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    };
-    let target = classify_credential_uri(uri, captured_value(captured_values, "SCHEME"));
-    if !target.is_parseable() {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string(format!("Invalid {} credential URI.", target.scheme()));
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    }
-
-    match target {
-        CredentialUriTarget::MongoDB(uri) => {
-            validate_mongodb_uri(m, &uri, cache, use_lax_tls, allow_internal_ips).await;
-        }
-        CredentialUriTarget::MySQL(uri) => {
-            validate_mysql_uri(m, &uri, cache, use_lax_tls, allow_internal_ips).await;
-        }
-        CredentialUriTarget::Postgres(uri) => {
-            validate_postgres_uri(m, &uri, cache, use_lax_tls, allow_internal_ips).await;
-        }
-        CredentialUriTarget::Jdbc(uri) => {
-            validate_jdbc_connection(m, &uri, cache, use_lax_tls, allow_internal_ips).await;
-        }
-        CredentialUriTarget::Http(uri) => {
-            match validate_http_credential_uri(
-                &uri,
-                client,
-                validation_timeout,
-                validation_retries,
-                allow_internal_ips,
-            )
-            .await
-            {
-                Ok((valid, status, message)) => {
-                    m.validation_success = valid;
-                    m.validation_response_status = status;
-                    m.validation_response_body = validation_body::from_string(message);
-                }
-                Err(error) => {
-                    m.validation_success = false;
-                    m.validation_response_status = StatusCode::BAD_GATEWAY;
-                    m.validation_response_body = validation_body::from_string(format!(
-                        "HTTP credential URI validation error: {error}"
-                    ));
-                }
-            }
-        }
-        CredentialUriTarget::Unsupported(scheme) => {
-            m.validation_success = false;
-            m.validation_response_body = validation_body::from_string(format!(
-                "No live validator is available for {} credential URIs.",
-                if scheme.is_empty() { "this" } else { scheme.as_str() }
-            ));
-            m.validation_response_status = StatusCode::CONTINUE;
-        }
-    }
-}
-
-async fn validate_jdbc_rule(
-    m: &mut OwnedBlobMatch,
-    captured_values: &[(String, String, usize, usize)],
-    cache: &Cache,
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-) {
-    let jdbc_conn = captured_values
-        .iter()
-        .find(|(n, ..)| n == "TOKEN")
-        .map(|(_, v, ..)| v.clone())
-        .unwrap_or_default();
-
-    validate_jdbc_connection(m, &jdbc_conn, cache, use_lax_tls, allow_internal_ips).await;
-}
-
-async fn validate_jdbc_connection(
-    m: &mut OwnedBlobMatch,
-    jdbc_conn: &str,
-    cache: &Cache,
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-) {
-    if jdbc_conn.is_empty() {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string("JDBC connection string not found.".to_string());
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    }
-
-    let cache_key = jdbc::generate_jdbc_cache_key(jdbc_conn);
-    if let Some(cached) = cache.get(&cache_key) {
-        let c = cached.value();
-        if c.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
-            m.validation_success = c.is_valid;
-            m.validation_response_body = c.body.clone();
-            m.validation_response_status = c.status;
-            return;
-        }
-    }
-
-    match jdbc::validate_jdbc(jdbc_conn, use_lax_tls, allow_internal_ips).await {
-        Ok(outcome) => {
-            m.validation_success = outcome.valid;
-            m.validation_response_body = validation_body::from_string(outcome.message);
-            m.validation_response_status = outcome.status;
-        }
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("JDBC validation error: {}", e));
-            m.validation_response_status = StatusCode::BAD_GATEWAY;
-        }
-    }
-
-    cache.insert(
-        cache_key,
-        CachedResponse {
-            body: m.validation_response_body.clone(),
-            status: m.validation_response_status,
-            is_valid: m.validation_success,
-            outcome: ValidationOutcome::from_legacy(
-                false,
-                m.validation_success,
-                m.validation_response_status.as_u16(),
-            ),
-            timestamp: Instant::now(),
-        },
-    );
-}
-
-async fn validate_postgres_rule(
-    m: &mut OwnedBlobMatch,
-    globals: &Object,
-    cache: &Cache,
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-) {
-    let pg_url = globals
-        .get("TOKEN")
-        .and_then(|v| v.as_scalar())
-        .map(|s| s.into_owned().to_kstr().to_string())
-        .unwrap_or_default();
-
-    validate_postgres_uri(m, &pg_url, cache, use_lax_tls, allow_internal_ips).await;
-}
-
-async fn validate_postgres_uri(
-    m: &mut OwnedBlobMatch,
-    pg_url: &str,
-    cache: &Cache,
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-) {
-    if pg_url.is_empty() {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string("Postgres URL not found.".to_string());
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    }
-
-    let cache_key = postgres::generate_postgres_cache_key(pg_url);
-    if let Some(cached) = cache.get(&cache_key) {
-        let c = cached.value();
-        if c.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
-            m.validation_success = c.is_valid;
-            m.validation_response_body = c.body.clone();
-            m.validation_response_status = c.status;
-            return;
-        }
-    }
-
-    match postgres::validate_postgres(pg_url, use_lax_tls, allow_internal_ips).await {
-        Ok((ok, meta)) => {
-            m.validation_success = ok;
-            m.validation_response_body = validation_body::from_string(if ok {
-                format!("Postgres connection is valid. Metadata: {:?}", meta)
-            } else {
-                "Postgres connection failed.".to_string()
-            });
-            m.validation_response_status =
-                if ok { StatusCode::OK } else { StatusCode::UNAUTHORIZED };
-        }
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("Postgres error: {}", e));
-            m.validation_response_status = StatusCode::BAD_GATEWAY;
-        }
-    }
-    cache.insert(
-        cache_key,
-        CachedResponse {
-            body: m.validation_response_body.clone(),
-            status: m.validation_response_status,
-            is_valid: m.validation_success,
-            outcome: ValidationOutcome::from_legacy(
-                false,
-                m.validation_success,
-                m.validation_response_status.as_u16(),
-            ),
-            timestamp: Instant::now(),
-        },
-    );
-}
-
-async fn validate_jwt_rule(
-    m: &mut OwnedBlobMatch,
-    captured_values: &[(String, String, usize, usize)],
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-) {
-    let token = captured_values
-        .iter()
-        .find(|(n, ..)| n == "TOKEN")
-        .map(|(_, v, ..)| v.clone())
-        .unwrap_or_default();
-
-    if token.is_empty() {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string("JWT token not found.".to_string());
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    }
-
-    match jwt::validate_jwt(&token, use_lax_tls, allow_internal_ips).await {
-        Ok((ok, msg)) => {
-            m.validation_success = ok;
-            m.validation_response_body = validation_body::from_string(msg);
-            m.validation_response_status =
-                if ok { StatusCode::OK } else { StatusCode::UNAUTHORIZED };
-        }
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("JWT validation error: {}", e));
-            m.validation_response_status = StatusCode::BAD_REQUEST;
-        }
-    }
-}
-
-async fn validate_aws_rule(
-    m: &mut OwnedBlobMatch,
-    captured_values: &[(String, String, usize, usize)],
-    cache: &Cache,
-) {
-    let dependent_variables: FxHashMap<_, _> = m
-        .dependent_captures
-        .iter()
-        .map(|(name, value)| (name.clone(), vec![(value.clone(), m.matching_input_offset_span)]))
-        .collect();
-    let token = captured_values
-        .iter()
-        .find(|(n, ..)| n == "TOKEN")
-        .map(|(_, v, ..)| v.clone())
-        .unwrap_or_default();
-
-    let (secret, session_token) =
-        aws_credential_shape(&m.rule, token, &dependent_variables, m.matching_input_offset_span);
-
-    if secret.is_empty() {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string("Missing AWS access-key ID or secret.".to_string());
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    }
-
-    let akid_candidates = aws_akid_candidates(
-        captured_values,
-        dependent_variables.get("AKID"),
-        m.matching_input_offset_span,
-        &secret,
-    );
-
-    if akid_candidates.is_empty() {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string("Missing AWS access-key ID or secret.".to_string());
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    }
-
-    let mut last_body = None;
-    let mut last_status = StatusCode::UNAUTHORIZED;
-
-    for akid in akid_candidates {
-        let cache_key = aws::generate_aws_cache_key(&akid, &secret, session_token.as_deref());
-        if let Some(cached) = cache.get(&cache_key) {
-            let c = cached.value();
-            if c.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
-                if c.is_valid {
-                    m.validation_success = c.is_valid;
-                    m.validation_response_body = c.body.clone();
-                    m.validation_response_status = c.status;
-                    return;
-                }
-                last_body = Some(c.body.clone());
-                last_status = c.status;
-                continue;
-            }
-        }
-
-        let result = validate_aws_credential_pair(&akid, &secret, session_token.as_deref()).await;
-        let body = if let Some(identity) = result.identity.as_deref() {
-            let mut body = format!("{} --- ARN: {}", akid, identity);
-            if let Some(account_id) = result.account_id.as_deref() {
-                body.push_str(&format!(" --- AWS Account Number: {account_id}"));
-            }
-            validation_body::from_string(body)
-        } else if result.outcome == ValidationOutcome::Skipped {
-            validation_body::from_string(result.message.clone())
-        } else if result.status == StatusCode::BAD_REQUEST {
-            validation_body::from_string(format!(
-                "Invalid AWS credentials ({}): {}",
-                akid, result.message
-            ))
-        } else {
-            validation_body::from_string(format!(
-                "AWS validation error ({}): {}",
-                akid, result.message
-            ))
-        };
-
-        if result.status != StatusCode::BAD_GATEWAY {
-            cache.insert(
-                cache_key,
-                CachedResponse {
-                    body: body.clone(),
-                    status: result.status,
-                    is_valid: result.is_valid,
-                    outcome: result.outcome,
-                    timestamp: Instant::now(),
-                },
-            );
-        }
-
-        if result.is_valid {
-            m.validation_success = true;
-            m.validation_response_body = body;
-            m.validation_response_status = result.status;
-            return;
-        }
-
-        last_body = Some(body);
-        last_status = result.status;
-    }
-
-    m.validation_success = false;
-    m.validation_response_body = last_body.unwrap_or_else(|| {
-        validation_body::from_string("AWS validation failed for all nearby access-key IDs.")
-    });
-    m.validation_response_status = last_status;
-}
-
-pub(crate) fn is_aws_session_token_rule(rule: &Rule) -> bool {
-    rule.id() == "kingfisher.aws.4"
-        || rule
-            .syntax()
-            .depends_on_rule
-            .iter()
-            .flatten()
-            .any(|dependency| dependency.variable.eq_ignore_ascii_case("AWS_SECRET_ACCESS_KEY"))
-}
-
-fn aws_credential_shape(
-    rule: &Rule,
-    token: String,
-    dependent_variables: &FxHashMap<String, Vec<(String, OffsetSpan)>>,
-    target_span: OffsetSpan,
-) -> (String, Option<String>) {
-    if is_aws_session_token_rule(rule) {
-        let secret =
-            closest_dependent_value(dependent_variables.get("AWS_SECRET_ACCESS_KEY"), target_span)
-                .unwrap_or_default();
-        (secret, Some(token))
-    } else {
-        (token, None)
-    }
-}
-
-fn closest_dependent_value(
-    values: Option<&Vec<(String, OffsetSpan)>>,
-    target_span: OffsetSpan,
-) -> Option<String> {
-    values?
-        .iter()
-        .min_by_key(|(_, span)| dependency_distance(*span, target_span))
-        .map(|(value, _)| value.clone())
-}
-
-fn aws_akid_candidates(
-    captured_values: &[(String, String, usize, usize)],
-    dependent_akids: Option<&Vec<(String, OffsetSpan)>>,
-    target_span: OffsetSpan,
-    secret: &str,
-) -> Vec<String> {
-    let mut candidates = Vec::new();
-
-    if let Some(closest) = utils::find_closest_variable(captured_values, secret, "TOKEN", "AKID") {
-        candidates.push((0usize, closest));
-    }
-
-    if let Some(values) = dependent_akids {
-        candidates.extend(
-            values
-                .iter()
-                .map(|(value, span)| (dependency_distance(*span, target_span), value.clone())),
-        );
-    }
-
-    candidates.sort_by_key(|(distance, _)| *distance);
-
-    let mut seen = FxHashSet::default();
-    candidates
-        .into_iter()
-        .filter_map(|(_, value)| if seen.insert(value.clone()) { Some(value) } else { None })
-        .take(64)
-        .collect()
-}
-
-fn dependency_distance(span: OffsetSpan, target_span: OffsetSpan) -> usize {
-    if span.end <= target_span.start {
-        target_span.start - span.end
-    } else {
-        span.start.saturating_sub(target_span.end)
-    }
-}
-
-async fn validate_gcp_rule(m: &mut OwnedBlobMatch, globals: &Object, cache: &Cache) {
-    let gcp_json = globals
-        .get("TOKEN")
-        .and_then(|v| v.as_scalar())
-        .map(|s| s.into_owned().to_kstr().to_string())
-        .unwrap_or_default();
-
-    if gcp_json.is_empty() {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string("GCP JSON not found.".to_string());
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    }
-
-    let cache_key = gcp::generate_gcp_cache_key(&gcp_json);
-    if let Some(cached) = cache.get(&cache_key) {
-        let c = cached.value();
-        if c.timestamp.elapsed() < Duration::from_secs(VALIDATION_CACHE_SECONDS) {
-            m.validation_success = c.is_valid;
-            m.validation_response_body = c.body.clone();
-            m.validation_response_status = c.status;
-            return;
-        }
-    }
-
-    match gcp::GcpValidator::global() {
-        Ok(validator) => match validator.validate_gcp_credentials(gcp_json.as_bytes()).await {
-            Ok((ok, meta)) => {
-                m.validation_success = ok;
-                m.validation_response_body = validation_body::from_string(meta.join("\n"));
-                m.validation_response_status =
-                    if ok { StatusCode::OK } else { StatusCode::UNAUTHORIZED };
-            }
-            Err(e) => {
-                m.validation_success = false;
-                m.validation_response_body =
-                    validation_body::from_string(format!("GCP validation error: {}", e));
-                m.validation_response_status = StatusCode::BAD_GATEWAY;
-            }
-        },
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("Failed to create GCP validator: {}", e));
-            m.validation_response_status = StatusCode::INTERNAL_SERVER_ERROR;
-        }
-    }
-    cache.insert(
-        cache_key,
-        CachedResponse {
-            body: m.validation_response_body.clone(),
-            status: m.validation_response_status,
-            is_valid: m.validation_success,
-            outcome: ValidationOutcome::from_legacy(
-                false,
-                m.validation_success,
-                m.validation_response_status.as_u16(),
-            ),
-            timestamp: Instant::now(),
-        },
-    );
-}
-
-async fn validate_coinbase_rule(
-    m: &mut OwnedBlobMatch,
-    globals: &Object,
-    client: &Client,
-    parser: &liquid::Parser,
-    cache: &Cache,
-) {
-    let cred_name = globals
-        .get("CRED_NAME")
-        .and_then(|v| v.as_scalar())
-        .map(|s| s.into_owned().to_kstr().to_string())
-        .unwrap_or_default();
-    let private_key = globals
-        .get("PRIVATE_KEY")
-        .and_then(|v| v.as_scalar())
-        .map(|s| s.into_owned().to_kstr().to_string())
-        .unwrap_or_default();
-
-    if cred_name.is_empty() || private_key.is_empty() {
-        m.validation_success = false;
-        m.validation_response_body =
-            validation_body::from_string("Missing key name or private key.".to_string());
-        m.validation_response_status = StatusCode::BAD_REQUEST;
-        return;
-    }
-
-    match coinbase::validate_cdp_api_key(&cred_name, &private_key, client, parser, cache).await {
-        Ok((ok, msg)) => {
-            m.validation_success = ok;
-            m.validation_response_body = msg;
-            m.validation_response_status =
-                if ok { StatusCode::OK } else { StatusCode::UNAUTHORIZED };
-        }
-        Err(e) => {
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("Coinbase validation error: {}", e));
-            m.validation_response_status = StatusCode::BAD_GATEWAY;
-        }
-    }
-}
-
-async fn validate_raw_rule(
-    m: &mut OwnedBlobMatch,
-    raw: &str,
-    globals: &Object,
-    client: &Client,
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-) {
-    match kingfisher_scanner::validation::raw::validate_raw(
-        raw,
-        globals,
-        client,
-        use_lax_tls,
-        allow_internal_ips,
-    )
-    .await
-    {
-        Ok(result) => {
-            m.validation_success = result.valid;
-            m.validation_response_body = validation_body::from_string(result.body);
-            m.validation_response_status = result.status;
-        }
-        Err(e) => {
-            debug!("Raw validation error for {}: {}", raw, e);
-            m.validation_success = false;
-            m.validation_response_body =
-                validation_body::from_string(format!("Raw validation error: {}", e));
-            m.validation_response_status = StatusCode::BAD_GATEWAY;
-        }
-    }
-}
+pub(crate) use kingfisher_scanner::validation::engine::is_aws_session_token_rule;
 
 fn populate_globals_from_captures(
     globals: &mut Object,
@@ -2545,7 +839,7 @@ fn populate_globals_from_captures(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::rules::rule::{Confidence, DependsOnRule, RuleSyntax};
+    use crate::rules::rule::{Confidence, DependsOnRule, Rule, RuleSyntax};
 
     #[test]
     fn credential_uri_classifier_normalizes_supported_database_schemes() {
@@ -3009,75 +1303,6 @@ mod tests {
         let (variables, missing) = collect_variables_and_dependencies(&[primary]);
         assert_eq!(variables["COMPONENT"][0].0, "associated");
         assert!(missing.is_empty());
-    }
-
-    #[test]
-    fn aws_akid_candidates_orders_by_proximity_and_deduplicates() {
-        let captured_values = vec![
-            ("TOKEN".to_string(), "secret".to_string(), 100usize, 140usize),
-            ("AKID".to_string(), "closest_capture".to_string(), 80usize, 90usize),
-        ];
-        let dependent_akids = vec![
-            ("far_before".to_string(), OffsetSpan::from_range(10..20)),
-            ("near_after".to_string(), OffsetSpan::from_range(150..160)),
-            ("overlap".to_string(), OffsetSpan::from_range(110..120)),
-            ("closest_capture".to_string(), OffsetSpan::from_range(80..90)),
-        ];
-
-        let candidates = aws_akid_candidates(
-            &captured_values,
-            Some(&dependent_akids),
-            OffsetSpan::from_range(100..140),
-            "secret",
-        );
-
-        assert_eq!(candidates, vec!["closest_capture", "overlap", "near_after", "far_before"]);
-    }
-
-    #[test]
-    fn aws_akid_candidates_caps_unique_candidates() {
-        let dependent_akids = (0..70)
-            .map(|i| (format!("akid{i}"), OffsetSpan::from_range((i * 2)..(i * 2 + 1))))
-            .collect::<Vec<_>>();
-
-        let candidates = aws_akid_candidates(
-            &[],
-            Some(&dependent_akids),
-            OffsetSpan::from_range(1_000..1_010),
-            "secret",
-        );
-
-        assert_eq!(candidates.len(), 64);
-        assert_eq!(candidates.first().map(String::as_str), Some("akid69"));
-        assert_eq!(candidates.last().map(String::as_str), Some("akid6"));
-    }
-
-    #[test]
-    fn aws_credential_shape_is_rule_specific_with_static_and_session_rules_in_one_blob() {
-        let static_rule = aws_rule("private.aws.static", false);
-        let session_rule = aws_rule("private.aws.session", true);
-        let dependent_variables = FxHashMap::from_iter([(
-            "AWS_SECRET_ACCESS_KEY".to_string(),
-            vec![("static-secret".to_string(), OffsetSpan::from_range(20..60))],
-        )]);
-        let span = OffsetSpan::from_range(70..110);
-
-        let static_shape = aws_credential_shape(
-            &static_rule,
-            "static-rule-token".to_string(),
-            &dependent_variables,
-            span,
-        );
-        let session_shape = aws_credential_shape(
-            &session_rule,
-            "session-token".to_string(),
-            &dependent_variables,
-            span,
-        );
-
-        assert_eq!(static_shape, ("static-rule-token".to_string(), None));
-        assert_eq!(session_shape, ("static-secret".to_string(), Some("session-token".to_string())));
-        assert!(is_aws_session_token_rule(&aws_rule("kingfisher.aws.4", false)));
     }
 
     #[test]

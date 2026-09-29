@@ -123,7 +123,7 @@ mod tests {
                 match_number: 0,
                 start: 1,
                 end: 4,
-                value: crate::finding::intern("abc"),
+                value: "abc".to_owned(),
             }],
         };
         let result = process_captures(&captures);

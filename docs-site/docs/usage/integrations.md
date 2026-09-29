@@ -226,17 +226,20 @@ KF_GITHUB_TOKEN="ghp_…" kingfisher scan github --public-events \
 
 ### Include a GitHub user's gists
 
-Pass `--include-gists` with one or more `--user` values to clone and scan their
-public gists with full Git history. Gists also appear in `--list-only` output and
-count toward `--repo-clone-limit`.
+Add `--include-gists` to enumerate public gists for each specified user and clone
+and scan them with full Git history by default:
 
 ```bash
 kingfisher scan github --user alice --include-gists --format toon
 kingfisher scan github --user alice --include-gists --list-only
 ```
 
-The option requires `--user` and cannot be combined with `--public-events`.
-Repository type and exclusion filters apply to repositories, not gists.
+Gists count toward `--repo-clone-limit` and use the same clone and history options
+as repositories. `--repo-type` and `--github-exclude` filter repositories, not
+gists. The flag requires `--user` and cannot be combined with `--public-events`.
+Enumeration uses GitHub's [public user gists endpoint](https://docs.github.com/en/rest/gists/gists#list-gists-for-a-user)
+and the configured API URL and authentication. Unlike the gist file snapshots
+fetched by `--repo-artifacts`, cloned gists include earlier revisions.
 
 ### Skip specific GitHub repositories during enumeration
 
@@ -348,7 +351,7 @@ kingfisher validate --rule github \
   --endpoint github=https://ghe.corp.example.com \
   "<your-github-pat>"
 
-# 6. Revoke through a Kingfisher 1.x custom rule that defines revocation
+# 6. Revoke through a Kingfisher custom rule that defines revocation
 kingfisher revoke --rules-path ./custom-rules.yml --rule custom.github.pat \
   --endpoint github=https://ghe.corp.example.com \
   "<your-github-pat>"
@@ -380,20 +383,26 @@ kingfisher scan gitlab --user johndoe
 
 ### Include GitLab snippets and their history
 
-Use `--include-snippets` with a user or group to scan accessible personal
-snippets for selected users and project snippets for selected projects. Snippets
-are cloned and scanned with full Git history by default, and are included in
-`--list-only` output. Snippets count toward `--repo-clone-limit`.
+Add `--include-snippets` to include accessible personal snippets for each `--user`
+and project snippets from the repositories selected by users or groups:
 
 ```bash
 kingfisher scan gitlab --user alice --include-snippets --format toon
-kingfisher scan gitlab --group my-group --include-subgroups --include-snippets
+kingfisher scan gitlab --group my-group --include-subgroups --include-snippets --format toon
 kingfisher scan gitlab --user alice --include-snippets --list-only
 ```
 
-GitLab uses the configured instance's GraphQL API. `KF_GITLAB_TOKEN` enables
-enumeration of private snippets visible to that token. Project exclusions also
-exclude that project's snippets; repository type filters do not filter snippets.
+Snippets are cloned as Git repositories and scanned with full history by default,
+including files deleted from the latest revision. Clone and history options apply
+to snippets too, and snippets count toward `--repo-clone-limit`. Project exclusions
+also exclude that project's snippets; they do not filter personal snippets.
+`--repo-type` selects projects, not personal snippets.
+
+Discovery uses the configured GitLab instance's [GraphQL snippets API](https://docs.gitlab.com/api/graphql/reference/#querysnippets)
+and `KF_GITLAB_TOKEN` when set. Only snippets visible to that caller are included;
+authenticated requests can include private snippets. Snippets without a Git clone
+URL are skipped with a warning. This adds historical coverage beyond the project
+snippet snapshots fetched by `--repo-artifacts`.
 
 Snippet discovery makes sequential, paginated GraphQL requests for each selected
 project. Large groups can take longer to enumerate and consume more API requests.
@@ -495,7 +504,7 @@ kingfisher validate --rule gitlab \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "<your-gitlab-pat>"
 
-# 6. Revoke through a Kingfisher 1.x custom rule that defines revocation
+# 6. Revoke through a Kingfisher custom rule that defines revocation
 kingfisher revoke --rules-path ./custom-rules.yml --rule custom.gitlab.pat \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "<your-gitlab-pat>"
@@ -670,18 +679,24 @@ kingfisher scan bitbucket --user johndoe
 
 ### Include Bitbucket Cloud snippets and their history
 
-Use `--include-snippets` to clone workspace snippets the current caller can
-access, including private snippets permitted by their credentials. Snippets are
-scanned with full Git history and appear in `--list-only` output.
+Add `--include-snippets` to clone and scan snippets owned by the selected
+workspaces, including personal workspaces selected with `--user`:
 
 ```bash
-kingfisher scan bitbucket --workspace my-team --include-snippets --format toon
+kingfisher scan bitbucket --workspace my-workspace --include-snippets --format toon
 kingfisher scan bitbucket --user alice --include-snippets --list-only
-kingfisher scan bitbucket --all-workspaces --include-snippets
 ```
 
-The API token needs `read:snippet:bitbucket` access (or the OAuth `snippet`
-scope). Bitbucket Server and Data Center do not support this option.
+The option also works with `--all-workspaces`. Discovery uses the configured
+Bitbucket authentication and includes public snippets plus private snippets the
+caller can access. Tokens need snippet read access (`snippet` for OAuth or
+`read:snippet:bitbucket` for API tokens), as described in the
+[Bitbucket snippets API](https://developer.atlassian.com/cloud/bitbucket/rest/api-group-snippets/).
+
+Snippets use the normal Git clone and history options, with full history scanned
+by default. Repository type filters and `--bitbucket-exclude` do not filter
+workspace snippets. Bitbucket Server/Data Center does not support this option;
+Kingfisher reports an error if it is requested there.
 
 `--project` does not select snippet owners. Use `--workspace`, `--user`, or
 `--all-workspaces` for snippet discovery; project-only selections are skipped

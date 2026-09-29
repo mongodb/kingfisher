@@ -15,6 +15,55 @@ function initRulesFilter() {
 
   const rows = Array.from(tbody.querySelectorAll("tr"));
   const total = rows.length;
+  const toolbar = document.createElement("div");
+  toolbar.className = "rules-toolbar";
+  toolbar.setAttribute("aria-label", "Filter detection rules");
+  const filters = [
+    { key: "confidence", name: "Confidence", index: 1, options: ["High", "Medium", "Low"] },
+    { key: "validation", name: "Live validation", index: 2, options: ["Yes", "None"] },
+    { key: "revocation", name: "Direct revocation", index: 3, options: ["Yes", "None"] },
+  ];
+  const params = new URLSearchParams(window.location.search);
+  filters.forEach(function (filter) {
+    const label = document.createElement("label");
+    label.textContent = filter.name;
+    const select = document.createElement("select");
+    select.name = filter.key;
+    select.add(new Option("All", ""));
+    filter.options.forEach(function (value) { select.add(new Option(value, value)); });
+    select.value = params.get(filter.key) || "";
+    if (select.selectedIndex < 0) select.value = "";
+    filter.select = select;
+    select.addEventListener("change", applyFilter);
+    label.appendChild(select);
+    toolbar.appendChild(label);
+  });
+  const reset = document.createElement("button");
+  reset.type = "button";
+  reset.textContent = "Clear filters";
+  reset.addEventListener("click", function () {
+    if (input) input.value = "";
+    filters.forEach(function (filter) { filter.select.value = ""; });
+    applyFilter();
+  });
+  toolbar.appendChild(reset);
+  if (input) {
+    input.setAttribute("aria-label", "Search detection rules");
+    input.placeholder = "Search by provider or rule ID…";
+    input.value = params.get("rule-query") || "";
+    input.insertAdjacentElement("afterend", toolbar);
+  } else {
+    table.before(toolbar);
+  }
+  if (countEl) {
+    countEl.setAttribute("role", "status");
+    countEl.setAttribute("aria-live", "polite");
+  }
+  const empty = document.createElement("p");
+  empty.className = "rules-empty";
+  empty.textContent = "No matching rules. Try a different provider or clear your filters.";
+  empty.hidden = true;
+  table.after(empty);
 
   function updateCount(visible) {
     if (countEl) {
@@ -23,19 +72,27 @@ function initRulesFilter() {
   }
 
   function applyFilter() {
-    if (!input) {
-      updateCount(total);
-      return;
-    }
-    const query = input.value.toLowerCase().trim();
+    const query = input ? input.value.toLowerCase().trim() : "";
     let visible = 0;
     rows.forEach(function (row) {
       const text = row.textContent.toLowerCase();
-      const match = !query || text.indexOf(query) !== -1;
-      row.style.display = match ? "" : "none";
+      const match = (!query || text.includes(query)) && filters.every(function (filter) {
+        return !filter.select.value || row.children[filter.index].textContent.trim() === filter.select.value;
+      });
+      row.hidden = !match;
       if (match) visible++;
     });
+    empty.hidden = visible !== 0;
+    table.hidden = visible === 0;
     updateCount(visible);
+    const url = new URL(window.location.href);
+    if (query) url.searchParams.set("rule-query", query);
+    else url.searchParams.delete("rule-query");
+    filters.forEach(function (filter) {
+      if (filter.select.value) url.searchParams.set(filter.key, filter.select.value);
+      else url.searchParams.delete(filter.key);
+    });
+    window.history.replaceState(window.history.state, "", url);
   }
 
   if (input) {
@@ -88,6 +145,7 @@ function initRulesFilter() {
 
     headers.forEach(function (h, i) {
       h.classList.remove("is-sorted-asc", "is-sorted-desc");
+      h.setAttribute("aria-sort", i === index ? (dir === 1 ? "ascending" : "descending") : "none");
       if (i === index) {
         h.classList.add(dir === 1 ? "is-sorted-asc" : "is-sorted-desc");
       }
@@ -96,7 +154,7 @@ function initRulesFilter() {
 
   headers.forEach(function (th, i) {
     th.classList.add("is-sortable");
-    th.setAttribute("role", "button");
+    th.setAttribute("aria-sort", "none");
     th.setAttribute("tabindex", "0");
     th.addEventListener("click", function () { sortBy(i); });
     th.addEventListener("keydown", function (e) {
@@ -107,7 +165,7 @@ function initRulesFilter() {
     });
   });
 
-  updateCount(total);
+  applyFilter();
 }
 
 if (typeof document$ !== "undefined" && document$.subscribe) {

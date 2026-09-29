@@ -148,7 +148,7 @@ impl Blob<'_> {
             // Small files: read into memory.
             let mut bytes = Vec::with_capacity(file_size as usize);
             file.read_to_end(&mut bytes)?;
-            Ok(Blob { id: OnceLock::new(), data: BlobData::Owned(bytes), temp_id })
+            Ok(Self::from_bytes(bytes))
         }
     }
 

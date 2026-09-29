@@ -1,12 +1,4 @@
-//! Rule definitions and database for the Kingfisher secret scanner.
-//!
-//! This crate provides:
-//! - [`Rule`] and [`RuleSyntax`] - Rule definitions
-//! - [`RulesDatabase`] - Compiled rules ready for scanning
-//! - [`Confidence`] - Rule confidence levels
-//! - [`Rules`] - Rule collection and loading
-//! - YAML parsing for rule files
-//! - Betterleaks- and Veles-derived default rules embedded in the crate
+#![doc = include_str!("../README.md")]
 
 #[path = "../build_support/betterleaks.rs"]
 mod betterleaks;

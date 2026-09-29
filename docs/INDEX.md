@@ -24,7 +24,7 @@ authoritative Kingfisher documentation for each task.
 | Track accepted findings without hiding new ones | [Baseline management](BASELINE.md) |
 | Preserve repository coverage evidence | [Repository audit log](AUDIT_LOG.md) |
 | Write, import, or verify detection rules | [Rule authoring](RULES.md) |
-| Embed Kingfisher in Rust | [Library API](LIBRARY.md) |
+| Embed scanning and validation in Rust | [Library API and integration recipes](LIBRARY.md#integration-recipes-for-rust-projects-and-llm-agents) |
 | Install or maintain the Python distribution | [Python/PyPI](PYPI.md) |
 
 ## Response Workflow
@@ -43,7 +43,7 @@ authoritative Kingfisher documentation for each task.
 
 ## Detection and Finding Semantics
 
-- [Rule authoring](RULES.md) — Betterleaks TOML, private Kingfisher YAML, regex constraints,
+- [Rule authoring](RULES.md) — Betterleaks TOML, Kingfisher YAML, regex constraints,
   components, validation, filters, and checksums.
 - [Parser-based context verification](CONTEXT_VERIFICATION.md) — how assignment context reduces
   false positives.
@@ -82,6 +82,6 @@ authoritative Kingfisher documentation for each task.
 4. Treat [USAGE.md](USAGE.md), [CONFIG.md](CONFIG.md), and command `--help` as authoritative for
    CLI behavior. Use [ARCHITECTURE.md](ARCHITECTURE.md) for source routing.
 5. Read [RULES.md](RULES.md) before non-trivial detector or schema changes. Generally useful rules
-   belong upstream in Betterleaks; organization-specific rules may use Kingfisher YAML.
+   belong upstream in Betterleaks; custom rules can use either the Kingfisher rule format (YAML) or Betterleaks TOML.
 6. Live validation, blast-radius mapping, alerts, and revocation can make network requests or cause
    external effects. Follow the authorization and safety guidance in the relevant document.

@@ -448,6 +448,7 @@ impl<'a> Matcher<'a> {
         }
         self.local_stats.blobs_scanned += 1;
         self.local_stats.bytes_scanned += blob.bytes().len() as u64;
+        crate::scan_progress::scanned(blob.bytes().len() as u64);
         // Opportunistically look for standalone Base64 blobs. If neither
         // the raw scan nor this check yields anything, we can return early
         // before doing any heavier work.

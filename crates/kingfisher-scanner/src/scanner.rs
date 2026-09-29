@@ -5,10 +5,11 @@ use std::path::Path;
 use std::sync::Arc;
 
 use anyhow::Result;
-use kingfisher_core::{Blob, BlobIdMap, LocationMapping, OffsetSpan, calculate_shannon_entropy};
+use kingfisher_core::{Blob, BlobId, LocationMapping, OffsetSpan, calculate_shannon_entropy};
 use kingfisher_rules::{
     Confidence, Rule, RulesDatabase, betterleaks_filter::BetterleaksFilterContext,
 };
+use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
@@ -24,31 +25,24 @@ pub struct ScannerConfig {
     /// Whether to decode and scan Base64 content.
     pub enable_base64_decoding: bool,
 
-    /// Whether to deduplicate findings.
+    /// Suppress repeated successful findings for the same content and source path.
+    /// Disabled by default. Concurrent calls may both report a first occurrence.
     pub enable_dedup: bool,
 
     /// Override the minimum entropy threshold for all rules.
     pub min_entropy_override: Option<f32>,
 
-    /// Language hint for parser-based context verification (e.g., "python", "javascript").
-    pub language_hint: Option<String>,
-
-    /// Whether to redact secrets in findings.
+    /// Replace returned secrets and all capture values with `[REDACTED]`.
     pub redact_secrets: bool,
-
-    /// Maximum depth for Base64 decoding (prevents infinite recursion).
-    pub max_base64_depth: usize,
 }
 
 impl Default for ScannerConfig {
     fn default() -> Self {
         Self {
             enable_base64_decoding: true,
-            enable_dedup: true,
+            enable_dedup: false,
             min_entropy_override: None,
-            language_hint: None,
             redact_secrets: false,
-            max_base64_depth: 2,
         }
     }
 }
@@ -63,27 +57,13 @@ impl Default for ScannerConfig {
 /// The `Scanner` is thread-safe and can be shared across threads using `Arc`.
 /// Each scanning operation is independent and uses thread-local resources.
 ///
-/// # Examples
-///
-/// ```no_run
-/// use kingfisher_scanner::{Scanner, ScannerConfig, RulesDatabase};
-/// use std::sync::Arc;
-///
-/// // Assuming you have a compiled RulesDatabase
-/// // let rules_db = Arc::new(RulesDatabase::from_rules(rules)?);
-/// // let scanner = Scanner::new(rules_db);
-/// //
-/// // // Scan bytes
-/// // let findings = scanner.scan_bytes(b"api_key = 'secret123'");
-/// //
-/// // // Scan a file
-/// // let findings = scanner.scan_file("config.yml")?;
-/// ```
+/// Compile rules once with [`RulesDatabase::from_rule_collection`] and reuse this
+/// scanner. See the crate-level examples for complete, executable usage.
 pub struct Scanner {
     rules_db: Arc<RulesDatabase>,
     scanner_pool: Arc<ScannerPool>,
     config: ScannerConfig,
-    seen_blobs: BlobIdMap<bool>,
+    seen_blobs: RwLock<FxHashSet<(BlobId, String)>>,
 }
 
 impl Scanner {
@@ -95,30 +75,31 @@ impl Scanner {
     /// Creates a new scanner with custom configuration.
     pub fn with_config(rules_db: Arc<RulesDatabase>, config: ScannerConfig) -> Self {
         let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
-        Self { rules_db, scanner_pool, config, seen_blobs: BlobIdMap::new() }
+        Self { rules_db, scanner_pool, config, seen_blobs: RwLock::new(FxHashSet::default()) }
     }
 
     /// Scans a byte slice for secrets.
     ///
-    /// This is the most direct scanning method. The bytes are scanned in-place
-    /// without copying.
+    /// Borrows the input unless UTF-16/32 decoding requires an owned UTF-8 buffer.
+    /// Returns scan and filter errors instead of treating them as an empty result.
     ///
     /// # Examples
     ///
     /// ```no_run
     /// # use kingfisher_scanner::Scanner;
     /// # use std::sync::Arc;
-    /// # fn example(scanner: &Scanner) {
+    /// # fn example(scanner: &Scanner) -> anyhow::Result<()> {
     /// let content = b"password = 'super_secret_password_12345'";
-    /// let findings = scanner.scan_bytes(content);
+    /// let findings = scanner.scan_bytes(content)?;
     /// for finding in findings {
     ///     println!("Found {} at line {}", finding.rule_name, finding.line());
     /// }
+    /// # Ok(())
     /// # }
     /// ```
-    pub fn scan_bytes(&self, bytes: &[u8]) -> Vec<Finding> {
-        let blob = Blob::from_bytes(bytes.to_vec());
-        self.scan_blob_at_path(&blob, "").unwrap_or_default()
+    pub fn scan_bytes(&self, bytes: &[u8]) -> Result<Vec<Finding>> {
+        let blob = Blob::from_borrowed(bytes);
+        self.scan_blob_at_path(&blob, "")
     }
 
     /// Scans a file for secrets.
@@ -150,7 +131,7 @@ impl Scanner {
         // Check for dedup
         if self.config.enable_dedup {
             let blob_id = blob.id();
-            if self.seen_blobs.contains_key(&blob_id) {
+            if self.seen_blobs.read().contains(&(blob_id, path.to_owned())) {
                 return Ok(Vec::new());
             }
         }
@@ -166,14 +147,14 @@ impl Scanner {
 
         // Run Vectorscan to find candidate matches
         let mut raw_matches = Vec::new();
-        self.scanner_pool.with(|scanner| {
-            let _ = scanner.scan(bytes, |rule_id, from, to, _flags| {
+        self.scanner_pool.try_with(|scanner| {
+            scanner.scan(bytes, |rule_id, from, to, _flags| {
                 if (rule_id as usize) < self.rules_db.num_rules() {
                     raw_matches.push((rule_id as usize, from as usize, to as usize));
                 }
                 kingfisher_vectorscan::Scan::Continue
-            });
-        });
+            })
+        })??;
         // Early exit if no matches
         if raw_matches.is_empty() && !self.config.enable_base64_decoding {
             return Ok(Vec::new());
@@ -265,7 +246,7 @@ impl Scanner {
                     }
 
                     let capture_map = named_captures(anchored_regex, &captures);
-                    let filter_outcome = rule.betterleaks_filter().and_then(|expression| {
+                    let filter_outcome = if let Some(expression) = rule.betterleaks_filter() {
                         let full_match = String::from_utf8_lossy(full_capture.as_bytes());
                         let secret = String::from_utf8_lossy(secret_bytes);
                         let fragment_raw = String::from_utf8_lossy(bytes);
@@ -290,14 +271,10 @@ impl Scanner {
                             description: rule.name(),
                             captures: capture_map.clone(),
                         };
-                        match self.rules_db.evaluate_betterleaks_filter(expression, &context) {
-                            Ok(outcome) => Some(outcome),
-                            Err(error) => {
-                                debug!(rule_id = rule.id(), %error, "Betterleaks filter evaluation failed");
-                                None
-                            }
-                        }
-                    });
+                        Some(self.rules_db.evaluate_betterleaks_filter(expression, &context)?)
+                    } else {
+                        None
+                    };
                     if filter_outcome.is_some_and(|outcome| outcome.discard) {
                         continue;
                     }
@@ -325,11 +302,7 @@ impl Scanner {
                     let offset_span = OffsetSpan::from_range(offset_start..offset_end);
                     let source_span = loc_mapping.get_source_span(&offset_span);
 
-                    let secret = if self.config.redact_secrets {
-                        self.redact(secret_bytes)
-                    } else {
-                        String::from_utf8_lossy(secret_bytes).to_string()
-                    };
+                    let secret = String::from_utf8_lossy(secret_bytes).to_string();
 
                     let fingerprint = primitives::compute_finding_fingerprint(
                         &secret,
@@ -379,7 +352,7 @@ impl Scanner {
                 betterleaks_path_prefiltered,
                 &loc_mapping,
                 &mut seen_matches,
-            );
+            )?;
             findings.extend(b64_findings);
         }
 
@@ -388,9 +361,18 @@ impl Scanner {
 
         // Mark blob as seen for dedup
         if self.config.enable_dedup && !findings.is_empty() {
-            self.seen_blobs.insert(blob.id(), true);
+            self.seen_blobs.write().insert((blob.id(), path.to_owned()));
         }
 
+        // Redact only after dependency matching and fingerprint calculation.
+        if self.config.redact_secrets {
+            for finding in &mut findings {
+                finding.secret = "[REDACTED]".to_owned();
+                for value in finding.captures.values_mut() {
+                    *value = "[REDACTED]".to_owned();
+                }
+            }
+        }
         Ok(findings)
     }
 
@@ -399,12 +381,7 @@ impl Scanner {
     /// Call this to clear the seen blobs cache if you want to rescan
     /// previously scanned content.
     pub fn reset_dedup(&self) {
-        self.seen_blobs.clear();
-    }
-
-    fn redact(&self, bytes: &[u8]) -> String {
-        let s = String::from_utf8_lossy(bytes);
-        if s.len() <= 8 { "*".repeat(s.len()) } else { format!("{}...{}", &s[..4], "*".repeat(4)) }
+        self.seen_blobs.write().clear();
     }
 
     fn scan_base64_content(
@@ -414,7 +391,7 @@ impl Scanner {
         betterleaks_path_prefiltered: bool,
         loc_mapping: &LocationMapping,
         seen_matches: &mut FxHashSet<u64>,
-    ) -> Vec<Finding> {
+    ) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         let bytes = blob.bytes();
 
@@ -424,15 +401,15 @@ impl Scanner {
         for item in b64_items {
             let mut candidate_rule_ids = Vec::new();
             let mut seen_candidate_rules = FxHashSet::default();
-            self.scanner_pool.with(|scanner| {
-                let _ = scanner.scan(&item.decoded, |rule_id, _from, _to, _flags| {
+            self.scanner_pool.try_with(|scanner| {
+                scanner.scan(&item.decoded, |rule_id, _from, _to, _flags| {
                     let rule_id = rule_id as usize;
                     if rule_id < self.rules_db.num_rules() && seen_candidate_rules.insert(rule_id) {
                         candidate_rule_ids.push(rule_id);
                     }
                     kingfisher_vectorscan::Scan::Continue
-                });
-            });
+                })
+            })??;
             for rule_id in candidate_rule_ids {
                 if betterleaks_path_prefiltered && self.rules_db.is_betterleaks_rule(rule_id) {
                     continue;
@@ -462,15 +439,12 @@ impl Scanner {
                     }
 
                     let capture_map = named_captures(regex, &captures);
-                    let filter_outcome = rule.betterleaks_filter().and_then(|expression| {
+                    let filter_outcome = if let Some(expression) = rule.betterleaks_filter() {
                         let full_match = String::from_utf8_lossy(full_capture.as_bytes());
                         let secret = String::from_utf8_lossy(secret_bytes);
                         let fragment_raw = String::from_utf8_lossy(&item.decoded);
-                        let (match_line_start_idx, match_line_end_idx) = line_bounds(
-                            &item.decoded,
-                            full_capture.start(),
-                            full_capture.end(),
-                        );
+                        let (match_line_start_idx, match_line_end_idx) =
+                            line_bounds(&item.decoded, full_capture.start(), full_capture.end());
                         let line = String::from_utf8_lossy(
                             &item.decoded[match_line_start_idx..match_line_end_idx],
                         );
@@ -488,14 +462,10 @@ impl Scanner {
                             description: rule.name(),
                             captures: capture_map.clone(),
                         };
-                        match self.rules_db.evaluate_betterleaks_filter(expression, &context) {
-                            Ok(outcome) => Some(outcome),
-                            Err(error) => {
-                                debug!(rule_id = rule.id(), %error, "Betterleaks filter evaluation failed");
-                                None
-                            }
-                        }
-                    });
+                        Some(self.rules_db.evaluate_betterleaks_filter(expression, &context)?)
+                    } else {
+                        None
+                    };
                     if filter_outcome.is_some_and(|outcome| outcome.discard) {
                         continue;
                     }
@@ -519,11 +489,7 @@ impl Scanner {
                     let offset_span = OffsetSpan::from_range(item.pos_start..item.pos_end);
                     let source_span = loc_mapping.get_source_span(&offset_span);
 
-                    let secret = if self.config.redact_secrets {
-                        self.redact(secret_bytes)
-                    } else {
-                        String::from_utf8_lossy(secret_bytes).to_string()
-                    };
+                    let secret = String::from_utf8_lossy(secret_bytes).to_string();
 
                     let fingerprint = primitives::compute_finding_fingerprint(
                         &secret,
@@ -556,7 +522,7 @@ impl Scanner {
             }
         }
 
-        findings
+        Ok(findings)
     }
 }
 
@@ -666,7 +632,7 @@ fn enforce_betterleaks_components(findings: &mut Vec<Finding>) {
     });
 }
 
-fn finding_is_within(primary: &Finding, component: &Finding, within: &str) -> bool {
+pub(crate) fn finding_is_within(primary: &Finding, component: &Finding, within: &str) -> bool {
     let within = within.trim();
     if within.is_empty() || within == "0" {
         return true;
@@ -788,7 +754,7 @@ mod tests {
     #[test]
     fn test_scan_bytes_finds_secret() {
         let scanner = create_test_scanner();
-        let findings = scanner.scan_bytes(b"my secret_abcd1234 is here");
+        let findings = scanner.scan_bytes(b"my secret_abcd1234 is here").unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].secret, "secret_abcd1234");
     }
@@ -796,21 +762,22 @@ mod tests {
     #[test]
     fn test_scan_bytes_no_match() {
         let scanner = create_test_scanner();
-        let findings = scanner.scan_bytes(b"nothing secret here");
+        let findings = scanner.scan_bytes(b"nothing secret here").unwrap();
         assert!(findings.is_empty());
     }
 
     #[test]
     fn test_scan_bytes_multiple_matches() {
         let scanner = create_test_scanner();
-        let findings = scanner.scan_bytes(b"first secret_aaaa1111 and second secret_bbbb2222");
+        let findings =
+            scanner.scan_bytes(b"first secret_aaaa1111 and second secret_bbbb2222").unwrap();
         assert_eq!(findings.len(), 2);
     }
 
     #[test]
     fn test_scan_bytes_uses_vectorscan_for_base64_candidates() {
         let scanner = create_test_scanner();
-        let findings = scanner.scan_bytes(b"c2VjcmV0X2FiY2QxMjM0c2VjcmV0X2FiY2QxMjM0");
+        let findings = scanner.scan_bytes(b"c2VjcmV0X2FiY2QxMjM0c2VjcmV0X2FiY2QxMjM0").unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].secret, "secret_abcd1234");
         assert!(findings[0].is_base64_encoded);
@@ -831,7 +798,7 @@ mod tests {
             (encode_utf32(source, false, false), "UTF-32 BE"),
         ];
         for (encoded, name) in cases {
-            let findings = scanner.scan_bytes(&encoded);
+            let findings = scanner.scan_bytes(&encoded).unwrap();
             assert_eq!(findings.len(), 1, "{name} should be scanned");
             assert_eq!(findings[0].secret, "secret_abcd1234", "{name}");
         }
@@ -876,7 +843,7 @@ mod tests {
     #[test]
     fn legacy_engine_hint_does_not_bypass_vectorscan() {
         let scanner = create_test_scanner_with_engine(false);
-        let findings = scanner.scan_bytes(b"my secret_abcd1234 is here");
+        let findings = scanner.scan_bytes(b"my secret_abcd1234 is here").unwrap();
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].secret, "secret_abcd1234");
     }
@@ -1009,7 +976,7 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
         });
         assert!(rule.syntax().as_regex().unwrap().is_match(b"prefix_AbCdEfGhIjKlMnOp"));
         let scanner = Scanner::new(Arc::new(RulesDatabase::from_rules(vec![rule]).unwrap()));
-        let findings = scanner.scan_bytes(b"prefix_AbCdEfGhIjKlMnOp");
+        let findings = scanner.scan_bytes(b"prefix_AbCdEfGhIjKlMnOp").unwrap();
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].secret, "AbCdEfGhIjKlMnOp");
@@ -1081,7 +1048,7 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
             rules_db,
             ScannerConfig { enable_base64_decoding: false, ..ScannerConfig::default() },
         );
-        let findings = scanner.scan_bytes(&input);
+        let findings = scanner.scan_bytes(&input).unwrap();
 
         assert_eq!(findings.len(), 2);
         assert!(findings.iter().any(|finding| finding.secret.as_bytes() == token));
@@ -1126,7 +1093,7 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
             vectorscan_compatible: true,
         });
         let scanner = Scanner::new(Arc::new(RulesDatabase::from_rules(vec![rule]).unwrap()));
-        let findings = scanner.scan_bytes(b"token_discard token_keepme");
+        let findings = scanner.scan_bytes(b"token_discard token_keepme").unwrap();
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].secret, "token_keepme");
@@ -1147,7 +1114,7 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
         let findings = scanner.scan_bytes(
             b"live=sk_live_51H8mHnGp6qGv7Kc9l1DdS3uVpjkz9gDf2QpPnPO2xZTfWnyQbB3hH9WZQwJfBQEZl7IuK2\n\
 test=sk_test_2MaYVU9EhTxxRKdvOPGiykzM",
-        );
+        ).unwrap();
 
         assert_eq!(findings.len(), 1);
         assert_eq!(

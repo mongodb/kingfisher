@@ -92,7 +92,7 @@ Use a finding’s generated revoke command for supported credentials:
 kingfisher revoke --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 ```
 
-Kingfisher 1.x custom YAML rules may also define `revocation:`.
+Kingfisher custom YAML rules may also define `revocation:`.
 
 ## 7. Scan a GitHub Organization
 
@@ -110,6 +110,6 @@ kingfisher scan /path/to/code --format json --output findings.json
 
 - [Basic Scanning](../usage/basic-scanning.md) — full scanning guide with all options
 - [Platform Integrations](../usage/integrations.md) — GitHub, GitLab, S3, Docker, Slack, and more
-- [Kingfisher 1.x Custom Rules](../rules/overview.md) — create private, organization-specific detections
+- [Custom Rules](../rules/overview.md) — load Kingfisher YAML or Betterleaks TOML and create custom detections
 - [Blast Radius](../features/blast-radius.md) — blast radius mapping for 43 providers
 - [Report Viewer & Triager](../features/report-viewer.md) — local and hosted viewer for Kingfisher, Gitleaks, and TruffleHog JSON reports

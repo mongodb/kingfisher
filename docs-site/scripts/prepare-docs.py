@@ -256,6 +256,20 @@ def rewrite_links(content: str) -> str:
         "](../LICENSE)",
         "](https://github.com/mongodb/kingfisher/blob/main/LICENSE)",
     )
+    # Source-only guides and Rust examples are browsed in the repository.
+    for guide in ("PUBLISHING.md", "WIZARD.md"):
+        content = content.replace(
+            "](" + guide,
+            "](https://github.com/mongodb/kingfisher/blob/main/docs/" + guide,
+        )
+    for directory in ("crates/", "examples/"):
+        content = content.replace(
+            "](../" + directory,
+            "](https://github.com/mongodb/kingfisher/blob/main/" + directory,
+        )
+    content = content.replace(
+        "](../../../docs/RULES.md", "](overview.md"
+    )
     return content
 
 

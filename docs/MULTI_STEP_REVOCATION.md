@@ -215,7 +215,7 @@ kingfisher revoke --rule <rule_id> --var EXTRA_VAR=value <token>
 - `docs/MULTI_STEP_REVOCATION.md`: This file
 
 ### Examples
-- [RULES.md](RULES.md): Kingfisher 1.x custom-rule examples and schema guidance
+- [RULES.md](RULES.md): Kingfisher custom-rule examples and schema guidance
 
 ### Supporting Changes
 - `src/reporter.rs`: Added pattern match for `HttpMultiStep` variant

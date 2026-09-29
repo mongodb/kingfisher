@@ -1,3 +1,4 @@
+// Avoid "update" in the test binary name: Windows may otherwise require elevation.
 use kingfisher::{cli::global::GlobalArgs, update::check_for_update};
 use wiremock::{
     Mock, MockServer, ResponseTemplate,

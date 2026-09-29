@@ -35,9 +35,9 @@ fn scan_fails_for_bad_rule_yaml() {
         .stderr(contains("Failed to load rules")); // bubble-up from RuleLoader
 }
 
-/// 3. Unsupported HTTP method in validation block ⇒ parse_http_method error
+/// 3. An invalid HTTP method makes validation inconclusive, not the credential inactive.
 #[test]
-fn scan_fails_for_unsupported_http_method() {
+fn scan_reports_inconclusive_validation_for_invalid_http_method() {
     let tmp = TempDir::new().unwrap();
 
     // Minimal rule with an invalid HTTP method containing whitespace.
@@ -73,11 +73,16 @@ rules:
             "--rules-path",
             tmp.path().to_str().unwrap(), // only the custom rule
             "--no-dedup",
+            "--format",
+            "pretty",
             "--load-builtins=false", // skip the builtin rules
             "--no-update-check",     // skip update check to avoid network calls
         ])
         .assert()
-        .failure() // CLI exits 0
         .code(200)
-        .stdout(contains("Invalid HTTP method: BREW SPACE").and(contains("Inactive Credential"))); // validation failed
+        .stdout(
+            contains("Validation InvalidConfiguration")
+                .and(contains("Inconclusive Validation"))
+                .and(contains("Inactive Credential").not()),
+        );
 }

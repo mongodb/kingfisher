@@ -5,28 +5,20 @@ PROJECT_NAME := kingfisher
 ZIG_VERSION ?= 0.15.1
 SKIP_TESTS ?= 0
 
-# Determine OS and whether to use gtar on darwin
-OS := $(shell uname)
-ifneq ($(OS),darwin)
-  USE_GTAR := 0
-  TAR_CMD := tar
-  TAR_OPTS := $(shell if tar --help 2>/dev/null | grep -q -- '--no-xattrs'; then echo '--no-xattrs -czf'; else echo '-czf'; fi)
-else
+# Normalize uname once for platform checks (uname reports Darwin on macOS).
+OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+TAR_CMD := tar
+ifeq ($(OS),darwin)
   ifneq ($(shell command -v gtar 2>/dev/null),)
-    USE_GTAR := 1
     TAR_CMD := gtar
-    TAR_OPTS := --no-xattrs -czf
-  else
-    USE_GTAR := 0
-    TAR_CMD := tar
-    TAR_OPTS := -czf
   endif
 endif
+TAR_OPTS := $(shell if $(TAR_CMD) --help 2>/dev/null | grep -q -- '--no-xattrs'; then echo '--no-xattrs -czf'; else echo '-czf'; fi)
 
 # uname reports MSYS_NT*/MINGW*/CLANG*/UCRT64_NT*/CYGWIN* under Windows POSIX
 # shells, including the CLANGARM64 environment required for windows-arm64.
 IS_WINDOWS_HOST := 0
-ifneq (,$(filter Windows_NT MSYS_NT% MINGW% CLANG% UCRT64_NT% CYGWIN_NT%,$(OS)))
+ifneq (,$(filter windows_nt msys_nt% mingw% clang% ucrt64_nt% cygwin_nt%,$(OS)))
   IS_WINDOWS_HOST := 1
 endif
 
@@ -54,7 +46,7 @@ ARCHIVE_CMD = $(TAR_CMD) $(TAR_OPTS)
 SUDO_CMD := $(shell command -v sudo 2>/dev/null)
 
 .PHONY: \
-        default help create-dockerignore setup-zig \
+        default help create-dockerignore setup-zig wizard-gui \
         ubuntu-x64 ubuntu-arm64 linux-x64 linux-arm64 linux linux-all \
         darwin-arm64 darwin-x64 darwin-dev darwin darwin-all \
         require-windows-host windows-x64 windows-arm64 windows-test-x64 windows-test-arm64 windows-test windows \
@@ -76,6 +68,7 @@ help:
 	@echo "  darwin-arm64       Build macOS arm64 archive"
 	@echo "  darwin-all         Build macOS x64 and arm64 archives"
 	@echo "  darwin-dev         Build a macOS arm64 dev binary"
+	@echo "  wizard-gui         Build a release GUI binary for the detected host platform"
 	@echo "  windows-x64        Build Windows x64 archive from MSYS2"
 	@echo "  windows-arm64      Build Windows arm64 archive from MSYS2"
 	@echo "  windows            Build Windows x64 and arm64 archives"
@@ -95,6 +88,14 @@ help:
 
 create-dockerignore:
 	@printf '%s\n' target/ .git/ .vscode/ bin/ > .dockerignore
+
+# Rust's host triple preserves the native ABI (including GNU/MSVC on Windows).
+# The GUI uses native desktop libraries, so do not send it through musl/Docker.
+HOST_TARGET = $(shell rustc -vV | sed -n 's/^host: //p')
+DARWIN_FEATURES := system-alloc
+
+wizard-gui: check-rust
+	cargo build --release --target $(HOST_TARGET) --features "$(strip gui $(if $(filter darwin,$(OS)),$(DARWIN_FEATURES)))" --bin $(PROJECT_NAME)
 
 prepare-release-notices:
 	@mkdir -p target/release/notices
@@ -161,10 +162,18 @@ setup-zig:
 # =============  BAREMETAL BUILDS (Check Rust first, install if missing)  =============
 #
 
-# -------------------------------------------------------------------------------------------------
-# ubuntu-x64 — native static build for x86_64-unknown-linux-musl via Zig. Tested on Ubuntu 24.04.
-# -------------------------------------------------------------------------------------------------
-ubuntu-x64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild exist
+# Target-specific values let both architectures share the same build recipes.
+ubuntu-x64 darwin-x64 linux-x64: BUILD_ARCH := x64
+ubuntu-arm64 darwin-arm64 linux-arm64: BUILD_ARCH := arm64
+ubuntu-x64 linux-x64: BUILD_TARGET := x86_64-unknown-linux-musl
+ubuntu-arm64 linux-arm64: BUILD_TARGET := aarch64-unknown-linux-musl
+darwin-x64: BUILD_TARGET := x86_64-apple-darwin
+darwin-arm64: BUILD_TARGET := aarch64-apple-darwin
+linux-x64: DOCKER_PLATFORM := linux/amd64
+linux-arm64: DOCKER_PLATFORM := linux/arm64
+
+# Native static Linux builds via Zig (Ubuntu).
+ubuntu-x64 ubuntu-arm64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild exist
 	@echo "Checking Rust toolchain…"
 	@$(MAKE) check-rust || { \
             echo "🦀  Installing Rust 1.96.0 …"; \
@@ -181,67 +190,27 @@ ubuntu-x64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild e
 	    zlib1g-dev libbz2-dev liblzma-dev libboost-all-dev \
 	    patch perl ragel
 
-	@echo "🔨  Building $(PROJECT_NAME) for x86_64-unknown-linux-musl …"
+	@echo "🔨  Building $(PROJECT_NAME) for $(BUILD_TARGET) …"
 	@. $$HOME/.cargo/env && \
-	    rustup target add x86_64-unknown-linux-musl && \
+	    rustup target add $(BUILD_TARGET) && \
 	    export PKG_CONFIG_ALLOW_CROSS=1 && \
-	    cargo zigbuild --release --target x86_64-unknown-linux-musl
+	    cargo zigbuild --release --target $(BUILD_TARGET)
 
 	@echo "🗜️   Packaging archive …"
-	@cd target/x86_64-unknown-linux-musl/release && \
+	@cd target/$(BUILD_TARGET)/release && \
 	    find ./$(PROJECT_NAME) -type f -executable -exec sha256sum {} \; > CHECKSUM.txt
 	@mkdir -p target/release
-	@cp target/x86_64-unknown-linux-musl/release/$(PROJECT_NAME) target/release/
-	@cp target/x86_64-unknown-linux-musl/release/CHECKSUM.txt target/release/CHECKSUM-linux-x64.txt
+	@cp target/$(BUILD_TARGET)/release/$(PROJECT_NAME) target/release/
+	@cp target/$(BUILD_TARGET)/release/CHECKSUM.txt target/release/CHECKSUM-linux-$(BUILD_ARCH).txt
 	@cd target/release && \
-	    rm -rf $(PROJECT_NAME)-linux-x64.tgz && \
-	    $(ARCHIVE_CMD) $(PROJECT_NAME)-linux-x64.tgz $(PROJECT_NAME) CHECKSUM-linux-x64.txt notices && \
-	    sha256sum $(PROJECT_NAME)-linux-x64.tgz >> CHECKSUM-linux-x64.txt
+	    rm -rf $(PROJECT_NAME)-linux-$(BUILD_ARCH).tgz && \
+	    $(ARCHIVE_CMD) $(PROJECT_NAME)-linux-$(BUILD_ARCH).tgz $(PROJECT_NAME) CHECKSUM-linux-$(BUILD_ARCH).txt notices && \
+	    sha256sum $(PROJECT_NAME)-linux-$(BUILD_ARCH).tgz >> CHECKSUM-linux-$(BUILD_ARCH).txt
 
 	$(MAKE) list-archives
 
-
-# -------------------------------------------------------------------------------------------------
-# ubuntu-arm64 — native cross-compile to aarch64-unknown-linux-musl via Zig. Tested on Ubuntu 24.04.
-# -------------------------------------------------------------------------------------------------
-ubuntu-arm64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild exist
-	@echo "Checking Rust toolchain…"
-	@$(MAKE) check-rust || { \
-            echo "🦀  Installing Rust 1.96.0 …"; \
-	    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; \
-	    . $$HOME/.cargo/env; \
-            rustup toolchain install 1.96.0; \
-            rustup default 1.96.0; \
-	}
-
-	@echo "📦  Installing build dependencies (musl, cmake, etc.)…"
-	@$(SUDO_CMD) DEBIAN_FRONTEND=noninteractive apt-get update -qq
-	@$(SUDO_CMD) DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-	    build-essential musl-tools musl-dev cmake pkg-config \
-	    zlib1g-dev libbz2-dev liblzma-dev libboost-all-dev \
-	    patch perl ragel
-
-	@echo "🔨  Building $(PROJECT_NAME) for aarch64-unknown-linux-musl …"
-	@. $$HOME/.cargo/env && \
-	    rustup target add aarch64-unknown-linux-musl && \
-	    export PKG_CONFIG_ALLOW_CROSS=1 && \
-	    cargo zigbuild --release --target aarch64-unknown-linux-musl
-
-	@echo "🗜️   Packaging archive …"
-	@cd target/aarch64-unknown-linux-musl/release && \
-	    find ./$(PROJECT_NAME) -type f -executable -exec sha256sum {} \; > CHECKSUM.txt
-	@mkdir -p target/release
-	@cp target/aarch64-unknown-linux-musl/release/$(PROJECT_NAME) target/release/
-	@cp target/aarch64-unknown-linux-musl/release/CHECKSUM.txt target/release/CHECKSUM-linux-arm64.txt
-	@cd target/release && \
-	    rm -rf $(PROJECT_NAME)-linux-arm64.tgz && \
-	    $(ARCHIVE_CMD) $(PROJECT_NAME)-linux-arm64.tgz $(PROJECT_NAME) CHECKSUM-linux-arm64.txt notices && \
-	    sha256sum $(PROJECT_NAME)-linux-arm64.tgz >> CHECKSUM-linux-arm64.txt
-
-	$(MAKE) list-archives
-
-darwin-arm64: prepare-release-notices
-	@echo "Checking Rust for darwin-arm64..."
+darwin-arm64 darwin-x64: prepare-release-notices
+	@echo "Checking Rust for darwin-$(BUILD_ARCH)..."
 	@$(MAKE) check-rust || ( \
 		echo "Rust not found or out-of-date. Installing via Homebrew..." && \
 		brew install rust \
@@ -249,47 +218,23 @@ darwin-arm64: prepare-release-notices
 	@brew list cmake >/dev/null 2>&1 || brew install cmake
 	@if [ "$${VECTORSCAN_BUILD_FROM_SOURCE:-0}" = "1" ]; then brew install boost ragel; fi
 	@brew install gcc libpcap pkg-config sqlite coreutils gnu-tar
-	@rustup target add aarch64-apple-darwin
-	cargo build --release --target aarch64-apple-darwin --features system-alloc
-	@cd target/aarch64-apple-darwin/release && \
+	@rustup target add $(BUILD_TARGET)
+	cargo build --release --target $(BUILD_TARGET) --features $(DARWIN_FEATURES)
+	@cd target/$(BUILD_TARGET)/release && \
 		find ./$(PROJECT_NAME) -type f -not -name "*.d" -not -name "*.rlib" -exec shasum -a 256 {} \; > CHECKSUM.txt
 	@mkdir -p target/release
-	@cp target/aarch64-apple-darwin/release/$(PROJECT_NAME) target/release/
-	@cp target/aarch64-apple-darwin/release/CHECKSUM.txt target/release/CHECKSUM-darwin-arm64.txt
+	@cp target/$(BUILD_TARGET)/release/$(PROJECT_NAME) target/release/
+	@cp target/$(BUILD_TARGET)/release/CHECKSUM.txt target/release/CHECKSUM-darwin-$(BUILD_ARCH).txt
 	@cd target/release && \
-	    rm -rf $(PROJECT_NAME)-darwin-arm64.tgz && \
-		$(ARCHIVE_CMD) $(PROJECT_NAME)-darwin-arm64.tgz $(PROJECT_NAME) CHECKSUM-darwin-arm64.txt notices && \
-		if [ -f $(PROJECT_NAME)-darwin-arm64.tgz ]; then \
-		  shasum -a 256 $(PROJECT_NAME)-darwin-arm64.tgz >> CHECKSUM-darwin-arm64.txt; \
+	    rm -rf $(PROJECT_NAME)-darwin-$(BUILD_ARCH).tgz && \
+		$(ARCHIVE_CMD) $(PROJECT_NAME)-darwin-$(BUILD_ARCH).tgz $(PROJECT_NAME) CHECKSUM-darwin-$(BUILD_ARCH).txt notices && \
+		if [ -f $(PROJECT_NAME)-darwin-$(BUILD_ARCH).tgz ]; then \
+		  shasum -a 256 $(PROJECT_NAME)-darwin-$(BUILD_ARCH).tgz >> CHECKSUM-darwin-$(BUILD_ARCH).txt; \
 		fi
 	$(MAKE) list-archives
 
 darwin-dev:
-	cargo build --profile=dev --target aarch64-apple-darwin --features system-alloc
-
-darwin-x64: prepare-release-notices
-	@echo "Checking Rust for darwin-x64..."
-	@$(MAKE) check-rust || ( \
-		echo "Rust not found or out-of-date. Installing via Homebrew..." && \
-		brew install rust \
-	)
-	@brew list cmake >/dev/null 2>&1 || brew install cmake
-	@if [ "$${VECTORSCAN_BUILD_FROM_SOURCE:-0}" = "1" ]; then brew install boost ragel; fi
-	@brew install gcc libpcap pkg-config sqlite coreutils gnu-tar
-	@rustup target add x86_64-apple-darwin
-	source $$HOME/.cargo/env && cargo build --release --target x86_64-apple-darwin --features system-alloc
-	@cd target/x86_64-apple-darwin/release && \
-		find ./$(PROJECT_NAME) -type f -not -name "*.d" -not -name "*.rlib" -exec shasum -a 256 {} \; > CHECKSUM.txt
-	@mkdir -p target/release
-	@cp target/x86_64-apple-darwin/release/$(PROJECT_NAME) target/release/
-	@cp target/x86_64-apple-darwin/release/CHECKSUM.txt target/release/CHECKSUM-darwin-x64.txt
-	@cd target/release && \
-	    rm -rf $(PROJECT_NAME)-darwin-x64.tgz && \
-		$(ARCHIVE_CMD) $(PROJECT_NAME)-darwin-x64.tgz $(PROJECT_NAME) CHECKSUM-darwin-x64.txt notices && \
-		if [ -f $(PROJECT_NAME)-darwin-x64.tgz ]; then \
-		  shasum -a 256 $(PROJECT_NAME)-darwin-x64.tgz >> CHECKSUM-darwin-x64.txt; \
-		fi
-	$(MAKE) list-archives
+	cargo build --profile=dev --target aarch64-apple-darwin --features $(DARWIN_FEATURES)
 
 require-windows-host:
 ifeq ($(IS_WINDOWS_HOST),1)
@@ -529,9 +474,9 @@ windows-test: windows-test-x64 windows-test-arm64
 # =============  DOCKER-BASED BUILDS =============
 # #
 
-linux-x64: check-docker create-dockerignore prepare-release-notices
+linux-x64 linux-arm64: check-docker create-dockerignore prepare-release-notices
 	@mkdir -p target/release
-	docker run --platform linux/amd64 --rm \
+	docker run --platform $(DOCKER_PLATFORM) --rm \
           -v "$$(pwd):/src" -w /src rust:1.96-alpine sh -eu -c '\
 		apk add --no-cache \
 		    bash \
@@ -545,53 +490,20 @@ linux-x64: check-docker create-dockerignore prepare-release-notices
 	        git openssl-dev curl && \
 		\
 		export CARGO_TARGET_DIR=/src/target-docker && \
-		rustup target add x86_64-unknown-linux-musl && \
+		rustup target add $(BUILD_TARGET) && \
 		\
-		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --workspace --all-targets --jobs 1 --target x86_64-unknown-linux-musl; fi ; \
-		\
-		export PKG_CONFIG_ALLOW_CROSS=1 ; \
-		export RUSTFLAGS="-C target-feature=+crt-static" ; \
-		\
-		cargo build --release --target x86_64-unknown-linux-musl && \
-		cd target-docker/x86_64-unknown-linux-musl/release && \
-	    sha256sum kingfisher > CHECKSUM.txt && \
-	    tar -czf /src/target/release/kingfisher-linux-x64.tgz \
-	        kingfisher CHECKSUM.txt -C /src/target/release notices \
-	'
-	$(MAKE) list-archives
-
-linux-arm64: check-docker create-dockerignore prepare-release-notices
-	@mkdir -p target/release
-	docker run --platform linux/arm64 --rm \
-          -v "$$(pwd):/src" -w /src rust:1.96-alpine sh -eu -c '\
-		apk add --no-cache \
-		    bash \
-		    musl-dev \
-		    gcc g++ make cmake pkgconfig \
-		    zlib-dev  zlib-static \
-		    bzip2-dev bzip2-static \
-		    xz-dev    xz-static \
-		    boost-dev linux-headers \
-		    patch perl ragel \
-	        git openssl-dev curl && \
-		\
-		export CARGO_TARGET_DIR=/src/target-docker && \
-		rustup target add aarch64-unknown-linux-musl && \
-		\
-		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --workspace --all-targets --jobs 1 --target aarch64-unknown-linux-musl; fi ; \
+		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --workspace --all-targets --jobs 1 --target $(BUILD_TARGET); fi ; \
 		\
 		export PKG_CONFIG_ALLOW_CROSS=1 ; \
 		export RUSTFLAGS="-C target-feature=+crt-static" ; \
 		\
-		cargo build --release --target aarch64-unknown-linux-musl && \
-		\
-		cd target-docker/aarch64-unknown-linux-musl/release && \
+		cargo build --release --target $(BUILD_TARGET) && \
+		cd target-docker/$(BUILD_TARGET)/release && \
 	    sha256sum kingfisher > CHECKSUM.txt && \
-	    tar -czf /src/target/release/kingfisher-linux-arm64.tgz \
+	    tar -czf /src/target/release/kingfisher-linux-$(BUILD_ARCH).tgz \
 	        kingfisher CHECKSUM.txt -C /src/target/release notices \
 	'
 	$(MAKE) list-archives
-
 
 # =============  AGGREGATE TARGETS  =============
 #

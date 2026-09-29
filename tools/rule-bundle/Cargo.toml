@@ -1,0 +1,23 @@
+[package]
+name = "kingfisher-rule-bundle"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+# Match the workspace's ZIP backend so feature unification does not change bundle bytes.
+flate2 = { version = "1.1", default-features = false, features = ["zlib-rs"] }
+regex.workspace = true
+regex-syntax = "0.8"
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml = "0.9"
+sha2.workspace = true
+toml = "0.8"
+ureq = { version = "3.4", default-features = false, features = ["native-tls"] }
+
+[dev-dependencies]
+tempfile = "3"

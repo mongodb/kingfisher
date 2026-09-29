@@ -121,8 +121,8 @@ Validation tells you a credential is live. Blast radius tells you why it's
 urgent. Revocation closes the loop.
 
 The current Betterleaks schema does not publish revocation metadata. Kingfisher binds selected
-detectors to reviewed provider actions through a detection-free capability overlay; its Kingfisher
-1.x custom YAML format also supports HTTP, multi-step HTTP, AWS, and GCP revocation:
+detectors to reviewed provider actions through a detection-free capability overlay. The Kingfisher
+rule format (YAML) also supports HTTP, multi-step HTTP, AWS, and GCP revocation:
 
 ```bash
 kingfisher revoke --rule github-pat "$LEAKED_TOKEN"

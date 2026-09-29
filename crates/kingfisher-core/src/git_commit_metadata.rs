@@ -149,6 +149,14 @@ pub struct CommitMetadata {
     #[serde(with = "HexObjectId")]
     pub commit_id: ObjectId,
 
+    /// The original author's interned name, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_name: Option<Arc<str>>,
+
+    /// The original author's interned email, when available.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub author_email: Option<Arc<str>>,
+
     /// The committer's interned name.
     pub committer_name: Arc<str>,
 

@@ -44,9 +44,11 @@ limitations under the License.
 Built-in rules
 --------------------------------------------------------------------
 Kingfisher's candidate detector catalog is sourced from Betterleaks and selected
-Veles detectors in OSV-SCALIBR. Upstream candidate sources are fetched at build
-time and are not vendored in this repository; Kingfisher adds operational
-validation, filtering, access-map, and revocation behavior around them.
+Veles detectors in OSV-SCALIBR. A maintainer tool converts pinned upstream sources
+into the bundled catalog; Kingfisher modifies the imported rules with operational
+validation, filtering, access-map, and revocation behavior. Exact upstream inputs,
+license texts, source headers, and provenance are preserved in
+crates/kingfisher-rules/generated/.
 
 Veles / OSV-SCALIBR
 https://github.com/google/osv-scalibr

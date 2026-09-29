@@ -1,274 +1,74 @@
 {% extends "main.html" %}
 
-{% block tabs %}
-  {{ super() }}
-
-  <style>
-    /* Hide header title on landing page */
-    .md-header__topic { display: none; }
-  </style>
-
-  <!-- Hero -->
-  <section class="kf-hero">
-    <div class="kf-hero__inner md-grid">
-      <div class="kf-hero__content">
-        <img src="{{ 'assets/images/kingfisher_logo.png' | url }}" alt="Kingfisher Logo" class="kf-hero__logo" width="126" height="173">
-        <h1 class="kf-hero__title">Kingfisher</h1>
-        <p class="kf-hero__subtitle">Detect and Validate Secrets Anywhere. Map Access. Revoke Fast.</p>
-        <p class="kf-hero__tagline">
-          Find exposed credentials, verify which are active, map what they can reach,
-          triage findings visually, and revoke supported secrets.
-        </p>
-        <ol class="kf-hero__workflow" aria-label="Secret response workflow">
-          <li>Detect</li>
-          <li>Validate</li>
-          <li>Map</li>
-          <li>Triage</li>
-          <li>Revoke</li>
-        </ol>
-        <p class="kf-hero__proof">
-          The end-to-end defender workflow in one Apache-2.0-licensed Rust tool, built by MongoDB.
-        </p>
-        <div class="kf-hero__actions">
-          <a href="{{ 'getting-started/installation/' | url }}" class="md-button md-button--primary">
-            Get Started
-          </a>
-          <a href="https://github.com/mongodb/kingfisher" class="md-button">
-            View on GitHub
-          </a>
+{% block container %}
+  <a href="#kf-title" class="md-skip">Skip to content</a>
+  <div class="kf-home">
+    <section class="kf-hero" aria-labelledby="kf-title">
+      <div class="kf-wrap kf-hero__grid">
+        <div>
+          <p class="kf-eyebrow"><span class="kf-dot"></span> OPEN SOURCE SECURITY · BUILT BY MONGODB</p>
+          <h1 id="kf-title" tabindex="-1">Find the secret.<br>Understand <em>the risk.</em></h1>
+          <p class="kf-lead">From exposed credentials to actionable insight. Detect, validate, investigate, and contain secrets with Kingfisher.</p>
+          <div class="kf-actions">
+            <a class="kf-button kf-button--primary" href="{{ 'viewer/' | url }}">Open report viewer <span aria-hidden="true">↗</span></a>
+            <a class="kf-button kf-button--outline" href="{{ 'rules/builtin-rules/' | url }}">Explore detection rules <span aria-hidden="true">→</span></a>
+          </div>
+          <p class="kf-hero__note">Built in Rust. Apache 2.0 licensed. Ready for your workflow.</p>
+        </div>
+        <div class="kf-console" aria-label="Illustrative Kingfisher triage preview">
+          <div class="kf-console__bar"><span class="kf-console__brand">◈ &nbsp; kingfisher</span><span class="kf-preview-label">ILLUSTRATIVE REPORT</span></div>
+          <div class="kf-console__body">
+            <div class="kf-console__heading"><span>Exposure overview</span><span class="kf-pill">Scan complete</span></div>
+            <div class="kf-metrics"><div><strong>12</strong><span>Findings</span></div><div><strong class="kf-green">3</strong><span>Active credentials</span></div><div><strong>4</strong><span>Providers</span></div></div>
+            <div class="kf-preview-row kf-preview-row--head"><span>DETECTED CREDENTIAL</span><span>VALIDATION</span></div>
+            <div class="kf-preview-row"><span><b>GitHub</b><small>Personal access token</small></span><span class="kf-status">● Active</span></div>
+            <div class="kf-preview-row"><span><b>AWS</b><small>Access key</small></span><span class="kf-status">● Active</span></div>
+            <div class="kf-preview-row"><span><b>MongoDB</b><small>Connection string</small></span><span class="kf-status kf-status--muted">○ Not attempted</span></div>
+            <div class="kf-console__foot"><span class="kf-dot"></span> Prioritize findings. Explore their impact.</div>
+          </div>
         </div>
       </div>
-    </div>
-  </section>
+    </section>
 
-  <!-- Stats bar -->
-  <section class="kf-stats">
-    <div class="kf-stats__inner md-grid">
-      <div class="kf-stats__item">
-        <span class="kf-stats__number">485</span>
-        <span class="kf-stats__label">Detection Rules</span>
+    <div class="kf-trust"><div class="kf-wrap"><span>ONE CONNECTED WORKFLOW</span><ol><li>Detect</li><li>Validate</li><li>Map access</li><li>Triage</li><li>Revoke</li></ol><a href="{{ 'usage/defender-workflow/' | url }}">See how it works <span aria-hidden="true">→</span></a></div></div>
+
+    <section class="kf-section kf-wrap" aria-labelledby="tools-title">
+      <div class="kf-section-heading"><div><p class="kf-eyebrow">YOUR INVESTIGATION STARTS HERE</p><h2 id="tools-title">Less noise.<br>More clarity.</h2></div><p>Explore what Kingfisher detects, then turn your scan results into a focused response.</p></div>
+      <div class="kf-tools">
+        <article class="kf-tool kf-tool--viewer">
+          <div class="kf-tool__top"><span class="kf-tool-icon" aria-hidden="true">↗</span><span class="kf-kicker">INVESTIGATE &amp; TRIAGE</span></div>
+          <h3>See the whole story<br>behind a finding.</h3>
+          <p>Bring your reports together. Filter findings, identify active credentials, and explore blast radius when your Kingfisher report includes access-map data.</p>
+          <div class="kf-formats" aria-label="Supported report formats"><span>Kingfisher</span><span>SARIF</span><span>Gitleaks</span><span>TruffleHog</span></div>
+          <div class="kf-tool__footer"><a class="kf-button kf-button--primary" href="{{ 'viewer/' | url }}">Launch report viewer <span aria-hidden="true">↗</span></a><span>Reports stay in your browser.</span></div>
+          <a class="kf-text-link" href="{{ 'features/report-viewer/' | url }}">Viewer guide &amp; import support <span aria-hidden="true">→</span></a>
+        </article>
+        <article class="kf-tool kf-tool--rules">
+          <div class="kf-tool__top"><span class="kf-tool-icon" aria-hidden="true">⌕</span><span class="kf-kicker">EXPLORE DETECTION COVERAGE</span></div>
+          <h3>Know exactly<br>what you can find.</h3>
+          <p>Browse the built-in catalog from Betterleaks and Veles. Search by provider and compare confidence, live validation, and direct revocation support.</p>
+          <div class="kf-rule-preview" aria-label="Examples of detection coverage"><div><code>github-pat</code><span>GitHub</span></div><div><code>aws-access-token</code><span>AWS</span></div><div><code>mongodb-connection-string</code><span>MongoDB</span></div></div>
+          <div class="kf-tool__footer"><a class="kf-button kf-button--dark" href="{{ 'rules/builtin-rules/' | url }}">Browse detection rules <span aria-hidden="true">→</span></a></div>
+          <a class="kf-text-link" href="{{ 'rules/overview/' | url }}">Build your own custom rules <span aria-hidden="true">→</span></a>
+        </article>
       </div>
-      <div class="kf-stats__item">
-        <span class="kf-stats__number">43</span>
-        <span class="kf-stats__label">Blast Radius Providers</span>
+    </section>
+
+    <section class="kf-platform" aria-labelledby="platform-title"><div class="kf-wrap">
+      <p class="kf-eyebrow">FROM DISCOVERY TO RESPONSE</p><h2 id="platform-title">Go beyond the match.</h2>
+      <div class="kf-capabilities">
+        <article><span class="kf-step">01 / DISCOVER</span><h3>Scan across your estate.</h3><p>Find credentials in files, Git history, cloud storage, containers, and collaboration platforms.</p><a href="{{ 'usage/integrations/' | url }}">Explore integrations →</a></article>
+        <article><span class="kf-step">02 / UNDERSTAND</span><h3>Verify the impact.</h3><p>Check credentials against provider APIs. Map identities, permissions, and accessible resources with blast-radius analysis.</p><a href="{{ 'features/blast-radius/' | url }}">Explore access mapping →</a></article>
+        <article><span class="kf-step">03 / RESPOND</span><h3>Move toward containment.</h3><p>Investigate findings visually and revoke supported credentials through provider-specific CLI workflows.</p><a href="{{ 'features/revocation/' | url }}">See revocation support →</a></article>
       </div>
-      <div class="kf-stats__item">
-        <span class="kf-stats__number">15+</span>
-        <span class="kf-stats__label">Scan Targets</span>
-      </div>
-      <div class="kf-stats__item">
-        <span class="kf-stats__number">34</span>
-        <span class="kf-stats__label">Rules with Revocation</span>
-      </div>
-    </div>
-  </section>
+    </div></section>
 
-  <!-- Features -->
-  <section class="kf-features">
-    <div class="kf-features__inner md-grid">
-      <h2 class="kf-section__title">From Exposure to Containment</h2>
-      <p class="kf-section__desc">
-        Go beyond matching patterns. Kingfisher connects detection, verification, impact analysis,
-        investigation, and supported remediation in one workflow.
-      </p>
+    <section class="kf-section kf-wrap kf-start" aria-labelledby="start-title"><div><p class="kf-eyebrow">START WITH A SCAN</p><h2 id="start-title">Your next step<br>takes one command.</h2><p>Install Kingfisher and bring secret detection into your local development or CI workflow.</p><a class="kf-text-link" href="{{ 'getting-started/installation/' | url }}">All installation options →</a></div><div class="kf-terminal"><div class="kf-console__bar"><span>TERMINAL</span><span>HOMEBREW</span></div><pre><code><span># Install Kingfisher</span>
+brew install kingfisher
 
-      <div class="kf-features__grid">
-        <div class="kf-feature">
-          <h3>Detect Across Your Estate</h3>
-          <p>
-            Files, Git repos, GitHub, GitLab, Azure Repos, Bitbucket, Gitea,
-            Hugging Face, Docker images, AWS S3, Google Cloud Storage, Jira,
-            Confluence, Slack, and Microsoft Teams.
-          </p>
-        </div>
-
-        <div class="kf-feature">
-          <h3>Live Validation</h3>
-          <p>
-            Check discovered credentials against provider APIs and distinguish verified active
-            credentials from inactive, assumed, and inconclusive findings.
-          </p>
-        </div>
-
-        <div class="kf-feature">
-          <h3>Blast Radius Mapping</h3>
-          <p>
-            Map leaked keys to their identities, permissions, and exposed resources.
-            All 43 providers—including AWS and GCP—ship in the open-source release,
-            with scan-integrated and standalone workflows.
-          </p>
-        </div>
-
-        <div class="kf-feature">
-          <h3>Visual Triage</h3>
-          <p>
-            Investigate, filter, deduplicate, and export findings in a browser-based report viewer.
-            Import common report formats to enrich an existing scanning workflow with Kingfisher's
-            validation and remediation data.
-          </p>
-        </div>
-
-        <div class="kf-feature">
-          <h3>Direct Revocation</h3>
-          <p>
-            Revoke supported credentials from the CLI with provider-specific workflows.
-            Follow the finding’s generated command and the provider’s permission requirements.
-          </p>
-        </div>
-
-        <div class="kf-feature">
-          <h3>Free and Open Source</h3>
-          <p>
-            Live validation, AWS and GCP blast-radius analysis, visual triage, and supported
-            revocation ship in the Apache-2.0 release.
-          </p>
-        </div>
-
-        <div class="kf-feature">
-          <h3>Built for Accuracy</h3>
-          <p>
-            Combine entropy filters, format checks, checksums, and live validation.
-            Eligible HTML and CSS files also receive parser-based context verification.
-          </p>
-        </div>
-
-        <div class="kf-feature">
-          <h3>Built for AI</h3>
-          <p>
-            Detects and validates tokens for 35+ AI/ML providers including OpenAI,
-            Anthropic, Google Gemini, Mistral, Cohere, and more. Purpose-built TOON
-            output format for token-efficient LLM and agent workflows.
-          </p>
-        </div>
-
-        <div class="kf-feature">
-          <h3>Built for Speed</h3>
-          <p>
-            A multithreaded Vectorscan engine uses SIMD-accelerated regex matching.
-            Repeated credentials with the same validation context reuse validation results.
-          </p>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Benchmark -->
-  <section class="kf-benchmark">
-    <div class="kf-benchmark__inner md-grid">
-      <h2 class="kf-section__title">Performance</h2>
-      <p class="kf-section__desc">
-        Compare scan runtimes, validation requests, and binary sizes in the published
-        benchmark suite. The methodology documents tool versions, settings, and test hardware.
-      </p>
-      <img src="{{ 'assets/images/runtime-comparison.png' | url }}" alt="Kingfisher Runtime Comparison across major open source repositories" class="kf-benchmark__chart">
-      <p class="kf-benchmark__link">
-        <a href="{{ 'reference/comparison/' | url }}">See full benchmark methodology and results</a>
-      </p>
-    </div>
-  </section>
-
-  <!-- Scan Targets -->
-  <section class="kf-targets">
-    <div class="kf-targets__inner md-grid">
-      <h2 class="kf-section__title">Scan Targets</h2>
-      <div class="kf-targets__grid">
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/files.svg' | url }}" alt="Files" height="40">
-          <span>Files / Dirs</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/local-git.svg' | url }}" alt="Git" height="40">
-          <span>Local Git</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/github.svg' | url }}" alt="GitHub" height="40">
-          <span>GitHub</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/gitlab.svg' | url }}" alt="GitLab" height="40">
-          <span>GitLab</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/azure-devops.svg' | url }}" alt="Azure Repos" height="40">
-          <span>Azure Repos</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/bitbucket.svg' | url }}" alt="Bitbucket" height="40">
-          <span>Bitbucket</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/gitea.svg' | url }}" alt="Gitea" height="40">
-          <span>Gitea</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/huggingface.svg' | url }}" alt="Hugging Face" height="40">
-          <span>Hugging Face</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/docker.svg' | url }}" alt="Docker" height="40">
-          <span>Docker</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/jira.svg' | url }}" alt="Jira" height="40">
-          <span>Jira</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/confluence.svg' | url }}" alt="Confluence" height="40">
-          <span>Confluence</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/slack.svg' | url }}" alt="Slack" height="40">
-          <span>Slack</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/teams.svg' | url }}" alt="Microsoft Teams" height="40">
-          <span>Teams</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/aws-s3.svg' | url }}" alt="AWS S3" height="40">
-          <span>AWS S3</span>
-        </div>
-        <div class="kf-target">
-          <img src="{{ 'assets/icons/gcs.svg' | url }}" alt="Google Cloud Storage" height="40">
-          <span>Cloud Storage</span>
-        </div>
-      </div>
-    </div>
-  </section>
-
-  <!-- Install -->
-  <section class="kf-install">
-    <div class="kf-install__inner md-grid">
-      <h2 class="kf-section__title">Install Kingfisher</h2>
-      <div class="kf-install__tabs">
-        <div class="kf-install__tab">
-          <h4>Homebrew</h4>
-          <div class="highlight"><pre><code>brew install kingfisher</code></pre></div>
-        </div>
-        <div class="kf-install__tab">
-          <h4>PyPI</h4>
-          <div class="highlight"><pre><code>uv tool install kingfisher-bin</code></pre></div>
-        </div>
-        <div class="kf-install__tab">
-          <h4>Docker</h4>
-          <div class="highlight"><pre><code>docker run --rm -v "$PWD":/src ghcr.io/mongodb/kingfisher:latest scan /src</code></pre></div>
-        </div>
-        <div class="kf-install__tab">
-          <h4>Script</h4>
-          <div class="highlight"><pre><code>curl -sSL https://raw.githubusercontent.com/mongodb/kingfisher/main/scripts/install-kingfisher.sh | bash</code></pre></div>
-        </div>
-      </div>
-      <div class="kf-install__cta">
-        <a href="{{ 'getting-started/installation/' | url }}" class="md-button md-button--primary">
-          Full Installation Guide
-        </a>
-      </div>
-    </div>
-  </section>
-
+<span># Scan your current directory</span>
+kingfisher scan . --view-report</code></pre><a href="{{ 'getting-started/quick-start/' | url }}">Follow the quick start <span aria-hidden="true">→</span></a></div></section>
+    <div class="kf-bottom"><div class="kf-wrap"><span><b>Kingfisher</b> &nbsp; / &nbsp; Built by MongoDB</span><a href="https://github.com/mongodb/kingfisher">Explore the source on GitHub ↗</a></div></div>
+  </div>
 {% endblock %}
-
 {% block content %}{% endblock %}
-{% block footer %}
-  {{ super() }}
-{% endblock %}

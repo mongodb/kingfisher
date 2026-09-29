@@ -1,3 +1,4 @@
+// Avoid "installer" in the test binary name: Windows may otherwise require elevation.
 use assert_cmd::Command;
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;

@@ -3,6 +3,15 @@
 All notable changes to this project will be documented in this file.
 
 ## [v2.8.0]
+- **Behavior change:** `--since-commit` now scans full commit ranges by default, catching secrets later deleted. Use `--git-history none` for net-diff scanning. [#518](https://github.com/mongodb/kingfisher/issues/518)
+- Added Git author name and email alongside committer information in finding metadata. [#519](https://github.com/mongodb/kingfisher/issues/519)
+- Improved `--branch` scan performance by avoiding per-commit Git index setup.
+- Branch-only remote scans now fetch just the selected branch and keep branch-specific clones separate from full-repository clones. [#514](https://github.com/mongodb/kingfisher/issues/514)
+- Added the optional native `wizard` (`gui`) for configuring scans, tracking progress, and inspecting JSON/JSONL or SARIF reports with filters, exports, and Git provenance.
+- Added independent report tabs and native Kingfisher desktop icons for macOS, Linux, and Windows.
+- Improved wizard readability with comma-separated counts, compact column controls, clickable commit links, and a **Local Web Viewer** action that preserves imported reports.
+- **Library behavior changes:** `ScannerConfig::enable_dedup` now defaults to `false` (previously `true`). Opt-in deduplication keys on both blob ID and source path, preserving identical content at different paths. Betterleaks filter evaluation errors now fail the scan call instead of silently keeping the finding.
+- Stabilized the 1.0.0 embedding APIs for `kingfisher-core`, `kingfisher-rules`, and `kingfisher-scanner`, with runnable examples and version-aware crates.io publishing for all crates, including `kingfisher-bin`.
 - Switched to the published `kingfisher-vectorscan` crate and its checksum-verified prebuilt archives, removing the local Vectorscan CMake build on supported targets. Windows builds use GNU/LLVM MinGW; MSVC is unsupported.
 - Replaced the temporary MongoDB driver Git pin with crates.io 3.8.0, retaining SRV validation and the Hickory 0.26 DNS fix.
 - Fixed scan-time validation requests to send a User-Agent, preventing services such as GitHub from rejecting them. Thanks @wingc-canva. [#512](https://github.com/mongodb/kingfisher/pull/512)
@@ -88,7 +97,7 @@ All notable changes to this project will be documented in this file.
   Veles detectors filling gaps, giving the community a well-designed shared format and a common
   place to develop generally useful rules.
 - Kingfisher now fetches and parses the Betterleaks catalog and selected Veles source files at build
-  time; the Kingfisher 1.x YAML custom-rule format remains supported for custom rules.
+  time; the Kingfisher rule format (YAML) remains supported for custom rules.
 - Preserved Kingfisher's engine capabilities around validation, blast-radius mapping, and credential revocation while allowing us to focus investment on scan performance, integrations, and analysis workflows.
 - All rules now use Vectorscan candidate detection, eliminating unconditional whole-blob regex fallbacks for Betterleaks' large generic credential patterns; Betterleaks path and finding-filter regex helpers are also compiled once with Vectorscan instead of being rebuilt per path or finding.
 

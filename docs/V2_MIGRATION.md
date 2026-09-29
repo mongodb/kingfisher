@@ -12,7 +12,7 @@ capabilities remain operational behavior layered onto those upstream candidates.
   during the Kingfisher build. They are no longer maintained as a second, vendored Kingfisher
   catalog.
 - Built-in rule IDs use the `betterleaks.` and `veles.` namespaces. Update scripts and rule selectors that refer to former built-in `kingfisher.*` IDs; see [Migrating rule selectors](#migrating-rule-selectors) for the compatibility shim.
-- Kingfisher's 1.x YAML rule format remains supported for private, organization-specific custom rules. Use Betterleaks TOML for new generally useful built-in detectors.
+- Both the Kingfisher rule format (`.yml`/`.yaml`) and Betterleaks TOML (`.toml`) are fully supported for custom rules loaded with `--rules-path`. Use Betterleaks TOML for new generally useful built-in detectors.
 - Betterleaks rules continue to participate in Kingfisher validation, blast-radius/access-map analysis, and supported credential revocation through Kingfisher's capability mappings.
 
 ## Migrating rule selectors
@@ -50,4 +50,4 @@ Run `kingfisher rules list` to see the current catalog.
 
 This move lets MongoDB concentrate on improving the Kingfisher engine: fast scanning, repository and artifact coverage, validation workflows, reporting, blast-radius analysis, revocation, and integrations. Rule development can be abstracted into a community-maintained upstream catalog, so improvements can be shared across tools instead of being reimplemented in separate formats.
 
-If you want a new generally useful Kingfisher rule, please support this direction by creating or improving it in the [Betterleaks repository](https://github.com/betterleaks/betterleaks). Keep the Kingfisher 1.x YAML format for rules that are intentionally private or specific to your environment; see [Kingfisher 1.x Custom Rules](RULES.md).
+If you want a new generally useful Kingfisher rule, please support this direction by creating or improving it in the [Betterleaks repository](https://github.com/betterleaks/betterleaks). Custom rules can use either the Kingfisher rule format (YAML) or Betterleaks TOML; see [Custom Rules](RULES.md).

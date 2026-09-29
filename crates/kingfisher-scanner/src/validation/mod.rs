@@ -1,7 +1,7 @@
 //! Credential validation module for Kingfisher.
 //!
 //! This module provides functionality for validating detected secrets by checking
-//! if they are still active/valid. Validation is gated behind the `validation` feature.
+//! if they are still active/valid. Validation is gated behind optional protocol-specific features.
 //!
 //! # Features
 //!
@@ -9,12 +9,17 @@
 //!
 //! ```toml
 //! [dependencies]
-//! kingfisher-scanner = { version = "0.1", features = ["validation"] }
+//! kingfisher-scanner = { version = "1.0.0", features = ["validation-http"] }
 //! ```
+//!
+//! Prefer `Validator` for automatic rule dispatch, credential association,
+//! bounded concurrency, and explicit results (requires `validation-http`).
+//! The protocol helpers below remain available for custom orchestration.
 //!
 //! # Available Validators
 //!
 //! - **HTTP**: Generic HTTP-based validation via configurable requests
+//! - **gRPC**: Unary requests with trailers (requires `validation-grpc` feature)
 //! - **AWS**: AWS credential validation via STS (requires `validation-aws` feature)
 //! - **GCP**: GCP service account validation (requires `validation-gcp` feature)
 //! - **Azure**: Azure Storage credential validation (requires `validation-azure` feature)
@@ -191,3 +196,27 @@ mod tests {
         assert!(response.is_still_valid(Duration::from_secs(1)));
     }
 }
+
+/// Shared Betterleaks expression interpreter used by the CLI and embedding API.
+#[cfg(feature = "validation-http")]
+pub mod betterleaks;
+
+/// Unary gRPC transport and template helpers.
+#[cfg(feature = "validation-grpc")]
+pub mod grpc;
+
+#[cfg(feature = "validation-http")]
+mod validator;
+#[cfg(feature = "validation-http")]
+pub use validator::{ValidatedFinding, Validator, ValidatorBuilder};
+#[cfg(feature = "validation-http")]
+mod result;
+#[cfg(feature = "validation-http")]
+pub use result::{ValidationReason, ValidationResult};
+
+#[cfg(feature = "validation-http")]
+pub mod credential_uri;
+#[cfg(feature = "validation-http")]
+pub mod engine;
+#[cfg(feature = "validation-http")]
+pub use engine::ValidationEngine;

@@ -20,6 +20,73 @@ env:
   RUST_TOOLCHAIN: "1.96.0"
 
 jobs:
+  rule-bundle:
+    name: Verify prepared rule bundle
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - name: Build maintainer tool
+        run: cargo build --locked -p kingfisher-rule-bundle
+      - name: Verify artifacts with network disabled
+        run: sudo unshare --net target/debug/kingfisher-rule-bundle --check
+
+  library-contract:
+    name: Stable library API (${{ matrix.features }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        features: [default-features, all-features]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake pkg-config perl curl
+      # Plain cargo test includes doctests, unlike --all-targets and nextest.
+      - name: Test libraries, consumer contracts, and README examples at MSRV
+        env:
+          FEATURE_GROUP: ${{ matrix.features }}
+          RUSTDOCFLAGS: -D warnings
+        run: |
+          if [ "$FEATURE_GROUP" = all-features ]; then
+            cargo test --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner --all-features
+            cargo doc --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner --no-deps --all-features
+          else
+            cargo test --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner --no-default-features
+            cargo doc --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner --no-deps --no-default-features
+          fi
+      - name: Test library example behavior and publication planner
+        if: matrix.features == 'default-features'
+        run: |
+          python3 -m unittest discover -s scripts/tests -v
+      - name: Check validator features independently
+        if: matrix.features == 'default-features'
+        run: |
+          for feature in validation validation-http validation-grpc validation-raw validation-ethereum validation-aws validation-azure validation-coinbase validation-gcp validation-jwt validation-database; do
+            cargo check --locked -p kingfisher-scanner --no-default-features --features "$feature"
+          done
+      - name: Install compatibility checker
+        if: github.event_name == 'pull_request'
+        run: cargo install --locked cargo-semver-checks --version 0.50.0
+      - name: Check public API compatibility against PR base
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_REV: ${{ github.event.pull_request.base.sha }}
+          FEATURE_GROUP: ${{ matrix.features }}
+        run: |
+          cargo semver-checks -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner \
+            --baseline-rev "$BASE_REV" --"$FEATURE_GROUP"
+
   viewer:
     name: Viewer regressions
     runs-on: ubuntu-24.04
@@ -63,6 +130,10 @@ jobs:
         run: make tests
         env:
           # Bound compiler memory while allowing two crates to build concurrently.
+          CARGO_BUILD_JOBS: 2
+      - name: Run the kingfisher-bin library example
+        run: cargo run --locked -p kingfisher-bin --example embedded_application
+        env:
           CARGO_BUILD_JOBS: 2
 
   linux-arm64:
@@ -132,6 +203,11 @@ jobs:
 
       - name: Run tests
         run: make tests
+
+      # Includes the process fixture harness and GPUI's headless UI tests.
+      - name: Run wizard regressions
+        run: |
+          cargo test --locked -p kingfisher-bin --features gui-tests --lib wizard::
 
   windows:
     name: Windows ${{ matrix.arch }}

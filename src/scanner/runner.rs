@@ -94,6 +94,11 @@ impl Drop for ValidationCacheLifetime {
     }
 }
 
+/// Input discovery completed without finding any scan targets.
+#[derive(Debug, thiserror::Error)]
+#[error("No inputs to scan")]
+pub struct NoScanInputsError;
+
 pub async fn run_scan(
     global_args: &global::GlobalArgs,
     scan_args: &scan::ScanArgs,
@@ -125,6 +130,8 @@ pub async fn run_async_scan(
     let _validation_cache_lifetime =
         if args.no_validate { None } else { Some(ValidationCacheLifetime::begin().await) };
 
+    let _wizard_progress = crate::scan_progress::start();
+
     // ── Phase 1: Input validation and environment setup ──────────────────
     validate_inputs(args)?;
     if args.disk_offload {
@@ -147,6 +154,11 @@ pub async fn run_async_scan(
     set_redaction_enabled(args.redact);
 
     // ── Phase 2: Repository enumeration ─────────────────────────────────
+    crate::scan_progress::phase(
+        "Discovering repositories and fetching inputs",
+        0,
+        crate::scan_progress::PhaseKind::Other,
+    );
     let repo_enumeration = enumerate_all_repos(args, global_args).await?;
     let repo_urls = repo_enumeration.repo_urls;
     {
@@ -246,7 +258,7 @@ pub async fn run_async_scan(
         && !has_remote_objects
         && !args.input_specifier_args.has_artifact_sources()
     {
-        bail!("No inputs to scan");
+        return Err(NoScanInputsError.into());
     }
 
     let baseline_path = Arc::new(
@@ -1135,6 +1147,7 @@ async fn run_sequential_scan(
         scan_started_at,
         update_status,
     );
+    crate::scan_progress::phase("Writing report", 0, crate::scan_progress::PhaseKind::Other);
     crate::reporter::run(global_args, Arc::clone(datastore), args, Some(audit_context))
         .context("Failed to run report command")?;
     print_scan_summary(
@@ -1639,6 +1652,7 @@ async fn run_parallel_scan(
             scan_started_at,
             update_status,
         );
+        crate::scan_progress::phase("Writing report", 0, crate::scan_progress::PhaseKind::Other);
         crate::reporter::run(global_args, Arc::clone(datastore), args, Some(audit_context))
             .context("Failed to run report command")?;
     } else if ran_repo_scan.load(Ordering::Relaxed) {
@@ -1686,6 +1700,7 @@ async fn run_parallel_scan(
             scan_started_at,
             update_status,
         );
+        crate::scan_progress::phase("Writing report", 0, crate::scan_progress::PhaseKind::Other);
         crate::reporter::run(global_args, Arc::clone(datastore), args, Some(audit_context))
             .context("Failed to run report command")?;
     }
@@ -1744,6 +1759,11 @@ async fn finalize_access_map(
         return Ok(());
     }
 
+    crate::scan_progress::phase(
+        "Mapping credential access",
+        0,
+        crate::scan_progress::PhaseKind::Other,
+    );
     let results = access_map::map_collected_requests(requests).await;
 
     {

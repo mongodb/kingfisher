@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-scanner"
-version = "0.1.0"
+version = "1.0.0"
 description = "High-level scanning API for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -8,7 +8,13 @@ license.workspace = true
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
-publish = false
+publish.workspace = true
+include = ["src/**", "examples/**", "build_support/**", "generated/**", "data/**", "LICENSE", "README.md"]
+
+# docs.rs blocks network access, so compile the vendored native source there.
+[package.metadata.docs.rs]
+features = ["kingfisher-vectorscan/build-from-source"]
+targets = ["x86_64-unknown-linux-gnu"]
 
 [features]
 default = []
@@ -26,6 +32,12 @@ validation-http = [
     "dep:sha1",
     "dep:hex",
     "dep:time",
+    "dep:hmac",
+    "dep:sha2",
+    "dep:futures",
+    "dep:chrono",
+    "dep:url",
+    "dep:percent-encoding",
 ]
 
 # Provider/protocol-specific validation flows that need custom network logic.
@@ -117,10 +129,14 @@ validation-database = [
     "dep:sha1",
 ]
 
+# gRPC unary validation (HTTP/2 headers and trailers).
+validation-grpc = ["validation-http", "tokio/rt", "dep:h2", "dep:bytes", "dep:rustls", "dep:rustls-native-certs", "dep:tokio-rustls", "dep:url"]
+
 # All validation features
 validation-all = [
     "validation",
     "validation-raw",
+    "validation-grpc",
     "validation-ethereum",
     "validation-aws",
     "validation-azure",
@@ -132,8 +148,8 @@ validation-all = [
 
 [dependencies]
 # Internal dependencies
-kingfisher-core = { path = "../kingfisher-core" }
-kingfisher-rules = { path = "../kingfisher-rules" }
+kingfisher-core = { version = "1.0.0", path = "../kingfisher-core" }
+kingfisher-rules = { version = "1.0.0", path = "../kingfisher-rules" }
 
 # Error handling
 anyhow.workspace = true
@@ -183,13 +199,16 @@ sha3 = { workspace = true, optional = true }
 zeroize = { workspace = true, optional = true }
 
 # HTTP validation
+futures = { version = "0.3.34", optional = true }
+h2 = { version = "0.4.19", optional = true }
+bytes = { version = "1.12.1", optional = true }
 reqwest = { version = "0.13", default-features = false, features = [
     "json", "gzip", "brotli", "deflate", "form", "query", "stream", "http2", "rustls", "multipart"
 ], optional = true }
 tokio = { version = "1.53", features = ["net", "time", "sync", "io-util"], optional = true }
 liquid = { version = "0.26", optional = true }
 liquid-core = { version = "0.26", optional = true }
-quick-xml = { version = "0.41", features = ["serde", "serialize"], optional = true }
+quick-xml = { version = "0.42", features = ["serde", "serialize"], optional = true }
 sha1 = { workspace = true, optional = true }
 time = { workspace = true, optional = true }
 chrono = { version = "0.4.45", optional = true }
@@ -233,6 +252,19 @@ ldap3 = { version = "0.12.1", default-features = false, features = ["tls-native"
 ldap3 = { version = "0.12.1", default-features = false, features = ["tls-rustls-aws-lc-rs"], optional = true }
 
 [dev-dependencies]
+axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
 pretty_assertions = "1.4"
 tempfile = "3.27"
-tokio = { version = "1.53", features = ["macros", "rt"] }
+tokio = { version = "1.53", features = ["macros", "rt", "sync"] }
+
+[[example]]
+name = "local_validation"
+required-features = ["validation-ethereum"]
+
+[[example]]
+name = "http_validation"
+required-features = ["validation-http"]
+
+[[example]]
+name = "validate_file"
+required-features = ["validation-http"]

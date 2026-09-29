@@ -465,7 +465,7 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
     let scope = if input.staged {
         "staged_tree_diff"
     } else if input.since_commit.is_some() {
-        "tree_diff"
+        if input.git_history == GitHistoryMode::Full { "commit_range" } else { "tree_diff" }
     } else if branch_root_enabled {
         "inclusive_root_tree_diff"
     } else if input.branch.is_some() {

@@ -652,7 +652,21 @@ const AZURE_QUERY_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b'}')
     .add(b'|');
 
-fn build_git_urls(
+/// GitHub gist file anchors lowercase filenames, collapse runs of non-alphanumeric
+/// characters (except `_`) to `-`, and omit leading/trailing separators.
+fn gist_file_anchor(file_path: &str) -> String {
+    let normalized = file_path.replace('\\', "/");
+    let name = normalized.rsplit('/').next().unwrap_or(normalized.as_str());
+    let slug = name
+        .split(|c: char| !c.is_ascii_alphanumeric() && c != '_')
+        .filter(|part| !part.is_empty())
+        .map(str::to_ascii_lowercase)
+        .collect::<Vec<_>>()
+        .join("-");
+    format!("file-{slug}")
+}
+
+pub(crate) fn build_git_urls(
     repo_url: &str,
     commit_id: &str,
     file_path: &str,
@@ -677,7 +691,18 @@ fn build_git_urls(
                 .to_string()
         };
 
-        if host.eq_ignore_ascii_case("bitbucket.org") {
+        if host.eq_ignore_ascii_case("gist.github.com") {
+            // Gists do not use /blob/ or /commit/ paths. Point at the revision
+            // page and use GitHub's #file-...-L{line} fragment for the match.
+            repository_url = repo_url.to_string();
+            commit_url = format!("{repo_url}/{commit_id}");
+            let anchor = gist_file_anchor(file_path);
+            if line > 0 {
+                file_url = format!("{repo_url}/{commit_id}#{anchor}-L{line}");
+            } else {
+                file_url = format!("{repo_url}/{commit_id}#{anchor}");
+            }
+        } else if host.eq_ignore_ascii_case("bitbucket.org") {
             let joined = segments.join("/");
             let base = if joined.is_empty() {
                 format!("{scheme}://{host}")
@@ -810,10 +835,10 @@ impl DetailsReporter {
                         "name": &cmd.committer_name,
                         "email": &cmd.committer_email,
                     },
-                    // "author": {
-                    //     "name": String::from_utf8_lossy(&cmd.author_name),
-                    //     "email": String::from_utf8_lossy(&cmd.author_email),
-                    // },
+                    "author": cmd.author_name.as_ref().or(cmd.author_email.as_ref()).map(|_| serde_json::json!({
+                        "name": &cmd.author_name,
+                        "email": &cmd.author_email,
+                    })),
                     // "message": msg,
                 },
                 "file": {
@@ -2579,6 +2604,8 @@ mod tests {
         let repo_path = Arc::new(PathBuf::from("/tmp/repo"));
         let commit_metadata = Arc::new(CommitMetadata {
             commit_id: ObjectId::from_hex(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            author_name: None,
+            author_email: None,
             committer_name: "Alice".into(),
             committer_email: "alice@exmple.com".into(),
             committer_timestamp: Time::new(0, 0),
@@ -2992,7 +3019,7 @@ mod tests {
         assert_eq!(metadata.kingfisher_version, env!("CARGO_PKG_VERSION"));
     }
 
-    use super::build_git_urls;
+    use super::{build_git_urls, gist_file_anchor};
 
     #[test]
     fn azure_commit_links_use_query_paths() {
@@ -3011,6 +3038,50 @@ mod tests {
         assert_eq!(
             file_url,
             "https://dev.azure.com/org/project/_git/repo/commit/0123456789abcdef?path=/dir/file.txt&line=7"
+        );
+    }
+
+    #[test]
+    fn gist_file_anchor_slugifies_filename() {
+        assert_eq!(gist_file_anchor("README.md"), "file-readme-md");
+        assert_eq!(gist_file_anchor("dir/hello_world.rb"), "file-hello_world-rb");
+        assert_eq!(gist_file_anchor(".git_commit.sh"), "file-git_commit-sh");
+        assert_eq!(gist_file_anchor("uniTerm .md"), "file-uniterm-md");
+        assert_eq!(gist_file_anchor(".env"), "file-env");
+        assert_eq!(gist_file_anchor("token.env."), "file-token-env");
+        assert_eq!(gist_file_anchor(r"dir\.env"), "file-env");
+    }
+
+    #[test]
+    fn gist_dotfile_links_use_normalized_anchors() {
+        let (repo_url, commit_url, file_url) =
+            build_git_urls("https://gist.github.com/abc/", "def", ".git_commit.sh", 12);
+        assert_eq!(repo_url, "https://gist.github.com/abc");
+        assert_eq!(commit_url, "https://gist.github.com/abc/def");
+        assert_eq!(file_url, "https://gist.github.com/abc/def#file-git_commit-sh-L12");
+
+        let (_, _, file_url) =
+            build_git_urls("https://gist.github.com/abc", "def", "uniTerm .md", 0);
+        assert_eq!(file_url, "https://gist.github.com/abc/def#file-uniterm-md");
+    }
+
+    #[test]
+    fn gist_links_skip_blob_paths() {
+        let (repo_url, commit_url, file_url) = build_git_urls(
+            "https://gist.github.com/alice/0123456789abcdef0123456789abcdef",
+            "aabbccddeeff00112233445566778899aabbccdd",
+            "secrets/token.env",
+            12,
+        );
+
+        assert_eq!(repo_url, "https://gist.github.com/alice/0123456789abcdef0123456789abcdef");
+        assert_eq!(
+            commit_url,
+            "https://gist.github.com/alice/0123456789abcdef0123456789abcdef/aabbccddeeff00112233445566778899aabbccdd"
+        );
+        assert_eq!(
+            file_url,
+            "https://gist.github.com/alice/0123456789abcdef0123456789abcdef/aabbccddeeff00112233445566778899aabbccdd#file-token-env-L12"
         );
     }
 
@@ -3038,6 +3109,8 @@ mod tests {
 
         let commit_metadata = Arc::new(CommitMetadata {
             commit_id: ObjectId::from_hex(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa").unwrap(),
+            author_name: Some("Original Author".into()),
+            author_email: Some("original@example.invalid".into()),
             committer_name: "Alice".into(),
             committer_email: "alice@exmple.com".into(),
             committer_timestamp: Time::new(0, 0),
@@ -3059,6 +3132,8 @@ mod tests {
             _ => unreachable!("expected git origin"),
         };
 
+        assert_eq!(git["commit"]["author"]["name"], "Original Author");
+        assert_eq!(git["commit"]["author"]["email"], "original@example.invalid");
         assert_eq!(git["repository_url"].as_str(), Some("https://github.com/mongodb/kingfisher"));
         assert_eq!(
             git["commit"]["url"].as_str(),

@@ -95,13 +95,14 @@ Use clearly fake placeholders or provider-documented example values only.
 
 ### Rule contributions
 
-If you are adding or updating a generally useful rule, contribute it to Betterleaks first. The
-Kingfisher 1.x YAML schema remains supported for private custom rules, not as a built-in catalog.
+If you are adding or updating a generally useful rule, contribute it to Betterleaks first. For
+custom rules, both the Kingfisher rule format (`.yml`/`.yaml`) and Betterleaks TOML (`.toml`)
+are fully supported through `--rules-path`. Custom rules may be shared or private.
 
-For Kingfisher 1.x custom rules:
+For Kingfisher custom rules:
 
 - Follow the schema and authoring guidance in [docs/RULES.md](docs/RULES.md).
-- Prefer YAML-defined validation and revocation when the private provider API supports
+- Prefer YAML-defined validation and revocation when the provider API supports
   it.
 - Keep patterns specific and efficient.
 - Add realistic examples and relevant tests.

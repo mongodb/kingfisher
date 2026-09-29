@@ -15,11 +15,16 @@ use serde_json::Value as JsonValue;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
+#[derive(Debug, thiserror::Error)]
+#[error("required validator feature is disabled")]
+struct MissingValidatorFeature;
+
 const MAX_RESPONSE_BODY: usize = 1 << 20;
 
 #[derive(Debug)]
-pub(crate) struct BetterleaksValidationOutcome {
+pub struct BetterleaksValidationOutcome {
     pub valid: bool,
+    pub reason: Option<super::ValidationReason>,
     pub status: StatusCode,
     pub body: String,
     pub outcome: ValidationOutcome,
@@ -152,7 +157,7 @@ struct Evaluator<'a> {
     last_status: Option<StatusCode>,
 }
 
-pub(crate) async fn validate(
+pub async fn validate(
     validation: &BetterleaksValidation,
     captures: &[(String, String, usize, usize)],
     globals: &LiquidObject,
@@ -203,7 +208,15 @@ pub(crate) async fn validate(
 
     match evaluator.eval(&validation.expression).await {
         Ok(value) => classify(value, evaluator.last_status),
+        Err(error) if error.is::<MissingValidatorFeature>() => BetterleaksValidationOutcome {
+            reason: Some(super::ValidationReason::FeatureDisabled),
+            valid: false,
+            status: StatusCode::PRECONDITION_REQUIRED,
+            body: "Required validator feature is disabled".to_string(),
+            outcome: ValidationOutcome::Skipped,
+        },
         Err(error) => BetterleaksValidationOutcome {
+            reason: Some(super::ValidationReason::RequestFailed),
             valid: false,
             status: StatusCode::BAD_GATEWAY,
             body: format!("Betterleaks validation error: {error:#}"),
@@ -221,6 +234,7 @@ fn classify(value: Value, remote_status: Option<StatusCode>) -> BetterleaksValid
         .unwrap_or_else(|_| "{\"result\":\"error\"}".to_string());
     match result.as_str() {
         "valid" => BetterleaksValidationOutcome {
+            reason: None,
             valid: true,
             status: remote_status.unwrap_or(StatusCode::OK),
             body,
@@ -228,6 +242,7 @@ fn classify(value: Value, remote_status: Option<StatusCode>) -> BetterleaksValid
         },
         "needs_validation" if has_active_credential_marker(&value) => {
             BetterleaksValidationOutcome {
+                reason: None,
                 valid: true,
                 status: remote_status.unwrap_or(StatusCode::FORBIDDEN),
                 body,
@@ -235,12 +250,14 @@ fn classify(value: Value, remote_status: Option<StatusCode>) -> BetterleaksValid
             }
         }
         "invalid" | "revoked" => BetterleaksValidationOutcome {
+            reason: None,
             valid: false,
             status: remote_status.unwrap_or(StatusCode::UNAUTHORIZED),
             body,
             outcome: ValidationOutcome::VerifiedInactive,
         },
         "skipped" => BetterleaksValidationOutcome {
+            reason: None,
             valid: false,
             status: remote_status.unwrap_or(StatusCode::PRECONDITION_REQUIRED),
             body: match &value {
@@ -254,6 +271,7 @@ fn classify(value: Value, remote_status: Option<StatusCode>) -> BetterleaksValid
             outcome: ValidationOutcome::Skipped,
         },
         _ => BetterleaksValidationOutcome {
+            reason: None,
             valid: false,
             // Preserve Betterleaks' unknown classification through Kingfisher's legacy refresh.
             status: StatusCode::BAD_GATEWAY,
@@ -552,7 +570,7 @@ impl Evaluator<'_> {
         let raw_url = args.first().map(Value::as_string).unwrap_or_default();
         let url = Url::parse(&raw_url)
             .map_err(|_| anyhow!("Betterleaks validation produced an invalid URL"))?;
-        kingfisher_scanner::validation::check_url_resolvable(&url, self.allow_internal_ips)
+        crate::validation::check_url_resolvable(&url, self.allow_internal_ips)
             .await
             .map_err(|_| anyhow!("Betterleaks validation URL was blocked"))?;
 
@@ -573,12 +591,14 @@ impl Evaluator<'_> {
         }
         let status = response.status();
         let headers = response.headers().clone();
-        let mut body = response
-            .bytes()
-            .await
-            .map_err(|_| anyhow!("failed to read Betterleaks validation response"))?
-            .to_vec();
-        body.truncate(MAX_RESPONSE_BODY);
+        let mut response = response;
+        let mut body = Vec::new();
+        while let Some(chunk) = response.chunk().await? {
+            if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY {
+                bail!("Betterleaks validation response exceeded size limit");
+            }
+            body.extend_from_slice(&chunk);
+        }
         let body = String::from_utf8_lossy(&body).into_owned();
         let json = serde_json::from_str(&body)
             .map(Value::from_json)
@@ -601,11 +621,23 @@ impl Evaluator<'_> {
         ])))
     }
 
+    #[cfg(not(feature = "validation-aws"))]
+    async fn aws_validate(&mut self, _args: &[Value]) -> Result<Value> {
+        Err(MissingValidatorFeature.into())
+    }
+
+    #[cfg(not(feature = "validation-gcp"))]
+    async fn gcp_validate(&mut self, _args: &[Value]) -> Result<Value> {
+        Err(MissingValidatorFeature.into())
+    }
+
+    #[cfg(feature = "validation-aws")]
     async fn aws_validate(&mut self, args: &[Value]) -> Result<Value> {
         let access_key = args.first().map(Value::as_string).unwrap_or_default();
         let secret_key = args.get(1).map(Value::as_string).unwrap_or_default();
         let result =
-            crate::validation::validate_aws_credential_pair(&access_key, &secret_key, None).await;
+            crate::validation::aws::validate_aws_credential_pair(&access_key, &secret_key, None)
+                .await;
         let mut response = BTreeMap::new();
         self.last_status = Some(result.status);
         response.insert("status".to_string(), Value::Integer(i64::from(result.status.as_u16())));
@@ -623,6 +655,7 @@ impl Evaluator<'_> {
         Ok(Value::Object(response))
     }
 
+    #[cfg(feature = "validation-gcp")]
     async fn gcp_validate(&mut self, args: &[Value]) -> Result<Value> {
         let credential_json = args.first().map(Value::as_string).unwrap_or_default();
         let parsed: JsonValue =
@@ -634,7 +667,7 @@ impl Evaluator<'_> {
         )]);
         match credential_type {
             "service_account" => {
-                match kingfisher_scanner::validation::gcp::GcpValidator::global()?
+                match crate::validation::gcp::GcpValidator::global()?
                     .get_access_token_from_sa_json(&credential_json)
                     .await
                 {
@@ -1008,6 +1041,7 @@ mod tests {
     use super::*;
     use axum::{Router, response::Redirect, routing::get};
     use kingfisher_rules::{Validation, get_betterleaks_rules};
+    #[cfg(feature = "validation-aws")]
     use liquid_core::Value as LiquidValue;
     use std::collections::BTreeSet;
 
@@ -1176,6 +1210,7 @@ mod tests {
         assert!(outcome.body.contains("request was redirected"), "{}", outcome.body);
     }
 
+    #[cfg(feature = "validation-aws")]
     #[tokio::test]
     async fn aws_validation_preserves_the_shared_canary_skip_list() {
         let rule = get_betterleaks_rules(None)

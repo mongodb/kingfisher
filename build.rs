@@ -9,6 +9,8 @@ use flate2::{Compression, write::GzEncoder};
 const BUNDLE_MAGIC: &[u8] = b"KFVIEW\x01";
 
 fn main() {
+    #[cfg(feature = "gui")]
+    build_wizard_icons();
     let viewer_dir = Path::new("docs/viewer");
     println!("cargo:rerun-if-changed={}", viewer_dir.display());
     emit_rerun_for_tree(viewer_dir);
@@ -76,4 +78,38 @@ fn collect_files(path: &Path, files: &mut Vec<PathBuf>) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+/// Derive desktop icons from the existing logo, retaining its aspect ratio and alpha.
+#[cfg(feature = "gui")]
+fn build_wizard_icons() {
+    let output = PathBuf::from(std::env::var_os("OUT_DIR").expect("OUT_DIR must be set"));
+    let logo = image::open("docs/viewer/kingfisher_logo.png")
+        .expect("wizard logo must decode")
+        .resize(512, 512, image::imageops::FilterType::Lanczos3)
+        .to_rgba8();
+    let mut icon = image::RgbaImage::new(512, 512);
+    image::imageops::overlay(
+        &mut icon,
+        &logo,
+        i64::from((512 - logo.width()) / 2),
+        i64::from((512 - logo.height()) / 2),
+    );
+    icon.save(output.join("wizard-icon.png")).expect("could not write wizard icon");
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
+        let ico = output.join("wizard-icon.ico");
+        image::DynamicImage::ImageRgba8(icon)
+            .resize(256, 256, image::imageops::FilterType::Lanczos3)
+            .save(&ico)
+            .expect("could not write Windows icon");
+        let resource = output.join("wizard.rc");
+        fs::write(
+            &resource,
+            format!("1 ICON \"{}\"\n", ico.display().to_string().replace('\\', "/")),
+        )
+        .expect("could not write Windows icon resource");
+        embed_resource::compile_for(&resource, ["kingfisher"], embed_resource::NONE)
+            .manifest_optional()
+            .expect("could not embed Windows wizard icon");
+    }
 }

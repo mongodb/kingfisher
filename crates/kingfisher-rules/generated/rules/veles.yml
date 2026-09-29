@@ -1,0 +1,643 @@
+# Converted and modified by Kingfisher importers and operational overlays.
+# See ../provenance.json for per-rule origins, pinned revisions, and hashes,
+# ../NOTICES.txt for attribution/licenses, and ../upstream-sources.json.gz
+# for exact upstream sources. Kingfisher-authored helpers are identified in provenance.
+# Generated from pinned source https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/; do not edit.
+# Selected Veles plugin IDs are declared in data/veles-rules.yml.
+rules:
+- name: Bitbucket Git Credentials
+  id: veles.secrets/bitbucketcredentials
+  pattern: (?P<TOKEN>\bhttps://(?P<GIT_USERNAME>[^:\s]+):(?P<GIT_PASSWORD>[^\s@]+)@bitbucket\.org/[^\s]+\.git\b)
+  path: (?i)(?:\.git[/\\]config|(?:^|[/\\])\.git-credentials|_history)$
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: 'https://bitbucket.org/{{ TOKEN | split: ''@bitbucket.org/'' | last }}/info/refs?service=git-upload-pack'
+        headers:
+          Authorization: 'Basic {{ GIT_USERNAME | append: '':'' | append: GIT_PASSWORD | b64enc }}'
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/gitbasicauth/bitbucket/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/gitbasicauth/bitbucket/validator.go
+- name: Bitwarden OAuth2 Client Secret
+  id: veles.secrets/bitwardenoauth2access
+  pattern: (?s)"user_(?P<TOKEN_ID>[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})_token_apiKeyClientSecret"\s*:.{0,20}?"(?P<TOKEN>[A-Za-z0-9]{10,50})"
+  path: (?i)bitwarden[ _-]*cli(?:[\/]+)data\.json$
+  validation:
+    type: Http
+    content:
+      request:
+        method: POST
+        url: https://identity.bitwarden.com/connect/token
+        headers:
+          Content-Type: application/x-www-form-urlencoded
+        body: grant_type=client_credentials&scope=api&client_id=user.{{ TOKEN_ID | url_encode }}&client_secret={{ TOKEN | url_encode }}&deviceName=fireFox&twoFactorToken=0&deviceIdentifier=0&deviceType=0
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+  betterleaks_secret_group: 2
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/bitwardenoauth2access/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/bitwardenoauth2access/validator.go
+- name: CircleCI Project Token
+  id: veles.secrets/circleciproject
+  pattern: (CCIPRJ_[A-Za-z0-9]{22}_[0-9a-f]{40})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://circleci.com/api/v1.1/project/scalibr-validation-nonexistent-a8f3c2d9
+        headers:
+          Circle-Token: '{{ TOKEN }}'
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+          - 404
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/circleci/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/circleci/validator.go
+- name: Cloudflare API Token
+  id: veles.secrets/cloudflareapitoken
+  pattern: (?s)(?i)["']?\b(?:CLOUDFLARE_API_TOKEN|CLOUDFLARE_API_KEY|CF_API_TOKEN|CF_API_KEY|CLOUDFLARE_TOKEN|CF_TOKEN|CLOUDFLARE_AUTH_KEY|CF_ACCOUNT_ID)\b["']?\s*[=:].{0,20}?(\b[A-Za-z0-9_-]{40}\b)
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://api.cloudflare.com/client/v4/zones
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+  revocation:
+    type: HttpMultiStep
+    content:
+      steps:
+      - name: lookup_token_id
+        request:
+          method: GET
+          url: https://api.cloudflare.com/client/v4/user/tokens/verify
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Accept: application/json
+          response_matcher:
+          - type: StatusMatch
+            status:
+            - 200
+          - type: JsonValid
+        extract:
+          TOKEN_ID:
+            type: JsonPath
+            path: $.result.id
+      - name: revoke_token
+        request:
+          method: DELETE
+          url: https://api.cloudflare.com/client/v4/user/tokens/{{ TOKEN_ID }}
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Accept: application/json
+          response_matcher:
+          - report_response: true
+          - type: StatusMatch
+            status:
+            - 200
+          - type: WordMatch
+            words:
+            - '"success":true'
+            match_all_words: true
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/cloudflareapitoken/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/cloudflareapitoken/validator.go
+- name: AWS CodeCatalyst Git Credentials
+  id: veles.secrets/codecatalystcredentials
+  pattern: (?P<TOKEN>\bhttps://(?P<GIT_USERNAME>[^:\s]+):(?P<GIT_PASSWORD>[^\s@]+)@git\.[^/]*codecatalyst\.aws/[^\s]*)
+  path: (?i)(?:\.git[/\\]config|(?:^|[/\\])\.git-credentials|_history)$
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: 'https://git.{{ TOKEN | split: ''@git.'' | last }}/info/refs?service=git-upload-pack'
+        headers:
+          Authorization: 'Basic {{ GIT_USERNAME | append: '':'' | append: GIT_PASSWORD | b64enc }}'
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/gitbasicauth/codecatalyst/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/gitbasicauth/codecatalyst/validator.go
+- name: AWS CodeCommit Git Credentials
+  id: veles.secrets/codecommitcredentials
+  pattern: (?P<TOKEN>https://(?P<GIT_USERNAME>[^:\s]+):(?P<GIT_PASSWORD>[^\s@]+)@git-codecommit\.[a-zA-Z\-0-9]+\.amazonaws\.com/[^\s]+)
+  path: (?i)(?:\.git[/\\]config|(?:^|[/\\])\.git-credentials|_history)$
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: 'https://git-codecommit.{{ TOKEN | split: ''@git-codecommit.'' | last }}/info/refs?service=git-upload-pack'
+        headers:
+          Authorization: 'Basic {{ GIT_USERNAME | append: '':'' | append: GIT_PASSWORD | b64enc }}'
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+          - 404
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/gitbasicauth/codecommit/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/gitbasicauth/codecommit/validator.go
+- name: Deno Organization Token
+  id: veles.secrets/denopatorg
+  pattern: (ddo_[A-Za-z0-9]{36})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://api.deno.com/organization
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/denopat/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/denopat/validator.go
+- name: DigitalOcean API Token
+  id: veles.secrets/digitaloceanapikey
+  pattern: (dop_v1_[abcdef0-9]{64})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://api.digitalocean.com/v2/account
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+          - 403
+  revocation:
+    type: Http
+    content:
+      request:
+        method: POST
+        url: https://cloud.digitalocean.com/v1/oauth/revoke
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+          Content-Type: application/x-www-form-urlencoded
+        body: token={{ TOKEN | url_encode }}
+        response_matcher:
+        - report_response: true
+        - type: StatusMatch
+          status:
+          - 200
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/digitaloceanapikey/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/digitaloceanapikey/validator.go
+- name: xAI API Key
+  id: veles.secrets/grokxaiapikey
+  pattern: (xai-[A-Za-z0-9]{80})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://api.x.ai/v1/api-key
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+        - type: WordMatch
+          words:
+          - '"api_key_blocked":true'
+          - '"api_key_disabled":true'
+          negative: true
+        - type: JsonValid
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/grokxaiapikey/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/grokxaiapikey/validator.go
+- name: HashiCorp Cloud Platform Client Secret
+  id: veles.secrets/hcpclientcredentials
+  pattern: '["'']?\b(?:HCP_CLIENT_SECRET|hcp_client_secret)\b["'']?\s*[:=]\s*["'']?([A-Za-z0-9._~\-]{64})["'']?'
+  validation:
+    type: Http
+    content:
+      request:
+        method: POST
+        url: https://auth.idp.hashicorp.com/oauth2/token
+        headers:
+          Content-Type: application/x-www-form-urlencoded
+        body: client_id={{ HCP_CLIENT_ID | url_encode }}&client_secret={{ TOKEN | url_encode }}&grant_type=client_credentials
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+  depends_on_rule:
+  - rule_id: veles.secrets/hcpclientcredentials-client-id
+    variable: HCP_CLIENT_ID
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/hcp/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/hcp/validator.go
+- name: HashiCorp Cloud Platform Client ID
+  id: veles.secrets/hcpclientcredentials-client-id
+  pattern: '["'']?\b(?:HCP_CLIENT_ID|hcp_client_id)\b["'']?\s*[:=]\s*["'']?([A-Za-z0-9]{32})["'']?'
+  visible: false
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/hcp/detector.go
+- name: Heroku Platform Key
+  id: veles.secrets/herokuplatformkey
+  pattern: (\b(HRKU-[0-9a-zA-Z_-]{60})\b)
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://api.heroku.com/account
+        headers:
+          Accept: application/vnd.heroku+json; version=3
+          Authorization: Bearer {{ TOKEN }}
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+  revocation:
+    type: HttpMultiStep
+    content:
+      steps:
+      - name: lookup_oauth_token_id
+        request:
+          method: GET
+          url: https://api.heroku.com/oauth/authorizations
+          headers:
+            Accept: application/vnd.heroku+json; version=3
+            Authorization: Bearer {{ TOKEN }}
+            Range: id ..; max=1000;
+          response_matcher:
+          - type: StatusMatch
+            status:
+            - 200
+            - 206
+          - type: JsonValid
+        extract:
+          OAUTH_TOKEN_ID:
+            type: Regex
+            pattern: (?s)"access_token"\s*:\s*\{[^{}]*"id"\s*:\s*"([^"]+)"[^{}]*"token"\s*:\s*"{{ TOKEN }}"
+      - name: revoke_oauth_token
+        request:
+          method: DELETE
+          url: https://api.heroku.com/oauth/tokens/{{ OAUTH_TOKEN_ID }}
+          headers:
+            Accept: application/vnd.heroku+json; version=3
+            Authorization: Bearer {{ TOKEN }}
+          response_matcher:
+          - report_response: true
+          - type: StatusMatch
+            status:
+            - 200
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/herokuplatformkey/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/herokuplatformkey/validator.go
+- name: npm Access Token
+  id: veles.secrets/npmjsaccesstoken
+  pattern: (npm_[a-zA-Z0-9]{36})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://registry.npmjs.org/-/whoami
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+  revocation:
+    type: HttpMultiStep
+    content:
+      steps:
+      - name: lookup_token_id
+        request:
+          method: GET
+          url: https://registry.npmjs.org/-/npm/v1/tokens
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+            Accept: application/json
+          response_matcher:
+          - type: StatusMatch
+            status:
+            - 200
+          - type: JsonValid
+        extract:
+          TOKEN_KEY:
+            type: Regex
+            pattern: '"key":"([^"]+)","token":"{{ TOKEN | prefix: 8 }}\.\.\.{{ TOKEN | suffix: 4 }}"'
+      - name: revoke_token
+        request:
+          method: DELETE
+          url: https://registry.npmjs.org/-/npm/v1/tokens/token/{{ TOKEN_KEY }}
+          headers:
+            Authorization: Bearer {{ TOKEN }}
+          response_matcher:
+          - report_response: true
+          - type: StatusMatch
+            status:
+            - 200
+            - 204
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/npmjsaccesstoken/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/npmjsaccesstoken/validator.go
+- name: OpenRouter API Key
+  id: veles.secrets/openrouter
+  pattern: (sk-or-v[0-9]+-[A-Za-z0-9_-]{20,})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://openrouter.ai/api/v1/auth/key
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+          - 429
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/openrouter/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/openrouter/validator.go
+- name: Packagist Organization Read Token
+  id: veles.secrets/packagistorgreadtoken
+  pattern: (packagist_ort_[0-9a-f]{68})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: '{{ REPO_URL }}/packages.json'
+        headers:
+          Accept: application/json
+          Authorization: 'Basic {{ ''token:'' | append: TOKEN | b64enc }}'
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+        - type: JsonValid
+  depends_on_rule:
+  - rule_id: veles.secrets/packagistorgreadtoken-repository
+    variable: REPO_URL
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/packagist/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/packagist/validator.go
+- name: Packagist Organization Read Token Repository URL
+  id: veles.secrets/packagistorgreadtoken-repository
+  pattern: (https?://repo\.packagist\.com[/\w\-\.]*)
+  visible: false
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/packagist/detector.go
+- name: Packagist Organization Update Token
+  id: veles.secrets/packagistorgupdatetoken
+  pattern: (packagist_out_[0-9a-f]{68})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: '{{ REPO_URL }}/packages.json'
+        headers:
+          Accept: application/json
+          Authorization: 'Basic {{ ''token:'' | append: TOKEN | b64enc }}'
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+        - type: JsonValid
+  depends_on_rule:
+  - rule_id: veles.secrets/packagistorgupdatetoken-repository
+    variable: REPO_URL
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/packagist/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/packagist/validator.go
+- name: Packagist Organization Update Token Repository URL
+  id: veles.secrets/packagistorgupdatetoken-repository
+  pattern: (https?://repo\.packagist\.com[/\w\-\.]*)
+  visible: false
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/packagist/detector.go
+- name: Packagist API Secret
+  id: veles.secrets/packagistsecret
+  pattern: (packagist_acs_[0-9a-f]{64,96})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://packagist.com/api/packages/
+        headers:
+          Accept: application/json
+          Authorization: |-
+            {%- assign ts = "" | unix_timestamp -%}
+            {%- assign cnonce = "" | uuid -%}
+            {%- assign enc_cnonce = cnonce | url_encode -%}
+            {%- assign enc_key = PACKAGIST_KEY | url_encode -%}
+            {%- assign enc_ts = ts | url_encode -%}
+            {%- assign params = "cnonce=" | append: enc_cnonce | append: "&key=" | append: enc_key | append: "&timestamp=" | append: enc_ts -%}
+            {%- capture to_sign -%}GET
+            packagist.com
+            /api/packages/
+            {{ params }}{%- endcapture -%}
+            {%- assign sig = to_sign | hmac_sha256: TOKEN -%}
+            PACKAGIST-HMAC-SHA256 Key={{ PACKAGIST_KEY }}, Timestamp={{ ts }}, Cnonce={{ cnonce }}, Signature={{ sig }}
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+        - type: JsonValid
+  depends_on_rule:
+  - rule_id: veles.secrets/packagistsecret-api-key
+    variable: PACKAGIST_KEY
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/packagist/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/packagist/validator.go
+- name: Packagist API Key
+  id: veles.secrets/packagistsecret-api-key
+  pattern: (packagist_ack_[0-9a-f]{28,32})
+  visible: false
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/packagist/detector.go
+- name: Postman API Key
+  id: veles.secrets/postmanapikey
+  pattern: (PMAK-[A-Fa-f0-9]{24}-[A-Fa-f0-9]{34})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://api.getpostman.com/me
+        headers:
+          X-Api-Key: '{{ TOKEN }}'
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/postmanapikey/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/postmanapikey/validator.go
+- name: Postman Collection Access Token
+  id: veles.secrets/postmancollectiontoken
+  pattern: (PMAT-[A-Za-z0-9]{26})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://api.postman.com/collections/aaaaaaaa-aaaaaaaa-aaaa-aaaa-aaaaaaaaaaaa?access_key={{ TOKEN | url_encode }}
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 403
+        - type: WordMatch
+          words:
+          - '"name":"forbiddenError"'
+        - type: JsonValid
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/postmanapikey/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/postmanapikey/validator.go
+- name: SendGrid API Key
+  id: veles.secrets/sendgrid
+  pattern: (SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43})
+  validation:
+    type: Http
+    content:
+      request:
+        method: GET
+        url: https://api.sendgrid.com/v3/user/account
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+        response_matcher:
+        - type: StatusMatch
+          status:
+          - 200
+          - 403
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/sendgrid/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/sendgrid/validator.go
+- name: Slack App Configuration Access Token
+  id: veles.secrets/slackappconfigaccesstoken
+  pattern: (xoxe\.xoxp-\d{1,10}-[a-zA-Z0-9]{166})
+  validation:
+    type: Http
+    content:
+      request:
+        method: POST
+        url: https://slack.com/api/auth.test
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+          Content-Type: application/x-www-form-urlencoded
+        response_matcher:
+        - type: WordMatch
+          words:
+          - '"ok":true'
+        - type: JsonValid
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/slacktoken/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/slacktoken/validator.go
+- name: Slack App Configuration Refresh Token
+  id: veles.secrets/slackappconfigrefreshtoken
+  pattern: (xoxe-\d{1,10}-[a-zA-Z0-9]{147})
+  validation:
+    type: Http
+    content:
+      request:
+        method: POST
+        url: https://slack.com/api/auth.test
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+          Content-Type: application/x-www-form-urlencoded
+        response_matcher:
+        - type: WordMatch
+          words:
+          - '"ok":true'
+        - type: JsonValid
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/slacktoken/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/slacktoken/validator.go
+- name: Slack App-Level Token
+  id: veles.secrets/slackappleveltoken
+  pattern: (xapp-\d{1,10}-[A-Za-z0-9]{11}-[0-9]{13}-[a-fA-F0-9]{64})
+  validation:
+    type: Http
+    content:
+      request:
+        method: POST
+        url: https://slack.com/api/auth.test
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+          Content-Type: application/x-www-form-urlencoded
+        response_matcher:
+        - type: WordMatch
+          words:
+          - '"ok":true'
+        - type: JsonValid
+  revocation:
+    type: Http
+    content:
+      request:
+        method: POST
+        url: https://slack.com/api/auth.revoke
+        headers:
+          Authorization: Bearer {{ TOKEN }}
+          Content-Type: application/x-www-form-urlencoded
+        body: token={{ TOKEN | url_encode }}
+        response_matcher:
+        - report_response: true
+        - type: WordMatch
+          words:
+          - '"ok":true'
+          - '"revoked":true'
+          match_all_words: true
+  betterleaks_secret_group: 0
+  references:
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/slacktoken/detector.go
+  - https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/slacktoken/validator.go

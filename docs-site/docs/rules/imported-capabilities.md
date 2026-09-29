@@ -15,6 +15,7 @@ Kingfisher-specific behavior without creating another detector catalog.
 version: 1
 betterleaks:
   upstream-rule-id:
+    verify_candidates: [AWS_SECRET_ACCESS_KEY] # dependency variable names, Betterleaks only
     bare: true | false
     confidence: low | medium | high
     authoritative: true | false
@@ -79,7 +80,7 @@ stale and unselected IDs.
 
 ## Bare token detection (Betterleaks only)
 
-`bare: true` derives a pattern from the pinned upstream regex at build time; it does not
+`bare: true` derives a pattern from the pinned upstream regex during bundle generation; it does not
 accept a replacement regex. It removes provider/assignment context before the reported
 secret while retaining the secret format, effective scoped flags, and trailing delimiters.
 The default is `false`. DeepSeek, Kimi/Moonshot, ZAI/GLM, and Voyage AI enable it in the
@@ -124,3 +125,18 @@ This additional filter does not exclude literal passwords merely because usernam
 are templated, or passwords that mix literal text with variable-like syntax. Existing upstream
 filters remain in effect. Filtering occurs before live validation and
 also applies to detection-only scans.
+
+## Candidate verification (Betterleaks only)
+
+`verify_candidates` names component variables allowed to participate in bounded
+credential-pair verification. The importer rejects names absent from the source
+rule's components. Opt-ins cover AWS access tokens, BrowserStack, ClickHouse Cloud,
+MongoDB Atlas service accounts, PlanetScale, Razorpay, and Wiz. Their detection
+patterns and upstream validation expressions remain unchanged. The generated AWS
+session-token compatibility rule also opts in for its access-key ID and secret.
+
+This capability permits ranked attempts against supported fixed-destination
+validators, never choosing a discovered endpoint by proximity. Unsupported
+validators retain strict ambiguity handling. See
+[opt-in candidate verification](overview.md#opt-in-candidate-verification)
+for limits, ranking, supported validators, and unresolved-result semantics.

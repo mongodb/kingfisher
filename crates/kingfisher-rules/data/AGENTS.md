@@ -17,9 +17,30 @@ and `veles` sections augment pinned upstream detectors with Kingfisher-specific 
 access-map, revocation, confidence, authority, and narrow filter behavior. It is not a second rule
 catalog.
 
-`veles-rules.yml` pins an OSV-SCALIBR commit and allowlists Veles plugin IDs for build-time import.
+`veles-rules.yml` pins an OSV-SCALIBR commit and allowlists Veles plugin IDs for maintainer-time import.
 Veles is Go source rather than a declarative catalog, so every selected ID must have an explicit,
 fail-closed adapter in `build_support/veles.rs`.
+
+## Custom Rule Authoring
+
+- Read [Custom Rules for Kingfisher](../../../docs/RULES.md) before generating or editing custom
+  rules. It documents the Kingfisher rule format, with schema and examples for detection,
+  validation, revocation, components, and checksum requirements.
+- Kingfisher fully supports both the **Kingfisher rule format** (`.yml`/`.yaml`) and
+  **Betterleaks TOML** (`.toml`). Either format may be used for shared or private custom rules.
+  Call the YAML format the Kingfisher rule format, without a version or legacy qualifier.
+- For Kingfisher YAML, define a top-level `rules:` list, use an organization-specific rule ID,
+  and put the reported secret in one unnamed capture. Follow the linked schema for optional
+  validation and revocation. Include matching examples and negative test cases as appropriate.
+- For Betterleaks TOML, use the supported upstream schema; custom IDs receive the `custom.`
+  namespace automatically. Contribute generally useful built-in detectors to Betterleaks first.
+- Load either format with `--rules-path <file-or-directory>`. Directories may contain both formats,
+  and `--rules-path` may be repeated. Custom rules augment built-ins unless `--load-builtins=false`.
+- Verify from the workspace root with
+  `kingfisher rules check --rules-path <file-or-directory> --load-builtins=false --no-update-check`,
+  then scan a fixture with the same rule path and `--format toon --no-validate` to check detection.
+- Keep custom rule files separate from this directory's built-in import configuration and
+  operational overlays. The overlay restrictions below do not limit custom-rule authoring.
 
 ## Ownership Boundaries
 
@@ -30,7 +51,7 @@ fail-closed adapter in `build_support/veles.rs`.
   `betterleaks.` namespace.
 - Every overlay entry must exist in the pinned Betterleaks source revision. Prefer a released
   Betterleaks version; when the latest release lacks a detector Kingfisher ships, use the immutable
-  full commit pinned by `build.rs` and document the reason and digest. Never target `main` or a
+  full commit pinned by `tools/rule-bundle/src/main.rs` and document the reason and digest. Never target `main` or a
   floating ref.
 - Keep `imported-rules-capabilities.md` synchronized with supported overlay fields and syntax.
 - Keep Veles revisions pinned to a full commit hash. Never import from `main`.
@@ -91,6 +112,13 @@ fail-closed adapter in `build_support/veles.rs`.
 ## Verification
 
 - Run `cargo fmt --all` after Rust changes.
+- From the workspace root, run `python3 scripts/update-rule-bundle.py` after overlay/importer
+  changes. Use `--refresh` when pins, Veles selections, or required upstream files change.
+  This regenerates and verifies the bundle, runs the rule/importer tests, and rebuilds docs
+  when MkDocs is installed. Normal Cargo builds do not regenerate the prepared rules.
+- Commit the input changes and generated bundle, provenance, archived sources, notices, and
+  rule listing together. Never edit generated hashes by hand. Finish with
+  `python3 scripts/update-rule-bundle.py --check`; see the root AGENTS.md catalog-update checklist.
 - Run `cargo test -p kingfisher-rules` for every overlay or importer change. This verifies that
   overlay IDs exist in the pinned catalog and that generated rules deserialize.
 - Run the narrowest relevant validator or scan integration test when a binding changes runtime

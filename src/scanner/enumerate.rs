@@ -14,7 +14,7 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use bstr::{BString, ByteSlice};
-use gix::{Repository as GixRepo, object::tree::EntryKind, object::tree::diff::ChangeDetached};
+use gix::{Repository as GixRepo, diff::tree::recorder::Change, object::tree::EntryKind};
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::{
     iter::plumbing::Folder,
@@ -102,6 +102,11 @@ pub fn enumerate_filesystem_inputs(
         None
     };
 
+    crate::scan_progress::phase(
+        "Scanning files and Git history",
+        0,
+        crate::scan_progress::PhaseKind::Scan,
+    );
     let progress = if progress_enabled {
         let style =
             ProgressStyle::with_template("{spinner} {msg} {total_bytes} [{elapsed_precise}]")
@@ -1236,13 +1241,13 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                 let git_result = if let Some(diff_cfg) = cfg.git_diff.clone() {
                     if cfg.enumerate_git_history
                         && !diff_cfg.staged
-                        && diff_cfg.since_ref.is_none()
                         && diff_cfg.branch_root.is_none()
                     {
                         enumerate_git_branch_history(
                             path,
                             repository,
                             &diff_cfg.branch_ref,
+                            diff_cfg.since_ref.as_deref(),
                             cfg.exclude_globset.clone(),
                             collect_git_metadata,
                             deadline,
@@ -1304,12 +1309,14 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
     }
 }
 
-/// Scan every commit reachable from the selected ref, including merge parents.
+/// Scan commits reachable from the selected ref, including merge parents,
+/// excluding the optional baseline and its ancestry.
 /// Diffing each commit against its first parent avoids enumerating unchanged trees.
 fn enumerate_git_branch_history(
     path: &Path,
     mut repository: gix::Repository,
     branch_ref: &str,
+    since_ref: Option<&str>,
     exclude_globset: Option<Arc<globset::GlobSet>>,
     collect_commit_metadata: bool,
     deadline: Instant,
@@ -1319,8 +1326,25 @@ fn enumerate_git_branch_history(
         format!("Failed to resolve --branch '{}' in repository {}", branch_ref, path.display())
     })?;
     let tip = tip.object()?.peel_to_commit()?.id;
+    // Exclude the baseline and all its ancestors, including shared merge ancestry.
+    // Walk explicitly so every step observes the repository timeout; timestamps
+    // cannot safely define a commit range (clocks may be skewed).
+    let mut excluded = HashSet::new();
+    if let Some(since_ref) = since_ref {
+        let base = resolve_diff_ref(&repository, path, since_ref).with_context(|| {
+            format!(
+                "Failed to resolve --since-commit '{since_ref}' in repository {}",
+                path.display()
+            )
+        })?;
+        let base = base.object()?.peel_to_commit()?.id;
+        for commit in repository.rev_walk([base]).all()? {
+            check_repo_deadline(deadline, path, "git history baseline traversal")?;
+            excluded.insert(commit?.id);
+        }
+    }
     let mut commits = Vec::new();
-    for commit in repository.rev_walk([tip]).all()? {
+    for commit in repository.rev_walk([tip]).selected(|id| !excluded.contains(id))? {
         check_repo_deadline(deadline, path, "git branch history traversal")?;
         let commit = commit?;
         commits.push((commit.id, commit.parent_ids.first().copied()));
@@ -1334,7 +1358,9 @@ fn enumerate_git_branch_history(
             repository,
             GitDiffConfig {
                 // Shallow boundaries have no available parent tree: scan their full tree.
-                since_ref: parent.filter(|id| reachable.contains(id)).map(|id| id.to_string()),
+                since_ref: parent
+                    .filter(|id| reachable.contains(id) || excluded.contains(id))
+                    .map(|id| id.to_string()),
                 branch_ref: commit.to_string(),
                 branch_root: None,
                 staged: false,
@@ -1491,18 +1517,27 @@ fn enumerate_git_diff_repo(
         }
 
         check_repo_deadline(deadline, path, "git diff computation")?;
-        let changes = repository
-            .diff_tree_to_tree(base_tree.as_ref(), Some(&head_tree), None)
-            .with_context(|| {
-                if let Some(ref since_ref_value) = since_ref {
-                    format!(
-                        "Failed to compute diff between '{}' and '{}'",
-                        since_ref_value, branch_ref
-                    )
-                } else {
-                    format!("Failed to compute tree for '{}'", branch_ref)
-                }
-            })?;
+        // Only tree entry IDs and paths are needed. The high-level diff helper builds
+        // an index-backed attribute cache on every call (rebuilding HEAD's index in
+        // bare clones) and performs unnecessary rename similarity checks. A rename
+        // is equally useful here as a deletion plus an addition at its new path.
+        let empty_tree = repository.empty_tree();
+        let base_tree = base_tree.as_ref().unwrap_or(&empty_tree);
+        let mut changes = gix::diff::tree::Recorder::default();
+        gix::diff::tree(
+            gix::objs::TreeRefIter::from_bytes(&base_tree.data, base_tree.id.kind()),
+            gix::objs::TreeRefIter::from_bytes(&head_tree.data, head_tree.id.kind()),
+            &mut gix::diff::tree::State::default(),
+            &repository.objects,
+            &mut changes,
+        )
+        .with_context(|| {
+            if let Some(ref since_ref_value) = since_ref {
+                format!("Failed to compute diff between '{}' and '{}'", since_ref_value, branch_ref)
+            } else {
+                format!("Failed to compute tree for '{}'", branch_ref)
+            }
+        })?;
 
         let commit_metadata = if collect_commit_metadata {
             let committer = head_commit
@@ -1510,8 +1545,15 @@ fn enumerate_git_diff_repo(
                 .with_context(|| format!("Failed to read committer for {}", branch_ref))?
                 .trim();
             let timestamp = committer.time().unwrap_or_else(|_| gix::date::Time::new(0, 0));
+            let author = head_commit.author().ok();
             Arc::new(CommitMetadata {
                 commit_id: head_commit.id,
+                author_name: author
+                    .as_ref()
+                    .map(|author| intern_git_identity(author.name.to_str_lossy().as_ref())),
+                author_email: author
+                    .as_ref()
+                    .map(|author| intern_git_identity(author.email.to_str_lossy().as_ref())),
                 committer_name: intern_git_identity(committer.name.to_str_lossy().as_ref()),
                 committer_email: intern_git_identity(committer.email.to_str_lossy().as_ref()),
                 committer_timestamp: timestamp,
@@ -1519,6 +1561,8 @@ fn enumerate_git_diff_repo(
         } else {
             Arc::new(CommitMetadata {
                 commit_id: head_commit.id,
+                author_name: None,
+                author_email: None,
                 committer_name: intern_git_identity(""),
                 committer_email: intern_git_identity(""),
                 committer_timestamp: gix::date::Time::new(0, 0),
@@ -1526,19 +1570,12 @@ fn enumerate_git_diff_repo(
         };
 
         let mut blobs = Vec::new();
-        for change in changes {
+        for change in changes.records {
             check_repo_deadline(deadline, path, "git diff change enumeration")?;
             let (entry_mode, id, location) = match change {
-                ChangeDetached::Addition { entry_mode, id, location, .. } => {
-                    (entry_mode, id, location)
-                }
-                ChangeDetached::Modification { entry_mode, id, location, .. } => {
-                    (entry_mode, id, location)
-                }
-                ChangeDetached::Rewrite { entry_mode, id, location, .. } => {
-                    (entry_mode, id, location)
-                }
-                ChangeDetached::Deletion { .. } => continue,
+                Change::Addition { entry_mode, oid, path, .. }
+                | Change::Modification { entry_mode, oid, path, .. } => (entry_mode, oid, path),
+                Change::Deletion { .. } => continue,
             };
 
             match entry_mode.kind() {
@@ -1858,6 +1895,7 @@ mod tests {
             open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
             "HEAD",
             None,
+            None,
             true,
             Instant::now() + Duration::from_secs(60),
         )?;
@@ -1885,6 +1923,103 @@ mod tests {
     }
 
     #[test]
+    fn bare_branch_scan_ignores_index_and_preserves_changed_paths() -> Result<()> {
+        let temp = tempdir()?;
+        let repo = Git2Repository::init_bare(temp.path())?;
+        let signature = Signature::now("tester", "tester@example.com")?;
+        let shared = repo.blob(b"secret moved and copied without changing content")?;
+        let old = repo.blob(b"old secret in modified file")?;
+        let new = repo.blob(b"new secret in modified file")?;
+        let deleted = repo.blob(b"deleted historical secret")?;
+        let excluded = repo.blob(b"excluded secret")?;
+        let mut nested = repo.treebuilder(None)?;
+        nested.insert("secret.txt", shared, 0o100644)?;
+        let nested = nested.write()?;
+        let mut builder = repo.treebuilder(None)?;
+        builder.insert("old-dir", nested, 0o040000)?;
+        builder.insert("modified.txt", old, 0o100644)?;
+        builder.insert("deleted.txt", deleted, 0o100644)?;
+        let root_tree = repo.find_tree(builder.write()?)?;
+        let root_id = repo.commit(None, &signature, &signature, "root", &root_tree, &[])?;
+        let root = repo.find_commit(root_id)?;
+        builder.remove("old-dir")?;
+        builder.remove("deleted.txt")?;
+        builder.insert("new-dir", nested, 0o040000)?;
+        builder.insert("copy.txt", shared, 0o100644)?;
+        builder.insert("modified.txt", new, 0o100644)?;
+        builder.insert("excluded.txt", excluded, 0o100644)?;
+        let tip_tree = repo.find_tree(builder.write()?)?;
+        let tip_id =
+            repo.commit(Some("HEAD"), &signature, &signature, "tip", &tip_tree, &[&root])?;
+        // User diff preferences must not trigger similarity checks or index loading.
+        repo.config()?.set_str("diff.renames", "copies")?;
+        let mut excludes = globset::GlobSetBuilder::new();
+        excludes.add(globset::Glob::new("excluded.txt")?);
+        let excludes = std::sync::Arc::new(excludes.build()?);
+
+        for corrupt_index in [false, true] {
+            let index_path = repo.path().join("index");
+            if corrupt_index {
+                fs::write(&index_path, b"deliberately invalid index")?;
+            } else {
+                assert!(!index_path.exists());
+            }
+            let open = || open_opts(repo.path(), Options::isolated().open_path_as_is(true));
+            let result = enumerate_git_diff_repo(
+                temp.path(),
+                open()?,
+                GitDiffConfig {
+                    since_ref: Some(root_id.to_string()),
+                    branch_ref: tip_id.to_string(),
+                    branch_root: None,
+                    staged: false,
+                },
+                Some(excludes.clone()),
+                true,
+                Instant::now() + Duration::from_secs(60),
+            )?;
+            let GitBlobSource::Precomputed(blobs) = result.blobs else {
+                panic!("expected precomputed diff blobs");
+            };
+            let mut paths: Vec<_> = blobs
+                .iter()
+                .map(|blob| blob.first_seen[0].path.to_str_lossy().into_owned())
+                .collect();
+            paths.sort();
+            assert_eq!(paths, ["copy.txt", "modified.txt", "new-dir/secret.txt"]);
+            assert!(blobs.iter().all(|blob| blob.blob_oid.to_string() != old.to_string()));
+
+            let result = enumerate_git_branch_history(
+                temp.path(),
+                open()?,
+                "HEAD",
+                None,
+                Some(excludes.clone()),
+                true,
+                Instant::now() + Duration::from_secs(60),
+            )?;
+            let GitBlobSource::Precomputed(blobs) = result.blobs else {
+                panic!("expected precomputed history blobs");
+            };
+            assert_eq!(blobs.len(), 4, "include modified and deleted historical blobs");
+            let shared_blob =
+                blobs.iter().find(|blob| blob.blob_oid.to_string() == shared.to_string()).unwrap();
+            let paths: Vec<_> = shared_blob
+                .first_seen
+                .iter()
+                .map(|appearance| appearance.path.to_str_lossy().into_owned())
+                .collect();
+            assert_eq!(paths, ["copy.txt", "new-dir/secret.txt", "old-dir/secret.txt"]);
+            if corrupt_index {
+                assert_eq!(fs::read(index_path)?, b"deliberately invalid index");
+            } else {
+                assert!(!index_path.exists(), "scanning must not create an index");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
     fn branch_history_scans_annotated_tag_at_shallow_boundary() -> Result<()> {
         let temp = tempdir()?;
         let repo = Git2Repository::init(temp.path())?;
@@ -1904,6 +2039,7 @@ mod tests {
             temp.path(),
             open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
             "release",
+            None,
             None,
             true,
             Instant::now() + Duration::from_secs(60),

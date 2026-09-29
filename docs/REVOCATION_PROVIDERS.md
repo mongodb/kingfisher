@@ -16,13 +16,13 @@ review the target and operational impact before running it; revocation can inter
 still depend on the credential.
 
 Kingfisher supports direct revocation for selected built-in imported detectors and through a
-rule-level `revocation:` block in the Kingfisher 1.x custom-rule format. The current open-source
+rule-level `revocation:` block in the Kingfisher rule format. The current open-source
 catalog includes 34 revocation-enabled rules across 15 provider families.
 
 Betterleaks does not currently define revocation metadata. Kingfisher therefore keeps operational
 revocation actions in `crates/kingfisher-rules/data/imported-rules-capabilities.yml`. This file is not a
 detection catalog: it contains no regexes or filters, and every entry is joined to the downloaded
-imported-detector catalog by upstream ID at build time.
+imported-detector catalog by upstream ID during bundle generation.
 
 Current built-in provider families include:
 
@@ -48,14 +48,14 @@ kingfisher revoke --rule aws-access-token \
   "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 ```
 
-Kingfisher 1.x custom rules may define these revocation types:
+Kingfisher custom rules may define these revocation types:
 
 - `Http` for a single provider API request
 - `HttpMultiStep` for lookup-then-delete workflows
 - `AWS` for IAM access-key revocation
 - `GCP` for service-account key revocation
 
-Invoke a Kingfisher 1.x custom revocation rule with:
+Invoke a Kingfisher custom revocation rule with:
 
 ```bash
 kingfisher revoke \
@@ -65,4 +65,4 @@ kingfisher revoke \
 ```
 
 See [USAGE.md](USAGE.md#direct-secret-revocation-with-kingfisher-revoke) for the command and
-[RULES.md](RULES.md) for the Kingfisher 1.x custom-rule schema.
+[RULES.md](RULES.md) for the Kingfisher custom-rule schema.

@@ -17,6 +17,8 @@ This guide covers all installation methods for Kingfisher, including pre-commit 
   - [Windows PowerShell](#windows-powershell)
   - [Using the pre-commit Framework](#using-the-pre-commit-framework)
   - [Using Husky (Node.js projects)](#using-husky-nodejs-projects)
+- [Cargo](#cargo)
+- [Native Scan Wizard](#native-scan-wizard)
 - [Compile from Source](#compile-from-source)
 - [PyPI Wheels](#pypi-wheels)
 - [Run Kingfisher in Docker](#run-kingfisher-in-docker)
@@ -394,13 +396,45 @@ Or if Kingfisher is already installed:
 kingfisher scan . --staged --quiet --no-update-check
 ```
 
+## Cargo
+
+The crates.io package is named `kingfisher-bin`, matching PyPI; the installed command is
+`kingfisher`. Once the release is published to crates.io:
+
+```sh
+cargo install --locked kingfisher-bin
+kingfisher --version
+```
+
+This compiles from source and requires Rust 1.96 or newer and the platform's native build
+prerequisites described below. The rule catalog is bundled; installation does not fetch
+Betterleaks or Veles sources.
+
+## Native Scan Wizard
+
+The native GPUI workspace is built into the CLI with the optional `gui` feature:
+
+```sh
+cargo build --release --features gui --bin kingfisher
+./target/release/kingfisher wizard
+# Equivalent alias:
+./target/release/kingfisher gui
+```
+
+On Windows, run `target\release\kingfisher.exe wizard`. You can supply a scan target or open
+an existing report with `kingfisher wizard --report report.json`. Scans run the same binary;
+no separate desktop executable or CLI installation is needed. Ordinary headless builds do
+not compile GPUI. Current pre-built releases do not include this optional feature.
+
+See the [wizard guide](WIZARD.md) for controls, native report views, shell command copying,
+and platform prerequisites.
+
 ## Compile from Source
 
-Source builds require outbound HTTPS access. During compilation, Kingfisher downloads the pinned
-Betterleaks catalog snapshot and selected Veles source files, converts them, and embeds the
-generated rule database. The current built-in catalog contains 485 rules. A Betterleaks release is
-preferred; the current immutable post-release commit is pinned because the latest release predates
-detectors that Kingfisher ships. The upstream rule source is intentionally not vendored in this repository.
+Source builds embed the prepared catalog of 485 rules; they do not download Betterleaks or
+Veles sources. Cargo dependencies and native build prerequisites must still be available.
+The repository preserves license texts, source headers, and provenance under
+`crates/kingfisher-rules/generated/`; the source archive includes those files.
 
 You may compile for your platform via `make`:
 

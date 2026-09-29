@@ -659,6 +659,11 @@ pub async fn run_secret_validation(
 
         let validation_results = DashMap::<String, CachedResponse>::new();
 
+        crate::scan_progress::phase(
+            "Validating credentials",
+            representatives.len() as u64,
+            crate::scan_progress::PhaseKind::Validation,
+        );
         let pb = ProgressBar::new(representatives.len() as u64).with_message("Validating secrets…");
         pb.set_style(
             ProgressStyle::with_template(
@@ -751,6 +756,7 @@ pub async fn run_secret_validation(
                 val_res.insert(key, cr);
 
                 pb.inc(1);
+                crate::scan_progress::advance();
             }
             .boxed()
         })
@@ -812,6 +818,11 @@ pub async fn run_secret_validation(
         };
 
         let total = blob_ids.len();
+        crate::scan_progress::phase(
+            "Validating dependent credentials",
+            total as u64,
+            crate::scan_progress::PhaseKind::Validation,
+        );
         let pb = ProgressBar::new(total as u64).with_message("Validating dependent secrets…");
         pb.set_style(
             ProgressStyle::with_template(
@@ -948,6 +959,7 @@ pub async fn run_secret_validation(
                         // take long enough that waiting for the whole chunk
                         // to finish makes an active scan look hung at 0%.
                         pb.inc(1);
+                        crate::scan_progress::advance();
                         validated.into_iter().flatten().collect::<Vec<_>>()
                     }
                     .boxed()
@@ -1222,7 +1234,6 @@ fn apply_validation_outcome(
 ) {
     match outcome {
         ValidationRunOutcome::Completed => {
-            om.refresh_validation_outcome();
             if om.validation_outcome.is_verified_active()
                 || matches!(
                     om.validation_outcome,

@@ -1,44 +1,13 @@
 //! Finding types representing detected secrets.
 
 use std::collections::HashMap;
-use std::sync::{Arc, LazyLock};
+use std::sync::Arc;
 
 use kingfisher_core::{BlobId, Location};
 use kingfisher_rules::{Confidence, Rule};
-use parking_lot::RwLock;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use smallvec::SmallVec;
-
-// Thread-safe string interner for capture values
-static STRING_POOL: LazyLock<RwLock<std::collections::HashSet<&'static str>>> =
-    LazyLock::new(|| RwLock::new(std::collections::HashSet::new()));
-
-/// Intern a string to get a static reference.
-///
-/// This is used to avoid allocating the same string multiple times
-/// when processing captures.
-pub fn intern(s: &str) -> &'static str {
-    // Check if already interned
-    {
-        let pool = STRING_POOL.read();
-        if let Some(&existing) = pool.get(s) {
-            return existing;
-        }
-    }
-
-    // Not found, need to insert
-    let mut pool = STRING_POOL.write();
-    // Double-check after acquiring write lock
-    if let Some(&existing) = pool.get(s) {
-        return existing;
-    }
-
-    // Leak the string to get a static reference
-    let leaked: &'static str = Box::leak(s.to_string().into_boxed_str());
-    pool.insert(leaked);
-    leaked
-}
 
 /// A secret finding detected by the scanner.
 ///
@@ -177,27 +146,26 @@ impl From<&Location> for FindingLocation {
 #[derive(Debug, Clone, JsonSchema)]
 pub struct SerializableCapture {
     /// The name of the capture group (if named).
-    pub name: Option<&'static str>,
+    pub name: Option<String>,
     /// The capture group number (1-indexed for explicit groups).
     pub match_number: i32,
     /// Start byte offset of the capture.
     pub start: usize,
     /// End byte offset of the capture.
     pub end: usize,
-    /// The captured value (interned for efficiency).
-    #[serde(skip_serializing, skip_deserializing)]
-    pub value: &'static str,
+    /// The owned captured value, released when the capture is dropped.
+    pub value: String,
 }
 
 impl SerializableCapture {
     /// Returns the raw captured value.
-    pub fn raw_value(&self) -> &'static str {
-        self.value
+    pub fn raw_value(&self) -> &str {
+        &self.value
     }
 
     /// Returns the value for display (may be redacted).
-    pub fn display_value(&self) -> std::borrow::Cow<'static, str> {
-        std::borrow::Cow::Borrowed(self.value)
+    pub fn display_value(&self) -> std::borrow::Cow<'_, str> {
+        std::borrow::Cow::Borrowed(&self.value)
     }
 }
 
@@ -236,23 +204,23 @@ impl SerializableCaptures {
     ) -> Self {
         let mut serialized_captures: SmallVec<[SerializableCapture; 2]> = SmallVec::new();
 
-        let capture_names: SmallVec<[Option<&'static str>; 4]> =
-            re.capture_names().map(|name| name.map(intern)).collect();
+        let capture_names: SmallVec<[Option<String>; 4]> =
+            re.capture_names().map(|name| name.map(str::to_owned)).collect();
 
         // If there are explicit capture groups, serialize those
         if captures.len() > 1 {
             for i in 1..captures.len() {
                 if let Some(cap) = captures.get(i) {
                     let raw_value = String::from_utf8_lossy(cap.as_bytes());
-                    let raw_interned = intern(raw_value.as_ref());
-                    let name = capture_names.get(i).and_then(|opt| *opt);
+                    let value = raw_value.into_owned();
+                    let name = capture_names.get(i).and_then(Clone::clone);
 
                     serialized_captures.push(SerializableCapture {
                         name,
                         match_number: i32::try_from(i).unwrap_or(0),
                         start: cap.start(),
                         end: cap.end(),
-                        value: raw_interned,
+                        value,
                     });
                 }
             }
@@ -260,15 +228,15 @@ impl SerializableCaptures {
             // Only full match exists, serialize that
             if let Some(cap) = captures.get(0) {
                 let raw_value = String::from_utf8_lossy(cap.as_bytes());
-                let raw_interned = intern(raw_value.as_ref());
-                let name = capture_names.first().and_then(|opt| *opt);
+                let value = raw_value.into_owned();
+                let name = capture_names.first().and_then(Clone::clone);
 
                 serialized_captures.push(SerializableCapture {
                     name,
                     match_number: 0,
                     start: cap.start(),
                     end: cap.end(),
-                    value: raw_interned,
+                    value,
                 });
             }
         }

@@ -12,24 +12,41 @@ The current built-in catalog contains **485 rules**, including selected Veles ru
 component/helper rules. See the [built-in rules listing](../docs-site/docs/rules/builtin-rules.md) for the per-rule catalog
 and capability counts.
 
+Kingfisher fully supports loading both the **Kingfisher rule format** (`.yml`/`.yaml`)
+and **Betterleaks TOML** (`.toml`) for custom rules. Either format can be used for
+shared or private detections.
+
 The Betterleaks TOML format is supported for custom rules as well as for Kingfisher's built-in
 catalog. Use it for generally useful detectors that should be developed and shared through
 Betterleaks. Custom Betterleaks TOML rules are automatically placed in the `custom.` namespace.
 
-The YAML format documented here is the supported **Kingfisher 1.x custom-rule format**. It is
-intended for private, organization-specific detections that cannot be contributed upstream. It is
-not used for Kingfisher's built-in catalog and no Kingfisher YAML rules are bundled with the
-project.
+The YAML schema documented below is the **Kingfisher rule format**. It supports detection,
+validation, revocation, components, and checksum requirements for custom rules. The built-in
+catalog is maintained separately: the maintainer tool converts upstream rules to an internal
+YAML representation inside the compressed bundle and readable
+[betterleaks.yml](../crates/kingfisher-rules/generated/rules/betterleaks.yml) and
+[veles.yml](../crates/kingfisher-rules/generated/rules/veles.yml) files.
+These generated files preserve the same rules and collection metadata; they are not maintained
+separately. Each file cites its sources, and the [provenance manifest](../crates/kingfisher-rules/generated/provenance.json)
+records its hash and per-rule origins, including Kingfisher-authored helpers. See the
+[crate documentation](../crates/kingfisher-rules/README.md#readable-rule-catalogs) for loading,
+licensing, and regeneration details.
 
-A Kingfisher 1.x custom rule is a YAML document that describes how to detect and optionally validate
+A rule in the Kingfisher rule format is a YAML document that describes how to detect and optionally validate
 or revoke secrets. With custom rules you can:
 
 - **Extend** Kingfisher without touching Rust code  
 - **Tune** sensitivity via entropy and confidence  
 - **Plug in** live checks against external services  
 
-Load `.toml`, `.yml`, or `.yaml` custom rules with `--rules-path`. They are additive to Betterleaks
-defaults; pass `--load-builtins=false` for a custom-only scan.
+Load `.toml`, `.yml`, or `.yaml` custom rules with `--rules-path`. They are additive to the Betterleaks
+and Veles built-ins; pass `--load-builtins=false` for a custom-only scan. A rules directory
+can contain both formats, or you can repeat `--rules-path` to load separate files:
+
+```bash
+kingfisher scan --rules-path ./company.yml --rules-path ./team.toml ./src/
+kingfisher rules check --rules-path ./custom-rules/ --load-builtins=false --no-update-check
+```
 
 Kingfisher's `imported-rules-capabilities.yml` is not another rule format. Its source-specific
 sections may bind existing imported detectors to operational validation, access-map, revocation,
@@ -37,12 +54,12 @@ confidence, authority, narrow filter behavior, or derive bare token patterns wit
 but must not contain detector regexes. See the [overlay reference](../crates/kingfisher-rules/data/imported-rules-capabilities.md#bare-token-detection-betterleaks-only).
 
 Veles support is built-in-only. `crates/kingfisher-rules/data/veles-rules.yml` pins an
-OSV-SCALIBR commit and selects upstream Veles plugin IDs that have explicit build-time adapters;
+OSV-SCALIBR commit and selects upstream Veles plugin IDs that have explicit import adapters;
 `--rules-path` does not accept Veles source or configuration.
 
 ## 1. Rule Schema
 
-Each rule file defines one or more entries under a top‑level `rules:` list. Every entry supports the following fields:
+Each Kingfisher YAML rule file defines one or more entries under a top‑level `rules:` list. Every entry supports the following fields:
 
 ```yaml
 rules:
@@ -231,7 +248,7 @@ validation:
   type: Assumed
 ```
 
-A Kingfisher 1.x custom private-key rule can use this marker when its high-signal format can be accepted
+A Kingfisher custom private-key rule can use this marker when its high-signal format can be accepted
 without a provider request; its findings are reported as `Assumed Valid (Not Live-Validated)`.
 
 Raw validation looks like this:
@@ -866,7 +883,7 @@ Notes:
 
 Modern API tokens increasingly include **built-in checksums**, short internal digests that make each credential self-verifiable. For background, see [GitHub's write-up on newer token formats](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/) and why checksums reduce false positives.
 
-Kingfisher's 1.x custom-rule format supports **checksum-aware matching**, enabling **offline structural verification** of credentials without calling third-party APIs.
+The Kingfisher rule format supports **checksum-aware matching**, enabling **offline structural verification** of credentials without calling third-party APIs.
 
 By validating each token's internal checksum, when supported by the token format, Kingfisher filters structurally invalid or fake tokens before validation runs.
 

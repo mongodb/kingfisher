@@ -15,24 +15,41 @@ The current built-in catalog contains **485 rules**, including selected Veles ru
 component/helper rules. See the [built-in rules listing](builtin-rules.md) for the per-rule catalog
 and capability counts.
 
+Kingfisher fully supports loading both the **Kingfisher rule format** (`.yml`/`.yaml`)
+and **Betterleaks TOML** (`.toml`) for custom rules. Either format can be used for
+shared or private detections.
+
 The Betterleaks TOML format is supported for custom rules as well as for Kingfisher's built-in
 catalog. Use it for generally useful detectors that should be developed and shared through
 Betterleaks. Custom Betterleaks TOML rules are automatically placed in the `custom.` namespace.
 
-The YAML format documented here is the supported **Kingfisher 1.x custom-rule format**. It is
-intended for private, organization-specific detections that cannot be contributed upstream. It is
-not used for Kingfisher's built-in catalog and no Kingfisher YAML rules are bundled with the
-project.
+The YAML schema documented below is the **Kingfisher rule format**. It supports detection,
+validation, revocation, components, and checksum requirements for custom rules. The built-in
+catalog is maintained separately: the maintainer tool converts upstream rules to an internal
+YAML representation inside the compressed bundle and readable
+[betterleaks.yml](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-rules/generated/rules/betterleaks.yml) and
+[veles.yml](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-rules/generated/rules/veles.yml) files.
+These generated files preserve the same rules and collection metadata; they are not maintained
+separately. Each file cites its sources, and the [provenance manifest](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-rules/generated/provenance.json)
+records its hash and per-rule origins, including Kingfisher-authored helpers. See the
+[crate documentation](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-rules/README.md#readable-rule-catalogs) for loading,
+licensing, and regeneration details.
 
-A Kingfisher 1.x custom rule is a YAML document that describes how to detect and optionally validate
+A rule in the Kingfisher rule format is a YAML document that describes how to detect and optionally validate
 or revoke secrets. With custom rules you can:
 
 - **Extend** Kingfisher without touching Rust code  
 - **Tune** sensitivity via entropy and confidence  
 - **Plug in** live checks against external services  
 
-Load `.toml`, `.yml`, or `.yaml` custom rules with `--rules-path`. They are additive to Betterleaks
-defaults; pass `--load-builtins=false` for a custom-only scan.
+Load `.toml`, `.yml`, or `.yaml` custom rules with `--rules-path`. They are additive to the Betterleaks
+and Veles built-ins; pass `--load-builtins=false` for a custom-only scan. A rules directory
+can contain both formats, or you can repeat `--rules-path` to load separate files:
+
+```bash
+kingfisher scan --rules-path ./company.yml --rules-path ./team.toml ./src/
+kingfisher rules check --rules-path ./custom-rules/ --load-builtins=false --no-update-check
+```
 
 Kingfisher's `imported-rules-capabilities.yml` is not another rule format. Its source-specific
 sections may bind existing imported detectors to operational validation, access-map, revocation,
@@ -40,12 +57,12 @@ confidence, authority, narrow filter behavior, or derive bare token patterns wit
 but must not contain detector regexes. See the [overlay reference](../rules/imported-capabilities.md#bare-token-detection-betterleaks-only).
 
 Veles support is built-in-only. `crates/kingfisher-rules/data/veles-rules.yml` pins an
-OSV-SCALIBR commit and selects upstream Veles plugin IDs that have explicit build-time adapters;
+OSV-SCALIBR commit and selects upstream Veles plugin IDs that have explicit import adapters;
 `--rules-path` does not accept Veles source or configuration.
 
 ## 1. Rule Schema
 
-Each rule file defines one or more entries under a top‑level `rules:` list. Every entry supports the following fields:
+Each Kingfisher YAML rule file defines one or more entries under a top‑level `rules:` list. Every entry supports the following fields:
 
 ```yaml
 rules:
@@ -234,7 +251,7 @@ validation:
   type: Assumed
 ```
 
-A Kingfisher 1.x custom private-key rule can use this marker when its high-signal format can be accepted
+A Kingfisher custom private-key rule can use this marker when its high-signal format can be accepted
 without a provider request; its findings are reported as `Assumed Valid (Not Live-Validated)`.
 
 Raw validation looks like this:
@@ -634,12 +651,74 @@ A required dependency with `within` and no candidate removes the primary finding
 Without `within`, a missing required dependency retains the finding and skips
 validation with status 428. `optional: true` permits an absent dependency.
 
-Multiple **distinct values** in the eligible window retain the finding but skip
-validation with status 428 and an `ambiguous dependency` explanation. Kingfisher
+By default, multiple **distinct values** in the eligible window retain the finding
+but skip validation with status 428 and an `ambiguous dependency` explanation. Kingfisher
 does not send a credential to a guessed endpoint. Narrow the window or use direct
 validation with explicit variables to resolve the association. Comment and README
 matches can participate; dependency matching does not interpret imports or exclude
 comments. A lone comment candidate is therefore still eligible.
+
+### Opt-in candidate verification
+
+A dependency that supplies a **credential component** can opt into bounded
+try-and-verify pairing:
+
+```yaml
+depends_on_rule:
+  - rule_id: custom.service.secret
+    variable: CLIENT_SECRET
+    within: "5L"
+    verify_candidates: true
+```
+
+Built-in opt-ins cover AWS access keys and session tokens, BrowserStack,
+ClickHouse Cloud, MongoDB Atlas service accounts, PlanetScale, Razorpay, and Wiz.
+AWS session tokens may try both access-key IDs and secrets within the same total
+combination budget.
+
+Private YAML rules can enable it for typed `AWS` validation or `Http` validation
+with a literal, fixed HTTP(S) URL, no Host header override, and no multipart
+uploads. Supported Betterleaks expressions may call `aws.validate`, or `http.get`
+and `http.post` with a provably fixed HTTP(S) origin and literal header names
+without a Host override. URLs may concatenate dynamic values after a literal
+prefix containing the complete origin and a slash; dynamic hosts and indirect
+URL variables remain unsupported. Pure helper calls are limited to
+`validate.unknown`, `bytes`, `base64.encode`, and `strings.urlQueryEscape`.
+HTTP validation disables redirects for any rule with a `verify_candidates`
+dependency, including findings with an unambiguous component. This keeps redirect
+policy consistent when ordinary validation and candidate searches share cached
+results. Discovered endpoint dependencies and
+unsupported validators retain strict ambiguity handling, even if opted in.
+Every ambiguous dependency must be eligible before a search starts.
+Variables or helper-rule IDs naming a URL, URI, host, domain, endpoint, address,
+port, or server are excluded from candidate verification even when opted in.
+Typed `AWS` validation additionally accepts only `AKID` and
+`AWS_SECRET_ACCESS_KEY`, the dependency variables that it consumes.
+
+Candidates remain restricted to the dependency window and are deduplicated by
+value. Matching assignment-name prefixes rank first (for example,
+`kms_aws_key` / `kms_aws_secret` or `production_client_id` /
+`production_client_secret`), then shared bracketed-object or INI-section context,
+then byte distance. These are ordering hints, not proof of association. Failed
+name matches fall back to other candidates. Multiple ambiguous components are
+combined in ranked order without materializing their full Cartesian product.
+
+A search tries at most **16 distinct combinations**, with a total time budget of
+**30 seconds or `--validation-timeout`, whichever is shorter** (10 seconds by
+default). At most four searches run concurrently across repositories, one
+combination at a time per search. Existing request retries and provider rate
+limits still apply; retries can make more than one request per combination.
+The time budget includes waiting for a search slot. Each complete credential
+combination uses the normal validation cache. A successful secret remains
+available for other access-key IDs.
+
+Only authoritative successful validation selects a pair and clears its ambiguity.
+Exhausted budgets and searches with no successful combination remain unresolved
+(status 428); timeouts, throttling, and unavailable verification remain inconclusive.
+They do not establish that the primary credential is inactive. `--no-validate`
+leaves multi-candidate findings ambiguous, even when assignment names match.
+Unselected candidate values are internal and never included in reports or generated
+validation commands; the selected values obey `--redact`.
 
 Association happens before deduplication. Identical secrets with different resolved
 contexts remain separate findings, so a bare definition cannot hide a paired
@@ -809,7 +888,7 @@ Notes:
 
 Modern API tokens increasingly include **built-in checksums**, short internal digests that make each credential self-verifiable. For background, see [GitHub's write-up on newer token formats](https://github.blog/engineering/platform-security/behind-githubs-new-authentication-token-formats/) and why checksums reduce false positives.
 
-Kingfisher's 1.x custom-rule format supports **checksum-aware matching**, enabling **offline structural verification** of credentials without calling third-party APIs.
+The Kingfisher rule format supports **checksum-aware matching**, enabling **offline structural verification** of credentials without calling third-party APIs.
 
 By validating each token's internal checksum, when supported by the token format, Kingfisher filters structurally invalid or fake tokens before validation runs.
 

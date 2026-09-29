@@ -524,7 +524,7 @@ async fn scan_deleted_secret(provider: &str) -> anyhow::Result<()> {
     } else {
         clone_url.to_string()
     };
-    for (enabled, code) in [(true, 200), (false, 1)] {
+    for (enabled, code) in [(true, 200), (false, 3)] {
         let mut command = make_command();
         command
             .args(["--no-validate", "--load-builtins=false", "--rules-path"])
