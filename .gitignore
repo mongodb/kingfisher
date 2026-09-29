@@ -244,3 +244,8 @@ docs-site/docs/viewer/
 .codegraph/
 # Created by https://www.toptal.com/developers/gitignore/api/python
 # Edit at https://www.toptal.com/developers/gitignore?templates=python
+
+!crates/kingfisher-rules/generated/provenance.json
+
+# Python release-helper test caches
+scripts/**/__pycache__/

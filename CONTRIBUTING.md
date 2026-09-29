@@ -43,6 +43,16 @@ Use the repository issue templates when they fit your case.
 
 Kingfisher is a Rust workspace. The workspace minimum Rust version is `1.96`.
 
+The workspace uses the published [`kingfisher-vectorscan`](https://crates.io/crates/kingfisher-vectorscan)
+crate. On supported Linux GNU, macOS, and Windows GNU/LLVM targets, Cargo downloads
+the checksum-verified Vectorscan archive, so Vectorscan itself does not need a local
+CMake/Boost build. Cargo still builds Rust code and other native dependencies, and
+needs the target linker/runtime libraries and network access for the archive. The
+Windows MSVC Rust targets are unsupported by this Vectorscan crate; use the MSYS2
+MINGW64 x64 or CLANGARM64 ARM64 setup used by the Makefile. See the crate's
+[build guide](https://github.com/micksmix/kingfisher-vectorscan#build-requirements-and-portability)
+for offline and source-build options.
+
 Helpful commands:
 
 ```bash
@@ -85,13 +95,14 @@ Use clearly fake placeholders or provider-documented example values only.
 
 ### Rule contributions
 
-If you are adding or updating a generally useful rule, contribute it to Betterleaks first. The
-Kingfisher 1.x YAML schema remains supported for private custom rules, not as a built-in catalog.
+If you are adding or updating a generally useful rule, contribute it to Betterleaks first. For
+custom rules, both the Kingfisher rule format (`.yml`/`.yaml`) and Betterleaks TOML (`.toml`)
+are fully supported through `--rules-path`. Custom rules may be shared or private.
 
-For Kingfisher 1.x custom rules:
+For Kingfisher custom rules:
 
 - Follow the schema and authoring guidance in [docs/RULES.md](docs/RULES.md).
-- Prefer YAML-defined validation and revocation when the private provider API supports
+- Prefer YAML-defined validation and revocation when the provider API supports
   it.
 - Keep patterns specific and efficient.
 - Add realistic examples and relevant tests.

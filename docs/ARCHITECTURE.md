@@ -113,20 +113,26 @@ flowchart LR
 - `src/direct_validate.rs`: direct validation of a known secret without going through pattern matching. Supports HTTP, gRPC, plus schema-level typed validators such as AWS, AzureStorage, CredentialUri, GCP, JDBC, MongoDB, MySQL, PostgreSQL, JWT, and Coinbase, and delegates ad-hoc `Raw` validators to `crates/kingfisher-scanner/src/validation/raw.rs`.
 - `src/direct_revoke.rs`: direct revocation of a known secret without going through the scan pipeline. Uses Liquid templates for revocation configurations and supports multi-step HTTP revocation flows.
 - `src/access_map.rs` and `src/access_map/*`: standalone blast-radius mapping with 43 provider implementations including AWS, Azure, GCP, GitHub, GitLab, Slack, Bitbucket, Gitea, Hugging Face, Buildkite, Anthropic, OpenAI, and more.
-- `crates/kingfisher-rules/build.rs` and `build_support/{betterleaks,veles}.rs`: download pinned
-  Betterleaks and selected Veles detector sources and translate them into the embedded default rule
-  database. No built-in rule catalog is stored in the repository.
+- `tools/rule-bundle/` and `crates/kingfisher-rules/build_support/{betterleaks,veles}.rs`:
+  the maintainer tool archives pinned upstream sources and translates them into the prepared
+  compressed catalog in `crates/kingfisher-rules/generated/`. Normal compilation embeds this
+  bundle without fetching rule sources. The manifest records input and output hashes.
 - `crates/kingfisher-rules/data/imported-rules-capabilities.yml`: Kingfisher-only operational bindings
   and selected safe revocation actions keyed by upstream detector ID. It contains no candidate
-  detector regexes, but may add narrow operational filters and capability metadata; the build rejects
+  detector regexes, but may add narrow operational filters and capability metadata; the generator rejects
   stale IDs and component references.
 
 ## Notes And Boundaries
 
 - The main CLI scan path is implemented primarily in the application modules under `src/`, not in `kingfisher-scanner`.
 - `kingfisher-scanner` is still important: it provides the embeddable scanner API plus shared validation and primitive functionality reused by the application.
-- The shared validation layer in `crates/kingfisher-scanner/src/validation/` contains reusable typed
-  validator families and the `Raw` exception-path validators retained for Kingfisher 1.x custom YAML.
+- The shared validation layer in `crates/kingfisher-scanner/src/validation/` contains the embeddable
+  `ValidationEngine`, Betterleaks expression runtime, gRPC transport, typed validator families,
+  and `Raw` exception-path validators. The engine dispatches and classifies validation for all
+  three callers: the embeddable `Validator`, CLI scans, and direct `validate` commands.
+  `Validator` associates supporting findings and bounds concurrency. The CLI adds candidate
+  selection, rate limiting, scan-scoped caches, and reporting around the same engine; see the
+  [library integration guide](LIBRARY.md#use-the-validation-builder).
 - Direct `validate`, `revoke`, and standalone `blast-radius` are sibling command paths. They are not downstream stages of `FindingsStore`.
 - Reporting is downstream from the datastore, which lets Kingfisher emit multiple output formats and drive the local viewer from the same finding set.
 - Every rule uses Vectorscan's high-throughput SIMD-accelerated database for candidate detection. The exact Rust regex then confirms captures before imported-rule filters, Base64 handling, and parser-based context verification improve accuracy and reduce false positives. No rule performs an unconditional whole-blob regex scan.
@@ -138,7 +144,7 @@ flowchart LR
   Vectorscan databases. `findMatch` uses start-of-match tracking; boolean helpers use normal block
   matching.
 - `FindingsStore` uses an in-memory store with cryptographic-digest deduplication, replacing the earlier SQLite-based storage model.
-- Betterleaks validation expressions run through a portable Rust AST evaluator. Kingfisher 1.x custom-rule
+- Betterleaks validation expressions run through a portable Rust AST evaluator. Kingfisher custom-rule
   validation and revocation templates use Liquid for HTTP request sequences, variable extraction,
   and multi-step flows.
 - Betterleaks access-map and revocation behavior is capability-driven. Runtime dispatch uses typed

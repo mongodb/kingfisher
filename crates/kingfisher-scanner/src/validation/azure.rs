@@ -96,9 +96,9 @@ pub async fn validate_azure_storage_credentials(
     loop {
         match reader.read_event_into(&mut buf) {
             Ok(Event::Eof) => break,
-            Ok(Event::Start(e)) if e.name().as_ref().eq_ignore_ascii_case(b"name") => {
+            Ok(Event::Start(e)) if e.name().as_ref().eq_ignore_ascii_case("name") => {
                 let text = reader.read_text(e.name())?;
-                names.push(text.decode()?.into_owned());
+                names.push(text.into_inner().into_owned());
             }
             Err(e) => return Err(anyhow!("XML parse error: {e}")),
             _ => {}

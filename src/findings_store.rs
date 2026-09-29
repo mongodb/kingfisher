@@ -724,6 +724,8 @@ mod tests {
                     commit_id: gix::ObjectId::from_hex(
                         b"0123456789abcdef0123456789abcdef01234567",
                     )?,
+                    author_name: Some("Original Author".into()),
+                    author_email: Some("original@example.invalid".into()),
                     committer_name: "Fixture Author".into(),
                     committer_email: "fixture@example.invalid".into(),
                     committer_timestamp: gix::date::Time::new(1_700_000_000, -25_200),

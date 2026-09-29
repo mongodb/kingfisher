@@ -17,7 +17,7 @@ use crate::cli::commands::{
 
 #[deny(missing_docs)]
 #[derive(Parser, Debug)]
-#[command(version = env!("CARGO_PKG_VERSION"))]
+#[command(name = "kingfisher", version = env!("CARGO_PKG_VERSION"))]
 /// Kingfisher - Detect and validate secrets across files and full Git history
 pub struct CommandLineArgs {
     /// The command to execute
@@ -80,6 +80,10 @@ pub enum Command {
     /// Scan content for secrets and sensitive information
     Scan(ScanCommandArgs),
 
+    /// Open the native scan wizard and report workspace (requires a GUI-enabled build)
+    #[command(visible_alias = "gui")]
+    Wizard(WizardArgs),
+
     /// Manage rules
     #[command(alias = "rule")]
     Rules(RulesArgs),
@@ -103,6 +107,16 @@ pub enum Command {
     /// Update the Kingfisher binary
     #[command(name = "update", alias = "self-update")]
     SelfUpdate,
+}
+
+/// Starting content for the native workspace.
+#[derive(Args, Debug)]
+pub struct WizardArgs {
+    /// Optional file, directory, or repository URL to scan
+    pub target: Option<std::ffi::OsString>,
+    /// Open a report directly in the native viewer
+    #[arg(long, conflicts_with = "target")]
+    pub report: Option<PathBuf>,
 }
 
 pub static RAM_GB: LazyLock<Option<f64>> = LazyLock::new(|| {

@@ -196,6 +196,43 @@ where
     Ok(())
 }
 
+/// Narrow only scans whose selected ref is the sole history input. Revision
+/// expressions and comparisons may require refs outside that branch's history.
+/// Hex-only names of four or more characters may also be abbreviated object IDs.
+/// Conservatively use a full clone for these, including real branches such as `cafe`.
+fn single_clone_branch(input: &crate::cli::commands::inputs::InputSpecifierArgs) -> Option<&str> {
+    if input.since_commit.is_some()
+        || input.branch_root
+        || input.branch_root_commit.is_some()
+        || input.staged
+    {
+        return None;
+    }
+    let branch = input.branch.as_deref()?.trim();
+    let branch = branch.strip_prefix("refs/heads/").unwrap_or(branch);
+    if branch.is_empty()
+        || branch.eq_ignore_ascii_case("HEAD")
+        || branch.starts_with("refs/")
+        || branch.starts_with("origin/")
+        || branch.starts_with('-')
+        || branch.contains(['~', '^', ':', '*', '?', '[', '\\'])
+        || branch.contains("@{")
+        || (branch.len() >= 4 && branch.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        debug!("Using a full clone: selected ref may be a revision rather than a branch name");
+        return None;
+    }
+    Some(branch)
+}
+
+fn branch_clone_destination(root: &std::path::Path, repo_url: &GitUrl, branch: &str) -> PathBuf {
+    let mut hash = blake3::Hasher::new();
+    hash.update(repo_url.as_str().as_bytes());
+    hash.update(&[0]);
+    hash.update(branch.as_bytes());
+    root.join(".branch-clones").join(hash.finalize().to_hex().as_str())
+}
+
 pub fn clone_or_update_git_repos_streaming<F>(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
@@ -216,6 +253,7 @@ where
         debug!("Need to fetch {repo_url}")
     }
 
+    let branch = single_clone_branch(&args.input_specifier_args).map(str::to_owned);
     let clone_mode = if args.input_specifier_args.git_history == GitHistoryMode::None {
         CloneMode::Checkout
     } else {
@@ -285,7 +323,12 @@ where
             };
             let output_dir = {
                 let datastore = datastore.lock().unwrap();
-                datastore.clone_destination(&repo_url)
+                match branch.as_deref() {
+                    Some(branch) => {
+                        branch_clone_destination(&datastore.clone_root(), &repo_url, branch)
+                    }
+                    None => datastore.clone_destination(&repo_url),
+                }
             };
 
             if output_dir.is_dir() {
@@ -342,7 +385,11 @@ where
                     return None;
                 }
             };
-            if let Err(e) = git.create_fresh_clone(&repo_url, &output_dir, clone_mode) {
+            let clone_result = match branch.as_deref() {
+                Some(branch) => git.create_branch_clone(&repo_url, &output_dir, branch),
+                None => git.create_fresh_clone(&repo_url, &output_dir, clone_mode),
+            };
+            if let Err(e) = clone_result {
                 audit.lock().unwrap().fetch_failed(repo_url.as_str(), &e.to_string());
                 worker_progress.suspend(|| {
                     if repo_url.as_str().ends_with(".wiki.git") {
@@ -402,6 +449,50 @@ mod tests {
     use super::{
         ProviderHosts, clone_host, repo_clone_host, scoped_provider_hosts, stream_parallel_results,
     };
+
+    #[test]
+    fn branch_clone_scope_preserves_multi_ref_and_revision_scans() {
+        use crate::cli::commands::scan::ScanOperation;
+        use crate::cli::global::{Command, CommandLineArgs};
+        use clap::Parser;
+        for (flags, expected) in [
+            (vec!["--branch", "feature/narrow"], Some("feature/narrow")),
+            (vec!["--branch", "refs/heads/feature/narrow"], Some("feature/narrow")),
+            (vec!["--branch", "feature", "--git-history", "none"], Some("feature")),
+            (vec!["--branch", "HEAD"], None),
+            (vec!["--branch", "0123456789abcdef0123456789abcdef01234567"], None),
+            (vec!["--branch", "feature~2"], None),
+            (vec!["--branch", "refs/tags/release"], None),
+            (vec!["--branch", "feature", "--since-commit", "main"], None),
+            (vec!["--branch", "feature", "--branch-root"], None),
+            (vec!["--branch", "feature", "--branch-root-commit", "main"], None),
+            (vec![], None),
+        ] {
+            let args = CommandLineArgs::try_parse_from(
+                ["kingfisher", "scan", "https://example.invalid/repo.git"].into_iter().chain(flags),
+            )
+            .unwrap();
+            let Command::Scan(command) = args.command else {
+                panic!("expected scan");
+            };
+            let ScanOperation::Scan(args) = command.into_operation().unwrap() else {
+                panic!("expected scan");
+            };
+            assert_eq!(super::single_clone_branch(&args.input_specifier_args), expected);
+        }
+    }
+
+    #[test]
+    fn branch_clone_caches_are_separate_and_stable() {
+        let root = std::path::Path::new("clones");
+        let url: GitUrl = "https://example.invalid/repo.git".parse().unwrap();
+        let other: GitUrl = "https://example.invalid/other.git".parse().unwrap();
+        let path = super::branch_clone_destination(root, &url, "feature/a");
+        assert_eq!(path, super::branch_clone_destination(root, &url, "feature/a"));
+        assert_ne!(path, super::branch_clone_destination(root, &url, "feature/b"));
+        assert_ne!(path, super::branch_clone_destination(root, &other, "feature/a"));
+        assert_eq!(path.parent(), Some(root.join(".branch-clones").as_path()));
+    }
 
     #[test]
     fn streaming_pool_makes_progress_with_one_worker() {

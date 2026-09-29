@@ -17,14 +17,14 @@ theme:
   favicon: assets/images/kingfisher_logo.png
   palette:
     - scheme: default
-      primary: teal
-      accent: teal
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-7
         name: Switch to dark mode
     - scheme: slate
-      primary: teal
-      accent: teal
+      primary: custom
+      accent: custom
       toggle:
         icon: material/brightness-4
         name: Switch to light mode
@@ -89,6 +89,11 @@ markdown_extensions:
 
 nav:
   - Home: index.md
+  - Report Viewer: viewer/index.html
+  - Rules Browser:
+    - Built-in Rules: rules/builtin-rules.md
+    - Imported Rule Capabilities: rules/imported-capabilities.md
+    - Custom Rules: rules/overview.md
   - Getting Started:
     - Installation: getting-started/installation.md
     - Quick Start: getting-started/quick-start.md
@@ -113,10 +118,6 @@ nav:
     - Source Code Parsing: features/parsing.md
     - Finding Fingerprints: features/fingerprints.md
     - LLM & Agent Integration: features/agents.md
-  - Rules:
-    - Built-in Rules: rules/builtin-rules.md
-    - Imported Rule Capabilities: rules/imported-capabilities.md
-    - Kingfisher 1.x Custom Rules: rules/overview.md
   - Reference:
     - Documentation Index: reference/documentation-index.md
     - Architecture: reference/architecture.md
@@ -124,7 +125,6 @@ nav:
     - Python Bindings: reference/python-bindings.md
     - Benchmarks & Comparison: reference/comparison.md
     - Project Background: reference/project.md
-  - Report Viewer: https://mongodb.github.io/kingfisher/viewer/
   - Blog:
     - blog/index.md
   - Changelog: changelog.md

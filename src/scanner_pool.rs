@@ -1,7 +1,7 @@
 use std::{cell::RefCell, sync::Arc};
 
+use kingfisher_vectorscan::{BlockDatabase, BlockScanner};
 use thread_local::ThreadLocal; // external crate ✔
-use vectorscan_rs::{BlockDatabase, BlockScanner};
 
 pub struct ScannerPool {
     vsdb: Arc<BlockDatabase>, // keep DB alive

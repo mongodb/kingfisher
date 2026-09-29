@@ -1,7 +1,7 @@
 # Kingfisher operational capabilities for imported Betterleaks and Veles detectors.
 #
 # This is deliberately not a detection-rule catalog. Regexes, components, and confidence come
-# from upstream at build time. Entries bind an unqualified upstream rule/plugin ID to
+# from upstream during bundle generation. Entries bind an unqualified upstream rule/plugin ID to
 # Kingfisher-specific validation, access-map, revocation, confidence, filtering, or bare-token
 # derivation from upstream captures.
 version: 1

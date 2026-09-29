@@ -163,8 +163,19 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
                     };
                     // Metadata traversal emits each commit once. Its appearances share
                     // this Arc directly, without a redundant per-commit cache.
+                    let author = commit.author().ok();
                     let cm = Arc::new(CommitMetadata {
                         commit_id: e.commit_oid,
+                        author_name: author.as_ref().map(|author| {
+                            intern_git_identity(
+                                String::from_utf8_lossy(author.name.as_ref()).as_ref(),
+                            )
+                        }),
+                        author_email: author.as_ref().map(|author| {
+                            intern_git_identity(
+                                String::from_utf8_lossy(author.email.as_ref()).as_ref(),
+                            )
+                        }),
                         committer_name: intern_git_identity(
                             String::from_utf8_lossy(committer.name.as_ref()).as_ref(),
                         ),

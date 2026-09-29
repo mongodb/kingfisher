@@ -5,27 +5,20 @@ PROJECT_NAME := kingfisher
 ZIG_VERSION ?= 0.15.1
 SKIP_TESTS ?= 0
 
-# Determine OS and whether to use gtar on darwin
-OS := $(shell uname)
-ifneq ($(OS),darwin)
-  USE_GTAR := 0
-  TAR_CMD := tar
-  TAR_OPTS := $(shell if tar --help 2>/dev/null | grep -q -- '--no-xattrs'; then echo '--no-xattrs -czf'; else echo '-czf'; fi)
-else
+# Normalize uname once for platform checks (uname reports Darwin on macOS).
+OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
+TAR_CMD := tar
+ifeq ($(OS),darwin)
   ifneq ($(shell command -v gtar 2>/dev/null),)
-    USE_GTAR := 1
     TAR_CMD := gtar
-    TAR_OPTS := --no-xattrs -czf
-  else
-    USE_GTAR := 0
-    TAR_CMD := tar
-    TAR_OPTS := -czf
   endif
 endif
+TAR_OPTS := $(shell if $(TAR_CMD) --help 2>/dev/null | grep -q -- '--no-xattrs'; then echo '--no-xattrs -czf'; else echo '-czf'; fi)
 
-# uname reports MSYS_NT*/MINGW*/CYGWIN* under Windows POSIX shells.
+# uname reports MSYS_NT*/MINGW*/CLANG*/UCRT64_NT*/CYGWIN* under Windows POSIX
+# shells, including the CLANGARM64 environment required for windows-arm64.
 IS_WINDOWS_HOST := 0
-ifneq (,$(filter Windows_NT MSYS_NT% MINGW% CYGWIN_NT%,$(OS)))
+ifneq (,$(filter windows_nt msys_nt% mingw% clang% ucrt64_nt% cygwin_nt%,$(OS)))
   IS_WINDOWS_HOST := 1
 endif
 
@@ -53,7 +46,7 @@ ARCHIVE_CMD = $(TAR_CMD) $(TAR_OPTS)
 SUDO_CMD := $(shell command -v sudo 2>/dev/null)
 
 .PHONY: \
-        default help create-dockerignore setup-zig \
+        default help create-dockerignore setup-zig wizard-gui \
         ubuntu-x64 ubuntu-arm64 linux-x64 linux-arm64 linux linux-all \
         darwin-arm64 darwin-x64 darwin-dev darwin darwin-all \
         require-windows-host windows-x64 windows-arm64 windows-test-x64 windows-test-arm64 windows-test windows \
@@ -75,6 +68,7 @@ help:
 	@echo "  darwin-arm64       Build macOS arm64 archive"
 	@echo "  darwin-all         Build macOS x64 and arm64 archives"
 	@echo "  darwin-dev         Build a macOS arm64 dev binary"
+	@echo "  wizard-gui         Build a release GUI binary for the detected host platform"
 	@echo "  windows-x64        Build Windows x64 archive from MSYS2"
 	@echo "  windows-arm64      Build Windows arm64 archive from MSYS2"
 	@echo "  windows            Build Windows x64 and arm64 archives"
@@ -95,11 +89,19 @@ help:
 create-dockerignore:
 	@printf '%s\n' target/ .git/ .vscode/ bin/ > .dockerignore
 
+# Rust's host triple preserves the native ABI (including GNU/MSVC on Windows).
+# The GUI uses native desktop libraries, so do not send it through musl/Docker.
+HOST_TARGET = $(shell rustc -vV | sed -n 's/^host: //p')
+DARWIN_FEATURES := system-alloc
+
+wizard-gui: check-rust
+	cargo build --release --target $(HOST_TARGET) --features "$(strip gui $(if $(filter darwin,$(OS)),$(DARWIN_FEATURES)))" --bin $(PROJECT_NAME)
+
 prepare-release-notices:
 	@mkdir -p target/release/notices
 	@cp NOTICE target/release/notices/NOTICE
 	@cp THIRD_PARTY_NOTICES target/release/notices/THIRD_PARTY_NOTICES
-	@cp vendor/vectorscan-rs/NOTICE target/release/notices/vectorscan-rs-NOTICE
+	@cp third-party/kingfisher-vectorscan/NOTICE target/release/notices/kingfisher-vectorscan-NOTICE
 
 
 setup-zig:
@@ -160,10 +162,20 @@ setup-zig:
 # =============  BAREMETAL BUILDS (Check Rust first, install if missing)  =============
 #
 
-# -------------------------------------------------------------------------------------------------
-# ubuntu-x64 — native static build for x86_64-unknown-linux-musl via Zig. Tested on Ubuntu 24.04.
-# -------------------------------------------------------------------------------------------------
-ubuntu-x64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild exist
+# Target-specific values let both architectures share the same build recipes.
+ubuntu-x64 darwin-x64 linux-x64: BUILD_ARCH := x64
+ubuntu-arm64 darwin-arm64 linux-arm64: BUILD_ARCH := arm64
+ubuntu-x64 linux-x64: BUILD_TARGET := x86_64-unknown-linux-musl
+ubuntu-arm64 linux-arm64: BUILD_TARGET := aarch64-unknown-linux-musl
+darwin-x64: BUILD_TARGET := x86_64-apple-darwin
+darwin-arm64: BUILD_TARGET := aarch64-apple-darwin
+linux-x64: DOCKER_PLATFORM := linux/amd64
+linux-arm64: DOCKER_PLATFORM := linux/arm64
+
+# Zig uses libc++; the prebuilt musl Vectorscan archives use GCC libstdc++.
+# Keep source builds for Zig so the C++ ABI matches its toolchain.
+# Native static Linux builds via Zig (Ubuntu).
+ubuntu-x64 ubuntu-arm64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild exist
 	@echo "Checking Rust toolchain…"
 	@$(MAKE) check-rust || { \
             echo "🦀  Installing Rust 1.96.0 …"; \
@@ -180,115 +192,51 @@ ubuntu-x64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild e
 	    zlib1g-dev libbz2-dev liblzma-dev libboost-all-dev \
 	    patch perl ragel
 
-	@echo "🔨  Building $(PROJECT_NAME) for x86_64-unknown-linux-musl …"
+	@echo "🔨  Building $(PROJECT_NAME) for $(BUILD_TARGET) …"
 	@. $$HOME/.cargo/env && \
-	    rustup target add x86_64-unknown-linux-musl && \
-	    export PKG_CONFIG_ALLOW_CROSS=1 && \
-	    cargo zigbuild --release --target x86_64-unknown-linux-musl
+	    rustup target add $(BUILD_TARGET) && \
+	    export PKG_CONFIG_ALLOW_CROSS=1 VECTORSCAN_BUILD_FROM_SOURCE=1 && \
+	    cargo zigbuild --release --target $(BUILD_TARGET)
 
 	@echo "🗜️   Packaging archive …"
-	@cd target/x86_64-unknown-linux-musl/release && \
+	@cd target/$(BUILD_TARGET)/release && \
 	    find ./$(PROJECT_NAME) -type f -executable -exec sha256sum {} \; > CHECKSUM.txt
 	@mkdir -p target/release
-	@cp target/x86_64-unknown-linux-musl/release/$(PROJECT_NAME) target/release/
-	@cp target/x86_64-unknown-linux-musl/release/CHECKSUM.txt target/release/CHECKSUM-linux-x64.txt
+	@cp target/$(BUILD_TARGET)/release/$(PROJECT_NAME) target/release/
+	@cp target/$(BUILD_TARGET)/release/CHECKSUM.txt target/release/CHECKSUM-linux-$(BUILD_ARCH).txt
 	@cd target/release && \
-	    rm -rf $(PROJECT_NAME)-linux-x64.tgz && \
-	    $(ARCHIVE_CMD) $(PROJECT_NAME)-linux-x64.tgz $(PROJECT_NAME) CHECKSUM-linux-x64.txt notices && \
-	    sha256sum $(PROJECT_NAME)-linux-x64.tgz >> CHECKSUM-linux-x64.txt
+	    rm -rf $(PROJECT_NAME)-linux-$(BUILD_ARCH).tgz && \
+	    $(ARCHIVE_CMD) $(PROJECT_NAME)-linux-$(BUILD_ARCH).tgz $(PROJECT_NAME) CHECKSUM-linux-$(BUILD_ARCH).txt notices && \
+	    sha256sum $(PROJECT_NAME)-linux-$(BUILD_ARCH).tgz >> CHECKSUM-linux-$(BUILD_ARCH).txt
 
 	$(MAKE) list-archives
 
-
-# -------------------------------------------------------------------------------------------------
-# ubuntu-arm64 — native cross-compile to aarch64-unknown-linux-musl via Zig. Tested on Ubuntu 24.04.
-# -------------------------------------------------------------------------------------------------
-ubuntu-arm64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild exist
-	@echo "Checking Rust toolchain…"
-	@$(MAKE) check-rust || { \
-            echo "🦀  Installing Rust 1.96.0 …"; \
-	    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; \
-	    . $$HOME/.cargo/env; \
-            rustup toolchain install 1.96.0; \
-            rustup default 1.96.0; \
-	}
-
-	@echo "📦  Installing build dependencies (musl, cmake, etc.)…"
-	@$(SUDO_CMD) DEBIAN_FRONTEND=noninteractive apt-get update -qq
-	@$(SUDO_CMD) DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-	    build-essential musl-tools musl-dev cmake pkg-config \
-	    zlib1g-dev libbz2-dev liblzma-dev libboost-all-dev \
-	    patch perl ragel
-
-	@echo "🔨  Building $(PROJECT_NAME) for aarch64-unknown-linux-musl …"
-	@. $$HOME/.cargo/env && \
-	    rustup target add aarch64-unknown-linux-musl && \
-	    export PKG_CONFIG_ALLOW_CROSS=1 && \
-	    cargo zigbuild --release --target aarch64-unknown-linux-musl
-
-	@echo "🗜️   Packaging archive …"
-	@cd target/aarch64-unknown-linux-musl/release && \
-	    find ./$(PROJECT_NAME) -type f -executable -exec sha256sum {} \; > CHECKSUM.txt
-	@mkdir -p target/release
-	@cp target/aarch64-unknown-linux-musl/release/$(PROJECT_NAME) target/release/
-	@cp target/aarch64-unknown-linux-musl/release/CHECKSUM.txt target/release/CHECKSUM-linux-arm64.txt
-	@cd target/release && \
-	    rm -rf $(PROJECT_NAME)-linux-arm64.tgz && \
-	    $(ARCHIVE_CMD) $(PROJECT_NAME)-linux-arm64.tgz $(PROJECT_NAME) CHECKSUM-linux-arm64.txt notices && \
-	    sha256sum $(PROJECT_NAME)-linux-arm64.tgz >> CHECKSUM-linux-arm64.txt
-
-	$(MAKE) list-archives
-
-darwin-arm64: prepare-release-notices
-	@echo "Checking Rust for darwin-arm64..."
+darwin-arm64 darwin-x64: prepare-release-notices
+	@echo "Checking Rust for darwin-$(BUILD_ARCH)..."
 	@$(MAKE) check-rust || ( \
 		echo "Rust not found or out-of-date. Installing via Homebrew..." && \
 		brew install rust \
 	)
 	@brew list cmake >/dev/null 2>&1 || brew install cmake
-	@brew list boost >/dev/null 2>&1 || brew install boost
-	@brew install gcc libpcap pkg-config ragel sqlite coreutils gnu-tar
-	@rustup target add aarch64-apple-darwin
-	cargo build --release --target aarch64-apple-darwin --features system-alloc
-	@cd target/aarch64-apple-darwin/release && \
+	@if [ "$${VECTORSCAN_BUILD_FROM_SOURCE:-0}" = "1" ]; then brew install boost ragel; fi
+	@brew install gcc libpcap pkg-config sqlite coreutils gnu-tar
+	@rustup target add $(BUILD_TARGET)
+	cargo build --release --target $(BUILD_TARGET) --features $(DARWIN_FEATURES)
+	@cd target/$(BUILD_TARGET)/release && \
 		find ./$(PROJECT_NAME) -type f -not -name "*.d" -not -name "*.rlib" -exec shasum -a 256 {} \; > CHECKSUM.txt
 	@mkdir -p target/release
-	@cp target/aarch64-apple-darwin/release/$(PROJECT_NAME) target/release/
-	@cp target/aarch64-apple-darwin/release/CHECKSUM.txt target/release/CHECKSUM-darwin-arm64.txt
+	@cp target/$(BUILD_TARGET)/release/$(PROJECT_NAME) target/release/
+	@cp target/$(BUILD_TARGET)/release/CHECKSUM.txt target/release/CHECKSUM-darwin-$(BUILD_ARCH).txt
 	@cd target/release && \
-	    rm -rf $(PROJECT_NAME)-darwin-arm64.tgz && \
-		$(ARCHIVE_CMD) $(PROJECT_NAME)-darwin-arm64.tgz $(PROJECT_NAME) CHECKSUM-darwin-arm64.txt notices && \
-		if [ -f $(PROJECT_NAME)-darwin-arm64.tgz ]; then \
-		  shasum -a 256 $(PROJECT_NAME)-darwin-arm64.tgz >> CHECKSUM-darwin-arm64.txt; \
+	    rm -rf $(PROJECT_NAME)-darwin-$(BUILD_ARCH).tgz && \
+		$(ARCHIVE_CMD) $(PROJECT_NAME)-darwin-$(BUILD_ARCH).tgz $(PROJECT_NAME) CHECKSUM-darwin-$(BUILD_ARCH).txt notices && \
+		if [ -f $(PROJECT_NAME)-darwin-$(BUILD_ARCH).tgz ]; then \
+		  shasum -a 256 $(PROJECT_NAME)-darwin-$(BUILD_ARCH).tgz >> CHECKSUM-darwin-$(BUILD_ARCH).txt; \
 		fi
 	$(MAKE) list-archives
 
 darwin-dev:
-	cargo build --profile=dev --target aarch64-apple-darwin --features system-alloc
-
-darwin-x64: prepare-release-notices
-	@echo "Checking Rust for darwin-x64..."
-	@$(MAKE) check-rust || ( \
-		echo "Rust not found or out-of-date. Installing via Homebrew..." && \
-		brew install rust \
-	)
-	@brew list cmake >/dev/null 2>&1 || brew install cmake
-	@brew list boost >/dev/null 2>&1 || brew install boost
-	@brew install gcc libpcap pkg-config ragel sqlite coreutils gnu-tar
-	@rustup target add x86_64-apple-darwin
-	source $$HOME/.cargo/env && cargo build --release --target x86_64-apple-darwin --features system-alloc
-	@cd target/x86_64-apple-darwin/release && \
-		find ./$(PROJECT_NAME) -type f -not -name "*.d" -not -name "*.rlib" -exec shasum -a 256 {} \; > CHECKSUM.txt
-	@mkdir -p target/release
-	@cp target/x86_64-apple-darwin/release/$(PROJECT_NAME) target/release/
-	@cp target/x86_64-apple-darwin/release/CHECKSUM.txt target/release/CHECKSUM-darwin-x64.txt
-	@cd target/release && \
-	    rm -rf $(PROJECT_NAME)-darwin-x64.tgz && \
-		$(ARCHIVE_CMD) $(PROJECT_NAME)-darwin-x64.tgz $(PROJECT_NAME) CHECKSUM-darwin-x64.txt notices && \
-		if [ -f $(PROJECT_NAME)-darwin-x64.tgz ]; then \
-		  shasum -a 256 $(PROJECT_NAME)-darwin-x64.tgz >> CHECKSUM-darwin-x64.txt; \
-		fi
-	$(MAKE) list-archives
+	cargo build --profile=dev --target aarch64-apple-darwin --features $(DARWIN_FEATURES)
 
 require-windows-host:
 ifeq ($(IS_WINDOWS_HOST),1)
@@ -297,7 +245,9 @@ else
 	$(error "This target can only run on Windows.")
 endif
 
-# Windows x64 build path for MSYS2/MinGW (GNU toolchain + vectorscan from source)
+# Keep CMake/Python for other native dependencies (including AWS-LC).
+# Install Vectorscan source dependencies only when explicitly requested.
+# Windows x64 build path for MSYS2/MinGW (GNU toolchain + published Vectorscan archive)
 windows-x64: require-windows-host prepare-release-notices
 	@bash -eu -o pipefail -c '\
 	  command -v pacman >/dev/null 2>&1 || { \
@@ -319,54 +269,15 @@ windows-x64: require-windows-host prepare-release-notices
 	  pacman --noconfirm --needed -S \
 	    mingw-w64-x86_64-toolchain \
 	    mingw-w64-x86_64-cmake \
-	    mingw-w64-x86_64-boost \
 	    mingw-w64-x86_64-pkgconf \
-	    mingw-w64-x86_64-ragel \
-	    mingw-w64-x86_64-pcre2 \
 	    mingw-w64-x86_64-zlib \
 	    mingw-w64-x86_64-python \
-	    git make zip; \
-	  repo_root="$$(pwd)"; \
-	  vectorscan_src="$$repo_root/vendor/vectorscan-rs/vectorscan-rs-sys/vectorscan"; \
-	  build_dir=/tmp/vectorscan-build; \
-	  rm -rf "$$build_dir"; \
-	  mkdir -p "$$build_dir"; \
-	  cd "$$build_dir"; \
-	  cmake "$$vectorscan_src" \
-	    -G "MinGW Makefiles" \
-	    -DCMAKE_BUILD_TYPE=Release \
-	    -DBUILD_SHARED_LIBS=OFF \
-	    -DBUILD_STATIC_LIBS=ON \
-	    -DBUILD_UNIT=OFF \
-	    -DBUILD_TOOLS=OFF \
-	    -DFAT_RUNTIME=OFF \
-	    -DCMAKE_C_COMPILER=gcc \
-	    -DCMAKE_CXX_COMPILER=g++ \
-	    -DCMAKE_INSTALL_PREFIX=/mingw64; \
-	  mingw32-make -j$$(nproc); \
-	  mingw32-make install; \
-	  mkdir -p /mingw64/lib/pkgconfig; \
-	  if [ -f /mingw64/include/hs/hs.h ]; then \
-	    hs_include=/mingw64/include/hs; \
-	  else \
-	    hs_include=/mingw64/include; \
+	    git make zip curl; \
+	  if [ "$${VECTORSCAN_BUILD_FROM_SOURCE:-0}" = "1" ]; then \
+	    pacman --noconfirm --needed -S \
+	      mingw-w64-x86_64-boost mingw-w64-x86_64-ragel mingw-w64-x86_64-pcre2; \
 	  fi; \
-	  printf "%s\n" \
-	    "prefix=/mingw64" \
-	    "exec_prefix=\$${prefix}" \
-	    "libdir=\$${prefix}/lib" \
-	    "includedir=$$hs_include" \
-	    "" \
-	    "Name: libhs" \
-	    "Description: Vectorscan regex library (Hyperscan fork)" \
-	    "Version: 5.4.12" \
-	    "Libs: -L\$${libdir} -lhs" \
-	    "Cflags: -I\$${includedir}" \
-	    > /mingw64/lib/pkgconfig/libhs.pc; \
-	  export PKG_CONFIG_ALLOW_CROSS=1; \
-	  export PKG_CONFIG_PATH=/mingw64/lib/pkgconfig; \
-	  export PKG_CONFIG_LIBDIR=/mingw64/lib/pkgconfig; \
-	  pkg-config --cflags --libs libhs; \
+	  repo_root="$$(pwd)"; \
 	  if ! command -v rustup >/dev/null 2>&1 && ! command -v rustup.exe >/dev/null 2>&1; then \
 	    cargo_home_candidate=""; \
 	    if [ -n "$${USERPROFILE:-}" ]; then \
@@ -396,7 +307,8 @@ windows-x64: require-windows-host prepare-release-notices
 	    exit 1; \
 	  fi; \
 	  cd "$$repo_root"; \
-	  export HYPERSCAN_ROOT="$$(cygpath -m /mingw64)"; \
+	  export CC=gcc CXX=g++; \
+	  export CMAKE_GENERATOR="MinGW Makefiles"; \
 	  export LIBRARY_PATH="/mingw64/lib:$${LIBRARY_PATH:-}"; \
 	  export CPATH="/mingw64/include:$${CPATH:-}"; \
 	  extra_native_lib_dirs="-L native=/mingw64/lib"; \
@@ -409,9 +321,8 @@ windows-x64: require-windows-host prepare-release-notices
 	    fi; \
 	  fi; \
 	  export RUSTFLAGS="$${RUSTFLAGS:-} $$extra_native_lib_dirs -C target-feature=+crt-static -C link-arg=-static"; \
-	  echo "Using HYPERSCAN_ROOT=$$HYPERSCAN_ROOT"; \
+	  echo "Using the published Vectorscan archive unless source build is requested."; \
 	  "$$RUSTUP_BIN" target add x86_64-pc-windows-gnu; \
-	  export LIBHS_NO_PKG_CONFIG=1; \
 	  if [ "$${WINDOWS_ONLY_DEPS:-0}" = "1" ]; then \
 	    echo "WINDOWS_ONLY_DEPS=1 set; skipping cargo build and packaging."; \
 	    exit 0; \
@@ -450,56 +361,15 @@ windows-arm64: require-windows-host prepare-release-notices
 	  pacman --noconfirm --needed -S \
 	    mingw-w64-clang-aarch64-toolchain \
 	    mingw-w64-clang-aarch64-cmake \
-	    mingw-w64-clang-aarch64-boost \
 	    mingw-w64-clang-aarch64-pkgconf \
-	    mingw-w64-clang-aarch64-ragel \
-	    mingw-w64-clang-aarch64-pcre2 \
 	    mingw-w64-clang-aarch64-zlib \
 	    mingw-w64-clang-aarch64-python \
-	    git make zip; \
-	  repo_root="$$(pwd)"; \
-	  vectorscan_src="$$repo_root/vendor/vectorscan-rs/vectorscan-rs-sys/vectorscan"; \
-	  build_dir=/tmp/vectorscan-arm64-build; \
-	  rm -rf "$$build_dir"; \
-	  mkdir -p "$$build_dir"; \
-	  cd "$$build_dir"; \
-	  cmake "$$vectorscan_src" \
-	    -G "MinGW Makefiles" \
-	    -DCMAKE_BUILD_TYPE=Release \
-	    -DBUILD_SHARED_LIBS=OFF \
-	    -DBUILD_STATIC_LIBS=ON \
-	    -DBUILD_UNIT=OFF \
-	    -DBUILD_TOOLS=OFF \
-	    -DFAT_RUNTIME=OFF \
-	    -DCMAKE_SYSTEM_NAME=Windows \
-	    -DCMAKE_SYSTEM_PROCESSOR=ARM64 \
-	    -DCMAKE_C_COMPILER=clang \
-	    -DCMAKE_CXX_COMPILER=clang++ \
-	    -DCMAKE_INSTALL_PREFIX=/clangarm64; \
-	  mingw32-make -j$$(nproc); \
-	  mingw32-make install; \
-	  mkdir -p /clangarm64/lib/pkgconfig; \
-	  if [ -f /clangarm64/include/hs/hs.h ]; then \
-	    hs_include=/clangarm64/include/hs; \
-	  else \
-	    hs_include=/clangarm64/include; \
+	    git make zip curl; \
+	  if [ "$${VECTORSCAN_BUILD_FROM_SOURCE:-0}" = "1" ]; then \
+	    pacman --noconfirm --needed -S \
+	      mingw-w64-clang-aarch64-boost mingw-w64-clang-aarch64-ragel mingw-w64-clang-aarch64-pcre2; \
 	  fi; \
-	  printf "%s\n" \
-	    "prefix=/clangarm64" \
-	    "exec_prefix=\$${prefix}" \
-	    "libdir=\$${prefix}/lib" \
-	    "includedir=$$hs_include" \
-	    "" \
-	    "Name: libhs" \
-	    "Description: Vectorscan regex library (Hyperscan fork)" \
-	    "Version: 5.4.12" \
-	    "Libs: -L\$${libdir} -lhs" \
-	    "Cflags: -I\$${includedir}" \
-	    > /clangarm64/lib/pkgconfig/libhs.pc; \
-	  export PKG_CONFIG_ALLOW_CROSS=1; \
-	  export PKG_CONFIG_PATH=/clangarm64/lib/pkgconfig; \
-	  export PKG_CONFIG_LIBDIR=/clangarm64/lib/pkgconfig; \
-	  pkg-config --cflags --libs libhs; \
+	  repo_root="$$(pwd)"; \
 	  if ! command -v rustup >/dev/null 2>&1 && ! command -v rustup.exe >/dev/null 2>&1; then \
 	    cargo_home_candidate=""; \
 	    if [ -n "$${USERPROFILE:-}" ]; then \
@@ -529,13 +399,13 @@ windows-arm64: require-windows-host prepare-release-notices
 	    exit 1; \
 	  fi; \
 	  cd "$$repo_root"; \
-	  export HYPERSCAN_ROOT="$$(cygpath -m /clangarm64)"; \
+	  export CC=clang CXX=clang++; \
+	  export CMAKE_GENERATOR="MinGW Makefiles"; \
 	  export LIBRARY_PATH="/clangarm64/lib:$${LIBRARY_PATH:-}"; \
 	  export CPATH="/clangarm64/include:$${CPATH:-}"; \
 	  export RUSTFLAGS="$${RUSTFLAGS:-} -L native=/clangarm64/lib -C target-feature=+crt-static -C link-arg=-static"; \
-	  echo "Using HYPERSCAN_ROOT=$$HYPERSCAN_ROOT"; \
+	  echo "Using the published Vectorscan archive unless source build is requested."; \
 	  "$$RUSTUP_BIN" target add aarch64-pc-windows-gnullvm; \
-	  export LIBHS_NO_PKG_CONFIG=1; \
 	  if [ "$${WINDOWS_ONLY_DEPS:-0}" = "1" ]; then \
 	    echo "WINDOWS_ONLY_DEPS=1 set; skipping cargo build and packaging."; \
 	    exit 0; \
@@ -559,18 +429,16 @@ windows-test-x64: require-windows-host
 	    MSYS) export PATH=/mingw64/bin:$$PATH; toolchain_root=/mingw64; target_triple=x86_64-pc-windows-gnu ;; \
 	    *) echo "Run this target from an MSYS2 MinGW64 shell."; exit 1 ;; \
 	  esac; \
-	  export LIBHS_NO_PKG_CONFIG=1; \
-	  export HYPERSCAN_ROOT="$$(cygpath -m "$$toolchain_root")"; \
-	  export PKG_CONFIG_ALLOW_CROSS=1; \
-	  export PKG_CONFIG_PATH="$$toolchain_root/lib/pkgconfig"; \
-	  export PKG_CONFIG_LIBDIR="$$toolchain_root/lib/pkgconfig"; \
+	  if [ "$$target_triple" = "x86_64-pc-windows-gnu" ]; then \
+	    export CC=gcc CXX=g++; \
+	  fi; \
 	  if ! command -v cargo >/dev/null 2>&1 && [ -n "$${USERPROFILE:-}" ]; then \
 	    cargo_home_candidate="$$(cygpath -u "$${USERPROFILE}")/.cargo/bin"; \
 	    if [ -d "$$cargo_home_candidate" ]; then \
 	      export PATH="$$cargo_home_candidate:$$PATH"; \
 	    fi; \
 	  fi; \
-	  extra_native_lib_dirs="-L native=/mingw64/lib"; \
+	  extra_native_lib_dirs="-L native=$$toolchain_root/lib"; \
 	  if command -v x86_64-w64-mingw32-gcc >/dev/null 2>&1; then \
 	    libgcc_a_path="$$(x86_64-w64-mingw32-gcc -print-libgcc-file-name 2>/dev/null || true)"; \
 	    if [ -n "$$libgcc_a_path" ] && [ -f "$$libgcc_a_path" ]; then \
@@ -580,8 +448,8 @@ windows-test-x64: require-windows-host
 	    fi; \
 	  fi; \
 	  export RUSTFLAGS="$${RUSTFLAGS:-} $$extra_native_lib_dirs -C target-feature=+crt-static -C link-arg=-static"; \
-	  echo "▶ cargo test --release --workspace --all-targets --target $$target_triple"; \
-	  cargo test --release --workspace --all-targets --target "$$target_triple"; \
+	  echo "▶ cargo test --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
+	  cargo test --profile ci-test --workspace --all-targets --target "$$target_triple"; \
 	'
 
 windows-test-arm64: require-windows-host
@@ -591,20 +459,16 @@ windows-test-arm64: require-windows-host
 	    MINGW64|MSYS) export PATH=/clangarm64/bin:$$PATH; toolchain_root=/clangarm64; target_triple=aarch64-pc-windows-gnullvm ;; \
 	    *) echo "Run this target from an MSYS2 CLANGARM64 shell."; exit 1 ;; \
 	  esac; \
-	  export LIBHS_NO_PKG_CONFIG=1; \
-	  export HYPERSCAN_ROOT="$$(cygpath -m "$$toolchain_root")"; \
-	  export PKG_CONFIG_ALLOW_CROSS=1; \
-	  export PKG_CONFIG_PATH="$$toolchain_root/lib/pkgconfig"; \
-	  export PKG_CONFIG_LIBDIR="$$toolchain_root/lib/pkgconfig"; \
+	  export CC=clang CXX=clang++; \
 	  if ! command -v cargo >/dev/null 2>&1 && [ -n "$${USERPROFILE:-}" ]; then \
 	    cargo_home_candidate="$$(cygpath -u "$${USERPROFILE}")/.cargo/bin"; \
 	    if [ -d "$$cargo_home_candidate" ]; then \
 	      export PATH="$$cargo_home_candidate:$$PATH"; \
 	    fi; \
 	  fi; \
-	  export RUSTFLAGS="$${RUSTFLAGS:-} -L native=/clangarm64/lib -C target-feature=+crt-static -C link-arg=-static"; \
-	  echo "▶ cargo test --release --workspace --all-targets --target $$target_triple"; \
-	  cargo test --release --workspace --all-targets --target "$$target_triple"; \
+	  export RUSTFLAGS="$${RUSTFLAGS:-} -L native=$$toolchain_root/lib -C target-feature=+crt-static -C link-arg=-static"; \
+	  echo "▶ cargo test --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
+	  cargo test --profile ci-test --workspace --all-targets --target "$$target_triple"; \
 	'
 
 windows-test: windows-test-x64 windows-test-arm64
@@ -612,10 +476,15 @@ windows-test: windows-test-x64 windows-test-arm64
 # =============  DOCKER-BASED BUILDS =============
 # #
 
-linux-x64: check-docker create-dockerignore prepare-release-notices
+# Match the Alpine baseline used by the Vectorscan musl release archives.
+# A caller can still set VECTORSCAN_BUILD_FROM_SOURCE=1 for a source build.
+linux-x64 linux-arm64: check-docker create-dockerignore prepare-release-notices
 	@mkdir -p target/release
-	docker run --platform linux/amd64 --rm \
-          -v "$$(pwd):/src" -w /src rust:1.96-alpine sh -eu -c '\
+	docker run --platform $(DOCKER_PLATFORM) --rm \
+          -v "$$(pwd):/src" -w /src \
+          -e VECTORSCAN_BUILD_FROM_SOURCE -e CARGO_BUILD_JOBS \
+          -e CARGO_INCREMENTAL -e CARGO_PROFILE_DEV_DEBUG -e CARGO_PROFILE_TEST_DEBUG \
+          rust:1.96-alpine3.23 sh -eu -c '\
 		apk add --no-cache \
 		    bash \
 		    musl-dev \
@@ -627,54 +496,21 @@ linux-x64: check-docker create-dockerignore prepare-release-notices
 		    patch perl ragel \
 	        git openssl-dev curl && \
 		\
-		export CARGO_TARGET_DIR=/src/target-docker && \
-		rustup target add x86_64-unknown-linux-musl && \
+		export CARGO_TARGET_DIR=/src/target && \
+		rustup target add $(BUILD_TARGET) && \
 		\
-		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --workspace --all-targets --jobs 1 --target x86_64-unknown-linux-musl; fi ; \
+		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --locked --workspace --all-targets --jobs 1 --target $(BUILD_TARGET); fi && \
 		\
-		export PKG_CONFIG_ALLOW_CROSS=1 ; \
-		export RUSTFLAGS="-C target-feature=+crt-static" ; \
+		export PKG_CONFIG_ALLOW_CROSS=1 && \
+		export RUSTFLAGS="-C target-feature=+crt-static" && \
 		\
-		cargo build --release --target x86_64-unknown-linux-musl && \
-		cd target-docker/x86_64-unknown-linux-musl/release && \
+		cargo build --locked --release --target $(BUILD_TARGET) && \
+		cd target/$(BUILD_TARGET)/release && \
 	    sha256sum kingfisher > CHECKSUM.txt && \
-	    tar -czf /src/target/release/kingfisher-linux-x64.tgz \
+	    tar -czf /src/target/release/kingfisher-linux-$(BUILD_ARCH).tgz \
 	        kingfisher CHECKSUM.txt -C /src/target/release notices \
 	'
 	$(MAKE) list-archives
-
-linux-arm64: check-docker create-dockerignore prepare-release-notices
-	@mkdir -p target/release
-	docker run --platform linux/arm64 --rm \
-          -v "$$(pwd):/src" -w /src rust:1.96-alpine sh -eu -c '\
-		apk add --no-cache \
-		    bash \
-		    musl-dev \
-		    gcc g++ make cmake pkgconfig \
-		    zlib-dev  zlib-static \
-		    bzip2-dev bzip2-static \
-		    xz-dev    xz-static \
-		    boost-dev linux-headers \
-		    patch perl ragel \
-	        git openssl-dev curl && \
-		\
-		export CARGO_TARGET_DIR=/src/target-docker && \
-		rustup target add aarch64-unknown-linux-musl && \
-		\
-		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --workspace --all-targets --jobs 1 --target aarch64-unknown-linux-musl; fi ; \
-		\
-		export PKG_CONFIG_ALLOW_CROSS=1 ; \
-		export RUSTFLAGS="-C target-feature=+crt-static" ; \
-		\
-		cargo build --release --target aarch64-unknown-linux-musl && \
-		\
-		cd target-docker/aarch64-unknown-linux-musl/release && \
-	    sha256sum kingfisher > CHECKSUM.txt && \
-	    tar -czf /src/target/release/kingfisher-linux-arm64.tgz \
-	        kingfisher CHECKSUM.txt -C /src/target/release notices \
-	'
-	$(MAKE) list-archives
-
 
 # =============  AGGREGATE TARGETS  =============
 #

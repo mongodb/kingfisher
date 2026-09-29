@@ -325,7 +325,7 @@ pub struct RevocationStep {
 #[serde(tag = "type")]
 pub enum ResponseExtractor {
     /// Extract from JSON response using a JSONPath-like syntax.
-    /// Example: "$.data.id" or "$.items[0].token_id"
+    /// Example: `$.data.id` or `$.items[0].token_id`
     JsonPath { path: String },
 
     /// Extract using a regex pattern with a capture group.
@@ -868,6 +868,33 @@ static PATTERN_REQUIREMENTS_TEMPLATE_PARSER: LazyLock<liquid::Parser> = LazyLock
 });
 
 impl RuleSyntax {
+    /// Creates a visible custom rule with no validators, filters, or entropy threshold.
+    ///
+    /// The pattern is compiled by `RulesDatabase`; construction itself performs no I/O.
+    pub fn new(id: impl Into<String>, name: impl Into<String>, pattern: impl Into<String>) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            pattern: pattern.into(),
+            path: None,
+            betterleaks_filter: None,
+            betterleaks_secret_group: None,
+            authoritative: true,
+            vectorscan_compatible: true,
+            min_entropy: 0.0,
+            confidence: Confidence::default(),
+            visible: true,
+            examples: Vec::new(),
+            negative_examples: Vec::new(),
+            references: Vec::new(),
+            validation: None,
+            revocation: None,
+            depends_on_rule: Vec::new(),
+            pattern_requirements: None,
+            tls_mode: None,
+        }
+    }
+
     /// Maximum allowed regex size.
     const REGEX_SIZE_LIMIT: usize = 16 * 1024 * 1024;
 

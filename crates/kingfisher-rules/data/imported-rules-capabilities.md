@@ -75,7 +75,7 @@ stale and unselected IDs.
 
 ## Bare token detection (Betterleaks only)
 
-`bare: true` derives a pattern from the pinned upstream regex at build time; it does not
+`bare: true` derives a pattern from the pinned upstream regex during bundle generation; it does not
 accept a replacement regex. It removes provider/assignment context before the reported
 secret while retaining the secret format, effective scoped flags, and trailing delimiters.
 The default is `false`. DeepSeek, Kimi/Moonshot, ZAI/GLM, and Voyage AI enable it in the

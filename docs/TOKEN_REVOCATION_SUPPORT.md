@@ -4,12 +4,12 @@ Betterleaks currently has no revocation metadata. The former Kingfisher-owned de
 was removed with the previous built-in YAML catalog. Kingfisher now joins selected imported detector
 IDs to safe operational actions in `crates/kingfisher-rules/data/imported-rules-capabilities.yml`.
 That overlay contains no candidate detector regexes, but may add narrow operational filters and
-capability metadata; it is validated against the downloaded catalog during the build.
+capability metadata; it is validated against the pinned catalog during bundle generation.
 
-Revocation is supported for mapped Betterleaks credentials and for Kingfisher 1.x custom rules through
+Revocation is supported for mapped Betterleaks credentials and for Kingfisher custom rules through
 `Http`, `HttpMultiStep`, `AWS`, and `GCP` configurations. See
 [REVOCATION_PROVIDERS.md](REVOCATION_PROVIDERS.md) for the current support model and
-[RULES.md](RULES.md) for Kingfisher 1.x custom-rule authoring details.
+[RULES.md](RULES.md) for Kingfisher custom-rule authoring details.
 
 New generally applicable revocation metadata should be designed and contributed upstream to
 [Betterleaks](https://github.com/betterleaks/betterleaks), then added to Kingfisher's build-time

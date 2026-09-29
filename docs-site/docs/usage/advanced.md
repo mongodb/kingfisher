@@ -210,12 +210,12 @@ kingfisher scan /path/to/code \
 
 ## Scanning in CI Pipelines
 
-Limit scanning to the delta between your default branch and a pull request branch by combining `--since-commit` with `--branch` (defaults to `HEAD`). This only scans files that differ between the two references, which keeps CI runs fast while still blocking new secrets.
+Limit scanning to a commit range by combining `--since-commit` with `--branch` (defaults to `HEAD`). With the default `--git-history full`, Kingfisher scans changes in every commit reachable from the selected tip, excluding the baseline ref and all its ancestors (`baseline..tip`). This includes merged history and secrets added and removed before the tip. Add `--git-history none` to scan only the net tree diff between the two refs.
 
 Use `--branch-root-commit` alongside `--branch` when you need to include a specific commit (and everything after it) in a diff-focused scan without re-examining earlier history. Provide the branch tip (or other comparison ref) via `--branch`, and pass the commit or merge-base you want to include with `--branch-root-commit`. If you omit `--branch-root-commit`, you can still enable `--branch-root` to fall back to treating the `--branch` ref itself as the inclusive root for backwards compatibility. This is especially useful in long-lived branches where you want to resume scanning from a previous review point or from the commit where a hotfix forked.
 
 > **How is this different from `--since-commit`?**   
-> `--since-commit` computes a diff between the branch tip and another ref, so it only inspects files that changed between those two points in history. `--branch-root-commit` rewinds to the parent of the commit you provide and then scans everything introduced from that commit forward, even if the files are unchanged relative to another baseline. Reach for `--since-commit` to keep CI scans fast by checking only the latest delta, and use `--branch-root-commit` when you want to re-audit the full contents of a branch starting at a specific commit.
+> `--since-commit` excludes the baseline commit and its ancestors, and by default inspects each subsequent commit’s changes. `--branch-root-commit` instead computes a net tree diff from the parent of the supplied commit to the tip, including the supplied commit’s changes but potentially missing secrets removed before the tip. Use `--since-commit <baseline>` to audit a commit range, or add `--git-history none` when only the final delta is wanted.
 
 ```bash
 kingfisher scan . \
@@ -271,7 +271,7 @@ kingfisher scan https://github.com/org/repo.git \
   --branch development
 ```
 
-When no explicit diff options (`--since-commit`, `--branch-root`, `--branch-root-commit`, or `--staged`) are supplied, `--branch` scans all history reachable from the requested ref, including merged branches. This is the default `--git-history full` behavior and finds secrets deleted in later commits without scanning unrelated branches or checking out the selected ref. Use `--git-history none` to scan only the selected ref’s snapshot. Full-history enumeration takes more time and buffers blob metadata before scanning; the revision walk and commit diffs share one `--git-repo-timeout` budget. Increase that timeout for large histories when needed.
+When no explicit diff options (`--branch-root`, `--branch-root-commit`, or `--staged`) are supplied, `--branch` scans all history reachable from the requested ref, including merged branches. This is the default `--git-history full` behavior and finds secrets deleted in later commits without scanning unrelated branches or checking out the selected ref. Use `--since-commit <ref>` to exclude that ref and its ancestors from the history scan. Use `--git-history none` to scan only the selected ref’s snapshot, or the net diff when paired with `--since-commit`. Full-history enumeration takes more time and buffers blob metadata before scanning; the revision walk and commit diffs share one `--git-repo-timeout` budget. Increase that timeout for large histories when needed.
 
 ```bash
 # Scan a branch from an existing checkout
@@ -385,15 +385,13 @@ from the built-in catalog because their broad patterns provide low signal at dis
 cost. Use a targeted custom TOML or YAML rule when your organization needs generic credential
 detection for a known naming convention.
 
-Kingfisher embeds 485 built-in rules. It does not vendor the upstream rule catalogs. Clean source
-builds require outbound HTTPS access: the build downloads the pinned Betterleaks catalog snapshot from its
-[source permalink](https://github.com/betterleaks/betterleaks/blob/95237cf8eb4d8e9f67409595b245e674832992cf/config/betterleaks.toml) and
-selected Veles source files from the full OSV-SCALIBR commit in
-`crates/kingfisher-rules/data/veles-rules.yml`, then converts and embeds the generated database.
-A Betterleaks release is preferred; the current immutable post-release commit is pinned because
-the latest release predates detectors that Kingfisher ships.
-`KINGFISHER_BETTERLEAKS_CONFIG` may point to a local TOML file for controlled importer development.
-Veles import is not available through `--rules-path`.
+Kingfisher embeds 485 built-in rules from a prepared compressed bundle. Normal compilation
+does not download rule sources. Exact upstream inputs, licenses, hashes, and source revisions
+are archived under `crates/kingfisher-rules/generated/`. Maintainers regenerate the bundle
+with `cargo run --locked -p kingfisher-rule-bundle`; `--refresh` fetches pinned upstream sources,
+and `--check` verifies the prepared artifacts offline. License text, source headers, and
+provenance are preserved under `crates/kingfisher-rules/generated/`. Veles import is not
+available through `--rules-path`.
 
 Detection regexes, path constraints, confidence changes, component dependencies, and Betterleaks
 validation expressions are translated into Kingfisher's runtime model. The top-level Betterleaks
@@ -414,7 +412,7 @@ checksum metadata, Kingfisher maintains a checked-in capability overlay for acce
 selected safe revocation actions. It contains no candidate detector regexes, but may add narrow
 operational filters and capability metadata; it is validated against the downloaded imported-detector IDs
 and components during the build. Checksum templates remain available to
-Kingfisher 1.x custom rules; Betterleaks detectors rely on their upstream regex/filter behavior until the
+Kingfisher custom rules; Betterleaks detectors rely on their upstream regex/filter behavior until the
 upstream schema exposes checksum metadata.
 
 The `betterleaks.gcp-api-key` binding uses this path to run the bounded, read-only Google API-key
@@ -428,7 +426,7 @@ Kingfisher-owned built-in YAML catalog.
 
 ## Custom Rules
 
-Kingfisher's 1.x YAML format remains supported for private, organization-specific custom rules.
+Both the Kingfisher rule format (`.yml`/`.yaml`) and Betterleaks TOML (`.toml`) are fully supported for custom rules loaded with `--rules-path`.
 
 First, review [RULES.md](../rules/overview.md) to learn how to create custom Kingfisher rules.
 
@@ -451,12 +449,13 @@ To add your rules alongside the built‑ins:
 kingfisher scan \
   --rules-path ./custom-rules/ \
   --rules-path my_rules.yml \
+  --rules-path team_rules.toml \
   ~/path/to/project-dir/
 ```
 
 ### Scan a custom rules directory
 
-`--rules-path` accepts a directory of `.yml`/`.yaml` rule files, not just a single file. Point it at any rules directory to load every rule file it contains.
+`--rules-path` accepts a directory containing Kingfisher `.yml`/`.yaml` and Betterleaks `.toml` rule files, not just a single file. Point it at any rules directory to load every rule file it contains.
 
 **Custom-only** (no built‑ins loaded):
 
@@ -749,8 +748,16 @@ Self-update supports all six release platforms: Linux x64/arm64, macOS x64/arm64
 
 ## Exit Codes
 
-| Code | Meaning                       |
-| ---- | ----------------------------- |
-| 0    | No findings                   |
-| 200  | Findings discovered           |
-| 205  | Validated findings discovered |
+| Code | Meaning                        |
+| ---- | ------------------------------ |
+| 0    | No findings                    |
+| 1    | Scan or runtime error          |
+| 2    | Invalid command-line arguments |
+| 3    | No inputs discovered to scan   |
+| 200  | Findings discovered            |
+| 205  | Validated findings discovered  |
+
+Input discovery can return exit code `3` when, for example, a GitHub user has no
+matching repositories or all discovered repositories are excluded. Orchestrators
+can use this code without matching the `No inputs to scan` error message. This
+condition stops before a scan report is produced.

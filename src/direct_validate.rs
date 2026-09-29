@@ -11,7 +11,6 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use crossbeam_skiplist::SkipMap;
 use kingfisher_core::ValidationOutcome;
 use liquid::Object;
 use liquid_core::{Value, ValueView};
@@ -24,28 +23,11 @@ use crate::{
     liquid_filters::register_all,
     provider_endpoints::{ProviderEndpointOverrides, hydrate_endpoint_globals_for_rule},
     rule_loader::RuleLoader,
-    rules::{HttpValidation, Validation, rule::Rule},
+    rules::{Validation, rule::Rule},
     template_vars::extract_template_vars,
-    validation::{
-        CredentialUriTarget, GLOBAL_USER_AGENT,
-        azure::validate_azure_storage_credentials,
-        classify_credential_uri,
-        coinbase::validate_cdp_api_key,
-        gcp::GcpValidator,
-        httpvalidation::is_auto_provided_request_var,
-        httpvalidation::validate_response,
-        httpvalidation::{build_request_builder, retry_request},
-        jdbc::validate_jdbc,
-        jwt::validate_jwt,
-        mongodb::validate_mongodb,
-        mysql::validate_mysql,
-        postgres::validate_postgres,
-    },
-    validation_body,
+    validation::{GLOBAL_USER_AGENT, httpvalidation::is_auto_provided_request_var},
     validation_rate_limit::{ValidationRateLimiter, should_rate_limit_validation},
 };
-
-use crate::grpc_validation;
 
 fn preview_body_for_display(body: &str, max_bytes: usize) -> String {
     if body.len() <= max_bytes {
@@ -61,170 +43,6 @@ fn preview_body_for_display(body: &str, max_bytes: usize) -> String {
     format!("{}...", &body[..end])
 }
 
-fn outcome_from_validator_result(is_valid: bool) -> ValidationOutcome {
-    if is_valid { ValidationOutcome::VerifiedActive } else { ValidationOutcome::VerifiedInactive }
-}
-
-async fn validate_credential_uri_direct(
-    uri: &str,
-    client: &Client,
-    timeout: Duration,
-    retries: u32,
-    use_lax_tls: bool,
-    allow_internal_ips: bool,
-) -> DirectValidationResult {
-    let target = classify_credential_uri(uri, None);
-    if !target.is_parseable() {
-        return DirectValidationResult {
-            rule_id: String::new(),
-            rule_name: String::new(),
-            is_valid: false,
-            validation_outcome: ValidationOutcome::VerifiedInactive,
-            status_code: Some(400),
-            message: format!("Invalid {} credential URI.", target.scheme()),
-        };
-    }
-
-    match target {
-        CredentialUriTarget::MongoDB(uri) => {
-            match validate_mongodb(&uri, use_lax_tls, allow_internal_ips).await {
-                Ok((is_valid, message)) => DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid,
-                    validation_outcome: outcome_from_validator_result(is_valid),
-                    status_code: None,
-                    message,
-                },
-                Err(error) => DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid: false,
-                    validation_outcome: ValidationOutcome::Unavailable,
-                    status_code: None,
-                    message: format!("MongoDB validation error: {error}"),
-                },
-            }
-        }
-        CredentialUriTarget::MySQL(uri) => {
-            match validate_mysql(&uri, use_lax_tls, allow_internal_ips).await {
-                Ok((is_valid, metadata)) => DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid,
-                    validation_outcome: outcome_from_validator_result(is_valid),
-                    status_code: None,
-                    message: if metadata.is_empty() {
-                        "MySQL validation completed".to_string()
-                    } else {
-                        metadata.join(", ")
-                    },
-                },
-                Err(error) => DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid: false,
-                    validation_outcome: ValidationOutcome::Unavailable,
-                    status_code: None,
-                    message: format!("MySQL validation error: {error}"),
-                },
-            }
-        }
-        CredentialUriTarget::Postgres(uri) => {
-            match validate_postgres(&uri, use_lax_tls, allow_internal_ips).await {
-                Ok((is_valid, metadata)) => DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid,
-                    validation_outcome: outcome_from_validator_result(is_valid),
-                    status_code: None,
-                    message: if metadata.is_empty() {
-                        "Postgres validation completed".to_string()
-                    } else {
-                        metadata.join(", ")
-                    },
-                },
-                Err(error) => DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid: false,
-                    validation_outcome: ValidationOutcome::Unavailable,
-                    status_code: None,
-                    message: format!("Postgres validation error: {error}"),
-                },
-            }
-        }
-        CredentialUriTarget::Jdbc(uri) => {
-            match validate_jdbc(&uri, use_lax_tls, allow_internal_ips).await {
-                Ok(outcome) => DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid: outcome.valid,
-                    validation_outcome: ValidationOutcome::from_legacy(
-                        false,
-                        outcome.valid,
-                        outcome.status.as_u16(),
-                    ),
-                    status_code: Some(outcome.status.as_u16()),
-                    message: outcome.message,
-                },
-                Err(error) => DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid: false,
-                    validation_outcome: ValidationOutcome::Unavailable,
-                    status_code: None,
-                    message: format!("JDBC validation error: {error}"),
-                },
-            }
-        }
-        CredentialUriTarget::Http(uri) => {
-            match crate::validation::validate_http_credential_uri(
-                &uri,
-                client,
-                timeout,
-                retries,
-                allow_internal_ips,
-            )
-            .await
-            {
-                Ok((is_valid, status, message)) => DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid,
-                    validation_outcome: ValidationOutcome::from_legacy(
-                        false,
-                        is_valid,
-                        status.as_u16(),
-                    ),
-                    status_code: Some(status.as_u16()),
-                    message,
-                },
-                Err(error) => DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid: false,
-                    validation_outcome: ValidationOutcome::Unavailable,
-                    status_code: None,
-                    message: format!("HTTP credential URI validation error: {error}"),
-                },
-            }
-        }
-        CredentialUriTarget::Unsupported(scheme) => DirectValidationResult {
-            rule_id: String::new(),
-            rule_name: String::new(),
-            is_valid: false,
-            validation_outcome: ValidationOutcome::NotAttempted,
-            status_code: None,
-            message: format!(
-                "No live validator is available for {} credential URIs.",
-                if scheme.is_empty() { "this" } else { scheme.as_str() }
-            ),
-        },
-    }
-}
-
-/// Result of a direct validation attempt.
 #[derive(Debug, Clone, Serialize)]
 pub struct DirectValidationResult {
     /// The rule ID that was used for validation.
@@ -470,156 +288,6 @@ pub(crate) fn read_secret(secret_arg: Option<&str>) -> Result<String> {
 }
 
 /// Render the validation URL using Liquid templates.
-async fn render_and_parse_url(
-    parser: &liquid::Parser,
-    globals: &Object,
-    url_template: &str,
-) -> Result<reqwest::Url> {
-    let template =
-        parser.parse(url_template).map_err(|e| anyhow!("Failed to parse URL template: {}", e))?;
-
-    let rendered =
-        template.render(globals).map_err(|e| anyhow!("Failed to render URL template: {}", e))?;
-
-    reqwest::Url::parse(&rendered).map_err(|e| anyhow!("Invalid URL '{}': {}", rendered, e))
-}
-
-/// Execute HTTP validation against the provided rule.
-async fn execute_http_validation(
-    http_validation: &HttpValidation,
-    globals: &Object,
-    client: &Client,
-    parser: &liquid::Parser,
-    timeout: Duration,
-    retries: u32,
-    allow_internal_ips: bool,
-) -> Result<DirectValidationResult> {
-    let request_globals = kingfisher_scanner::validation::with_request_template_globals(globals);
-
-    // Render the URL
-    let url = render_and_parse_url(parser, &request_globals, &http_validation.request.url).await?;
-
-    // SSRF check: verify the resolved IP is public before making the request
-    crate::validation::utils::check_url_resolvable(&url, allow_internal_ips)
-        .await
-        .map_err(|e| anyhow!("URL resolution failed: {}", e))?;
-
-    debug!("Validating against URL: {}", url);
-
-    // Build the request
-    let request_builder = build_request_builder(
-        client,
-        &http_validation.request.method,
-        &url,
-        &http_validation.request.headers,
-        &http_validation.request.body,
-        timeout,
-        parser,
-        &request_globals,
-    )
-    .map_err(|e| anyhow!("Failed to build request: {}", e))?;
-
-    // Execute the request with retries
-    let backoff_min = Duration::from_millis(100);
-    let backoff_max = Duration::from_secs(2);
-
-    let response = retry_request(request_builder, retries, backoff_min, backoff_max)
-        .await
-        .map_err(|e| anyhow!("Request failed: {}", e))?;
-
-    let status = response.status();
-    let headers = response.headers().clone();
-    let body =
-        response.text().await.unwrap_or_else(|e| format!("Failed to read response body: {}", e));
-
-    // Validate the response
-    let matchers = http_validation.request.response_matcher.as_deref().unwrap_or(&[]);
-    let html_allowed = http_validation.request.response_is_html;
-    let display_body = if html_allowed {
-        crate::validation::utils::format_response_body_for_display(&body, 500, true)
-    } else {
-        preview_body_for_display(&body, 500)
-    };
-    let is_valid = validate_response(matchers, &body, &status, &headers, html_allowed);
-
-    Ok(DirectValidationResult {
-        rule_id: String::new(), // Will be filled in by caller
-        rule_name: String::new(),
-        is_valid,
-        validation_outcome: ValidationOutcome::from_legacy(false, is_valid, status.as_u16()),
-        status_code: Some(status.as_u16()),
-        message: display_body,
-    })
-}
-
-/// Execute gRPC validation against the provided rule.
-async fn execute_grpc_validation(
-    grpc_validation_cfg: &kingfisher_rules::GrpcValidation,
-    globals: &Object,
-    parser: &liquid::Parser,
-    timeout: Duration,
-    allow_internal_ips: bool,
-) -> Result<DirectValidationResult> {
-    let request_globals = kingfisher_scanner::validation::with_request_template_globals(globals);
-
-    // Render the URL
-    let url =
-        render_and_parse_url(parser, &request_globals, &grpc_validation_cfg.request.url).await?;
-
-    // SSRF check: verify the resolved IP is public before making the request
-    crate::validation::utils::check_url_resolvable(&url, allow_internal_ips)
-        .await
-        .map_err(|e| anyhow!("URL resolution failed: {}", e))?;
-
-    debug!("Validating against gRPC URL: {}", url);
-
-    let res = grpc_validation::grpc_unary_call_from_rule(
-        &url,
-        &grpc_validation_cfg.request.headers,
-        &grpc_validation_cfg.request.body,
-        parser,
-        &request_globals,
-        timeout,
-    )
-    .await
-    .map_err(|e| anyhow!("gRPC request failed: {e}"))?;
-
-    let status = res.http_status;
-    let headers = res.headers;
-    let mut body = String::from_utf8_lossy(&res.body_bytes).to_string();
-    let grpc_status =
-        headers.get("grpc-status").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-    let grpc_message =
-        headers.get("grpc-message").and_then(|v| v.to_str().ok()).unwrap_or("").to_string();
-    if grpc_status == "0" {
-        body = "grpc-status=0".to_string();
-    } else if (body.trim().is_empty() && (!grpc_status.is_empty() || !grpc_message.is_empty()))
-        || body.as_bytes().contains(&0)
-    {
-        body = format!("grpc-status={grpc_status} grpc-message={grpc_message}");
-    }
-
-    // Truncate body for display if too long
-    let display_body = preview_body_for_display(&body, 500);
-
-    // Validate the response
-    let matchers = grpc_validation_cfg.request.response_matcher.as_deref().unwrap_or(&[]);
-    let is_valid = validate_response(matchers, &body, &status, &headers, false);
-
-    Ok(DirectValidationResult {
-        rule_id: String::new(), // Will be filled in by caller
-        rule_name: String::new(),
-        is_valid,
-        validation_outcome: ValidationOutcome::from_legacy(false, is_valid, status.as_u16()),
-        status_code: Some(status.as_u16()),
-        message: display_body,
-    })
-}
-
-/// Run direct validation of a secret against a single rule.
-///
-/// Resolve an exact rule ID or an unambiguous prefix; reject ambiguous selectors.
-/// Return a single result for the selected rule.
 pub async fn run_direct_validation(
     args: &ValidateArgs,
     global_args: &GlobalArgs,
@@ -649,16 +317,12 @@ pub async fn run_direct_validation(
         crate::cli::global::TlsMode::Off | crate::cli::global::TlsMode::Lax
     );
 
-    // Build HTTP client with SSRF-safe redirect policy when applicable
+    // Do not follow redirects while sending credentials.
     let client = Client::builder()
         .danger_accept_invalid_certs(use_lax_tls)
         .timeout(Duration::from_secs(args.timeout))
         .user_agent(GLOBAL_USER_AGENT.as_str())
-        .redirect(if global_args.allow_internal_ips {
-            reqwest::redirect::Policy::default()
-        } else {
-            crate::validation::ssrf_safe_redirect_policy()
-        })
+        .redirect(reqwest::redirect::Policy::none())
         .gzip(true)
         .deflate(true)
         .brotli(true)
@@ -793,428 +457,31 @@ pub async fn run_direct_validation(
             limiter.wait_for_rule(&rule_id).await;
         }
 
-        // Execute validation based on type. Errors from the HTTP / gRPC
-        // pathways (DNS failure, SSRF preflight, request build, request
-        // execution, timeout) used to short-circuit the whole `validate`
-        // command via `?`, which left stdout empty and made downstream
-        // tools (and integration tests) unable to distinguish "no rule"
-        // from "validation attempted, infrastructure failed". Match the
-        // pattern used by AWS / GCP / raw branches below: surface the
-        // failure as a non-valid result with a generic `message`. The
-        // underlying error is intentionally NOT included in stdout or in
-        // debug logs because the rendered URL / headers / body can
-        // contain `{{ TOKEN }}` substituted to the secret (and any
-        // `--var` / `--arg` values).
-        let mut result = match validation {
-            Validation::Assumed => DirectValidationResult {
-                rule_id: String::new(),
-                rule_name: String::new(),
-                is_valid: true,
-                validation_outcome: ValidationOutcome::Assumed,
-                status_code: None,
-                message: kingfisher_core::ValidationOutcome::Assumed.display_name().to_string(),
+        // The shared engine returns explicit outcomes and credential-safe request
+        // failure messages, including when validation cannot reach the provider.
+        let checked = kingfisher_scanner::validation::ValidationEngine::new(&client, &parser)
+            .credential_uri_client(&credential_uri_client)
+            .timeout(timeout)
+            .retries(args.retries)
+            .allow_internal_ips(global_args.allow_internal_ips)
+            .use_lax_tls(use_lax_tls)
+            .validate(rule, &globals)
+            .await;
+        let mut result = DirectValidationResult {
+            rule_id: String::new(),
+            rule_name: String::new(),
+            is_valid: checked.outcome.is_verified_active()
+                || checked.outcome == ValidationOutcome::Assumed,
+            validation_outcome: checked.outcome,
+            status_code: checked.http_status,
+            message: if checked.response_body.is_empty() {
+                checked
+                    .reason
+                    .map(|reason| format!("Validation {:?}", reason))
+                    .unwrap_or_else(|| checked.outcome.display_name().to_string())
+            } else {
+                preview_body_for_display(&checked.response_body, 4096)
             },
-            Validation::Ethereum(kind) => {
-                let outcome = kingfisher_scanner::validation::ethereum::validate(*kind, &secret);
-                DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid: false,
-                    validation_outcome: outcome.outcome,
-                    status_code: None,
-                    message: outcome.body,
-                }
-            }
-            Validation::Http(http_validation) => {
-                match execute_http_validation(
-                    http_validation,
-                    &globals,
-                    &client,
-                    &parser,
-                    timeout,
-                    args.retries,
-                    global_args.allow_internal_ips,
-                )
-                .await
-                {
-                    Ok(r) => r,
-                    Err(_e) => {
-                        // Intentionally drop the underlying error: it can
-                        // embed the rendered URL with `{{ TOKEN }}`
-                        // substituted (i.e. the secret) or `--var` /
-                        // `--arg` values. Logging it (even at debug) would
-                        // leak credentials into stderr when -v is on.
-                        debug!("HTTP validation failed");
-                        DirectValidationResult {
-                            rule_id: rule_id.clone(),
-                            rule_name: rule_name.clone(),
-                            is_valid: false,
-                            validation_outcome: ValidationOutcome::Unavailable,
-                            status_code: None,
-                            message: "HTTP validation failed".to_string(),
-                        }
-                    }
-                }
-            }
-            Validation::Betterleaks(betterleaks_validation) => {
-                let captures = vec![("TOKEN".to_string(), secret.clone(), 0, secret.len())];
-                let outcome = crate::betterleaks_validation::validate(
-                    betterleaks_validation,
-                    &captures,
-                    &globals,
-                    &client,
-                    global_args.allow_internal_ips,
-                )
-                .await;
-                DirectValidationResult {
-                    rule_id: rule_id.clone(),
-                    rule_name: rule_name.clone(),
-                    is_valid: outcome.valid,
-                    validation_outcome: outcome.outcome,
-                    status_code: Some(outcome.status.as_u16()),
-                    message: outcome.body,
-                }
-            }
-            Validation::Grpc(grpc_validation_cfg) => {
-                match execute_grpc_validation(
-                    grpc_validation_cfg,
-                    &globals,
-                    &parser,
-                    timeout,
-                    global_args.allow_internal_ips,
-                )
-                .await
-                {
-                    Ok(r) => r,
-                    Err(_e) => {
-                        debug!("gRPC validation failed");
-                        DirectValidationResult {
-                            rule_id: rule_id.clone(),
-                            rule_name: rule_name.clone(),
-                            is_valid: false,
-                            validation_outcome: ValidationOutcome::Unavailable,
-                            status_code: None,
-                            message: "gRPC validation failed".to_string(),
-                        }
-                    }
-                }
-            }
-
-            Validation::AWS => {
-                let is_session_token_rule = crate::validation::is_aws_session_token_rule(rule);
-                let akid = get_global_var(&globals, "AKID")
-                .or_else(|| get_global_var(&globals, "ACCESS_KEY_ID"))
-                .ok_or_else(|| anyhow!(
-                    "AWS validation requires AKID variable. Use: --var AKID=<access_key_id> <secret_access_key>"
-                ))?;
-                let aws_secret = if is_session_token_rule {
-                    get_global_var(&globals, "AWS_SECRET_ACCESS_KEY").ok_or_else(|| anyhow!(
-                        "AWS session-token validation requires AWS_SECRET_ACCESS_KEY. Use: --var AKID=<access_key_id> --var AWS_SECRET_ACCESS_KEY=<secret_access_key> <session_token>"
-                    ))?
-                } else {
-                    secret.clone()
-                };
-                let session_token = if is_session_token_rule {
-                    Some(secret.clone())
-                } else {
-                    get_global_var(&globals, "AWS_SESSION_TOKEN")
-                };
-
-                let result = crate::validation::validate_aws_credential_pair(
-                    &akid,
-                    &aws_secret,
-                    session_token.as_deref(),
-                )
-                .await;
-                DirectValidationResult {
-                    rule_id: String::new(),
-                    rule_name: String::new(),
-                    is_valid: result.is_valid,
-                    validation_outcome: result.outcome,
-                    status_code: Some(result.status.as_u16()),
-                    message: result.message,
-                }
-            }
-
-            Validation::GCP => {
-                // GCP expects the full service account JSON as the secret
-                match GcpValidator::new() {
-                    Ok(validator) => {
-                        match validator.validate_gcp_credentials(secret.as_bytes()).await {
-                            Ok((is_valid, metadata)) => DirectValidationResult {
-                                rule_id: String::new(),
-                                rule_name: String::new(),
-                                is_valid,
-                                validation_outcome: outcome_from_validator_result(is_valid),
-                                status_code: None,
-                                message: if metadata.is_empty() {
-                                    "GCP credential validation completed".to_string()
-                                } else {
-                                    metadata.join(", ")
-                                },
-                            },
-                            Err(e) => DirectValidationResult {
-                                rule_id: String::new(),
-                                rule_name: String::new(),
-                                is_valid: false,
-                                validation_outcome: ValidationOutcome::Unavailable,
-                                status_code: None,
-                                message: format!("GCP validation error: {}", e),
-                            },
-                        }
-                    }
-                    Err(e) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: false,
-                        validation_outcome: ValidationOutcome::Unavailable,
-                        status_code: None,
-                        message: format!("Failed to initialize GCP validator: {}", e),
-                    },
-                }
-            }
-
-            Validation::MongoDB => {
-                // MongoDB expects a connection URI as the secret
-                match validate_mongodb(&secret, use_lax_tls, global_args.allow_internal_ips).await {
-                    Ok((is_valid, message)) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid,
-                        validation_outcome: outcome_from_validator_result(is_valid),
-                        status_code: None,
-                        message,
-                    },
-                    Err(e) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: false,
-                        validation_outcome: ValidationOutcome::Unavailable,
-                        status_code: None,
-                        message: format!("MongoDB validation error: {}", e),
-                    },
-                }
-            }
-
-            Validation::MySQL => {
-                // MySQL expects a connection URL as the secret
-                match validate_mysql(&secret, use_lax_tls, global_args.allow_internal_ips).await {
-                    Ok((is_valid, metadata)) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid,
-                        validation_outcome: outcome_from_validator_result(is_valid),
-                        status_code: None,
-                        message: if metadata.is_empty() {
-                            "MySQL validation completed".to_string()
-                        } else {
-                            metadata.join(", ")
-                        },
-                    },
-                    Err(e) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: false,
-                        validation_outcome: ValidationOutcome::Unavailable,
-                        status_code: None,
-                        message: format!("MySQL validation error: {}", e),
-                    },
-                }
-            }
-
-            Validation::Postgres => {
-                // Postgres expects a connection URL as the secret
-                match validate_postgres(&secret, use_lax_tls, global_args.allow_internal_ips).await
-                {
-                    Ok((is_valid, metadata)) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid,
-                        validation_outcome: outcome_from_validator_result(is_valid),
-                        status_code: None,
-                        message: if metadata.is_empty() {
-                            "Postgres validation completed".to_string()
-                        } else {
-                            metadata.join(", ")
-                        },
-                    },
-                    Err(e) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: false,
-                        validation_outcome: ValidationOutcome::Unavailable,
-                        status_code: None,
-                        message: format!("Postgres validation error: {}", e),
-                    },
-                }
-            }
-
-            Validation::Jdbc => {
-                // JDBC expects a JDBC connection string as the secret
-                match validate_jdbc(&secret, use_lax_tls, global_args.allow_internal_ips).await {
-                    Ok(outcome) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: outcome.valid,
-                        validation_outcome: ValidationOutcome::from_legacy(
-                            false,
-                            outcome.valid,
-                            outcome.status.as_u16(),
-                        ),
-                        status_code: Some(outcome.status.as_u16()),
-                        message: outcome.message,
-                    },
-                    Err(e) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: false,
-                        validation_outcome: ValidationOutcome::Unavailable,
-                        status_code: None,
-                        message: format!("JDBC validation error: {}", e),
-                    },
-                }
-            }
-
-            Validation::CredentialUri => {
-                validate_credential_uri_direct(
-                    &secret,
-                    &credential_uri_client,
-                    timeout,
-                    args.retries,
-                    use_lax_tls,
-                    global_args.allow_internal_ips,
-                )
-                .await
-            }
-
-            Validation::JWT => {
-                // JWT expects a JWT token as the secret
-                match validate_jwt(&secret, use_lax_tls, global_args.allow_internal_ips).await {
-                    Ok((is_valid, message)) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid,
-                        validation_outcome: outcome_from_validator_result(is_valid),
-                        status_code: None,
-                        message,
-                    },
-                    Err(e) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: false,
-                        validation_outcome: ValidationOutcome::Unavailable,
-                        status_code: None,
-                        message: format!("JWT validation error: {}", e),
-                    },
-                }
-            }
-
-            Validation::AzureStorage => {
-                // Azure Storage expects JSON with storage_account and storage_key
-                // Or use --var AZURENAME=xxx (or STORAGE_ACCOUNT for backward compat) and pass the storage key as the secret
-                let azure_json = if secret.starts_with('{') {
-                    // Secret is already JSON
-                    secret.clone()
-                } else {
-                    // Build JSON from variables
-                    // AZURENAME is the legacy custom-rule dependency variable for the account name.
-                    // STORAGE_ACCOUNT is kept for backward compatibility
-                    let storage_account = get_global_var(&globals, "AZURENAME")
-                    .or_else(|| get_global_var(&globals, "STORAGE_ACCOUNT"))
-                    .ok_or_else(|| anyhow!(
-                        "Azure Storage validation requires either JSON input or --var AZURENAME=<account_name> <storage_key>"
-                    ))?;
-                    serde_json::json!({
-                        "storage_account": storage_account,
-                        "storage_key": secret
-                    })
-                    .to_string()
-                };
-
-                let cache: Arc<SkipMap<String, crate::validation::CachedResponse>> =
-                    Arc::new(SkipMap::new());
-                match validate_azure_storage_credentials(&azure_json, &cache).await {
-                    Ok((is_valid, body)) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid,
-                        validation_outcome: outcome_from_validator_result(is_valid),
-                        status_code: None,
-                        message: validation_body::clone_as_string(&body),
-                    },
-                    Err(e) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: false,
-                        validation_outcome: ValidationOutcome::Unavailable,
-                        status_code: None,
-                        message: format!("Azure Storage validation error: {}", e),
-                    },
-                }
-            }
-
-            Validation::Coinbase => {
-                // Coinbase needs credential name and private key PEM
-                let cred_name = get_global_var(&globals, "CRED_NAME")
-                .or_else(|| get_global_var(&globals, "KEY_ID"))
-                .ok_or_else(|| anyhow!(
-                    "Coinbase validation requires CRED_NAME variable. Use: --var CRED_NAME=<key_id> <private_key_pem>"
-                ))?;
-
-                let cache: Arc<SkipMap<String, crate::validation::CachedResponse>> =
-                    Arc::new(SkipMap::new());
-                match validate_cdp_api_key(&cred_name, &secret, &client, &parser, &cache).await {
-                    Ok((is_valid, body)) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid,
-                        validation_outcome: outcome_from_validator_result(is_valid),
-                        status_code: None,
-                        message: validation_body::clone_as_string(&body),
-                    },
-                    Err(e) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: false,
-                        validation_outcome: ValidationOutcome::Unavailable,
-                        status_code: None,
-                        message: format!("Coinbase validation error: {}", e),
-                    },
-                }
-            }
-
-            Validation::Raw(raw) => {
-                match kingfisher_scanner::validation::raw::validate_raw(
-                    raw,
-                    &globals,
-                    &client,
-                    use_lax_tls,
-                    global_args.allow_internal_ips,
-                )
-                .await
-                {
-                    Ok(result) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: result.valid,
-                        validation_outcome: ValidationOutcome::from_legacy(
-                            false,
-                            result.valid,
-                            result.status.as_u16(),
-                        ),
-                        status_code: Some(result.status.as_u16()),
-                        message: result.body,
-                    },
-                    Err(e) => DirectValidationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        is_valid: false,
-                        validation_outcome: ValidationOutcome::Unavailable,
-                        status_code: None,
-                        message: format!("Raw validation error: {}", e),
-                    },
-                }
-            }
         };
 
         result.rule_id = rule_id;
@@ -1472,22 +739,21 @@ mod tests {
 
     #[tokio::test]
     async fn direct_http_credential_uri_preserves_sanitized_validator_errors() {
-        let result = validate_credential_uri_direct(
-            "http://alice:hunter2@example.com",
-            &Client::new(),
-            Duration::from_secs(1),
-            0,
-            false,
-            false,
-        )
-        .await;
-
-        assert_eq!(result.validation_outcome, ValidationOutcome::Unavailable);
-        assert_eq!(
-            result.message,
-            "HTTP credential URI validation error: HTTP credential URI validation requires HTTPS"
-        );
-        assert!(!result.message.contains("hunter2"));
+        let mut syntax = selector_test_rule("private.uri").syntax().clone();
+        syntax.validation = Some(Validation::CredentialUri);
+        let rule = Rule::new(syntax);
+        let client = Client::new();
+        let parser = register_all(liquid::ParserBuilder::with_stdlib()).build().unwrap();
+        let globals = Object::from_iter([(
+            "TOKEN".into(),
+            Value::scalar("http://alice:hunter2@example.com"),
+        )]);
+        let result = kingfisher_scanner::validation::ValidationEngine::new(&client, &parser)
+            .validate(&rule, &globals)
+            .await;
+        assert_eq!(result.outcome, ValidationOutcome::Unavailable);
+        assert!(!result.response_body.contains("hunter2"));
+        assert!(!format!("{result:?}").contains("hunter2"));
     }
 
     fn selector_test_rule(id: &str) -> Rule {

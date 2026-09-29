@@ -92,7 +92,8 @@ eligible). The available scopes are:
 | `branch_history` | All commits reachable from `--branch` with `--git-history full` (the default), including merged history |
 | `git_tree` | The tree resolved from `--branch` with `--git-history none` |
 | `working_tree` | The checked-out files used with `--git-history none` |
-| `tree_diff` | The change set between `--since-commit` and the resolved tip |
+| `commit_range` | Changes in every commit reachable from the tip, excluding `--since-commit` and its ancestors |
+| `tree_diff` | The net change set between `--since-commit` and the resolved tip with `--git-history none` |
 | `inclusive_root_tree_diff` | Changes beginning at `--branch-root-commit` or the computed branch root |
 | `staged_tree_diff` | The staged index changes selected by `--staged` |
 

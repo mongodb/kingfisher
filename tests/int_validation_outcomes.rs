@@ -199,3 +199,122 @@ async fn generic_credential_uri_refuses_plaintext_basic_auth() -> Result<()> {
     assert!(server.received_requests().await.unwrap().is_empty());
     Ok(())
 }
+
+/// Both CLI entry points must preserve the same explicit outcome as the embeddable API.
+#[tokio::test]
+async fn library_scan_and_direct_validation_agree_on_http_outcomes() -> Result<()> {
+    use kingfisher_rules::{Confidence, Rules};
+    use kingfisher_scanner::{RulesDatabase, Scanner, Validator};
+    use std::sync::Arc;
+    use wiremock::{
+        Mock, ResponseTemplate,
+        matchers::{header, method, path},
+    };
+
+    for (status, body, expected) in [
+        (200, "authenticated", "verified_active"),
+        (401, "rejected", "verified_inactive"),
+        (429, "authenticated", "unavailable"),
+        (503, "authenticated", "unavailable"),
+        (200, "welcome", "unavailable"),
+    ] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/identity"))
+            .and(header("authorization", "Bearer demo_abcd1234efgh5678"))
+            .respond_with(ResponseTemplate::new(status).set_body_string(body))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let temp = tempdir()?;
+        let rules_path = temp.path().join("rules.yml");
+        let input = temp.path().join("input.txt");
+        let report_path = temp.path().join("report.json");
+        fs::write(&input, "demo_abcd1234efgh5678")?;
+        fs::write(
+            &rules_path,
+            format!(
+                r#"
+rules:
+  - id: acme.parity
+    name: Parity fixture
+    pattern: '(demo_[a-z0-9]{{16}})'
+    min_entropy: 0.0
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: '{}/identity'
+          headers:
+            Authorization: 'Bearer {{{{ TOKEN }}}}'
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+            - type: WordMatch
+              words: [authenticated]
+"#,
+                server.uri()
+            ),
+        )?;
+        let database = RulesDatabase::from_rule_collection(Rules::from_paths(
+            [&rules_path],
+            Confidence::Low,
+        )?)?;
+        let findings = Scanner::new(Arc::new(database)).scan_file(&input)?;
+        assert_eq!(findings.len(), 1);
+        let library = Validator::builder()
+            .allow_internal_ips(true)
+            .build()?
+            .validate_findings(findings)
+            .await;
+        assert_eq!(serde_json::to_value(library[0].outcome)?, expected);
+        assert_eq!(library[0].http_status, Some(status));
+
+        let direct = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "validate",
+                "--rule",
+                "acme.parity",
+                "demo_abcd1234efgh5678",
+                "--no-builtins",
+                "--rules-path",
+            ])
+            .arg(&rules_path)
+            .args([
+                "--retries",
+                "0",
+                "--format",
+                "json",
+                "--allow-internal-ips",
+                "--no-update-check",
+            ])
+            .output()?;
+        assert_eq!(direct.status.code(), Some(if expected == "verified_active" { 0 } else { 1 }));
+        let direct: Value = serde_json::from_slice(&direct.stdout)?;
+        assert_eq!(direct["validation_outcome"], expected);
+        assert_eq!(direct["status_code"], status);
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .arg("scan")
+            .arg(&input)
+            .args(["--rule", "acme.parity", "--rules-path"])
+            .arg(&rules_path)
+            .args([
+                "--load-builtins=false",
+                "--validation-retries",
+                "0",
+                "--format",
+                "json",
+                "--output",
+            ])
+            .arg(&report_path)
+            .args(["--allow-internal-ips", "--no-update-check"])
+            .assert()
+            .code(if expected == "verified_active" { 205 } else { 200 });
+        let scan: Value = serde_json::from_slice(&fs::read(&report_path)?)?;
+        assert_eq!(scan["findings"][0]["finding"]["validation"]["outcome"], expected);
+        server.verify().await;
+    }
+    Ok(())
+}

@@ -398,7 +398,8 @@ pub struct InputSpecifierArgs {
     pub git_clone: GitCloneMode,
 
     /// Scan full Git history (restricted to --branch when set), or only the selected
-    /// snapshot/working tree with "none". Explicit diff options retain their diff scope.
+    /// snapshot/working tree with "none". --since-commit bounds the history range;
+    /// staged and branch-root options retain their diff scope.
     #[arg(long, default_value_t=GitHistoryMode::Full)]
     pub git_history: GitHistoryMode,
 
@@ -415,7 +416,8 @@ pub struct InputSpecifierArgs {
     #[arg(long, default_value_t = true)]
     pub scan_nested_repos: bool,
 
-    /// Limit Git scanning to changes made since this commit or ref
+    /// Scan commits reachable from --branch (default HEAD), excluding this ref and
+    /// its ancestors. With --git-history none, scan only the net tree diff instead.
     #[arg(long = "since-commit", value_name = "GIT-REF", help_heading = "Git Options")]
     pub since_commit: Option<String>,
 

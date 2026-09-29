@@ -28,7 +28,7 @@ foundation for secret detection.
 It has since evolved across nearly every subsystem. Major areas of development include:
 
 - Live validation and provider-specific credential outcome handling.
-- Betterleaks- and Veles-derived detector coverage plus private Kingfisher YAML rules.
+- Betterleaks- and Veles-derived detector coverage plus Kingfisher YAML rules.
 - Blast-radius analysis, visual triage, and supported credential revocation.
 - Baseline management and stable finding fingerprints.
 - Parser-based context verification layered on SIMD-accelerated matching.

@@ -7,7 +7,6 @@ pub mod access_map;
 pub mod alerts;
 pub mod azure;
 pub mod baseline;
-mod betterleaks_validation;
 pub mod binary;
 pub mod bitbucket;
 pub mod blob;
@@ -68,6 +67,8 @@ pub mod util;
 pub mod validation;
 pub mod validation_body;
 pub mod validation_rate_limit;
+#[cfg(feature = "gui")]
+pub mod wizard;
 
 use std::path::{Path, PathBuf};
 
@@ -450,3 +451,5 @@ mod tests {
         Ok(())
     }
 }
+
+mod scan_progress;

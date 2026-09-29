@@ -537,6 +537,39 @@ impl Git {
         self.run_cmd(cmd, git_clone_timeout())
     }
 
+    /// Clone only a selected branch and its complete history. Use a bare clone even
+    /// for snapshot scans: the explicit ref is scanned from its tree, not a checkout.
+    pub fn create_branch_clone(
+        &self,
+        repo_url: &GitUrl,
+        output_dir: &Path,
+        branch: &str,
+    ) -> Result<(), GitError> {
+        let mut cmd = self.git();
+        cmd.args([
+            "clone",
+            "--bare",
+            "--quiet",
+            "--single-branch",
+            "--no-tags",
+            "--no-local",
+            "--branch",
+        ]);
+        cmd.arg(branch);
+        cmd.arg("--");
+        cmd.arg(self.repo_arg_for_clone(repo_url));
+        cmd.arg(output_dir);
+        self.run_cmd(cmd, git_clone_timeout())?;
+
+        // Bare clones do not install a fetch refspec. Keep subsequent updates just
+        // as narrow, and update the local branch that reference resolution prefers.
+        let mut cmd = self.git();
+        cmd.arg("--git-dir").arg(output_dir);
+        cmd.args(["config", "remote.origin.fetch"]);
+        cmd.arg(format!("+refs/heads/{branch}:refs/heads/{branch}"));
+        self.run_cmd(cmd, git_update_timeout())
+    }
+
     fn repo_arg_for_clone(&self, repo_url: &GitUrl) -> String {
         if let Some((username, password)) = &self.bitbucket_basic_auth
             && let Ok(mut url) = Url::parse(repo_url.as_str())
@@ -807,6 +840,60 @@ mod tests {
         assert_eq!(CloneMode::Bare.arg(), Some("--bare"));
         assert_eq!(CloneMode::Mirror.arg(), Some("--mirror"));
         assert_eq!(CloneMode::Checkout.arg(), None);
+    }
+
+    #[test]
+    fn branch_clone_and_update_fetch_only_selected_history() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+        let source = git2::Repository::init_bare(temp.path().join("source"))?;
+        let signature = git2::Signature::now("tester", "tester@example.com")?;
+        let commit = |branch: &str,
+                      contents: &[u8],
+                      parent: Option<git2::Oid>|
+         -> anyhow::Result<git2::Oid> {
+            let blob = source.blob(contents)?;
+            let mut builder = source.treebuilder(None)?;
+            builder.insert("secret.txt", blob, 0o100644)?;
+            let tree = source.find_tree(builder.write()?)?;
+            let parent = parent.map(|id| source.find_commit(id)).transpose()?;
+            let parents: Vec<_> = parent.iter().collect();
+            Ok(source.commit(Some(branch), &signature, &signature, "fixture", &tree, &parents)?)
+        };
+        let root = commit("refs/heads/main", b"shared history", None)?;
+        let tip = commit("refs/heads/feature/narrow", b"selected branch", Some(root))?;
+        let other = commit("refs/heads/unrelated", b"unrelated secret", None)?;
+        source.set_head("refs/heads/main")?;
+        source.tag(
+            "unrelated-tag",
+            source.find_commit(other)?.as_object(),
+            &signature,
+            "tag",
+            false,
+        )?;
+        let url: GitUrl = "https://example.invalid/branch-fixture.git".parse().unwrap();
+        let local = source.path().canonicalize()?.to_string_lossy().replace('\\', "/");
+        let mut git = Git::default();
+        git.credentials.extend(["-c".into(), format!("url.{local}.insteadOf={url}")]);
+        let destination = temp.path().join("cache").join("selected");
+        git.create_branch_clone(&url, &destination, "feature/narrow")?;
+        {
+            let clone = git2::Repository::open_bare(&destination)?;
+            assert_eq!(clone.head()?.target(), Some(tip));
+            assert!(clone.find_commit(root).is_ok(), "keep the branch's complete history");
+            assert!(clone.find_commit(other).is_err(), "do not transfer unrelated objects");
+            assert!(clone.find_reference("refs/heads/main").is_err());
+            assert!(clone.find_reference("refs/heads/unrelated").is_err());
+            assert!(clone.find_reference("refs/tags/unrelated-tag").is_err());
+        }
+        let updated = commit("refs/heads/feature/narrow", b"updated branch", Some(tip))?;
+        let other_updated = commit("refs/heads/unrelated", b"new unrelated secret", Some(other))?;
+        git.update_clone(&url, &destination)?;
+        let clone = git2::Repository::open_bare(&destination)?;
+        assert_eq!(clone.head()?.target(), Some(updated));
+        assert!(clone.find_commit(other_updated).is_err());
+        assert!(clone.find_reference("refs/heads/unrelated").is_err());
+        assert!(!destination.join("shallow").exists());
+        Ok(())
     }
 
     #[test]

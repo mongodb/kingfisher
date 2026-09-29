@@ -1,24 +1,30 @@
 [package]
 name = "kingfisher-rules"
-version = "0.1.0"
+version = "1.0.0"
 description = "Rule definitions and database for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+license = "Apache-2.0 AND MIT"
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
-publish = false
+publish.workspace = true
+include = ["src/**", "examples/**", "build_support/**", "generated/**", "data/*.yml", "data/*.md", "LICENSE", "README.md"]
+
+# docs.rs blocks network access, so compile the vendored native source there.
+[package.metadata.docs.rs]
+features = ["kingfisher-vectorscan/build-from-source"]
+targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
 # Internal dependencies
-kingfisher-core = { path = "../kingfisher-core" }
+kingfisher-core = { version = "1.0.0", path = "../kingfisher-core" }
 
 # Serialization
 serde.workspace = true
 serde_json.workspace = true
 serde_yaml = "0.9"
-toml = "0.8"
+toml = "1.1"
 schemars.workspace = true
 
 # Error handling
@@ -52,7 +58,7 @@ rand.workspace = true
 zeroize.workspace = true
 
 # Vectorscan for pattern matching
-vectorscan-rs.workspace = true
+kingfisher-vectorscan.workspace = true
 thread_local.workspace = true
 
 # Logging
@@ -65,19 +71,6 @@ ignore.workspace = true
 
 # Embedded rule bundle
 flate2 = "1.1"
-
-[build-dependencies]
-anyhow.workspace = true
-flate2 = "1.1"
-regex.workspace = true
-regex-syntax = "0.8"
-serde.workspace = true
-serde_yaml = "0.9"
-toml = "0.8"
-sha2.workspace = true
-# Avoid Rustls/ring in the build script: ClusterFuzzLite's sanitizer CFLAGS would
-# otherwise instrument ring and break the non-fuzz build-script linker.
-ureq = { version = "3.4", default-features = false, features = ["native-tls"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"

@@ -8,8 +8,11 @@ use flate2::read::GzDecoder;
 use crate::rule::Confidence;
 use crate::rules::Rules;
 
+/// Source revisions, input hashes, and rule provenance for the embedded catalog.
+pub const BUILTIN_RULE_PROVENANCE: &str = include_str!("../generated/provenance.json");
+
 const BUNDLE_MAGIC: &[u8] = b"KFRULES\x01";
-const DEFAULT_RULE_BUNDLE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/builtin-rules.gz"));
+const DEFAULT_RULE_BUNDLE: &[u8] = include_bytes!("../generated/builtin-rules.gz");
 type BuiltinRuleFiles = Vec<(PathBuf, Vec<u8>)>;
 type CachedBuiltinRuleFiles = Result<BuiltinRuleFiles, String>;
 
@@ -244,7 +247,7 @@ mod test {
             selected.rules.insert(rule.id.clone(), rule.clone());
         }
         let db = crate::RulesDatabase::from_rule_collection(selected).unwrap();
-        let mut scanner = vectorscan_rs::BlockScanner::new(db.vectorscan_db()).unwrap();
+        let mut scanner = kingfisher_vectorscan::BlockScanner::new(db.vectorscan_db()).unwrap();
         for (id, token) in cases {
             let input = format!("{token}\n{token}");
             let mut hits = 0;
@@ -257,7 +260,7 @@ mod test {
                         assert_eq!(captures.get(1).unwrap().as_bytes(), token.as_bytes());
                         hits += 1;
                     }
-                    vectorscan_rs::Scan::Continue
+                    kingfisher_vectorscan::Scan::Continue
                 })
                 .unwrap();
             assert!(hits >= 2, "{id}: missing adjacent bare tokens");
@@ -274,6 +277,34 @@ mod test {
         let files = get_builtin_rule_files().unwrap();
         assert_eq!(files.len(), 2);
         assert!(files.windows(2).all(|pair| pair[0].0 <= pair[1].0));
+    }
+
+    #[test]
+    fn readable_files_load_identically_to_embedded_catalog() {
+        let manifest: serde_json::Value = serde_json::from_str(BUILTIN_RULE_PROVENANCE).unwrap();
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("generated");
+        let paths: std::collections::BTreeSet<_> = manifest["rules"]
+            .as_object()
+            .unwrap()
+            .values()
+            .map(|record| root.join(record["generated_file"].as_str().unwrap()))
+            .collect();
+        assert_eq!(
+            paths,
+            [root.join("rules/betterleaks.yml"), root.join("rules/veles.yml")]
+                .into_iter()
+                .collect()
+        );
+        let exported = Rules::from_yaml_files(paths, Confidence::Low).unwrap();
+        let embedded = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        assert_eq!(
+            serde_json::to_value(&exported.rules).unwrap(),
+            serde_json::to_value(&embedded.rules).unwrap()
+        );
+        assert_eq!(
+            serde_json::to_value(&exported.betterleaks_prefilter).unwrap(),
+            serde_json::to_value(&embedded.betterleaks_prefilter).unwrap()
+        );
     }
 
     #[test]

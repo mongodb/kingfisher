@@ -5,7 +5,7 @@ pub(crate) use repos::{
     clone_or_update_git_repos_streaming, enumerate_azure_repos, enumerate_bitbucket_repos,
     enumerate_github_event_targets, enumerate_github_repos, enumerate_huggingface_repos,
 };
-pub use runner::{load_and_record_rules, run_async_scan, run_scan};
+pub use runner::{NoScanInputsError, load_and_record_rules, run_async_scan, run_scan};
 pub(crate) use validation::{
     AccessMapCollector, direct_access_map_requests, run_secret_validation,
 };

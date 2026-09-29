@@ -125,7 +125,7 @@ always confirm the target and operational impact before containment.
 ### Performance, Accuracy, and Extensible Rules
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
 - **Extensible rules**: Betterleaks is the main catalog, with selected Veles detectors filling gaps;
-  custom Betterleaks TOML and Kingfisher 1.x YAML rules are supported ([built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), [docs/RULES.md](docs/RULES.md))
+  both Betterleaks TOML (`.toml`) and the Kingfisher rule format (`.yml`/`.yaml`) are fully supported via `--rules-path` ([built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), [docs/RULES.md](docs/RULES.md))
 - **Validation and defender-led revocation**: validate discovered credentials live, then revoke supported credentials from the CLI. For supported provider flows, responders can contain a leaked token even when its owner is unknown or has left the company ([docs/USAGE.md](docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](docs/REVOCATION_PROVIDERS.md))
 - **Blast-radius mapping included by default**: use `--blast-radius` (alias `--access-map`) to map supported credentials to their effective identities, permissions, reachable roles/service accounts, and impacted resource scopes. All 43 providers—including advanced AWS role-assumption and GCP service-account impersonation analysis—are included in the Apache-2.0 release ([blast-radius docs](https://mongodb.github.io/kingfisher/features/blast-radius/))
 - **Broad provider coverage**: detect and validate credentials across cloud, AI, developer tooling, databases, SaaS, messaging, identity, and cryptographic systems through the Betterleaks- and Veles-based candidate catalog
@@ -133,7 +133,7 @@ always confirm the target and operational impact before containment.
 - **SQLite Database Scanning**: Automatically extracts and scans SQLite database contents for secrets stored in table rows
 - **Python Bytecode (.pyc) Scanning**: Extracts and scans string constants from compiled Python (`.pyc`, `.pyo`) files
 - **Baseline management**: generate and track baselines to suppress known secrets ([docs/BASELINE.md](docs/BASELINE.md))
-- **Checksum-aware custom detection**: Kingfisher 1.x custom rules can verify token checksums offline before validation ([checksum intelligence](docs/RULES.md#checksum-intelligence))
+- **Checksum-aware custom detection**: Kingfisher custom rules can verify token checksums offline before validation ([checksum intelligence](docs/RULES.md#checksum-intelligence))
 - **Report Viewer (local + hosted)**: Visualize and triage Kingfisher, **SARIF, Gitleaks, and TruffleHog** output locally with `kingfisher view ./report.json` or online with the [hosted viewer](https://mongodb.github.io/kingfisher/viewer/). Multiple files, directories, and imported third-party reports are merged and deduplicated. See [docs/USAGE.md](docs/USAGE.md#report-viewer-local-and-hosted).
 - **Audit reporting**: Generate compliance-oriented HTML reports with scan metadata and validation ordering
 - **Library crates**: Embed Kingfisher's scanning engine in your own Rust applications ([docs/LIBRARY.md](docs/LIBRARY.md))
@@ -340,6 +340,7 @@ validation filters, output formats, scan scope, and command examples.
 | Configure authentication and environment variables | [Environment-variable reference](docs/INTEGRATIONS.md#environment-variables) |
 | Validate or revoke a known credential | [Direct validation](docs/USAGE.md#direct-secret-validation-with-kingfisher-validate), [revocation](docs/REVOCATION_PROVIDERS.md) |
 | Map identity, permissions, and affected resources | [Blast-radius guide](docs/BLAST_RADIUS.md) |
+| Run scans and inspect reports in a native workspace | [Kingfisher wizard](docs/WIZARD.md) |
 | Triage one or more reports visually | [Viewer usage](docs/USAGE.md#report-viewer-local-and-hosted), [hosted guide](https://mongodb.github.io/kingfisher/features/report-viewer/) |
 | Configure CI, pre-commit, or centralized scanning | [Deployment](docs/DEPLOYMENT.md), [advanced configuration](docs/ADVANCED.md) |
 | Send findings to chat or webhook destinations | [Alerts](docs/ALERTS.md) |
@@ -361,12 +362,25 @@ Machine consumers should use structured validation outcomes and finding fingerpr
 parsing display labels. See [output and validation semantics](docs/USAGE.md),
 [finding fingerprints](docs/FINGERPRINT.md), and the [full documentation index](docs/INDEX.md).
 
+## Rust Embedding Examples
+
+The [library guide](docs/LIBRARY.md#runnable-examples) includes runnable examples for
+`kingfisher-core`, `kingfisher-rules`, `kingfisher-scanner`, and the `kingfisher-bin`
+library. Copyable [integration recipes](docs/LIBRARY.md#integration-recipes-for-rust-projects-and-llm-agents)
+cover file batches, private rules, async services, and scanning plus HTTP validation.
+For example, from a repository checkout:
+
+```sh
+cargo run --locked -p kingfisher-scanner --example http_validation --features validation-http
+```
+
 ## Documentation
 
 - **[Documentation index](docs/INDEX.md):** task-oriented map of every user, operator, rule-author,
   and developer guide in the repository.
 - **[Hosted documentation](https://mongodb.github.io/kingfisher/):** searchable rendered version.
 - **[llms.txt](llms.txt):** compact machine-readable map of the documentation set.
+- **[Cargo publishing](docs/PUBLISHING.md):** prepared rule bundles, provenance, and crate releases.
 - **[Architecture](docs/ARCHITECTURE.md):** codebase layout and data flow.
 - **[Changelog](CHANGELOG.md):** release-by-release behavior changes.
 

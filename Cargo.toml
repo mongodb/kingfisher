@@ -4,6 +4,7 @@ members = [
     "crates/kingfisher-core",
     "crates/kingfisher-rules",
     "crates/kingfisher-scanner",
+    "tools/rule-bundle",
 ]
 resolver = "2"
 
@@ -14,7 +15,7 @@ license = "Apache-2.0"
 authors = ["Mick Grove <mick.grove@mongodb.com>"]
 homepage = "https://github.com/mongodb/kingfisher"
 repository = "https://github.com/mongodb/kingfisher"
-publish = false
+publish = ["crates-io"]
 
 [workspace.dependencies]
 anyhow = "1.0"
@@ -29,7 +30,7 @@ bstr = { version = "1.13", features = ["serde"] }
 smallvec = { version = "1", features = ["const_generics", "const_new", "union"] }
 parking_lot = "0.12"
 tracing = "0.1"
-vectorscan-rs = "0.0.6"
+kingfisher-vectorscan = "0.1.1"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
 ignore = "0.4"
 walkdir = "2.5"
@@ -52,8 +53,8 @@ thread_local = "1.1.10"
 
 
 [package]
-name = "kingfisher"
-version = "2.7.0"
+name = "kingfisher-bin"
+version = "2.8.0"
 description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -62,6 +63,15 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 publish.workspace = true
+include = ["src/**", "examples/**", "build.rs", "docs/viewer/**", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES", "third-party/**", "README.md", "Cargo.lock"]
+
+[lib]
+name = "kingfisher"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kingfisher"
+path = "src/main.rs"
 
 [package.metadata.deb]
 name = "kingfisher"
@@ -73,7 +83,7 @@ assets = [
     ["target/release/kingfisher", "/usr/bin/kingfisher", "755"],
     ["NOTICE", "/usr/share/doc/kingfisher/NOTICE", "644"],
     ["THIRD_PARTY_NOTICES", "/usr/share/doc/kingfisher/THIRD_PARTY_NOTICES", "644"],
-    ["vendor/vectorscan-rs/NOTICE", "/usr/share/doc/kingfisher/vectorscan-rs-NOTICE", "644"]
+    ["third-party/kingfisher-vectorscan/NOTICE", "/usr/share/doc/kingfisher/kingfisher-vectorscan-NOTICE", "644"]
 ]
 
 [package.metadata.generate-rpm]
@@ -85,14 +95,18 @@ assets = [
     { source = "target/release/kingfisher", dest = "/usr/bin/kingfisher", mode = "755" },
     { source = "NOTICE", dest = "/usr/share/doc/kingfisher/NOTICE", mode = "644", doc = true },
     { source = "THIRD_PARTY_NOTICES", dest = "/usr/share/doc/kingfisher/THIRD_PARTY_NOTICES", mode = "644", doc = true },
-    { source = "vendor/vectorscan-rs/NOTICE", dest = "/usr/share/doc/kingfisher/vectorscan-rs-NOTICE", mode = "644", doc = true }
+    { source = "third-party/kingfisher-vectorscan/NOTICE", dest = "/usr/share/doc/kingfisher/kingfisher-vectorscan-NOTICE", mode = "644", doc = true }
 ]
 
 [dependencies]
+# Native workspace is opt-in; headless CLI builds do not link GPUI.
+gpui-kit = { version = "=0.6.6", optional = true }
+command-group = { version = "5.0.1", optional = true }
+image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Library crates
-kingfisher-core = { path = "crates/kingfisher-core" }
-kingfisher-rules = { path = "crates/kingfisher-rules" }
-kingfisher-scanner = { path = "crates/kingfisher-scanner", features = ["validation-all"] }
+kingfisher-core = { version = "1.0.0", path = "crates/kingfisher-core" }
+kingfisher-rules = { version = "1.0.0", path = "crates/kingfisher-rules" }
+kingfisher-scanner = { version = "1.0.0", path = "crates/kingfisher-scanner", features = ["validation-all"] }
 
 clap = { version = "4.6", default-features = false, features = [
     "derive",
@@ -122,7 +136,7 @@ tracing = "0.1.44"
 indicatif = { version = "0.18", features = ["improved_unicode"] }
 rayon = "1.12"
 hex = "0.4.3"
-vectorscan-rs = "0.0.6"
+kingfisher-vectorscan.workspace = true
 regex = "1.13.1"
 serde_json = "1.0.151"
 toon-format = { version = "0.5.0", default-features = false }
@@ -189,10 +203,7 @@ flate2 = "1.1"
 thousands = "0.2.0"
 crossbeam-skiplist = "0.1.3"
 tokio-postgres = { version = "0.7", default-features = false, features = ["runtime"] }
-# Temporary Git pin: keeps MongoDB SRV validation enabled while using the upstream
-# Hickory 0.26 DNS-resolver fix before it is available in a crates.io release.
-# TODO: switch back to a crates.io mongodb release once it includes that fix.
-mongodb = { git = "https://github.com/mongodb/mongo-rust-driver", rev = "0f628f2a4b3102c4bff854a0da6938c691bd5871", default-features = false, features = ["rustls-tls-aws-lc", "aws-auth", "compat-3-0-0", "dns-resolver"] }
+mongodb = { version = "3.8.0", default-features = false, features = ["rustls-tls-aws-lc", "aws-auth", "compat-3-0-0", "dns-resolver"] }
 mysql_async = { version = "0.37.1", default-features = false, features = ["default-rustls"] }
 aws-config = { version = "1.11.0", default-features = false, features = ["default-https-client", "rt-tokio", "credentials-process", "sso"] }
 aws-credential-types = "1.3.0"
@@ -276,10 +287,19 @@ optional = true
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "NSApplication", "NSImage"], optional = true }
+objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSData"], optional = true }
+
 [build-dependencies]
 flate2 = "1.1"
+image = { version = "0.25", default-features = false, features = ["png", "ico"], optional = true }
+embed-resource = { version = "3.0", optional = true }
 
 [features]
+gui = ["dep:gpui-kit", "dep:command-group", "dep:image", "dep:embed-resource", "dep:objc2", "dep:objc2-app-kit", "dep:objc2-foundation"]
+gui-tests = ["gui", "gpui-kit/test-support"]
 default = ["use-mimalloc"]
 use-mimalloc = []
 use-jemalloc = ["tikv-jemallocator"]
@@ -316,7 +336,7 @@ incremental = false
 # the global `s` level.  The crates below are cold or infrequently used in the
 # common local-repository scan path, so `z` is a safer size trade-off.
 #
-# Hot-path crates kept at `s` include: vectorscan-rs, regex, bstr, memmap2,
+# Hot-path crates kept at `s` include: kingfisher-vectorscan, regex, bstr, memmap2,
 # memchr, ignore, walkdir, rayon, xxhash-rust, rustc-hash, crossbeam-*, smallvec,
 # dashmap, globset, rusqlite, tree-magic-mini, content_inspector,
 # cssparser, tl, gix, petgraph, roaring, fixedbitset, path-dedot, serde_json,
@@ -630,9 +650,14 @@ debug = true
 incremental = true
 codegen-units = 256
 
-[patch.crates-io]
-vectorscan-rs = { path = "vendor/vectorscan-rs/vectorscan-rs" }
-vectorscan-rs-sys = { path = "vendor/vectorscan-rs/vectorscan-rs-sys" }
+# Optimized Windows tests without the production profile's costly LTO/linking.
+[profile.ci-test]
+inherits = "dev"
+opt-level = 1
+debug = false
+incremental = false
+lto = "off"
+codegen-units = 16
 
 [profile.profiling]
 inherits = "release"

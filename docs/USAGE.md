@@ -350,7 +350,7 @@ kingfisher validate --rule jwt \
   "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
 ```
 
-**Supported validators:** Betterleaks validation expressions are imported by default, including HTTP and supported cloud helpers. Kingfisher also uses `CredentialUri` to validate imported HTTPS credential URIs with Basic Auth after an explicit unauthenticated challenge, and to route PostgreSQL, MySQL/MariaDB, MongoDB, and supported JDBC inputs to database validators. Kingfisher 1.x custom rules can use HTTP, Grpc, AWS, GCP, MongoDB, MySQL, Postgres, JDBC, CredentialUri, JWT, Azure Storage, Coinbase, raw validators, and local Ethereum validation.
+**Supported validators:** Betterleaks validation expressions are imported by default, including HTTP and supported cloud helpers. Kingfisher also uses `CredentialUri` to validate imported HTTPS credential URIs with Basic Auth after an explicit unauthenticated challenge, and to route PostgreSQL, MySQL/MariaDB, MongoDB, and supported JDBC inputs to database validators. Kingfisher custom rules can use HTTP, Grpc, AWS, GCP, MongoDB, MySQL, Postgres, JDBC, CredentialUri, JWT, Azure Storage, Coinbase, raw validators, and local Ethereum validation.
 
 **Exit codes:** Returns `0` if any matching rule validates the secret as valid, `1` if all are invalid or an error occurred.
 
@@ -399,7 +399,7 @@ kingfisher validate --rule github-pat \
   --endpoint github=https://ghe.corp.example.com \
   "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# A Kingfisher 1.x custom GitLab rule can use the same endpoint override
+# A Kingfisher custom GitLab rule can use the same endpoint override
 kingfisher revoke --rules-path ./custom-rules.yml --rule custom.gitlab.pat \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "glpat-xxxxxxxxxxxxxxxxxxxx"
@@ -469,10 +469,10 @@ supported.
 ### Direct secret revocation with `kingfisher revoke`
 
 Use `kingfisher revoke` to invoke either a mapped Betterleaks revocation capability or a Kingfisher
-1.x custom rule's `revocation` configuration without scanning files. Betterleaks does not currently
+custom rule's `revocation` configuration without scanning files. Betterleaks does not currently
 provide revocation metadata, so built-in actions are maintained as a detection-free capability
-overlay and joined to upstream rule IDs at build time. HTTP actions use the same Liquid templating
-and response matchers as Kingfisher 1.x `validation`.
+overlay and joined to upstream rule IDs during bundle generation. HTTP actions use the same Liquid templating
+and response matchers as Kingfisher YAML `validation`.
 
 For supported provider flows, this lets an authorized defender contain the credential without first
 finding the employee who created or leaked it. That matters when ownership is unclear or the person
@@ -620,12 +620,12 @@ See [`docs/CONFIG.md`](CONFIG.md) for the full schema and precedence rules.
 
 ### Scan changes in CI pipelines
 
-Limit scanning to the delta between your default branch and a pull request branch by combining `--since-commit` with `--branch` (defaults to `HEAD`). This only scans files that differ between the two references, which keeps CI runs fast while still blocking new secrets.
+Limit scanning to a commit range by combining `--since-commit` with `--branch` (defaults to `HEAD`). With the default `--git-history full`, Kingfisher scans changes in every commit reachable from the selected tip, excluding the baseline ref and all its ancestors (`baseline..tip`). This includes merged history and secrets added and removed before the tip. Add `--git-history none` to scan only the net tree diff between the two refs.
 
 Use `--branch-root-commit` alongside `--branch` when you need to include a specific commit (and everything after it) in a diff-focused scan without re-examining earlier history. Provide the branch tip (or other comparison ref) via `--branch`, and pass the commit or merge-base you want to include with `--branch-root-commit`. If you omit `--branch-root-commit`, you can still enable `--branch-root` to fall back to treating the `--branch` ref itself as the inclusive root for backwards compatibility. This is especially useful in long-lived branches where you want to resume scanning from a previous review point or from the commit where a hotfix forked.
 
 > **How is this different from `--since-commit`?**   
-> `--since-commit` computes a diff between the branch tip and another ref, so it only inspects files that changed between those two points in history. `--branch-root-commit` rewinds to the parent of the commit you provide and then scans everything introduced from that commit forward, even if the files are unchanged relative to another baseline. Reach for `--since-commit` to keep CI scans fast by checking only the latest delta, and use `--branch-root-commit` when you want to re-audit the full contents of a branch starting at a specific commit.
+> `--since-commit` excludes the baseline commit and its ancestors, and by default inspects each subsequent commit’s changes. `--branch-root-commit` instead computes a net tree diff from the parent of the supplied commit to the tip, including the supplied commit’s changes but potentially missing secrets removed before the tip. Use `--since-commit <baseline>` to audit a commit range, or add `--git-history none` when only the final delta is wanted.
 
 ```bash
 kingfisher scan . \
@@ -681,7 +681,7 @@ kingfisher scan https://github.com/org/repo.git \
   --branch development
 ```
 
-When no explicit diff options (`--since-commit`, `--branch-root`, `--branch-root-commit`, or `--staged`) are supplied, `--branch` scans all history reachable from the requested ref, including merged branches. This is the default `--git-history full` behavior and finds secrets deleted in later commits without scanning unrelated branches or checking out the selected ref. Use `--git-history none` to scan only the selected ref’s snapshot. Full-history enumeration takes more time and buffers blob metadata before scanning; the revision walk and commit diffs share one `--git-repo-timeout` budget. Increase that timeout for large histories when needed.
+When no explicit diff options (`--branch-root`, `--branch-root-commit`, or `--staged`) are supplied, `--branch` scans all history reachable from the requested ref, including merged branches. This is the default `--git-history full` behavior and finds secrets deleted in later commits without scanning unrelated branches or checking out the selected ref. Use `--since-commit <ref>` to exclude that ref and its ancestors from the history scan. Use `--git-history none` to scan only the selected ref’s snapshot, or the net diff when paired with `--since-commit`. Full-history enumeration takes more time and buffers blob metadata before scanning; the revision walk and commit diffs share one `--git-repo-timeout` budget. Increase that timeout for large histories when needed.
 
 ```bash
 # Scan a branch from an existing checkout
@@ -1012,7 +1012,7 @@ kingfisher validate --rule github-pat \
   --endpoint github=https://ghe.corp.example.com \
   "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
 
-# 6. Revoke through a Kingfisher 1.x custom rule that defines revocation
+# 6. Revoke through a Kingfisher custom rule that defines revocation
 kingfisher revoke --rules-path ./custom-rules.yml --rule custom.github.pat \
   --endpoint github=https://ghe.corp.example.com \
   "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -1153,7 +1153,7 @@ kingfisher validate --rule gitlab-pat \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "glpat-xxxxxxxxxxxxxxxxxxxx"
 
-# 6. Revoke through a Kingfisher 1.x custom rule that defines revocation
+# 6. Revoke through a Kingfisher custom rule that defines revocation
 kingfisher revoke --rules-path ./custom-rules.yml --rule custom.gitlab.pat \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "glpat-xxxxxxxxxxxxxxxxxxxx"
@@ -1815,8 +1815,16 @@ _If no token is provided Kingfisher still works for public repositories._
 
 ## Exit Codes
 
-| Code | Meaning                       |
-| ---- | ----------------------------- |
-| 0    | No findings                   |
-| 200  | Findings discovered           |
-| 205  | Validated findings discovered |
+| Code | Meaning                        |
+| ---- | ------------------------------ |
+| 0    | No findings                    |
+| 1    | Scan or runtime error          |
+| 2    | Invalid command-line arguments |
+| 3    | No inputs discovered to scan   |
+| 200  | Findings discovered            |
+| 205  | Validated findings discovered  |
+
+Input discovery can return exit code `3` when, for example, a GitHub user has no
+matching repositories or all discovered repositories are excluded. Orchestrators
+can use this code without matching the `No inputs to scan` error message. This
+condition stops before a scan report is produced.

@@ -150,7 +150,7 @@ HTML report (`kingfisher view ./report.json` or `kingfisher scan /path/to/code -
 
 ## Revoke from the CLI
 
-Kingfisher 1.x custom rules can define direct revocation when the provider API supports it:
+Kingfisher custom rules can define direct revocation when the provider API supports it:
 
 ```bash
 kingfisher revoke --rules-path ./custom-rules.yml --rule custom.aws.access-key SECRET

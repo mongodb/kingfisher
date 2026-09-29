@@ -1,10 +1,11 @@
 //! Thread-local scanner pool for efficient multi-threaded scanning.
 
-use std::cell::UnsafeCell;
+use std::cell::RefCell;
 use std::sync::Arc;
 
+use anyhow::{Context, Result};
+use kingfisher_vectorscan::{BlockDatabase, BlockScanner};
 use thread_local::ThreadLocal;
-use vectorscan_rs::{BlockDatabase, BlockScanner};
 
 /// A pool of Vectorscan block scanners for efficient multi-threaded scanning.
 ///
@@ -17,7 +18,7 @@ use vectorscan_rs::{BlockDatabase, BlockScanner};
 /// to the database (via lifetime transmute), so they must be dropped first.
 pub struct ScannerPool {
     // IMPORTANT: scanners must be dropped before db - do not reorder these fields
-    scanners: ThreadLocal<UnsafeCell<Option<BlockScanner<'static>>>>,
+    scanners: ThreadLocal<RefCell<Option<BlockScanner<'static>>>>,
     db: Arc<BlockDatabase>,
 }
 
@@ -35,26 +36,35 @@ impl ScannerPool {
     ///
     /// This ensures each thread has its own scanner instance, avoiding
     /// the need for locking during scanning operations.
+    ///
+    /// # Panics
+    /// Panics on allocation failure or reentrant access. Prefer [`Self::try_with`].
     pub fn with<F, R>(&self, f: F) -> R
     where
         F: FnOnce(&mut BlockScanner<'_>) -> R,
     {
-        let cell = self.scanners.get_or(|| UnsafeCell::new(None));
+        self.try_with(f).expect("unable to borrow or initialize scanner")
+    }
 
-        // Safety: ThreadLocal guarantees only the current thread accesses this cell
-        let scanner_opt = unsafe { &mut *cell.get() };
+    /// Executes a callback with a scanner, returning allocation or reentrancy errors.
+    ///
+    /// A callback must not recursively borrow the same pool on the same thread.
+    /// Separate threads use separate scratch space. A panic releases the borrow.
+    pub fn try_with<F, R>(&self, f: F) -> Result<R>
+    where
+        F: FnOnce(&mut BlockScanner<'_>) -> R,
+    {
+        let cell = self.scanners.get_or(|| RefCell::new(None));
+        let mut scanner_opt = cell.try_borrow_mut().context("scanner pool is already borrowed")?;
 
-        // Create scanner if it doesn't exist.
-        // Safety: We extend the lifetime to 'static via transmute. This is sound because:
-        // 1. The database is held in an Arc, so it won't be freed while we hold a reference
-        // 2. The struct field order ensures scanners are dropped before db (Rust drops in order)
-        // 3. Therefore the database outlives all scanners that reference it
+        // SAFETY: The pool owns the database; scanners are dropped before it.
+        // RefCell prevents overlapping mutable borrows, including reentrant callbacks.
         if scanner_opt.is_none() {
             let db_ref: &'static BlockDatabase =
                 unsafe { std::mem::transmute::<&BlockDatabase, &'static BlockDatabase>(&self.db) };
-            *scanner_opt = Some(BlockScanner::new(db_ref).expect("Failed to create BlockScanner"));
+            *scanner_opt = Some(BlockScanner::new(db_ref)?);
         }
 
-        f(scanner_opt.as_mut().unwrap())
+        Ok(f(scanner_opt.as_mut().unwrap()))
     }
 }

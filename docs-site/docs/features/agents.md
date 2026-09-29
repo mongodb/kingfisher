@@ -24,7 +24,7 @@ kingfisher revoke --rule betterleaks.github-pat "ghp_xxx" --format toon
 ```
 
 Betterleaks rules provide default validation where upstream defines it. Kingfisher supplies
-selected safe revocation actions through a build-validated capability overlay; Kingfisher 1.x custom YAML
+selected safe revocation actions through a build-validated capability overlay; Kingfisher custom YAML
 rules may also define a `revocation:` block.
 
 !!! tip "When to use TOON"

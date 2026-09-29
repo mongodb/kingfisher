@@ -114,7 +114,8 @@ impl DetailsReporter {
         let tool = sarif::Tool::builder()
             .driver(
                 sarif::ToolComponent::builder()
-                    .name(env!("CARGO_PKG_NAME").to_string())
+                    // Keep the tool identity stable despite the kingfisher-bin crate name.
+                    .name("kingfisher".to_string())
                     .semantic_version(env!("CARGO_PKG_VERSION").to_string())
                     .full_name(format!("Kingfisher {}", env!("CARGO_PKG_VERSION")))
                     .information_uri(env!("CARGO_PKG_HOMEPAGE").to_string())

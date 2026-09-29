@@ -3,21 +3,15 @@ use std::path::Path;
 use std::process::Command;
 
 fn toml_escape_path(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "\\\\")
+    path.to_string_lossy().replace('\\', "\\\\").replace('"', "\\\"")
 }
 
-#[cfg(not(windows))]
 #[test]
 fn library_crates_work_from_external_project() -> anyhow::Result<()> {
     let repo_root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let core_path = toml_escape_path(&repo_root.join("crates/kingfisher-core"));
     let rules_path = toml_escape_path(&repo_root.join("crates/kingfisher-rules"));
     let scanner_path = toml_escape_path(&repo_root.join("crates/kingfisher-scanner"));
-    let vectorscan_rs_path =
-        toml_escape_path(&repo_root.join("vendor/vectorscan-rs/vectorscan-rs"));
-    let vectorscan_rs_sys_path =
-        toml_escape_path(&repo_root.join("vendor/vectorscan-rs/vectorscan-rs-sys"));
-
     let temp = tempfile::tempdir()?;
     let project_dir = temp.path().join("external-kingfisher-consumer");
     fs::create_dir_all(project_dir.join("src"))?;
@@ -35,12 +29,8 @@ edition = "2021"
 kingfisher-core = {{ path = "{core_path}" }}
 kingfisher-rules = {{ path = "{rules_path}" }}
 
-[target.'cfg(not(windows))'.dependencies]
 kingfisher-scanner = {{ path = "{scanner_path}" }}
 
-[patch.crates-io]
-vectorscan-rs = {{ path = "{vectorscan_rs_path}" }}
-vectorscan-rs-sys = {{ path = "{vectorscan_rs_sys_path}" }}
 "#
         ),
     )?;
@@ -49,33 +39,25 @@ vectorscan-rs-sys = {{ path = "{vectorscan_rs_sys_path}" }}
         project_dir.join("src/main.rs"),
         r#"use std::sync::Arc;
 use kingfisher_core::Blob;
-use kingfisher_rules::{get_builtin_rules, Rule, RulesDatabase};
-#[cfg(not(windows))]
+use kingfisher_rules::{get_builtin_rules, RulesDatabase};
 use kingfisher_scanner::Scanner;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let rules = get_builtin_rules(None)?;
     println!("rules={}", rules.num_rules());
 
-    let rule_vec: Vec<Rule> = rules
-        .iter_rules()
-        .map(|syntax| Rule::new(syntax.clone()))
-        .collect();
-    let rules_db = Arc::new(RulesDatabase::from_rules(rule_vec)?);
+    let rules_db = Arc::new(RulesDatabase::from_rule_collection(rules)?);
 
-    #[cfg(not(windows))]
     {
         let scanner = Scanner::new(rules_db);
         let blob =
             Blob::from_bytes(b"token = \"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\"".to_vec());
         let findings = scanner.scan_blob(&blob)?;
+        assert!(findings.iter().any(|finding| {
+            finding.rule_id == "betterleaks.github-pat"
+                && finding.secret == "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"
+        }), "expected the GitHub PAT rule to report the exact token");
         println!("findings={}", findings.len());
-    }
-
-    #[cfg(windows)]
-    {
-        let _ = Blob::from_bytes(Vec::new());
-        let _ = rules_db;
     }
 
     Ok(())
@@ -95,12 +77,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "external project lockfile generation failed\nstdout:\n{lock_stdout}\nstderr:\n{lock_stderr}"
     );
 
-    let output = Command::new("cargo")
-        .arg("run")
+    // Keep dependency artifacts across test runs and inside the CI Rust cache.
+    // Use a separate target directory because this consumer has its own feature graph.
+    let target_root = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| repo_root.join("target"));
+    let target_dir = repo_root.join(target_root).join("external-consumer");
+
+    let mut run = Command::new("cargo");
+    // MSYS2 CI invokes the parent tests with --target; Cargo does not inherit
+    // that flag in subprocesses. Avoid falling back to the unsupported MSVC host.
+    #[cfg(all(windows, target_arch = "x86_64"))]
+    run.args(["run", "--target", "x86_64-pc-windows-gnu"]);
+    #[cfg(all(windows, target_arch = "aarch64"))]
+    run.args(["run", "--target", "aarch64-pc-windows-gnullvm"]);
+    #[cfg(not(windows))]
+    run.arg("run");
+
+    let output = run
         .arg("--quiet")
         // The external dependency graph can include packages that the workspace build did not
         // download. Keep its generated lockfile fixed without requiring a warm Cargo cache.
         .arg("--locked")
+        .env("CARGO_TARGET_DIR", &target_dir)
         .current_dir(&project_dir)
         .output()?;
 

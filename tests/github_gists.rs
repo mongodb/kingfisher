@@ -254,8 +254,8 @@ async fn enumerated_gist_is_cloned_and_scanned_for_deleted_secrets() -> anyhow::
     let rewrite = format!("url.{local_repo}.insteadOf");
     for (extra, expected_code) in [
         (vec!["--include-gists"], 200),
-        (vec![], 1),
-        (vec!["--include-gists", "--repo-clone-limit", "0"], 1),
+        (vec![], 3),
+        (vec!["--include-gists", "--repo-clone-limit", "0"], 3),
     ] {
         let mut command = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
         command
@@ -283,6 +283,53 @@ async fn enumerated_gist_is_cloned_and_scanned_for_deleted_secrets() -> anyhow::
         } else {
             assertion.stderr(contains("No inputs to scan"));
         }
+    }
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn empty_github_discovery_has_distinct_exit_code() -> anyhow::Result<()> {
+    let temp = tempfile::tempdir()?;
+    let rules = temp.path().join("rules.yml");
+    std::fs::write(
+        &rules,
+        "rules:\n  - name: Empty discovery test\n    id: custom.issue517.secret\n    pattern: '(issue517_secret)'\n    min_entropy: 0\n",
+    )?;
+
+    for (status, expected_code, expected_message) in
+        [(200, 3, "No inputs to scan"), (401, 1, "Failed to enumerate GitHub repositories")]
+    {
+        let server = MockServer::start().await;
+        let response = if status == 200 {
+            ResponseTemplate::new(status).set_body_json(json!([]))
+        } else {
+            ResponseTemplate::new(status).set_body_json(json!({"message": "Bad credentials"}))
+        };
+        Mock::given(method("GET"))
+            .and(path("/users/alice/repos"))
+            .respond_with(response)
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        assert_cmd::Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "scan",
+                "github",
+                "--user",
+                "alice",
+                "--api-url",
+                &server.uri(),
+                "--no-update-check",
+                "--no-validate",
+                "--load-builtins=false",
+                "--rules-path",
+            ])
+            .arg(&rules)
+            .args(["--format", "toon", "--jobs", "2"])
+            .assert()
+            .code(expected_code)
+            .stderr(predicates::str::contains(expected_message));
     }
     Ok(())
 }

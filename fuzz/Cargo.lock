@@ -2040,17 +2040,19 @@ dependencies = [
  "hmac",
  "ignore",
  "kingfisher-core",
+ "kingfisher-vectorscan",
  "liquid",
  "liquid-core",
  "percent-encoding",
  "rand 0.10.2",
  "regex",
+ "regex-syntax",
  "schemars",
  "serde",
  "serde_json",
  "serde_yaml",
  "sha1 0.11.0",
- "sha2",
+ "sha2 0.11.0",
  "thiserror 2.0.20",
  "thread_local",
  "tiktoken-rs",
@@ -2059,7 +2061,6 @@ dependencies = [
  "tracing",
  "ureq",
  "uuid",
- "vectorscan-rs",
  "walkdir",
  "xxhash-rust",
  "zeroize",
@@ -2076,6 +2077,7 @@ dependencies = [
  "http",
  "kingfisher-core",
  "kingfisher-rules",
+ "kingfisher-vectorscan",
  "parking_lot",
  "regex",
  "rustc-hash",
@@ -2086,8 +2088,33 @@ dependencies = [
  "thiserror 2.0.20",
  "thread_local",
  "tracing",
- "vectorscan-rs",
  "xxhash-rust",
+]
+
+[[package]]
+name = "kingfisher-vectorscan"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e457ea5dc4befa749300687432526a2a2a2a2ea2615540384f1173799245dec4"
+dependencies = [
+ "bitflags 2.13.1",
+ "foreign-types 0.5.0",
+ "kingfisher-vectorscan-sys",
+ "libc",
+ "thiserror 1.0.69",
+]
+
+[[package]]
+name = "kingfisher-vectorscan-sys"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0bcbf55f8bc473110c889bac1829701f71ecbbae6b6ac62356819140d8c82d58"
+dependencies = [
+ "cc",
+ "cmake",
+ "flate2",
+ "sha2 0.10.9",
+ "tar",
 ]
 
 [[package]]
@@ -2883,6 +2910,17 @@ dependencies = [
 
 [[package]]
 name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
+]
+
+[[package]]
+name = "sha2"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "446ba717509524cb3f22f17ecc096f10f4822d76ab5c0b9822c5f9c284e825f4"
@@ -2984,6 +3022,17 @@ dependencies = [
  "colored",
  "itertools 0.11.0",
  "thiserror 1.0.69",
+]
+
+[[package]]
+name = "tar"
+version = "0.4.46"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3f6221d9a6003c78398e3b239969f352578258df48c8eb051caadae0015bc840"
+dependencies = [
+ "filetime",
+ "libc",
+ "xattr",
 ]
 
 [[package]]
@@ -3365,24 +3414,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "accd4ea62f7bb7a82fe23066fb0957d48ef677f6eeb8215f372f52e48bb32426"
 
 [[package]]
-name = "vectorscan-rs"
-version = "0.0.6"
-dependencies = [
- "bitflags 2.13.1",
- "foreign-types 0.5.0",
- "libc",
- "thiserror 1.0.69",
- "vectorscan-rs-sys",
-]
-
-[[package]]
-name = "vectorscan-rs-sys"
-version = "0.0.6"
-dependencies = [
- "cmake",
-]
-
-[[package]]
 name = "version_check"
 version = "0.9.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3703,6 +3734,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "xattr"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32e45ad4206f6d2479085147f02bc2ef834ac85886624a23575ae137c8aa8156"
+dependencies = [
+ "libc",
+ "rustix",
 ]
 
 [[package]]

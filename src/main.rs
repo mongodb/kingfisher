@@ -105,16 +105,52 @@ use crate::cli::commands::{
 
 fn main() -> anyhow::Result<()> {
     raise_nproc_soft_limit();
+    const STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MiB
+    // Clap's derived parser can overflow Windows' main-thread stack in debug builds.
+    // Box its result so transferring the large command enum also stays off that stack.
+    let parser = std::thread::Builder::new()
+        .name("kingfisher-args".to_string())
+        .stack_size(STACK_SIZE)
+        .spawn(|| {
+            let (args, matches) = CommandLineArgs::parse_args_with_matches();
+            (Box::new(args), matches)
+        })
+        .context("Failed to spawn argument parser thread")?;
+    let (args, matches) = parser.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
 
+    // GPUI must run on the OS main thread. Keep the raw matches when handing other
+    // commands to the larger-stack worker so config precedence still distinguishes
+    // explicit flags from clap defaults.
+    if let Command::Wizard(wizard) = &args.command {
+        #[cfg(feature = "gui")]
+        return kingfisher::wizard::run(
+            wizard.target.clone(),
+            wizard.report.clone(),
+            kingfisher::wizard::global_values(&matches),
+        );
+        #[cfg(not(feature = "gui"))]
+        {
+            let _ = wizard;
+            anyhow::bail!(
+                "This build does not include the native wizard. Build with `cargo build --release --features gui --bin kingfisher`, then run `kingfisher wizard` (alias: `kingfisher gui`)."
+            );
+        }
+    }
     // Run the real entry point on a thread with an explicit, larger stack so that
     // deeply-nested async state machines (validation pipeline) cannot overflow the
     // default main-thread stack.
-    const STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MiB
     let builder =
         std::thread::Builder::new().name("kingfisher-main".to_string()).stack_size(STACK_SIZE);
 
-    let handler = builder.spawn(run).expect("failed to spawn main thread");
-    handler.join().unwrap_or_else(|e| std::panic::resume_unwind(e))
+    let handler = builder.spawn(move || run(*args, matches)).expect("failed to spawn main thread");
+    let result = handler.join().unwrap_or_else(|e| std::panic::resume_unwind(e));
+    if let Err(error) = &result
+        && error.is::<kingfisher::scanner::NoScanInputsError>()
+    {
+        eprintln!("Error: {error:?}");
+        std::process::exit(3);
+    }
+    result
 }
 
 /// Outcome of `async_main`. Used to signal that the runtime should be torn down
@@ -150,7 +186,7 @@ fn raise_nproc_soft_limit() {
 #[cfg(not(unix))]
 fn raise_nproc_soft_limit() {}
 
-fn run() -> anyhow::Result<()> {
+fn run(args: CommandLineArgs, matches: clap::ArgMatches) -> anyhow::Result<()> {
     // Install the AWS-LC Rustls provider before initializing any TLS clients.
     match rustls::crypto::aws_lc_rs::default_provider().install_default() {
         Ok(()) => {}
@@ -160,16 +196,7 @@ fn run() -> anyhow::Result<()> {
             warn!("rustls crypto provider was already installed; keeping existing provider");
         }
     }
-    // Parse command-line arguments. We keep the raw `ArgMatches` so
-    // `apply_config` can distinguish a user-provided flag from a clap default
-    // and apply project-config scalars only when the user did not pass the
-    // matching CLI flag (precedence: CLI > env > config > built-in default).
-    let (CommandLineArgs { command, global_args }, matches) =
-        CommandLineArgs::parse_args_with_matches();
-
-    set_user_agent_suffix(global_args.user_agent_suffix.clone());
-
-    let args = CommandLineArgs { command, global_args };
+    set_user_agent_suffix(args.global_args.user_agent_suffix.clone());
 
     // Determine the number of jobs, defaulting to the number of CPUs
     let num_jobs = match &args.command {
@@ -179,7 +206,7 @@ fn run() -> anyhow::Result<()> {
         Command::Validate(_) => 1, // Single validation request
         Command::Revoke(_) => 1,   // Single revocation request
         Command::BlastRadius(_) => 1,
-        Command::View(_) => 1,
+        Command::View(_) | Command::Wizard(_) => 1,
         Command::Config(_) => 1,
     };
 
@@ -1791,8 +1818,8 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                         run_rules_list(list_args)?;
                     }
                 },
-                Command::View(_) => {
-                    anyhow::bail!("View command should not reach this branch")
+                Command::View(_) | Command::Wizard(_) => {
+                    anyhow::bail!("View and wizard commands should not reach this branch")
                 }
                 Command::BlastRadius(_) => {
                     anyhow::bail!("BlastRadius command should not reach this branch")
