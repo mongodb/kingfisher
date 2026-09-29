@@ -5,6 +5,7 @@ testdata/* linguist-vendored
 /crates/kingfisher-rules/data/** text eol=lf
 /crates/kingfisher-rules/generated/*.json text eol=lf
 /crates/kingfisher-rules/generated/*.txt text eol=lf
+/crates/kingfisher-rules/generated/rules/** text eol=lf
 /LICENSE text eol=lf
 /Cargo.toml text eol=lf
 /Cargo.lock text eol=lf

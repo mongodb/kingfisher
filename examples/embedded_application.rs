@@ -12,6 +12,6 @@ fn main() -> anyhow::Result<()> {
     );
     let findings = scanner.scan_bytes(b"token=demo_abcd1234efgh5678")?;
     assert_eq!(findings.len(), 1);
-    println!("{}: {}", findings[0].rule_id, findings[0].secret);
+    println!("{}: [REDACTED]", findings[0].rule_id);
     Ok(())
 }

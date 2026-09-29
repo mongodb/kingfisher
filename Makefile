@@ -172,6 +172,7 @@ darwin-arm64: BUILD_TARGET := aarch64-apple-darwin
 linux-x64: DOCKER_PLATFORM := linux/amd64
 linux-arm64: DOCKER_PLATFORM := linux/arm64
 
+# Musl has no published Vectorscan archive; both Linux recipes build from source.
 # Native static Linux builds via Zig (Ubuntu).
 ubuntu-x64 ubuntu-arm64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild exist
 	@echo "Checking Rust toolchain…"
@@ -193,7 +194,7 @@ ubuntu-x64 ubuntu-arm64: setup-zig prepare-release-notices   # ensures Zig & car
 	@echo "🔨  Building $(PROJECT_NAME) for $(BUILD_TARGET) …"
 	@. $$HOME/.cargo/env && \
 	    rustup target add $(BUILD_TARGET) && \
-	    export PKG_CONFIG_ALLOW_CROSS=1 && \
+	    export PKG_CONFIG_ALLOW_CROSS=1 VECTORSCAN_BUILD_FROM_SOURCE=1 && \
 	    cargo zigbuild --release --target $(BUILD_TARGET)
 
 	@echo "🗜️   Packaging archive …"
@@ -489,7 +490,7 @@ linux-x64 linux-arm64: check-docker create-dockerignore prepare-release-notices
 		    patch perl ragel \
 	        git openssl-dev curl && \
 		\
-		export CARGO_TARGET_DIR=/src/target-docker && \
+		export CARGO_TARGET_DIR=/src/target-docker VECTORSCAN_BUILD_FROM_SOURCE=1 && \
 		rustup target add $(BUILD_TARGET) && \
 		\
 		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --workspace --all-targets --jobs 1 --target $(BUILD_TARGET); fi ; \

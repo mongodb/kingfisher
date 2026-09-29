@@ -25,13 +25,7 @@ fn main() -> anyhow::Result<()> {
         None => scanner.scan_bytes(b"token=demo_abcd1234efgh5678")?,
     };
     for finding in findings.iter().filter(|finding| finding.rule().visible()) {
-        println!(
-            "{} at {}:{}: {}",
-            finding.rule_id,
-            finding.line(),
-            finding.column(),
-            finding.secret
-        );
+        println!("{} at {}:{}: [REDACTED]", finding.rule_id, finding.line(), finding.column());
     }
     // Reuse the same compiled database and scanner on a worker thread.
     let worker = Arc::clone(&scanner);
