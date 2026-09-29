@@ -478,6 +478,7 @@ windows-test: windows-test-x64 windows-test-arm64
 
 # Match the Alpine baseline used by the Vectorscan musl release archives.
 # A caller can still set VECTORSCAN_BUILD_FROM_SOURCE=1 for a source build.
+# Stage archive inputs together: BusyBox tar applies -C to every input path.
 linux-x64 linux-arm64: check-docker create-dockerignore prepare-release-notices
 	@mkdir -p target/release
 	docker run --platform $(DOCKER_PLATFORM) --rm \
@@ -507,8 +508,9 @@ linux-x64 linux-arm64: check-docker create-dockerignore prepare-release-notices
 		cargo build --locked --release --target $(BUILD_TARGET) && \
 		cd target/$(BUILD_TARGET)/release && \
 	    sha256sum kingfisher > CHECKSUM.txt && \
+	    cp -R /src/target/release/notices . && \
 	    tar -czf /src/target/release/kingfisher-linux-$(BUILD_ARCH).tgz \
-	        kingfisher CHECKSUM.txt -C /src/target/release notices \
+	        kingfisher CHECKSUM.txt notices \
 	'
 	$(MAKE) list-archives
 
