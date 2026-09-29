@@ -131,9 +131,9 @@ impl Blob<'_> {
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let mut file = File::open(&path)?;
         let file_size = file.metadata()?.len();
-        let temp_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
 
         if file_size > LARGE_FILE_THRESHOLD {
+            let temp_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
             // Large files: one mmap, zero extra copies.
             let mmap = unsafe { memmap2::Mmap::map(&file)? };
             let id = BlobId::new(&mmap);
