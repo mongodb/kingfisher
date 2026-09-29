@@ -88,8 +88,8 @@ jobs:
           BASE_REV: ${{ github.event.pull_request.base.sha }}
           FEATURE_GROUP: ${{ matrix.features }}
         run: |
-          cargo semver-checks -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner \
-            --baseline-rev "$BASE_REV" --"$FEATURE_GROUP"
+          python3 scripts/check-library-compatibility.py \
+            --baseline-rev "$BASE_REV" --features "$FEATURE_GROUP"
 
   viewer:
     name: Viewer regressions
