@@ -18,7 +18,7 @@ targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
 # Internal dependencies
-kingfisher-core = { version = "1.0.0", path = "../kingfisher-core" }
+kingfisher-core = { version = "1.0.1", path = "../kingfisher-core" }
 
 # Serialization
 serde.workspace = true

@@ -2,6 +2,12 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.9.1]
+- Updated PyO3 to 0.29.3 to fix Python binding memory-safety and thread-safety advisories.
+- Fixed crates.io packaging and bumped `kingfisher-core` to 1.0.1.
+- Enabled Python SDK publishing on merges to `main`, preserving every pending release.
+- Added Rust and Python homepage quick starts and clarified the open-source revocation comparison.
+
 ## [v2.9.0]
 - Fixed the validation-phase message to appear when credential validation begins.
 - Reduced scan CPU use in Base64 and Unicode detection without changing scan results.

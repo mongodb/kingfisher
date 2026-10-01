@@ -2,6 +2,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import shlex
 from pathlib import Path
 import tarfile
 import tempfile
@@ -31,6 +32,18 @@ def crate(name="kingfisher-core", version="1.0.0", **changes):
 
 
 class PublishTests(unittest.TestCase):
+    def test_release_preflight_packages_only_registry_release_crates(self):
+        workflow = (publisher.ROOT / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        commands = [shlex.split(line.strip()) for line in workflow.splitlines()
+                    if line.strip().startswith("cargo package ")]
+        self.assertEqual(len(commands), 1)
+        command = commands[0]
+        selected = [command[index + 1] for index, arg in enumerate(command) if arg == "-p"]
+        self.assertEqual(tuple(selected), publisher.PACKAGES)
+        self.assertIn("--locked", command)
+        self.assertNotIn("--no-verify", command)
+        self.assertNotIn("--workspace", command)
+
     def test_fetch_retries_transient_errors(self):
         errors = [urllib.error.HTTPError("https://crates.io", code, "retry", {}, None)
                   for code in (408, 429, 500, 503)]

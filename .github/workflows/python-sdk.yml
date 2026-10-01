@@ -3,6 +3,7 @@ name: Python SDK
 on:
   pull_request:
   push:
+    branches: [main]
     tags: ['python-v*']
   workflow_dispatch:
 
@@ -10,7 +11,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: python-sdk-${{ github.ref }}
+  # Only PR checks supersede earlier runs. Every release keeps its own slot,
+  # including pending runs: GitHub concurrency is not a FIFO release queue.
+  group: python-sdk-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -170,9 +173,12 @@ jobs:
           if-no-files-found: error
 
   publish:
-    if: startsWith(github.ref, 'refs/tags/python-v') && github.event_name == 'push'
+    if: github.repository == 'mongodb/kingfisher' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/python-v'))
     needs: [wheels, source-and-msrv]
     runs-on: ubuntu-latest
+    concurrency:
+      group: pypi-sdk-publish-${{ github.run_id }}
+      cancel-in-progress: false
     environment:
       name: pypi-sdk
       url: https://pypi.org/p/kingfisher-secret-scanner
@@ -185,3 +191,7 @@ jobs:
           path: dist
           merge-multiple: true
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+        with:
+          # SDK versions are independent of the CLI. Unrelated main merges and
+          # retries must not fail when this SDK version is already on PyPI.
+          skip-existing: true

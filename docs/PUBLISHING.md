@@ -5,7 +5,8 @@
 The root package is `kingfisher-bin`; its executable and Rust library retain the name
 `kingfisher`. The `kingfisher` crates.io name belongs to another project. The reusable library packages
 are `kingfisher-core`, `kingfisher-rules`, and `kingfisher-scanner`. The maintainer-only
-`kingfisher-rule-bundle` package is never published.
+`kingfisher-rule-bundle` package is never published. The `kingfisher-python` binding
+crate is packaged by Maturin for the separate Python SDK release, not crates.io.
 
 ## Package versions and consumers
 
@@ -13,10 +14,10 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
-| `kingfisher-core` | `1.0.0` | `kingfisher_core` library |
+| `kingfisher-core` | `1.0.1` | `kingfisher_core` library |
 | `kingfisher-rules` | `1.0.1` | `kingfisher_rules` library |
 | `kingfisher-scanner` | `1.1.0` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.9.0` | `kingfisher` executable and library |
+| `kingfisher-bin` | `2.9.1` | `kingfisher` executable and library |
 
 The libraries establish their stable `1.x` API at `1.0.0`; they do not inherit the CLI
 version. See the [compatibility contract](LIBRARY.md#api-stability).
@@ -26,7 +27,7 @@ version. See the [compatibility contract](LIBRARY.md#api-stability).
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.9.0
+cargo install --locked kingfisher-bin --version 2.9.1
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
@@ -100,7 +101,7 @@ fields support workspace development; published manifests use the version requir
 Cargo can package the selected workspace members together before they exist in the registry:
 
 ```sh
-cargo package --workspace --exclude kingfisher-rule-bundle
+cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
 cargo test --locked -p kingfisher-bin --test licenses --test smoke_check_rules
 ```
 
