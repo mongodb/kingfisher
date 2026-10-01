@@ -236,24 +236,33 @@ successful macOS or Linux run does not establish Windows compatibility.
 ## GitHub Actions and PyPI publishing
 
 [Python SDK workflow](https://github.com/mongodb/kingfisher/blob/main/.github/workflows/python-sdk.yml) builds and tests six
-native wheels on pull requests and manual runs. Linux wheels use manylinux 2.28;
+native wheels on pull requests, main-branch pushes, SDK tag pushes, and manual runs. Linux wheels use manylinux 2.28;
 Windows wheels bundle runtime DLLs using delvewheel and are tested under ordinary
 CPython outside MSYS2. A separate job builds an sdist, installs it with CPython
 3.10, and runs the same tests. Wheel jobs use CPython 3.13. Publishing depends on
 all wheel and source tests succeeding.
 
-SDK releases use independent `python-v<version>` tags, with the version from
-`crates/kingfisher-python/Cargo.toml`. This avoids republishing the SDK during an
-unrelated CLI release. Only tag pushes publish; PR/manual builds upload artifacts
-without publishing. The tag must exactly match the package version.
+Merging to `main` automatically builds, tests, and publishes `kingfisher-secret-scanner`
+through this workflow. The CLI release separately publishes `kingfisher-bin`.
+PR/manual SDK builds upload artifacts without publishing. Publishing is restricted
+to `mongodb/kingfisher` and uses the protected `pypi-sdk` environment.
+
+The SDK version comes from `crates/kingfisher-python/Cargo.toml` and is independent
+of the CLI version. Increment it when SDK code or its embedded Rust dependencies
+change. Already-published files are skipped on unrelated main merges and retries;
+PyPI does not replace existing files. Optional `python-v<version>` tag pushes can
+also publish, and the tag must exactly match the SDK package version.
 
 Maintainer release checklist:
 
 1. Review the changes, increment the SDK version for subsequent releases, update
    `uv.lock` and `Cargo.lock`, regenerate the rule provenance as described in
    [publishing guidance](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md), and merge through the normal process.
-2. Push the matching `python-v<version>` tag when ready. Inspect all six tested
-   wheels and the source artifact before approving the protected publish job.
+2. Inspect all six tested wheels and the source artifact in the main-branch run.
+   The protected publish job runs after every build and test succeeds.
+3. Configure PyPI Trusted Publishing for owner `mongodb`, repository `kingfisher`,
+   workflow `python-sdk.yml`, and environment `pypi-sdk`. The GitHub environment
+   must allow the `main` branch (and `python-v*` tags if using tag releases).
 
 Publishing uses PyPI Trusted Publishing without a stored API token. A local TestPyPI rehearsal can use
 `uv publish --publish-url https://test.pypi.org/legacy/ dist-python/*` after

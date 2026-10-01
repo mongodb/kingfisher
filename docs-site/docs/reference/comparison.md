@@ -5,36 +5,19 @@ description: "Published secret-scanning runtime, network-request, and binary-siz
 
 # Capabilities and Benchmarks
 
-**Of the secret scanning tools compared below, only Kingfisher and Betterleaks 2.0
-offer built-in credential revocation.** Find exposed secrets, verify which are live,
-identify their owners, and revoke supported credentials—all open source, with no
-paid edition required.
+**Free, open-source credential revocation:** among the open-source tools compared
+below, Kingfisher and Betterleaks 2.0 include built-in revocation for supported
+credentials. No enterprise subscription is required.
 
 | Built-in capability | Kingfisher | Betterleaks 2.0 RC1 | TruffleHog OSS | Gitleaks |
 |---|:---:|:---:|:---:|:---:|
 | Secret discovery | ✅ | ✅ | ✅ | ✅ |
 | Live credential verification | ✅ | ✅ | ✅ | ❌ |
 | Identity and permission analysis | ✅ | ✅ | ✅ | ❌ |
-| **Credential revocation** | **✅** | **✅** | ❌ | ❌ |
+| Credential revocation | ✅ | ✅ | ❌ | ❌ |
 | License | Apache-2.0 | MIT | AGPL-3.0 | MIT |
 
-✅ Supported · ❌ Not built in. Provider coverage and permissions vary.
-Betterleaks **2.0.0-rc.1** is a prerelease; revocation requires an explicit action.
-
-Feature review: September 30, 2026. Sources:
-[Kingfisher revocation](../features/revocation.md),
-[Betterleaks 2.0 RC1](https://github.com/betterleaks/betterleaks/blob/v2.0.0-rc.1/README.md),
-[TruffleHog source and capabilities](https://github.com/trufflesecurity/trufflehog/tree/19f011aca35e0fb30601c9407a4afbaeb02aad53),
-and [Gitleaks source and capabilities](https://github.com/gitleaks/gitleaks/tree/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b).
-Revocation means invalidating credentials through the provider, not merely checking
-their status. No built-in revocation command was found in the reviewed TruffleHog
-or Gitleaks source.
-
-## Published benchmarks
-
-These historical measurements are separate from the Kingfisher and Betterleaks 2.0
-revocation capabilities described on the homepage. Betterleaks 2.0 was not included
-in these benchmarks.
+✅ Supported · ❌ Not Supported
 
 ## Runtime Comparison (seconds)
 *Lower runtimes are better.*

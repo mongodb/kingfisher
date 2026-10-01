@@ -7695,7 +7695,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kingfisher-bin"
-version = "2.9.0"
+version = "2.9.1"
 dependencies = [
  "anyhow",
  "asar",
@@ -7841,7 +7841,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "anyhow",
  "bstr",

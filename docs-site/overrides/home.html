@@ -8,12 +8,13 @@
         <div>
           <p class="kf-eyebrow"><span class="kf-dot"></span> OPEN SOURCE SECURITY · BUILT BY MONGODB</p>
           <h1 id="kf-title" tabindex="-1">Find the secret.<br>Understand <em>the risk.</em></h1>
-          <p class="kf-lead">Find exposed credentials. Validate what’s live. Revoke supported secrets — all open source.</p>
+          <p class="kf-lead">Find exposed credentials. Validate what’s live. Revoke supported secrets — from the CLI, Rust, or Python. All open source.</p>
           <div class="kf-actions">
             <a class="kf-button kf-button--primary" href="{{ 'viewer/' | url }}">Open report viewer <span aria-hidden="true">↗</span></a>
             <a class="kf-button kf-button--outline" href="{{ 'rules/builtin-rules/' | url }}">Explore detection rules <span aria-hidden="true">→</span></a>
           </div>
-          <p class="kf-hero__note">Of the secret scanning tools in our comparison, only Kingfisher and Betterleaks 2.0 offer built-in credential revocation. Find exposed secrets, verify which are live, identify their owners, and revoke supported credentials—all open source, with no paid edition required.</p>
+          <p><a class="kf-text-link" href="{{ 'reference/library/' | url }}">Rust library →</a> &nbsp; · &nbsp; <a class="kf-text-link" href="{{ 'reference/python-bindings/' | url }}">Python SDK →</a></p>
+          <p class="kf-hero__note">Credential revocation, free and open source. Among the open-source tools in our comparison, Kingfisher and Betterleaks 2.0 include built-in revocation for supported credentials, with no enterprise subscription required.</p>
           <a class="kf-text-link" href="{{ 'reference/comparison/' | url }}">See the comparison <span aria-hidden="true">→</span></a>
         </div>
         <div class="kf-console" aria-label="Illustrative Kingfisher triage preview">
@@ -86,6 +87,28 @@ fn main() -> anyhow::Result<()> {
     Ok(())
 }</code></pre>
         <a href="{{ 'reference/library/' | url }}">Setup, options, and runnable examples <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
+    <section class="kf-section kf-wrap kf-start" aria-labelledby="python-title">
+      <div>
+        <p class="kf-eyebrow">EMBED THE SAME RUST ENGINE</p>
+        <h2 id="python-title">Use Kingfisher<br>from Python.</h2>
+        <p>Install <code>kingfisher-secret-scanner</code> and import <code>kingfisher_sdk</code>. Scan text, bytes, or files in process, then validate findings or explicitly revoke supported credentials with <code>Validator</code> and <code>Revoker</code>. No CLI subprocess is needed.</p>
+        <a class="kf-text-link" href="{{ 'reference/python-bindings/' | url }}">Python SDK guide →</a>
+        <p><a href="https://github.com/mongodb/kingfisher/tree/main/python/examples">Runnable Python examples</a></p>
+      </div>
+      <div class="kf-terminal">
+        <div class="kf-console__bar"><span>PYTHON QUICK START</span><span>PYPI · PYTHON 3.10+</span></div>
+        <pre><code><span># Install the native SDK</span>
+uv add kingfisher-secret-scanner
+
+<span># Scan in your Python application</span>
+from kingfisher_sdk import Scanner
+
+scanner = Scanner()
+findings = scanner.scan("application config")
+print(f"{len(findings)} findings")</code></pre>
+        <a href="{{ 'reference/python-bindings/' | url }}">Setup, validation, and revocation <span aria-hidden="true">→</span></a>
       </div>
     </section>
     <section class="kf-section kf-wrap kf-start" aria-labelledby="start-title"><div><p class="kf-eyebrow">START WITH A SCAN</p><h2 id="start-title">Your next step<br>takes one command.</h2><p>Install Kingfisher and bring secret detection into your local development or CI workflow.</p><a class="kf-text-link" href="{{ 'getting-started/installation/' | url }}">All installation options →</a></div><div class="kf-terminal"><div class="kf-console__bar"><span>TERMINAL</span><span>HOMEBREW</span></div><pre><code><span># Install Kingfisher</span>

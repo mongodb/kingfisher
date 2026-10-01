@@ -462,7 +462,7 @@ jobs:
       - name: Verify rule bundle and extracted packages before authenticating
         run: |
           cargo run --locked -p kingfisher-rule-bundle -- --check
-          cargo package --locked --workspace --exclude kingfisher-rule-bundle
+          cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
       - name: Plan changed releases and reject missing version bumps
         id: plan
         run: python3 scripts/publish-crates.py --tag "$RELEASE_TAG"

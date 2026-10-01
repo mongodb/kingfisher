@@ -7,6 +7,11 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.9.1]
+- Fixed crates.io release packaging to select only registry packages and bumped `kingfisher-core` to 1.0.1 for the Unicode detection updates.
+- Publish the native `kingfisher-secret-scanner` Python SDK after successful main-branch wheel and source tests.
+- Highlighted Rust and Python embedding guides and quick starts on the documentation homepage.
+
 ## [v2.9.0]
 - Fixed the validation-phase message to appear when credential validation begins.
 - Reduced scan CPU use in Base64 and Unicode detection without changing scan results.

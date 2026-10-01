@@ -55,7 +55,7 @@ thread_local = "1.1.10"
 
 [package]
 name = "kingfisher-bin"
-version = "2.9.0"
+version = "2.9.1"
 description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -105,7 +105,7 @@ gpui-kit = { version = "=0.6.6", optional = true }
 command-group = { version = "5.0.1", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Library crates
-kingfisher-core = { version = "1.0.0", path = "crates/kingfisher-core" }
+kingfisher-core = { version = "1.0.1", path = "crates/kingfisher-core" }
 kingfisher-rules = { version = "1.0.1", path = "crates/kingfisher-rules" }
 kingfisher-scanner = { version = "1.1.0", path = "crates/kingfisher-scanner", features = ["validation"] }
 

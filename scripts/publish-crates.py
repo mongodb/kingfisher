@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Plan or publish the four crates, in dependency order. Planning is read-only.
 
-Requires Python 3.11+, Cargo, and archives produced by `cargo package --workspace
---exclude kingfisher-rule-bundle`. Never logs or stores registry credentials.
+Requires Python 3.11+, Cargo, and archives produced by `cargo package` for the four
+packages in PACKAGES. Never logs or stores registry credentials.
 """
 import argparse
 import hashlib
