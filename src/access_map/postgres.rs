@@ -4,11 +4,11 @@ use std::time::Duration;
 use std::sync::OnceLock;
 
 use anyhow::{Context, Result, anyhow};
+use kingfisher_scanner::validation::limits::timeout;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::{CryptoProvider, aws_lc_rs, verify_tls12_signature, verify_tls13_signature};
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
 use rustls::{DigitallySignedStruct, SignatureScheme, client::ClientConfig};
-use tokio::time::timeout;
 use tokio_postgres::config::SslMode;
 use tokio_postgres::tls::NoTls;
 use tokio_postgres::{Client, Config};

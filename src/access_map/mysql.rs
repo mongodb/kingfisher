@@ -1,9 +1,9 @@
 use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
+use kingfisher_scanner::validation::limits::timeout;
 use mysql_async::prelude::*;
 use mysql_async::{Opts, Pool};
-use tokio::time::timeout;
 use tracing::warn;
 
 use crate::cli::commands::access_map::AccessMapArgs;

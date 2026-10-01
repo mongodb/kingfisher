@@ -203,6 +203,8 @@ With `validation`, `Revoker` provides explicit rule-driven revocation without
 CLI dependencies:
 
 ```rust,no_run
+# #[cfg(feature = "validation")]
+# mod revocation_example {
 use std::collections::BTreeMap;
 use kingfisher_scanner::{Revoker, Rule};
 
@@ -210,6 +212,7 @@ async fn revoke_selected(rule: &Rule, secret: &str) -> anyhow::Result<bool> {
     let result = Revoker::new()?.revoke(rule, secret, &BTreeMap::new()).await?;
     Ok(result.revoked)
 }
+# }
 ```
 
 Pass required companion variables and endpoint overrides in the map; `TOKEN` is

@@ -21,6 +21,17 @@ default = []
 
 # Validation is all-or-nothing; scanning alone remains dependency-light.
 validation = [
+    # Preserve the legacy feature implications for downstream cfg checks.
+    "validation-http",
+    "validation-raw",
+    "validation-ethereum",
+    "validation-aws",
+    "validation-azure",
+    "validation-coinbase",
+    "validation-gcp",
+    "validation-jwt",
+    "validation-database",
+    "validation-grpc",
     "dep:reqwest",
     "dep:tokio",
     "dep:liquid",
