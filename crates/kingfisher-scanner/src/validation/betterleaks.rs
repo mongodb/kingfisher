@@ -15,10 +15,6 @@ use serde_json::Value as JsonValue;
 use sha1::Sha1;
 use sha2::{Digest, Sha256};
 
-#[derive(Debug, thiserror::Error)]
-#[error("required validator feature is disabled")]
-struct MissingValidatorFeature;
-
 const MAX_RESPONSE_BODY: usize = 1 << 20;
 
 #[derive(Debug)]
@@ -208,13 +204,6 @@ pub async fn validate(
 
     match evaluator.eval(&validation.expression).await {
         Ok(value) => classify(value, evaluator.last_status),
-        Err(error) if error.is::<MissingValidatorFeature>() => BetterleaksValidationOutcome {
-            reason: Some(super::ValidationReason::FeatureDisabled),
-            valid: false,
-            status: StatusCode::PRECONDITION_REQUIRED,
-            body: "Required validator feature is disabled".to_string(),
-            outcome: ValidationOutcome::Skipped,
-        },
         Err(error) => BetterleaksValidationOutcome {
             reason: Some(super::ValidationReason::RequestFailed),
             valid: false,
@@ -594,7 +583,9 @@ impl Evaluator<'_> {
         let mut response = response;
         let mut body = Vec::new();
         while let Some(chunk) = response.chunk().await? {
-            if body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY {
+            if !super::limits::NetworkLimits::current().unlimited_response
+                && body.len().saturating_add(chunk.len()) > MAX_RESPONSE_BODY
+            {
                 bail!("Betterleaks validation response exceeded size limit");
             }
             body.extend_from_slice(&chunk);
@@ -621,17 +612,6 @@ impl Evaluator<'_> {
         ])))
     }
 
-    #[cfg(not(feature = "validation-aws"))]
-    async fn aws_validate(&mut self, _args: &[Value]) -> Result<Value> {
-        Err(MissingValidatorFeature.into())
-    }
-
-    #[cfg(not(feature = "validation-gcp"))]
-    async fn gcp_validate(&mut self, _args: &[Value]) -> Result<Value> {
-        Err(MissingValidatorFeature.into())
-    }
-
-    #[cfg(feature = "validation-aws")]
     async fn aws_validate(&mut self, args: &[Value]) -> Result<Value> {
         let access_key = args.first().map(Value::as_string).unwrap_or_default();
         let secret_key = args.get(1).map(Value::as_string).unwrap_or_default();
@@ -655,7 +635,6 @@ impl Evaluator<'_> {
         Ok(Value::Object(response))
     }
 
-    #[cfg(feature = "validation-gcp")]
     async fn gcp_validate(&mut self, args: &[Value]) -> Result<Value> {
         let credential_json = args.first().map(Value::as_string).unwrap_or_default();
         let parsed: JsonValue =
@@ -1041,7 +1020,7 @@ mod tests {
     use super::*;
     use axum::{Router, response::Redirect, routing::get};
     use kingfisher_rules::{Validation, get_betterleaks_rules};
-    #[cfg(feature = "validation-aws")]
+
     use liquid_core::Value as LiquidValue;
     use std::collections::BTreeSet;
 
@@ -1210,7 +1189,6 @@ mod tests {
         assert!(outcome.body.contains("request was redirected"), "{}", outcome.body);
     }
 
-    #[cfg(feature = "validation-aws")]
     #[tokio::test]
     async fn aws_validation_preserves_the_shared_canary_skip_list() {
         let rule = get_betterleaks_rules(None)

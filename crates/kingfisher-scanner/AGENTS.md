@@ -21,7 +21,7 @@ Guidance for working in `crates/kingfisher-scanner/`.
 ## Feature Flags
 
 - Validation code must remain feature-gated.
-- When adding validation support, wire it through the narrowest appropriate feature (`validation-http`, `validation-aws`, `validation-gcp`, `validation-database`, etc.).
+- Validation is all-or-nothing: gate every validator and revoker behind `validation`. Provider-specific feature names are compatibility aliases only.
 - Do not make optional validation dependencies unconditional unless there is a strong compatibility reason.
 
 ## API Stability

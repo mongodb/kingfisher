@@ -8,7 +8,6 @@ use kingfisher_rules::{HttpValidation, ResponseMatcher, Rule, Validation};
 use liquid::Object;
 use liquid_core::ValueView;
 use reqwest::{Client, StatusCode, Url};
-#[cfg(any(feature = "validation-azure", feature = "validation-coinbase"))]
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -22,7 +21,7 @@ pub struct ValidationEngine<'a> {
     client: &'a Client,
     credential_uri_client: &'a Client,
     parser: &'a liquid::Parser,
-    timeout: Duration,
+    timeout: Option<Duration>,
     retries: u32,
     max_response_bytes: usize,
     allow_internal_ips: bool,
@@ -34,7 +33,7 @@ impl<'a> ValidationEngine<'a> {
             client,
             credential_uri_client: client,
             parser,
-            timeout: Duration::from_secs(10),
+            timeout: Some(Duration::from_secs(10)),
             retries: 0,
             max_response_bytes: 1 << 20,
             allow_internal_ips: false,
@@ -46,9 +45,9 @@ impl<'a> ValidationEngine<'a> {
         self.credential_uri_client = client;
         self
     }
-    /// Bound the entire execution, including retries and multi-step validators.
+    /// Bound the entire execution, including retries and multi-step validators. Zero disables timeouts.
     pub fn timeout(mut self, timeout: Duration) -> Self {
-        self.timeout = timeout;
+        self.timeout = (!timeout.is_zero()).then_some(timeout);
         self
     }
     /// Number of HTTP retries after the initial attempt. Defaults to zero.
@@ -56,7 +55,7 @@ impl<'a> ValidationEngine<'a> {
         self.retries = retries;
         self
     }
-    /// Maximum YAML HTTP response bytes retained and matched. Defaults to 1 MiB.
+    /// Maximum YAML HTTP response bytes retained and matched. Defaults to 1 MiB; zero is unlimited.
     pub fn max_response_bytes(mut self, limit: usize) -> Self {
         self.max_response_bytes = limit;
         self
@@ -85,9 +84,6 @@ impl<'a> ValidationEngine<'a> {
             return ValidationResult::outcome(ValidationOutcome::NotAttempted)
                 .reason(ValidationReason::NonAuthoritative);
         }
-        if self.timeout.is_zero() || self.max_response_bytes == 0 {
-            return ValidationResult::unavailable(ValidationReason::InvalidConfiguration);
-        }
         if matches!(validation, Validation::Assumed) {
             return ValidationResult::outcome(ValidationOutcome::Assumed);
         }
@@ -103,9 +99,20 @@ impl<'a> ValidationEngine<'a> {
         {
             return ValidationResult::skipped(ValidationReason::MissingDependency);
         }
-        tokio::time::timeout(self.timeout, self.dispatch(rule, validation, globals))
+        super::limits::NetworkLimits {
+            no_timeouts: self.timeout.is_none(),
+            unlimited_response: self.max_response_bytes == 0,
+            unlimited_results: false,
+        }
+        .scope(async {
+            super::limits::timeout(
+                self.timeout.unwrap_or_default(),
+                Box::pin(self.dispatch(rule, validation, globals)),
+            )
             .await
             .unwrap_or_else(|_| ValidationResult::unavailable(ValidationReason::DeadlineExceeded))
+        })
+        .await
     }
     async fn dispatch(
         &self,
@@ -139,12 +146,10 @@ impl<'a> ValidationEngine<'a> {
                 }
                 check
             }
-            #[cfg(feature = "validation-ethereum")]
             Validation::Ethereum(kind) => {
                 let result = super::ethereum::validate(*kind, &text(globals, "TOKEN"));
                 ValidationResult::outcome(result.outcome).body(result.body)
             }
-            #[cfg(feature = "validation-raw")]
             Validation::Raw(kind) => {
                 if super::raw_required_vars(kind).iter().any(|name| text(globals, name).is_empty())
                 {
@@ -166,7 +171,6 @@ impl<'a> ValidationEngine<'a> {
                     Err(_) => ValidationResult::unavailable(ValidationReason::RequestFailed),
                 }
             }
-            #[cfg(feature = "validation-aws")]
             Validation::AWS => {
                 let akid = first_text(globals, &["AKID", "ACCESS_KEY_ID"]);
                 let (secret, session) = aws_credential_shape(rule, globals);
@@ -178,7 +182,6 @@ impl<'a> ValidationEngine<'a> {
                         .await;
                 ValidationResult::outcome(result.outcome).status(result.status).body(result.message)
             }
-            #[cfg(feature = "validation-azure")]
             Validation::AzureStorage => {
                 let account = first_text(globals, &["AZURENAME", "STORAGE_ACCOUNT"]);
                 if account.is_empty() && !text(globals, "TOKEN").trim_start().starts_with('{') {
@@ -201,7 +204,6 @@ impl<'a> ValidationEngine<'a> {
                     (valid, super::validation_body::as_str(&body).to_string())
                 }))
             }
-            #[cfg(feature = "validation-coinbase")]
             Validation::Coinbase => {
                 let name = first_text(globals, &["CRED_NAME", "KEY_ID"]);
                 if name.is_empty() {
@@ -226,7 +228,6 @@ impl<'a> ValidationEngine<'a> {
                     (valid, super::validation_body::as_str(&body).to_string())
                 }))
             }
-            #[cfg(feature = "validation-gcp")]
             Validation::GCP => match super::gcp::GcpValidator::global() {
                 Ok(validator) => positive_only(
                     validator
@@ -236,7 +237,6 @@ impl<'a> ValidationEngine<'a> {
                 ),
                 Err(_) => ValidationResult::unavailable(ValidationReason::RequestFailed),
             },
-            #[cfg(feature = "validation-jwt")]
             Validation::JWT => positive_only(
                 super::jwt::validate_jwt(
                     &text(globals, "TOKEN"),
@@ -245,15 +245,11 @@ impl<'a> ValidationEngine<'a> {
                 )
                 .await,
             ),
-            #[cfg(feature = "validation-database")]
             Validation::MongoDB | Validation::MySQL | Validation::Postgres | Validation::Jdbc => {
                 self.database(validation, &text(globals, "TOKEN")).await
             }
             Validation::CredentialUri => self.credential_uri(globals).await,
-            #[cfg(feature = "validation-grpc")]
             Validation::Grpc(config) => self.grpc(config, globals).await,
-            #[allow(unreachable_patterns)]
-            _ => ValidationResult::skipped(ValidationReason::FeatureDisabled),
         }
     }
 
@@ -314,7 +310,7 @@ impl<'a> ValidationEngine<'a> {
             &url,
             &request.headers,
             &request.body,
-            self.timeout,
+            self.timeout.unwrap_or_default(),
             self.parser,
             &globals,
         ) {
@@ -372,7 +368,9 @@ impl<'a> ValidationEngine<'a> {
         loop {
             match response.chunk().await {
                 Ok(Some(chunk)) => {
-                    if body.len().saturating_add(chunk.len()) > self.max_response_bytes {
+                    if self.max_response_bytes != 0
+                        && body.len().saturating_add(chunk.len()) > self.max_response_bytes
+                    {
                         return ValidationResult::unavailable(ValidationReason::ResponseTooLarge)
                             .status(status);
                     }
@@ -392,7 +390,6 @@ impl<'a> ValidationEngine<'a> {
         classify_status(valid, status).body(String::from_utf8_lossy(&body).into_owned())
     }
 
-    #[cfg(feature = "validation-database")]
     async fn database(&self, validation: &Validation, uri: &str) -> ValidationResult {
         let result = match validation {
             Validation::MongoDB => {
@@ -442,7 +439,7 @@ impl<'a> ValidationEngine<'a> {
                 match super::credential_uri::validate_http_credential_uri(
                     &uri,
                     self.credential_uri_client,
-                    self.timeout,
+                    self.timeout.unwrap_or_default(),
                     self.retries,
                     self.allow_internal_ips,
                 )
@@ -456,20 +453,13 @@ impl<'a> ValidationEngine<'a> {
                 ValidationResult::outcome(ValidationOutcome::NotAttempted)
                     .reason(ValidationReason::UnsupportedValidator)
             }
-            #[cfg(feature = "validation-database")]
             CredentialUriTarget::MongoDB(uri) => self.database(&Validation::MongoDB, &uri).await,
-            #[cfg(feature = "validation-database")]
             CredentialUriTarget::MySQL(uri) => self.database(&Validation::MySQL, &uri).await,
-            #[cfg(feature = "validation-database")]
             CredentialUriTarget::Postgres(uri) => self.database(&Validation::Postgres, &uri).await,
-            #[cfg(feature = "validation-database")]
             CredentialUriTarget::Jdbc(uri) => self.database(&Validation::Jdbc, &uri).await,
-            #[cfg(not(feature = "validation-database"))]
-            _ => ValidationResult::skipped(ValidationReason::FeatureDisabled),
         }
     }
 
-    #[cfg(feature = "validation-grpc")]
     async fn grpc(
         &self,
         config: &kingfisher_rules::GrpcValidation,
@@ -491,7 +481,7 @@ impl<'a> ValidationEngine<'a> {
             &request.body,
             self.parser,
             &globals,
-            self.timeout,
+            self.timeout.unwrap_or_default(),
         )
         .await
         {
@@ -546,13 +536,6 @@ fn classify_status(valid: bool, status: StatusCode) -> ValidationResult {
     }
 }
 
-#[cfg(any(
-    feature = "validation-azure",
-    feature = "validation-coinbase",
-    feature = "validation-gcp",
-    feature = "validation-jwt",
-    feature = "validation-database"
-))]
 fn positive_only(result: anyhow::Result<(bool, String)>) -> ValidationResult {
     match result {
         Ok((true, body)) => ValidationResult::outcome(ValidationOutcome::VerifiedActive).body(body),
@@ -591,7 +574,7 @@ fn resolution_failure(error: &(dyn std::error::Error + 'static)) -> ValidationRe
 fn first_text(globals: &Object, names: &[&str]) -> String {
     names.iter().map(|name| text(globals, name)).find(|value| !value.is_empty()).unwrap_or_default()
 }
-#[cfg(feature = "validation-aws")]
+
 fn aws_credential_shape(rule: &Rule, globals: &Object) -> (String, Option<String>) {
     let token = text(globals, "TOKEN");
     if is_aws_session_token_rule(rule) {
@@ -625,7 +608,7 @@ mod tests {
     }
 }
 
-#[cfg(all(test, feature = "validation-aws"))]
+#[cfg(test)]
 mod aws_tests {
     use super::*;
     use liquid::model::Value;

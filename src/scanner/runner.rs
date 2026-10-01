@@ -127,6 +127,45 @@ pub async fn run_async_scan(
     update_status: &crate::update::UpdateStatus,
     auto_cleanup_clones: bool,
 ) -> Result<()> {
+    kingfisher_scanner::validation::limits::NetworkLimits {
+        no_timeouts: args.content_filtering_args.no_limits,
+        unlimited_response: args.content_filtering_args.no_limits,
+        unlimited_results: args.content_filtering_args.no_limits,
+    }
+    .scope(run_async_scan_inner(
+        global_args,
+        args,
+        datastore,
+        rules_db,
+        update_status,
+        auto_cleanup_clones,
+    ))
+    .await
+}
+
+async fn run_async_scan_inner(
+    global_args: &global::GlobalArgs,
+    args: &scan::ScanArgs,
+    datastore: Arc<Mutex<findings_store::FindingsStore>>,
+    rules_db: &RulesDatabase,
+    update_status: &crate::update::UpdateStatus,
+    auto_cleanup_clones: bool,
+) -> Result<()> {
+    let scan_started_at = chrono::Local::now();
+    let mut timed_args = args.clone();
+    timed_args.input_specifier_args.history_time_range =
+        args.input_specifier_args.history_time_range.or_else(|| {
+            args.input_specifier_args.since_hours.map(|hours| {
+                let end = scan_started_at.timestamp();
+                (end - i64::from(hours) * 3600, end)
+            })
+        });
+    if timed_args.content_filtering_args.no_limits {
+        timed_args.input_specifier_args.repo_clone_limit = None;
+        timed_args.validation_timeout = 0;
+        timed_args.max_validation_response_length = 0;
+    }
+    let args = &timed_args;
     let _validation_cache_lifetime =
         if args.no_validate { None } else { Some(ValidationCacheLifetime::begin().await) };
 
@@ -140,7 +179,6 @@ pub async fn run_async_scan(
     register_safe_list_patterns(args)?;
 
     let start_time = Instant::now();
-    let scan_started_at = chrono::Local::now();
     let audit_log = args.audit_log.as_deref().map(crate::util::expand_tilde);
     let scan_audit: SharedScanAudit = Arc::new(Mutex::new(ScanAuditCollector::new(
         scan_started_at.to_rfc3339(),
@@ -159,16 +197,10 @@ pub async fn run_async_scan(
         0,
         crate::scan_progress::PhaseKind::Other,
     );
-    let repo_enumeration = enumerate_all_repos(args, global_args).await?;
-    let repo_urls = repo_enumeration.repo_urls;
-    {
-        let mut audit = scan_audit.lock().unwrap();
-        for repo_url in &repo_urls {
-            audit.discover_remote(repo_url.as_str());
-        }
-    }
+    // Event selectors must be ready before scanning, since they determine refs.
+    let github_event_targets = enumerate_github_event_targets(args, global_args).await?;
     let github_event_targets_by_root =
-        Arc::new(github_event_targets_by_root(&repo_enumeration.github_event_targets, &datastore));
+        Arc::new(github_event_targets_by_root(&github_event_targets, &datastore));
     let huggingface_buckets = enumerate_huggingface_buckets(args, global_args).await?;
 
     let mut input_roots = args.input_specifier_args.path_inputs.clone();
@@ -185,8 +217,9 @@ pub async fn run_async_scan(
     // ── Phase 3: Spawn cloning + artifact-fetching concurrently ─────────
     // The scan loop will start consuming from `repo_rx` as soon as we get
     // there in Phase 5; both producers feed it as their work completes.
+    let (url_tx, url_rx) = crossbeam_channel::bounded(scan_channel_cap);
     let repo_clone_handle = start_repo_cloning(
-        &repo_urls,
+        url_rx,
         args,
         global_args,
         &datastore,
@@ -194,10 +227,13 @@ pub async fn run_async_scan(
         repo_tx.clone(),
         progress_enabled,
     );
-    let artifact_handle = start_artifact_fetching(
+    let artifact_handle = start_discovery_and_artifact_fetching(
         args,
         global_args,
-        &repo_urls,
+        github_event_targets,
+        url_tx,
+        &scan_audit,
+        !huggingface_buckets.is_empty(),
         &datastore,
         repo_tx.clone(),
         progress_enabled,
@@ -246,21 +282,6 @@ pub async fn run_async_scan(
     )
     .await?;
 
-    let has_remote_objects = args.input_specifier_args.s3_bucket.is_some()
-        || args.input_specifier_args.gcs_bucket.is_some()
-        || !huggingface_buckets.is_empty();
-    // The artifact task pushes into `repo_rx` asynchronously, so we can't
-    // observe its work via `input_roots`. Defer to the type to know which
-    // flags schedule artifact fetching so this stays in sync as new sources
-    // are added.
-    if input_roots.is_empty()
-        && repo_urls.is_empty()
-        && !has_remote_objects
-        && !args.input_specifier_args.has_artifact_sources()
-    {
-        return Err(NoScanInputsError.into());
-    }
-
     let baseline_path = Arc::new(
         args.baseline_file
             .clone()
@@ -301,9 +322,14 @@ pub async fn run_async_scan(
             }
         }
     }
-    let git_repo_count =
-        repo_roots.iter().filter(|root| is_git_repository_root(root)).count() + repo_urls.len();
-    let use_parallel_repo_scan = git_repo_count > 10;
+    let git_repo_count = repo_roots.iter().filter(|root| is_git_repository_root(root)).count()
+        + args.input_specifier_args.git_url.len();
+    // Discovery is still running, so the final repository count is not known.
+    let input = &args.input_specifier_args;
+    let use_parallel_repo_scan = git_repo_count > 10
+        || input.has_repository_discovery()
+        || input.include_contributors
+        || github_event_targets_by_root.len() > 10;
 
     let validation_rate_limiter =
         ValidationRateLimiter::from_cli(args.validation_rps, &args.validation_rps_rule)?
@@ -311,13 +337,15 @@ pub async fn run_async_scan(
     let provider_endpoints = Arc::new(ProviderEndpointOverrides::from_global_args(global_args)?);
 
     let validation_deps: Option<ValidationDeps> = if !args.no_validate {
-        info!("Starting secret validation phase...");
         Some(Arc::new((
             register_all(liquid::ParserBuilder::with_stdlib()).build()?,
-            crate::validation::ValidationClients::new(
+            crate::validation::ValidationClients::with_timeout(
                 global_args.tls_mode,
                 global_args.allow_internal_ips,
-            )?,
+                Duration::from_secs(args.validation_timeout),
+                args.content_filtering_args.no_limits,
+            )?
+            .with_unlimited_results(args.content_filtering_args.no_limits),
             Arc::new(SkipMap::new()),
             validation_rate_limiter.clone(),
             Arc::clone(&provider_endpoints),
@@ -392,6 +420,29 @@ pub async fn run_async_scan(
 
 /// Validates that all provided input paths exist.
 fn validate_inputs(args: &scan::ScanArgs) -> Result<()> {
+    let input = &args.input_specifier_args;
+    if let Some(hours) = input.since_hours {
+        if hours == 0 {
+            bail!("--since-hours must be at least 1");
+        }
+        if input.git_history != crate::cli::commands::github::GitHistoryMode::Full {
+            bail!("--since-hours requires --git-history full");
+        }
+        if input.since_commit.is_some()
+            || input.staged
+            || input.branch_root
+            || input.branch_root_commit.is_some()
+        {
+            bail!(
+                "--since-hours cannot be combined with --since-commit, --staged, or branch-root options"
+            );
+        }
+        if !input.github_event_user.is_empty() {
+            bail!(
+                "--since-hours cannot be combined with GitHub public-event scanning; use --event-lookback-hours for event timestamps"
+            );
+        }
+    }
     for path in &args.input_specifier_args.path_inputs {
         if !path.exists() {
             error!("Specified input path does not exist: {}", path.display());
@@ -413,53 +464,59 @@ fn register_safe_list_patterns(args: &scan::ScanArgs) -> Result<()> {
     Ok(())
 }
 
-struct RepoEnumeration {
-    repo_urls: Vec<crate::git_url::GitUrl>,
-    github_event_targets: Vec<github::GitHubEventScanTarget>,
-}
-
 /// Enumerates repositories from all configured platforms, adds wiki URLs, and deduplicates.
 async fn enumerate_all_repos(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
-) -> Result<RepoEnumeration> {
-    let mut repo_urls = enumerate_github_repos(args, global_args).await?;
-    let github_event_targets = enumerate_github_event_targets(args, global_args).await?;
-
-    repo_urls.extend(github_event_targets.iter().map(|target| target.repo_url.clone()));
-    repo_urls.extend(enumerate_gitlab_repos(args, global_args).await?);
-    repo_urls.extend(enumerate_gitea_repos(args, global_args).await?);
-    repo_urls.extend(enumerate_huggingface_repos(args, global_args).await?);
-    repo_urls.extend(enumerate_bitbucket_repos(args, global_args).await?);
-    repo_urls.extend(enumerate_azure_repos(args, global_args).await?);
-
-    // Add wiki repositories for each URL when requested
-    if args.input_specifier_args.repo_artifacts {
-        let mut wiki_urls = Vec::new();
-        for url in &repo_urls {
-            if let Some(w) = github::wiki_url(url) {
-                wiki_urls.push(w);
-            }
-            if let Some(w) = gitlab::wiki_url(url) {
-                wiki_urls.push(w);
-            }
-            if let Some(w) = gitea::wiki_url(url) {
-                wiki_urls.push(w);
-            }
-            if let Some(w) = bitbucket::wiki_url(url) {
-                wiki_urls.push(w);
-            }
-            if let Some(w) = azure::wiki_url(url) {
-                wiki_urls.push(w);
+    github_event_targets: &[github::GitHubEventScanTarget],
+    on_repo: &mut (dyn FnMut(crate::git_url::GitUrl) -> Result<()> + Send),
+) -> Result<Vec<crate::git_url::GitUrl>> {
+    let mut repo_urls = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut emit = |url: crate::git_url::GitUrl| -> Result<()> {
+        let mut urls = vec![url.clone()];
+        if args.input_specifier_args.repo_artifacts {
+            urls.extend(
+                [
+                    github::wiki_url(&url),
+                    gitlab::wiki_url(&url),
+                    gitea::wiki_url(&url),
+                    bitbucket::wiki_url(&url),
+                    azure::wiki_url(&url),
+                ]
+                .into_iter()
+                .flatten(),
+            );
+        }
+        for url in urls {
+            if seen.insert(url.clone()) {
+                on_repo(url.clone())?;
+                repo_urls.push(url);
             }
         }
-        repo_urls.extend(wiki_urls);
+        Ok(())
+    };
+    for url in &args.input_specifier_args.git_url {
+        emit(url.clone())?;
     }
-
-    repo_urls.sort();
-    repo_urls.dedup();
-
-    Ok(RepoEnumeration { repo_urls, github_event_targets })
+    for target in github_event_targets {
+        emit(target.repo_url.clone())?;
+    }
+    enumerate_github_repos(args, global_args, &mut emit).await?;
+    enumerate_gitlab_repos(args, global_args, &mut emit).await?;
+    for url in enumerate_gitea_repos(args, global_args).await? {
+        emit(url)?;
+    }
+    for url in enumerate_huggingface_repos(args, global_args).await? {
+        emit(url)?;
+    }
+    for url in enumerate_bitbucket_repos(args, global_args).await? {
+        emit(url)?;
+    }
+    for url in enumerate_azure_repos(args, global_args).await? {
+        emit(url)?;
+    }
+    Ok(repo_urls)
 }
 
 fn github_event_targets_by_root(
@@ -509,7 +566,7 @@ fn git_refs_for_github_event_selector(
 
 /// Spawns a background thread to clone/update git repositories, streaming results via a channel.
 fn start_repo_cloning(
-    repo_urls: &[crate::git_url::GitUrl],
+    repo_urls: crossbeam_channel::Receiver<crate::git_url::GitUrl>,
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
     datastore: &Arc<Mutex<FindingsStore>>,
@@ -517,38 +574,52 @@ fn start_repo_cloning(
     repo_tx: crossbeam_channel::Sender<PathBuf>,
     _progress_enabled: bool,
 ) -> Option<std::thread::JoinHandle<()>> {
-    if repo_urls.is_empty() {
-        drop(repo_tx);
-        return None;
-    }
-
     let clone_args = args.clone();
     let clone_globals = global_args.clone();
-    let clone_repo_urls = repo_urls.to_vec();
     let clone_datastore = Arc::clone(datastore);
     let clone_audit = Arc::clone(audit);
     let clone_repo_tx = repo_tx.clone();
 
+    // Tokio task-local policies do not cross native thread boundaries.
+    let network_limits = kingfisher_scanner::validation::limits::NetworkLimits::current();
     let handle = std::thread::spawn(move || {
-        if let Err(e) = clone_or_update_git_repos_streaming(
-            &clone_args,
-            &clone_globals,
-            &clone_repo_urls,
-            &clone_datastore,
-            &clone_audit,
-            |path| {
-                let _ = clone_repo_tx.send(path);
-            },
-        ) {
-            error!("Failed to fetch one or more Git repositories: {e}");
-        }
+        network_limits.sync_scope(|| {
+            if let Err(e) = clone_or_update_git_repos_streaming(
+                &clone_args,
+                &clone_globals,
+                repo_urls,
+                &clone_datastore,
+                &clone_audit,
+                |path| clone_repo_tx.send(path).is_ok(),
+            ) {
+                error!("Failed to fetch one or more Git repositories: {e}");
+            }
+        })
     });
     drop(repo_tx);
     Some(handle)
 }
 
+struct ArtifactFetchHandle {
+    thread: std::thread::JoinHandle<Result<()>>,
+    cancel: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl ArtifactFetchHandle {
+    fn cancel(&mut self) {
+        if let Some(cancel) = self.cancel.take() {
+            let _ = cancel.send(());
+        }
+    }
+
+    fn join(self) -> std::thread::Result<Result<()>> {
+        self.thread.join()
+    }
+}
+
 /// Spawns a dedicated thread (with its own multi-threaded tokio runtime)
-/// that streams artifact directories into `out_tx` as each fetch completes.
+/// that discovers repositories into `url_tx`, then streams artifact directories
+/// into `out_tx` as each fetch completes.
 /// Decoupling from the parent runtime ensures the artifact task can make
 /// progress regardless of how the parent runtime is configured (including
 /// `#[tokio::test]`'s default single-threaded runtime), while the scan
@@ -559,19 +630,25 @@ fn start_repo_cloning(
 /// Panics if the OS refuses to spawn the worker thread (e.g. resource
 /// exhaustion). This is treated as unrecoverable on the main scan path
 /// because every other concurrent component would face the same limit.
-fn start_artifact_fetching(
+#[allow(clippy::too_many_arguments)]
+fn start_discovery_and_artifact_fetching(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
-    repo_urls: &[crate::git_url::GitUrl],
+    github_event_targets: Vec<github::GitHubEventScanTarget>,
+    url_tx: crossbeam_channel::Sender<crate::git_url::GitUrl>,
+    audit: &SharedScanAudit,
+    has_huggingface_buckets: bool,
     datastore: &Arc<Mutex<FindingsStore>>,
     out_tx: crossbeam_channel::Sender<PathBuf>,
     progress_enabled: bool,
-) -> std::thread::JoinHandle<Result<()>> {
+) -> ArtifactFetchHandle {
     let args = args.clone();
     let global_args = global_args.clone();
-    let repo_urls = repo_urls.to_vec();
+    let audit = Arc::clone(audit);
     let datastore = Arc::clone(datastore);
-    std::thread::Builder::new()
+    let network_limits = kingfisher_scanner::validation::limits::NetworkLimits::current();
+    let (cancel_tx, cancel_rx) = tokio::sync::oneshot::channel();
+    let thread = std::thread::Builder::new()
         .name("artifact-fetcher".to_string())
         .spawn(move || -> Result<()> {
             let workers = args.num_jobs.max(1);
@@ -581,16 +658,48 @@ fn start_artifact_fetching(
                 .enable_all()
                 .build()
                 .context("Failed to build artifact-fetcher runtime")?;
-            rt.block_on(fetch_all_artifacts(
-                &args,
-                &global_args,
-                &repo_urls,
-                &datastore,
-                out_tx,
-                progress_enabled,
-            ))
+            let work = network_limits.scope(async {
+                let repo_urls =
+                    enumerate_all_repos(&args, &global_args, &github_event_targets, &mut |url| {
+                        audit.lock().unwrap().discover_remote(url.as_str());
+                        url_tx.send(url).context("Repository cloning stopped during discovery")
+                    })
+                    .await?;
+                drop(url_tx);
+                let input = &args.input_specifier_args;
+                if repo_urls.is_empty()
+                    && input.path_inputs.is_empty()
+                    && input.s3_bucket.is_none()
+                    && input.gcs_bucket.is_none()
+                    && !has_huggingface_buckets
+                    && !input.has_artifact_sources()
+                {
+                    return Err(NoScanInputsError.into());
+                }
+                fetch_all_artifacts(
+                    &args,
+                    &global_args,
+                    &repo_urls,
+                    &datastore,
+                    out_tx,
+                    progress_enabled,
+                )
+                .await
+            });
+            let result = rt.block_on(async {
+                tokio::select! {
+                    biased;
+                    result = work => result,
+                    _ = cancel_rx => Err(anyhow::anyhow!("repository discovery or artifact fetching canceled")),
+                }
+            });
+            if result.is_err() {
+                audit.lock().unwrap().run_failed();
+            }
+            result
         })
-        .expect("failed to spawn artifact-fetcher thread")
+        .expect("failed to spawn artifact-fetcher thread");
+    ArtifactFetchHandle { thread, cancel: Some(cancel_tx) }
 }
 
 /// Fetches artifacts from various platforms (issues, wikis, Jira, Confluence,
@@ -680,6 +789,7 @@ async fn fetch_all_artifacts(
                 &args.input_specifier_args.docker_image,
                 &clone_root,
                 progress_enabled,
+                args.content_filtering_args.resource_limits(),
             )
             .await?,
         );
@@ -687,6 +797,7 @@ async fn fetch_all_artifacts(
             &args.input_specifier_args.docker_archive,
             &clone_root,
             progress_enabled,
+            args.content_filtering_args.resource_limits(),
         )?);
         for (dir, source) in docker_dirs {
             {
@@ -904,7 +1015,7 @@ async fn run_sequential_scan(
     discovered_repos: Arc<Vec<PathBuf>>,
     repo_rx: crossbeam_channel::Receiver<PathBuf>,
     repo_clone_handle: Option<std::thread::JoinHandle<()>>,
-    artifact_handle: std::thread::JoinHandle<Result<()>>,
+    mut artifact_handle: ArtifactFetchHandle,
     github_event_targets_by_root: Arc<HashMap<PathBuf, Vec<github::GitHubEventScanTarget>>>,
     shared_profiler: &Arc<ConcurrentRuleProfiler>,
     enable_profiling: bool,
@@ -1100,6 +1211,7 @@ async fn run_sequential_scan(
     // so the threads can exit and `join()` doesn't deadlock.
     drop(repo_rx);
 
+    artifact_handle.cancel();
     if let Some(handle) = repo_clone_handle {
         let _ = handle.join();
     }
@@ -1111,7 +1223,7 @@ async fn run_sequential_scan(
     // Surface the scan error first; if scanning succeeded, surface any
     // artifact-fetching error.
     scan_result?;
-    artifact_result.map_err(|e| e.context("artifact fetching failed"))?;
+    artifact_result.map_err(|e| e.context("repository discovery or artifact fetching failed"))?;
 
     datastore
         .lock()
@@ -1181,7 +1293,7 @@ async fn run_parallel_scan(
     discovered_repos: Arc<Vec<PathBuf>>,
     repo_rx: crossbeam_channel::Receiver<PathBuf>,
     repo_clone_handle: Option<std::thread::JoinHandle<()>>,
-    artifact_handle: std::thread::JoinHandle<Result<()>>,
+    mut artifact_handle: ArtifactFetchHandle,
     github_event_targets_by_root: Arc<HashMap<PathBuf, Vec<github::GitHubEventScanTarget>>>,
     shared_profiler: &Arc<ConcurrentRuleProfiler>,
     enable_profiling: bool,
@@ -1317,7 +1429,9 @@ async fn run_parallel_scan(
         .num_threads(repo_concurrency)
         .build()
         .context("Failed to build repo scan thread pool")?
-        .scope(|scope| {
+        // Keep the channel-reading coordinator off the scan workers. Discovery
+        // can wait for scan backpressure, including with --jobs 1.
+        .in_place_scope(|scope| {
             // Distinguishes user-supplied `repo_roots` (must be preserved)
             // from clones / artifact dirs that arrive via `repo_rx` and
             // are eligible for post-scan cleanup.
@@ -1605,13 +1719,14 @@ async fn run_parallel_scan(
     // periodic output doesn't interleave with the scan-completion summary.
     tracker.shutdown();
 
+    artifact_handle.cancel();
     if let Some(handle) = repo_clone_handle {
         let _ = handle.join();
     }
     // Surface artifact-fetching errors after all per-repo scans have finished.
     match artifact_handle.join() {
         Ok(Ok(())) => {}
-        Ok(Err(e)) => return Err(e.context("artifact fetching failed")),
+        Ok(Err(e)) => return Err(e.context("repository discovery or artifact fetching failed")),
         Err(_) => return Err(anyhow::anyhow!("artifact fetch thread panicked")),
     }
 
@@ -2111,6 +2226,72 @@ mod tests {
     use crate::github::GitHubEventScanSelector;
 
     #[tokio::test]
+    async fn canceled_artifact_fetch_does_not_wait_for_provider_response() {
+        use super::*;
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
+
+        let server = MockServer::start().await;
+        let received = Arc::new(tokio::sync::Notify::new());
+        let observed = received.clone();
+        Mock::given(path("/rest/api/content/search"))
+            .respond_with(move |_: &wiremock::Request| {
+                observed.notify_one();
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!({"results": [], "_links": {}}))
+                    .set_delay(Duration::from_secs(30))
+            })
+            .mount(&server)
+            .await;
+        let command = crate::cli::CommandLineArgs::try_parse_from([
+            "kingfisher",
+            "scan",
+            "confluence",
+            "--url",
+            &server.uri(),
+            "--cql",
+            "label = secret",
+        ])
+        .unwrap();
+        let crate::cli::global::Command::Scan(scan) = command.command else { panic!() };
+        let scan::ScanOperation::Scan(args) = scan.into_operation().unwrap() else { panic!() };
+        let dir = tempfile::tempdir().unwrap();
+        let datastore = Arc::new(Mutex::new(FindingsStore::new(dir.path().to_path_buf())));
+        let audit = Arc::new(Mutex::new(
+            ScanAuditCollector::new("2026-01-01T00:00:00Z".into(), None).unwrap(),
+        ));
+        let (url_tx, _url_rx) = crossbeam_channel::bounded(1);
+        let (out_tx, _out_rx) = crossbeam_channel::bounded(1);
+        temp_env::async_with_vars(
+            [("KF_CONFLUENCE_TOKEN", Some("test-token")), ("KF_CONFLUENCE_USER", None)],
+            async {
+                let mut handle = start_discovery_and_artifact_fetching(
+                    &args,
+                    &command.global_args,
+                    vec![],
+                    url_tx,
+                    &audit,
+                    false,
+                    &datastore,
+                    out_tx,
+                    false,
+                );
+                tokio::time::timeout(Duration::from_secs(5), received.notified()).await.unwrap();
+                handle.cancel();
+                let result = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    tokio::task::spawn_blocking(move || handle.join()),
+                )
+                .await
+                .expect("cancellation must interrupt provider I/O")
+                .unwrap()
+                .unwrap();
+                assert!(result.unwrap_err().to_string().contains("canceled"));
+            },
+        )
+        .await;
+    }
+
+    #[tokio::test]
     async fn validation_cache_lifetimes_serialize_overlapping_scans() {
         let first = super::ValidationCacheLifetime::begin().await;
         let second = super::ValidationCacheLifetime::begin();
@@ -2306,6 +2487,31 @@ mod tests {
 
         assert!(branch.is_none());
         assert!(branch_root_commit.is_none());
+    }
+
+    #[test]
+    fn recent_history_window_falls_back_for_direct_callers_and_preserves_fixed_windows() {
+        let command = crate::cli::CommandLineArgs::try_parse_from([
+            "kingfisher",
+            "scan",
+            ".",
+            "--since-hours",
+            "2",
+        ])
+        .unwrap();
+        let crate::cli::global::Command::Scan(command) = command.command else { panic!() };
+        let crate::cli::commands::scan::ScanOperation::Scan(mut args) =
+            command.into_operation().unwrap()
+        else {
+            panic!()
+        };
+        let input = &mut args.input_specifier_args;
+        let before = chrono::Utc::now().timestamp();
+        let (start, end) = input.resolved_history_time_range().unwrap();
+        assert_eq!(end - start, 7200);
+        assert!(end >= before && end <= chrono::Utc::now().timestamp());
+        input.history_time_range = Some((100, 7300));
+        assert_eq!(input.resolved_history_time_range(), Some((100, 7300)));
     }
 
     #[test]

@@ -1,0 +1,22 @@
+[package]
+name = "kingfisher-python"
+version = "1.0.1"
+description = "Native Python bindings for Kingfisher"
+repository.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+name = "_native"
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+pyo3 = { version = "0.28", features = ["abi3-py310", "generate-import-lib"] }
+kingfisher-core = { path = "../kingfisher-core" }
+kingfisher-rules = { path = "../kingfisher-rules" }
+kingfisher-scanner = { path = "../kingfisher-scanner", features = ["validation"] }
+anyhow.workspace = true
+serde_json.workspace = true
+tokio = { version = "1.53", features = ["rt-multi-thread", "time", "net"] }

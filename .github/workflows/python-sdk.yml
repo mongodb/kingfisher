@@ -1,0 +1,167 @@
+name: Python SDK
+
+on:
+  pull_request:
+  push:
+    tags: ['python-v*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: python-sdk-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  CARGO_INCREMENTAL: '0'
+  CARGO_PROFILE_DEV_DEBUG: '0'
+  CARGO_PROFILE_RELEASE_LTO: 'false'
+  # A panic in an extension must unwind to PyO3, not abort the Python process.
+  CARGO_PROFILE_RELEASE_PANIC: unwind
+  CARGO_HTTP_MULTIPLEXING: 'false'
+  MACOSX_DEPLOYMENT_TARGET: '11.0'
+
+jobs:
+  wheels:
+    name: Wheel (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-gnu
+            msystem: MINGW64
+            packages: mingw-w64-x86_64-toolchain mingw-w64-x86_64-cmake mingw-w64-x86_64-pkgconf mingw-w64-x86_64-zlib
+            cc: gcc
+            cxx: g++
+          - os: windows-11-arm
+            target: aarch64-pc-windows-gnullvm
+            msystem: CLANGARM64
+            packages: mingw-w64-clang-aarch64-toolchain mingw-w64-clang-aarch64-cmake mingw-w64-clang-aarch64-pkgconf mingw-w64-clang-aarch64-zlib
+            cc: clang
+            cxx: clang++
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.96.0'
+          targets: ${{ matrix.target }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+        with:
+          enable-cache: true
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          key: python-${{ matrix.target }}
+      - name: Verify SDK release tag
+        if: startsWith(github.ref, 'refs/tags/python-v')
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          uv run --no-project python -c 'import os,tomllib; from pathlib import Path; version=tomllib.loads(Path("crates/kingfisher-python/Cargo.toml").read_text())["package"]["version"]; assert os.environ["RELEASE_TAG"] == "python-v" + version'
+      - name: Build portable Linux wheel
+        if: runner.os == 'Linux'
+        uses: PyO3/maturin-action@e83996d129638aa358a18fbd1dfb82f0b0fb5d3b
+        with:
+          target: ${{ matrix.target }}
+          manylinux: '2_28'
+          maturin-version: 'v1.15.0'
+          rust-toolchain: '1.96.0'
+          args: --profile python-release --locked --out dist-python --find-interpreter
+          # Published Vectorscan archives require glibc 2.35. Build from the
+          # vendored source inside manylinux to keep the advertised 2.28 floor.
+          before-script-linux: yum install -y boost-devel ragel perl-core
+          docker-options: -e VECTORSCAN_BUILD_FROM_SOURCE=1 -e CARGO_PROFILE_RELEASE_PANIC=unwind -e CARGO_PROFILE_RELEASE_LTO=false
+      - name: Build macOS wheel
+        if: runner.os == 'macOS'
+        run: uv run --no-project --with maturin==1.15.0 maturin build --profile python-release --locked --target ${{ matrix.target }} --out dist-python
+      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
+        if: runner.os == 'Windows'
+        with:
+          msystem: ${{ matrix.msystem }}
+          path-type: inherit
+          update: true
+          install: ${{ matrix.packages }} make git
+      - name: Build Windows wheel
+        if: runner.os == 'Windows'
+        shell: msys2 {0}
+        env:
+          CC: ${{ matrix.cc }}
+          CXX: ${{ matrix.cxx }}
+          CMAKE_GENERATOR: MinGW Makefiles
+          SDK_TARGET: ${{ matrix.target }}
+        run: |
+          uv run --no-project --with maturin==1.15.0 maturin build --profile python-release --locked --target "$SDK_TARGET" --out unrepaired
+          # Bundle GNU/LLVM runtime DLLs; do not rely on MSYS2 at installation.
+          uv run --no-project --with delvewheel delvewheel repair --add-path "$(cygpath -w "$MINGW_PREFIX/bin")" --wheel-dir dist-python unrepaired/*.whl
+      - name: Install wheel into an isolated environment
+        shell: bash
+        run: |
+          uv venv .venv-wheel --python 3.13
+          uv pip install --python .venv-wheel dist-python/*.whl pytest
+      - name: Test installed wheel (no editable source imports)
+        shell: bash
+        run: uv run --no-project --python .venv-wheel python -m pytest python/tests -q
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: python-${{ matrix.target }}
+          path: dist-python/*.whl
+          if-no-files-found: error
+
+  source-and-msrv:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: '1.96.0'
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - name: Format and shared revocation tests
+        run: |
+          cargo fmt --all --check
+          cargo test --locked -p kingfisher-scanner --features validation validation::revocation
+      - name: Build source distribution
+        run: uv run --no-project --with maturin==1.15.0 maturin sdist --out dist-python
+      - name: Build and test from sdist with oldest Python
+        shell: bash
+        run: |
+          uv venv .venv-sdist --python 3.10
+          uv pip install --python .venv-sdist dist-python/*.tar.gz pytest
+          mkdir sdist-check
+          tar -xzf dist-python/*.tar.gz -C sdist-check --strip-components=1
+          uv run --no-project --python .venv-sdist python -m pytest sdist-check/python/tests -q
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: python-sdist
+          path: dist-python/*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/python-v') && github.event_name == 'push'
+    needs: [wheels, source-and-msrv]
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi-sdk
+      url: https://pypi.org/p/kingfisher-secret-scanner
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: python-*
+          path: dist
+          merge-multiple: true
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33

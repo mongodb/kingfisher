@@ -1,3 +1,4 @@
+use kingfisher_scanner::validation::limits::ResourceTimeout;
 use std::{
     collections::{HashMap, HashSet},
     env,
@@ -333,7 +334,7 @@ pub async fn enumerate_repo_urls(
     let auth = AzureAuth::from_environment();
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(ignore_certs)
-        .timeout(Duration::from_secs(30))
+        .resource_timeout(Duration::from_secs(30))
         .build()?;
 
     let exclude_matcher = build_exclude_matcher(&repo_specifiers.exclude_repos);

@@ -609,6 +609,8 @@ pub(crate) fn create_minimal_scan_args() -> crate::cli::commands::scan::ScanArgs
             repo_artifacts: false,
             scan_nested_repos: true,
             since_commit: None,
+            since_hours: None,
+            history_time_range: None,
             branch: None,
             branch_root: false,
             branch_root_commit: None,
@@ -616,6 +618,7 @@ pub(crate) fn create_minimal_scan_args() -> crate::cli::commands::scan::ScanArgs
         },
         extra_ignore_comments: Vec::new(),
         content_filtering_args: ContentFilteringArgs {
+            no_limits: false,
             max_file_size_mb: 25.0,
             no_extract_archives: true,
             extraction_depth: 2,

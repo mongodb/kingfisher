@@ -40,13 +40,14 @@ pub struct GitHubReposListArgs {
 
 /// Options for selecting GitHub repos
 #[derive(Args, Debug, Clone)]
+#[command(group(clap::ArgGroup::new("github_users").args(["user"]).multiple(true)))]
 pub struct GitHubRepoSpecifiers {
     /// Repositories belonging to these users
     #[arg(long, alias = "github-user")]
     pub user: Vec<String>,
 
     /// Include public gists belonging to the specified users
-    #[arg(long, requires = "user")]
+    #[arg(long, requires = "github_users")]
     pub include_gists: bool,
 
     /// Repositories belonging to these organizations

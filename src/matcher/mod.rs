@@ -124,6 +124,7 @@ struct UserData {
 /// If doing multi-threaded scanning, use a separate `Matcher` for each thread.
 #[derive(Clone)]
 pub struct Matcher<'a> {
+    resources: crate::limits::ResourceLimits,
     /// Thread-local pool that hands out a &mut BlockScanner
     scanner_pool: std::sync::Arc<crate::scanner_pool::ScannerPool>,
 
@@ -176,6 +177,11 @@ impl<'a> Matcher<'a> {
 }
 
 impl<'a> Matcher<'a> {
+    pub fn with_resource_limits(mut self, resources: crate::limits::ResourceLimits) -> Self {
+        self.resources = resources;
+        self
+    }
+
     /// Create a new `Matcher` from the given `RulesDatabase`.
     ///
     /// If `global_stats` is provided, it will be updated with the local stats
@@ -199,6 +205,7 @@ impl<'a> Matcher<'a> {
             if enable_profiling { Some(Arc::new(ConcurrentRuleProfiler::new())) } else { None }
         });
         Ok(Matcher {
+            resources: crate::limits::ResourceLimits::default(),
             scanner_pool,
             rules_db,
             local_stats: MatcherStats::default(),
@@ -452,7 +459,7 @@ impl<'a> Matcher<'a> {
         // Opportunistically look for standalone Base64 blobs. If neither
         // the raw scan nor this check yields anything, we can return early
         // before doing any heavier work.
-        let mut b64_items = if no_base64 || blob.len() > BASE64_SCAN_LIMIT {
+        let mut b64_items = if no_base64 || self.resources.exceeds(blob.len(), BASE64_SCAN_LIMIT) {
             Vec::new()
         } else {
             get_b64_strings(blob.bytes())
@@ -530,7 +537,7 @@ impl<'a> Matcher<'a> {
                     match_rule_indices
                         .extend(std::iter::repeat_n(rule_id_usize, matches.len() - before_len));
                 }
-                if depth + 1 < MAX_B64_DEPTH {
+                if !self.resources.reached(depth + 1, MAX_B64_DEPTH) {
                     for nested in get_b64_strings(item.decoded.as_slice()) {
                         b64_stack.push((
                             DecodedData {
@@ -553,7 +560,7 @@ impl<'a> Matcher<'a> {
             &mut matches,
             &match_rule_indices,
         );
-        associate_betterleaks_components(blob.bytes(), &mut matches);
+        associate_betterleaks_components(blob.bytes(), &mut matches, self.resources);
         suppress_credential_uri_fallbacks(&mut matches);
         deduplicate_imported_catalog_matches(&mut matches);
 
@@ -763,7 +770,11 @@ fn component_is_within(
     true
 }
 
-fn associate_betterleaks_components<'a>(bytes: &[u8], matches: &mut Vec<BlobMatch<'a>>) {
+fn associate_betterleaks_components<'a>(
+    bytes: &[u8],
+    matches: &mut Vec<BlobMatch<'a>>,
+    resources: crate::limits::ResourceLimits,
+) {
     if !matches.iter().any(|finding| !finding.rule.syntax().depends_on_rule.is_empty()) {
         return;
     }
@@ -886,13 +897,12 @@ fn associate_betterleaks_components<'a>(bytes: &[u8], matches: &mut Vec<BlobMatc
                     let mut ranked: Vec<_> =
                         ranked.into_iter().map(|(value, rank)| (rank, value)).collect();
                     ranked.sort();
+                    if !resources.unlimited {
+                        ranked.truncate(crate::validation::candidates::MAX_COMBINATIONS);
+                    }
                     candidates[primary_index].insert(
                         variable.clone(),
-                        ranked
-                            .into_iter()
-                            .take(crate::validation::candidates::MAX_COMBINATIONS)
-                            .map(|(_, value)| value)
-                            .collect(),
+                        ranked.into_iter().map(|(_, value)| value).collect(),
                     );
                 }
                 ambiguous[primary_index].insert(variable, values.len());

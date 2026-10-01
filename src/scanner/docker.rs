@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use tracing::debug;
 use walkdir::WalkDir;
 
-use crate::decompress::decompress_file_with_single_stream_cap;
+use crate::decompress::decompress_file_with_single_stream_cap_and_limits;
 
 /// Docker/OCI image layers are often large tar streams. Keep this high enough
 /// to avoid silently dropping scan coverage for normal base OS layers while
@@ -316,7 +316,11 @@ fn remove_tar_wrapped_intermediate(path: &Path, out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn extract_layer_archive(path: &Path, out_dir: &Path) -> Result<()> {
+fn extract_layer_archive(
+    path: &Path,
+    out_dir: &Path,
+    resources: crate::limits::ResourceLimits,
+) -> Result<()> {
     let aliased_path;
     let layer_path = if path.extension().is_some() {
         path
@@ -328,10 +332,11 @@ fn extract_layer_archive(path: &Path, out_dir: &Path) -> Result<()> {
         &aliased_path
     };
 
-    let result = decompress_file_with_single_stream_cap(
+    let result = decompress_file_with_single_stream_cap_and_limits(
         layer_path,
         Some(out_dir),
         MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES,
+        resources,
     );
     let cleanup_result = if layer_path != path && layer_path.exists() {
         std::fs::remove_file(layer_path)
@@ -353,12 +358,14 @@ fn extract_saved_archive_layers(
     archive_path: &Path,
     out_dir: &Path,
     pb: &ProgressBar,
+    resources: crate::limits::ResourceLimits,
 ) -> Result<usize> {
     pb.set_message("extracting layers");
-    decompress_file_with_single_stream_cap(
+    decompress_file_with_single_stream_cap_and_limits(
         archive_path,
         Some(out_dir),
         MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES,
+        resources,
     )?;
     remove_tar_wrapped_intermediate(archive_path, out_dir)?;
 
@@ -366,7 +373,7 @@ fn extract_saved_archive_layers(
 
     pb.set_length(layer_paths.len() as u64);
     for p in &layer_paths {
-        extract_layer_archive(p, out_dir)?;
+        extract_layer_archive(p, out_dir, resources)?;
         pb.inc(1);
     }
 
@@ -425,11 +432,14 @@ fn registry_auth(reference: &Reference) -> RegistryAuth {
     }
 }
 
-pub struct Docker;
+pub struct Docker {
+    resources: crate::limits::ResourceLimits,
+}
 
 impl Docker {
+    #[cfg(test)]
     pub fn new() -> Self {
-        Docker
+        Docker { resources: crate::limits::ResourceLimits::default() }
     }
 
     fn try_save_local_image(&self, image: &str, out_dir: &Path, use_progress: bool) -> Result<()> {
@@ -457,7 +467,7 @@ impl Docker {
             return Err(anyhow!("failed to save local image"));
         }
 
-        extract_saved_archive_layers(&tar_path, out_dir, &pb)?;
+        extract_saved_archive_layers(&tar_path, out_dir, &pb, self.resources)?;
 
         pb.finish_with_message(format!("saved {image}"));
         Ok(())
@@ -473,7 +483,7 @@ impl Docker {
         pb.set_message(format!("extracting {}", archive_path.display()));
 
         std::fs::create_dir_all(out_dir)?;
-        let layer_count = extract_saved_archive_layers(archive_path, out_dir, &pb)?;
+        let layer_count = extract_saved_archive_layers(archive_path, out_dir, &pb, self.resources)?;
         if layer_count == 0 {
             pb.finish_with_message("no docker layers found");
             return Err(anyhow!(
@@ -530,10 +540,11 @@ impl Docker {
             let tmp_path = out_dir.join(file_name);
             let mut tmp = std::fs::File::create(&tmp_path)?;
             tmp.write_all(&layer.data)?;
-            decompress_file_with_single_stream_cap(
+            decompress_file_with_single_stream_cap_and_limits(
                 &tmp_path,
                 Some(out_dir),
                 MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES,
+                self.resources,
             )?;
             std::fs::remove_file(&tmp_path)?;
             pb.inc(1);
@@ -547,8 +558,9 @@ pub async fn save_docker_images(
     images: &[String],
     clone_root: &Path,
     use_progress: bool,
+    resources: crate::limits::ResourceLimits,
 ) -> Result<Vec<(PathBuf, String)>> {
-    let docker = Docker::new();
+    let docker = Docker { resources };
     let mut dirs = Vec::new();
 
     for image in images {
@@ -568,8 +580,9 @@ pub fn save_docker_archives(
     archives: &[PathBuf],
     clone_root: &Path,
     use_progress: bool,
+    resources: crate::limits::ResourceLimits,
 ) -> Result<Vec<(PathBuf, String)>> {
-    let docker = Docker::new();
+    let docker = Docker { resources };
     let mut dirs = Vec::new();
 
     for archive in archives {

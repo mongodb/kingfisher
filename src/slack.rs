@@ -105,7 +105,9 @@ pub async fn search_messages(
     max_results: usize,
     ignore_certs: bool,
 ) -> Result<Vec<SlackMessage>> {
-    if max_results == 0 {
+    if !kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results
+        && max_results == 0
+    {
         return Ok(Vec::new());
     }
 
@@ -137,7 +139,9 @@ pub async fn search_messages(
         };
         for m in msgs.matches {
             messages.push(m);
-            if messages.len() >= max_results {
+            if !kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results
+                && messages.len() >= max_results
+            {
                 return Ok(messages);
             }
         }
@@ -156,7 +160,9 @@ pub async fn search_files(
     max_results: usize,
     ignore_certs: bool,
 ) -> Result<Vec<SlackFile>> {
-    if max_results == 0 {
+    if !kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results
+        && max_results == 0
+    {
         return Ok(Vec::new());
     }
 
@@ -188,7 +194,9 @@ pub async fn search_files(
         };
         for file in file_results.matches {
             files.push(file);
-            if files.len() >= max_results {
+            if !kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results
+                && files.len() >= max_results
+            {
                 return Ok(files);
             }
         }

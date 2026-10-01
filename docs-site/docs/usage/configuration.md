@@ -164,6 +164,7 @@ checked-in config files.
 scan:
   confidence: medium            # low | medium | high           (--confidence)
   min_entropy: 3.5              # float                          (--min-entropy)
+  no_limits: false             # disable scan resource budgets  (--no-limits)
   no_validate: false            # bool                           (--no-validate)
   only_valid: false             # bool                           (--only-valid)
   validation_filter: actionable # all | active | actionable      (--validation-filter)
@@ -187,7 +188,7 @@ rules:
   cache_dir: ./.kingfisher-cache # optional path                 (--rule-cache-dir, KF_RULE_CACHE_DIR)
 
 validation:
-  timeout: 10                   # seconds, 1..=60                (--validation-timeout)
+  timeout: 10                   # seconds, 0 = unlimited                (--validation-timeout)
   retries: 1                    # int, 0..=5                     (--validation-retries)
   rps: 5.0                      # float                          (--validation-rps)
   rps_per_rule:                 # map, additive                  (--validation-rps-rule)
@@ -207,7 +208,7 @@ filters:
   max_file_size_mb: 256.0       # float                          (--max-file-size)
   no_binary: false              # bool                           (--no-binary)
   no_extract_archives: false    # bool                           (--no-extract-archives)
-  extraction_depth: 2           # int, 1..=25                    (--extraction-depth)
+  extraction_depth: 2           # int, 0 = unlimited                    (--extraction-depth)
   no_inline_ignore: false       # bool                           (--no-ignore)
   no_ignore_if_contains: false  # bool                           (--no-ignore-if-contains)
   extra_ignore_comments: []     # list, additive                 (--ignore-comment)

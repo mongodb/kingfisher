@@ -123,52 +123,23 @@ fn provider_hosts(args: &scan::ScanArgs, global_args: &global::GlobalArgs) -> Pr
     hosts
 }
 
-fn apply_repo_clone_limit(
-    repo_urls: &mut Vec<GitUrl>,
-    limit: Option<usize>,
-    predicate: impl Fn(&GitUrl) -> bool,
-) {
-    let Some(limit) = limit else {
-        return;
-    };
-    let mut limited = Vec::new();
-    let mut remaining = Vec::new();
-    for url in repo_urls.drain(..) {
-        if predicate(&url) {
-            limited.push(url);
-        } else {
-            remaining.push(url);
-        }
-    }
-    limited.sort();
-    limited.dedup();
-    if limited.len() > limit {
-        limited.truncate(limit);
-    }
-    limited.extend(remaining);
-    limited.sort();
-    limited.dedup();
-    *repo_urls = limited;
-}
-
 /// Run independent jobs on a bounded Rayon pool and stream successful results
 /// back to the calling thread.
 ///
 /// The receiver must stay outside a Rayon scope: Rayon executes a scope's
 /// coordinator closure on a pool worker, so a coordinator that blocks on the
 /// result channel deadlocks when the pool has exactly one worker.
-fn stream_parallel_results<I, O, Items, Worker, Consumer>(
+fn stream_parallel_results<I, O, Worker, Consumer>(
     num_threads: usize,
-    items: Items,
+    items: crossbeam_channel::Receiver<I>,
     worker: Worker,
     mut consume: Consumer,
 ) -> Result<()>
 where
     I: Send + 'static,
     O: Send + 'static,
-    Items: IntoIterator<Item = I>,
     Worker: Fn(I) -> Option<O> + Send + Sync + 'static,
-    Consumer: FnMut(O),
+    Consumer: FnMut(O) -> bool,
 {
     let num_threads = num_threads.max(1);
     let pool = ThreadPoolBuilder::new()
@@ -176,22 +147,54 @@ where
         .build()
         .context("Failed to build git clone thread pool")?;
     let (result_tx, result_rx) = crossbeam_channel::bounded(std::cmp::max(2, num_threads * 2));
+    let (cancel_tx, cancel_rx) = crossbeam_channel::bounded::<()>(0);
     let worker = Arc::new(worker);
 
-    for item in items {
-        let result_tx = result_tx.clone();
-        let worker = Arc::clone(&worker);
-        pool.spawn(move || {
-            if let Some(result) = worker(item) {
-                let _ = result_tx.send(result);
+    std::thread::scope(|scope| {
+        scope.spawn(move || {
+            let (work_tx, work_rx) = crossbeam_channel::bounded(num_threads * 2);
+            for _ in 0..num_threads {
+                let work_rx = work_rx.clone();
+                let result_tx = result_tx.clone();
+                let cancel_rx = cancel_rx.clone();
+                let worker = Arc::clone(&worker);
+                pool.spawn(move || loop {
+                    let item = crossbeam_channel::select_biased! {
+                        recv(cancel_rx) -> _ => break,
+                        recv(work_rx) -> item => match item { Ok(item) => item, Err(_) => break },
+                    };
+                    if let Some(result) = worker(item) {
+                        crossbeam_channel::select_biased! {
+                            recv(cancel_rx) -> _ => break,
+                            send(result_tx, result) -> sent => if sent.is_err() { break; },
+                        }
+                    }
+                });
+            }
+            drop(work_rx);
+            drop(result_tx);
+            loop {
+                // Cancellation must interrupt waiting for discovery as well as
+                // waiting for a clone slot; the producer may still be in HTTP I/O.
+                let item = crossbeam_channel::select_biased! {
+                    recv(cancel_rx) -> _ => break,
+                    recv(items) -> item => match item { Ok(item) => item, Err(_) => break },
+                };
+                crossbeam_channel::select_biased! {
+                    recv(cancel_rx) -> _ => break,
+                    send(work_tx, item) -> sent => if sent.is_err() { break; },
+                }
             }
         });
-    }
-    drop(result_tx);
-
-    for result in result_rx {
-        consume(result);
-    }
+        for result in &result_rx {
+            if !consume(result) {
+                break;
+            }
+        }
+        // Disconnect broadcasts cancellation to every waiter.
+        drop(cancel_tx);
+        drop(result_rx);
+    });
 
     Ok(())
 }
@@ -236,23 +239,14 @@ fn branch_clone_destination(root: &std::path::Path, repo_url: &GitUrl, branch: &
 pub fn clone_or_update_git_repos_streaming<F>(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
-    repo_urls: &[GitUrl],
+    repo_urls: crossbeam_channel::Receiver<GitUrl>,
     datastore: &Arc<Mutex<findings_store::FindingsStore>>,
     audit: &SharedScanAudit,
     mut on_repo_ready: F,
 ) -> Result<()>
 where
-    F: FnMut(PathBuf) + Send,
+    F: FnMut(PathBuf) -> bool + Send,
 {
-    if repo_urls.is_empty() {
-        return Ok(());
-    }
-
-    info!("{} Git URLs to fetch", repo_urls.len());
-    for repo_url in repo_urls {
-        debug!("Need to fetch {repo_url}")
-    }
-
     let branch = single_clone_branch(&args.input_specifier_args).map(str::to_owned);
     let clone_mode = if args.input_specifier_args.git_history == GitHistoryMode::None {
         CloneMode::Checkout
@@ -263,50 +257,59 @@ where
         }
     };
 
-    let progress = if global_args.use_progress() {
-        let style = ProgressStyle::with_template(
-            "{msg} {bar} {percent:>3}% {pos}/{len} [{elapsed_precise}]",
-        )
-        .expect("progress bar style template should compile");
-        let pb = ProgressBar::new(repo_urls.len() as u64)
-            .with_style(style)
-            .with_message("Fetching Git repos");
-        pb.enable_steady_tick(Duration::from_millis(500));
-        pb
-    } else {
-        ProgressBar::hidden()
-    };
+    // Discovery may produce no remote URLs (for example, a local-only scan).
+    // Create the shared indicator only when a worker actually starts fetching.
+    let progress = Arc::new(std::sync::OnceLock::<ProgressBar>::new());
+    let progress_enabled = global_args.use_progress();
 
+    let no_limits = args.content_filtering_args.no_limits;
+    let network_limits = kingfisher_scanner::validation::limits::NetworkLimits::current();
     let clone_concurrency = std::cmp::max(1, args.num_jobs);
     let ignore_certs = global_args.ignore_certs;
     let provider_hosts = provider_hosts(args, global_args);
-    let github_auth = if repo_urls.iter().any(|url| provider_hosts.is_github_url(url)) {
-        Some(Arc::new(
-            GitHubAuth::from_env(&args.input_specifier_args.github_api_url, ignore_certs)
-                .context("Failed to configure GitHub authentication")?,
-        ))
-    } else {
-        None
-    };
+    let github_auth =
+        Arc::new(std::sync::OnceLock::<std::result::Result<GitHubAuth, String>>::new());
+    let github_api_url = args.input_specifier_args.github_api_url.clone();
     let datastore = Arc::clone(datastore);
     let audit = Arc::clone(audit);
-    let worker_progress = progress.clone();
+    let worker_progress = Arc::clone(&progress);
 
     // The helper's bounded result channel prevents cloners from racing ahead
     // of the scanner and filling the clone directory with completed work.
-    stream_parallel_results(
+    let result = stream_parallel_results(
         clone_concurrency,
-        repo_urls.iter().cloned(),
+        repo_urls,
         move |repo_url| {
+            let worker_progress = worker_progress.get_or_init(|| {
+                if progress_enabled {
+                    let style =
+                        ProgressStyle::with_template("{spinner} {msg} {pos} [{elapsed_precise}]")
+                            .expect("progress bar style template should compile");
+                    let pb = ProgressBar::new_spinner()
+                        .with_style(style)
+                        .with_message("Fetching Git repos");
+                    pb.enable_steady_tick(Duration::from_millis(500));
+                    pb
+                } else {
+                    ProgressBar::hidden()
+                }
+            });
             audit.lock().unwrap().fetch_started(repo_url.as_str());
             let git_for_repo = || -> Result<Git> {
                 let github_token = if provider_hosts.is_github_url(&repo_url) {
                     let auth = github_auth
+                        .get_or_init(|| {
+                            network_limits
+                                .sync_scope(|| GitHubAuth::from_env(&github_api_url, ignore_certs))
+                                .map_err(|e| format!("{e:#}"))
+                        })
                         .as_ref()
-                        .expect("GitHub auth is configured when GitHub URLs are present");
+                        .map_err(|e| {
+                            anyhow::anyhow!("Failed to configure GitHub authentication: {e}")
+                        })?;
                     let clone_host = repo_clone_host(&repo_url);
                     if clone_host.as_deref().is_some_and(|host| auth.allows_clone_host(host)) {
-                        auth.token_blocking().with_context(|| {
+                        network_limits.sync_scope(|| auth.token_blocking()).with_context(|| {
                             format!("Failed to mint GitHub credentials for repository {repo_url}")
                         })?
                     } else {
@@ -319,7 +322,8 @@ where
                     ignore_certs,
                     &scoped_provider_hosts(&provider_hosts, &repo_url, github_token.is_some()),
                     github_token,
-                ))
+                )
+                .without_timeouts(no_limits))
             };
             let output_dir = {
                 let datastore = datastore.lock().unwrap();
@@ -414,9 +418,12 @@ where
             Some(output_dir)
         },
         &mut on_repo_ready,
-    )?;
+    );
 
-    progress.finish();
+    if let Some(progress) = progress.get() {
+        progress.finish_and_clear();
+    }
+    result?;
     Ok(())
 }
 
@@ -449,6 +456,30 @@ mod tests {
     use super::{
         ProviderHosts, clone_host, repo_clone_host, scoped_provider_hosts, stream_parallel_results,
     };
+
+    fn queued_items(items: impl IntoIterator<Item = usize>) -> crossbeam_channel::Receiver<usize> {
+        let (tx, rx) = crossbeam_channel::unbounded();
+        for item in items {
+            tx.send(item).unwrap();
+        }
+        rx
+    }
+
+    #[test]
+    fn streaming_pool_cancels_while_discovery_channel_is_still_open() {
+        let (input_tx, input_rx) = crossbeam_channel::bounded(1);
+        let (done_tx, done_rx) = mpsc::channel();
+        input_tx.send(42).unwrap();
+        let handle = thread::spawn(move || {
+            done_tx.send(stream_parallel_results(1, input_rx, Some, |_| false)).unwrap();
+        });
+        let result = done_rx.recv_timeout(Duration::from_secs(5));
+        // Unblock a broken implementation before asserting, so the test cannot
+        // leave a waiting feeder behind on failure.
+        drop(input_tx);
+        handle.join().unwrap();
+        result.expect("consumer cancellation must not wait for discovery").unwrap();
+    }
 
     #[test]
     fn branch_clone_scope_preserves_multi_ref_and_revision_scans() {
@@ -501,9 +532,12 @@ mod tests {
             let mut streamed = Vec::new();
             let result = stream_parallel_results(
                 1,
-                0..4,
+                queued_items(0..4),
                 |value| Some(value * 2),
-                |value| streamed.push(value),
+                |value| {
+                    streamed.push(value);
+                    true
+                },
             );
             done_tx.send((result, streamed)).expect("test receiver should remain open");
         });
@@ -515,6 +549,27 @@ mod tests {
         streamed.sort_unstable();
         assert_eq!(streamed, vec![0, 2, 4, 6]);
         handle.join().expect("streaming thread should not panic");
+    }
+
+    #[test]
+    fn streaming_pool_delivers_results_before_discovery_finishes() {
+        let (input_tx, input_rx) = crossbeam_channel::bounded(1);
+        let (output_tx, output_rx) = mpsc::channel();
+        let handle = thread::spawn(move || {
+            stream_parallel_results(1, input_rx, Some, |value| output_tx.send(value).is_ok())
+        });
+        input_tx.send(42).unwrap();
+        assert_eq!(output_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 42);
+        // Discovery remains open until after the first result is consumed.
+        input_tx.send(43).unwrap();
+        drop(input_tx);
+        assert_eq!(output_rx.recv_timeout(Duration::from_secs(5)).unwrap(), 43);
+        handle.join().unwrap().unwrap();
+    }
+
+    #[test]
+    fn streaming_pool_stops_when_consumer_disconnects() {
+        stream_parallel_results(1, queued_items(0..1000), Some, |_| false).unwrap();
     }
 
     #[test]
@@ -547,6 +602,7 @@ mod tests {
 pub async fn enumerate_github_repos(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
+    on_repo: &mut (dyn FnMut(GitUrl) -> Result<()> + Send),
 ) -> Result<Vec<GitUrl>> {
     let repo_specifiers = github::RepoSpecifiers {
         user: args.input_specifier_args.github_user.clone(),
@@ -556,7 +612,29 @@ pub async fn enumerate_github_repos(
         repo_filter: args.input_specifier_args.github_repo_type.into(),
         exclude_repos: args.input_specifier_args.github_exclude.clone(),
     };
-    let mut repo_urls = args.input_specifier_args.git_url.clone();
+    let mut repo_urls = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut emit = |repo_string: &str| -> Result<()> {
+        let repo_url = match GitUrl::from_str(repo_string) {
+            Ok(url) => url,
+            Err(e) => {
+                error!("Failed to parse repo URL from {repo_string}: {e}");
+                return Ok(());
+            }
+        };
+        if seen.contains(&repo_url)
+            || args
+                .input_specifier_args
+                .repo_clone_limit
+                .is_some_and(|limit| repo_urls.len() >= limit)
+        {
+            return Ok(());
+        }
+        seen.insert(repo_url.clone());
+        on_repo(repo_url.clone())?;
+        repo_urls.push(repo_url);
+        Ok(())
+    };
     if args.input_specifier_args.include_contributors {
         for repo_url in &args.input_specifier_args.git_url {
             if !repo_host_contains(repo_url, "github") {
@@ -575,14 +653,7 @@ pub async fn enumerate_github_repos(
             {
                 Ok(contributor_urls) => {
                     for repo_string in contributor_urls {
-                        match GitUrl::from_str(&repo_string) {
-                            Ok(repo_url) => repo_urls.push(repo_url),
-                            Err(e) => {
-                                error!(
-                                    "Failed to parse contributor repo URL from {repo_string}: {e}"
-                                );
-                            }
-                        }
+                        emit(&repo_string)?;
                     }
                 }
                 Err(err) => {
@@ -595,50 +666,23 @@ pub async fn enumerate_github_repos(
     }
     if !repo_specifiers.is_empty() {
         let mut progress = if global_args.use_progress() {
-            let style =
-                ProgressStyle::with_template("{spinner} {msg} {human_len} [{elapsed_precise}]")
-                    .expect("progress bar style template should compile");
-            let pb = ProgressBar::new_spinner()
-                .with_style(style)
-                .with_message("Enumerating GitHub repositories...");
+            let pb = ProgressBar::new_spinner().with_message("Enumerating GitHub repositories...");
             pb.enable_steady_tick(Duration::from_millis(500));
             pb
         } else {
             ProgressBar::hidden()
         };
-        let mut num_found: u64 = 0;
-        let api_url = args.input_specifier_args.github_api_url.clone();
-        let repo_strings = github::enumerate_repo_urls(
+        github::enumerate_repo_urls_streaming(
             &repo_specifiers,
-            api_url,
+            args.input_specifier_args.github_api_url.clone(),
             global_args.ignore_certs,
             Some(&mut progress),
+            &mut emit,
         )
         .await
         .context("Failed to enumerate GitHub repositories")?;
-        for repo_string in repo_strings {
-            match GitUrl::from_str(&repo_string) {
-                Ok(repo_url) => {
-                    repo_urls.push(repo_url);
-                    num_found += 1;
-                }
-                Err(e) => {
-                    progress.suspend(|| {
-                        error!("Failed to parse repo URL from {repo_string}: {e}");
-                    });
-                }
-            }
-        }
-        progress.finish_with_message(format!(
-            "Found {} repositories from GitHub",
-            HumanCount(num_found)
-        ));
+        progress.finish_and_clear();
     }
-    apply_repo_clone_limit(&mut repo_urls, args.input_specifier_args.repo_clone_limit, |url| {
-        repo_host_contains(url, "github")
-    });
-    repo_urls.sort();
-    repo_urls.dedup();
     Ok(repo_urls)
 }
 
@@ -685,6 +729,7 @@ pub async fn enumerate_github_event_targets(
 pub async fn enumerate_gitlab_repos(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
+    on_repo: &mut (dyn FnMut(GitUrl) -> Result<()> + Send),
 ) -> Result<Vec<GitUrl>> {
     let repo_specifiers = gitlab::RepoSpecifiers {
         user: args.input_specifier_args.gitlab_user.clone(),
@@ -696,7 +741,29 @@ pub async fn enumerate_gitlab_repos(
         exclude_repos: args.input_specifier_args.gitlab_exclude.clone(),
     };
 
-    let mut repo_urls = args.input_specifier_args.git_url.clone();
+    let mut repo_urls = Vec::new();
+    let mut seen = std::collections::BTreeSet::new();
+    let mut emit = |repo_string: &str| -> Result<()> {
+        let repo_url = match GitUrl::from_str(repo_string) {
+            Ok(url) => url,
+            Err(e) => {
+                error!("Failed to parse repo URL from {repo_string}: {e}");
+                return Ok(());
+            }
+        };
+        if seen.contains(&repo_url)
+            || args
+                .input_specifier_args
+                .repo_clone_limit
+                .is_some_and(|limit| repo_urls.len() >= limit)
+        {
+            return Ok(());
+        }
+        seen.insert(repo_url.clone());
+        on_repo(repo_url.clone())?;
+        repo_urls.push(repo_url);
+        Ok(())
+    };
     if args.input_specifier_args.include_contributors {
         for repo_url in &args.input_specifier_args.git_url {
             if !repo_host_contains(repo_url, "gitlab") {
@@ -714,14 +781,7 @@ pub async fn enumerate_gitlab_repos(
             {
                 Ok(contributor_urls) => {
                     for repo_string in contributor_urls {
-                        match GitUrl::from_str(&repo_string) {
-                            Ok(repo_url) => repo_urls.push(repo_url),
-                            Err(e) => {
-                                error!(
-                                    "Failed to parse contributor repo URL from {repo_string}: {e}"
-                                );
-                            }
-                        }
+                        emit(&repo_string)?;
                     }
                 }
                 Err(err) => {
@@ -734,53 +794,23 @@ pub async fn enumerate_gitlab_repos(
     }
     if !repo_specifiers.is_empty() {
         let progress = if global_args.use_progress() {
-            let style =
-                ProgressStyle::with_template("{spinner} {msg} {human_len} [{elapsed_precise}]")
-                    .expect("progress bar style template should compile");
-            let pb = ProgressBar::new_spinner()
-                .with_style(style)
-                .with_message("Enumerating GitLab repositories...");
+            let pb = ProgressBar::new_spinner().with_message("Enumerating GitLab repositories...");
             pb.enable_steady_tick(Duration::from_millis(500));
             pb
         } else {
             ProgressBar::hidden()
         };
-
-        let mut num_found: u64 = 0;
-        let api_url = args.input_specifier_args.gitlab_api_url.clone();
-        let gitlab_repos = gitlab::enumerate_repo_urls(
+        gitlab::enumerate_repo_urls_streaming(
             &repo_specifiers,
-            api_url,
+            args.input_specifier_args.gitlab_api_url.clone(),
             global_args.ignore_certs,
             Some(progress.clone()),
+            &mut emit,
         )
         .await
         .context("Failed to enumerate GitLab repositories")?;
-
-        for repo_string in gitlab_repos {
-            match GitUrl::from_str(&repo_string) {
-                Ok(repo_url) => {
-                    repo_urls.push(repo_url);
-                    num_found += 1;
-                }
-                Err(e) => {
-                    progress.suspend(|| {
-                        error!("Failed to parse repo URL from {repo_string}: {e}");
-                    });
-                }
-            }
-        }
-
-        progress.finish_with_message(format!(
-            "Found {} repositories from GitLab",
-            HumanCount(num_found)
-        ));
+        progress.finish_and_clear();
     }
-    apply_repo_clone_limit(&mut repo_urls, args.input_specifier_args.repo_clone_limit, |url| {
-        repo_host_contains(url, "gitlab")
-    });
-    repo_urls.sort();
-    repo_urls.dedup();
     Ok(repo_urls)
 }
 
@@ -1378,7 +1408,8 @@ pub async fn fetch_s3_objects(
         &args.extra_ignore_comments,
         args.no_inline_ignore,
         !args.no_ignore_if_contains,
-    )?;
+    )?
+    .with_resource_limits(args.content_filtering_args.resource_limits());
     let mut processor = BlobProcessor { matcher };
 
     let progress = if progress_enabled {
@@ -1461,7 +1492,8 @@ pub async fn fetch_huggingface_objects(
         &args.extra_ignore_comments,
         args.no_inline_ignore,
         !args.no_ignore_if_contains,
-    )?;
+    )?
+    .with_resource_limits(args.content_filtering_args.resource_limits());
     let mut processor = BlobProcessor { matcher };
 
     let progress = if progress_enabled {
@@ -1555,7 +1587,8 @@ pub async fn fetch_gcs_objects(
         &args.extra_ignore_comments,
         args.no_inline_ignore,
         !args.no_ignore_if_contains,
-    )?;
+    )?
+    .with_resource_limits(args.content_filtering_args.resource_limits());
     let mut processor = BlobProcessor { matcher };
 
     let progress = if progress_enabled {

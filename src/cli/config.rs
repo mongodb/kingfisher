@@ -101,6 +101,7 @@ pub struct ScanConfig {
     pub confidence: Option<ConfigConfidence>,
     pub min_entropy: Option<f32>,
     pub no_validate: Option<bool>,
+    pub no_limits: Option<bool>,
     pub only_valid: Option<bool>,
     pub validation_filter: Option<ValidationFilter>,
     pub redact: Option<bool>,
@@ -168,7 +169,7 @@ pub struct FiltersConfig {
     pub max_file_size_mb: Option<f64>,
     pub no_binary: Option<bool>,
     pub no_extract_archives: Option<bool>,
-    pub extraction_depth: Option<u8>,
+    pub extraction_depth: Option<usize>,
     pub no_inline_ignore: Option<bool>,
     pub no_ignore_if_contains: Option<bool>,
     /// Additive — merged with `--ignore-comment`.
@@ -431,20 +432,15 @@ fn validate(cfg: &KingfisherConfig) -> Result<()> {
     }
 
     // Range-bounded scalars (mirror the CLI value_parser ranges).
-    if let Some(t) = cfg.validation.timeout
-        && !(1..=60).contains(&t)
-    {
-        bail!("validation.timeout must be in 1..=60 (got {t})");
-    }
     if let Some(r) = cfg.validation.retries
         && r > 5
     {
         bail!("validation.retries must be in 0..=5 (got {r})");
     }
-    if let Some(d) = cfg.filters.extraction_depth
-        && !(1..=25).contains(&d)
+    if let Some(size) = cfg.filters.max_file_size_mb
+        && (!size.is_finite() || size < 0.0)
     {
-        bail!("filters.extraction_depth must be in 1..=25 (got {d})");
+        bail!("filters.max_file_size_mb must be finite and nonnegative");
     }
     if let Some(rps) = cfg.validation.rps
         && !(rps.is_finite() && rps > 0.0)
@@ -691,15 +687,22 @@ git:
     }
 
     #[test]
-    fn invalid_validation_timeout_is_rejected() {
-        let err = parse_str("validation:\n  timeout: 999\n").unwrap_err();
-        assert!(format!("{err:#}").contains("validation.timeout"));
+    fn unlimited_and_large_resource_values_are_accepted() {
+        for value in [0, 999] {
+            let cfg = parse_str(&format!(
+                "validation:\n  timeout: {value}\nfilters:\n  extraction_depth: {value}\n"
+            ))
+            .unwrap();
+            assert_eq!(cfg.validation.timeout, Some(value));
+            assert_eq!(cfg.filters.extraction_depth, Some(value as usize));
+        }
     }
 
     #[test]
-    fn invalid_extraction_depth_is_rejected() {
-        let err = parse_str("filters:\n  extraction_depth: 99\n").unwrap_err();
-        assert!(format!("{err:#}").contains("filters.extraction_depth"));
+    fn invalid_file_size_is_rejected() {
+        for value in ["-1", ".nan", ".inf"] {
+            assert!(parse_str(&format!("filters:\n  max_file_size_mb: {value}\n")).is_err());
+        }
     }
 
     #[test]

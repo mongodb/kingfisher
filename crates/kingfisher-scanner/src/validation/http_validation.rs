@@ -1,3 +1,4 @@
+use super::limits::ResourceTimeout;
 use std::{collections::BTreeMap, future::Future, net::IpAddr, str::FromStr, time::Duration};
 
 use anyhow::{Error, Result, anyhow};
@@ -139,7 +140,7 @@ pub fn build_request_builder(
         debug!("{}", err_msg);
         err_msg
     })?;
-    let mut request_builder = client.request(method, url.clone()).timeout(timeout);
+    let mut request_builder = client.request(method, url.clone()).resource_timeout(timeout);
     let custom_headers = process_headers(headers, parser, globals, url)
         .map_err(|e| format!("Error processing headers: {}", e))?;
 

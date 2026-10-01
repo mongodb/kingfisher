@@ -5,7 +5,7 @@ follows semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-scanner = "1.0.0"
+kingfisher-scanner = "1.1.0"
 anyhow = "1"
 ```
 
@@ -78,17 +78,16 @@ recursively borrow the same pool on the same thread; this returns an error.
 
 ## Optional validation
 
-No validator features are enabled by default. Enable only the protocols needed:
+Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "1.0.0", features = ["validation-http"] }
+kingfisher-scanner = { version = "1.1.0", features = ["validation"] }
 ```
 
-`validation` aliases `validation-http`. Other features are `validation-raw`,
-`validation-grpc`, `validation-ethereum`, `validation-aws`, `validation-azure`, `validation-coinbase`,
-`validation-gcp`, `validation-jwt`, and `validation-database`. `validation-all`
-enables all validators and their dependencies. Enabling a feature exposes validation
-functions; it does not make `Scanner` perform network requests automatically.
+`validation` enables every supported family and its dependencies. Legacy
+`validation-*` feature names remain compatibility aliases that enable the same
+complete feature. Enabling validation does not make `Scanner` perform network
+requests automatically.
 Validation clients and runtime lifecycles are managed by the embedding application.
 
 Vectorscan is a native dependency. Its build may download a platform archive;
@@ -99,12 +98,11 @@ for versioning, deployment, and migration details.
 
 ## Scan and validate
 
-Enable `validation-http` for the high-level API. Add provider features as needed,
-or `validation-all` for all supported families. Keep raw findings until validation
+Enable `validation` for the high-level API and all supported families. Keep raw findings until validation
 finishes and pass the full result set so hidden supporting credentials are available.
 
 ```rust,no_run
-# #[cfg(feature = "validation-http")]
+# #[cfg(feature = "validation")]
 # async fn example() -> anyhow::Result<()> {
 use std::{sync::Arc, time::Duration};
 use kingfisher_scanner::{get_builtin_rules, RulesDatabase, Scanner, Validator};
@@ -157,7 +155,7 @@ Scan a real file with the built-in catalog, or exercise explicitly enabled local
 
 ```sh
 cargo run --locked -p kingfisher-scanner --example scan_content -- path/to/config.env
-cargo run --locked -p kingfisher-scanner --example local_validation --features validation-ethereum
+cargo run --locked -p kingfisher-scanner --example local_validation --features validation
 ```
 
 These examples avoid network validation and print no unredacted secrets.
@@ -176,7 +174,7 @@ More complete integrations (all included in the crate source):
 cargo run -p kingfisher-scanner --example scan_files -- Cargo.toml README.md
 cargo run -p kingfisher-scanner --example scan_custom_rules -- crates/kingfisher-scanner/examples/fixtures/acme-http.yml README.md
 cargo run -p kingfisher-scanner --example scan_async
-cargo run -p kingfisher-scanner --example http_validation --features validation-http
+cargo run -p kingfisher-scanner --example http_validation --features validation
 ```
 
 The HTTP example uses a local mock with synthetic credentials. It checks active,
@@ -190,8 +188,46 @@ association, concurrency, and reporting. Advanced callers with resolved Liquid g
 can call the engine directly. Its `ValidationResult::response_body` may contain
 credentials and is omitted from Debug output. Prefer the high-level finding API for
 ordinary integrations. `.retries(n)` enables YAML HTTP retries within the total deadline.
+`.timeout(Duration::ZERO)` disables Kingfisher validation timeouts, and
+`.max_response_bytes(0)` disables YAML HTTP, Betterleaks, and gRPC response caps.
+Injected HTTP clients retain their own timeout settings; concurrency remains bounded.
 Disabled features, missing or ambiguous components, redacted inputs, and timeouts
 produce explicit outcomes and credential-free reasons.
 
 See the [integration recipes](https://github.com/mongodb/kingfisher/blob/main/docs/LIBRARY.md#integration-recipes-for-rust-projects-and-llm-agents)
 for copyable dependency manifests and instructions for adapting each example.
+
+## Credential revocation
+
+With `validation`, `Revoker` provides explicit rule-driven revocation without
+CLI dependencies:
+
+```rust,no_run
+use std::collections::BTreeMap;
+use kingfisher_scanner::{Revoker, Rule};
+
+async fn revoke_selected(rule: &Rule, secret: &str) -> anyhow::Result<bool> {
+    let result = Revoker::new()?.revoke(rule, secret, &BTreeMap::new()).await?;
+    Ok(result.revoked)
+}
+```
+
+Pass required companion variables and endpoint overrides in the map; `TOKEN` is
+reserved for the secret argument. HTTP and multi-step rules are supported, with
+AWS and GCP included in `validation`. The default client uses
+strict TLS and disables redirects. Calls have a 10-second total deadline and no
+automatic HTTP retries; AWS retains its provider-specific retry policy. Customize with `Revoker::with_client` and `Revoker::timeout`.
+Callers own authorization and endpoint policy; internal HTTP addresses are allowed.
+A timeout may occur after a credential was revoked. Scanning and validation never
+invoke revocation. Provider responses and errors may contain secrets.
+
+See [`examples/revoke.rs`](examples/revoke.rs) for a runnable example.
+
+## Shared revocation execution
+
+With `validation`, `validation::revocation` exposes the HTTP and multi-step
+revocation helpers used by the CLI and Python SDK. These low-level async helpers
+require an explicit rule configuration, resolved Liquid globals, client, parser,
+timeout and retry count. Callers own authorization, endpoint policy and the total
+deadline; use a client with redirects disabled and zero retries for destructive
+operations. AWS and GCP helpers are included in the same feature.

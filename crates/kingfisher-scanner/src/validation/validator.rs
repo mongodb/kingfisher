@@ -1,4 +1,5 @@
 //! Application-owned validation orchestration for scanner findings.
+use super::limits::ResourceTimeout;
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt,
@@ -67,7 +68,7 @@ impl ValidationResult {
 
 /// Reusable validator. Clones share the HTTP pool and concurrency limit.
 ///
-/// Available with `validation-http`. Call explicitly: scanning alone never
+/// Available with `validation`. Call explicitly: scanning alone never
 /// invokes this type. Requires a Tokio runtime with I/O and time enabled.
 /// No process-wide validation cache or configuration is installed.
 #[derive(Clone)]
@@ -127,6 +128,7 @@ impl ValidatorBuilder {
         self
     }
     /// Total deadline including permit acquisition, DNS, and multi-step requests.
+    /// Zero disables Kingfisher timeouts; injected clients retain their own settings.
     pub fn timeout(mut self, timeout: Duration) -> Self {
         self.timeout = timeout;
         self
@@ -137,7 +139,8 @@ impl ValidatorBuilder {
         self.retries = retries;
         self
     }
-    /// Maximum YAML HTTP response size. Other families retain their own limits.
+    /// Maximum YAML HTTP response size. Zero also disables Betterleaks and gRPC body caps.
+    /// Nonzero values leave the other families' default limits unchanged.
     pub fn max_response_bytes(mut self, limit: usize) -> Self {
         self.max_response_bytes = limit;
         self
@@ -160,13 +163,11 @@ impl ValidatorBuilder {
             self.concurrency > 0 && self.concurrency <= Semaphore::MAX_PERMITS,
             "validation concurrency must be between 1 and Semaphore::MAX_PERMITS"
         );
-        ensure!(!self.timeout.is_zero(), "validation timeout must be positive");
-        ensure!(self.max_response_bytes > 0, "validation response limit must be positive");
         let client = match self.client {
             Some(client) => client,
             None => Client::builder()
                 .redirect(reqwest::redirect::Policy::none())
-                .timeout(self.timeout)
+                .resource_timeout(self.timeout)
                 .build()?,
         };
         let parser =
@@ -242,7 +243,7 @@ impl Validator {
                 .validate(finding.rule(), &globals)
                 .await
         };
-        tokio::time::timeout(self.timeout, work)
+        super::limits::timeout(self.timeout, work)
             .await
             .unwrap_or_else(|_| ValidationResult::unavailable(ValidationReason::DeadlineExceeded))
     }

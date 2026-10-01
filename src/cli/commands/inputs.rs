@@ -416,10 +416,24 @@ pub struct InputSpecifierArgs {
     #[arg(long, default_value_t = true)]
     pub scan_nested_repos: bool,
 
-    /// Scan commits reachable from --branch (default HEAD), excluding this ref and
-    /// its ancestors. With --git-history none, scan only the net tree diff instead.
+    /// Scan commits reachable from all refs and HEAD (or only --branch when set),
+    /// excluding this ref and its ancestors. With --git-history none, scan only
+    /// the net tree diff to --branch (default HEAD) instead.
     #[arg(long = "since-commit", value_name = "GIT-REF", help_heading = "Git Options")]
     pub since_commit: Option<String>,
+
+    /// Scan Git commits from the last N whole hours, using committer timestamps.
+    /// Walk all refs and HEAD unless --branch is set. Requires --git-history full.
+    #[arg(
+        long, value_name = "HOURS", help_heading = "Git Options",
+        value_parser = clap::value_parser!(u32).range(1..),
+        conflicts_with_all = ["since_commit", "staged", "branch_root", "branch_root_commit"]
+    )]
+    pub since_hours: Option<u32>,
+
+    /// Inclusive Unix timestamp bounds, fixed once at scan start for every repository.
+    #[arg(skip)]
+    pub history_time_range: Option<(i64, i64)>,
 
     /// Scan only staged changes by synthesizing a temporary commit and diffing it
     /// against the current HEAD (or an empty tree when no commits exist).
@@ -470,14 +484,22 @@ pub struct InputSpecifierArgs {
 }
 
 impl InputSpecifierArgs {
-    /// Return true when any scan input has been specified.
-    pub fn has_any_input(&self) -> bool {
-        !self.path_inputs.is_empty()
-            || !self.git_url.is_empty()
-            || !self.github_user.is_empty()
+    /// Resolve a recent-history window for callers that bypass the scan runner.
+    /// The runner stores this once so all repositories share the same window.
+    pub fn resolved_history_time_range(&self) -> Option<(i64, i64)> {
+        self.history_time_range.or_else(|| {
+            self.since_hours.map(|hours| {
+                let end = chrono::Utc::now().timestamp();
+                (end - i64::from(hours) * 3600, end)
+            })
+        })
+    }
+
+    /// Whether provider selectors can discover repositories incrementally.
+    pub fn has_repository_discovery(&self) -> bool {
+        !self.github_user.is_empty()
             || !self.github_organization.is_empty()
             || self.all_github_organizations
-            || !self.github_event_user.is_empty()
             || !self.gitlab_user.is_empty()
             || !self.gitlab_group.is_empty()
             || self.all_gitlab_groups
@@ -489,7 +511,6 @@ impl InputSpecifierArgs {
             || !self.huggingface_model.is_empty()
             || !self.huggingface_dataset.is_empty()
             || !self.huggingface_space.is_empty()
-            || !self.huggingface_bucket.is_empty()
             || !self.bitbucket_user.is_empty()
             || !self.bitbucket_workspace.is_empty()
             || !self.bitbucket_project.is_empty()
@@ -497,6 +518,15 @@ impl InputSpecifierArgs {
             || !self.azure_organization.is_empty()
             || !self.azure_project.is_empty()
             || self.all_azure_projects
+    }
+
+    /// Return true when any scan input has been specified.
+    pub fn has_any_input(&self) -> bool {
+        !self.path_inputs.is_empty()
+            || !self.git_url.is_empty()
+            || self.has_repository_discovery()
+            || !self.github_event_user.is_empty()
+            || !self.huggingface_bucket.is_empty()
             || self.jira_url.is_some()
             || self.confluence_url.is_some()
             || self.slack_query.is_some()
@@ -713,15 +743,21 @@ fn warn_deprecated_provider(provider: &str, guidance: &str) {
 // -----------------------------------------------------------------------------
 #[derive(Args, Debug, Clone)]
 pub struct ContentFilteringArgs {
-    /// Ignore files larger than the given size in MB
+    /// Ignore files larger than the given size in MB (0 = unlimited)
     #[arg(
         global = true,
         long = "max-file-size",
         visible_alias = "max-filesize",      // also show in --help
         default_value_t = 256.0,
+        value_parser = parse_max_file_size,
         value_name = "MB"
     )]
     pub max_file_size_mb: f64,
+
+    /// Disable scan resource budgets and timeouts. Overrides individual limits.
+    /// Concurrency, rate limits, exclusions, and extraction path checks remain enabled.
+    #[arg(global = true, long, default_value_t = false)]
+    pub no_limits: bool,
 
     /// Skip any file or directory whose path matches this glob pattern. Multiple
     /// patterns may be provided by repeating the flag.
@@ -732,9 +768,9 @@ pub struct ContentFilteringArgs {
     #[arg(global = true, long = "no-extract-archives", default_value_t = false)]
     pub no_extract_archives: bool,
 
-    /// Maximum allowed depth for extracting nested archives
-    #[arg(global = true, long = "extraction-depth", default_value_t = 2, value_parser = clap::value_parser!(u8).range(1..=25))]
-    pub extraction_depth: u8,
+    /// Maximum allowed depth for extracting nested archives (0 = unlimited)
+    #[arg(global = true, long = "extraction-depth", default_value_t = 2, value_parser = clap::value_parser!(usize))]
+    pub extraction_depth: usize,
 
     /// If true, do NOT scan binary files
     #[arg(global = true, long = "no-binary", default_value_t = false)]
@@ -744,10 +780,32 @@ pub struct ContentFilteringArgs {
 impl ContentFilteringArgs {
     /// Convert the maximum file size in MB to bytes
     pub fn max_file_size_bytes(&self) -> Option<u64> {
-        if self.max_file_size_mb < 0.0 {
-            Some(256 * 1024 * 1024) // default 256 MB if negative
+        if self.no_limits || self.max_file_size_mb == 0.0 {
+            None
         } else {
             Some((self.max_file_size_mb * 1024.0 * 1024.0) as u64)
+        }
+    }
+}
+
+fn parse_max_file_size(value: &str) -> Result<f64, String> {
+    let value: f64 = value.parse().map_err(|_| "file size must be a number")?;
+    if !value.is_finite() || value < 0.0 {
+        return Err("file size must be finite and nonnegative (0 = unlimited)".into());
+    }
+    Ok(value)
+}
+
+impl ContentFilteringArgs {
+    pub fn resource_limits(&self) -> crate::limits::ResourceLimits {
+        crate::limits::ResourceLimits { unlimited: self.no_limits }
+    }
+
+    pub fn archive_depth(&self) -> Option<usize> {
+        if self.no_limits || self.extraction_depth == 0 {
+            None
+        } else {
+            Some(self.extraction_depth)
         }
     }
 }

@@ -66,18 +66,23 @@ fn set_own_process_group(_cmd: &mut Command) {}
 /// direct child to avoid leaving a zombie. Group members are reparented to
 /// init and reaped by it.
 #[cfg(unix)]
-fn kill_process_tree(child: &mut std::process::Child) {
+fn kill_process_tree(child: &mut std::process::Child, own_process_group: bool) {
     // Negative PID targets the whole group, whose pgid equals the child's pid
     // because we spawned it via `process_group(0)`.
     let pgid = child.id() as i32;
-    unsafe {
-        libc::kill(-pgid, libc::SIGKILL);
+    if own_process_group {
+        unsafe {
+            libc::kill(-pgid, libc::SIGKILL);
+        }
     }
+    // Also handles children that inherit our foreground process group, or a
+    // failed group signal. Never signal the foreground group itself.
+    let _ = child.kill();
     let _ = child.wait();
 }
 
 #[cfg(not(unix))]
-fn kill_process_tree(child: &mut std::process::Child) {
+fn kill_process_tree(child: &mut std::process::Child, _own_process_group: bool) {
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -236,6 +241,7 @@ fn summarize_output(output: &[u8]) -> Option<String> {
 /// requested.
 pub struct Git {
     credentials: Vec<String>,
+    no_timeouts: bool,
     ignore_certs: bool,
     github_token: Option<String>,
     bitbucket_access_token: Option<String>,
@@ -383,6 +389,7 @@ impl Git {
 
         Self {
             credentials,
+            no_timeouts: false,
             ignore_certs,
             github_token,
             bitbucket_access_token,
@@ -417,6 +424,11 @@ impl Git {
         cmd
     }
 
+    pub fn without_timeouts(mut self, disabled: bool) -> Self {
+        self.no_timeouts = disabled;
+        self
+    }
+
     /// Run the constructed `git` command with a hard wall-clock timeout.
     ///
     /// Spawns the child, drains stdout/stderr in dedicated reader threads
@@ -433,7 +445,12 @@ impl Git {
         // Put `git` in its own process group so that on timeout we can signal
         // the entire tree, not just the immediate child (see
         // `set_own_process_group`).
-        set_own_process_group(&mut cmd);
+        // With no deadline, keep the foreground process group so Ctrl-C also
+        // reaches Git and its helpers.
+        let bounded = !self.no_timeouts && !timeout.is_zero();
+        if bounded {
+            set_own_process_group(&mut cmd);
+        }
         let mut child = cmd.spawn()?;
 
         // Drain stdout/stderr off the main thread. Reader threads exit as
@@ -453,33 +470,34 @@ impl Git {
             Ok(buf)
         });
 
-        let status = match child.wait_timeout(timeout) {
-            Ok(Some(status)) => status,
-            Ok(None) => {
-                // Timeout. Killing the whole process group closes every
-                // writer on the stdout/stderr pipes — including helpers like
-                // `git-remote-https`/`ssh` that may have inherited git's pipe
-                // ends — which unblocks the reader threads. `kill_process_tree`
-                // also reaps the direct child so we don't leave a zombie.
-                let secs = timeout.as_secs();
-                warn!(
-                    "git command exceeded {secs}s timeout; killing process group of pid {}",
-                    child.id()
-                );
-                kill_process_tree(&mut child);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return Err(GitError::Timeout { secs });
-            }
-            Err(e) => {
-                // wait_timeout itself failed — kill defensively so we don't
-                // leak the child (or its helpers), then surface the I/O error.
-                kill_process_tree(&mut child);
-                let _ = stdout_reader.join();
-                let _ = stderr_reader.join();
-                return Err(GitError::IOError(e));
-            }
-        };
+        let status =
+            match if bounded { child.wait_timeout(timeout) } else { child.wait().map(Some) } {
+                Ok(Some(status)) => status,
+                Ok(None) => {
+                    // Timeout. Killing the whole process group closes every
+                    // writer on the stdout/stderr pipes — including helpers like
+                    // `git-remote-https`/`ssh` that may have inherited git's pipe
+                    // ends — which unblocks the reader threads. `kill_process_tree`
+                    // also reaps the direct child so we don't leave a zombie.
+                    let secs = timeout.as_secs();
+                    warn!(
+                        "git command exceeded {secs}s timeout; killing process group of pid {}",
+                        child.id()
+                    );
+                    kill_process_tree(&mut child, bounded);
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    return Err(GitError::Timeout { secs });
+                }
+                Err(e) => {
+                    // wait_timeout itself failed — kill defensively so we don't
+                    // leak the child (or its helpers), then surface the I/O error.
+                    kill_process_tree(&mut child, bounded);
+                    let _ = stdout_reader.join();
+                    let _ = stderr_reader.join();
+                    return Err(GitError::IOError(e));
+                }
+            };
 
         let stdout = stdout_reader.join().unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
         let stderr = stderr_reader.join().unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
@@ -1068,5 +1086,44 @@ mod tests {
             let git = Git::with_provider_hosts(false, &hosts);
             assert!(!git.credentials.iter().any(|value| value.contains("_ghcreds")));
         });
+    }
+}
+
+#[cfg(test)]
+mod unlimited_tests {
+    use super::*;
+
+    #[test]
+    fn delayed_child() {
+        if let Ok(delay) = std::env::var("KF_TEST_UNLIMITED_WAIT_CHILD") {
+            std::thread::sleep(Duration::from_millis(delay.parse().unwrap()));
+        }
+    }
+
+    #[test]
+    fn cleanup_kills_a_child_without_a_separate_process_group() {
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "git_binary::unlimited_tests::delayed_child"])
+            .env("KF_TEST_UNLIMITED_WAIT_CHILD", "10000");
+        let mut child = command.spawn().unwrap();
+        kill_process_tree(&mut child, false);
+        assert!(!child.try_wait().unwrap().unwrap().success());
+    }
+
+    #[test]
+    fn unlimited_wait_ignores_deadline() {
+        let command = || {
+            let mut cmd = Command::new(std::env::current_exe().unwrap());
+            cmd.args(["--exact", "git_binary::unlimited_tests::delayed_child"])
+                .env("KF_TEST_UNLIMITED_WAIT_CHILD", "50");
+            cmd
+        };
+        assert!(matches!(
+            Git::default().run_cmd(command(), Duration::from_millis(1)),
+            Err(GitError::Timeout { .. })
+        ));
+        Git::default().without_timeouts(true).run_cmd(command(), Duration::from_millis(1)).unwrap();
+        Git::default().run_cmd(command(), Duration::ZERO).unwrap();
     }
 }

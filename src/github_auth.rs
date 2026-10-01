@@ -1,3 +1,4 @@
+use kingfisher_scanner::validation::limits::ResourceTimeout;
 use std::{
     env, fs,
     path::{Path, PathBuf},
@@ -148,7 +149,7 @@ impl GitHubAuth {
             .header("X-GitHub-Api-Version", GITHUB_API_VERSION)
             .header(header::USER_AGENT, GLOBAL_USER_AGENT.as_str())
             .bearer_auth(jwt)
-            .timeout(TOKEN_REQUEST_TIMEOUT)
+            .resource_timeout(TOKEN_REQUEST_TIMEOUT)
             .send()
             .await
             .context("Failed to request a GitHub App installation token")?;
@@ -175,8 +176,8 @@ impl GitHubAuth {
         let url = installation_token_url(&self.api_base, app.installation_id)?;
         let client = reqwest::blocking::Client::builder()
             .danger_accept_invalid_certs(self.ignore_certs)
-            .connect_timeout(TOKEN_CONNECT_TIMEOUT)
-            .timeout(TOKEN_REQUEST_TIMEOUT)
+            .resource_connect_timeout(TOKEN_CONNECT_TIMEOUT)
+            .resource_timeout(TOKEN_REQUEST_TIMEOUT)
             .build()
             .context("Failed to build GitHub App HTTP client")?;
         let response = client
@@ -484,6 +485,27 @@ fn validate_installation_token(token: String) -> Result<String> {
         bail!("GitHub App installation-token response contained an empty token")
     }
     Ok(token)
+}
+
+trait BlockingResourceTimeout {
+    fn resource_timeout(self, duration: Duration) -> Self;
+    fn resource_connect_timeout(self, duration: Duration) -> Self;
+}
+impl BlockingResourceTimeout for reqwest::blocking::ClientBuilder {
+    fn resource_timeout(self, duration: Duration) -> Self {
+        if kingfisher_scanner::validation::limits::NetworkLimits::current().no_timeouts {
+            self.timeout(None)
+        } else {
+            self.timeout(duration)
+        }
+    }
+    fn resource_connect_timeout(self, duration: Duration) -> Self {
+        if kingfisher_scanner::validation::limits::NetworkLimits::current().no_timeouts {
+            self
+        } else {
+            self.connect_timeout(duration)
+        }
+    }
 }
 
 #[cfg(test)]

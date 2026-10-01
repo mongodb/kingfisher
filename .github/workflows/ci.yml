@@ -73,12 +73,9 @@ jobs:
         if: matrix.features == 'default-features'
         run: |
           python3 -m unittest discover -s scripts/tests -v
-      - name: Check validator features independently
+      - name: Check complete validation feature
         if: matrix.features == 'default-features'
-        run: |
-          for feature in validation validation-http validation-grpc validation-raw validation-ethereum validation-aws validation-azure validation-coinbase validation-gcp validation-jwt validation-database; do
-            cargo check --locked -p kingfisher-scanner --no-default-features --features "$feature"
-          done
+        run: cargo check --locked -p kingfisher-scanner --no-default-features --features validation
       - name: Install compatibility checker
         if: github.event_name == 'pull_request'
         run: cargo install --locked cargo-semver-checks --version 0.50.0

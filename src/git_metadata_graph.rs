@@ -4,7 +4,7 @@ use anyhow::{Context, Result, bail};
 use bstr::{BString, ByteSlice};
 use fixedbitset::FixedBitSet;
 use gix::{
-    ObjectId, OdbHandle,
+    ObjectId,
     hashtable::{
         HashMap, hash_map,
         hash_table::{self, HashTable},
@@ -21,6 +21,7 @@ use petgraph::{
     prelude::*,
     visit::Visitable,
 };
+use rayon::prelude::*;
 use roaring::RoaringBitmap;
 use smallvec::SmallVec;
 use tracing::{debug, error_span, warn};
@@ -151,45 +152,74 @@ pub(crate) struct RepositoryIndex {
 }
 impl RepositoryIndex {
     pub(crate) fn new_with_deadline(
-        odb: &OdbHandle,
+        repo: &gix::ThreadSafeRepository,
         deadline: Option<Instant>,
         repo_path: &Path,
     ) -> Result<Self> {
         use gix::{odb::store::iter::Ordering, prelude::*};
+        // Object header lookups are independent but can require pack-file I/O. Use the
+        // existing bounded Rayon pool to overlap lookups in small batches. Batch boundaries
+        // retain ODB order, and cap temporary IDs/results to bound extra memory.
+        // Keep each worker's handle across batches. `map_init` creates a new
+        // handle for each Rayon job, repeatedly discarding pack lookup state.
+        let repositories = thread_local::ThreadLocal::new();
+        const BATCH_SIZE: usize = 4096;
+        let mut object_iter = repo
+            .to_thread_local()
+            .objects
+            .iter()
+            .context("Failed to iterate object database")?
+            .with_ordering(Ordering::PackAscendingOffsetThenLooseLexicographical);
+
         let mut trees = ObjectIdBimap::with_capacity(0);
         let mut commits = ObjectIdBimap::with_capacity(0);
         let mut blobs = ObjectIdBimap::with_capacity(0);
         let mut tags = ObjectIdBimap::with_capacity(0);
-
-        for oid_result in odb
-            .iter()
-            .context("Failed to iterate object database")?
-            .with_ordering(Ordering::PackAscendingOffsetThenLooseLexicographical)
-        {
+        loop {
             check_deadline(deadline, "repository object indexing", repo_path)?;
-            let oid = match oid_result {
-                Ok(oid) => oid,
-                Err(e) => {
-                    debug!("Failed to read object id: {e}");
-                    continue;
+            let batch = object_iter.by_ref().take(BATCH_SIZE).collect::<Vec<_>>();
+            if batch.is_empty() {
+                break;
+            }
+            let indexed_objects: Vec<Result<Option<(Kind, ObjectId)>>> = batch
+                .into_par_iter()
+                .with_min_len(64)
+                .map(|oid_result| {
+                    check_deadline(deadline, "repository object indexing", repo_path)?;
+                    let local_repo = repositories.get_or(|| repo.to_thread_local());
+                    let oid = match oid_result {
+                        Ok(oid) => oid,
+                        Err(e) => {
+                            debug!("Failed to read object id: {e}");
+                            return Ok(None);
+                        }
+                    };
+                    let hdr = match local_repo.objects.header(oid) {
+                        Ok(hdr) => hdr,
+                        Err(e) => {
+                            debug!("Failed to read object header for {oid}: {e}");
+                            return Ok(None);
+                        }
+                    };
+                    let kind = hdr.kind();
+                    if kind == Kind::Blob && hdr.size() < MIN_SCANNABLE_BLOB_SIZE {
+                        return Ok(None);
+                    }
+                    Ok(Some((kind, oid)))
+                })
+                .collect();
+            // Indexed parallel collection preserves ODB order, including
+            // skipped entries, without sorting or changing dense object IDs.
+            for result in indexed_objects {
+                let Some((kind, oid)) = result? else { continue };
+                match kind {
+                    Kind::Tree => trees.insert(oid),
+                    Kind::Blob => blobs.insert(oid),
+                    Kind::Commit => commits.insert(oid),
+                    Kind::Tag => tags.insert(oid),
                 }
-            };
-            let hdr = match odb.header(oid) {
-                Ok(hdr) => hdr,
-                Err(e) => {
-                    debug!("Failed to read object header for {oid}: {e}");
-                    continue;
-                }
-            };
-            match hdr.kind() {
-                Kind::Tree => trees.insert(oid),
-                Kind::Blob if hdr.size() >= MIN_SCANNABLE_BLOB_SIZE => blobs.insert(oid),
-                Kind::Blob => {}
-                Kind::Commit => commits.insert(oid),
-                Kind::Tag => tags.insert(oid),
             }
         }
-
         Ok(Self { trees, commits, blobs, tags })
     }
     pub(crate) fn num_commits(&self) -> usize {
@@ -546,6 +576,89 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::git_repo_enumerator::{GitBlobSource, GitRepoWithMetadataEnumerator};
+
+    #[test]
+    fn parallel_object_index_matches_serial_pack_and_loose_order() -> Result<()> {
+        use super::{ObjectIdBimap, RepositoryIndex};
+        use gix::{object::Kind, odb::store::iter::Ordering, prelude::*};
+
+        let temp = tempdir()?;
+        let repo = Git2Repository::init_bare(temp.path())?;
+        let mut pack = repo.packbuilder()?;
+        // Cross a batch boundary, with skipped small blobs interspersed among
+        // scannable blobs. Packing below also leaves loose copies of the IDs.
+        for i in 0..4200 {
+            let contents = if i % 3 == 0 {
+                format!("{i}")
+            } else {
+                format!("scannable blob contents number {i}")
+            };
+            pack.insert_object(repo.blob(contents.as_bytes())?, None)?;
+        }
+        for size in [19, 20, 21] {
+            pack.insert_object(repo.blob(&vec![b'x'; size])?, None)?;
+        }
+        let tree_id = repo.treebuilder(None)?.write()?;
+        let tree = repo.find_tree(tree_id)?;
+        let signature = Signature::now("tester", "tester@example.com")?;
+        let commit = repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[])?;
+        let tag = repo.tag("v1", &repo.find_object(commit, None)?, &signature, "tag", false)?;
+        pack.insert_commit(commit)?;
+        pack.insert_object(tag, None)?;
+
+        for packed in [false, true] {
+            if packed {
+                pack.write(&repo.path().join("objects").join("pack"), 0)?;
+            }
+            let repo = open_opts(temp.path(), Options::isolated().open_path_as_is(true))?;
+            let mut expected = std::array::from_fn::<_, 4, _>(|_| ObjectIdBimap::with_capacity(0));
+            for oid in repo
+                .objects
+                .iter()?
+                .with_ordering(Ordering::PackAscendingOffsetThenLooseLexicographical)
+            {
+                let oid = oid?;
+                let header = repo.objects.header(oid)?;
+                let slot = match header.kind() {
+                    Kind::Blob if header.size() < super::MIN_SCANNABLE_BLOB_SIZE => continue,
+                    Kind::Blob => 0,
+                    Kind::Tree => 1,
+                    Kind::Commit => 2,
+                    Kind::Tag => 3,
+                };
+                expected[slot].insert(oid);
+            }
+            let repo = repo.into_sync();
+            for threads in [1, 4] {
+                let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build()?;
+                let actual =
+                    pool.install(|| RepositoryIndex::new_with_deadline(&repo, None, temp.path()))?;
+                assert_eq!(actual.blobs.len(), 2802);
+                assert_eq!(actual.trees.len(), 1);
+                assert_eq!(actual.commits.len(), 1);
+                assert_eq!(actual.tags.len(), 1);
+                for (actual, expected) in
+                    [&actual.blobs, &actual.trees, &actual.commits, &actual.tags]
+                        .into_iter()
+                        .zip(&expected)
+                {
+                    assert_eq!(
+                        actual.idx_to_oid, expected.idx_to_oid,
+                        "packed={packed}, threads={threads}"
+                    );
+                }
+                assert!(
+                    pool.install(|| RepositoryIndex::new_with_deadline(
+                        &repo,
+                        Some(std::time::Instant::now()),
+                        temp.path()
+                    ))
+                    .is_err()
+                );
+            }
+        }
+        Ok(())
+    }
 
     #[test]
     fn object_index_preserves_ids_through_collisions_and_growth() {

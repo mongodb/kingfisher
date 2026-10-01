@@ -22,6 +22,13 @@ where
     // Helper to build ConfigLoader with profile/creds/no_credentials
     let build_loader = || {
         let mut loader = defaults(BehaviorVersion::latest());
+        if kingfisher_scanner::validation::limits::NetworkLimits::current().no_timeouts {
+            loader = loader
+                .timeout_config(aws_sdk_s3::config::timeout::TimeoutConfig::disabled())
+                .stalled_stream_protection(
+                    aws_sdk_s3::config::StalledStreamProtectionConfig::disabled(),
+                );
+        }
         if let Some(p) = profile {
             loader = loader.profile_name(p);
         }

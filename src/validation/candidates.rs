@@ -200,8 +200,12 @@ where
     F: FnMut(OwnedBlobMatch, Duration) -> Fut,
     Fut: Future<Output = OwnedBlobMatch>,
 {
-    let deadline = Instant::now() + timeout.min(MAX_SEARCH_TIME);
-    let Ok(Ok(_permit)) = tokio::time::timeout_at(deadline, SEARCHES.acquire()).await else {
+    let deadline = (!timeout.is_zero()).then(|| Instant::now() + timeout.min(MAX_SEARCH_TIME));
+    let permit = match deadline {
+        Some(deadline) => tokio::time::timeout_at(deadline, SEARCHES.acquire()).await,
+        None => Ok(SEARCHES.acquire().await),
+    };
+    let Ok(Ok(_permit)) = permit else {
         unresolved(m, 0, "time budget exhausted while waiting for a verification slot", true);
         return;
     };
@@ -216,8 +220,10 @@ where
     let mut queue = BinaryHeap::from([Reverse((0usize, initial))]);
     let mut attempted = 0;
     while let Some(Reverse((score, indices))) = queue.pop() {
-        let remaining = deadline.saturating_duration_since(Instant::now());
-        if remaining.is_zero() {
+        let remaining = deadline
+            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
+            .unwrap_or_default();
+        if deadline.is_some() && remaining.is_zero() {
             unresolved(m, attempted, "time budget exhausted", true);
             return;
         }
@@ -262,7 +268,9 @@ where
             unresolved(m, attempted, reason, !skipped);
             return;
         }
-        if attempted == MAX_COMBINATIONS {
+        if !kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results
+            && attempted == MAX_COMBINATIONS
+        {
             break;
         }
         for dimension in 0..variables.len() {
@@ -409,6 +417,45 @@ depends_on_rule:
                     assert!(eligible_dependency(rule, dep), "{}: {}", rule.id, dep.variable);
                 }
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_budget_is_independent_of_response_body_limit() {
+        use kingfisher_scanner::validation::limits::NetworkLimits;
+
+        for unlimited_results in [false, true] {
+            let mut m = finding();
+            let count = MAX_COMBINATIONS + 1;
+            m.ambiguous_dependencies.insert("SECRET".into(), count);
+            m.dependency_candidates.insert(
+                "SECRET".into(),
+                (0..count).map(|index| format!("candidate-{index}")).collect(),
+            );
+            let clients = super::super::ValidationClients::with_timeout(
+                crate::cli::global::TlsMode::Strict,
+                false,
+                Duration::ZERO,
+                true,
+            )
+            .unwrap()
+            .with_unlimited_results(unlimited_results);
+            assert_eq!(clients.unlimited_results, unlimited_results);
+            let mut attempts = 0;
+            NetworkLimits {
+                unlimited_response: clients.unlimited_response,
+                unlimited_results: clients.unlimited_results,
+                ..Default::default()
+            }
+            .scope(run(&mut m, Duration::ZERO, |mut attempt, _| {
+                attempts += 1;
+                async move {
+                    attempt.validation_outcome = ValidationOutcome::VerifiedInactive;
+                    attempt
+                }
+            }))
+            .await;
+            assert_eq!(attempts, if unlimited_results { count } else { MAX_COMBINATIONS });
         }
     }
 

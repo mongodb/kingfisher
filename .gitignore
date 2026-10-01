@@ -249,3 +249,9 @@ docs-site/docs/viewer/
 
 # Python release-helper test caches
 scripts/**/__pycache__/
+
+# Native Python SDK development artifacts
+python/**/__pycache__/
+python/kingfisher_sdk/*.so
+python/kingfisher_sdk/*.pyd
+/dist-python/

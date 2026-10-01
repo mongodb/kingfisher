@@ -1,3 +1,4 @@
+use kingfisher_scanner::validation::limits::ResourceTimeout;
 use std::{collections::HashSet, env, str::FromStr, time::Duration};
 
 use anyhow::{Result, anyhow};
@@ -217,7 +218,7 @@ pub async fn enumerate_repo_urls(
 ) -> Result<Vec<String>> {
     let excludes = build_exclude_matcher(&specifiers.exclude_repos);
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
+        .resource_timeout(Duration::from_secs(30))
         .danger_accept_invalid_certs(ignore_certs)
         .build()?;
     let token = env::var("KF_GITEA_TOKEN").ok().filter(|t| !t.is_empty());

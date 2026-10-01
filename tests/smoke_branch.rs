@@ -602,3 +602,188 @@ fn since_commit_excludes_baseline_ancestry_and_keeps_intermediate_changes() -> R
     }
     Ok(())
 }
+
+#[test]
+fn since_commit_without_branch_scans_all_refs() -> Result<()> {
+    let temp = tempdir()?;
+    let repo = Repository::init_bare(temp.path())?;
+    let sig = Signature::now("tester", "tester@example.com")?;
+    let mut builder = repo.treebuilder(None)?;
+    builder.insert("baseline.txt", repo.blob(GCP_API_KEY_LINE.as_bytes())?, 0o100644)?;
+    let baseline_tree = repo.find_tree(builder.write()?)?;
+    let baseline_id =
+        repo.commit(Some("refs/heads/main"), &sig, &sig, "baseline", &baseline_tree, &[])?;
+    let baseline = repo.find_commit(baseline_id)?;
+    repo.set_head("refs/heads/main")?;
+    builder.insert("secret.txt", repo.blob(GITHUB_TOKEN_LINE.as_bytes())?, 0o100644)?;
+    let secret_tree = repo.find_tree(builder.write()?)?;
+    let secret_id = repo.commit(None, &sig, &sig, "add secret", &secret_tree, &[&baseline])?;
+    let secret = repo.find_commit(secret_id)?;
+    // No local branch reaches this history, and the secret is gone at its tip.
+    repo.commit(
+        Some("refs/remotes/origin/feature"),
+        &sig,
+        &sig,
+        "remove secret",
+        &baseline_tree,
+        &[&secret],
+    )?;
+
+    for flags in [vec![], vec!["--git-history", "full"], vec!["--commit-metadata=false"]] {
+        let assertion = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .arg("scan")
+            .arg(temp.path())
+            .args([
+                "--since-commit",
+                "HEAD",
+                "--no-validate",
+                "--no-update-check",
+                "--format",
+                "toon",
+            ])
+            .args(flags)
+            .assert()
+            .code(200)
+            .stdout(contains(GITHUB_TOKEN_VALUE).and(contains(GCP_API_KEY_VALUE).not()));
+        let report: serde_json::Value =
+            toon_format::decode_default(std::str::from_utf8(&assertion.get_output().stdout)?)?;
+        let audit = &report["audit"]["repositories"][0]["git"];
+        assert_eq!(audit["scope"], "commit_range");
+        assert_eq!(audit["tip_ref"], "(all refs and HEAD)");
+        assert!(audit["tip_sha"].is_null());
+    }
+    for flags in [vec!["--branch", "HEAD"], vec!["--branch", "main"], vec!["--git-history", "none"]]
+    {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .arg("scan")
+            .arg(temp.path())
+            .args([
+                "--since-commit",
+                "HEAD",
+                "--no-validate",
+                "--no-update-check",
+                "--format",
+                "toon",
+            ])
+            .args(flags)
+            .assert()
+            .success()
+            .stdout(contains(GITHUB_TOKEN_VALUE).not().and(contains(GCP_API_KEY_VALUE).not()));
+    }
+    Ok(())
+}
+
+#[test]
+fn since_hours_scans_remote_history_with_one_window_for_all_repositories() -> Result<()> {
+    let temp = tempdir()?;
+    let now = chrono::Utc::now().timestamp();
+    let old = Signature::new("tester", "tester@example.com", &git2::Time::new(now - 172800, 0))?;
+    let recent = Signature::new("tester", "tester@example.com", &git2::Time::new(now - 3600, 0))?;
+    let paths = [temp.path().join("first.git"), temp.path().join("second.git")];
+    for path in &paths {
+        let repo = Repository::init_bare(path)?;
+        let mut builder = repo.treebuilder(None)?;
+        builder.insert("baseline.txt", repo.blob(GCP_API_KEY_LINE.as_bytes())?, 0o100644)?;
+        let baseline_tree = repo.find_tree(builder.write()?)?;
+        let baseline_id =
+            repo.commit(Some("refs/heads/main"), &recent, &old, "old", &baseline_tree, &[])?;
+        let baseline = repo.find_commit(baseline_id)?;
+        repo.set_head("refs/heads/main")?;
+        builder.insert("temporary.txt", repo.blob(GITHUB_TOKEN_LINE.as_bytes())?, 0o100644)?;
+        let secret_tree = repo.find_tree(builder.write()?)?;
+        let secret_id = repo.commit(None, &old, &recent, "recent", &secret_tree, &[&baseline])?;
+        let secret = repo.find_commit(secret_id)?;
+        repo.commit(
+            Some("refs/remotes/origin/feature"),
+            &recent,
+            &old,
+            "older child",
+            &baseline_tree,
+            &[&secret],
+        )?;
+    }
+    let report_path = temp.path().join("report.json");
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .arg("scan")
+        .args(&paths)
+        .args([
+            "--since-hours",
+            "24",
+            "--git-history",
+            "full",
+            "--no-validate",
+            "--no-update-check",
+            "--format",
+            "json",
+            "--output",
+        ])
+        .arg(&report_path)
+        .assert()
+        .code(200);
+    let output = fs::read_to_string(report_path)?;
+    assert!(output.contains(GITHUB_TOKEN_VALUE));
+    assert!(!output.contains(GCP_API_KEY_VALUE));
+    let report: serde_json::Value = serde_json::from_str(&output)?;
+    let repositories = report["audit"]["repositories"].as_array().unwrap();
+    assert_eq!(repositories.len(), 2);
+    let first = &repositories[0]["git"];
+    for repository in repositories {
+        let git = &repository["git"];
+        assert_eq!(git["scope"], "commit_time_range");
+        assert_eq!(git["tip_ref"], "(all refs and HEAD)");
+        assert_eq!(git["since_timestamp"], first["since_timestamp"]);
+        assert_eq!(git["until_timestamp"], first["until_timestamp"]);
+        let end = git["until_timestamp"].as_i64().unwrap();
+        assert_eq!(end - git["since_timestamp"].as_i64().unwrap(), 24 * 3600);
+        assert!(end >= now && end <= chrono::Utc::now().timestamp());
+    }
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .arg("scan")
+        .arg(&paths[0])
+        .args([
+            "--since-hours",
+            "24",
+            "--branch",
+            "main",
+            "--no-validate",
+            "--no-update-check",
+            "--format",
+            "toon",
+        ])
+        .assert()
+        .success()
+        .stdout(contains(GITHUB_TOKEN_VALUE).not().and(contains(GCP_API_KEY_VALUE).not()));
+    Ok(())
+}
+
+#[test]
+fn since_hours_rejects_invalid_values_and_conflicting_scopes() -> Result<()> {
+    let temp = tempdir()?;
+    for value in ["0", "-1", "1.5", "NaN", "4294967296"] {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .arg("scan")
+            .arg(temp.path())
+            .arg(format!("--since-hours={value}"))
+            .arg("--no-update-check")
+            .assert()
+            .failure()
+            .stderr(contains("--since-hours"));
+    }
+    for flags in [
+        vec!["--since-commit", "HEAD"],
+        vec!["--staged"],
+        vec!["--branch-root", "--branch", "main"],
+        vec!["--branch-root-commit", "HEAD"],
+        vec!["--git-history", "none"],
+    ] {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .arg("scan")
+            .arg(temp.path())
+            .args(["--since-hours", "24", "--no-validate", "--no-update-check"])
+            .args(flags)
+            .assert()
+            .failure()
+            .stderr(contains("--since-hours"));
+    }
+    Ok(())
+}

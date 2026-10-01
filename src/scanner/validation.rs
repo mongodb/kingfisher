@@ -19,7 +19,7 @@ use liquid::Parser;
 use reqwest::StatusCode;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tokio::sync::Notify;
-use tracing::{trace, warn};
+use tracing::{info, trace, warn};
 
 use crate::{
     access_map::{AccessMapRequest, CollectedAccessMapRequest},
@@ -617,6 +617,10 @@ pub async fn run_secret_validation(
         }
         (simple, dep_ids)
     };
+
+    if !simple_matches.is_empty() || !dependent_blob_ids.is_empty() {
+        info!("Starting secret validation phase...");
+    }
 
     // ── Phase 1: simple, global de-dupe ──────────────────────────────────────
     if !simple_matches.is_empty() {

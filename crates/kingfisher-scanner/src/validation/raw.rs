@@ -1,5 +1,6 @@
 //! Provider-specific raw validators for secret formats that need custom protocol logic.
 
+use super::limits::timeout;
 use std::{
     collections::BTreeSet,
     sync::{Arc, OnceLock},
@@ -24,7 +25,6 @@ use sha2::{Digest, Sha256, Sha512};
 use tokio::{
     io::{AsyncBufReadExt, AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufStream},
     net::TcpStream,
-    time::timeout,
 };
 use tokio_rustls::TlsConnector;
 use url::Url;

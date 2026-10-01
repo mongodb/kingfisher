@@ -1,4 +1,4 @@
-#![cfg(feature = "validation-http")]
+#![cfg(feature = "validation")]
 
 use std::{
     collections::BTreeMap,
@@ -102,8 +102,8 @@ fn invalid_builder_settings_fail_and_validator_is_shareable() {
     send_sync::<Validator>();
     send_sync::<kingfisher_scanner::ValidatedFinding>();
     assert!(Validator::builder().concurrency(0).build().is_err());
-    assert!(Validator::builder().timeout(Duration::ZERO).build().is_err());
-    assert!(Validator::builder().max_response_bytes(0).build().is_err());
+    assert!(Validator::builder().timeout(Duration::ZERO).build().is_ok());
+    assert!(Validator::builder().max_response_bytes(0).build().is_ok());
 }
 
 #[tokio::test]
@@ -401,7 +401,7 @@ async fn multipart_renders_captures_as_inline_content() {
     );
 }
 
-#[cfg(not(feature = "validation-aws"))]
+#[cfg(not(feature = "validation"))]
 #[tokio::test]
 async fn disabled_family_is_skipped() {
     let mut rule = syntax();
@@ -412,7 +412,7 @@ async fn disabled_family_is_skipped() {
     );
 }
 
-#[cfg(feature = "validation-ethereum")]
+#[cfg(feature = "validation")]
 #[tokio::test]
 async fn local_family_dispatch_preserves_cryptographic_outcome() {
     let mut rule = syntax();
@@ -480,7 +480,7 @@ second.status == 200 ? {"result": "valid"} : {"result": "unknown"}
     assert_eq!(result.http_status, Some(200));
 }
 
-#[cfg(not(feature = "validation-aws"))]
+#[cfg(not(feature = "validation"))]
 #[tokio::test]
 async fn betterleaks_missing_sdk_feature_is_not_a_rejected_credential() {
     let f = toml_finding(r#"aws.validate(finding.secret, "synthetic-secret")"#);
@@ -578,4 +578,36 @@ async fn http_retries_preserve_final_status_and_rebuild_multipart() {
         assert_eq!(result.http_status, Some(200));
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
+}
+
+#[tokio::test]
+async fn unlimited_validation_reads_late_evidence_past_default_body_limit() {
+    let server = serve(Router::new().route(
+        "/identity",
+        get(|| async {
+            tokio::time::sleep(Duration::from_millis(30)).await;
+            format!("{}authenticated", " ".repeat((1 << 20) + 1))
+        }),
+    ))
+    .await;
+    let bounded = Validator::builder()
+        .allow_internal_ips(true)
+        .variable("ENDPOINT", &server.url)
+        .build()
+        .unwrap();
+    assert_eq!(
+        bounded.validate_finding(&finding(syntax())).await.reason,
+        Some(ValidationReason::ResponseTooLarge)
+    );
+    let unlimited = Validator::builder()
+        .allow_internal_ips(true)
+        .variable("ENDPOINT", &server.url)
+        .timeout(Duration::ZERO)
+        .max_response_bytes(0)
+        .build()
+        .unwrap();
+    assert_eq!(
+        unlimited.validate_finding(&finding(syntax())).await.outcome,
+        ValidationOutcome::VerifiedActive
+    );
 }

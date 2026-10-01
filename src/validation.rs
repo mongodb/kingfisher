@@ -1,3 +1,4 @@
+use kingfisher_scanner::validation::limits::ResourceTimeout;
 use std::{
     panic::AssertUnwindSafe,
     sync::Arc,
@@ -23,7 +24,7 @@ use reqwest::{
     header::{HeaderMap, HeaderValue},
 };
 use rustc_hash::FxHashMap;
-use tokio::{sync::Notify, time};
+use tokio::sync::Notify;
 use tracing::warn;
 
 use crate::{
@@ -131,25 +132,35 @@ pub struct ValidationClients {
     pub global_mode: TlsMode,
     /// When true, skip SSRF IP validation and allow requests to internal/private addresses.
     pub allow_internal_ips: bool,
+    pub unlimited_response: bool,
+    /// Candidate budgets are independent of response body caps.
+    pub unlimited_results: bool,
 }
 
 impl ValidationClients {
     /// Create validation clients based on the global TLS mode.
     pub fn new(global_mode: TlsMode, allow_internal_ips: bool) -> anyhow::Result<Self> {
-        let timeout = std::time::Duration::from_secs(30);
+        Self::with_timeout(global_mode, allow_internal_ips, Duration::from_secs(30), false)
+    }
 
+    pub fn with_timeout(
+        global_mode: TlsMode,
+        allow_internal_ips: bool,
+        timeout: Duration,
+        unlimited_response: bool,
+    ) -> anyhow::Result<Self> {
         let strict = Client::builder()
             .user_agent(GLOBAL_USER_AGENT.as_str())
             .danger_accept_invalid_certs(false)
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(timeout)
+            .resource_timeout(timeout)
             .build()?;
 
         let lax = Client::builder()
             .user_agent(GLOBAL_USER_AGENT.as_str())
             .danger_accept_invalid_certs(true)
             .redirect(reqwest::redirect::Policy::none())
-            .timeout(timeout)
+            .resource_timeout(timeout)
             .build()?;
 
         let credential_uri = build_credential_uri_client(timeout, false)?;
@@ -162,7 +173,15 @@ impl ValidationClients {
             lax,
             global_mode,
             allow_internal_ips,
+            unlimited_response,
+            unlimited_results: false,
         })
+    }
+
+    /// Explicitly configure candidate budgets independently of HTTP response caps.
+    pub fn with_unlimited_results(mut self, unlimited: bool) -> Self {
+        self.unlimited_results = unlimited;
+        self
     }
 
     /// Get the appropriate client for a given rule's TLS mode.
@@ -213,7 +232,7 @@ pub(crate) fn build_credential_uri_client(timeout: Duration, use_lax_tls: bool) 
     Ok(Client::builder()
         .danger_accept_invalid_certs(use_lax_tls)
         .redirect(reqwest::redirect::Policy::none())
-        .timeout(timeout)
+        .resource_timeout(timeout)
         .build()?)
 }
 
@@ -465,7 +484,12 @@ pub async fn validate_single_match(
     max_body_len: usize,
 ) {
     if candidates::ready(m) {
-        candidates::run(m, validation_timeout, |mut attempt, remaining| async move {
+        kingfisher_scanner::validation::limits::NetworkLimits {
+            no_timeouts: validation_timeout.is_zero(),
+            unlimited_response: clients.unlimited_response,
+            unlimited_results: clients.unlimited_results,
+        }
+        .scope(candidates::run(m, validation_timeout, |mut attempt, remaining| async move {
             // Preserve endpoint inputs for generated commands on cache hits as well
             // as misses. Fixed validation URLs may still use these in headers/body.
             let mut globals = Object::new();
@@ -506,7 +530,7 @@ pub async fn validate_single_match(
             )
             .await;
             attempt
-        })
+        }))
         .await;
     } else {
         validate_resolved_match(
@@ -559,7 +583,7 @@ async fn validate_resolved_match(
     // A waiter can time out before the owner; only the owner may publish a failure
     // and remove the shared entry. Keep ownership outside the canceled future.
     let mut owns_in_flight = false;
-    let timeout_result = time::timeout(
+    let timeout_result = kingfisher_scanner::validation::limits::timeout(
         validation_timeout,
         AssertUnwindSafe(
             timed_validate_single_match(
@@ -787,6 +811,7 @@ async fn timed_validate_single_match(
         .credential_uri_client(clients.credential_uri_client(rule_tls_mode))
         .timeout(validation_timeout)
         .retries(validation_retries)
+        .max_response_bytes(if clients.unlimited_response { 0 } else { 1 << 20 })
         .allow_internal_ips(clients.allow_internal_ips)
         .use_lax_tls(use_lax_tls)
         .validate(&m.rule, &globals)

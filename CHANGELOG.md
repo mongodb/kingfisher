@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.9.0]
+- Fixed the validation-phase message to appear when credential validation begins.
+- Reduced scan CPU use in Base64 and Unicode detection without changing scan results.
+- **Library behavior change:** validation `timeout(Duration::ZERO)` and `max_response_bytes(0)` now disable their respective limits instead of returning a build error.
+- Added `--no-limits` for unlimited scan budgets and timeouts. **Behavior change:** `--extraction-depth 0` disables the archive depth limit; use `--no-extract-archives` to disable extraction. [#524](https://github.com/mongodb/kingfisher/issues/524)
+- GitHub user/org and GitLab user/group scans now overlap discovery, cloning, and scanning; added `--user-file` for both providers. **Behavior change:** clone limits select the first unique repositories discovered per provider in API order; explicit Git URLs and added wiki URLs are not counted. [#525](https://github.com/mongodb/kingfisher/issues/525)
+- Added `--since-hours N` for recent Git history scans. **Behavior change:** `--since-commit` now scans all refs by default; use `--branch HEAD` to retain the previous scope. `--branch` restricts either scan. [#526](https://github.com/mongodb/kingfisher/issues/526)
+
 ## [v2.8.0]
 - **Behavior change:** `--since-commit` now scans full commit ranges by default, catching secrets later deleted. Use `--git-history none` for net-diff scanning. [#518](https://github.com/mongodb/kingfisher/issues/518)
 - Added Git author name and email alongside committer information in finding metadata. [#519](https://github.com/mongodb/kingfisher/issues/519)

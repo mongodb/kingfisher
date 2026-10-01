@@ -391,6 +391,7 @@ async fn fetch_github_orgs(
     Ok(orgs)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_github_repos(
     client: &reqwest::Client,
     api_base: &Url,
@@ -398,6 +399,7 @@ async fn fetch_github_repos(
     repo_type: &str,
     token: Option<&str>,
     action: &str,
+    on_repo: &mut (dyn FnMut(&str) -> Result<()> + Send),
 ) -> Result<Vec<GitHubRepo>> {
     let mut repos = Vec::new();
     let mut page = 1;
@@ -416,6 +418,9 @@ async fn fetch_github_repos(
         if page_repos.is_empty() {
             break;
         }
+        for repo in &page_repos {
+            on_repo(&repo.clone_url)?;
+        }
         repos.extend(page_repos);
         page += 1;
     }
@@ -429,6 +434,7 @@ async fn fetch_github_gist_urls(
     api_base: &Url,
     username: &str,
     token: Option<&str>,
+    on_repo: &mut (dyn FnMut(&str) -> Result<()> + Send),
 ) -> Result<Vec<String>> {
     let mut urls = Vec::new();
     let mut seen_pages = HashSet::new();
@@ -456,7 +462,10 @@ async fn fetch_github_gist_urls(
         if gists.is_empty() {
             break;
         }
-        urls.extend(gists.into_iter().map(|gist| gist.git_pull_url));
+        for gist in gists {
+            on_repo(&gist.git_pull_url)?;
+            urls.push(gist.git_pull_url);
+        }
     }
     Ok(urls)
 }
@@ -724,13 +733,30 @@ pub async fn enumerate_repo_urls(
     repo_specifiers: &RepoSpecifiers,
     github_url: url::Url,
     ignore_certs: bool,
+    progress: Option<&mut ProgressBar>,
+) -> Result<Vec<String>> {
+    enumerate_repo_urls_streaming(repo_specifiers, github_url, ignore_certs, progress, &mut |_| {
+        Ok(())
+    })
+    .await
+}
+
+/// Emit repositories as API pages arrive, before discovery of subsequent sources.
+pub async fn enumerate_repo_urls_streaming(
+    repo_specifiers: &RepoSpecifiers,
+    github_url: url::Url,
+    ignore_certs: bool,
     mut progress: Option<&mut ProgressBar>,
+    on_repo: &mut (dyn FnMut(&str) -> Result<()> + Send),
 ) -> Result<Vec<String>> {
     let client = create_github_client(ignore_certs)?;
     let mut repo_urls = Vec::new();
     let exclude_set = build_exclude_matcher(&repo_specifiers.exclude_repos);
     let api_base = normalize_api_base(&github_url);
     let token = github_token(&client, &github_url, ignore_certs).await?;
+    let mut emit = |url: &str| {
+        if should_exclude_repo(url, &exclude_set) { Ok(()) } else { on_repo(url) }
+    };
     for username in &repo_specifiers.user {
         let repos = fetch_github_repos(
             &client,
@@ -739,6 +765,7 @@ pub async fn enumerate_repo_urls(
             repo_specifiers.repo_filter.user_query_value(),
             token.as_deref(),
             "listing user repositories",
+            &mut emit,
         )
         .await?;
         repo_urls.extend(repos.into_iter().filter_map(|repo| {
@@ -747,7 +774,8 @@ pub async fn enumerate_repo_urls(
         }));
         if repo_specifiers.include_gists {
             repo_urls.extend(
-                fetch_github_gist_urls(&client, &api_base, username, token.as_deref()).await?,
+                fetch_github_gist_urls(&client, &api_base, username, token.as_deref(), &mut emit)
+                    .await?,
             );
         }
         if let Some(progress) = progress.as_mut() {
@@ -767,6 +795,7 @@ pub async fn enumerate_repo_urls(
             repo_specifiers.repo_filter.org_query_value(),
             token.as_deref(),
             "listing organization repositories",
+            &mut emit,
         )
         .await?;
         repo_urls.extend(repos.into_iter().filter_map(|repo| {

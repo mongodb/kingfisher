@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-scanner"
-version = "1.0.0"
+version = "1.1.0"
 description = "High-level scanning API for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -19,11 +19,8 @@ targets = ["x86_64-unknown-linux-gnu"]
 [features]
 default = []
 
-# Core validation support (includes HTTP validation)
-validation = ["validation-http"]
-
-# HTTP-based validation for API tokens
-validation-http = [
+# Validation is all-or-nothing; scanning alone remains dependency-light.
+validation = [
     "dep:reqwest",
     "dep:tokio",
     "dep:liquid",
@@ -38,35 +35,14 @@ validation-http = [
     "dep:chrono",
     "dep:url",
     "dep:percent-encoding",
-]
-
-# Provider/protocol-specific validation flows that need custom network logic.
-validation-raw = [
-    "validation-http",
-    "dep:chrono",
-    "dep:hmac",
-    "dep:sha2",
-    "dep:hex",
-    "dep:url",
-    "dep:percent-encoding",
     "dep:rustls",
     "dep:rustls-native-certs",
     "dep:tokio-rustls",
     "dep:ldap3",
-]
-
-# Deterministic, network-free Ethereum key parsing and address derivation.
-validation-ethereum = [
     "dep:bip32",
     "dep:bip39",
-    "dep:hex",
     "dep:sha3",
     "dep:zeroize",
-]
-
-# AWS credential validation
-validation-aws = [
-    "validation-http",
     "dep:aws-config",
     "dep:aws-credential-types",
     "dep:aws-sdk-iam",
@@ -78,78 +54,37 @@ validation-aws = [
     "dep:base32",
     "dep:byteorder",
     "dep:rand",
-]
-
-# Azure credential validation
-validation-azure = [
-    "validation-http",
-    "dep:chrono",
-    "dep:hmac",
-    "dep:sha2",
-]
-
-# Coinbase credential validation
-validation-coinbase = [
-    "validation-http",
-    "dep:chrono",
     "dep:ed25519-dalek",
     "dep:p256",
-    "dep:rand",
-    "dep:hex",
-]
-
-# GCP credential validation
-validation-gcp = [
-    "validation-http",
-    "dep:chrono",
     "dep:pem",
-    "dep:percent-encoding",
     "dep:aws-lc-rs",
-    "dep:tokio",
-]
-
-# JWT validation
-validation-jwt = [
-    "validation-http",
-    "dep:chrono",
     "dep:jsonwebtoken",
-    "dep:tokio",
-]
-
-# Database validation (MongoDB/MySQL/Postgres/JDBC)
-validation-database = [
-    "validation-http",
     "dep:mongodb",
     "dep:mysql_async",
     "dep:tokio-postgres",
     "dep:tokio-postgres-rustls",
-    "dep:rustls",
-    "dep:rustls-native-certs",
-    "dep:url",
-    "dep:sha1",
+    "tokio/rt",
+    "dep:h2",
+    "dep:bytes",
 ]
 
-# gRPC unary validation (HTTP/2 headers and trailers).
-validation-grpc = ["validation-http", "tokio/rt", "dep:h2", "dep:bytes", "dep:rustls", "dep:rustls-native-certs", "dep:tokio-rustls", "dep:url"]
-
-# All validation features
-validation-all = [
-    "validation",
-    "validation-raw",
-    "validation-grpc",
-    "validation-ethereum",
-    "validation-aws",
-    "validation-azure",
-    "validation-coinbase",
-    "validation-gcp",
-    "validation-jwt",
-    "validation-database",
-]
+# Compatibility aliases: every former provider feature now enables all validation.
+validation-http = ["validation"]
+validation-raw = ["validation"]
+validation-ethereum = ["validation"]
+validation-aws = ["validation"]
+validation-azure = ["validation"]
+validation-coinbase = ["validation"]
+validation-gcp = ["validation"]
+validation-jwt = ["validation"]
+validation-database = ["validation"]
+validation-grpc = ["validation"]
+validation-all = ["validation"]
 
 [dependencies]
 # Internal dependencies
 kingfisher-core = { version = "1.0.0", path = "../kingfisher-core" }
-kingfisher-rules = { version = "1.0.0", path = "../kingfisher-rules" }
+kingfisher-rules = { version = "1.0.1", path = "../kingfisher-rules" }
 
 # Error handling
 anyhow.workspace = true
@@ -259,12 +194,12 @@ tokio = { version = "1.53", features = ["macros", "rt", "sync"] }
 
 [[example]]
 name = "local_validation"
-required-features = ["validation-ethereum"]
+required-features = ["validation"]
 
 [[example]]
 name = "http_validation"
-required-features = ["validation-http"]
+required-features = ["validation"]
 
 [[example]]
 name = "validate_file"
-required-features = ["validation-http"]
+required-features = ["validation"]

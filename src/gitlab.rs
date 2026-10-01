@@ -1,3 +1,4 @@
+use kingfisher_scanner::validation::limits::ResourceTimeout;
 use std::{
     collections::HashSet,
     env, fs,
@@ -129,7 +130,7 @@ fn should_exclude_repo(clone_url: &str, excludes: &git_host::ExcludeMatcher) -> 
 
 fn create_gitlab_http_client(ignore_certs: bool) -> Result<reqwest::Client> {
     let mut builder = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
+        .resource_timeout(Duration::from_secs(30))
         .user_agent(GLOBAL_USER_AGENT.as_str());
     if ignore_certs {
         builder = builder.danger_accept_invalid_certs(true);
@@ -177,6 +178,7 @@ async fn fetch_paged_projects(
     base_url: Url,
     extra_query: &[(&str, String)],
     excludes: &git_host::ExcludeMatcher,
+    on_repo: &mut (dyn FnMut(&str) -> Result<()> + Send),
 ) -> Result<Vec<SimpleProject>> {
     let mut page = 1u32;
     let mut projects = Vec::new();
@@ -201,6 +203,7 @@ async fn fetch_paged_projects(
             if should_exclude_repo(&project.http_url_to_repo, excludes) {
                 continue;
             }
+            on_repo(&project.http_url_to_repo)?;
             projects.push(project);
         }
 
@@ -267,6 +270,7 @@ async fn fetch_snippet_urls(
     token: Option<&str>,
     api_base: &Url,
     scope: SnippetScope,
+    on_repo: &mut (dyn FnMut(&str) -> Result<()> + Send),
 ) -> Result<Vec<String>> {
     const QUERY: &str = r#"
         query KingfisherSnippets($authorId: UserID, $projectId: ProjectID, $type: TypeEnum!, $after: String) {
@@ -316,6 +320,7 @@ async fn fetch_snippet_urls(
             .snippets;
         for snippet in snippets.nodes.into_iter().flatten() {
             if let Some(url) = snippet.http_url_to_repo.filter(|url| !url.is_empty()) {
+                on_repo(&url)?;
                 urls.push(url);
             } else {
                 warn!("Skipping GitLab snippet without a Git clone URL for {scope}");
@@ -342,6 +347,20 @@ pub async fn enumerate_repo_urls(
     ignore_certs: bool,
     progress: Option<ProgressBar>,
 ) -> Result<Vec<String>> {
+    enumerate_repo_urls_streaming(repo_specifiers, gitlab_url, ignore_certs, progress, &mut |_| {
+        Ok(())
+    })
+    .await
+}
+
+/// Emit repositories as API pages arrive, before discovery of subsequent sources.
+pub async fn enumerate_repo_urls_streaming(
+    repo_specifiers: &RepoSpecifiers,
+    gitlab_url: Url,
+    ignore_certs: bool,
+    progress: Option<ProgressBar>,
+    on_repo: &mut (dyn FnMut(&str) -> Result<()> + Send),
+) -> Result<Vec<String>> {
     let client = create_gitlab_http_client(ignore_certs)?;
     let token = gitlab_private_token();
     let api_base = normalize_api_base(&gitlab_url);
@@ -365,20 +384,27 @@ pub async fn enumerate_repo_urls(
             RepoType::All => {}
         }
         projects.extend(
-            fetch_paged_projects(&client, token.as_deref(), projects_url, &query, &exclude_set)
-                .await?,
+            fetch_paged_projects(
+                &client,
+                token.as_deref(),
+                projects_url,
+                &query,
+                &exclude_set,
+                on_repo,
+            )
+            .await?,
         );
 
         if repo_specifiers.include_snippets {
-            repo_urls.extend(
-                fetch_snippet_urls(
-                    &client,
-                    token.as_deref(),
-                    &api_base,
-                    SnippetScope::User(user.id),
-                )
-                .await?,
-            );
+            let snippets = fetch_snippet_urls(
+                &client,
+                token.as_deref(),
+                &api_base,
+                SnippetScope::User(user.id),
+                on_repo,
+            )
+            .await?;
+            repo_urls.extend(snippets);
         }
 
         if let Some(pb) = progress.as_ref() {
@@ -386,7 +412,11 @@ pub async fn enumerate_repo_urls(
         }
     }
 
-    let groups: Vec<SimpleGroup> = if repo_specifiers.all_groups {
+    enum GroupTarget<'a> {
+        Id(u64),
+        Name(&'a str),
+    }
+    let groups = if repo_specifiers.all_groups {
         let mut page = 1u32;
         let mut groups = Vec::new();
         loop {
@@ -401,25 +431,27 @@ pub async fn enumerate_repo_urls(
             if page_groups.is_empty() {
                 break;
             }
-            groups.extend(page_groups);
+            groups.extend(page_groups.into_iter().map(|group| GroupTarget::Id(group.id)));
             page += 1;
         }
         groups
     } else {
-        let mut found = Vec::new();
-        for group in &repo_specifiers.group {
-            let encoded = form_urlencoded::byte_serialize(group.as_bytes()).collect::<String>();
-            let group_url = gitlab_api_url(&api_base, &format!("api/v4/groups/{encoded}"))?;
-            let group_info: SimpleGroup =
-                send_gitlab_json(&client, token.as_deref(), group_url).await?;
-            found.push(group_info);
-        }
-        found
+        repo_specifiers.group.iter().map(|name| GroupTarget::Name(name)).collect()
     };
 
+    // Resolve explicitly named groups just before their projects, so a large
+    // group list does not delay the first clone.
     for group in groups {
+        let group_id = match group {
+            GroupTarget::Id(id) => id,
+            GroupTarget::Name(name) => {
+                let encoded = form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>();
+                let group_url = gitlab_api_url(&api_base, &format!("api/v4/groups/{encoded}"))?;
+                send_gitlab_json::<SimpleGroup>(&client, token.as_deref(), group_url).await?.id
+            }
+        };
         let projects_url =
-            gitlab_api_url(&api_base, &format!("api/v4/groups/{}/projects", group.id))?;
+            gitlab_api_url(&api_base, &format!("api/v4/groups/{group_id}/projects"))?;
         let mut query = Vec::new();
         if matches!(repo_specifiers.repo_filter, RepoType::Owner) {
             query.push(("owned", "true".to_string()));
@@ -429,8 +461,15 @@ pub async fn enumerate_repo_urls(
         }
 
         projects.extend(
-            fetch_paged_projects(&client, token.as_deref(), projects_url, &query, &exclude_set)
-                .await?,
+            fetch_paged_projects(
+                &client,
+                token.as_deref(),
+                projects_url,
+                &query,
+                &exclude_set,
+                on_repo,
+            )
+            .await?,
         );
 
         if let Some(pb) = progress.as_ref() {
@@ -445,15 +484,15 @@ pub async fn enumerate_repo_urls(
         }
         if repo_specifiers.include_snippets {
             if let Some(id) = project.id {
-                repo_urls.extend(
-                    fetch_snippet_urls(
-                        &client,
-                        token.as_deref(),
-                        &api_base,
-                        SnippetScope::Project(id),
-                    )
-                    .await?,
-                );
+                let snippets = fetch_snippet_urls(
+                    &client,
+                    token.as_deref(),
+                    &api_base,
+                    SnippetScope::Project(id),
+                    on_repo,
+                )
+                .await?;
+                repo_urls.extend(snippets);
             } else {
                 warn!(
                     "Skipping snippet enumeration for GitLab project without an ID: {}",

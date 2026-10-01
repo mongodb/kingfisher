@@ -266,37 +266,15 @@ mod github {
     }
 
     #[test]
-    fn scan_github_user_file_requires_public_events() {
-        let users = tempfile::NamedTempFile::new().expect("create user file");
-        std::fs::write(users.path(), "alice\n").expect("write user file");
-
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args([
-                "scan",
-                "github",
-                "--user-file",
-                users.path().to_str().expect("path should be utf-8"),
-                "--no-update-check",
-            ])
-            .assert()
-            .failure()
-            .stderr(contains("--user-file can only be used with --public-events"));
-    }
-
-    #[test]
     fn scan_github_public_events_reports_missing_user_file() {
+        let temp = tempfile::tempdir().expect("create test directory");
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args([
-                "scan",
-                "github",
-                "--public-events",
-                "--user-file",
-                "/path/to/missing/github-users.txt",
-                "--no-update-check",
-            ])
+            .args(["scan", "github", "--public-events", "--user-file"])
+            .arg(temp.path().join("missing-users.txt"))
+            .arg("--no-update-check")
             .assert()
             .failure()
-            .stderr(contains("Failed to read GitHub public event user file"));
+            .stderr(contains("Failed to read GitHub user file"));
     }
 
     #[test]
@@ -318,7 +296,7 @@ mod github {
             ])
             .assert()
             .failure()
-            .stderr(contains("--audit-log must not overwrite the GitHub public-event user file"));
+            .stderr(contains("--audit-log must not overwrite the GitHub user file"));
         assert_eq!(std::fs::read_to_string(users).unwrap(), "alice\n");
     }
 

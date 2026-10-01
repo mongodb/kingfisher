@@ -1,3 +1,4 @@
+use kingfisher_scanner::validation::limits::ResourceTimeout;
 use std::{
     collections::HashSet,
     env, fs,
@@ -492,7 +493,7 @@ pub async fn enumerate_repo_urls(
 ) -> Result<Vec<String>> {
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(ignore_certs)
-        .timeout(Duration::from_secs(30))
+        .resource_timeout(Duration::from_secs(30))
         .build()?;
     let kind = BitbucketKind::from_url(&api_url);
     if repo_specifiers.include_snippets && kind == BitbucketKind::Server {

@@ -1,81 +1,74 @@
 //! Credential validation module for Kingfisher.
 //!
 //! This module provides functionality for validating detected secrets by checking
-//! if they are still active/valid. Validation is gated behind optional protocol-specific features.
+//! if they are still active/valid. All validation is gated behind the optional `validation` feature.
 //!
 //! # Features
 //!
-//! Enable validation features in your `Cargo.toml`:
+//! Enable validation in your `Cargo.toml`:
 //!
 //! ```toml
 //! [dependencies]
-//! kingfisher-scanner = { version = "1.0.0", features = ["validation-http"] }
+//! kingfisher-scanner = { version = "1.1.0", features = ["validation"] }
 //! ```
 //!
 //! Prefer `Validator` for automatic rule dispatch, credential association,
-//! bounded concurrency, and explicit results (requires `validation-http`).
+//! bounded concurrency, and explicit results (requires `validation`).
 //! The protocol helpers below remain available for custom orchestration.
 //!
 //! # Available Validators
 //!
 //! - **HTTP**: Generic HTTP-based validation via configurable requests
-//! - **gRPC**: Unary requests with trailers (requires `validation-grpc` feature)
-//! - **AWS**: AWS credential validation via STS (requires `validation-aws` feature)
-//! - **GCP**: GCP service account validation (requires `validation-gcp` feature)
-//! - **Azure**: Azure Storage credential validation (requires `validation-azure` feature)
-//! - **Databases**: MongoDB, MySQL, Postgres, JDBC (requires `validation-database` feature)
-//! - **JWT**: JWT token validation (requires `validation-jwt` feature)
+//! - **gRPC**: Unary requests with trailers
+//! - **AWS**: AWS credential validation via STS
+//! - **GCP**: GCP service account validation
+//! - **Azure**: Azure Storage credential validation
+//! - **Databases**: MongoDB, MySQL, Postgres, JDBC
+//! - **JWT**: JWT token validation
 //! - **Raw**: provider/protocol-specific validators that need custom logic
-//!   (requires `validation-raw` feature)
 //! - **Ethereum**: network-free key parsing and address derivation
-//!   (requires `validation-ethereum` feature)
+
+pub mod limits;
 
 mod utils;
 mod validation_body;
 
 use kingfisher_core::ValidationOutcome;
 
-#[cfg(feature = "validation-http")]
 pub mod http_validation;
 
-#[cfg(feature = "validation-aws")]
+pub mod revocation;
+
+mod revoker;
+
+pub use revoker::Revoker;
+
 pub mod aws;
 
-#[cfg(feature = "validation-azure")]
 pub mod azure;
 
-#[cfg(feature = "validation-coinbase")]
 pub mod coinbase;
 
-#[cfg(feature = "validation-gcp")]
 pub mod gcp;
 
-#[cfg(feature = "validation-jwt")]
 pub mod jwt;
 
-#[cfg(feature = "validation-database")]
 pub mod jdbc;
 
-#[cfg(feature = "validation-database")]
 pub mod mongodb;
 
-#[cfg(feature = "validation-database")]
 pub mod mysql;
 
-#[cfg(feature = "validation-database")]
 pub mod postgres;
 
-#[cfg(feature = "validation-ethereum")]
 pub mod ethereum;
 
-#[cfg(feature = "validation-raw")]
 pub mod raw;
 
 // Re-exports
 pub use utils::{find_closest_variable, process_captures};
 pub use validation_body::{ValidationResponseBody, as_str, clone_as_string, from_string};
 
-#[cfg(feature = "validation-http")]
 pub use http_validation::{
     SSRF_BLOCKED_MESSAGE, SsrfBlockedError, build_request_builder, check_host_resolvable,
     check_url_resolvable, generate_http_cache_key_parts, is_ssrf_safe_ip, parse_http_method,
@@ -83,21 +76,17 @@ pub use http_validation::{
     with_request_template_globals,
 };
 
-#[cfg(feature = "validation-raw")]
 pub use raw::{RawValidationOutcome, required_vars as raw_required_vars, validate_raw};
 
-#[cfg(feature = "validation-http")]
 #[expect(deprecated)]
 pub use http_validation::check_url_resolvable_safe;
 
-#[cfg(feature = "validation-aws")]
 pub use aws::{
     aws_key_to_account_number, generate_aws_cache_key, revoke_aws_access_key,
     set_aws_skip_account_ids, set_aws_validation_concurrency, should_skip_aws_validation,
     validate_aws_credentials, validate_aws_credentials_input,
 };
 
-#[cfg(feature = "validation-http")]
 use std::sync::{LazyLock, OnceLock};
 use std::{
     sync::Arc,
@@ -107,18 +96,15 @@ use std::{
 use crossbeam_skiplist::SkipMap;
 
 /// User agent string used for HTTP validation requests.
-#[cfg(feature = "validation-http")]
+
 pub static GLOBAL_USER_AGENT: LazyLock<String> = LazyLock::new(build_user_agent);
 
-#[cfg(feature = "validation-http")]
 static USER_AGENT_SUFFIX: OnceLock<String> = OnceLock::new();
 
-#[cfg(feature = "validation-http")]
 const BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) \
          AppleWebKit/537.36 (KHTML, like Gecko) \
          Chrome/140.0.0.0 Safari/537.36";
 
-#[cfg(feature = "validation-http")]
 fn build_user_agent() -> String {
     let base = format!("{}/{}", env!("CARGO_PKG_NAME"), env!("CARGO_PKG_VERSION"));
     if let Some(suffix) = USER_AGENT_SUFFIX.get() {
@@ -133,7 +119,7 @@ fn build_user_agent() -> String {
 /// The suffix is inserted before the browser portion of the user-agent. Empty or whitespace-only
 /// values are ignored. This should be called once near program start prior to accessing
 /// [`GLOBAL_USER_AGENT`].
-#[cfg(feature = "validation-http")]
+
 pub fn set_user_agent_suffix<S: Into<String>>(suffix: Option<S>) {
     if let Some(suffix) = suffix {
         let trimmed = suffix.into().trim().to_string();
@@ -198,25 +184,21 @@ mod tests {
 }
 
 /// Shared Betterleaks expression interpreter used by the CLI and embedding API.
-#[cfg(feature = "validation-http")]
 pub mod betterleaks;
 
 /// Unary gRPC transport and template helpers.
-#[cfg(feature = "validation-grpc")]
 pub mod grpc;
 
-#[cfg(feature = "validation-http")]
 mod validator;
-#[cfg(feature = "validation-http")]
+
 pub use validator::{ValidatedFinding, Validator, ValidatorBuilder};
-#[cfg(feature = "validation-http")]
+
 mod result;
-#[cfg(feature = "validation-http")]
+
 pub use result::{ValidationReason, ValidationResult};
 
-#[cfg(feature = "validation-http")]
 pub mod credential_uri;
-#[cfg(feature = "validation-http")]
+
 pub mod engine;
-#[cfg(feature = "validation-http")]
+
 pub use engine::ValidationEngine;

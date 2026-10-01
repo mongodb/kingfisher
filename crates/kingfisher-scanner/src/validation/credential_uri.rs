@@ -1,25 +1,26 @@
 //! Credential URI normalization and HTTPS Basic authentication.
+use super::limits::ResourceTimeout;
 use super::{GLOBAL_USER_AGENT, http_validation as httpvalidation};
-#[cfg(feature = "validation-database")]
+
 use super::{mongodb, mysql, postgres};
 use anyhow::{Result, anyhow};
 use percent_encoding::percent_decode_str;
 use reqwest::{Client, StatusCode, Url, header, header::HeaderMap};
 use std::time::Duration;
 /// Returns `true` if the provided string can be parsed as a MongoDB connection URI.
-#[cfg(feature = "validation-database")]
+
 pub fn is_parseable_mongodb_uri(uri: &str) -> bool {
     mongodb::looks_like_mongodb_uri(uri)
 }
 
 /// Returns `true` if the provided string can be parsed as a Postgres connection URI.
-#[cfg(feature = "validation-database")]
+
 pub fn is_parseable_postgres_uri(uri: &str) -> bool {
     postgres::parse_postgres_url(uri).is_ok()
 }
 
 /// Returns `true` if the provided string can be parsed as a MySQL connection URI.
-#[cfg(feature = "validation-database")]
+
 pub fn is_parseable_mysql_uri(uri: &str) -> bool {
     mysql::parse_mysql_url(uri).is_ok()
 }
@@ -54,16 +55,14 @@ impl CredentialUriTarget {
                     && !url.username().is_empty()
                     && url.password().is_some_and(|password| !password.is_empty())
             }),
-            #[cfg(feature = "validation-database")]
+
             Self::MongoDB(uri) => is_parseable_mongodb_uri(uri),
-            #[cfg(feature = "validation-database")]
+
             Self::MySQL(uri) => is_parseable_mysql_uri(uri),
-            #[cfg(feature = "validation-database")]
+
             Self::Postgres(uri) => is_parseable_postgres_uri(uri),
             // The JDBC validator performs subprotocol-specific parsing. Treat the outer prefix as
             // structurally valid here so direct validation can return its precise diagnostic.
-            #[cfg(not(feature = "validation-database"))]
-            Self::MongoDB(uri) | Self::MySQL(uri) | Self::Postgres(uri) => Url::parse(uri).is_ok(),
             Self::Jdbc(uri) => uri.len() > "jdbc:".len(),
             Self::Unsupported(_) => true,
         }
@@ -193,7 +192,7 @@ pub async fn validate_http_credential_uri(
         client
             .get(url.clone())
             .header(header::USER_AGENT, GLOBAL_USER_AGENT.as_str())
-            .timeout(timeout),
+            .resource_timeout(timeout),
         retries,
         Duration::from_millis(500),
         Duration::from_secs(2),
@@ -226,7 +225,7 @@ pub async fn validate_http_credential_uri(
             .get(url.clone())
             .basic_auth(username, Some(password))
             .header(header::USER_AGENT, GLOBAL_USER_AGENT.as_str())
-            .timeout(timeout),
+            .resource_timeout(timeout),
         retries,
         Duration::from_millis(500),
         Duration::from_secs(2),
