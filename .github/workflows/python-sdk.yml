@@ -11,7 +11,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: python-sdk-${{ github.ref }}
+  # Only PR checks supersede earlier runs. Every release keeps its own slot,
+  # including pending runs: GitHub concurrency is not a FIFO release queue.
+  group: python-sdk-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
@@ -175,7 +177,7 @@ jobs:
     needs: [wheels, source-and-msrv]
     runs-on: ubuntu-latest
     concurrency:
-      group: pypi-sdk-publish
+      group: pypi-sdk-publish-${{ github.run_id }}
       cancel-in-progress: false
     environment:
       name: pypi-sdk

@@ -18,9 +18,18 @@ class PythonSdkReleaseTests(unittest.TestCase):
             self.assertIn(guard, condition)
         self.assertIn("needs: [wheels, source-and-msrv]", publish)
         self.assertIn("name: pypi-sdk", publish)
-        self.assertIn("group: pypi-sdk-publish", publish)
+        self.assertIn("group: pypi-sdk-publish-${{ github.run_id }}", publish)
         self.assertIn("skip-existing: true", publish)
         self.assertIn("pattern: python-*", publish)
+
+    def test_release_builds_do_not_replace_other_pending_releases(self):
+        workflow = (ROOT / ".github/workflows/python-sdk.yml").read_text(encoding="utf-8")
+        concurrency = workflow.split("concurrency:\n", 1)[1].split("env:\n", 1)[0]
+        self.assertIn(
+            "group: python-sdk-${{ github.event_name == 'pull_request' && github.ref || github.run_id }}",
+            concurrency,
+        )
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", concurrency)
 
 
 if __name__ == "__main__":
