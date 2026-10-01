@@ -21,15 +21,19 @@ def rules():
     return Rules([mock.RULE_PATH], builtins=False)
 
 
-def test_scan_file_and_redaction(rules, tmp_path):
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"], ids=["lf", "crlf"])
+def test_scan_file_and_redaction(rules, tmp_path, newline):
     scanner = Scanner(rules)
     path = tmp_path / "credential with spaces.txt"
-    path.write_text("prefix\n" + mock.TOKEN, encoding="utf-8")
+    # Write exact bytes so Windows text-mode newline translation cannot change
+    # the fixture. Offsets refer to the scanned bytes for both line endings.
+    prefix = b"prefix" + newline
+    path.write_bytes(prefix + mock.TOKEN.encode("utf-8"))
     finding, = scanner.scan_file(path)
     assert finding.rule_id == mock.RULE_ID
     assert finding.secret == mock.TOKEN
     assert finding.to_dict()["location"]["line"] == 2
-    assert finding.to_dict()["location"]["start_offset"] == 7
+    assert finding.to_dict()["location"]["start_offset"] == len(prefix)
     assert mock.TOKEN not in repr(finding)
     assert mock.TOKEN not in json.dumps(finding.to_dict())
     assert finding.to_dict(redact=False)["secret"] == mock.TOKEN
