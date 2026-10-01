@@ -96,6 +96,12 @@ fn pyc_version_info(magic: u16) -> Option<(usize, CodeFormat)> {
     }
 }
 
+enum MarshalWork {
+    Objects(u32, usize),
+    Dictionary(usize),
+    Skip(usize),
+}
+
 struct MarshalReader<'a> {
     cursor: Cursor<&'a [u8]>,
     code_format: CodeFormat,
@@ -103,6 +109,7 @@ struct MarshalReader<'a> {
     strings: Vec<u8>,
     total_extracted: usize,
     depth: usize,
+    resources: crate::limits::ResourceLimits,
 }
 
 impl<'a> MarshalReader<'a> {
@@ -114,6 +121,7 @@ impl<'a> MarshalReader<'a> {
             strings: Vec::new(),
             total_extracted: 0,
             depth: 0,
+            resources: crate::limits::ResourceLimits::default(),
         }
     }
 
@@ -151,7 +159,7 @@ impl<'a> MarshalReader<'a> {
     }
 
     fn collect_string(&mut self, data: &[u8]) {
-        if self.total_extracted >= MAX_TOTAL_BYTES {
+        if self.resources.reached(self.total_extracted, MAX_TOTAL_BYTES) {
             return;
         }
         if data.is_empty() {
@@ -162,22 +170,38 @@ impl<'a> MarshalReader<'a> {
             self.total_extracted += 1;
         }
         let allowed = MAX_TOTAL_BYTES.saturating_sub(self.total_extracted);
-        let take = data.len().min(allowed);
+        let take = self.resources.cap(data.len(), allowed);
         self.strings.extend_from_slice(&data[..take]);
         self.total_extracted += take;
     }
 
     fn read_object(&mut self) -> Result<()> {
-        if self.depth > MAX_RECURSION_DEPTH {
-            bail!("marshal recursion depth exceeded");
+        let mut work = vec![MarshalWork::Objects(1, 0)];
+        while let Some(next) = work.pop() {
+            match next {
+                MarshalWork::Objects(0, _) => {}
+                MarshalWork::Objects(count, depth) => {
+                    if self.resources.exceeds(depth, MAX_RECURSION_DEPTH) {
+                        bail!("marshal recursion depth exceeded");
+                    }
+                    work.push(MarshalWork::Objects(count - 1, depth));
+                    self.depth = depth + 1;
+                    self.read_object_inner(&mut work)?;
+                }
+                MarshalWork::Dictionary(depth) => {
+                    if self.read_u8()? != TYPE_NULL {
+                        self.cursor.set_position(self.cursor.position() - 1);
+                        work.push(MarshalWork::Dictionary(depth));
+                        work.push(MarshalWork::Objects(2, depth));
+                    }
+                }
+                MarshalWork::Skip(bytes) => self.skip(bytes)?,
+            }
         }
-        self.depth += 1;
-        let result = self.read_object_inner();
-        self.depth -= 1;
-        result
+        Ok(())
     }
 
-    fn read_object_inner(&mut self) -> Result<()> {
+    fn read_object_inner(&mut self, work: &mut Vec<MarshalWork>) -> Result<()> {
         let raw_type = self.read_u8().context("unexpected EOF reading type byte")?;
         let type_byte = raw_type & !FLAG_REF;
         let is_ref = raw_type & FLAG_REF != 0;
@@ -220,11 +244,11 @@ impl<'a> MarshalReader<'a> {
             TYPE_LONG => {
                 let n = self.read_i32()?;
                 let words = n.unsigned_abs() as usize;
-                if words as u32 > MAX_COLLECTION_LEN {
+                if self.resources.exceeds(words as u32, MAX_COLLECTION_LEN) {
                     bail!("long size {words} exceeds collection limit");
                 }
                 let bytes = words.checked_mul(2).context("long size overflow")?;
-                if bytes > MAX_TOTAL_BYTES {
+                if self.resources.exceeds(bytes, MAX_TOTAL_BYTES) {
                     bail!("long size {bytes} exceeds total bytes limit");
                 }
                 self.skip(bytes)?;
@@ -232,7 +256,7 @@ impl<'a> MarshalReader<'a> {
 
             TYPE_STRING | TYPE_INTERNED => {
                 let len = self.read_u32()? as usize;
-                if len > MAX_TOTAL_BYTES {
+                if self.resources.exceeds(len, MAX_TOTAL_BYTES) {
                     bail!("string length {len} exceeds limit");
                 }
                 let data = self.read_bytes(len)?;
@@ -241,7 +265,7 @@ impl<'a> MarshalReader<'a> {
 
             TYPE_UNICODE => {
                 let len = self.read_u32()? as usize;
-                if len > MAX_TOTAL_BYTES {
+                if self.resources.exceeds(len, MAX_TOTAL_BYTES) {
                     bail!("unicode length {len} exceeds limit");
                 }
                 let data = self.read_bytes(len)?;
@@ -250,7 +274,7 @@ impl<'a> MarshalReader<'a> {
 
             TYPE_ASCII | TYPE_ASCII_INTERNED => {
                 let len = self.read_u32()? as usize;
-                if len > MAX_TOTAL_BYTES {
+                if self.resources.exceeds(len, MAX_TOTAL_BYTES) {
                     bail!("ascii length {len} exceeds limit");
                 }
                 let data = self.read_bytes(len)?;
@@ -269,81 +293,47 @@ impl<'a> MarshalReader<'a> {
 
             TYPE_TUPLE => {
                 let n = self.read_u32()?;
-                if n > MAX_COLLECTION_LEN {
+                if self.resources.exceeds(n, MAX_COLLECTION_LEN) {
                     bail!("tuple length {n} exceeds limit");
                 }
-                for _ in 0..n {
-                    self.read_object()?;
-                }
+                work.push(MarshalWork::Objects(n, self.depth));
             }
 
             TYPE_SMALL_TUPLE => {
                 let n = self.read_u8()? as u32;
-                for _ in 0..n {
-                    self.read_object()?;
-                }
+                work.push(MarshalWork::Objects(n, self.depth));
             }
 
             TYPE_LIST => {
                 let n = self.read_u32()?;
-                if n > MAX_COLLECTION_LEN {
+                if self.resources.exceeds(n, MAX_COLLECTION_LEN) {
                     bail!("list length {n} exceeds limit");
                 }
-                for _ in 0..n {
-                    self.read_object()?;
-                }
+                work.push(MarshalWork::Objects(n, self.depth));
             }
 
             TYPE_SET | TYPE_FROZENSET => {
                 let n = self.read_u32()?;
-                if n > MAX_COLLECTION_LEN {
+                if self.resources.exceeds(n, MAX_COLLECTION_LEN) {
                     bail!("set length {n} exceeds limit");
                 }
-                for _ in 0..n {
-                    self.read_object()?;
-                }
+                work.push(MarshalWork::Objects(n, self.depth));
             }
 
-            TYPE_DICT => {
-                loop {
-                    let peek = self.read_u8()?;
-                    if peek == TYPE_NULL {
-                        break;
-                    }
-                    // Put the byte back by seeking
-                    let pos = self.cursor.position();
-                    self.cursor.set_position(pos - 1);
-                    self.read_object()?;
-                    self.read_object()?;
-                }
-            }
+            TYPE_DICT => work.push(MarshalWork::Dictionary(self.depth)),
 
             TYPE_CODE => {
-                self.read_code_object()?;
+                let fmt = self.code_format;
+                self.skip(4 * fmt.leading_longs())?;
+                work.push(MarshalWork::Objects(fmt.trailing_objects() as u32, self.depth));
+                work.push(MarshalWork::Skip(4)); // firstlineno
+                work.push(MarshalWork::Objects(fmt.middle_objects() as u32, self.depth));
             }
 
             other => {
                 debug!("unknown marshal type byte 0x{other:02x}, stopping parse");
                 bail!("unknown marshal type 0x{other:02x}");
             }
-        }
-
-        Ok(())
-    }
-
-    fn read_code_object(&mut self) -> Result<()> {
-        let fmt = self.code_format;
-
-        for _ in 0..fmt.leading_longs() {
-            self.skip(4)?;
-        }
-        for _ in 0..fmt.middle_objects() {
-            self.read_object()?;
-        }
-        // firstlineno
-        self.skip(4)?;
-        for _ in 0..fmt.trailing_objects() {
-            self.read_object()?;
         }
 
         Ok(())
@@ -355,6 +345,12 @@ impl<'a> MarshalReader<'a> {
 /// Returns the extracted strings concatenated with newlines, suitable for
 /// scanning. Returns an empty vec if the file contains no extractable strings.
 pub fn extract_pyc_strings(path: &Path) -> Result<Vec<u8>> {
+    extract_pyc_strings_with_limits(path, crate::limits::ResourceLimits::default())
+}
+pub fn extract_pyc_strings_with_limits(
+    path: &Path,
+    resources: crate::limits::ResourceLimits,
+) -> Result<Vec<u8>> {
     let data = std::fs::read(path)
         .with_context(|| format!("failed to read .pyc file: {}", path.display()))?;
 
@@ -386,6 +382,7 @@ pub fn extract_pyc_strings(path: &Path) -> Result<Vec<u8>> {
     }
 
     let mut reader = MarshalReader::new(marshal_data, code_format);
+    reader.resources = resources;
     match reader.read_object() {
         Ok(()) => {}
         Err(e) => {
@@ -781,5 +778,27 @@ mod tests {
             result_str.contains("DB_PASSWORD") || result_str.contains("xK9#mP2$vL5nQ8wR"),
             "expected to find secret string in extracted pyc content, got: {result_str}"
         );
+    }
+}
+
+#[cfg(test)]
+mod unlimited_tests {
+    use super::*;
+
+    #[test]
+    fn unlimited_bytecode_nesting_uses_an_explicit_stack() -> Result<()> {
+        let mut data = Vec::new();
+        for _ in 0..1024 {
+            data.extend_from_slice(&[TYPE_SMALL_TUPLE, 1]);
+        }
+        data.extend_from_slice(&[TYPE_SHORT_ASCII, 6]);
+        data.extend_from_slice(b"secret");
+        let mut bounded = MarshalReader::new(&data, CodeFormat::V311);
+        assert!(bounded.read_object().is_err());
+        let mut unlimited = MarshalReader::new(&data, CodeFormat::V311);
+        unlimited.resources.unlimited = true;
+        unlimited.read_object()?;
+        assert_eq!(unlimited.strings, b"secret");
+        Ok(())
     }
 }

@@ -3,6 +3,7 @@
 //! This module provides functionality to validate AWS access keys by making
 //! an STS GetCallerIdentity call.
 
+use super::limits::timeout;
 use kingfisher_core::ValidationOutcome;
 use std::{
     collections::HashSet,
@@ -42,10 +43,7 @@ use http::{
 };
 use rand::{RngExt, rng};
 use regex::Regex;
-use tokio::{
-    sync::Semaphore,
-    time::{sleep, timeout},
-};
+use tokio::{sync::Semaphore, time::sleep};
 
 use super::GLOBAL_USER_AGENT;
 
@@ -86,13 +84,18 @@ fn build_http_client() -> SharedHttpClient {
 
 async fn build_base_config(credentials: Credentials) -> SdkConfig {
     let retry_config = RetryConfig::adaptive().with_max_attempts(3);
-    aws_config::defaults(BehaviorVersion::latest())
+    let loader = aws_config::defaults(BehaviorVersion::latest())
         .region(Region::new("us-east-1"))
         .credentials_provider(credentials)
         .http_client(build_http_client())
-        .retry_config(retry_config)
-        .load()
-        .await
+        .retry_config(retry_config);
+    let loader = if super::limits::NetworkLimits::current().no_timeouts {
+        loader.timeout_config(aws_smithy_types::timeout::TimeoutConfig::disabled())
+            .stalled_stream_protection(aws_smithy_runtime_api::client::stalled_stream_protection::StalledStreamProtectionConfig::disabled())
+    } else {
+        loader
+    };
+    loader.load().await
 }
 
 fn extract_account_id(input: &str) -> Option<String> {

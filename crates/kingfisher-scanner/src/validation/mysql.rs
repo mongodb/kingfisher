@@ -1,8 +1,9 @@
 use std::{net::IpAddr, time::Duration};
 
+use super::limits::timeout;
 use anyhow::{Result, anyhow};
 use mysql_async::{Conn, Opts, OptsBuilder, SslOpts, prelude::Queryable};
-use tokio::time::{error::Elapsed, timeout};
+use tokio::time::error::Elapsed;
 use tracing::debug;
 use url::Url;
 

@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use futures::{StreamExt, stream};
+use kingfisher_scanner::validation::limits::timeout;
 use reqwest::{Client, StatusCode, redirect::Policy};
 use serde_json::Value;
 
@@ -135,7 +136,7 @@ async fn probe_api_key(client: &Client, api_key: &str, probe: ApiKeyProbe) -> Pr
         Ok::<_, &'static str>((status, body))
     };
 
-    match tokio::time::timeout(PROBE_TIMEOUT, request).await {
+    match timeout(PROBE_TIMEOUT, request).await {
         Ok(Ok((status, body))) => classify_response(probe, status, &body),
         Ok(Err(reason)) => ProbeResult {
             probe,

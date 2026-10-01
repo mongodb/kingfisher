@@ -66,7 +66,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let lock_output = Command::new("cargo")
-        .arg("generate-lockfile")
+        // Add the consumer without upgrading the native dependencies whose
+        // verified archives are reused below.
+        .args(["update", "--workspace"])
         .arg("--offline")
         .current_dir(&project_dir)
         .output()?;
@@ -93,6 +95,39 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     run.args(["run", "--target", "aarch64-pc-windows-gnullvm"]);
     #[cfg(not(windows))]
     run.arg("run");
+
+    // Reuse the native archives already verified by the parent build. The
+    // consumer has a separate target directory, but should not need a second
+    // GitHub release download just to exercise the library API.
+    if std::env::var_os("VECTORSCAN_PREBUILT_DIR").is_none() {
+        let archive_dir = temp.path().join("vectorscan-prebuilt");
+        let profile_dir = std::env::current_exe()?
+            .parent()
+            .and_then(Path::parent)
+            .expect("test executable is in the profile deps directory")
+            .to_path_buf();
+        if let Ok(builds) = fs::read_dir(profile_dir.join("build")) {
+            for build in builds {
+                let build = build?;
+                if !build.file_name().to_string_lossy().starts_with("kingfisher-vectorscan-sys-") {
+                    continue;
+                }
+                let Ok(outputs) = fs::read_dir(build.path().join("out")) else { continue };
+                for output in outputs {
+                    let output = output?;
+                    let name = output.file_name();
+                    let text = name.to_string_lossy();
+                    if text.starts_with("vectorscan-") && text.ends_with(".tar.gz") {
+                        fs::create_dir_all(&archive_dir)?;
+                        fs::copy(output.path(), archive_dir.join(name))?;
+                    }
+                }
+            }
+        }
+        if archive_dir.is_dir() {
+            run.env("VECTORSCAN_PREBUILT_DIR", archive_dir);
+        }
+    }
 
     let output = run
         .arg("--quiet")

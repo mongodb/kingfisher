@@ -87,16 +87,21 @@ eligible). The available scopes are:
 | `branch_history` | All commits reachable from `--branch` with `--git-history full` (the default), including merged history |
 | `git_tree` | The tree resolved from `--branch` with `--git-history none` |
 | `working_tree` | The checked-out files used with `--git-history none` |
-| `commit_range` | Changes in every commit reachable from the tip, excluding `--since-commit` and its ancestors |
+| `commit_range` | Changes in every commit reachable from all refs and HEAD (or only `--branch` when set), excluding `--since-commit` and its ancestors |
+| `commit_time_range` | Added or modified file versions in commits whose committer timestamps fall within the fixed `--since-hours` window, across all refs and HEAD unless `--branch` is set |
 | `tree_diff` | The net change set between `--since-commit` and the resolved tip with `--git-history none` |
 | `inclusive_root_tree_diff` | Changes beginning at `--branch-root-commit` or the computed branch root |
 | `staged_tree_diff` | The staged index changes selected by `--staged` |
 
-`tip_ref` and `tip_sha` identify the starting tip. Range scans also record `base_ref`/`base_sha` or
+`tip_ref` and `tip_sha` identify the starting tip for a single-ref scan. For `--since-commit` or `--since-hours`
+with full history and no `--branch`, `tip_ref` is `(all refs and HEAD)` and `tip_sha` is omitted
+because the walk has multiple possible starting points. Range scans also record `base_ref`/`base_sha` or
 `inclusive_root_ref`/`inclusive_root_sha`. Full-history scans include `fetched_commit_count` when
 Git can compute it (restricted to the selected ref’s reachable commits for `branch_history`), plus the clone mode and whether the repository is shallow. These fields
 describe what was locally available and eligible; they do not pretend that a Git graph has one
 chronological “last” commit.
+
+Time-window scans additionally record `since_timestamp` and `until_timestamp` as inclusive Unix-second bounds. Both are fixed once at scan start and shared by all repositories in the invocation; selection uses committer timestamps. These fields are omitted for other scopes.
 
 ## Incremental JSONL events
 

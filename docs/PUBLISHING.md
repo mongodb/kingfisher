@@ -14,9 +14,9 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
 | `kingfisher-core` | `1.0.0` | `kingfisher_core` library |
-| `kingfisher-rules` | `1.0.0` | `kingfisher_rules` library |
-| `kingfisher-scanner` | `1.0.0` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.8.0` | `kingfisher` executable and library |
+| `kingfisher-rules` | `1.0.1` | `kingfisher_rules` library |
+| `kingfisher-scanner` | `1.1.0` | `kingfisher_scanner` library |
+| `kingfisher-bin` | `2.9.0` | `kingfisher` executable and library |
 
 The libraries establish their stable `1.x` API at `1.0.0`; they do not inherit the CLI
 version. See the [compatibility contract](LIBRARY.md#api-stability).
@@ -26,7 +26,7 @@ version. See the [compatibility contract](LIBRARY.md#api-stability).
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.8.0
+cargo install --locked kingfisher-bin --version 2.9.0
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
@@ -247,7 +247,7 @@ publishing, first create fresh archives:
 
 ```sh
 cargo package --locked --workspace --exclude kingfisher-rule-bundle
-python3 scripts/publish-crates.py --tag v2.8.0
+python3 scripts/publish-crates.py --tag v2.9.0
 python3 -m unittest discover -s scripts/tests -v
 ```
 

@@ -1,3 +1,4 @@
+use crate::limits::ResourceLimits;
 use std::{
     collections::{HashMap, HashSet},
     io::Read,
@@ -33,8 +34,9 @@ use crate::{
     blob::{Blob, BlobAppearance, BlobId, BlobIdMap},
     cli::commands::{github::GitHistoryMode, scan},
     decompress::{
-        CompressedContent, MAX_INMEM_ZIP_ARCHIVE_BYTES, ZIP_BASED_FORMATS, decompress_file_to_temp,
-        extract_zip_archive_in_memory, looks_like_zip,
+        CompressedContent, MAX_INMEM_ZIP_ARCHIVE_BYTES, ZIP_BASED_FORMATS,
+        decompress_file_to_temp_with_limits, extract_zip_archive_in_memory_with_limits,
+        looks_like_zip,
     },
     findings_store,
     git_commit_metadata::{CommitMetadata, intern_git_identity},
@@ -42,7 +44,7 @@ use crate::{
     matcher::{Matcher, MatcherStats},
     open_git_repo_with_options,
     origin::{Origin, OriginSet},
-    pyc::extract_pyc_strings,
+    pyc::extract_pyc_strings_with_limits,
     rule_profiling::ConcurrentRuleProfiler,
     rules_database::RulesDatabase,
     scanner::{
@@ -51,7 +53,7 @@ use crate::{
         util::{is_compressed_content, is_compressed_file, is_pyc_file, is_sqlite_file},
     },
     scanner_pool::ScannerPool,
-    sqlite::extract_sqlite_contents,
+    sqlite::extract_sqlite_contents_with_limits,
 };
 
 type OwnedBlob = Blob<'static>;
@@ -69,13 +71,18 @@ pub fn enumerate_filesystem_inputs(
     shared_profiler: Arc<ConcurrentRuleProfiler>,
     matcher_stats: &Mutex<MatcherStats>,
 ) -> Result<bool> {
-    let repo_scan_timeout = Duration::from_secs(args.git_repo_timeout);
+    let repo_scan_timeout = if args.content_filtering_args.no_limits || args.git_repo_timeout == 0 {
+        None
+    } else {
+        Some(Duration::from_secs(args.git_repo_timeout))
+    };
 
     let branch_root_enabled = args.input_specifier_args.branch_root
         || args.input_specifier_args.branch_root_commit.is_some();
 
     let wants_git_diff = args.input_specifier_args.staged
         || args.input_specifier_args.since_commit.is_some()
+        || args.input_specifier_args.since_hours.is_some()
         || args.input_specifier_args.branch.is_some()
         || branch_root_enabled;
 
@@ -169,8 +176,13 @@ pub fn enumerate_filesystem_inputs(
         repo_scan_timeout,
         exclude_globset: exclude_globset.clone(),
         git_diff: diff_config.clone(),
+        history_all_refs: (args.input_specifier_args.since_commit.is_some()
+            || args.input_specifier_args.since_hours.is_some())
+            && args.input_specifier_args.branch.is_none(),
+        history_time_range: args.input_specifier_args.resolved_history_time_range(),
         extract_archives: !args.content_filtering_args.no_extract_archives,
-        extraction_depth: args.content_filtering_args.extraction_depth as usize,
+        extraction_depth: args.content_filtering_args.archive_depth(),
+        resources: args.content_filtering_args.resource_limits(),
     };
     let (send_ds, recv_ds) = create_datastore_channel(args.num_jobs);
     let datastore_writer_thread =
@@ -192,7 +204,8 @@ pub fn enumerate_filesystem_inputs(
         &args.extra_ignore_comments,
         args.no_inline_ignore,
         !args.no_ignore_if_contains,
-    )?;
+    )?
+    .with_resource_limits(args.content_filtering_args.resource_limits());
     let blob_processor_init_time = Mutex::new(t1.elapsed());
     let make_blob_processor = || -> BlobProcessor {
         let t1 = Instant::now();
@@ -409,9 +422,10 @@ impl ParallelBlobIterator for FileResult {
     fn into_blob_iter<'a>(self) -> Result<Option<Self::Iter<'a>>> {
         let extraction_enabled = self.extract_archives;
         let max_extraction_depth = self.extraction_depth;
+        let resources = self.resources;
 
         if extraction_enabled && is_sqlite_file(&self.path) {
-            match extract_sqlite_contents(&self.path) {
+            match extract_sqlite_contents_with_limits(&self.path, resources) {
                 Ok(tables) if tables.is_empty() => {
                     debug!("No tables found in SQLite database: {}", self.path.display());
                     self.raw_blob_iter().map(Some)
@@ -436,7 +450,7 @@ impl ParallelBlobIterator for FileResult {
                 }
             }
         } else if extraction_enabled && is_pyc_file(&self.path) {
-            match extract_pyc_strings(&self.path) {
+            match extract_pyc_strings_with_limits(&self.path, resources) {
                 Ok(strings) if strings.is_empty() => {
                     debug!("No strings found in .pyc file: {}", self.path.display());
                     self.raw_blob_iter().map(Some)
@@ -457,7 +471,7 @@ impl ParallelBlobIterator for FileResult {
         } else if extraction_enabled
             && (is_compressed_file(&self.path) || file_header_looks_like_zip(&self.path))
         {
-            match decompress_file_to_temp(&self.path) {
+            match decompress_file_to_temp_with_limits(&self.path, resources) {
                 Ok((content, _temp_dir)) => match content {
                     // Single-file decompression fully in memory.
                     CompressedContent::Raw(ref data) => {
@@ -482,7 +496,7 @@ impl ParallelBlobIterator for FileResult {
 
                     // Multi‑file archive (in‑memory).
                     CompressedContent::Archive(files) => {
-                        if max_extraction_depth == 0 {
+                        if max_extraction_depth == Some(0) {
                             debug!(
                                 "Skipping nested archive (max depth reached): {}",
                                 self.path.display()
@@ -491,7 +505,8 @@ impl ParallelBlobIterator for FileResult {
                         }
                         let items = recursively_expand_archive_entries(
                             files,
-                            max_extraction_depth.saturating_sub(1),
+                            max_extraction_depth.map(|depth| depth.saturating_sub(1)),
+                            resources,
                         )?
                         .into_iter()
                         .map(|(filename, data)| {
@@ -508,7 +523,7 @@ impl ParallelBlobIterator for FileResult {
 
                     // Multi‑file archive (files on disk).
                     CompressedContent::ArchiveFiles(entries) => {
-                        if max_extraction_depth == 0 {
+                        if max_extraction_depth == Some(0) {
                             debug!(
                                 "Skipping nested archive (max depth reached): {}",
                                 self.path.display()
@@ -520,14 +535,15 @@ impl ParallelBlobIterator for FileResult {
                         // matcher; ordinary entries stay file-backed to avoid an extra copy.
                         let mut items = Vec::new();
                         for (filename, disk_path) in entries {
-                            if max_extraction_depth > 1
+                            if max_extraction_depth.is_none_or(|depth| depth > 1)
                                 && (is_compressed_file(Path::new(&filename))
                                     || file_header_looks_like_zip(&disk_path))
                                 && let Ok(data) = std::fs::read(&disk_path)
                             {
                                 let nested = recursively_expand_archive_entries(
                                     vec![(filename.clone(), data)],
-                                    max_extraction_depth - 1,
+                                    max_extraction_depth.map(|depth| depth - 1),
+                                    resources,
                                 )?;
                                 // A successful nested extraction replaces the archive entry
                                 // with its contents. Invalid or empty archives are returned as
@@ -611,51 +627,107 @@ impl AsRef<[u8]> for SharedArchive {
 
 type ArchiveEntries = Box<dyn Iterator<Item = OwnedArchiveEntry> + Send>;
 
-fn lazy_expand_entries(entries: ArchiveEntries, remaining_depth: usize) -> ArchiveEntries {
+fn lazy_expand_entries(
+    entries: ArchiveEntries,
+    remaining_depth: Option<usize>,
+    resources: ResourceLimits,
+) -> ArchiveEntries {
+    expand_entries(entries, remaining_depth, resources, true)
+}
+
+fn expand_entries(
+    entries: ArchiveEntries,
+    remaining_depth: Option<usize>,
+    resources: ResourceLimits,
+    apply_budget: bool,
+) -> ArchiveEntries {
+    expand_entries_with(
+        entries,
+        remaining_depth,
+        resources,
+        apply_budget,
+        move |logical, shared| {
+            if looks_like_zip(&shared) && shared.len() <= MAX_INMEM_ZIP_ARCHIVE_BYTES {
+                crate::decompress::zip_entries(
+                    std::io::Cursor::new(SharedArchive(shared)),
+                    logical.to_string(),
+                    resources,
+                )
+                .map(|entries| Box::new(entries) as ArchiveEntries)
+            } else {
+                extract_archive_bytes(logical, &shared, resources).map(|entries| {
+                    Box::new(entries.unwrap_or_default().into_iter()) as ArchiveEntries
+                })
+            }
+        },
+    )
+}
+
+fn expand_entries_with(
+    entries: ArchiveEntries,
+    remaining_depth: Option<usize>,
+    resources: ResourceLimits,
+    mut apply_budget: bool,
+    mut extract: impl FnMut(&str, Arc<Vec<u8>>) -> Result<ArchiveEntries> + Send + 'static,
+) -> ArchiveEntries {
+    // Track only active ancestors: identical sibling archives must still be
+    // scanned at each logical path. Cycles are not additional nesting depth.
+    let mut ancestors = std::collections::HashSet::new();
+    let mut stack = vec![(entries, remaining_depth, None)];
     let mut total = 0u64;
-    let mut expanded =
-        entries.flat_map(move |(logical, data)| lazy_expand_entry(logical, data, remaining_depth));
     Box::new(std::iter::from_fn(move || {
-        if total >= MAX_RECURSIVE_ARCHIVE_BYTES {
-            return None;
+        while !apply_budget || !resources.reached(total, MAX_RECURSIVE_ARCHIVE_BYTES) {
+            let (entries, depth, _) = stack.last_mut()?;
+            let Some((logical, mut data)) = entries.next() else {
+                if let Some((_, _, Some(hash))) = stack.pop() {
+                    ancestors.remove(&hash);
+                }
+                continue;
+            };
+            let depth = *depth;
+            if depth != Some(0) {
+                let hash = blake3::hash(&data);
+                if !ancestors.contains(&hash) {
+                    let shared = Arc::new(data);
+                    match extract(&logical, Arc::clone(&shared)) {
+                        Ok(mut nested) => {
+                            if let Some(first) = nested.next() {
+                                apply_budget = true;
+                                ancestors.insert(hash);
+                                stack.push((
+                                    Box::new(std::iter::once(first).chain(nested)),
+                                    depth.map(|d| d - 1),
+                                    Some(hash),
+                                ));
+                                continue;
+                            }
+                        }
+                        Err(error) => debug!("Failed to expand archive {logical}: {error:#}"),
+                    }
+                    data = Arc::unwrap_or_clone(shared);
+                } else {
+                    debug!("Archive cycle at {logical}; scanning raw content without expanding");
+                }
+            }
+            let remaining = MAX_RECURSIVE_ARCHIVE_BYTES.saturating_sub(total);
+            if apply_budget {
+                data.truncate(resources.cap(data.len() as u64, remaining) as usize);
+            }
+            total = total.saturating_add(data.len() as u64);
+            return Some((logical, data));
         }
-        let (logical, mut bytes) = expanded.next()?;
-        let remaining = MAX_RECURSIVE_ARCHIVE_BYTES - total;
-        bytes.truncate(bytes.len().min(remaining as usize));
-        total += bytes.len() as u64;
-        Some((logical, bytes))
+        None
     }))
 }
 
-fn lazy_expand_entry(logical: String, data: Vec<u8>, remaining_depth: usize) -> ArchiveEntries {
-    if remaining_depth == 0 {
-        return Box::new(std::iter::once((logical, data)));
-    }
-    if looks_like_zip(&data) && data.len() <= MAX_INMEM_ZIP_ARCHIVE_BYTES {
-        // Arc<Vec<_>> preserves the original allocation for the raw fallback.
-        let data = Arc::new(data);
-        if let Ok(mut entries) = crate::decompress::zip_entries(
-            std::io::Cursor::new(SharedArchive(Arc::clone(&data))),
-            logical.clone(),
-        ) && let Some(first) = entries.next()
-        {
-            return lazy_expand_entries(
-                Box::new(std::iter::once(first).chain(entries)),
-                remaining_depth - 1,
-            );
-        }
-        return Box::new(std::iter::once((logical, Arc::unwrap_or_clone(data))));
-    }
-    match extract_archive_bytes(&logical, &data) {
-        Ok(Some(entries)) => {
-            lazy_expand_entries(Box::new(entries.into_iter()), remaining_depth - 1)
-        }
-        Ok(None) => Box::new(std::iter::once((logical, data))),
-        Err(error) => {
-            debug!("Failed to expand archive {logical}: {error:#}");
-            Box::new(std::iter::once((logical, data)))
-        }
-    }
+fn lazy_expand_entry(
+    logical: String,
+    data: Vec<u8>,
+    remaining_depth: Option<usize>,
+    resources: ResourceLimits,
+) -> ArchiveEntries {
+    // Failed extraction preserves the entire raw input, as in bounded mode.
+    expand_entries(Box::new(std::iter::once((logical, data))), remaining_depth, resources, false)
 }
 
 fn archive_staged_name(logical: &str) -> String {
@@ -671,7 +743,11 @@ fn archive_staged_name(logical: &str) -> String {
 /// Extract one archive layer from bytes, returning paths rooted at `logical`.
 /// Decompression failures deliberately return `None` so callers can still scan the original entry
 /// as raw content.
-fn extract_archive_bytes(logical: &str, data: &[u8]) -> Result<Option<Vec<OwnedArchiveEntry>>> {
+fn extract_archive_bytes(
+    logical: &str,
+    data: &[u8],
+    resources: ResourceLimits,
+) -> Result<Option<Vec<OwnedArchiveEntry>>> {
     let path = Path::new(logical);
     let is_zip_body = looks_like_zip(data);
     if !is_compressed_file(path) && !is_zip_body {
@@ -691,7 +767,7 @@ fn extract_archive_bytes(logical: &str, data: &[u8]) -> Result<Option<Vec<OwnedA
             return Ok(None);
         }
         if data.len() <= MAX_INMEM_ZIP_ARCHIVE_BYTES {
-            return match extract_zip_archive_in_memory(data, logical) {
+            return match extract_zip_archive_in_memory_with_limits(data, logical, resources) {
                 Ok(entries) if !entries.is_empty() => Ok(Some(entries)),
                 Ok(_) => Ok(None),
                 Err(e) => {
@@ -714,10 +790,13 @@ fn extract_archive_bytes(logical: &str, data: &[u8]) -> Result<Option<Vec<OwnedA
     std::fs::write(&staged_path, data)
         .with_context(|| format!("Failed to stage archive to {}", staged_path.display()))?;
 
-    let (content, _temp_dir) = match decompress_file_to_temp(&staged_path) {
+    let (content, _temp_dir) = match decompress_file_to_temp_with_limits(&staged_path, resources) {
         Ok(content) => content,
         Err(e) => {
-            debug!("decompress_file_to_temp({}) failed: {e:#}", staged_path.display());
+            debug!(
+                "decompress_file_to_temp_with_limits({}, resources) failed: {e:#}",
+                staged_path.display()
+            );
             return Ok(None);
         }
     };
@@ -733,18 +812,24 @@ fn extract_archive_bytes(logical: &str, data: &[u8]) -> Result<Option<Vec<OwnedA
     match content {
         CompressedContent::Archive(files) => {
             for (entry_logical, bytes) in files {
-                push_archive_bytes(&mut entries, &mut total, remap_logical(entry_logical), bytes);
-                if total >= MAX_RECURSIVE_ARCHIVE_BYTES {
+                push_archive_bytes(
+                    &mut entries,
+                    &mut total,
+                    remap_logical(entry_logical),
+                    bytes,
+                    resources,
+                );
+                if resources.reached(total, MAX_RECURSIVE_ARCHIVE_BYTES) {
                     break;
                 }
             }
         }
         CompressedContent::ArchiveFiles(files) => {
             for (entry_logical, disk_path) in files {
-                if total >= MAX_RECURSIVE_ARCHIVE_BYTES {
+                if resources.reached(total, MAX_RECURSIVE_ARCHIVE_BYTES) {
                     break;
                 }
-                let remaining = MAX_RECURSIVE_ARCHIVE_BYTES - total;
+                let remaining = MAX_RECURSIVE_ARCHIVE_BYTES.saturating_sub(total);
                 let entry_len = match std::fs::metadata(&disk_path) {
                     Ok(metadata) => metadata.len(),
                     Err(e) => {
@@ -759,19 +844,33 @@ fn extract_archive_bytes(logical: &str, data: &[u8]) -> Result<Option<Vec<OwnedA
                         continue;
                     }
                 };
-                let mut bytes = Vec::with_capacity(entry_len.min(remaining) as usize);
-                if let Err(e) = file.take(entry_len.min(remaining)).read_to_end(&mut bytes) {
+                let mut bytes = Vec::new();
+                if let Err(e) =
+                    resources.reader(file, entry_len.min(remaining)).read_to_end(&mut bytes)
+                {
                     debug!("Failed to read extracted entry {}: {e}", disk_path.display());
                     continue;
                 }
-                push_archive_bytes(&mut entries, &mut total, remap_logical(entry_logical), bytes);
+                push_archive_bytes(
+                    &mut entries,
+                    &mut total,
+                    remap_logical(entry_logical),
+                    bytes,
+                    resources,
+                );
             }
         }
         CompressedContent::Raw(mut bytes) => {
-            if bytes.len() as u64 > MAX_RECURSIVE_ARCHIVE_BYTES {
+            if resources.exceeds(bytes.len() as u64, MAX_RECURSIVE_ARCHIVE_BYTES) {
                 bytes.truncate(MAX_RECURSIVE_ARCHIVE_BYTES as usize);
             }
-            push_archive_bytes(&mut entries, &mut total, format!("{logical}!content"), bytes);
+            push_archive_bytes(
+                &mut entries,
+                &mut total,
+                format!("{logical}!content"),
+                bytes,
+                resources,
+            );
         }
         CompressedContent::RawFile(path) => {
             let payload_len = match std::fs::metadata(&path) {
@@ -788,15 +887,21 @@ fn extract_archive_bytes(logical: &str, data: &[u8]) -> Result<Option<Vec<OwnedA
                     return Ok(None);
                 }
             };
-            let mut bytes =
-                Vec::with_capacity(payload_len.min(MAX_RECURSIVE_ARCHIVE_BYTES) as usize);
-            if let Err(e) =
-                file.take(payload_len.min(MAX_RECURSIVE_ARCHIVE_BYTES)).read_to_end(&mut bytes)
+            let mut bytes = Vec::new();
+            if let Err(e) = resources
+                .reader(file, payload_len.min(MAX_RECURSIVE_ARCHIVE_BYTES))
+                .read_to_end(&mut bytes)
             {
                 debug!("Failed to read decompressed payload {}: {e}", path.display());
                 return Ok(None);
             }
-            push_archive_bytes(&mut entries, &mut total, format!("{logical}!content"), bytes);
+            push_archive_bytes(
+                &mut entries,
+                &mut total,
+                format!("{logical}!content"),
+                bytes,
+                resources,
+            );
         }
     }
 
@@ -808,12 +913,13 @@ fn push_archive_bytes(
     total: &mut u64,
     logical: String,
     mut bytes: Vec<u8>,
+    resources: ResourceLimits,
 ) -> bool {
     let remaining = MAX_RECURSIVE_ARCHIVE_BYTES.saturating_sub(*total);
-    if remaining == 0 {
+    if resources.reached(*total, MAX_RECURSIVE_ARCHIVE_BYTES) {
         return false;
     }
-    if bytes.len() as u64 > remaining {
+    if resources.exceeds(bytes.len() as u64, remaining) {
         bytes.truncate(remaining as usize);
     }
     *total += bytes.len() as u64;
@@ -821,54 +927,13 @@ fn push_archive_bytes(
     true
 }
 
-fn recursively_expand_archive_entry(
-    logical: String,
-    data: Vec<u8>,
-    remaining_depth: usize,
-) -> Result<Vec<OwnedArchiveEntry>> {
-    if remaining_depth == 0 {
-        return Ok(vec![(logical, data)]);
-    }
-
-    let Some(entries) = extract_archive_bytes(&logical, &data)? else {
-        return Ok(vec![(logical, data)]);
-    };
-
-    let mut expanded = Vec::new();
-    let mut total = 0;
-    for (entry_logical, entry_data) in entries {
-        let nested = recursively_expand_archive_entry(
-            entry_logical,
-            entry_data,
-            remaining_depth.saturating_sub(1),
-        )?;
-        for (nested_logical, nested_data) in nested {
-            if !push_archive_bytes(&mut expanded, &mut total, nested_logical, nested_data) {
-                break;
-            }
-        }
-        if total >= MAX_RECURSIVE_ARCHIVE_BYTES {
-            break;
-        }
-    }
-    Ok(expanded)
-}
-
 fn recursively_expand_archive_entries(
     entries: impl IntoIterator<Item = OwnedArchiveEntry>,
-    remaining_depth: usize,
+    remaining_depth: Option<usize>,
+    resources: ResourceLimits,
 ) -> Result<Vec<OwnedArchiveEntry>> {
-    let mut expanded = Vec::new();
-    let mut total = 0;
-    for (logical, data) in entries {
-        let nested = recursively_expand_archive_entry(logical, data, remaining_depth)?;
-        for (nested_logical, nested_data) in nested {
-            if !push_archive_bytes(&mut expanded, &mut total, nested_logical, nested_data) {
-                return Ok(expanded);
-            }
-        }
-    }
-    Ok(expanded)
+    let entries: Vec<_> = entries.into_iter().collect();
+    Ok(lazy_expand_entries(Box::new(entries.into_iter()), remaining_depth, resources).collect())
 }
 
 fn archive_entry_suffix<'a>(entry_logical: &'a str, archive_path: &str) -> Option<&'a str> {
@@ -880,14 +945,15 @@ fn archive_entry_suffix<'a>(entry_logical: &'a str, archive_path: &str) -> Optio
 // A marker so the struct itself carries the lifetime.
 struct GitRepoResultIter<'a> {
     inner: GitRepoResult,
-    deadline: std::time::Instant,
+    deadline: Option<std::time::Instant>,
     /// When true, blobs whose in-tree path matches a known archive format
     /// (zip/jar/apk/tar/gz/...) are extracted before scanning, so secrets
     /// inside the archive can be matched. When false, archive blobs are
     /// scanned as raw compressed bytes (legacy behavior).
     extract_archives: bool,
     /// Maximum number of archive layers to extract from each git blob.
-    extraction_depth: usize,
+    extraction_depth: Option<usize>,
+    resources: ResourceLimits,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -895,15 +961,13 @@ impl ParallelBlobIterator for GitRepoResult {
     type Iter<'a> = GitRepoResultIter<'a>;
 
     fn into_blob_iter<'a>(self) -> Result<Option<Self::Iter<'a>>> {
-        // placeholder 1 h deadline; will be overwritten immediately
-        const PLACEHOLDER: Duration = Duration::from_secs(3600);
-
         Ok(Some(GitRepoResultIter {
             inner: self,
-            deadline: Instant::now() + PLACEHOLDER,
+            deadline: None,
             // Default to enabled; the dispatch site overrides from CLI args.
             extract_archives: true,
-            extraction_depth: 1,
+            extraction_depth: Some(1),
+            resources: ResourceLimits::default(),
             _marker: std::marker::PhantomData,
         }))
     }
@@ -923,6 +987,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
         let flag = Arc::new(AtomicBool::new(false)); // first-timeout gate
         let extract_archives = self.extract_archives;
         let extraction_depth = self.extraction_depth;
+        let resources = self.resources;
         // Loads one git blob and returns one *or more* `(OriginSet, Blob)`
         // tuples: a single tuple for normal blobs, multiple tuples for
         // archive blobs (zip/jar/apk/...) whose entries get unpacked into
@@ -933,7 +998,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
             let flag = Arc::clone(&flag);
 
             move |repo: &mut GixRepo, md: GitBlobMetadata| -> Result<LoadedGitBlobs<'a>> {
-                if StdInstant::now() > deadline {
+                if deadline.is_some_and(|deadline| StdInstant::now() > deadline) {
                     if flag.swap(true, Ordering::Relaxed) {
                         bail!("__timeout_silenced__");
                     }
@@ -949,7 +1014,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 // name with no archive extension (e.g. a committed `tfplan`).
                 // We don't need to keep the raw archive bytes around — its
                 // compressed contents won't produce useful matches anyway.
-                if extract_archives && extraction_depth > 0 {
+                if extract_archives && extraction_depth != Some(0) {
                     // Prefer an appearance whose name is a recognized archive so
                     // report paths stay stable; fall back to the first appearance
                     // only when the bytes are a ZIP with no archive extension.
@@ -969,8 +1034,12 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                         });
 
                     if let Some(archive_path) = archive_path {
-                        let entries =
-                            lazy_expand_entry(archive_path.clone(), data, extraction_depth);
+                        let entries = lazy_expand_entry(
+                            archive_path.clone(),
+                            data,
+                            extraction_depth,
+                            resources,
+                        );
                         let repo_path = Arc::clone(&repo_path);
                         return Ok(Box::new(entries.map(move |(entry_logical, entry_bytes)| {
                             // Invalid/empty archives keep the original blob identity and origins.
@@ -1077,7 +1146,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                         for oid_result in iter
                             .with_ordering(OdbOrdering::PackAscendingOffsetThenLooseLexicographical)
                         {
-                            if StdInstant::now() > deadline {
+                            if deadline.is_some_and(|deadline| StdInstant::now() > deadline) {
                                 if !enum_flag.swap(true, Ordering::Relaxed) {
                                     debug!(
                                         "Git repo ODB enumeration at {} timed-out",
@@ -1237,7 +1306,7 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                 let collect_git_metadata = cfg.collect_git_metadata;
                 let timeout = cfg.repo_scan_timeout;
 
-                let deadline = Instant::now() + timeout;
+                let deadline = timeout.and_then(|timeout| Instant::now().checked_add(timeout));
                 let git_result = if let Some(diff_cfg) = cfg.git_diff.clone() {
                     if cfg.enumerate_git_history
                         && !diff_cfg.staged
@@ -1246,8 +1315,9 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                         enumerate_git_branch_history(
                             path,
                             repository,
-                            &diff_cfg.branch_ref,
+                            (!cfg.history_all_refs).then_some(diff_cfg.branch_ref.as_str()),
                             diff_cfg.since_ref.as_deref(),
+                            cfg.history_time_range,
                             cfg.exclude_globset.clone(),
                             collect_git_metadata,
                             deadline,
@@ -1268,7 +1338,7 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                         repository,
                         cfg.exclude_globset.clone(),
                     )
-                    .run_with_deadline(Some(deadline))
+                    .run_with_deadline(deadline)
                 } else {
                     GitRepoEnumerator::new(path, repository).run()
                 };
@@ -1291,7 +1361,9 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                             .into_blob_iter() // Option<GitRepoResultIter>
                             .map(|iter| {
                                 iter.map(|mut gri| {
-                                    gri.deadline = Instant::now() + timeout;
+                                    gri.deadline = timeout
+                                        .and_then(|timeout| Instant::now().checked_add(timeout));
+                                    gri.resources = cfg.resources;
                                     gri.extract_archives = extract_archives;
                                     gri.extraction_depth = cfg.extraction_depth;
                                     FoundInputIter::GitRepo(gri)
@@ -1309,23 +1381,92 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
     }
 }
 
-/// Scan commits reachable from the selected ref, including merge parents,
+/// Collect each reachable commit once, treating shallow commits as roots only on
+/// their own edges. The gix revision walker suppresses shallow parents globally,
+/// which can hide ancestry still reachable through another tip or merge parent.
+fn collect_git_history(
+    repository: &gix::Repository,
+    tips: impl IntoIterator<Item = gix::ObjectId>,
+    excluded: &HashSet<gix::ObjectId>,
+    path: &Path,
+    deadline: Option<Instant>,
+) -> Result<Vec<(gix::ObjectId, Option<gix::ObjectId>)>> {
+    let mut commits = Vec::new();
+    if let Some(shallow) = repository.shallow_commits()?.filter(|ids| !ids.is_empty()) {
+        let mut pending: Vec<_> = tips.into_iter().collect();
+        let mut seen = HashSet::new();
+        while let Some(id) = pending.pop() {
+            check_repo_deadline(deadline, path, "git shallow history traversal")?;
+            if excluded.contains(&id) || !seen.insert(id) {
+                continue;
+            }
+            let commit = repository.find_commit(id)?;
+            let parents: Vec<_> = if shallow.binary_search(&id).is_ok() {
+                Vec::new()
+            } else {
+                commit.parent_ids().map(|parent| parent.detach()).collect()
+            };
+            commits.push((id, parents.first().copied()));
+            pending.extend(parents);
+        }
+    } else {
+        for commit in repository.rev_walk(tips).selected(|id| !excluded.contains(id))? {
+            check_repo_deadline(deadline, path, "git history traversal")?;
+            let commit = commit?;
+            commits.push((commit.id, commit.parent_ids.first().copied()));
+        }
+    }
+    Ok(commits)
+}
+
+/// Scan commits reachable from the selected ref (or all refs and HEAD), including merge parents,
 /// excluding the optional baseline and its ancestry.
 /// Diffing each commit against its first parent avoids enumerating unchanged trees.
+#[allow(clippy::too_many_arguments)]
 fn enumerate_git_branch_history(
     path: &Path,
     mut repository: gix::Repository,
-    branch_ref: &str,
+    branch_ref: Option<&str>,
     since_ref: Option<&str>,
+    time_range: Option<(i64, i64)>,
     exclude_globset: Option<Arc<globset::GlobSet>>,
     collect_commit_metadata: bool,
-    deadline: Instant,
+    deadline: Option<Instant>,
 ) -> Result<GitRepoResult> {
     check_repo_deadline(deadline, path, "git branch history setup")?;
-    let tip = resolve_diff_ref(&repository, path, branch_ref).with_context(|| {
-        format!("Failed to resolve --branch '{}' in repository {}", branch_ref, path.display())
-    })?;
-    let tip = tip.object()?.peel_to_commit()?.id;
+    let mut tips = Vec::new();
+    if let Some(branch_ref) = branch_ref {
+        let tip = resolve_diff_ref(&repository, path, branch_ref).with_context(|| {
+            format!("Failed to resolve --branch '{branch_ref}' in repository {}", path.display())
+        })?;
+        tips.push(tip.object()?.peel_to_commit()?.id);
+    } else {
+        for reference in repository.references()?.all()? {
+            check_repo_deadline(deadline, path, "git history ref collection")?;
+            let mut reference = reference.map_err(anyhow::Error::from_boxed)?;
+            let object = reference
+                .peel_to_id()
+                .with_context(|| {
+                    format!(
+                        "Failed to peel history ref {:?} in {}",
+                        reference.name(),
+                        path.display()
+                    )
+                })?
+                .object()?;
+            // Tags may point to trees or blobs, which have no commit history.
+            if object.kind == gix::object::Kind::Commit {
+                tips.push(object.id);
+            }
+        }
+        check_repo_deadline(deadline, path, "git history HEAD collection")?;
+        // HEAD can be detached, or unborn even when other refs have history.
+        if let Some(head) = repository.head()?.try_into_peeled_id()? {
+            tips.push(head.object()?.peel_to_commit()?.id);
+        }
+        tips.sort_unstable();
+        tips.dedup();
+    }
     // Exclude the baseline and all its ancestors, including shared merge ancestry.
     // Walk explicitly so every step observes the repository timeout; timestamps
     // cannot safely define a commit range (clocks may be skewed).
@@ -1338,21 +1479,24 @@ fn enumerate_git_branch_history(
             )
         })?;
         let base = base.object()?.peel_to_commit()?.id;
-        for commit in repository.rev_walk([base]).all()? {
-            check_repo_deadline(deadline, path, "git history baseline traversal")?;
-            excluded.insert(commit?.id);
-        }
+        excluded = collect_git_history(&repository, [base], &excluded, path, deadline)?
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
     }
-    let mut commits = Vec::new();
-    for commit in repository.rev_walk([tip]).selected(|id| !excluded.contains(id))? {
-        check_repo_deadline(deadline, path, "git branch history traversal")?;
-        let commit = commit?;
-        commits.push((commit.id, commit.parent_ids.first().copied()));
-    }
+    let commits = collect_git_history(&repository, tips, &excluded, path, deadline)?;
     let reachable: HashSet<_> = commits.iter().map(|(id, _)| *id).collect();
     let mut blobs: HashMap<gix::ObjectId, GitBlobMetadata> = HashMap::new();
     for (commit, parent) in commits {
         check_repo_deadline(deadline, path, "git branch history enumeration")?;
+        // Filter after traversing: older descendants can have newer ancestors.
+        // Keep all reachable parents above so older parent trees still bound diffs.
+        if let Some((start, end)) = time_range {
+            let timestamp = repository.find_commit(commit)?.time()?.seconds;
+            if timestamp < start || timestamp > end {
+                continue;
+            }
+        }
         let result = enumerate_git_diff_repo(
             path,
             repository,
@@ -1370,7 +1514,10 @@ fn enumerate_git_branch_history(
             deadline,
         )
         .with_context(|| {
-            format!("While enumerating commit {commit} in history of '{branch_ref}'")
+            format!(
+                "While enumerating commit {commit} in history of '{}'",
+                branch_ref.unwrap_or("all refs and HEAD")
+            )
         })?;
         repository = result.repository;
         let GitBlobSource::Precomputed(commit_blobs) = result.blobs else {
@@ -1413,7 +1560,7 @@ fn enumerate_git_diff_repo(
     diff_cfg: GitDiffConfig,
     exclude_globset: Option<std::sync::Arc<globset::GlobSet>>,
     collect_commit_metadata: bool,
-    deadline: Instant,
+    deadline: Option<Instant>,
 ) -> Result<GitRepoResult> {
     check_repo_deadline(deadline, path, "git diff setup")?;
     let GitDiffConfig { since_ref, branch_ref, branch_root, staged } = diff_cfg;
@@ -1611,8 +1758,8 @@ fn enumerate_git_diff_repo(
     })
 }
 
-fn check_repo_deadline(deadline: Instant, path: &Path, phase: &str) -> Result<()> {
-    if Instant::now() > deadline {
+fn check_repo_deadline(deadline: Option<Instant>, path: &Path, phase: &str) -> Result<()> {
+    if deadline.is_some_and(|deadline| Instant::now() > deadline) {
         bail!("{phase} timed out for repo {}", path.display());
     }
     Ok(())
@@ -1851,7 +1998,7 @@ mod tests {
             },
             None,
             false,
-            Instant::now() + Duration::from_secs(60),
+            Some(Instant::now() + Duration::from_secs(60)),
         )?;
 
         let blobs = match result.blobs {
@@ -1893,11 +2040,12 @@ mod tests {
         let result = enumerate_git_branch_history(
             temp.path(),
             open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
-            "HEAD",
+            Some("HEAD"),
+            None,
             None,
             None,
             true,
-            Instant::now() + Duration::from_secs(60),
+            Some(Instant::now() + Duration::from_secs(60)),
         )?;
         let GitBlobSource::Precomputed(blobs) = result.blobs else {
             panic!("expected precomputed history blobs");
@@ -1918,6 +2066,206 @@ mod tests {
             assert!(
                 blob.first_seen.iter().all(|appearance| appearance.path.to_str_lossy() == path)
             );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn timed_history_uses_committer_dates_without_pruning_older_descendants() -> Result<()> {
+        let temp = tempdir()?;
+        let repo = Git2Repository::init_bare(temp.path())?;
+        let start = 1_700_000_000;
+        let end = start + 3600;
+        let signature =
+            |seconds| Signature::new("tester", "tester@example.com", &git2::Time::new(seconds, 0));
+        let old = signature(start - 1)?;
+        let lower = signature(start)?;
+        let upper = signature(end)?;
+        let future = signature(end + 1)?;
+        let mut builder = repo.treebuilder(None)?;
+        let baseline_blob = repo.blob(b"unchanged old secret")?;
+        builder.insert("baseline.txt", baseline_blob, 0o100644)?;
+        let baseline_tree = repo.find_tree(builder.write()?)?;
+        let root_id =
+            repo.commit(None, &upper, &old, "old commit with recent author", &baseline_tree, &[])?;
+        let root = repo.find_commit(root_id)?;
+        let recent_blob = repo.blob(b"recent temporary secret")?;
+        builder.insert("recent.txt", recent_blob, 0o100644)?;
+        let recent_tree = repo.find_tree(builder.write()?)?;
+        let recent_id = repo.commit(
+            None,
+            &old,
+            &lower,
+            "recent commit with old author",
+            &recent_tree,
+            &[&root],
+        )?;
+        let recent = repo.find_commit(recent_id)?;
+        // An older child must not prune its newer ancestor; it removes the secret.
+        repo.commit(
+            Some("refs/heads/main"),
+            &upper,
+            &old,
+            "older child",
+            &baseline_tree,
+            &[&recent],
+        )?;
+        repo.set_head("refs/heads/main")?;
+        let mut builder = repo.treebuilder(Some(&baseline_tree))?;
+        let remote_blob = repo.blob(b"remote secret at upper bound")?;
+        builder.insert("remote.txt", remote_blob, 0o100644)?;
+        let remote_tree = repo.find_tree(builder.write()?)?;
+        let remote_id =
+            repo.commit(None, &old, &upper, "at upper bound", &remote_tree, &[&root])?;
+        let remote = repo.find_commit(remote_id)?;
+        builder.insert("future.txt", repo.blob(b"future secret outside window")?, 0o100644)?;
+        let future_tree = repo.find_tree(builder.write()?)?;
+        repo.commit(
+            Some("refs/remotes/origin/feature"),
+            &upper,
+            &future,
+            "future child",
+            &future_tree,
+            &[&remote],
+        )?;
+
+        for metadata in [true, false] {
+            for branch in [None, Some("main")] {
+                let result = enumerate_git_branch_history(
+                    temp.path(),
+                    open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
+                    branch,
+                    None,
+                    Some((start, end)),
+                    None,
+                    metadata,
+                    Some(Instant::now() + Duration::from_secs(60)),
+                )?;
+                let GitBlobSource::Precomputed(blobs) = result.blobs else {
+                    panic!("expected blobs");
+                };
+                let mut actual: Vec<_> =
+                    blobs.iter().map(|blob| blob.blob_oid.to_string()).collect();
+                let mut expected = vec![recent_blob.to_string()];
+                if branch.is_none() {
+                    expected.push(remote_blob.to_string());
+                }
+                actual.sort();
+                expected.sort();
+                assert_eq!(
+                    actual, expected,
+                    "old unchanged content and future commits must be excluded"
+                );
+                if metadata {
+                    assert!(blobs.iter().flat_map(|blob| &blob.first_seen).all(|appearance| {
+                        let id = appearance.commit_metadata.commit_id.to_string();
+                        id == recent_id.to_string() || id == remote_id.to_string()
+                    }));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn all_ref_history_preserves_unique_appearances_and_shallow_tips() -> Result<()> {
+        let temp = tempdir()?;
+        let repo = Git2Repository::init_bare(temp.path())?;
+        let sig = Signature::now("tester", "tester@example.com")?;
+        let empty_tree = repo.find_tree(repo.treebuilder(None)?.write()?)?;
+        let base_id = repo.commit(Some("refs/heads/main"), &sig, &sig, "base", &empty_tree, &[])?;
+        let base = repo.find_commit(base_id)?;
+        let mut builder = repo.treebuilder(None)?;
+        let shared_blob = repo.blob(b"shared historical secret")?;
+        builder.insert("shared.txt", shared_blob, 0o100644)?;
+        let shared_tree = repo.find_tree(builder.write()?)?;
+        let shared_id = repo.commit(None, &sig, &sig, "shared", &shared_tree, &[&base])?;
+        let shared = repo.find_commit(shared_id)?;
+        let mut expected = vec![shared_id.to_string()];
+        for (name, reference) in [
+            ("local", Some("refs/heads/feature")),
+            ("remote", Some("refs/remotes/origin/feature")),
+            ("tag", None),
+            ("detached", None),
+        ] {
+            let mut builder = repo.treebuilder(Some(&shared_tree))?;
+            builder.insert(name, repo.blob(format!("secret for {name}").as_bytes())?, 0o100644)?;
+            let tree = repo.find_tree(builder.write()?)?;
+            let id = repo.commit(reference, &sig, &sig, name, &tree, &[&shared])?;
+            expected.push(id.to_string());
+            match name {
+                "tag" => {
+                    repo.tag("release", repo.find_commit(id)?.as_object(), &sig, "release", false)?;
+                }
+                "detached" => repo.set_head_detached(id)?,
+                _ => {}
+            }
+        }
+        // Symbolic/duplicate tips must not repeat appearances. Non-commit tags are harmless.
+        repo.reference_symbolic(
+            "refs/remotes/origin/HEAD",
+            "refs/remotes/origin/feature",
+            true,
+            "test",
+        )?;
+        repo.tag("tree", empty_tree.as_object(), &sig, "tree tag", false)?;
+        repo.reference("refs/tags/blob", shared_blob, true, "blob tag")?;
+        // A separate shallow tip inherits a blob from its unavailable parent.
+        let shallow_id = repo.commit(
+            Some("refs/heads/shallow"),
+            &sig,
+            &sig,
+            "shallow",
+            &shared_tree,
+            &[&shared],
+        )?;
+        fs::write(repo.path().join("shallow"), format!("{shallow_id}\n"))?;
+        expected.push(shallow_id.to_string());
+        expected.sort();
+
+        // Unborn HEAD must not prevent scanning the remaining refs either.
+        for unborn in [false, true] {
+            if unborn {
+                repo.set_head("refs/heads/unborn")?;
+            }
+            let result = enumerate_git_branch_history(
+                temp.path(),
+                open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
+                None,
+                Some(&base_id.to_string()),
+                None,
+                None,
+                true,
+                Some(Instant::now() + Duration::from_secs(60)),
+            )?;
+            let GitBlobSource::Precomputed(blobs) = result.blobs else {
+                panic!("expected blobs");
+            };
+            assert_eq!(blobs.len(), if unborn { 4 } else { 5 });
+            let shared_blob = blobs
+                .iter()
+                .find(|blob| blob.blob_oid.to_string() == shared_blob.to_string())
+                .unwrap();
+            let mut appearances: Vec<_> = shared_blob
+                .first_seen
+                .iter()
+                .map(|a| a.commit_metadata.commit_id.to_string())
+                .collect();
+            appearances.sort();
+            let mut expected_shared = vec![shared_id.to_string(), shallow_id.to_string()];
+            expected_shared.sort();
+            assert_eq!(appearances, expected_shared, "shared ancestry must be visited once");
+            let mut actual: Vec<_> = blobs
+                .iter()
+                .flat_map(|b| b.first_seen.iter().map(|a| a.commit_metadata.commit_id.to_string()))
+                .collect();
+            actual.sort();
+            actual.dedup();
+            if unborn {
+                assert_eq!(actual.len(), expected.len() - 1);
+            } else {
+                assert_eq!(actual, expected);
+            }
         }
         Ok(())
     }
@@ -1976,7 +2324,7 @@ mod tests {
                 },
                 Some(excludes.clone()),
                 true,
-                Instant::now() + Duration::from_secs(60),
+                Some(Instant::now() + Duration::from_secs(60)),
             )?;
             let GitBlobSource::Precomputed(blobs) = result.blobs else {
                 panic!("expected precomputed diff blobs");
@@ -1992,11 +2340,12 @@ mod tests {
             let result = enumerate_git_branch_history(
                 temp.path(),
                 open()?,
-                "HEAD",
+                Some("HEAD"),
+                None,
                 None,
                 Some(excludes.clone()),
                 true,
-                Instant::now() + Duration::from_secs(60),
+                Some(Instant::now() + Duration::from_secs(60)),
             )?;
             let GitBlobSource::Precomputed(blobs) = result.blobs else {
                 panic!("expected precomputed history blobs");
@@ -2038,11 +2387,12 @@ mod tests {
         let result = enumerate_git_branch_history(
             temp.path(),
             open_opts(repo.path(), Options::isolated().open_path_as_is(true))?,
-            "release",
+            Some("release"),
+            None,
             None,
             None,
             true,
-            Instant::now() + Duration::from_secs(60),
+            Some(Instant::now() + Duration::from_secs(60)),
         )?;
         let GitBlobSource::Precomputed(blobs) = result.blobs else {
             panic!("expected precomputed history blobs");
@@ -2070,6 +2420,34 @@ mod tests {
     }
 
     #[test]
+    fn archive_cycles_stop_but_identical_siblings_are_expanded() {
+        for unlimited in [false, true] {
+            let entries = vec![("first".into(), vec![1]), ("second".into(), vec![1])];
+            let mut extractions = 0;
+            let expanded: Vec<_> = super::expand_entries_with(
+                Box::new(entries.into_iter()),
+                None,
+                crate::limits::ResourceLimits { unlimited },
+                false,
+                move |logical, data| {
+                    extractions += 1;
+                    assert!(extractions <= 4, "archive cycle was expanded again");
+                    // A -> B -> A models a cycle without relying on a specific
+                    // archive codec's ability to encode a quine.
+                    let next = if data[0] == 1 { 2 } else { 1 };
+                    Ok(Box::new(std::iter::once((format!("{logical}!child"), vec![next]))))
+                },
+            )
+            .take(3)
+            .collect();
+            assert_eq!(
+                expanded,
+                vec![("first!child!child".into(), vec![1]), ("second!child!child".into(), vec![1]),]
+            );
+        }
+    }
+
+    #[test]
     fn lazy_archive_fallback_preserves_unreadable_and_empty_inputs() -> Result<()> {
         let empty_zip = ZipWriter::new(std::io::Cursor::new(Vec::new())).finish()?.into_inner();
         for bytes in [
@@ -2077,8 +2455,13 @@ mod tests {
             b"plain content".to_vec(),
             empty_zip,
         ] {
-            let entries =
-                lazy_expand_entry("fixture.zip".into(), bytes.clone(), 2).collect::<Vec<_>>();
+            let entries = lazy_expand_entry(
+                "fixture.zip".into(),
+                bytes.clone(),
+                Some(2),
+                crate::limits::ResourceLimits::default(),
+            )
+            .collect::<Vec<_>>();
             assert_eq!(entries, vec![("fixture.zip".into(), bytes)]);
         }
         Ok(())
@@ -2097,8 +2480,13 @@ mod tests {
             zip.finish()?;
         }
 
-        let entries =
-            lazy_expand_entry("dir/payload.zip".into(), cursor.into_inner(), 1).collect::<Vec<_>>();
+        let entries = lazy_expand_entry(
+            "dir/payload.zip".into(),
+            cursor.into_inner(),
+            Some(1),
+            crate::limits::ResourceLimits::default(),
+        )
+        .collect::<Vec<_>>();
 
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "dir/payload.zip!nested/secret.txt");
@@ -2132,13 +2520,24 @@ mod tests {
         }
         let outer_bytes = outer_cursor.into_inner();
 
-        let shallow =
-            lazy_expand_entry("dir/outer.zip".into(), outer_bytes.clone(), 1).collect::<Vec<_>>();
+        let shallow = lazy_expand_entry(
+            "dir/outer.zip".into(),
+            outer_bytes.clone(),
+            Some(1),
+            crate::limits::ResourceLimits::default(),
+        )
+        .collect::<Vec<_>>();
         assert_eq!(shallow.len(), 1);
         assert_eq!(shallow[0].0, "dir/outer.zip!inner.zip");
         assert_eq!(shallow[0].1, inner_bytes);
 
-        let deep = lazy_expand_entry("dir/outer.zip".into(), outer_bytes, 2).collect::<Vec<_>>();
+        let deep = lazy_expand_entry(
+            "dir/outer.zip".into(),
+            outer_bytes,
+            Some(2),
+            crate::limits::ResourceLimits::default(),
+        )
+        .collect::<Vec<_>>();
         assert_eq!(deep.len(), 1);
         assert_eq!(deep[0].0, "dir/outer.zip!inner.zip!nested/secret.txt");
         assert_eq!(deep[0].1, b"nested archive content");
@@ -2172,7 +2571,8 @@ mod tests {
             path: path.clone(),
             num_bytes: expected.len() as u64,
             extract_archives: true,
-            extraction_depth: 2,
+            extraction_depth: Some(2),
+            resources: crate::limits::ResourceLimits::default(),
         })?;
 
         assert_eq!(blobs.len(), 1);
@@ -2213,7 +2613,8 @@ mod tests {
             path: outer_path.clone(),
             num_bytes: fs::metadata(&outer_path)?.len(),
             extract_archives: true,
-            extraction_depth: 1,
+            extraction_depth: Some(1),
+            resources: crate::limits::ResourceLimits::default(),
         })?;
         assert_eq!(shallow.len(), 1);
         assert_eq!(shallow[0].0, PathBuf::from(format!("{}!inner.zip", outer_path.display())));
@@ -2223,7 +2624,8 @@ mod tests {
             path: outer_path.clone(),
             num_bytes: fs::metadata(&outer_path)?.len(),
             extract_archives: true,
-            extraction_depth: 2,
+            extraction_depth: Some(2),
+            resources: crate::limits::ResourceLimits::default(),
         })?;
         assert_eq!(deep.len(), 1);
         assert_eq!(
@@ -2250,7 +2652,8 @@ mod tests {
                 path: path.clone(),
                 num_bytes: expected.len() as u64,
                 extract_archives: true,
-                extraction_depth: 2,
+                extraction_depth: Some(2),
+                resources: crate::limits::ResourceLimits::default(),
             })?;
 
             assert_eq!(blobs.len(), 1, "{} should fall back to raw bytes", name);
@@ -2273,7 +2676,8 @@ mod tests {
             path: path.clone(),
             num_bytes: expected.len() as u64,
             extract_archives: true,
-            extraction_depth: 2,
+            extraction_depth: Some(2),
+            resources: crate::limits::ResourceLimits::default(),
         })?;
 
         assert_eq!(blobs.len(), 1);
@@ -2293,7 +2697,8 @@ mod tests {
             path: path.clone(),
             num_bytes: expected.len() as u64,
             extract_archives: true,
-            extraction_depth: 2,
+            extraction_depth: Some(2),
+            resources: crate::limits::ResourceLimits::default(),
         })?;
 
         assert_eq!(blobs.len(), 1);

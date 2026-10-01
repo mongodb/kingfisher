@@ -14,11 +14,21 @@ const MAX_TOTAL_BYTES: usize = 256 * 1024 * 1024;
 /// Each entry contains the CREATE TABLE statement followed by INSERT
 /// statements with explicit column names so that keyword-based secret
 /// detectors can match column names like "api_key" near their values.
-pub fn extract_sqlite_contents(path: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+pub fn extract_sqlite_contents_with_limits(
+    path: &Path,
+    resources: crate::limits::ResourceLimits,
+) -> Result<Vec<(String, Vec<u8>)>> {
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("Failed to open SQLite database: {}", path.display()))?;
 
-    conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    if resources.unlimited {
+        conn.busy_handler(Some(|_| {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+            true
+        }))?;
+    } else {
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+    }
 
     let tables = list_user_tables(&conn)?;
     if tables.is_empty() {
@@ -30,7 +40,7 @@ pub fn extract_sqlite_contents(path: &Path) -> Result<Vec<(String, Vec<u8>)>> {
     let mut total_bytes: usize = 0;
 
     for (table_name, create_sql) in &tables {
-        if total_bytes >= MAX_TOTAL_BYTES {
+        if resources.reached(total_bytes, MAX_TOTAL_BYTES) {
             debug!(
                 "SQLite extraction hit total size limit ({MAX_TOTAL_BYTES} bytes), \
                  skipping remaining tables in {}",
@@ -39,7 +49,13 @@ pub fn extract_sqlite_contents(path: &Path) -> Result<Vec<(String, Vec<u8>)>> {
             break;
         }
 
-        match dump_table(&conn, table_name, create_sql, MAX_TOTAL_BYTES - total_bytes) {
+        match dump_table(
+            &conn,
+            table_name,
+            create_sql,
+            MAX_TOTAL_BYTES.saturating_sub(total_bytes),
+            resources,
+        ) {
             Ok(sql_text) => {
                 total_bytes += sql_text.len();
                 let logical_name = format!("{}.sql", table_name);
@@ -83,10 +99,11 @@ fn dump_table(
     table_name: &str,
     create_sql: &str,
     remaining_budget: usize,
+    resources: crate::limits::ResourceLimits,
 ) -> Result<String> {
     let mut out = String::with_capacity(4096);
     let create_statement = format!("{create_sql};\n");
-    if !push_with_budget(&mut out, &create_statement, remaining_budget) {
+    if !push_with_budget(&mut out, &create_statement, remaining_budget, resources) {
         bail!(
             "CREATE TABLE statement for '{table_name}' exceeds remaining size budget ({remaining_budget} bytes)"
         );
@@ -109,12 +126,12 @@ fn dump_table(
     let mut rows = stmt.query([])?;
 
     while let Some(row) = rows.next()? {
-        if rows_emitted >= MAX_ROWS_PER_TABLE {
+        if resources.reached(rows_emitted, MAX_ROWS_PER_TABLE) {
             let marker = format!("-- (truncated after {MAX_ROWS_PER_TABLE} rows)\n");
-            let _ = push_with_budget(&mut out, &marker, remaining_budget);
+            let _ = push_with_budget(&mut out, &marker, remaining_budget, resources);
             break;
         }
-        if out.len() >= remaining_budget {
+        if resources.reached(out.len(), remaining_budget) {
             break;
         }
 
@@ -129,9 +146,9 @@ fn dump_table(
         }
 
         writeln!(row_sql, ");")?;
-        if !push_with_budget(&mut out, &row_sql, remaining_budget) {
+        if !push_with_budget(&mut out, &row_sql, remaining_budget, resources) {
             let marker = "-- (truncated: size limit reached)\n";
-            let _ = push_with_budget(&mut out, marker, remaining_budget);
+            let _ = push_with_budget(&mut out, marker, remaining_budget, resources);
             break;
         }
         rows_emitted += 1;
@@ -140,8 +157,13 @@ fn dump_table(
     Ok(out)
 }
 
-fn push_with_budget(out: &mut String, fragment: &str, remaining_budget: usize) -> bool {
-    if out.len().saturating_add(fragment.len()) > remaining_budget {
+fn push_with_budget(
+    out: &mut String,
+    fragment: &str,
+    remaining_budget: usize,
+    resources: crate::limits::ResourceLimits,
+) -> bool {
+    if resources.exceeds(out.len().saturating_add(fragment.len()), remaining_budget) {
         return false;
     }
     out.push_str(fragment);
@@ -185,6 +207,9 @@ fn write_value(out: &mut String, row: &rusqlite::Row<'_>, idx: usize) -> Result<
     Ok(())
 }
 
+pub fn extract_sqlite_contents(path: &Path) -> Result<Vec<(String, Vec<u8>)>> {
+    extract_sqlite_contents_with_limits(path, crate::limits::ResourceLimits::default())
+}
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -297,6 +322,7 @@ mod tests {
             "user_info",
             "CREATE TABLE user_info (id INTEGER PRIMARY KEY, username TEXT, api_key TEXT)",
             8,
+            crate::limits::ResourceLimits::default(),
         )
         .unwrap_err();
 
@@ -315,10 +341,45 @@ mod tests {
         ))
         .unwrap();
 
-        let sql = dump_table(&conn, "t", "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)", 96)
-            .unwrap();
+        let sql = dump_table(
+            &conn,
+            "t",
+            "CREATE TABLE t (id INTEGER PRIMARY KEY, val TEXT)",
+            96,
+            crate::limits::ResourceLimits::default(),
+        )
+        .unwrap();
 
         assert!(sql.len() <= 96);
         assert!(!sql.contains(&large_value));
+    }
+}
+
+#[cfg(test)]
+mod unlimited_tests {
+    use super::*;
+
+    #[test]
+    fn unlimited_sqlite_dump_keeps_rows_beyond_byte_budget() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        conn.execute_batch("CREATE TABLE secrets (token TEXT); INSERT INTO secrets VALUES ('secret beyond budget');")?;
+        let schema = "CREATE TABLE secrets (token TEXT)";
+        let bounded = dump_table(
+            &conn,
+            "secrets",
+            schema,
+            schema.len() + 2,
+            crate::limits::ResourceLimits::default(),
+        )?;
+        assert!(!bounded.contains("secret beyond budget"));
+        let unlimited = dump_table(
+            &conn,
+            "secrets",
+            schema,
+            schema.len() + 2,
+            crate::limits::ResourceLimits { unlimited: true },
+        )?;
+        assert!(unlimited.contains("secret beyond budget"));
+        Ok(())
     }
 }

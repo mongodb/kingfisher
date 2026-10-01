@@ -1,5 +1,6 @@
 use std::{net::IpAddr, time::Duration};
 
+use super::limits::timeout;
 use anyhow::Result;
 use mongodb::{
     Client,
@@ -7,7 +8,6 @@ use mongodb::{
     error::ErrorKind,
     options::{ClientOptions, ServerAddress, Tls, TlsOptions},
 };
-use tokio::time::timeout;
 use tracing::debug;
 
 use super::http_validation::{SSRF_BLOCKED_MESSAGE, check_host_resolvable};
@@ -136,6 +136,14 @@ pub async fn validate_mongodb(
         opts.connect_timeout = Some(Duration::from_millis(SRV_CONNECT_MS));
         opts.server_selection_timeout = Some(Duration::from_millis(SRV_SELECT_MS));
     }
+    let no_timeouts = super::limits::NetworkLimits::current().no_timeouts;
+    if no_timeouts {
+        // MongoDB defines zero connectTimeoutMS as no connection deadline.
+        opts.connect_timeout = Some(Duration::ZERO);
+        // The driver requires a finite server-selection interval. Repeat only
+        // selection failures below; no command has been sent in that case.
+        opts.server_selection_timeout = Some(Duration::from_secs(30));
+    }
     opts.max_pool_size = Some(1);
     opts.min_pool_size = Some(0);
 
@@ -146,7 +154,17 @@ pub async fn validate_mongodb(
     }
 
     let client = Client::with_options(opts)?;
-    let res = client.database("admin").run_command(doc! { "ping": 1 }).await;
+    let res = loop {
+        let result = client.database("admin").run_command(doc! { "ping": 1 }).await;
+        if no_timeouts
+            && result
+                .as_ref()
+                .is_err_and(|error| matches!(*error.kind, ErrorKind::ServerSelection { .. }))
+        {
+            continue;
+        }
+        break result;
+    };
     match res {
         Ok(_) => Ok((true, "MongoDB connection is valid.".to_string())),
         Err(e) => {

@@ -142,7 +142,7 @@ DOC_MAP = {
     "PYPI.md": (
         "reference/python-bindings.md",
         "Python Bindings",
-        "Install and use Kingfisher from Python via PyPI wheels. Build and publish wheels for multiple platforms.",
+        "Use native Python modules for secret detection, validation and revocation. Includes uv examples, local tests and PyPI publishing.",
     ),
     "COMPARISON.md": (
         "reference/comparison.md",
@@ -270,7 +270,7 @@ def rewrite_links(content: str) -> str:
         return f"](https://github.com/mongodb/kingfisher/{view}/main/{path}{suffix})"
 
     content = re.sub(
-        r"\]\(\.\./((?:crates|examples)/[^)\s#?]*)([^)]*)\)",
+        r"\]\(\.\./((?:crates|examples|python|\.github)/[^)\s#?]*)([^)]*)\)",
         source_link,
         content,
     )

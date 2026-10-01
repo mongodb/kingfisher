@@ -2,8 +2,8 @@
 title: Kingfisher — Detect, Validate, Map, Triage, Revoke
 description: >-
   Find exposed credentials, verify which are active, map what they can reach, triage findings
-  visually, and revoke supported secrets. Kingfisher brings the end-to-end defender workflow
-  together in one Apache-2.0-licensed Rust tool built by MongoDB.
+  visually, and revoke supported secrets. Embed Kingfisher's published Rust scanner and
+  validation crates; use the full application crate for rule-driven revocation or the CLI.
 template: home.html
 hide:
   - navigation

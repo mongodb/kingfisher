@@ -26,7 +26,21 @@ pub struct DecodedData {
 #[inline]
 pub fn is_base64_byte(b: u8) -> bool {
     // Accepts both standard base64 ('+', '/') and URL-safe base64 ('-', '_') characters.
-    matches!(b, b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' | b'-' | b'_')
+    // This classification runs for every input byte. A small lookup avoids
+    // repeating several range checks in the scanner's hottest byte loop.
+    static ALPHABET: [bool; 256] = {
+        let mut alphabet = [false; 256];
+        let mut i = 0;
+        while i < alphabet.len() {
+            alphabet[i] = matches!(
+                i as u8,
+                b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'+' | b'/' | b'-' | b'_'
+            );
+            i += 1;
+        }
+        alphabet
+    };
+    ALPHABET[usize::from(b)]
 }
 
 /// Finds standalone Base64-encoded strings in the input and returns decoded data
@@ -213,6 +227,30 @@ pub fn find_secret_capture_with_group<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn base64_alphabet_accepts_only_standard_and_url_safe_bytes() {
+        let alphabet = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_";
+        for byte in u8::MIN..=u8::MAX {
+            assert_eq!(is_base64_byte(byte), alphabet.contains(&byte), "byte {byte}");
+        }
+    }
+
+    #[test]
+    fn base64_detection_preserves_alphabets_padding_and_offsets() {
+        let payload = b"???>>>a sufficiently long ASCII payload";
+        for engine in [general_purpose::STANDARD, general_purpose::URL_SAFE] {
+            let encoded = engine.encode(payload);
+            let input = format!("\"{encoded}\"\n");
+            let decoded = get_base64_strings(input.as_bytes());
+            assert_eq!(decoded.len(), 1);
+            assert_eq!(decoded[0].decoded, payload);
+            assert_eq!(decoded[0].pos_start, 1);
+            assert_eq!(decoded[0].pos_end, 1 + encoded.len());
+        }
+        assert!(get_base64_strings(&[0xff; 64]).is_empty());
+        assert!(get_base64_strings(b"short").is_empty());
+    }
 
     #[test]
     fn betterleaks_default_uses_first_non_empty_capture() {

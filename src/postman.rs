@@ -337,7 +337,11 @@ pub async fn download_postman_to_dir(
         }
     }
 
-    let limit_hit = |paths: &Vec<(PathBuf, String)>| max_results > 0 && paths.len() >= max_results;
+    let limit_hit = |paths: &Vec<(PathBuf, String)>| {
+        max_results > 0
+            && (!kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results
+                && paths.len() >= max_results)
+    };
 
     for uid in collection_uids {
         if limit_hit(&paths) {

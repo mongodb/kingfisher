@@ -173,4 +173,5 @@ does not regenerate the catalog. See [publishing guidance](docs/PUBLISHING.md) f
 - Rules: `docs/RULES.md`
 - Architecture: `docs/ARCHITECTURE.md`, `docs/BLAST_RADIUS.md`
 - Deployment/install: `docs/INSTALLATION.md`, `docs/DEPLOYMENT.md`, `docs/PYPI.md`
-- Library API: `docs/LIBRARY.md`
+- Rust embedding: [library guide](docs/LIBRARY.md), [runnable examples](crates/kingfisher-scanner/examples) (`kingfisher-scanner`; validation and revocation via `validation`)
+- Python embedding: [SDK guide](docs/PYPI.md), [runnable examples](python/examples) (install `kingfisher-secret-scanner`, import `kingfisher_sdk`)

@@ -393,8 +393,15 @@ pub async fn fetch_issues(
     let mut start_at: u64 = 0;
     let mut next_page_token: Option<String> = None;
 
-    while issues.len() < max_results {
-        let page_size = std::cmp::min(JIRA_ISSUES_PAGE_SIZE, max_results - issues.len());
+    while kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results
+        || issues.len() < max_results
+    {
+        let page_size =
+            if kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results {
+                JIRA_ISSUES_PAGE_SIZE
+            } else {
+                std::cmp::min(JIRA_ISSUES_PAGE_SIZE, max_results - issues.len())
+            };
 
         let mut options = SearchOptions::builder();
         options.max_results(page_size as u64).fields(vec![JIRA_SEARCH_FIELDS]);
@@ -427,7 +434,9 @@ pub async fn fetch_issues(
         }
     }
 
-    issues.truncate(max_results);
+    if !kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results {
+        issues.truncate(max_results);
+    }
     Ok(issues)
 }
 

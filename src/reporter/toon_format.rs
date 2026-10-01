@@ -49,6 +49,10 @@ struct ToonFindingRecord {
     git_repository_url: Option<String>,
     git_commit_id: Option<String>,
     git_commit_url: Option<String>,
+    git_author_name: Option<String>,
+    git_author_email: Option<String>,
+    git_committer_name: Option<String>,
+    git_committer_email: Option<String>,
     git_file_url: Option<String>,
 }
 
@@ -80,6 +84,10 @@ impl ToonFindingRecord {
             git_repository_url: json_string(git, &["repository_url"]),
             git_commit_id: json_string(git, &["commit", "id"]),
             git_commit_url: json_string(git, &["commit", "url"]),
+            git_author_name: json_string(git, &["commit", "author", "name"]),
+            git_author_email: json_string(git, &["commit", "author", "email"]),
+            git_committer_name: json_string(git, &["commit", "committer", "name"]),
+            git_committer_email: json_string(git, &["commit", "committer", "email"]),
             git_file_url: json_string(git, &["file", "url"]),
         }
     }

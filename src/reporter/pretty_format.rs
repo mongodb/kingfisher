@@ -233,6 +233,11 @@ impl DetailsReporter {
             if let Some(url) = commit.get("url").and_then(|v| v.as_str()) {
                 writeln!(f, " |__Commit........: {}", self.style_metadata(url))?;
             }
+            if let Some(author) = commit.get("author").filter(|v| !v.is_null()) {
+                let name = author.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let email = author.get("email").and_then(|v| v.as_str()).unwrap_or("");
+                writeln!(indented(f).with_str(" |__"), "Author........: {} <{}>", name, email)?;
+            }
             if let Some(committer) = commit.get("committer") {
                 let name = committer.get("name").and_then(|v| v.as_str()).unwrap_or("");
                 let email = committer.get("email").and_then(|v| v.as_str()).unwrap_or("");

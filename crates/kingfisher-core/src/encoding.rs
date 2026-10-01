@@ -64,7 +64,10 @@ enum Encoding {
 }
 
 fn guess(input: &[u8]) -> Option<(Encoding, usize)> {
-    if input.len() < 8 {
+    // Every BOM-less encoding heuristic below requires zero-byte padding.
+    // Ordinary source text has none; use the vectorized search to avoid
+    // repeatedly walking the whole blob to score individual byte lanes.
+    if input.len() < 8 || input.len() % 2 != 0 || memchr::memchr(0, input).is_none() {
         return None;
     }
     let score = |offset: usize, stride: usize| {
@@ -97,6 +100,15 @@ fn guess(input: &[u8]) -> Option<(Encoding, usize)> {
 #[cfg(test)]
 mod tests {
     use super::decode;
+
+    #[test]
+    fn unpadded_text_is_not_guessed_as_utf16_or_utf32() {
+        for text in ["abcdefgh", "plain ASCII source text!", "日本語のテキスト"] {
+            assert_eq!(decode(text.as_bytes()), None);
+        }
+        // BOMs still select an encoding even when the payload has no zero bytes.
+        assert_eq!(decode(&[0xff, 0xfe, 0x41, 0x41]).unwrap(), "䅁".as_bytes());
+    }
 
     #[test]
     fn zero_filled_binary_headers_are_not_unicode_text() {

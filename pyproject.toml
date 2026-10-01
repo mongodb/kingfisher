@@ -1,0 +1,35 @@
+[build-system]
+requires = ["maturin>=1.12,<2"]
+build-backend = "maturin"
+
+[project]
+name = "kingfisher-secret-scanner"
+dynamic = ["version"]
+description = "Fast secret scanning, credential validation, and revocation for Python, powered by Rust"
+keywords = ["secret-scanner", "secret-detection", "credential-validation", "credential-revocation", "api-keys", "security"]
+readme = "python/README.md"
+requires-python = ">=3.10"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE", "THIRD_PARTY_NOTICES", "third-party/kingfisher-vectorscan/*", "crates/kingfisher-rules/generated/licenses/*"]
+classifiers = ["Programming Language :: Python :: 3", "Programming Language :: Rust"]
+
+[project.urls]
+Homepage = "https://github.com/mongodb/kingfisher"
+Repository = "https://github.com/mongodb/kingfisher"
+Documentation = "https://github.com/mongodb/kingfisher/blob/main/docs/PYPI.md"
+Examples = "https://github.com/mongodb/kingfisher/tree/main/python/examples"
+Issues = "https://github.com/mongodb/kingfisher/issues"
+
+[dependency-groups]
+dev = ["maturin>=1.12,<2", "pytest>=8,<10"]
+
+[tool.maturin]
+manifest-path = "crates/kingfisher-python/Cargo.toml"
+python-source = "python"
+module-name = "kingfisher_sdk._native"
+profile = "python-release"
+exclude = ["**/__pycache__/**", "**/*.pyc"]
+include = [{ path = "python/examples/**/*", format = "sdist" }, { path = "python/tests/**/*", format = "sdist" }]
+
+[tool.pytest.ini_options]
+testpaths = ["python/tests"]

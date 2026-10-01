@@ -154,7 +154,9 @@ pub async fn search_messages(
 
             messages.push(TeamsMessage { web_url, body_content, created_date_time, channel_id });
 
-            if messages.len() >= max_results {
+            if !kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results
+                && messages.len() >= max_results
+            {
                 return Ok(messages);
             }
         }

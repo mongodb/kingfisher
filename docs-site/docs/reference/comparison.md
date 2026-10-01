@@ -1,9 +1,40 @@
 ---
 title: "Benchmarks & Comparison"
-description: "Benchmark results comparing Kingfisher performance against TruffleHog, GitLeaks, and detect-secrets across major open source repositories."
+description: "Published secret-scanning runtime, network-request, and binary-size benchmarks."
 ---
 
-# Benchmark Comparison
+# Capabilities and Benchmarks
+
+**Of the secret scanning tools compared below, only Kingfisher and Betterleaks 2.0
+offer built-in credential revocation.** Find exposed secrets, verify which are live,
+identify their owners, and revoke supported credentials—all open source, with no
+paid edition required.
+
+| Built-in capability | Kingfisher | Betterleaks 2.0 RC1 | TruffleHog OSS | Gitleaks |
+|---|:---:|:---:|:---:|:---:|
+| Secret discovery | ✅ | ✅ | ✅ | ✅ |
+| Live credential verification | ✅ | ✅ | ✅ | ❌ |
+| Identity and permission analysis | ✅ | ✅ | ✅ | ❌ |
+| **Credential revocation** | **✅** | **✅** | ❌ | ❌ |
+| License | Apache-2.0 | MIT | AGPL-3.0 | MIT |
+
+✅ Supported · ❌ Not built in. Provider coverage and permissions vary.
+Betterleaks **2.0.0-rc.1** is a prerelease; revocation requires an explicit action.
+
+Feature review: September 30, 2026. Sources:
+[Kingfisher revocation](../features/revocation.md),
+[Betterleaks 2.0 RC1](https://github.com/betterleaks/betterleaks/blob/v2.0.0-rc.1/README.md),
+[TruffleHog source and capabilities](https://github.com/trufflesecurity/trufflehog/tree/19f011aca35e0fb30601c9407a4afbaeb02aad53),
+and [Gitleaks source and capabilities](https://github.com/gitleaks/gitleaks/tree/b58d3f102cf3a2c84cb7f923d05c25c9b1aed84b).
+Revocation means invalidating credentials through the provider, not merely checking
+their status. No built-in revocation command was found in the reviewed TruffleHog
+or Gitleaks source.
+
+## Published benchmarks
+
+These historical measurements are separate from the Kingfisher and Betterleaks 2.0
+revocation capabilities described on the homepage. Betterleaks 2.0 was not included
+in these benchmarks.
 
 ## Runtime Comparison (seconds)
 *Lower runtimes are better.*
@@ -26,22 +57,22 @@ description: "Benchmark results comparing Kingfisher performance against Truffle
 
 ### Validated/Verified Findings Comparison
 
-Note: For Gitleaks and detect-secrets, validated/verified counts are not available.
+Gitleaks does not perform live validation; its verified counts are **N/A**, not zero.
 
 | Repository | Kingfisher Validated | TruffleHog Verified | Gitleaks Verified |
 |------------|----------------------|---------------------|-------------------|
-| croc | 0 | 0 | 0 |
-| rails | 0 | 0 | 0 |
-| ruby | 0 | 0 | 0 |
-| gitlab | **6** | **6** | 0 |
-| django | 0 | 0 | 0 |
-| lucene | 0 | 0 | 0 |
-| mongodb | 0 | 0 | 0 |
-| linux | 0 | 0 | 0 |
-| typescript | 0 | 0 | 0 |
+| croc | 0 | 0 | N/A |
+| rails | 0 | 0 | N/A |
+| ruby | 0 | 0 | N/A |
+| gitlab | **6** | **6** | N/A |
+| django | 0 | 0 | N/A |
+| lucene | 0 | 0 | N/A |
+| mongodb | 0 | 0 | N/A |
+| linux | 0 | 0 | N/A |
+| typescript | 0 | 0 | N/A |
 
 ### Network Requests Comparison
-*'Network Requests' shows the total number of HTTP calls made during a scan. Since Gitleaks and detect‑secrets don’t validate secrets, they never make any network requests.*
+*'Network Requests' shows HTTP calls recorded during these scans. Gitleaks does not perform live credential validation; zero here describes this benchmark, not every possible network interaction.*
 
 | Repository | Kingfisher Network Requests | TruffleHog Network Requests | Gitleaks Network Requests |
 |------------|-----------------------------|-----------------------------|---------------------------|

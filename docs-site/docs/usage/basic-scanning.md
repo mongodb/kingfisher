@@ -520,7 +520,7 @@ kingfisher revoke --rules-path ./custom-rules.yml --rule custom.provider.token "
 
 ### Limit maximum file size scanned (`--max-file-size`)
 
-By default, Kingfisher skips files larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**.
+By default, Kingfisher skips files larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**. Use `--max-file-size 0` for unlimited file size, or `--no-limits` to disable scan resource budgets and timeouts.
 
 ```bash
 # Scan files up to 500 mb in size
@@ -625,7 +625,60 @@ See [`docs/CONFIG.md`](../usage/configuration.md) for the full schema and preced
 
 ### Scan changes in CI pipelines
 
-Limit scanning to a commit range by combining `--since-commit` with `--branch` (defaults to `HEAD`). With the default `--git-history full`, Kingfisher scans changes in every commit reachable from the selected tip, excluding the baseline ref and all its ancestors (`baseline..tip`). This includes merged history and secrets added and removed before the tip. Add `--git-history none` to scan only the net tree diff between the two refs.
+### Changes in the last N hours
+
+Use `--since-hours <HOURS>` to scan recent Git changes without choosing a baseline commit. `HOURS` must be a positive whole number. With no `--branch`, Kingfisher walks all locally available refs (local branches, remote-tracking branches, and tags) plus HEAD:
+
+```bash
+# Clone once with all branches and complete history; no checkout is needed.
+git clone --no-checkout --no-single-branch "$REPO_URL" ./repo
+
+# Scan commits from the last 24 hours across all available refs.
+kingfisher scan ./repo --since-hours 24 --git-history full --format toon
+
+# Restrict the same window to one branch.
+kingfisher scan ./repo --since-hours 24 --branch origin/main --format toon
+```
+
+`--git-history full` is the default, so it may be omitted. `--since-commit` is not needed.
+
+For example, assuming the following committer timestamps:
+
+```text
+                  scan start minus 24h        scan start
+                            |                     |
+      A---B-----------------|---C---D              |  main (HEAD)
+           \                |                     |
+            E---------------|---F---G              |  origin/feature
+                            |                     |
+         older commits      |   selected window   |
+```
+
+The first scan includes changes in **C, D, F, and G**. It excludes **A, B, and E** as scan candidates. Adding `--branch main` includes only **C and D**. A secret added in C and removed in D is still detectable because each selected commit is inspected, not just the final branch tree.
+
+Time-window semantics:
+
+- Kingfisher fixes one inclusive window at scan start, from that instant minus `HOURS` through scan start, at Unix-second precision. Every repository in the same invocation uses the same window, even if cloning or scanning takes time. Commits dated after scan start are excluded.
+- Selection uses the **committer timestamp**, not the author timestamp, push/fetch time, or file modification time. Rebasing and cherry-picking can change committer dates. This option cannot reconstruct when a server received a push.
+- Commit dates need not follow ancestry order. Kingfisher continues traversing older commits to find qualifying ancestors; a time window reduces scanned file content but does not necessarily reduce graph traversal. The repository timeout still applies.
+- Each selected commit is compared with its first parent, even if that parent predates the window. Kingfisher scans the complete added or modified file versions, not only added lines. An older secret in a file modified during the window can therefore be reported. Deleted files and removed content are not scanned from the parent tree; a removed secret is detectable only if an added or modified file version containing it belongs to a selected commit. Unchanged files and uncommitted working-tree changes are excluded.
+- Only locally available history can be scanned. A shallow clone may omit qualifying commits or parent trees. When a selected shallow boundary has no usable parent history, Kingfisher scans its full tree, which may include older content. Prefer complete history for accurate parent comparisons; `git clone --shallow-since` is not equivalent to this scan filter.
+
+`--since-hours` requires full Git history mode and cannot be combined with `--since-commit`, `--staged`, `--branch-root`, or `--branch-root-commit`. It filters Git commit content, not repository-host artifacts or other non-Git inputs. GitHub public-event scanning uses its separate `--event-lookback-hours` option and cannot be combined with `--since-hours`.
+
+Audit output identifies this scope as `commit_time_range` and records the inclusive window in `since_timestamp` and `until_timestamp` (Unix seconds). All-ref scans use `(all refs and HEAD)` as `tip_ref`; an explicit branch records its resolved tip.
+
+### Commit ranges
+
+With the default `--git-history full`, `--since-commit <baseline>` scans changes in every commit reachable from all locally available refs (including local branches, remote-tracking branches, and tags) plus `HEAD`, excluding the baseline ref and all its ancestors. Add `--branch <ref>` to restrict the walk to one tip (`baseline..tip`); explicit `--branch HEAD` retains HEAD-only scanning. This includes merged history and secrets added and removed before a tip. With `--git-history none`, Kingfisher instead scans the net tree diff from the baseline to `--branch` (default `HEAD`).
+
+For example, after cloning all branches, scan their available history with:
+
+```bash
+kingfisher scan ./repo --since-commit "$BASE_COMMIT" --git-history full --format toon
+```
+
+Only refs and history present in the local clone can be scanned. Shallow boundaries limit traversal; a boundary commit whose parent is unavailable is scanned as a full tree. The baseline must resolve locally. `--since-commit` is an ancestry boundary, not a time filter: divergent branches may include older commits outside the baseline’s ancestry.
 
 Use `--branch-root-commit` alongside `--branch` when you need to include a specific commit (and everything after it) in a diff-focused scan without re-examining earlier history. Provide the branch tip (or other comparison ref) via `--branch`, and pass the commit or merge-base you want to include with `--branch-root-commit`. If you omit `--branch-root-commit`, you can still enable `--branch-root` to fall back to treating the `--branch` ref itself as the inclusive root for backwards compatibility. This is especially useful in long-lived branches where you want to resume scanning from a previous review point or from the commit where a hotfix forked.
 
@@ -889,6 +942,30 @@ substitution, or recursively expands variable values. Use `$$` for a literal
 All three App values are required. A complete App configuration takes
 precedence over `KF_GITHUB_TOKEN`; an incomplete configuration is rejected.
 
+### Scan many GitHub users
+
+```bash
+kingfisher scan github --user-file github-users.txt --user additional-user --format toon
+```
+
+Use one username per line. Blank lines and lines beginning with `#` are ignored;
+a leading `@` is accepted. Users from the file and repeated `--user` flags are
+combined and deduplicated without regard to case. `--user-file` also works with
+`--include-gists` and `--list-only`. For example, `github-users.txt` can contain:
+
+```text
+# Engineering users
+alice
+@bob
+```
+
+An empty or comment-only file needs another source such as `--user` or `--org`.
+
+GitHub user and organization scans start cloning and scanning as repository
+pages arrive, while discovery continues. Bounded queues keep cloning from
+running too far ahead of scanning. `--repo-clone-limit` selects the first unique
+repositories discovered, after exclusions; listing output remains sorted.
+
 ### Monitor public GitHub events for users
 
 Use `--public-events` to scan recent public activity for one or more GitHub users. Repeat `--user` for multiple actors, or pass `--user-file` with one username per line. Blank lines and lines beginning with `#` are ignored, and a leading `@` is accepted.
@@ -1056,6 +1133,20 @@ kingfisher scan gitlab --group my-group --repo-clone-limit 500
 ```bash
 kingfisher scan gitlab --user johndoe
 ```
+
+### Scan many GitLab users
+
+```bash
+kingfisher scan gitlab --user-file gitlab-users.txt --user additional-user --format toon
+```
+
+The file uses the same format and deduplication as GitHub user files, including
+support for GitLab usernames containing dots or underscores. An empty file needs
+another source such as `--user` or `--group`. It also works with
+`--include-snippets` and `--list-only`. GitLab user and group scans clone and scan
+repositories as project pages arrive, including on self-hosted instances.
+`--repo-clone-limit` selects the first unique repositories discovered after
+exclusions, including snippets.
 
 ### Include GitLab snippets and their history
 

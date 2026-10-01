@@ -108,13 +108,13 @@ pub struct ScanArgs {
     #[arg(global = true, long, short = 'n', default_value_t = false)]
     pub no_validate: bool,
 
-    /// Timeout for validation requests in seconds (1-60)
+    /// Timeout for validation requests in seconds (0 = unlimited)
     #[arg(
         global = true,
         long = "validation-timeout",
         default_value_t = 10,
         value_name = "SECONDS",
-        value_parser = clap::value_parser!(u64).range(1..=60)
+        value_parser = clap::value_parser!(u64)
     )]
     pub validation_timeout: u64,
 
@@ -201,7 +201,7 @@ pub struct ScanArgs {
     #[arg(global = true, long = "turbo", default_value_t = false)]
     pub turbo: bool,
 
-    /// Timeout for Git repository scanning in seconds
+    /// Timeout for Git repository scanning in seconds (0 = unlimited)
     #[arg(global = true, long, default_value_t = 1800, value_name = "SECONDS")]
     pub git_repo_timeout: u64,
 
@@ -537,46 +537,68 @@ pub enum ListRepositoriesCommand {
     Huggingface { specifiers: HuggingFaceRepoSpecifiers },
 }
 
-fn load_github_event_users(
+fn load_provider_users(
     cli_users: Vec<String>,
     user_file: Option<&Path>,
+    provider: &str,
 ) -> anyhow::Result<Vec<String>> {
     fn is_valid_github_username(user: &str) -> bool {
         user.len() <= 39
             && !user.starts_with('-')
             && !user.ends_with('-')
-            && user.chars().all(|c| c.is_ascii_alphanumeric() || c == '-')
+            // Enterprise Managed Users include an underscore before their shortcode.
+            && user.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
     }
 
-    fn push_user(users: &mut Vec<String>, raw: &str, source: &str) -> anyhow::Result<()> {
+    fn push_user(
+        users: &mut Vec<String>,
+        seen: &mut std::collections::HashSet<String>,
+        raw: &str,
+        source: &str,
+        provider: &str,
+    ) -> anyhow::Result<()> {
         let user = raw.trim().trim_start_matches('@');
         if user.is_empty() {
             return Ok(());
         }
-        if !is_valid_github_username(user) {
-            bail!("Invalid GitHub username in {source}: {user:?}");
+        if !(if provider == "GitHub" {
+            is_valid_github_username(user)
+        } else {
+            (2..=255).contains(&user.len())
+                && user.as_bytes().first().is_some_and(u8::is_ascii_alphanumeric)
+                && !user.ends_with('.')
+                && user.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '-' | '.'))
+        }) {
+            bail!("Invalid {provider} username in {source}: {user:?}");
         }
-        if !users.iter().any(|existing| existing.eq_ignore_ascii_case(user)) {
+        if seen.insert(user.to_ascii_lowercase()) {
             users.push(user.to_string());
         }
         Ok(())
     }
 
     let mut users = Vec::new();
+    let mut seen = std::collections::HashSet::new();
     for user in &cli_users {
-        push_user(&mut users, user, "--user")?;
+        push_user(&mut users, &mut seen, user, "--user", provider)?;
     }
 
     if let Some(path) = user_file {
-        let contents = fs::read_to_string(path).with_context(|| {
-            format!("Failed to read GitHub public event user file {}", path.display())
-        })?;
+        let path = expand_tilde(path);
+        let contents = fs::read_to_string(&path)
+            .with_context(|| format!("Failed to read {provider} user file {}", path.display()))?;
         for (line_number, line) in contents.lines().enumerate() {
             let trimmed = line.trim();
             if trimmed.is_empty() || trimmed.starts_with('#') {
                 continue;
             }
-            push_user(&mut users, trimmed, &format!("{}:{}", path.display(), line_number + 1))?;
+            push_user(
+                &mut users,
+                &mut seen,
+                trimmed,
+                &format!("{}:{}", path.display(), line_number + 1),
+                provider,
+            )?;
         }
     }
 
@@ -627,25 +649,19 @@ impl ScanCommandArgs {
                 }
                 ScanInputCommand::Github(args) => {
                     let mut specifiers = args.specifiers;
-                    if args.event_user_file.is_some() && !args.public_events {
-                        bail!("--user-file can only be used with --public-events");
+                    if let (Some(audit_log), Some(user_file)) =
+                        (scan_args.audit_log.as_deref(), args.user_file.as_deref())
+                        && paths_refer_to_same_file(
+                            &expand_tilde(audit_log),
+                            &expand_tilde(user_file),
+                        )
+                    {
+                        bail!("--audit-log must not overwrite the GitHub user file");
                     }
+                    specifiers.user =
+                        load_provider_users(specifiers.user, args.user_file.as_deref(), "GitHub")?;
                     if args.public_events {
-                        if let (Some(audit_log), Some(user_file)) =
-                            (scan_args.audit_log.as_deref(), args.event_user_file.as_deref())
-                            && paths_refer_to_same_file(
-                                &expand_tilde(audit_log),
-                                &expand_tilde(user_file),
-                            )
-                        {
-                            bail!(
-                                "--audit-log must not overwrite the GitHub public-event user file"
-                            );
-                        }
-                        let event_users = load_github_event_users(
-                            std::mem::take(&mut specifiers.user),
-                            args.event_user_file.as_deref(),
-                        )?;
+                        let event_users = std::mem::take(&mut specifiers.user);
                         if event_users.is_empty() {
                             bail!(
                                 "You must specify at least one --user or --user-file when scanning GitHub public events"
@@ -677,7 +693,7 @@ impl ScanCommandArgs {
                         None
                     } else if specifiers.is_empty() {
                         bail!(
-                            "You must specify at least one --user, --org, or use --all-orgs when scanning GitHub"
+                            "You must specify at least one --user, --user-file, --org, or use --all-orgs when scanning GitHub"
                         );
                     } else if args.list_only {
                         Some(ListRepositoriesCommand::Github { api_url: args.api_url, specifiers })
@@ -698,10 +714,24 @@ impl ScanCommandArgs {
                         None
                     }
                 }
-                ScanInputCommand::Gitlab(args) => {
+                ScanInputCommand::Gitlab(mut args) => {
+                    if let (Some(audit_log), Some(user_file)) =
+                        (scan_args.audit_log.as_deref(), args.user_file.as_deref())
+                        && paths_refer_to_same_file(
+                            &expand_tilde(audit_log),
+                            &expand_tilde(user_file),
+                        )
+                    {
+                        bail!("--audit-log must not overwrite the GitLab user file");
+                    }
+                    args.specifiers.user = load_provider_users(
+                        args.specifiers.user,
+                        args.user_file.as_deref(),
+                        "GitLab",
+                    )?;
                     if args.specifiers.is_empty() {
                         bail!(
-                            "You must specify at least one --user, --group, or use --all-groups when scanning GitLab"
+                            "You must specify at least one --user, --user-file, --group, or use --all-groups when scanning GitLab"
                         );
                     }
                     if args.list_only {
@@ -1163,9 +1193,9 @@ pub struct GithubScanArgs {
     #[arg(long = "event-lookback-hours", value_name = "HOURS", default_value_t = 24)]
     pub event_lookback_hours: u64,
 
-    /// Read GitHub public-event users from a file, one username per line
-    #[arg(long = "user-file", value_name = "FILE", value_hint = ValueHint::FilePath)]
-    pub event_user_file: Option<PathBuf>,
+    /// Read GitHub users from a file, one username per line (blank lines and # comments ignored)
+    #[arg(long = "user-file", group = "github_users", value_name = "FILE", value_hint = ValueHint::FilePath)]
+    pub user_file: Option<PathBuf>,
 
     /// Include contributor repositories when scanning git URLs
     #[arg(long = "include-contributors", default_value_t = false)]
@@ -1191,6 +1221,10 @@ pub struct GithubScanArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct GitLabScanArgs {
+    /// Read GitLab users from a file, one username per line (blank lines and # comments ignored)
+    #[arg(long = "user-file", value_name = "FILE", value_hint = ValueHint::FilePath)]
+    pub user_file: Option<PathBuf>,
+
     #[command(flatten)]
     pub specifiers: GitLabRepoSpecifiers,
 

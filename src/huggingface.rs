@@ -1,3 +1,4 @@
+use kingfisher_scanner::validation::limits::ResourceTimeout;
 use std::{collections::HashSet, env, time::Duration};
 
 use anyhow::{Context, Result, anyhow};
@@ -629,7 +630,7 @@ pub async fn enumerate_repo_urls(
     progress: Option<&mut ProgressBar>,
 ) -> Result<Vec<String>> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
+        .resource_timeout(Duration::from_secs(30))
         .danger_accept_invalid_certs(ignore_certs)
         .build()?;
     let base_url = Url::parse(HUGGINGFACE_API)?;
@@ -694,7 +695,7 @@ pub async fn enumerate_bucket_targets(
     progress: Option<&mut ProgressBar>,
 ) -> Result<Vec<BucketTarget>> {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(30))
+        .resource_timeout(Duration::from_secs(30))
         .danger_accept_invalid_certs(ignore_certs)
         .build()?;
     let base_url = Url::parse(HUGGINGFACE_API)?;
@@ -788,7 +789,7 @@ where
     F: FnMut(&BucketTarget, String, Vec<u8>) -> Result<()>,
 {
     let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(120))
+        .resource_timeout(Duration::from_secs(120))
         .danger_accept_invalid_certs(ignore_certs)
         .user_agent(GLOBAL_USER_AGENT.as_str())
         .build()?;

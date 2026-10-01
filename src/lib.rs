@@ -38,6 +38,7 @@ pub mod grpc_validation;
 pub mod huggingface;
 pub mod inline_ignore;
 pub mod jira;
+pub mod limits;
 pub mod liquid_filters;
 pub mod location;
 pub mod matcher;
@@ -105,14 +106,18 @@ pub struct GitDiffConfig {
 struct EnumeratorConfig {
     enumerate_git_history: bool,
     collect_git_metadata: bool,
-    repo_scan_timeout: Duration,
+    repo_scan_timeout: Option<Duration>,
     exclude_globset: Option<std::sync::Arc<GlobSet>>,
     git_diff: Option<GitDiffConfig>,
+    /// Start bounded history walks from all refs when no branch was explicitly selected.
+    history_all_refs: bool,
+    history_time_range: Option<(i64, i64)>,
     /// Whether archive blobs encountered during git scanning should be
     /// transparently extracted before pattern matching.
     extract_archives: bool,
     /// Maximum number of archive layers to extract while scanning git blobs.
-    extraction_depth: usize,
+    extraction_depth: Option<usize>,
+    resources: limits::ResourceLimits,
 }
 
 pub enum FoundInput {
@@ -125,7 +130,8 @@ pub struct FileResult {
     pub path: PathBuf,
     pub num_bytes: u64,
     pub extract_archives: bool,
-    pub extraction_depth: usize,
+    pub extraction_depth: Option<usize>,
+    pub resources: limits::ResourceLimits,
 }
 
 pub struct EnumeratorFileResult {
@@ -141,7 +147,8 @@ pub type Output = Sender<FoundInput>;
 struct VisitorBuilder<'t> {
     max_file_size: Option<u64>,
     extract_archives: bool,
-    extraction_depth: usize,
+    extraction_depth: Option<usize>,
+    resources: limits::ResourceLimits,
     output: &'t Output,
 }
 
@@ -154,6 +161,7 @@ where
             max_file_size: self.max_file_size,
             extract_archives: self.extract_archives,
             extraction_depth: self.extraction_depth,
+            resources: self.resources,
             output: self.output,
         })
     }
@@ -162,7 +170,8 @@ where
 struct Visitor<'t> {
     max_file_size: Option<u64>,
     extract_archives: bool,
-    extraction_depth: usize,
+    extraction_depth: Option<usize>,
+    resources: limits::ResourceLimits,
     output: &'t Output,
 }
 
@@ -213,6 +222,7 @@ impl<'t> ignore::ParallelVisitor for Visitor<'t> {
                     num_bytes,
                     extract_archives: self.extract_archives,
                     extraction_depth: self.extraction_depth,
+                    resources: self.resources,
                 });
             }
         } else if metadata.is_dir() {
@@ -234,7 +244,8 @@ pub struct FilesystemEnumerator {
     collect_git_metadata: bool,
     enumerate_git_history: bool,
     extract_archives: bool,
-    extraction_depth: usize,
+    extraction_depth: Option<usize>,
+    resources: limits::ResourceLimits,
     no_dedup: bool,
     exclude_globset: Option<std::sync::Arc<GlobSet>>,
 }
@@ -265,7 +276,8 @@ impl FilesystemEnumerator {
             collect_git_metadata: args.input_specifier_args.commit_metadata,
             enumerate_git_history: Self::DEFAULT_ENUMERATE_GIT_HISTORY,
             extract_archives: !args.content_filtering_args.no_extract_archives,
-            extraction_depth: args.content_filtering_args.extraction_depth as usize,
+            extraction_depth: args.content_filtering_args.archive_depth(),
+            resources: args.content_filtering_args.resource_limits(),
             no_dedup: args.no_dedup,
             exclude_globset: None,
         })
@@ -366,6 +378,7 @@ impl FilesystemEnumerator {
             max_file_size: self.max_file_size,
             extract_archives: self.extract_archives,
             extraction_depth: self.extraction_depth,
+            resources: self.resources,
             output: &output,
         };
         self.walk_builder.build_parallel().visit(&mut visitor_builder);

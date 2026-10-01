@@ -382,7 +382,11 @@ mod tests {
         ];
         let command = options.command(Path::new("kingfisher"), Path::new("report.json")).unwrap();
         assert!(command.get_args().any(|v| v == "--jobs=2"));
-        options.extra = vec!["--validation-timeout=90".into()];
+        for timeout in ["0", "90"] {
+            options.extra = vec![format!("--validation-timeout={timeout}").into()];
+            assert!(options.command(Path::new("kingfisher"), Path::new("report.json")).is_ok());
+        }
+        options.extra = vec!["--validation-timeout=invalid".into()];
         assert!(options.command(Path::new("kingfisher"), Path::new("report.json")).is_err());
     }
     #[test]

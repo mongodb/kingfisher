@@ -246,6 +246,47 @@ fn finding_git_url(record: &FindingReporterRecord) -> Option<String> {
         .map(|url| url.to_string())
 }
 
+fn finding_git_identities_html(record: &FindingReporterRecord) -> String {
+    let Some(commit) =
+        record.finding.git_metadata.as_ref().and_then(|metadata| metadata.get("commit"))
+    else {
+        return String::new();
+    };
+
+    let mut identities = Vec::new();
+    for (label, key) in [("Author", "author"), ("Committer", "committer")] {
+        let Some(identity) = commit.get(key).filter(|value| !value.is_null()) else {
+            continue;
+        };
+        let name = identity
+            .get("name")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let email = identity
+            .get("email")
+            .and_then(|value| value.as_str())
+            .map(str::trim)
+            .filter(|value| !value.is_empty());
+        let value = match (name, email) {
+            (Some(name), Some(email)) => {
+                format!("{} &lt;{}&gt;", escape_html(name), escape_html(email))
+            }
+            (Some(name), None) => escape_html(name),
+            (None, Some(email)) => format!("&lt;{}&gt;", escape_html(email)),
+            (None, None) => continue,
+        };
+        identities
+            .push(format!("<div class=\"git-identity\"><strong>{label}</strong> {value}</div>"));
+    }
+
+    if identities.is_empty() {
+        String::new()
+    } else {
+        format!("<div class=\"git-identities\">{}</div>", identities.join(""))
+    }
+}
+
 fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
     if findings.is_empty() {
         return "<p>No findings detected.</p>".to_string();
@@ -271,6 +312,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
                 )
             })
             .unwrap_or_default();
+        let git_context_html = format!("{git_url_html}{}", finding_git_identities_html(record));
         let commands = [
             record.finding.validate_command.as_deref().map(|command| {
                 format!("<div><strong>Validate</strong><code>{}</code></div>", escape_html(command))
@@ -318,7 +360,7 @@ fn render_findings_table(findings: &[FindingReporterRecord]) -> String {
             escape_html(&record.rule.id),
             escape_html(&record.rule.description),
             escape_html(&record.finding.path),
-            git_url_html,
+            git_context_html,
             status_class,
             escape_html(&record.finding.validation.status),
             confidence_sort,
@@ -703,6 +745,8 @@ fn build_html(envelope: &ReportEnvelope) -> String {
     th[aria-sort=\"descending\"] .sort-indicator::before {{ content: \"↓\"; color: var(--brand); }}
     .source-link {{ display: inline-flex; gap: 3px; color: var(--info); font-weight: 700; text-decoration: none; }}
     .source-link:hover {{ text-decoration: underline; }}
+    .git-identities {{ display: grid; gap: 3px; margin-top: 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }}
+    .git-identity strong {{ color: var(--text); }}
     .access-identity {{ margin-top: 20px; overflow-wrap: anywhere; }}
     .access-paths {{ list-style: none; padding: 0; display: grid; gap: 12px; }}
     .access-path {{ display: grid; grid-template-columns: minmax(0, 1fr) 24px minmax(0, 1.2fr); gap: 12px; padding: 16px; border: 1px solid var(--border); border-radius: 8px; }}

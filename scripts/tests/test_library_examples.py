@@ -24,7 +24,7 @@ class LibraryExamplesTests(unittest.TestCase):
                 "cargo", "build", "--locked", "--examples",
                 "-p", "kingfisher-core", "-p", "kingfisher-rules",
                 "-p", "kingfisher-scanner",
-                "--features", "kingfisher-scanner/validation-ethereum,kingfisher-scanner/validation-http",
+                "--features", "kingfisher-scanner/validation",
                 "--message-format=json",
             ],
             cwd=ROOT, capture_output=True, text=True,

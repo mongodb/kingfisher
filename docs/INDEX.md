@@ -25,7 +25,7 @@ authoritative Kingfisher documentation for each task.
 | Preserve repository coverage evidence | [Repository audit log](AUDIT_LOG.md) |
 | Write, import, or verify detection rules | [Rule authoring](RULES.md) |
 | Embed scanning and validation in Rust | [Library API and integration recipes](LIBRARY.md#integration-recipes-for-rust-projects-and-llm-agents) |
-| Install or maintain the Python distribution | [Python/PyPI](PYPI.md) |
+| Embed the Python SDK or maintain PyPI distributions | [Python/PyPI](PYPI.md) |
 
 ## Response Workflow
 
@@ -65,7 +65,7 @@ authoritative Kingfisher documentation for each task.
 
 - [Architecture](ARCHITECTURE.md) — crates, CLI paths, scanner pipeline, validation, and reporters.
 - [Rust library API](LIBRARY.md) — embedding the scanner and selecting validation features.
-- [Python/PyPI](PYPI.md) — Python installation, wheels, and publishing.
+- [Python/PyPI](PYPI.md) — Native Python detection, validation, revocation, runnable uv examples, wheels, and publishing.
 - [Benchmarks](COMPARISON.md) — methodology, performance, network requests, and binary size.
 - [Project background](PROJECT.md) — production use, lineage, evolution, and roadmap.
 - [Changelog](../CHANGELOG.md) — release history.

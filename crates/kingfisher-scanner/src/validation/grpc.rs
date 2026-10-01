@@ -107,7 +107,7 @@ pub async fn grpc_unary_call(
     let port = url.port_or_known_default().unwrap_or(443);
 
     let addr = format!("{host}:{port}");
-    let tcp = tokio::time::timeout(timeout, TcpStream::connect(addr))
+    let tcp = super::limits::timeout(timeout, TcpStream::connect(addr))
         .await
         .context("Timed out connecting to gRPC host")?
         .context("Failed to connect to gRPC host")?;
@@ -116,12 +116,12 @@ pub async fn grpc_unary_call(
     let server_name = rustls::pki_types::ServerName::try_from(host.to_string())
         .map_err(|_| anyhow!("Invalid TLS server name: {host}"))?;
 
-    let tls = tokio::time::timeout(timeout, connector.connect(server_name, tcp))
+    let tls = super::limits::timeout(timeout, connector.connect(server_name, tcp))
         .await
         .context("Timed out during TLS handshake")?
         .context("TLS handshake failed")?;
 
-    let (mut h2_client, connection) = tokio::time::timeout(timeout, client::handshake(tls))
+    let (mut h2_client, connection) = super::limits::timeout(timeout, client::handshake(tls))
         .await
         .context("Timed out during HTTP/2 handshake")?
         .context("HTTP/2 handshake failed")?;
@@ -153,7 +153,7 @@ pub async fn grpc_unary_call(
     // Send gRPC request bytes (including the 5-byte gRPC frame prefix).
     send_stream.send_data(Bytes::from(body), true).context("Failed to send gRPC request body")?;
 
-    let response = tokio::time::timeout(timeout, response_future)
+    let response = super::limits::timeout(timeout, response_future)
         .await
         .context("Timed out waiting for gRPC response headers")?
         .context("Failed to receive gRPC response headers")?;
@@ -169,13 +169,15 @@ pub async fn grpc_unary_call(
         // - None => end of stream
         // - Some(Ok(bytes)) => a data chunk
         // - Some(Err(err)) => stream error
-        let next_opt = tokio::time::timeout(timeout, recv_stream.data())
+        let next_opt = super::limits::timeout(timeout, recv_stream.data())
             .await
             .context("Timed out reading gRPC response data")?;
 
         match next_opt {
             Some(Ok(b)) => {
-                if body_bytes.len().saturating_add(b.len()) > (1 << 20) {
+                if !super::limits::NetworkLimits::current().unlimited_response
+                    && body_bytes.len().saturating_add(b.len()) > (1 << 20)
+                {
                     return Err(anyhow!("gRPC validation response exceeded size limit"));
                 }
                 body_bytes.extend_from_slice(b.as_ref());
@@ -187,7 +189,7 @@ pub async fn grpc_unary_call(
     }
 
     // Read trailers (where grpc-status is typically reported).
-    if let Some(trailers) = tokio::time::timeout(timeout, recv_stream.trailers())
+    if let Some(trailers) = super::limits::timeout(timeout, recv_stream.trailers())
         .await
         .context("Timed out reading gRPC response trailers")?
         .context("Error reading gRPC response trailers")?

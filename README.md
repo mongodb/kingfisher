@@ -20,7 +20,7 @@
 
 **Find leaked secrets. Validate what’s live. Map the blast radius. Revoke fast.**
 
-Kingfisher is a blazingly fast, completely free and open source secret scanner built in Rust. It detects leaked secrets across your entire stack with [hundreds of built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), validates which credentials are actually live, maps the blast radius of every leak, and revokes exposed secrets in minutes - the full defender workflow in one Apache-2.0-licensed release:
+Kingfisher is a blazingly fast, completely free and open source secret scanner built in Rust. It detects leaked secrets across your entire stack with [hundreds of built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), validates which credentials are actually live, maps the blast radius of every leak, and **revokes exposed secrets in minutes** - the full defender workflow in one Apache-2.0-licensed release:
 
 **Detect → Validate → Map → Triage → Revoke**
 
@@ -31,6 +31,19 @@ Kingfisher is a blazingly fast, completely free and open source secret scanner b
  - revoke supported secrets
 
 > **Defender workflow:** Follow the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md) for secret detection, validation, notifications, blast-radius mapping, and revocation.
+
+## Embed Kingfisher as a Rust library or Python module
+
+Add Kingfisher's fast secret scanning, live credential validation, and revocation
+to your own applications through a native Rust library or Python module.
+Everything runs in-process, with no CLI subprocess required.
+
+- **Rust:** Use `kingfisher-scanner`. See the [library guide](docs/LIBRARY.md) and
+  [runnable examples](crates/kingfisher-scanner/examples) for scanning and validation,
+  plus [revocation via `kingfisher-scanner`](docs/LIBRARY.md#revoke-a-credential).
+- **Python:** Install `uv add kingfisher-secret-scanner` and import `kingfisher_sdk`.
+  See the [Python SDK guide](docs/PYPI.md) and [runnable examples](python/examples)
+  for scanning, validation, and explicit revocation.
 
 ## Scan Targets
 
@@ -53,6 +66,21 @@ organizations, cloud object storage, collaboration tools, and API-development pl
 For target-specific commands, authentication, scope, and pagination behavior, use the
 [platform integration guide](docs/INTEGRATIONS.md).
 
+## Discover, validate, and revoke — open source options
+
+Of the popular secret scanning tools compared below, **only Kingfisher and Betterleaks 2.0
+offer built-in credential revocation.** All open source, with no
+paid edition required.
+
+| Built-in capability | Kingfisher | Betterleaks 2.0 | TruffleHog OSS | Gitleaks |
+|---|:---:|:---:|:---:|:---:|
+| (Find) Secret discovery | ✅ | ✅ | ✅ | ✅ |
+| (Validate) Live credential verification | ✅ | ✅ | ✅ | ❌ |
+| (Map) Identity and permission analysis | ✅ | ✅ | ✅ | ❌ |
+| (Revoke) **Credential revocation** | **✅** | **✅** | ❌ | ❌ |
+| License | Apache-2.0 | MIT | AGPL-3.0 | MIT |
+
+✅ Supported · ❌ Not Supported
 
 ## Built for Speed and Accuracy
 
@@ -136,7 +164,7 @@ always confirm the target and operational impact before containment.
 - **Checksum-aware custom detection**: Kingfisher custom rules can verify token checksums offline before validation ([checksum intelligence](docs/RULES.md#checksum-intelligence))
 - **Report Viewer (local + hosted)**: Visualize and triage Kingfisher, **SARIF, Gitleaks, and TruffleHog** output locally with `kingfisher view ./report.json` or online with the [hosted viewer](https://mongodb.github.io/kingfisher/viewer/). Multiple files, directories, and imported third-party reports are merged and deduplicated. See [docs/USAGE.md](docs/USAGE.md#report-viewer-local-and-hosted).
 - **Audit reporting**: Generate compliance-oriented HTML reports with scan metadata and validation ordering
-- **Library crates**: Embed Kingfisher's scanning engine in your own Rust applications ([docs/LIBRARY.md](docs/LIBRARY.md))
+- **Embedding**: Scan in-process from [Rust](docs/LIBRARY.md) or [Python](docs/PYPI.md), with explicit validation and revocation APIs
 
 ## Basic Usage Demo
 ```bash
@@ -159,6 +187,9 @@ brew install kingfisher
 # PyPI wrapper
 uv tool install kingfisher-bin
 ```
+
+See the [full installation guide](docs/INSTALLATION.md) for all installation methods,
+installer options, and [pre-commit hook installation](docs/INSTALLATION.md#pre-commit-hooks).
 
 Then scan a repository, including its Git history:
 
@@ -347,7 +378,7 @@ validation filters, output formats, scan scope, and command examples.
 | Produce repository coverage and audit evidence | [Repository audit log](docs/AUDIT_LOG.md) |
 | Suppress existing findings without hiding new ones | [Baselines](docs/BASELINE.md) |
 | Write or import custom rules | [Rule authoring](docs/RULES.md) |
-| Embed the scanner in Rust or use it from Python | [Rust library](docs/LIBRARY.md), [Python distribution](docs/PYPI.md) |
+| Embed the scanner in Rust or use it from Python | [Rust library](docs/LIBRARY.md), [Python SDK and distribution](docs/PYPI.md) |
 
 ## Output for People and Machines
 
@@ -371,7 +402,7 @@ cover file batches, private rules, async services, and scanning plus HTTP valida
 For example, from a repository checkout:
 
 ```sh
-cargo run --locked -p kingfisher-scanner --example http_validation --features validation-http
+cargo run --locked -p kingfisher-scanner --example http_validation --features validation
 ```
 
 ## Documentation

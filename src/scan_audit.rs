@@ -124,6 +124,11 @@ impl AuditPhase {
 pub struct GitAuditSnapshot {
     pub scope: String,
     pub tip_ref: String,
+    /// Inclusive committer timestamp bounds (Unix seconds) for --since-hours.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub since_timestamp: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub until_timestamp: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tip_sha: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -353,6 +358,11 @@ impl ScanAuditCollector {
         self.write_event("repository_scan_failed", Some(key));
     }
 
+    /// Mark already-streamed records as an incomplete run after discovery fails.
+    pub fn run_failed(&mut self) {
+        self.write_event("run_failed", None);
+    }
+
     pub fn finish(&mut self) -> Result<ScanAuditManifest> {
         if self.manifest.completed_at.is_none() {
             self.manifest.completed_at = Some(now());
@@ -395,7 +405,7 @@ impl ScanAuditCollector {
             "run_id": self.manifest.run_id,
             "timestamp": now(),
             "repository": repository,
-            "summary": if event == "run_completed" { Some(summarize(&self.records.values().cloned().collect::<Vec<_>>())) } else { None },
+            "summary": if matches!(event, "run_completed" | "run_failed") { Some(summarize(&self.records.values().cloned().collect::<Vec<_>>())) } else { None },
         });
         let result = serde_json::to_writer(&mut *writer, &payload)
             .and_then(|_| writer.write_all(b"\n").map_err(serde_json::Error::io))
@@ -457,13 +467,19 @@ fn sanitize_error(error: &str) -> String {
 ///
 /// This runs blocking Git subprocesses and must be called *outside* any lock
 /// shared with other scan workers (see [`ScanAuditCollector::scan_started_with_snapshot`]).
-/// Each command is bounded by the repository timeout from `args`.
+/// Commands share the repository timeout from `args`; zero or `--no-limits` disables it.
 pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAuditSnapshot {
-    let deadline = Instant::now() + Duration::from_secs(args.git_repo_timeout);
+    let deadline = if args.content_filtering_args.no_limits || args.git_repo_timeout == 0 {
+        None
+    } else {
+        Instant::now().checked_add(Duration::from_secs(args.git_repo_timeout))
+    };
     let input = &args.input_specifier_args;
     let branch_root_enabled = input.branch_root || input.branch_root_commit.is_some();
     let scope = if input.staged {
         "staged_tree_diff"
+    } else if input.since_hours.is_some() {
+        "commit_time_range"
     } else if input.since_commit.is_some() {
         if input.git_history == GitHistoryMode::Full { "commit_range" } else { "tree_diff" }
     } else if branch_root_enabled {
@@ -487,6 +503,12 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
                 .or_else(|| git_output(root, deadline, &["hash-object", "-t", "tree", "/dev/null"]))
         });
         ("(staged index)".to_string(), None, base)
+    } else if (input.since_commit.is_some() || input.since_hours.is_some())
+        && input.git_history == GitHistoryMode::Full
+        && input.branch.is_none()
+        && !branch_root_enabled
+    {
+        ("(all refs and HEAD)".to_string(), None, input.since_commit.clone())
     } else {
         // With --branch <ref> --branch-root (and no explicit
         // --branch-root-commit), the enumerator diffs <ref>'s parent tree
@@ -523,10 +545,13 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
     } else {
         None
     };
+    let history_time_range = input.resolved_history_time_range();
     GitAuditSnapshot {
         scope: scope.to_string(),
         tip_sha,
         tip_ref,
+        since_timestamp: history_time_range.map(|(start, _)| start),
+        until_timestamp: history_time_range.map(|(_, end)| end),
         base_sha: base_ref.as_ref().and_then(|value| git_commit_sha(root, deadline, value)),
         base_ref,
         inclusive_root_sha: inclusive_root_ref
@@ -555,6 +580,8 @@ pub fn combine_git_snapshots(
         _ => Some(GitAuditSnapshot {
             scope: "multiple_targets".to_string(),
             tip_ref: "(multiple targets)".to_string(),
+            since_timestamp: None,
+            until_timestamp: None,
             tip_sha: None,
             base_ref: None,
             base_sha: None,
@@ -580,7 +607,7 @@ pub fn combine_git_snapshots(
 /// --end-of-options`, so user input cannot be interpreted as command options.
 /// Then `rev-list -n 1` peels the verified object ID to a commit without adding
 /// caret syntax, which Windows command wrappers can mangle.
-fn git_commit_sha(root: &Path, deadline: Instant, ref_name: &str) -> Option<String> {
+fn git_commit_sha(root: &Path, deadline: Option<Instant>, ref_name: &str) -> Option<String> {
     crate::scanner::reference_candidates(ref_name).into_iter().find_map(|candidate| {
         let oid =
             git_output(root, deadline, &["rev-parse", "--verify", "--end-of-options", &candidate])?;
@@ -604,7 +631,7 @@ fn git_path(path: &Path) -> PathBuf {
     path.to_path_buf()
 }
 
-fn git_output(root: &Path, deadline: Instant, args: &[&str]) -> Option<String> {
+fn git_output(root: &Path, deadline: Option<Instant>, args: &[&str]) -> Option<String> {
     let git_root = git_path(root);
     let mut command = Command::new("git");
     if root.join("HEAD").is_file() && root.join("objects").is_dir() {
@@ -630,7 +657,7 @@ fn git_output(root: &Path, deadline: Instant, args: &[&str]) -> Option<String> {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
-                if Instant::now() >= deadline {
+                if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
                     let _ = child.kill();
                     let _ = child.wait();
                     debug!("git {} timed out against {}", args.join(" "), root.display());
@@ -687,7 +714,7 @@ mod tests {
         let object = repo.find_object(commit, None).unwrap();
         repo.tag("release", &object, &signature, "annotated tag", false).unwrap();
         repo.reference("refs/remotes/origin/feature", commit, false, "remote branch").unwrap();
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let deadline = Some(Instant::now() + Duration::from_secs(30));
 
         for reference in ["HEAD", "release", "feature", "origin/feature", &commit.to_string()] {
             assert_eq!(
@@ -702,6 +729,42 @@ mod tests {
                 None,
                 "unexpected commit for {reference}"
             );
+        }
+    }
+
+    #[test]
+    fn unlimited_repository_timeouts_preserve_audit_boundaries() {
+        use clap::Parser;
+
+        let temp = tempdir().unwrap();
+        let root = temp.path().canonicalize().unwrap();
+        let repo = git2::Repository::init(&root).unwrap();
+        let signature = git2::Signature::now("tester", "tester@example.com").unwrap();
+        let tree_id = repo.index().unwrap().write_tree().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let commit =
+            repo.commit(Some("HEAD"), &signature, &signature, "initial", &tree, &[]).unwrap();
+
+        for options in [
+            vec!["--git-repo-timeout=30"],
+            vec!["--git-repo-timeout=0"],
+            vec!["--git-repo-timeout=1", "--no-limits"],
+            vec!["--git-repo-timeout=0", "--no-limits"],
+        ] {
+            let command = crate::cli::CommandLineArgs::try_parse_from(
+                ["kingfisher", "scan", "."].into_iter().chain(options.iter().copied()),
+            )
+            .unwrap();
+            let crate::cli::global::Command::Scan(command) = command.command else { panic!() };
+            let crate::cli::commands::scan::ScanOperation::Scan(args) =
+                command.into_operation().unwrap()
+            else {
+                panic!()
+            };
+            let snapshot = git_snapshot(&root, &args, false);
+            assert_eq!(snapshot.tip_sha, Some(commit.to_string()), "options={options:?}");
+            assert_eq!(snapshot.shallow, Some(false), "options={options:?}");
+            assert_eq!(snapshot.fetched_commit_count, Some(1), "options={options:?}");
         }
     }
 
@@ -791,6 +854,21 @@ mod tests {
         let result = ScanAuditCollector::new("2026-01-01T00:00:00Z".into(), Some(&link));
         assert!(result.is_err(), "audit log must refuse a symlinked output path");
         assert_eq!(std::fs::read(&target).unwrap(), b"ORIGINAL_CONTENT");
+    }
+
+    #[test]
+    fn discovery_failure_marks_streamed_audit_records_incomplete() {
+        let temp = tempdir().unwrap();
+        let path = temp.path().join("audit.jsonl");
+        let mut collector =
+            ScanAuditCollector::new("2026-01-01T00:00:00Z".into(), Some(&path)).unwrap();
+        collector.discover_remote("https://github.com/acme/first.git");
+        collector.run_failed();
+        let text = std::fs::read_to_string(path).unwrap();
+        let events: Vec<serde_json::Value> =
+            text.lines().map(|line| serde_json::from_str(line).unwrap()).collect();
+        assert_eq!(events.last().unwrap()["event"], "run_failed");
+        assert!(!events.iter().any(|event| event["event"] == "run_completed"));
     }
 
     #[test]

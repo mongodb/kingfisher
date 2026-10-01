@@ -8,12 +8,13 @@
         <div>
           <p class="kf-eyebrow"><span class="kf-dot"></span> OPEN SOURCE SECURITY · BUILT BY MONGODB</p>
           <h1 id="kf-title" tabindex="-1">Find the secret.<br>Understand <em>the risk.</em></h1>
-          <p class="kf-lead">From exposed credentials to actionable insight. Detect, validate, investigate, and contain secrets with Kingfisher.</p>
+          <p class="kf-lead">Find exposed credentials. Validate what’s live. Revoke supported secrets — all open source.</p>
           <div class="kf-actions">
             <a class="kf-button kf-button--primary" href="{{ 'viewer/' | url }}">Open report viewer <span aria-hidden="true">↗</span></a>
             <a class="kf-button kf-button--outline" href="{{ 'rules/builtin-rules/' | url }}">Explore detection rules <span aria-hidden="true">→</span></a>
           </div>
-          <p class="kf-hero__note">Built in Rust. Apache 2.0 licensed. Ready for your workflow.</p>
+          <p class="kf-hero__note">Of the secret scanning tools in our comparison, only Kingfisher and Betterleaks 2.0 offer built-in credential revocation. Find exposed secrets, verify which are live, identify their owners, and revoke supported credentials—all open source, with no paid edition required.</p>
+          <a class="kf-text-link" href="{{ 'reference/comparison/' | url }}">See the comparison <span aria-hidden="true">→</span></a>
         </div>
         <div class="kf-console" aria-label="Illustrative Kingfisher triage preview">
           <div class="kf-console__bar"><span class="kf-console__brand">◈ &nbsp; kingfisher</span><span class="kf-preview-label">ILLUSTRATIVE REPORT</span></div>
@@ -63,6 +64,30 @@
       </div>
     </div></section>
 
+    <section class="kf-section kf-wrap kf-start" aria-labelledby="rust-title">
+      <div>
+        <p class="kf-eyebrow">EMBED THE SCANNER</p>
+        <h2 id="rust-title">Use Kingfisher<br>from Rust.</h2>
+        <p>Add <code>kingfisher-scanner = "1.1.0"</code> and <code>anyhow = "1"</code> to your Cargo dependencies. Load the bundled rules once, then reuse the scanner to inspect bytes or files in process. Enable the <code>validation</code> feature for live credential validation and rule-driven revocation with <code>kingfisher_scanner::Revoker</code>.</p>
+        <a class="kf-text-link" href="{{ 'reference/library/' | url }}">Rust library guide →</a>
+        <p><a href="{{ 'reference/library/' | url }}#validate-findings">Validation example</a> · <a href="{{ 'reference/library/' | url }}#revoke-a-credential">Revocation example</a></p>
+      </div>
+      <div class="kf-terminal">
+        <div class="kf-console__bar"><span>RUST QUICK START</span><span>CRATES.IO</span></div>
+        <pre><code>use std::sync::Arc;
+use kingfisher_scanner::{get_builtin_rules, RulesDatabase, Scanner};
+
+fn main() -> anyhow::Result<()> {
+    let rules = get_builtin_rules(None)?;
+    let database = Arc::new(RulesDatabase::from_rule_collection(rules)?);
+    let scanner = Scanner::new(database);
+    let findings = scanner.scan_bytes(b"application config")?;
+    println!("{} findings", findings.len());
+    Ok(())
+}</code></pre>
+        <a href="{{ 'reference/library/' | url }}">Setup, options, and runnable examples <span aria-hidden="true">→</span></a>
+      </div>
+    </section>
     <section class="kf-section kf-wrap kf-start" aria-labelledby="start-title"><div><p class="kf-eyebrow">START WITH A SCAN</p><h2 id="start-title">Your next step<br>takes one command.</h2><p>Install Kingfisher and bring secret detection into your local development or CI workflow.</p><a class="kf-text-link" href="{{ 'getting-started/installation/' | url }}">All installation options →</a></div><div class="kf-terminal"><div class="kf-console__bar"><span>TERMINAL</span><span>HOMEBREW</span></div><pre><code><span># Install Kingfisher</span>
 brew install kingfisher
 

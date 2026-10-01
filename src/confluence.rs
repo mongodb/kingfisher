@@ -120,13 +120,21 @@ pub async fn search_pages(
     let site_url = normalize_confluence_base(&confluence_url);
     let base = site_url.as_str().trim_end_matches('/');
     let api_url = Url::parse(&format!("{}/rest/api/content/search", base))?;
-    let limit = std::cmp::min(CONFLUENCE_PAGE_SIZE, max_results);
+    let limit =
+        if kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results {
+            CONFLUENCE_PAGE_SIZE
+        } else {
+            std::cmp::min(CONFLUENCE_PAGE_SIZE, max_results)
+        };
 
     let mut pages = Vec::new();
 
     // Cloud dropped offset pagination here in 2020; following `_links.next`
     // works for both deployments.
-    let mut next_url = if max_results == 0 {
+    let mut next_url = if !kingfisher_scanner::validation::limits::NetworkLimits::current()
+        .unlimited_results
+        && max_results == 0
+    {
         None
     } else {
         let mut url = api_url.clone();
@@ -172,14 +180,19 @@ pub async fn search_pages(
         let received = body.results.len();
         for p in body.results {
             pages.push(p);
-            if pages.len() >= max_results {
+            if !kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results
+                && pages.len() >= max_results
+            {
                 break;
             }
         }
 
         // Cloud can return an empty page alongside a `next` link; stopping here
         // is what keeps the loop bounded.
-        if pages.len() >= max_results || received == 0 {
+        if (!kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results
+            && pages.len() >= max_results)
+            || received == 0
+        {
             break;
         }
 
@@ -484,5 +497,34 @@ mod tests {
 
         assert_eq!(pages.len(), 1);
         assert_eq!(pages[0].id, "1");
+    }
+    #[tokio::test]
+    async fn unlimited_search_results_preserve_server_pagination() {
+        use kingfisher_scanner::validation::limits::NetworkLimits;
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/rest/api/content/search"))
+            .and(query_param("limit", super::CONFLUENCE_PAGE_SIZE.to_string()))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "results": [
+                    {"id": "1", "title": "first", "_links": {"webui": "/pages/1"}},
+                    {"id": "2", "title": "second", "_links": {"webui": "/pages/2"}}
+                ],
+                "_links": {}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let pages = NetworkLimits { unlimited_results: true, ..Default::default() }
+            .scope(with_confluence_token(search_pages(
+                Url::parse(&server.uri()).unwrap(),
+                "label = secret",
+                1,
+                false,
+            )))
+            .await
+            .unwrap();
+        assert_eq!(pages.len(), 2);
+        assert!(!NetworkLimits::current().unlimited_results);
     }
 }

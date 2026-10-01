@@ -1,0 +1,30 @@
+rules:
+  - id: acme.python-demo
+    name: Synthetic Python SDK token
+    pattern: '\b(demo_[a-z0-9]{16})\b'
+    examples: [demo_abcd1234efgh5678]
+    negative_examples: [demo_short]
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: '{{ ENDPOINT }}/identity'
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+            - type: WordMatch
+              words: ['"authenticated":true']
+    revocation:
+      type: Http
+      content:
+        request:
+          method: DELETE
+          url: '{{ ENDPOINT }}/token'
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          response_matcher:
+            - type: StatusMatch
+              status: [204]

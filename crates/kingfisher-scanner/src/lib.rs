@@ -7,18 +7,7 @@ mod scanner;
 mod scanner_pool;
 
 // Validation module (feature-gated)
-#[cfg(any(
-    feature = "validation",
-    feature = "validation-http",
-    feature = "validation-aws",
-    feature = "validation-azure",
-    feature = "validation-coinbase",
-    feature = "validation-gcp",
-    feature = "validation-jwt",
-    feature = "validation-database",
-    feature = "validation-ethereum",
-    feature = "validation-all",
-))]
+#[cfg(feature = "validation")]
 pub mod validation;
 
 pub use finding::{Finding, FindingLocation, SerializableCapture, SerializableCaptures};
@@ -31,5 +20,8 @@ pub use kingfisher_core::{
 };
 pub use kingfisher_rules::{Confidence, Rule, RuleSyntax, RulesDatabase, get_builtin_rules};
 
-#[cfg(feature = "validation-http")]
+#[cfg(feature = "validation")]
 pub use validation::{ValidatedFinding, ValidationReason, Validator, ValidatorBuilder};
+
+#[cfg(feature = "validation")]
+pub use validation::{Revoker, revocation::DirectRevocationResult};

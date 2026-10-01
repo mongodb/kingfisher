@@ -28,6 +28,7 @@ This guide covers advanced Kingfisher features for power users.
     - [Scan using a rule family](#scan-using-a-rule-family)
   - [Rule Performance Profiling](#rule-performance-profiling)
   - [Disk Offload](#disk-offload)
+  - [Unlimited scans](#unlimited-scans)
   - [Notable Scan Options](#notable-scan-options)
     - [Exclude specific paths](#exclude-specific-paths)
     - [Scan while ignoring likely test files](#scan-while-ignoring-likely-test-files)
@@ -181,7 +182,7 @@ Kingfisher searches the surrounding lines for these tokens without requiring lan
 Use these options with `kingfisher scan` to customize live validation behavior:
 
 ```bash
-# Set per-request timeout (default: 10 seconds, range: 1-60)
+# Set per-request timeout (default: 10 seconds; 0 disables timeouts)
 kingfisher scan /path/to/code --validation-timeout 15
 
 # Set number of retry attempts (default: 1, range: 0-5)
@@ -203,14 +204,67 @@ kingfisher scan /path/to/code \
   --max-validation-response-length 8192
 ```
 
-- `--validation-timeout SECONDS`: per-request and per-match timeout for validation (default: 10, range: 1-60).
+- `--validation-timeout SECONDS`: per-request and per-match timeout for validation (default: 10; 0 disables timeouts).
 - `--validation-retries N`: number of retry attempts for validation requests (default: 1, range: 0-5).
 - `--max-validation-response-length BYTES`: maximum bytes stored from validation response bodies (default: 2048; `0` disables truncation at storage time).
 - `--full-validation-response`: include complete validation response bodies end-to-end. This bypasses both storage-time truncation and reporter display truncation, and takes precedence over `--max-validation-response-length`.
 
 ## Scanning in CI Pipelines
 
-Limit scanning to a commit range by combining `--since-commit` with `--branch` (defaults to `HEAD`). With the default `--git-history full`, Kingfisher scans changes in every commit reachable from the selected tip, excluding the baseline ref and all its ancestors (`baseline..tip`). This includes merged history and secrets added and removed before the tip. Add `--git-history none` to scan only the net tree diff between the two refs.
+### Changes in the last N hours
+
+Use `--since-hours <HOURS>` to scan recent Git changes without choosing a baseline commit. `HOURS` must be a positive whole number. With no `--branch`, Kingfisher walks all locally available refs (local branches, remote-tracking branches, and tags) plus HEAD:
+
+```bash
+# Clone once with all branches and complete history; no checkout is needed.
+git clone --no-checkout --no-single-branch "$REPO_URL" ./repo
+
+# Scan commits from the last 24 hours across all available refs.
+kingfisher scan ./repo --since-hours 24 --git-history full --format toon
+
+# Restrict the same window to one branch.
+kingfisher scan ./repo --since-hours 24 --branch origin/main --format toon
+```
+
+`--git-history full` is the default, so it may be omitted. `--since-commit` is not needed.
+
+For example, assuming the following committer timestamps:
+
+```text
+                  scan start minus 24h        scan start
+                            |                     |
+      A---B-----------------|---C---D              |  main (HEAD)
+           \                |                     |
+            E---------------|---F---G              |  origin/feature
+                            |                     |
+         older commits      |   selected window   |
+```
+
+The first scan includes changes in **C, D, F, and G**. It excludes **A, B, and E** as scan candidates. Adding `--branch main` includes only **C and D**. A secret added in C and removed in D is still detectable because each selected commit is inspected, not just the final branch tree.
+
+Time-window semantics:
+
+- Kingfisher fixes one inclusive window at scan start, from that instant minus `HOURS` through scan start, at Unix-second precision. Every repository in the same invocation uses the same window, even if cloning or scanning takes time. Commits dated after scan start are excluded.
+- Selection uses the **committer timestamp**, not the author timestamp, push/fetch time, or file modification time. Rebasing and cherry-picking can change committer dates. This option cannot reconstruct when a server received a push.
+- Commit dates need not follow ancestry order. Kingfisher continues traversing older commits to find qualifying ancestors; a time window reduces scanned file content but does not necessarily reduce graph traversal. The repository timeout still applies.
+- Each selected commit is compared with its first parent, even if that parent predates the window. Kingfisher scans the complete added or modified file versions, not only added lines. An older secret in a file modified during the window can therefore be reported. Deleted files and removed content are not scanned from the parent tree; a removed secret is detectable only if an added or modified file version containing it belongs to a selected commit. Unchanged files and uncommitted working-tree changes are excluded.
+- Only locally available history can be scanned. A shallow clone may omit qualifying commits or parent trees. When a selected shallow boundary has no usable parent history, Kingfisher scans its full tree, which may include older content. Prefer complete history for accurate parent comparisons; `git clone --shallow-since` is not equivalent to this scan filter.
+
+`--since-hours` requires full Git history mode and cannot be combined with `--since-commit`, `--staged`, `--branch-root`, or `--branch-root-commit`. It filters Git commit content, not repository-host artifacts or other non-Git inputs. GitHub public-event scanning uses its separate `--event-lookback-hours` option and cannot be combined with `--since-hours`.
+
+Audit output identifies this scope as `commit_time_range` and records the inclusive window in `since_timestamp` and `until_timestamp` (Unix seconds). All-ref scans use `(all refs and HEAD)` as `tip_ref`; an explicit branch records its resolved tip.
+
+### Commit ranges
+
+With the default `--git-history full`, `--since-commit <baseline>` scans changes in every commit reachable from all locally available refs (including local branches, remote-tracking branches, and tags) plus `HEAD`, excluding the baseline ref and all its ancestors. Add `--branch <ref>` to restrict the walk to one tip (`baseline..tip`); explicit `--branch HEAD` retains HEAD-only scanning. This includes merged history and secrets added and removed before a tip. With `--git-history none`, Kingfisher instead scans the net tree diff from the baseline to `--branch` (default `HEAD`).
+
+For example, after cloning all branches, scan their available history with:
+
+```bash
+kingfisher scan ./repo --since-commit "$BASE_COMMIT" --git-history full --format toon
+```
+
+Only refs and history present in the local clone can be scanned. Shallow boundaries limit traversal; a boundary commit whose parent is unavailable is scanned as a full tree. The baseline must resolve locally. `--since-commit` is an ancestry boundary, not a time filter: divergent branches may include older commits outside the baseline’s ancestry.
 
 Use `--branch-root-commit` alongside `--branch` when you need to include a specific commit (and everything after it) in a diff-focused scan without re-examining earlier history. Provide the branch tip (or other comparison ref) via `--branch`, and pass the commit or merge-base you want to include with `--branch-root-commit`. If you omit `--branch-root-commit`, you can still enable `--branch-root` to fall back to treating the `--branch` ref itself as the inclusive root for backwards compatibility. This is especially useful in long-lived branches where you want to resume scanning from a previous review point or from the commit where a hotfix forked.
 
@@ -643,6 +697,50 @@ sweep for such remnants. If a leftover is found in the chosen temporary director
 sensitive data and remove it after confirming it is no longer in use. Filesystem snapshots,
 backups, or recoverable storage blocks can also retain data after deletion.
 
+## Unlimited scans
+
+Use `--no-limits` when scan completeness takes priority over bounded time, memory,
+and temporary disk usage:
+
+```bash
+kingfisher scan /path/to/code --no-limits --format toon
+```
+
+The flag overrides individual resource limits, including values supplied in a
+configuration file. Defaults are unchanged when it is absent. It removes:
+
+- File-size limits, archive entry/count/output budgets, and nested archive depth limits,
+  including archives in Git history and Docker layers.
+- SQLite row/output budgets and lock waits, Python bytecode extraction budgets,
+  Base64 size/depth limits, and credential candidate-count budgets.
+- Repository scan and Git clone/update deadlines, source-provider request timeouts,
+  validation deadlines, and validation response body/storage caps.
+- Repository clone counts and provider search result counts. API page sizes remain
+  bounded, and pagination continues until the provider reports completion.
+
+Worker counts, bounded queues, request rate limits, finite retry counts, scan
+selectors/exclusions, `--no-base64`, `--no-extract-archives`, detection rules, and
+archive path checks remain in effect. ZIP extraction still switches to disk for
+large inputs. Scan-time blast-radius network deadlines are also disabled, while
+its enumeration and evidence caps remain in effect. Report presentation limits,
+operating system limits, remote service limits, and format/protocol validity checks
+are outside this scan resource policy. A stalled scan can wait indefinitely; memory
+or disk exhaustion can still prevent completion.
+
+For selective control, `--max-file-size 0`, `--extraction-depth 0`,
+`--git-repo-timeout 0`, and `--validation-timeout 0` disable their respective limits.
+Validation timeouts and archive depth also accept positive values above the former
+60-second and 25-layer maxima. `KF_GIT_CLONE_TIMEOUT_SECS=0` and
+`KF_GIT_UPDATE_TIMEOUT_SECS=0` disable the corresponding Git subprocess deadline.
+Negative, NaN, and infinite file sizes are rejected.
+
+To enable the preset in an explicitly loaded configuration file:
+
+```yaml
+scan:
+  no_limits: true
+```
+
 ## Notable Scan Options
 
 - `--jobs <N>`: Set the number of parallel scanner workers; see [Control Scan Concurrency](#control-scan-concurrency).
@@ -658,7 +756,7 @@ backups, or recoverable storage blocks can also retain data after deletion.
 - `--repo-clone-limit <N>`: Cap GitHub and GitLab clone targets when enumerating users, orgs/groups, or contributor repos; this includes opted-in GitHub gists and GitLab snippets
 - `--no-binary`: Skip binary files
 - `--no-extract-archives`: Do not scan inside archives
-- `--extraction-depth <N>`: Specifies how deep nested archives should be extracted and scanned (default: 2)
+- `--extraction-depth <N>`: Specifies how deep nested archives should be extracted and scanned (default: 2; 0 = unlimited)
 - `--redact`: Replaces discovered secrets with a one-way hash for secure output
 - `--exclude <PATTERN>`: Skip any file or directory whose path matches this glob pattern (repeatable, uses gitignore-style syntax, case sensitive)
 - `--baseline-file <FILE>`: Ignore matches listed in a baseline YAML file
@@ -670,7 +768,7 @@ backups, or recoverable storage blocks can also retain data after deletion.
 - `--ignore-comment <DIRECTIVE>`: Honor additional inline directives from other scanners (repeatable; e.g. `--ignore-comment "gitleaks:allow"`)
 - `--no-ignore`: Disable inline directives entirely so every match is reported
 - `--no-ignore-if-contains`: Ignore the `ignore_if_contains` filter in rules so placeholder words still produce findings
-- `--validation-timeout SECONDS`: per-request and per-match timeout for validation (default: 10, range: 1-60).
+- `--validation-timeout SECONDS`: per-request and per-match timeout for validation (default: 10; 0 disables timeouts).
 - `--validation-retries N`: number of retry attempts for validation requests (default: 1, range: 0-5).
 - `--max-validation-response-length BYTES`: maximum bytes stored from validation response bodies (default: 2048; `0` disables truncation at storage time).
 - `--full-validation-response`: include complete validation response bodies end-to-end (bypasses storage and reporter truncation).
@@ -700,7 +798,7 @@ kingfisher scan ./my-project \
 
 ### Limit maximum file size scanned
 
-By default, Kingfisher skips files larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**.
+By default, Kingfisher skips files larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**. Use `--max-file-size 0` for unlimited file size, or `--no-limits` to disable scan resource budgets and timeouts.
 
 ```bash
 # Scan files up to 500 mb in size

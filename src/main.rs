@@ -487,6 +487,11 @@ fn apply_config(
     {
         scan_args.num_jobs = j;
     }
+    if let Some(value) = cfg.scan.no_limits
+        && config_wins(scan_matches, "no_limits")
+    {
+        scan_args.content_filtering_args.no_limits = value;
+    }
     if let Some(t) = cfg.scan.git_repo_timeout
         && config_wins(scan_matches, "git_repo_timeout")
     {
@@ -859,6 +864,9 @@ fn build_config_yaml(
     }
     if user_set(sub_matches, "num_jobs") {
         scan.jobs = Some(scan_args.num_jobs);
+    }
+    if user_set(sub_matches, "no_limits") {
+        scan.no_limits = Some(scan_args.content_filtering_args.no_limits);
     }
     if user_set(sub_matches, "git_repo_timeout") {
         scan.git_repo_timeout = Some(scan_args.git_repo_timeout);
@@ -1954,6 +1962,8 @@ fn create_default_scan_args() -> cli::commands::scan::ScanArgs {
             repo_artifacts: false,
             scan_nested_repos: true,
             since_commit: None,
+            since_hours: None,
+            history_time_range: None,
             branch: None,
             branch_root: false,
             branch_root_commit: None,
@@ -1961,6 +1971,7 @@ fn create_default_scan_args() -> cli::commands::scan::ScanArgs {
         },
         extra_ignore_comments: Vec::new(),
         content_filtering_args: ContentFilteringArgs {
+            no_limits: false,
             max_file_size_mb: 25.0,
             no_extract_archives: true,
             extraction_depth: 2,
@@ -2449,6 +2460,32 @@ mod apply_config_tests {
         super::replace_stdin_placeholders(&mut path_inputs, stdin_file.clone());
 
         assert_eq!(path_inputs, vec![stdin_file, PathBuf::from("./src"), PathBuf::from("./tests")]);
+    }
+
+    #[test]
+    fn no_limits_round_trips_and_overrides_individual_budgets() {
+        let (args, matches) = parse(&[
+            "kingfisher",
+            "scan",
+            ".",
+            "--no-limits",
+            "--max-file-size=1",
+            "--extraction-depth=1",
+        ]);
+        let global = args.global_args.clone();
+        let scan = into_scan(args);
+        let yaml =
+            super::build_config_yaml(&scan, &global, matches.subcommand_matches("scan").unwrap())
+                .unwrap();
+        let config = parse_str(&yaml).unwrap();
+        assert_eq!(config.scan.no_limits, Some(true));
+        let (args, matches) = parse(&["kingfisher", "scan", "."]);
+        let mut global = args.global_args.clone();
+        let mut scan = into_scan(args);
+        super::apply_config(&mut scan, &mut global, &config, matches.subcommand_matches("scan"));
+        assert_eq!(scan.content_filtering_args.max_file_size_mb, 1.0);
+        assert_eq!(scan.content_filtering_args.max_file_size_bytes(), None);
+        assert_eq!(scan.content_filtering_args.archive_depth(), None);
     }
 
     #[test]
