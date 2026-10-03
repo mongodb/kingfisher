@@ -16,7 +16,7 @@ class PythonSdkReleaseTests(unittest.TestCase):
         for guard in ("github.repository == 'mongodb/kingfisher'",
                       "github.event_name == 'push'", "github.ref == 'refs/heads/main'"):
             self.assertIn(guard, condition)
-        self.assertIn("needs: [wheels, source-and-msrv]", publish)
+        self.assertIn("needs: [wheels, source]", publish)
         self.assertIn("name: pypi-sdk", publish)
         self.assertIn("group: pypi-sdk-publish-${{ github.run_id }}", publish)
         self.assertIn("skip-existing: true", publish)
