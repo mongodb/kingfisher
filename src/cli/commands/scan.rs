@@ -156,9 +156,6 @@ pub struct ScanArgs {
     #[arg(global = true, long = "blast-radius", alias = "access-map", default_value_t = false)]
     pub access_map: bool,
 
-    // /// Optional path to write a consolidated access-map HTML report
-    // #[arg(long, value_name = "PATH")]
-    // pub access_map_html: Option<PathBuf>,
     /// Display only validated findings
     #[arg(global = true, long, default_value_t = false, conflicts_with = "validation_filter")]
     pub only_valid: bool,
@@ -341,7 +338,7 @@ pub struct ScanArgs {
 
     /// Per-webhook overrides loaded from `kingfisher.yaml`. Indexed in lockstep
     /// with `alert_webhook` for the trailing config-sourced URLs. Not parsed
-    /// from the CLI; populated by `apply_config` in main.rs.
+    /// from the CLI; populated by the binary's `app::config::apply_config`.
     #[arg(skip)]
     pub config_webhook_overrides: Vec<ConfigWebhookOverride>,
 }

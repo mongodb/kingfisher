@@ -624,25 +624,15 @@ pub async fn run_secret_validation(
 
     // ── Phase 1: simple, global de-dupe ──────────────────────────────────────
     if !simple_matches.is_empty() {
-        // Keep only ONE representative per rule, secret, and validator capture context.
-        // Previous code stored ALL matches per group — holding thousands of
-        // Arc clones alive for the entire duration of the concurrent stream.
+        // Retain one representative per rule, validation input, and capture context
+        // so duplicate occurrences do not hold extra Arcs throughout validation.
         let total_simple = simple_matches.len();
         let mut representatives: FxHashMap<String, Arc<FindingsStoreMessage>> =
             FxHashMap::default();
         for arc_msg in simple_matches {
-            // VALIDATION DEDUP: Use the first/primary capture for grouping, except that a
-            // CredentialUri rule uses its full URI capture rather than the reported password.
-            //
-            // This differs from fingerprint/reporting code (which uses get(1).or_else(get(0)))
-            // for backward compatibility reasons - changing fingerprint calculation would break
-            // historical baselines and dedup entries.
-            //
-            // For validation deduplication, we need the PRIMARY secret value to ensure each
-            // unique secret triggers a separate validation request. Using get(1) first would
-            // incorrectly pick up inner unnamed groups when patterns have nested captures
-            // like (?<REGEX>...(ABC|DEF)...), causing all matches to share the same
-            // validation result.
+            // Group by the actual validator input: CredentialUri uses the full URI;
+            // other rules use their primary capture. External fingerprint compatibility
+            // is handled separately by reporting and must not select validator inputs.
             let secret = validation_input(&arc_msg.2.rule, &arc_msg.2.groups);
             let group_key = validation_group_key(arc_msg.2.rule.id(), secret, &arc_msg.2.groups);
             trace!(
@@ -1198,8 +1188,6 @@ async fn validate_single(
     );
     apply_validation_outcome(om, &cache_key, outcome, success_count, fail_count, cache);
     maybe_record_access_map(om, access_map);
-    // Remove from `in_progress`
-    // in_progress.remove(&cache_key);
     if let Some((_, in_flight)) = in_progress.remove(&cache_key) {
         in_flight.completed.store(true, Ordering::Release);
         in_flight.notify.notify_waiters();
@@ -1299,6 +1287,7 @@ fn is_counted_validation_status(status: StatusCode) -> bool {
 /// `panic!`/`unwrap` would otherwise tear down the entire scan. We catch the
 /// unwind here and fail just the one match. The panic payload is discarded
 /// immediately because it may contain secret material.
+/// This only contains unwinding panics; `panic = "abort"` terminates the process.
 ///
 /// `AssertUnwindSafe` is required because the future borrows `&mut om`. It is
 /// sound for this use because the unwind is never observed as a partial result:
@@ -1332,7 +1321,6 @@ fn validation_input<'a>(
     captures.captures.first().map_or("", |capture| capture.raw_value())
 }
 
-// Helper to compute the cache key for an OwnedBlobMatch.
 fn build_cache_key(om: &OwnedBlobMatch) -> String {
     let validation_input = validation_input(&om.rule, &om.captures);
     let mut hasher = blake3::Hasher::new();
@@ -1572,7 +1560,8 @@ fn record_rule_id_access_map(
 ///
 /// * `veles.secrets/bitbucketcredentials` — the secret is a git URL with
 ///   embedded basic-auth credentials, not an API token.
-///   Returns `true` when the rule was handled.
+///
+/// Returns `true` when the rule was handled.
 fn record_veles_access_map(
     om: &OwnedBlobMatch,
     collector: &AccessMapCollector,
@@ -1615,12 +1604,9 @@ fn record_veles_access_map(
 
 /// Access-map dispatch for Kingfisher 1.x (`kingfisher.*`) rules.
 ///
-/// **This is live code, not dead code.** The built-in 2.x catalog contains no
-/// `kingfisher.*` IDs, so none of these arms fire on a default scan — but the
-/// 1.x YAML catalog is still a supported input via `--rules-path`, and these
-/// arms are the only way those rules reach the access-map collectors. Removing
-/// them would silently break blast-radius mapping for every operator who kept
-/// the legacy catalog.
+/// These handlers support the 1.x YAML catalog loaded through `--rules-path`.
+/// The bundled 2.x catalog has no `kingfisher.*` IDs; its rules use the
+/// Betterleaks capability or Veles dispatch instead.
 ///
 /// See `crates/kingfisher-rules/data/legacy-rule-aliases.yml` for the 1.x → 2.x
 /// provider mapping.

@@ -94,9 +94,9 @@ pub const MAX_TAR_ARCHIVE_ENTRIES: usize = 10_000;
 /// Maximum uncompressed size accepted for one TAR file entry.
 pub const MAX_TAR_ENTRY_DECOMPRESSED_BYTES: u64 = 512 * 1024 * 1024;
 
-/// Aggregate uncompressed TAR output allowed for one archive. This matches the
-/// streaming ZIP extractor's aggregate budget so parallel scans cannot fill the
-/// temporary extraction directory without bound.
+/// Aggregate uncompressed TAR output allowed for one archive. Together with
+/// per-entry and entry-count limits, this bounds extracted output per archive
+/// when resource limits are enabled.
 pub const MAX_TAR_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
 
 #[derive(Clone, Copy)]
@@ -287,11 +287,9 @@ fn handle_tar_archive_streaming_with_limits(
 pub const MAX_INMEM_ZIP_ARCHIVE_BYTES: usize = 64 * 1024 * 1024;
 
 /// Aggregate cap on total decompressed bytes the in-memory ZIP extractor
-/// will accumulate per archive. Bounds the worst-case footprint of one
-/// rayon worker processing one archive: with `num_jobs` workers running
-/// in parallel, peak resident memory is bounded by `num_jobs * this`.
-/// Independent of the per-entry cap, so a single bomb-style entry can't
-/// drain it all but neither can N medium-sized entries.
+/// will accumulate per archive when resource limits are enabled. This limits
+/// decoded output; compressed inputs and other worker allocations contribute
+/// additional memory. It applies independently of the per-entry cap.
 pub const MAX_INMEM_ZIP_DECOMPRESSED_BYTES: u64 = 256 * 1024 * 1024;
 
 pub fn extract_zip_archive_in_memory_with_limits(
@@ -744,9 +742,8 @@ fn decompress_once_with_single_stream_cap(
                 return handle_hwp_archive_in_memory(path, path, resources);
             }
             "egg" => {
-                // No open-source EGG (ALZip) extractor exists. Return the
-                // raw bytes so plaintext content inside the container is
-                // still scanned.
+                // EGG extraction is not implemented here; retain the raw bytes
+                // so any plaintext content is still scanned.
                 let mut buffer = Vec::new();
                 file.read_to_end(&mut buffer)?;
                 return Ok(CompressedContent::Raw(buffer));
@@ -900,7 +897,6 @@ pub fn decompress_file_to_temp_with_limits(
     let temp_dir = tempdir()?;
     let mut content = decompress_file_with_limits(path, Some(temp_dir.path()), resources)?;
 
-    // if let CompressedContent::Archive(ref files) = content {
     let mut prefix_for_replace = None;
     if let Some(stem) = path.file_stem() {
         let candidate = temp_dir.path().join(stem).with_extension("decomp.tar");

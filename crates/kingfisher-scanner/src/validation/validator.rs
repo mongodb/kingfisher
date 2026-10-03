@@ -158,6 +158,11 @@ impl ValidatorBuilder {
         self
     }
     /// Validate configuration and initialize the pooled client and template filters.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for zero or excessive concurrency, or if the HTTP client
+    /// or Liquid template parser cannot be initialized.
     pub fn build(self) -> Result<Validator> {
         ensure!(
             self.concurrency > 0 && self.concurrency <= Semaphore::MAX_PERMITS,
@@ -188,6 +193,7 @@ impl ValidatorBuilder {
 }
 
 impl Validator {
+    /// Start a validator configuration with default limits and transport policy.
     pub fn builder() -> ValidatorBuilder {
         ValidatorBuilder::default()
     }

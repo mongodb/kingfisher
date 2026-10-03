@@ -23,7 +23,7 @@ impl OffsetPoint {
     }
 }
 
-/// A non-empty span defined by two byte offsets (half-open interval `[start, end)`).
+/// A span defined by two byte offsets (half-open interval `[start, end)`).
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
 pub struct OffsetSpan {
     pub start: usize,
@@ -71,7 +71,7 @@ impl OffsetSpan {
     }
 }
 
-/// A point in source text (1-indexed line, 0-indexed column).
+/// A point in source text (1-indexed line, 0-indexed byte column).
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize, JsonSchema)]
 pub struct SourcePoint {
     pub line: usize,

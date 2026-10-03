@@ -21,8 +21,8 @@ use crate::{
 };
 
 /// Blobs smaller than this (in bytes) are skipped during enumeration.
-/// No meaningful secret (API key, token, password assignment) fits in fewer
-/// bytes, so filtering these avoids loading, hashing, and scanning overhead.
+/// This fixed cutoff avoids work on tiny Git objects; it is not derived from
+/// the selected rules and can exclude shorter custom-rule matches.
 pub const MIN_SCANNABLE_BLOB_SIZE: u64 = 20;
 
 // Convert "<seconds> <offset>" -- Time; fallback to the Unix-epoch on parse error
@@ -73,7 +73,6 @@ impl<'a> GitRepoWithMetadataEnumerator<'a> {
 
     pub fn run_with_deadline(self, deadline: Option<Instant>) -> Result<GitRepoResult> {
         let started = Instant::now();
-        // let _span = debug_span!("enumerate_git_with_metadata", path = ?self.path).entered();
         check_deadline(deadline, "git repository metadata enumeration", self.path)?;
         let repo_sync = self.repo.clone().into_sync();
         let odb = &self.repo.objects;

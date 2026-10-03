@@ -8,19 +8,16 @@ use percent_encoding::percent_decode_str;
 use reqwest::{Client, StatusCode, Url, header, header::HeaderMap};
 use std::time::Duration;
 /// Returns `true` if the provided string can be parsed as a MongoDB connection URI.
-
 pub fn is_parseable_mongodb_uri(uri: &str) -> bool {
     mongodb::looks_like_mongodb_uri(uri)
 }
 
 /// Returns `true` if the provided string can be parsed as a Postgres connection URI.
-
 pub fn is_parseable_postgres_uri(uri: &str) -> bool {
     postgres::parse_postgres_url(uri).is_ok()
 }
 
 /// Returns `true` if the provided string can be parsed as a MySQL connection URI.
-
 pub fn is_parseable_mysql_uri(uri: &str) -> bool {
     mysql::parse_mysql_url(uri).is_ok()
 }

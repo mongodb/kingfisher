@@ -24,7 +24,7 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
-  RUST_TOOLCHAIN: "1.96.0"
+  RUST_TOOLCHAIN: "1.99.0"
 
 jobs:
   # Tests save their own dependency caches, including Linux debug artifacts.

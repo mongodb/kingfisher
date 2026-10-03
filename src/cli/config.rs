@@ -6,7 +6,7 @@
 //! Precedence end-to-end: **CLI > env > config > built-in default**.
 //!
 //! Detection of "was the CLI flag actually provided?" relies on
-//! [`clap::parser::ValueSource`]; see `apply_config` in `main.rs`, which uses
+//! [`clap::parser::ValueSource`]; see `apply_config` in `src/app/config.rs`, which uses
 //! the helper `config_wins(matches, "<arg_id>")` to gate every scalar
 //! assignment.
 //!
@@ -49,8 +49,8 @@
 //!   keep_clones: false
 //! ```
 //!
-//! This module is parsing-only. The CLI entry point (main.rs) is responsible
-//! for resolving paths, reading file contents, and merging values into
+//! This module parses configuration. The binary's private `app::config` module
+//! reads the explicitly selected file and merges its values into
 //! `ScanArgs`/`GlobalArgs`.
 
 use std::collections::BTreeMap;
@@ -120,7 +120,7 @@ pub struct ScanConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RulesConfig {
-    /// Additive — merged with `--rule` selections.
+    /// Additive with explicit `--rule` selections; replaces the implicit `all` default.
     #[serde(default)]
     pub enabled: Vec<String>,
     /// Additive — merged with `--exclude-rule` exclusions.

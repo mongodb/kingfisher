@@ -1,4 +1,3 @@
-// tests/int_github.rs
 use std::{
     str::FromStr,
     sync::{Arc, Mutex},
@@ -73,7 +72,6 @@ fn test_github_remote_scan() -> Result<()> {
             github_repo_type: GitHubRepoType::Source,
             github_event_user: Vec::new(),
             github_event_lookback_hours: 24,
-            // new GitLab defaults
             gitlab_user: Vec::new(),
             gitlab_include_snippets: false,
             gitlab_group: Vec::new(),

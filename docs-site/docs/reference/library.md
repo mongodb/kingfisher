@@ -8,9 +8,9 @@ description: "Embed Kingfisher's scanning engine in your own Rust applications u
 For in-process Python detection, validation and revocation, see the [Python SDK](../reference/python-bindings.md).
 
 The prepared library releases are **kingfisher-core 1.0.1**,
-**kingfisher-rules 1.0.1**, and **kingfisher-scanner 1.1.0**.
-They require Rust **1.96** or newer and are versioned independently of the
-`kingfisher-bin` CLI, currently **2.9.1**. See [publishing](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md).
+**kingfisher-rules 1.1.0**, and **kingfisher-scanner 1.2.0**.
+They require Rust **1.99** or newer and are versioned independently of the
+`kingfisher-bin` CLI, currently **2.10.0**. See [publishing](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md).
 
 ## Crate Overview
 
@@ -26,13 +26,21 @@ when you need their additional APIs. None of the three depends on `kingfisher-bi
 Use `Validator` from `kingfisher-scanner` for live checks and `Revoker` for explicit,
 rule-driven revocation. Both are available with `validation`.
 
+The `kingfisher-bin` package also exports the full application library as
+`kingfisher`. Its existing module paths remain available for consumers that need
+CLI orchestration or provider integrations. Prefer the focused crates above for
+new embedding work. CLI configuration merging, configuration generation, and
+rule commands are private binary modules, rather than additional public APIs.
+Public fallible scanner, rule-compilation, validator-builder, and revocation
+methods document their error conditions in rustdoc.
+
 ## Quick Start
 
 Add the scanner crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-kingfisher-scanner = "1.1.0"
+kingfisher-scanner = "1.2.0"
 anyhow = "1"
 ```
 
@@ -64,6 +72,7 @@ Each publishable package includes runnable source examples. Run these from the r
 | ------- | ------- | ------- |
 | `kingfisher-core` | [Borrow a blob and resolve locations](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-core/examples/blob_locations.rs) | `cargo run -p kingfisher-core --example blob_locations` |
 | `kingfisher-rules` | [Load and compile rules](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-rules/examples/load_rules.rs) | `cargo run -p kingfisher-rules --example load_rules` |
+| `kingfisher-scanner` | [Inspect rules, regexes and configured actions](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-scanner/examples/inspect_rules.rs) | `cargo run -p kingfisher-scanner --example inspect_rules -- --with-revocation` |
 | `kingfisher-scanner` | [Scan, redact, and share across threads](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-scanner/examples/scan_content.rs) | `cargo run -p kingfisher-scanner --example scan_content` |
 | `kingfisher-scanner` | [Explicit local validation](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-scanner/examples/local_validation.rs) | `cargo run -p kingfisher-scanner --example local_validation --features validation` |
 | `kingfisher-scanner` | [Scan file batches to JSON Lines](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-scanner/examples/scan_files.rs) | `cargo run -p kingfisher-scanner --example scan_files -- Cargo.toml README.md` |
@@ -86,12 +95,12 @@ additional validator features your project needs.
 To install the CLI from crates.io:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.8.0
+cargo install --locked kingfisher-bin --version 2.10.0
 kingfisher scan path/to/project --no-validate --format toon --no-update-check
 ```
 
 For the `kingfisher-bin` library example in your own application, use
-`kingfisher = { package = "kingfisher-bin", version = "2.9.1" }` and `anyhow = "1"`.
+`kingfisher = { package = "kingfisher-bin", version = "2.10.0" }` and `anyhow = "1"`.
 The focused library examples use the crate versions listed above;
 `kingfisher-rules` and `kingfisher-scanner` examples also use `anyhow = "1"`.
 
@@ -100,22 +109,67 @@ The focused library examples use the crate versions listed above;
 Start with a complete example above and copy it into `src/main.rs` in a small Rust
 application. These are public-API consumers; no CLI process or private Kingfisher
 module is required. Choose dependencies from this table in addition to
-`kingfisher-scanner = "1.1.0"` and `anyhow = "1"`:
+`kingfisher-scanner = "1.2.0"` and `anyhow = "1"`:
 
 | Recipe | Additional dependencies / features |
 | ------ | ---------------------------------- |
 | `scan_content` | None |
+| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "1.1.0"` for loading custom YAML/TOML |
 | `scan_files` | `serde_json = "1"` |
-| `scan_custom_rules` | `kingfisher-rules = "1.0.1"` |
+| `scan_custom_rules` | `kingfisher-rules = "1.1.0"` |
 | `scan_async` | `tokio = { version = "1.53", features = ["macros", "rt", "sync"] }` |
-| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "1.0.1"` |
+| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "1.1.0"` |
 | `http_validation` | Complete manifest below; also copy `fixtures/acme-http.yml` and `support/mod.rs` into `src/fixtures/` and `src/support/` |
 | `validate_file` | Scanner feature `validation`; `serde_json = "1"`; `tokio = { version = "1.53", features = ["macros", "rt"] }` |
 
 The examples use the published crate versions. For local development, replace each
 Kingfisher dependency version with a `path` to the corresponding crate in a local
-checkout, preserving its features. Use Rust 1.96+ and the native build prerequisites
+checkout, preserving its features. Use Rust 1.99+ and the native build prerequisites
 in [Build and Deployment](#build-and-deployment).
+
+### Inspect catalog rules and validation/revocation definitions
+
+Use the [inspect_rules example](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-scanner/examples/inspect_rules.rs)
+for offline catalog discovery or an exact rule's complete loaded definition.
+It requires no `validation` feature:
+
+```sh
+cargo run --locked -p kingfisher-scanner --example inspect_rules -- --with-validation --with-revocation
+cargo run --locked -p kingfisher-scanner --example inspect_rules -- betterleaks.aws-access-token
+cargo run --locked -p kingfisher-scanner --example inspect_rules -- betterleaks.aws-access-token --field pattern --field validation --field revocation
+cargo run --locked -p kingfisher-scanner --example inspect_rules -- --rules-path company.yml --no-builtins
+```
+
+The example loads all confidence levels and lists ID, name, visibility and
+configured action support. Use `--id-prefix` or capability flags for catalog
+filters, an exact ID for details, and repeated `--field` to select detail sections.
+The code comments show where to add predicates for confidence, entropy,
+visibility, dependencies or pattern requirements.
+
+For your own application, use these public APIs:
+
+| API | Inspection data |
+| --- | --- |
+| `database.rules()` | Loaded `Arc<Rule>` entries; iterate or find by exact `rule.id()` |
+| `rule.syntax()` | Full serializable definition, including pattern, path, confidence, entropy, filters, capture selection, dependencies, examples and references |
+| `database.anchored_regexes()[index].as_str()` | Already-compiled Rust confirmation pattern with comments removed; index matches `database.rules()` |
+| `rule.syntax().validation` | Configured validation type and content, or `None` |
+| `rule.syntax().revocation` | Configured revocation type and content, or `None` |
+
+Serialize `rule.syntax()` or individual fields with `serde_json::to_string_pretty`.
+This avoids maintaining a second schema and preserves the loaded definition.
+HTTP/gRPC configurations expose requests and response matchers; Betterleaks
+validation exposes a portable expression tree, components and operational
+capabilities. Original expression text may be absent in release builds. Typed/raw
+validators identify Rust dispatch handlers; their implementation source is not
+serialized. Absent configurations become JSON `null`.
+
+The historical `anchored_regexes()` accessor returns original search patterns,
+without the internal endpoint wrapper. A regex match alone is a candidate:
+reported findings still pass capture selection, entropy, filters and dependency
+requirements. Inspection makes no validation/revocation requests, and configured
+actions alone do not establish successful validation or revocation. Custom rule
+literals are returned as configured; this is not finding redaction.
 
 ### Scan strings, uploads, and application configuration
 
@@ -125,6 +179,31 @@ uploads, or generated source to `scan_bytes`; use `scan_blob_at_path` when a log
 filename matters to rule filters. Decide whether your product blocks on any
 visible finding or only flags it for review. An empty successful scan means no
 matches under the selected rules, not proof that the input contains no secrets.
+
+### Bound a scan or cancel it from another thread
+
+Use `scan_bytes_with_control`, `scan_file_with_control`, or
+`scan_blob_at_path_with_control` to apply a per-call `ScanControl`:
+
+```rust
+use std::time::Duration;
+use kingfisher_scanner::{CancellationToken, ScanControl};
+
+let cancellation = CancellationToken::default();
+let control = ScanControl::default()
+    .with_timeout(Duration::from_secs(2))?
+    .with_cancellation(cancellation.clone());
+let findings = scanner.scan_bytes_with_control(content, &control)?;
+```
+
+Another thread can call `cancellation.cancel()`. Cancellation is permanent for
+that token. An interrupted call returns an error containing `ScanAborted::TimedOut`
+or `ScanAborted::Cancelled`; it does not return partial results or update the dedup
+cache. Existing methods remain unlimited. Deadlines are cooperative: checks run
+between matching/filtering operations, in Vectorscan callbacks, and during Base64
+enumeration. File reads, decoding, rule compilation and individual native operations
+cannot be preempted. Use a separate process if your service needs a hard execution
+limit. A deadline starts when the control is constructed and covers the entire call.
 
 ### Scan files in a build tool or CI gate
 
@@ -168,12 +247,12 @@ Copy `http_validation.rs` and its YAML fixture with this manifest:
 name = "secret-check"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.99"
 
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.1.0", features = ["validation"] }
-kingfisher-rules = "1.0.1"
+kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
+kingfisher-rules = "1.1.0"
 serde_json = "1"
 tokio = { version = "1.53", features = ["macros", "rt", "net", "io-util", "time"] }
 ```
@@ -314,7 +393,7 @@ Compile once and share the database. Preserve catalog metadata with
 `RulesDatabase::from_rule_collection`; converting the loaded collection into a
 `Vec<Rule>` loses its database-level source prefilter.
 
-For custom files, add `kingfisher-rules = "1.0.1"` and use:
+For custom files, add `kingfisher-rules = "1.1.0"` and use:
 
 ```rust
 use kingfisher_rules::{Confidence, Rules, RulesDatabase};
@@ -431,13 +510,21 @@ returns allocation and reentrant-borrow errors. A callback must not recursively
 borrow the same pool on the same thread. `with` panics for those errors; it does not
 permit overlapping mutable borrows.
 
+The application matcher, embeddable scanner, source-path prefilter, and
+finding-filter helpers share one pool implementation in the rules crate. The
+existing `kingfisher::scanner_pool::ScannerPool` and
+`kingfisher_scanner::ScannerPool` paths refer to that same type. The pool owns its
+database and drops thread-local scanners first. Its callback cannot return a
+scanner borrowing that database. A fallible callback produces a nested `Result`;
+propagate both layers with `pool.try_with(|scanner| scanner.scan(bytes, callback))??`.
+
 ## Credential Validation (Optional)
 
 No validator features are enabled by default:
 
 ```toml
 [dependencies]
-kingfisher-scanner = { version = "1.1.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
 ```
 
 `validation` enables all supported validators and revocation: HTTP, gRPC,
@@ -454,7 +541,7 @@ logging or serializing it:
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.1.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -499,7 +586,7 @@ No dependency on the CLI crate is needed.
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.1.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -564,7 +651,7 @@ input limits and bound worker counts for untrusted or large workloads.
 The full application's library is available separately:
 
 ```toml
-kingfisher = { package = "kingfisher-bin", version = "2.9.1" }
+kingfisher = { package = "kingfisher-bin", version = "2.10.0" }
 ```
 
 It carries CLI dependencies and all validator features. The stable embedding
@@ -573,11 +660,16 @@ for detection, validation, and revocation integration.
 
 ## API Stability
 
-Scanner 1.1.0 adds `Revoker` and makes validation all-or-nothing. Existing provider
-feature names remain aliases, so existing manifests keep working but now compile
-all validators. The rules 1.0.1 patch refreshes packaged provenance after manifest
-and lockfile changes; the core API is unchanged. The Python SDK 1.0.1 keeps its
-public interface and delegates revocation to the shared Rust runner.
+Rules 1.1.0 adds endpoint-confirmation helpers and reduces filter input copying.
+Scanner 1.2.0 adds optional cooperative scan deadlines/cancellation and improves
+candidate confirmation and span tracking while retaining existing scan methods
+and public helper signatures. Python SDK 1.1.0 adds per-call scan controls and
+`Rules.detail()` inspection. Core remains 1.0.1; the CLI is versioned separately.
+
+Scanner 1.1.0 introduced `Revoker` and made validation all-or-nothing. Existing
+provider feature names remain aliases, so existing manifests keep working while
+compiling all validators. Python SDK 1.0.1 delegated revocation to the shared Rust
+runner.
 
 
 The first published `1.0.0` establishes the stable contract. Within `1.x`:
@@ -591,7 +683,7 @@ The first published `1.0.0` establishes the stable contract. Within `1.x`:
   are behavioral contracts covered by regression tests.
 - Existing documented serialized field names and enum spellings are retained. New
   optional data may be added where compatible; consumers should accept unknown fields.
-- Rust 1.96 remains the minimum supported compiler for `1.x`. Dependency updates must
+- Rust 1.99 is the minimum supported compiler for this release. Dependency updates must
   preserve that minimum and pass feature and consumer checks.
 
 Catalog content, match counts, provider responses, diagnostics, finding order,

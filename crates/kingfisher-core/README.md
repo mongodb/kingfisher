@@ -1,7 +1,7 @@
 # kingfisher-core
 
 Shared content, location, provenance, entropy, and validation-outcome types for
-embedding Kingfisher in Rust 1.96+ applications. The `1.x` public Rust API follows
+embedding Kingfisher in Rust 1.99+ applications. The `1.x` public Rust API follows
 semantic versioning; breaking changes require a new major version.
 
 ```toml

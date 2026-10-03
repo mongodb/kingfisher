@@ -117,6 +117,10 @@ try {
 
     Write-Host "Kingfisher installed to: $destination"
     Write-Host "Ensure '$InstallDir' is in your PATH environment variable."
+    if (-not $env:KF_GIT_BINARY -and -not (Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue)) {
+        Write-Host 'Remote repository and --staged scans require Git for Windows: https://gitforwindows.org/'
+        Write-Host 'Install Git on PATH or set KF_GIT_BINARY to the full path to git.exe.'
+    }
 }
 finally {
     if ($tempDir -and (Test-Path $tempDir.FullName)) {

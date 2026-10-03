@@ -3,6 +3,7 @@ SHELL := /usr/bin/env bash
 
 PROJECT_NAME := kingfisher
 ZIG_VERSION ?= 0.15.1
+RUST_FUZZ_TOOLCHAIN ?= nightly-2026-10-02
 SKIP_TESTS ?= 0
 
 # Normalize uname once for platform checks (uname reports Darwin on macOS).
@@ -178,11 +179,11 @@ linux-arm64: DOCKER_PLATFORM := linux/arm64
 ubuntu-x64 ubuntu-arm64: setup-zig prepare-release-notices   # ensures Zig & cargo-zigbuild exist
 	@echo "Checking Rust toolchain…"
 	@$(MAKE) check-rust || { \
-            echo "🦀  Installing Rust 1.96.0 …"; \
+            echo "🦀  Installing Rust 1.99.0 …"; \
 	    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y; \
 	    . $$HOME/.cargo/env; \
-            rustup toolchain install 1.96.0; \
-            rustup default 1.96.0; \
+            rustup toolchain install 1.99.0; \
+            rustup default 1.99.0; \
 	}
 
 	@echo "📦  Installing build dependencies (musl, cmake, etc.)…"
@@ -481,11 +482,11 @@ windows-test: windows-test-x64 windows-test-arm64
 # Stage archive inputs together: BusyBox tar applies -C to every input path.
 linux-x64 linux-arm64: check-docker create-dockerignore prepare-release-notices
 	@mkdir -p target/release
-	docker run --platform $(DOCKER_PLATFORM) --rm \
+	docker run --pull=always --platform $(DOCKER_PLATFORM) --rm \
           -v "$$(pwd):/src" -w /src \
           -e VECTORSCAN_BUILD_FROM_SOURCE -e CARGO_BUILD_JOBS \
           -e CARGO_INCREMENTAL -e CARGO_PROFILE_DEV_DEBUG -e CARGO_PROFILE_TEST_DEBUG \
-          rust:1.96-alpine3.23 sh -eu -c '\
+          rust:1.99.0-alpine3.23 sh -eu -c '\
 		apk add --no-cache \
 		    bash \
 		    musl-dev \
@@ -498,6 +499,7 @@ linux-x64 linux-arm64: check-docker create-dockerignore prepare-release-notices
 	        git openssl-dev curl && \
 		\
 		export CARGO_TARGET_DIR=/src/target && \
+		export RUSTUP_TOOLCHAIN=$$RUST_VERSION && \
 		rustup target add $(BUILD_TARGET) && \
 		\
 		if [ "$(SKIP_TESTS)" != "1" ]; then cargo test --locked --workspace --all-targets --jobs 1 --target $(BUILD_TARGET); fi && \
@@ -599,7 +601,7 @@ check-rust:
 	  echo "Rust not found."; \
 	  exit 1; \
 	fi; \
-        required=1.96.0; \
+        required=1.99.0; \
 	if [ $$(printf '%s\n' "$$required" "$$version" | sort -V | head -n1) != "$$required" ]; then \
 	  echo "Rust version $$version is older than required $$required."; \
 	  exit 1; \
@@ -645,17 +647,9 @@ fuzz:
 		echo "📦 installing cargo-fuzz …"; \
 		cargo install cargo-fuzz; \
 	}
-	@rustup toolchain list | grep -q nightly || { \
-		echo "📦 installing nightly toolchain …"; \
-		rustup toolchain install nightly; \
-	}
+	@rustup toolchain install "$(RUST_FUZZ_TOOLCHAIN)" --profile minimal
 	@fuzz_seconds=$${FUZZ_SECONDS:-60}; \
-	NIGHTLY_PATH="$$HOME/.rustup/toolchains/nightly-$$(rustc -vV | awk '/^host:/{print $$2}')/bin"; \
-	if [ ! -d "$$NIGHTLY_PATH" ]; then \
-		echo "❌ Nightly toolchain not found at $$NIGHTLY_PATH"; \
-		exit 1; \
-	fi; \
-	export PATH="$$NIGHTLY_PATH:$$PATH"; \
+	export RUSTUP_TOOLCHAIN="$(RUST_FUZZ_TOOLCHAIN)"; \
 	echo "Using rustc: $$(which rustc) ($$(rustc --version))"; \
 	for target in fuzz_entropy fuzz_location fuzz_base64 fuzz_span; do \
 		echo "▶ fuzzing $$target for $${fuzz_seconds}s …"; \

@@ -7,11 +7,7 @@ use std::{
     time::Duration,
 };
 
-// NOTE: We continue to issue the small number of Azure DevOps Git REST calls we need
-// directly through `reqwest` instead of depending on the `azure_devops_rust_api`
-// crate. The SDK does not yet expose stable coverage for wiki repositories or the
-// preview API surfaces we rely on, while the raw requests keep the binary lean and
-// let us opt into newer API versions as Microsoft rolls them out.
+// Use direct REST requests to select the API versions needed for repository discovery.
 
 use anyhow::{Context, Result, anyhow};
 use indicatif::{ProgressBar, ProgressStyle};
@@ -503,9 +499,8 @@ pub async fn fetch_repo_items(
     _output_root: &Path,
     _datastore: &Arc<Mutex<findings_store::FindingsStore>>,
 ) -> Result<Vec<PathBuf>> {
-    // Azure DevOps exposes work items and wiki content via additional APIs. For now we
-    // skip fetching extra artifacts and simply return an empty set so callers can rely
-    // on the function existing just like the other git host modules.
+    // Azure DevOps artifact fetching is not implemented; this provider returns no
+    // additional directories for the shared artifact pipeline.
     Ok(Vec::new())
 }
 

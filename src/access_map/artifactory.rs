@@ -52,10 +52,10 @@ pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
 }
 
 /// Maps an Artifactory token without a known base URL.
-/// Attempts common JFrog cloud URL patterns.
+/// Probes the shared JFrog cloud endpoint; instance-specific mapping requires a base URL.
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
-    // Without a base URL we cannot discover the instance.
-    // Build a minimal result indicating the token is valid but instance unknown.
+    // A shared-endpoint probe cannot discover the token's Artifactory instance.
+    // Return its observed ping result without claiming complete access mapping.
     let client = Client::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
         .build()

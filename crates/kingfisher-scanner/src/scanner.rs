@@ -13,6 +13,7 @@ use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
 use tracing::debug;
 
+use crate::ScanControl;
 use crate::finding::{Finding, FindingLocation};
 use crate::primitives;
 use crate::scanner_pool::ScannerPool;
@@ -83,6 +84,11 @@ impl Scanner {
     /// Borrows the input unless UTF-16/32 decoding requires an owned UTF-8 buffer.
     /// Returns scan and filter errors instead of treating them as an empty result.
     ///
+    /// # Errors
+    ///
+    /// Returns native matching, regex confirmation, and rule-filter errors.
+    /// An error is never converted into an empty successful scan.
+    ///
     /// # Examples
     ///
     /// ```no_run
@@ -104,11 +110,12 @@ impl Scanner {
 
     /// Scans a file for secrets.
     ///
-    /// Large files are automatically memory-mapped for efficiency.
+    /// Non-empty files are memory-mapped; empty files use owned bytes.
     ///
     /// # Errors
     ///
-    /// Returns an error if the file cannot be read.
+    /// Returns an error if the file cannot be read or if matching, regex
+    /// confirmation, or a rule filter fails.
     pub fn scan_file<P: AsRef<Path>>(&self, path: P) -> Result<Vec<Finding>> {
         let blob = Blob::from_file(&path)?;
         self.scan_blob_at_path(&blob, &path.as_ref().to_string_lossy())
@@ -118,16 +125,72 @@ impl Scanner {
     ///
     /// This is the core scanning method. Use this when you have a pre-existing
     /// `Blob` instance.
+    ///
+    /// # Errors
+    ///
+    /// Returns matching, regex confirmation, and rule-filter errors, as with
+    /// [`Self::scan_bytes`].
     pub fn scan_blob(&self, blob: &Blob) -> Result<Vec<Finding>> {
         self.scan_blob_at_path(blob, "")
     }
 
     /// Scan a blob while supplying the source path used by path-aware rules and filters.
+    ///
+    /// # Errors
+    ///
+    /// Returns matching, regex confirmation, and rule-filter errors, including
+    /// errors evaluating the source-path prefilter.
     pub fn scan_blob_at_path(&self, blob: &Blob, path: &str) -> Result<Vec<Finding>> {
-        self.scan_blob_at_path_impl(blob, path)
+        self.scan_blob_at_path_with_control(blob, path, &ScanControl::default())
     }
 
-    fn scan_blob_at_path_impl(&self, blob: &Blob, path: &str) -> Result<Vec<Finding>> {
+    /// Scan bytes with a cooperative deadline and/or cancellation signal.
+    /// Returns an error on interruption, never partial findings.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors documented by [`Self::scan_bytes`], or an error
+    /// containing [`crate::ScanAborted`] when cancelled or past its deadline.
+    pub fn scan_bytes_with_control(
+        &self,
+        bytes: &[u8],
+        control: &ScanControl,
+    ) -> Result<Vec<Finding>> {
+        control.check()?;
+        let blob = Blob::from_borrowed(bytes);
+        self.scan_blob_at_path_with_control(&blob, "", control)
+    }
+
+    /// Read and scan a file with per-call controls. File reads are not preemptible.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors documented by [`Self::scan_file`], or an error
+    /// containing [`crate::ScanAborted`] when cancelled or past its deadline.
+    pub fn scan_file_with_control<P: AsRef<Path>>(
+        &self,
+        path: P,
+        control: &ScanControl,
+    ) -> Result<Vec<Finding>> {
+        control.check()?;
+        let blob = Blob::from_file(&path)?;
+        self.scan_blob_at_path_with_control(&blob, &path.as_ref().to_string_lossy(), control)
+    }
+
+    /// Scan a blob and logical source path with per-call controls.
+    ///
+    /// # Errors
+    ///
+    /// Returns the errors documented by [`Self::scan_blob_at_path`], or an error
+    /// containing [`crate::ScanAborted`] when cancelled or past its deadline.
+    /// Interrupted calls return no partial findings and do not commit deduplication.
+    pub fn scan_blob_at_path_with_control(
+        &self,
+        blob: &Blob,
+        path: &str,
+        control: &ScanControl,
+    ) -> Result<Vec<Finding>> {
+        control.check()?;
         // Check for dedup
         if self.config.enable_dedup {
             let blob_id = blob.id();
@@ -145,16 +208,22 @@ impl Scanner {
             return Ok(Vec::new());
         }
 
+        control.check()?;
         // Run Vectorscan to find candidate matches
         let mut raw_matches = Vec::new();
-        self.scanner_pool.try_with(|scanner| {
+        let scan_result = self.scanner_pool.try_with(|scanner| {
             scanner.scan(bytes, |rule_id, from, to, _flags| {
+                if control.check().is_err() {
+                    return kingfisher_vectorscan::Scan::Terminate;
+                }
                 if (rule_id as usize) < self.rules_db.num_rules() {
                     raw_matches.push((rule_id as usize, from as usize, to as usize));
                 }
                 kingfisher_vectorscan::Scan::Continue
             })
-        })??;
+        });
+        control.check()?;
+        scan_result??;
         // Early exit if no matches
         if raw_matches.is_empty() && !self.config.enable_base64_decoding {
             return Ok(Vec::new());
@@ -168,9 +237,13 @@ impl Scanner {
         let mut seen_matches: FxHashSet<u64> = FxHashSet::default();
         let mut seen_raw_match_ends: FxHashSet<(usize, usize)> = FxHashSet::default();
         let mut seen_prefilter_rules: FxHashSet<usize> = FxHashSet::default();
-        let mut previous_full_spans: FxHashMap<usize, Vec<OffsetSpan>> = FxHashMap::default();
+        let mut previous_full_spans: FxHashMap<usize, primitives::MatchSpans> =
+            FxHashMap::default();
 
+        let mut candidate_indexes = FxHashMap::default();
+        let fragment_raw = std::cell::OnceCell::new();
         for (rule_id, _start, end) in raw_matches.into_iter().rev() {
+            control.check()?;
             if betterleaks_path_prefiltered && self.rules_db.is_betterleaks_rule(rule_id) {
                 continue;
             }
@@ -182,7 +255,7 @@ impl Scanner {
                 continue;
             }
 
-            let Some(anchored_regex) = self.rules_db.anchored_regexes().get(rule_id) else {
+            let Some(confirmation_regex) = self.rules_db.anchored_regexes().get(rule_id) else {
                 continue;
             };
 
@@ -196,19 +269,41 @@ impl Scanner {
                 if !seen_raw_match_ends.insert((rule_id, end)) {
                     continue;
                 }
-                if previous_full_spans.get(&rule_id).is_some_and(|spans| {
-                    spans.iter().any(|span| span.start < end && end <= span.end)
-                }) {
+                if previous_full_spans.get(&rule_id).is_some_and(|spans| spans.contains_end(end)) {
                     continue;
                 }
                 (end.saturating_sub(RAW_MATCH_LOOKBACK), end)
             };
             let bounded_confirmation = !self.rules_db.uses_vectorscan_prefilter(rule_id);
             loop {
+                control.check()?;
                 let haystack = &bytes[scan_start..scan_end];
                 let mut confirmed = false;
 
-                for captures in anchored_regex.captures_iter(haystack) {
+                let captures = if bounded_confirmation {
+                    let index = match candidate_indexes.entry(rule_id) {
+                        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
+                        std::collections::hash_map::Entry::Vacant(entry) => {
+                            entry.insert(primitives::CandidateMatchIndex::with_control(
+                                confirmation_regex,
+                                bytes,
+                                control,
+                            )?)
+                        }
+                    };
+                    index.captures(
+                        confirmation_regex,
+                        self.rules_db.endpoint_regex(rule_id),
+                        haystack,
+                        scan_start,
+                    )
+                } else {
+                    primitives::ConfirmationCaptures::Search(
+                        confirmation_regex.captures_iter(haystack),
+                    )
+                };
+                for captures in captures {
+                    control.check()?;
                     let full_capture = captures.get(0).unwrap();
                     if bounded_confirmation
                         && ((scan_start > 0 && full_capture.start() == 0)
@@ -220,7 +315,7 @@ impl Scanner {
                     let full_capture_span = OffsetSpan::from_range(
                         (scan_start + full_capture.start())..(scan_start + full_capture.end()),
                     );
-                    if !primitives::record_match(
+                    if !primitives::record_indexed_match(
                         &mut previous_full_spans,
                         rule_id,
                         full_capture_span,
@@ -230,7 +325,7 @@ impl Scanner {
 
                     // Get the primary secret value
                     let secret_capture = primitives::find_secret_capture_with_group(
-                        anchored_regex,
+                        confirmation_regex,
                         &captures,
                         rule.betterleaks_secret_group(),
                     );
@@ -245,11 +340,12 @@ impl Scanner {
                         continue;
                     }
 
-                    let capture_map = named_captures(anchored_regex, &captures);
+                    let capture_map = named_captures(confirmation_regex, &captures);
                     let filter_outcome = if let Some(expression) = rule.betterleaks_filter() {
                         let full_match = String::from_utf8_lossy(full_capture.as_bytes());
                         let secret = String::from_utf8_lossy(secret_bytes);
-                        let fragment_raw = String::from_utf8_lossy(bytes);
+                        let fragment_raw =
+                            fragment_raw.get_or_init(|| String::from_utf8_lossy(bytes));
                         let match_start_idx = scan_start + full_capture.start();
                         let match_end_idx = scan_start + full_capture.end();
                         let (match_line_start_idx, match_line_end_idx) =
@@ -262,7 +358,7 @@ impl Scanner {
                             secret: &secret,
                             full_match: &full_match,
                             line: &line,
-                            fragment_raw: &fragment_raw,
+                            fragment_raw,
                             match_start_idx,
                             match_end_idx,
                             match_line_start_idx,
@@ -352,27 +448,32 @@ impl Scanner {
                 betterleaks_path_prefiltered,
                 &loc_mapping,
                 &mut seen_matches,
+                control,
             )?;
             findings.extend(b64_findings);
         }
 
-        enforce_betterleaks_components(&mut findings);
-        deduplicate_imported_catalog_findings(&mut findings);
-
-        // Mark blob as seen for dedup
-        if self.config.enable_dedup && !findings.is_empty() {
-            self.seen_blobs.write().insert((blob.id(), path.to_owned()));
-        }
+        enforce_betterleaks_components(&mut findings, control)?;
+        control.check()?;
+        deduplicate_imported_catalog_findings(&mut findings, control)?;
+        control.check()?;
 
         // Redact only after dependency matching and fingerprint calculation.
         if self.config.redact_secrets {
             for finding in &mut findings {
+                control.check()?;
                 finding.secret = "[REDACTED]".to_owned();
                 for value in finding.captures.values_mut() {
                     *value = "[REDACTED]".to_owned();
                 }
             }
         }
+        control.check()?;
+        // Mark blob as seen for dedup
+        if self.config.enable_dedup && !findings.is_empty() {
+            self.seen_blobs.write().insert((blob.id(), path.to_owned()));
+        }
+
         Ok(findings)
     }
 
@@ -391,26 +492,35 @@ impl Scanner {
         betterleaks_path_prefiltered: bool,
         loc_mapping: &LocationMapping,
         seen_matches: &mut FxHashSet<u64>,
+        control: &ScanControl,
     ) -> Result<Vec<Finding>> {
         let mut findings = Vec::new();
         let bytes = blob.bytes();
 
         // Find Base64-encoded strings
-        let b64_items = primitives::get_base64_strings(bytes);
+        let b64_items = primitives::get_base64_strings_with_control(bytes, control)?;
 
         for item in b64_items {
+            control.check()?;
+            let fragment_raw = std::cell::OnceCell::new();
             let mut candidate_rule_ids = Vec::new();
             let mut seen_candidate_rules = FxHashSet::default();
-            self.scanner_pool.try_with(|scanner| {
+            let scan_result = self.scanner_pool.try_with(|scanner| {
                 scanner.scan(&item.decoded, |rule_id, _from, _to, _flags| {
+                    if control.check().is_err() {
+                        return kingfisher_vectorscan::Scan::Terminate;
+                    }
                     let rule_id = rule_id as usize;
                     if rule_id < self.rules_db.num_rules() && seen_candidate_rules.insert(rule_id) {
                         candidate_rule_ids.push(rule_id);
                     }
                     kingfisher_vectorscan::Scan::Continue
                 })
-            })??;
+            });
+            control.check()?;
+            scan_result??;
             for rule_id in candidate_rule_ids {
+                control.check()?;
                 if betterleaks_path_prefiltered && self.rules_db.is_betterleaks_rule(rule_id) {
                     continue;
                 }
@@ -423,6 +533,7 @@ impl Scanner {
                 let regex = &self.rules_db.anchored_regexes()[rule_id];
 
                 for captures in regex.captures_iter(&item.decoded) {
+                    control.check()?;
                     let full_capture = captures.get(0).expect("regex captures include group zero");
                     let secret_capture = primitives::find_secret_capture_with_group(
                         regex,
@@ -442,7 +553,8 @@ impl Scanner {
                     let filter_outcome = if let Some(expression) = rule.betterleaks_filter() {
                         let full_match = String::from_utf8_lossy(full_capture.as_bytes());
                         let secret = String::from_utf8_lossy(secret_bytes);
-                        let fragment_raw = String::from_utf8_lossy(&item.decoded);
+                        let fragment_raw =
+                            fragment_raw.get_or_init(|| String::from_utf8_lossy(&item.decoded));
                         let (match_line_start_idx, match_line_end_idx) =
                             line_bounds(&item.decoded, full_capture.start(), full_capture.end());
                         let line = String::from_utf8_lossy(
@@ -453,7 +565,7 @@ impl Scanner {
                             secret: &secret,
                             full_match: &full_match,
                             line: &line,
-                            fragment_raw: &fragment_raw,
+                            fragment_raw,
                             match_start_idx: full_capture.start(),
                             match_end_idx: full_capture.end(),
                             match_line_start_idx,
@@ -526,9 +638,13 @@ impl Scanner {
     }
 }
 
-fn deduplicate_imported_catalog_findings(findings: &mut Vec<Finding>) {
+fn deduplicate_imported_catalog_findings(
+    findings: &mut Vec<Finding>,
+    control: &ScanControl,
+) -> Result<()> {
     let mut keep = vec![true; findings.len()];
     for left in 0..findings.len() {
+        control.check()?;
         if !keep[left] || !findings[left].rule.visible() {
             continue;
         }
@@ -536,6 +652,7 @@ fn deduplicate_imported_catalog_findings(findings: &mut Vec<Finding>) {
             continue;
         };
         for right in (left + 1)..findings.len() {
+            control.check()?;
             if !keep[right]
                 || !findings[right].rule.visible()
                 || findings[left].location.start_offset != findings[right].location.start_offset
@@ -564,6 +681,7 @@ fn deduplicate_imported_catalog_findings(findings: &mut Vec<Finding>) {
         index += 1;
         retain
     });
+    Ok(())
 }
 
 fn imported_catalog(rule_id: &str) -> Option<bool> {
@@ -595,11 +713,15 @@ fn finding_rule(rule: &Arc<Rule>, confidence: Confidence) -> Arc<Rule> {
     Arc::new(effective_rule)
 }
 
-fn enforce_betterleaks_components(findings: &mut Vec<Finding>) {
+fn enforce_betterleaks_components(
+    findings: &mut Vec<Finding>,
+    control: &ScanControl,
+) -> Result<()> {
     let mut keep = vec![true; findings.len()];
     loop {
         let mut changed = false;
         for (primary_index, primary) in findings.iter().enumerate() {
+            control.check()?;
             if !keep[primary_index] {
                 continue;
             }
@@ -607,11 +729,17 @@ fn enforce_betterleaks_components(findings: &mut Vec<Finding>) {
                 let Some(within) = dependency.within.as_deref() else {
                     continue;
                 };
-                let found = findings.iter().enumerate().any(|(candidate_index, candidate)| {
-                    keep[candidate_index]
+                let mut found = false;
+                for (candidate_index, candidate) in findings.iter().enumerate() {
+                    control.check()?;
+                    if keep[candidate_index]
                         && candidate.rule_id == dependency.rule_id
                         && finding_is_within(primary, candidate, within)
-                });
+                    {
+                        found = true;
+                        break;
+                    }
+                }
                 if !found && !dependency.optional {
                     keep[primary_index] = false;
                     changed = true;
@@ -630,6 +758,7 @@ fn enforce_betterleaks_components(findings: &mut Vec<Finding>) {
         index += 1;
         retain
     });
+    Ok(())
 }
 
 pub(crate) fn finding_is_within(primary: &Finding, component: &Finding, within: &str) -> bool {

@@ -15,8 +15,8 @@ use crate::{
 pub struct RuleSpecifierArgs {
     /// Load additional rules from file(s) or directories
     ///
-    /// Directories are walked recursively for YAML files. This option
-    /// can be repeated.
+    /// Directories are walked recursively for YAML and Betterleaks TOML files.
+    /// This option can be repeated.
     #[arg(global = true, long, alias="rules", value_hint=ValueHint::AnyPath)]
     pub rules_path: Vec<PathBuf>,
 
@@ -33,7 +33,7 @@ pub struct RuleSpecifierArgs {
     #[arg(global = true, long = "exclude-rule", value_name = "RULE")]
     pub exclude_rule: Vec<String>,
 
-    /// Load the built-in Betterleaks rules
+    /// Load the built-in Betterleaks and Veles rules
     #[arg(global = true, long, default_value_t=true, action=ArgAction::Set)]
     pub load_builtins: bool,
 }

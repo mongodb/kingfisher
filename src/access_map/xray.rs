@@ -143,8 +143,8 @@ pub async fn map_access_from_token_and_url(token: &str, base_url: &str) -> Resul
         risk_notes.push(format!("Can view {} security policies", policies.len()));
     }
 
-    // Determine if user has admin-level access based on policy management
-    // If policies are readable AND repos are listed, likely has elevated access
+    // Treat non-empty policy/repository listings as capability hints. These
+    // read-only probes do not establish write or policy-management permission.
     let can_manage_policies = has_policy_access && !policies.is_empty();
     let can_scan_repos = !repos.is_empty();
 
@@ -165,7 +165,7 @@ pub async fn map_access_from_token_and_url(token: &str, base_url: &str) -> Resul
     permissions.read_only.sort();
     permissions.read_only.dedup();
 
-    // Severity: admin if can manage policies, high if repo scanning, medium otherwise
+    // Both capability hints yield High; either alone yields Medium.
     let severity = if can_manage_policies && can_scan_repos {
         Severity::High
     } else if can_manage_policies || can_scan_repos {

@@ -11,7 +11,6 @@ pub mod location;
 pub mod origin;
 pub mod validation;
 
-// Re-export commonly used types at the crate root
 pub use blob::{
     Blob, BlobAppearance, BlobAppearanceSet, BlobData, BlobId, BlobIdMap, BlobMetadata,
 };

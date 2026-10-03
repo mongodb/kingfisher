@@ -27,7 +27,7 @@ class Finding:
 
     @property
     def secret(self) -> str:
-        """Explicit access to the unredacted credential."""
+        """Return the stored credential; redact=True scanning leaves it redacted."""
         return self.to_dict(redact=False)["secret"]
 
     @property

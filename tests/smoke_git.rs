@@ -1,4 +1,3 @@
-// tests/smoke_git.rs
 use std::{fs, process::Command};
 
 use assert_cmd::prelude::*;

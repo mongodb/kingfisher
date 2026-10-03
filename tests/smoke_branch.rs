@@ -1,4 +1,3 @@
-// tests/smoke_branch.rs
 //
 // Integration tests that exercise `kingfisher scan` against Git branches and commit
 // references using locally constructed repositories. These ensure that the
@@ -29,6 +28,40 @@ const STRIPE_SECRET_LINE: &str = concat!(
     "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",
     "'",
 );
+
+#[test]
+fn staged_scan_uses_git_executable_override() -> Result<()> {
+    let temp = tempdir()?;
+    let repo_dir = temp.path().join("repository with spaces");
+    let repo = Repository::init(&repo_dir)?;
+    repo.config()?.set_str("user.name", "Kingfisher Test")?;
+    repo.config()?.set_str("user.email", "kingfisher@example.invalid")?;
+    let signature = Signature::now("Kingfisher Test", "kingfisher@example.invalid")?;
+    let empty_tree = repo.find_tree(repo.treebuilder(None)?.write()?)?;
+    repo.commit(Some("HEAD"), &signature, &signature, "initial", &empty_tree, &[])?;
+    fs::write(repo_dir.join("secret.txt"), GITHUB_TOKEN_LINE)?;
+    {
+        let mut index = repo.index()?;
+        index.add_path(Path::new("secret.txt"))?;
+        index.write()?;
+    }
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .arg("scan")
+        .arg(&repo_dir)
+        .args(["--staged", "--no-validate", "--no-update-check", "--format", "toon"])
+        .assert()
+        .code(200)
+        .stdout(contains(GITHUB_TOKEN_VALUE));
+
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .arg("scan")
+        .arg(&repo_dir)
+        .args(["--staged", "--no-validate", "--no-update-check", "--format", "toon"])
+        .env("KF_GIT_BINARY", temp.path().join("missing git.exe"))
+        .assert()
+        .stderr(contains("KF_GIT_BINARY"));
+    Ok(())
+}
 
 #[test]
 fn scan_by_commit_and_branch_diff() -> anyhow::Result<()> {
@@ -135,14 +168,8 @@ aws_secret_access_key = efnegoUp/WXc3XwlL77dXu1aKIICzvz+n+7Sz88i
     Ok(())
 }
 
-///
-///
-///
-///
-///
-/// Create a repo with a single file `secrets.txt` and five commits that append
-/// lines in order, exactly like the provided shell script. Returns the repo dir
-/// and the vector of commit IDs (oldest → newest).
+/// Create a repository with five commits appending synthetic secrets to one file.
+/// Return the repository directory and commit IDs from oldest to newest.
 fn setup_linear_repo_with_secrets() -> Result<(TempDir, std::path::PathBuf, Vec<git2::Oid>)> {
     let dir = tempdir()?;
     let repo_dir = dir.path().join("repo");
@@ -163,7 +190,7 @@ fn setup_linear_repo_with_secrets() -> Result<(TempDir, std::path::PathBuf, Vec<
     let mut parent_commit = repo.find_commit(c1)?;
     let mut contents = String::from(GITHUB_TOKEN_LINE);
 
-    // Remaining commits mirror the shell script example.
+    // Append one provider-specific secret per commit.
     let additions = [
         ("Add GCP API key", GCP_API_KEY_LINE),
         ("Add Slack bot token", SLACK_TOKEN_LINE),
@@ -478,7 +505,9 @@ fn remote_branch_scans_use_narrow_caches_separate_from_full_clones() -> Result<(
     let (temp, repo_dir, commits) = setup_linear_repo_with_secrets()?;
     let cache = temp.path().join("clones");
     let url = "https://example.invalid/branch-scan.git";
-    let local = repo_dir.canonicalize()?.to_string_lossy().replace('\\', "/");
+    // Keep an ordinary drive path: Git for Windows rejects canonicalized
+    // verbatim paths (`//?/C:/...`) when used as a clone URL rewrite.
+    let local = std::path::absolute(&repo_dir)?.to_string_lossy().replace('\\', "/");
     let run = |flags: &[&str]| {
         let mut command = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
         command

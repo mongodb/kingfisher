@@ -2,13 +2,13 @@
 
 Rule definitions and compiled rule database support for Kingfisher.
 
-The `1.x` public Rust API follows semantic versioning and requires Rust 1.96+.
+The `1.x` public Rust API follows semantic versioning and requires Rust 1.99+.
 Breaking API changes require a new major version; catalog updates may change which
 secrets are detected without changing the Rust API.
 
 ```toml
 [dependencies]
-kingfisher-rules = "1.0.1"
+kingfisher-rules = "1.1.0"
 anyhow = "1"
 ```
 

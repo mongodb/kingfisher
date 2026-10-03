@@ -466,6 +466,9 @@ Use a prefix like `betterleaks.github` if you want to include or exclude an
 entire family instead of single rules. Wildcards like `betterleaks.g*` are not
 supported.
 
+Suggested validation, revocation, and blast-radius commands in reports use POSIX shell quoting.
+Adapt their quoting before pasting into PowerShell or cmd.exe.
+
 ### Direct secret revocation with `kingfisher revoke`
 
 Use `kingfisher revoke` to invoke either a mapped Betterleaks revocation capability or a Kingfisher

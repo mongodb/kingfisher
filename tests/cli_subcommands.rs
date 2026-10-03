@@ -1,6 +1,5 @@
-// tests/cli_subcommands.rs
 //
-// Extensive CLI tests for the new subcommand syntax (kingfisher scan <platform>)
+// CLI tests for provider scan subcommands (kingfisher scan <platform>).
 // These tests validate that all platform-specific scan subcommands are properly wired up
 // and can be invoked with various argument combinations.
 

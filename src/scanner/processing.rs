@@ -1,9 +1,10 @@
+use std::path::Path;
+
 use anyhow::Result;
 use tokio::time::Instant;
 use tracing::{debug_span, trace};
 
 use crate::{
-    Path,
     blob::{Blob, BlobMetadata},
     content_type::ContentInspector,
     location::LocationMapping,
@@ -86,10 +87,9 @@ impl<'a> BlobProcessor<'a> {
                         Origin::File(_) => "file",
                         Origin::Extended(_) => "ext",
                     };
-                    // println!("Origin type: {}", type_str);
                     if origin_type == "unknown" {
                         origin_type = type_str;
-                        break; // Exit loop after first match
+                        break;
                     }
                 }
 

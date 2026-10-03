@@ -25,6 +25,10 @@ pub struct Revoker {
 
 impl Revoker {
     /// Create a runner with strict TLS, redirects disabled, and a 10-second deadline.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the HTTP client or Liquid template parser cannot be initialized.
     pub fn new() -> Result<Self> {
         Self::with_client(Client::builder().redirect(reqwest::redirect::Policy::none()).build()?)
     }
@@ -32,6 +36,10 @@ impl Revoker {
     /// Use an application-owned HTTP client. Configure TLS, proxies, and redirects
     /// for the intended endpoints. AWS and GCP helpers use their own transports;
     /// the total deadline still applies. HTTP rules may reach internal addresses.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the Liquid template parser cannot be initialized.
     pub fn with_client(client: Client) -> Result<Self> {
         Ok(Self {
             client,
@@ -44,6 +52,10 @@ impl Revoker {
     /// Set a nonzero total deadline for each call, including multi-step requests.
     /// A timeout cannot undo an already submitted revocation request; its outcome
     /// may be unknown. Do not automatically retry a timed-out operation.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the duration is zero.
     pub fn timeout(mut self, timeout: Duration) -> Result<Self> {
         ensure!(!timeout.is_zero(), "Revocation timeout must be nonzero");
         self.timeout = timeout;
@@ -56,6 +68,13 @@ impl Revoker {
     /// and always comes from `secret`. No environment variables or CLI defaults are
     /// read. Missing configuration and execution failures return errors;
     /// a completed provider response is evaluated by the rule's success matcher.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for an empty secret, reserved `TOKEN` variable, missing or
+    /// unsupported revocation configuration, template/transport failures, or timeout.
+    /// A completed response that fails the success matcher is returned with
+    /// `revoked: false`, rather than treated as a transport error.
     pub async fn revoke(
         &self,
         rule: &Rule,

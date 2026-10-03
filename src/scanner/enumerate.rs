@@ -3,8 +3,7 @@ use std::{
     collections::{HashMap, HashSet},
     io::Read,
     marker::PhantomData,
-    path::Path,
-    process::Command,
+    path::{Path, PathBuf},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
@@ -27,9 +26,8 @@ use tracing::{debug, error};
 use smallvec::smallvec;
 
 use crate::{
-    DirectoryResult, EnumeratorConfig, EnumeratorFileResult, FileResult, FilesystemEnumerator,
-    FoundInput, GitDiffConfig, GitRepoEnumerator, GitRepoResult, GitRepoWithMetadataEnumerator,
-    PathBuf,
+    DirectoryResult, EnumeratorFileResult, FileResult, FilesystemEnumerator, FoundInput,
+    GitDiffConfig, GitRepoEnumerator, GitRepoResult, GitRepoWithMetadataEnumerator,
     binary::is_binary,
     blob::{Blob, BlobAppearance, BlobId, BlobIdMap},
     cli::commands::{github::GitHistoryMode, scan},
@@ -49,7 +47,7 @@ use crate::{
     rules_database::RulesDatabase,
     scanner::{
         processing::BlobProcessor,
-        runner::{create_datastore_channel, spawn_datastore_writer_thread},
+        storage::{create_datastore_channel, spawn_datastore_writer_thread},
         util::{is_compressed_content, is_compressed_file, is_pyc_file, is_sqlite_file},
     },
     scanner_pool::ScannerPool,
@@ -58,6 +56,23 @@ use crate::{
 
 type OwnedBlob = Blob<'static>;
 type LoadedGitBlobs<'a> = Box<dyn Iterator<Item = (OriginSet, Blob<'a>)> + Send + 'a>;
+
+struct EnumeratorConfig {
+    enumerate_git_history: bool,
+    collect_git_metadata: bool,
+    repo_scan_timeout: Option<Duration>,
+    exclude_globset: Option<Arc<globset::GlobSet>>,
+    git_diff: Option<GitDiffConfig>,
+    /// Start bounded history walks from all refs when no branch was explicitly selected.
+    history_all_refs: bool,
+    history_time_range: Option<(i64, i64)>,
+    /// Whether archive blobs encountered during git scanning should be
+    /// transparently extracted before pattern matching.
+    extract_archives: bool,
+    /// Maximum number of archive layers to extract while scanning git blobs.
+    extraction_depth: Option<usize>,
+    resources: ResourceLimits,
+}
 
 #[allow(clippy::too_many_arguments)]
 pub fn enumerate_filesystem_inputs(
@@ -252,10 +267,10 @@ pub fn enumerate_filesystem_inputs(
                     .unwrap_or(false);
                 let is_binary = is_binary(blob.bytes());
                 let should_skip = if is_archive {
-                    // For archives: skip only if --no_extract_archives is true
+                    // --no-extract-archives also suppresses raw containers at this stage.
                     args.content_filtering_args.no_extract_archives
                 } else {
-                    // For non-archives: skip if it's binary and --no_binary is true
+                    // Apply --no-binary to non-archive inputs.
                     is_binary && args.content_filtering_args.no_binary
                 };
                 if should_skip {
@@ -367,7 +382,6 @@ fn make_fs_enumerator(
     }
 }
 
-// Rest of the file remains the same...
 /// Implements parallel iteration for either a single blob or a list of blobs.
 struct FileResultIter<'a> {
     iter_kind: FileResultIterKind,
@@ -942,14 +956,11 @@ fn archive_entry_suffix<'a>(entry_logical: &'a str, archive_path: &str) -> Optio
     )
 }
 
-// A marker so the struct itself carries the lifetime.
 struct GitRepoResultIter<'a> {
     inner: GitRepoResult,
     deadline: Option<std::time::Instant>,
-    /// When true, blobs whose in-tree path matches a known archive format
-    /// (zip/jar/apk/tar/gz/...) are extracted before scanning, so secrets
-    /// inside the archive can be matched. When false, archive blobs are
-    /// scanned as raw compressed bytes (legacy behavior).
+    /// Extract recognized archive paths and content-sniffed ZIPs before scanning,
+    /// subject to depth/resource limits. When false, scan the raw container bytes.
     extract_archives: bool,
     /// Maximum number of archive layers to extract from each git blob.
     extraction_depth: Option<usize>,
@@ -1012,8 +1023,8 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 // Try archive extraction if any first-seen path looks like
                 // a known archive format, or the blob bytes are a ZIP under a
                 // name with no archive extension (e.g. a committed `tfplan`).
-                // We don't need to keep the raw archive bytes around — its
-                // compressed contents won't produce useful matches anyway.
+                // Successful extraction replaces the raw container; invalid or empty
+                // archives remain available for scanning as raw bytes.
                 if extract_archives && extraction_depth != Some(0) {
                     // Prefer an appearance whose name is a recognized archive so
                     // report paths stay stable; fall back to the first appearance
@@ -1211,11 +1222,7 @@ enum FoundInputIter<'a> {
     EnumeratorFile(EnumeratorFileIter<'a>),
 }
 
-// Enumerator file parallelism approach:
-//
-// - Split into lines sequentially
-// - Parallelize JSON deserialization (JSON is an expensive serialization format, but easy to sling
-//   around, hence used here -- another format like Arrow or msgpack would be much more efficient)
+// Split JSONL sequentially, then deserialize and load each entry in parallel.
 
 impl<'a> ParallelIterator for EnumeratorFileIter<'a> {
     type Item = Result<(OriginSet, Blob<'a>)>;
@@ -1233,7 +1240,6 @@ impl<'a> ParallelIterator for EnumeratorFileIter<'a> {
                 let e: EnumeratorBlobResult = serde_json::from_str(&line).with_context(|| {
                     format!("Error in enumerator {}:{line_num}", self.inner.path.display())
                 })?;
-                // let origin = Origin::from_extended(e.origin).into();
                 let origin = OriginSet::new(Origin::from_extended(e.origin), Vec::new());
                 let blob = Blob::from_bytes(e.content.as_bytes().to_owned());
                 Ok((origin, blob))
@@ -1357,18 +1363,16 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
 
                         // Convert to a blob iterator, then patch deadline + extraction.
                         let extract_archives = cfg.extract_archives;
-                        repo_result
-                            .into_blob_iter() // Option<GitRepoResultIter>
-                            .map(|iter| {
-                                iter.map(|mut gri| {
-                                    gri.deadline = timeout
-                                        .and_then(|timeout| Instant::now().checked_add(timeout));
-                                    gri.resources = cfg.resources;
-                                    gri.extract_archives = extract_archives;
-                                    gri.extraction_depth = cfg.extraction_depth;
-                                    FoundInputIter::GitRepo(gri)
-                                })
+                        repo_result.into_blob_iter().map(|iter| {
+                            iter.map(|mut gri| {
+                                gri.deadline =
+                                    timeout.and_then(|timeout| Instant::now().checked_add(timeout));
+                                gri.resources = cfg.resources;
+                                gri.extract_archives = extract_archives;
+                                gri.extraction_depth = cfg.extraction_depth;
+                                FoundInputIter::GitRepo(gri)
                             })
+                        })
                     }
                 }
             }
@@ -1558,7 +1562,7 @@ fn enumerate_git_diff_repo(
     path: &Path,
     repository: gix::Repository,
     diff_cfg: GitDiffConfig,
-    exclude_globset: Option<std::sync::Arc<globset::GlobSet>>,
+    exclude_globset: Option<Arc<globset::GlobSet>>,
     collect_commit_metadata: bool,
     deadline: Option<Instant>,
 ) -> Result<GitRepoResult> {
@@ -1796,7 +1800,9 @@ fn resolve_optional_diff_ref(
 }
 
 fn run_git_command(path: &Path, args: &[&str], bubble_up_error: bool) -> Result<Option<String>> {
-    let output = Command::new("git").arg("-C").arg(path).args(args).output()?;
+    let output = crate::git_binary::git_command().arg("-C").arg(path).args(args).output().context(
+        "Failed to execute Git; install Git on PATH or set KF_GIT_BINARY to its executable",
+    )?;
 
     if !output.status.success() {
         if bubble_up_error {
@@ -2244,7 +2250,7 @@ mod tests {
             assert_eq!(blobs.len(), if unborn { 4 } else { 5 });
             let shared_blob = blobs
                 .iter()
-                .find(|blob| blob.blob_oid.to_string() == shared_blob.to_string())
+                .find(|blob| blob.blob_oid.as_slice() == shared_blob.as_bytes())
                 .unwrap();
             let mut appearances: Vec<_> = shared_blob
                 .first_seen
@@ -2312,7 +2318,10 @@ mod tests {
             } else {
                 assert!(!index_path.exists());
             }
-            let open = || open_opts(repo.path(), Options::isolated().open_path_as_is(true));
+            let open = || {
+                open_opts(repo.path(), Options::isolated().open_path_as_is(true))
+                    .map_err(anyhow::Error::from)
+            };
             let result = enumerate_git_diff_repo(
                 temp.path(),
                 open()?,
@@ -2335,7 +2344,7 @@ mod tests {
                 .collect();
             paths.sort();
             assert_eq!(paths, ["copy.txt", "modified.txt", "new-dir/secret.txt"]);
-            assert!(blobs.iter().all(|blob| blob.blob_oid.to_string() != old.to_string()));
+            assert!(blobs.iter().all(|blob| blob.blob_oid.as_slice() != old.as_bytes()));
 
             let result = enumerate_git_branch_history(
                 temp.path(),
@@ -2352,7 +2361,7 @@ mod tests {
             };
             assert_eq!(blobs.len(), 4, "include modified and deleted historical blobs");
             let shared_blob =
-                blobs.iter().find(|blob| blob.blob_oid.to_string() == shared.to_string()).unwrap();
+                blobs.iter().find(|blob| blob.blob_oid.as_slice() == shared.as_bytes()).unwrap();
             let paths: Vec<_> = shared_blob
                 .first_seen
                 .iter()

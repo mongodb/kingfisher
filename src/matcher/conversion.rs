@@ -92,7 +92,6 @@ impl OwnedBlobMatch {
             rule,
             blob_id: m.blob_id,
             finding_fingerprint: m.finding_fingerprint,
-            // matching_input: m.snippet.matching.0.to_vec(),
             matching_input_offset_span: m.location.offset_span,
             captures: m.groups.clone(),
             validation_response_body: m.validation_response_body.clone(),
@@ -121,7 +120,7 @@ impl OwnedBlobMatch {
             validation_success: blob_match.validation_success,
             validation_outcome: blob_match.validation_outcome,
             calculated_entropy: blob_match.calculated_entropy,
-            finding_fingerprint: 0, //default
+            finding_fingerprint: 0,
             is_base64: blob_match.is_base64,
             dependent_captures: blob_match.dependent_captures,
             ambiguous_dependencies: blob_match.ambiguous_dependencies,
@@ -184,7 +183,7 @@ pub struct Match {
     #[serde(default)]
     pub validation_outcome: ValidationOutcome,
 
-    /// Validation Success
+    /// Shannon entropy of the selected secret bytes.
     pub calculated_entropy: f32,
 
     pub visible: bool,
@@ -248,12 +247,11 @@ impl Match {
 
         let finding_fingerprint = compute_finding_fingerprint(
             finding_value_for_fp,
-            origin_type, // file_or_commit,
+            origin_type,
             offset_start,
             offset_end,
         );
 
-        // matching_snippet
         Match {
             rule: owned_blob_match.rule.clone(),
             visible: owned_blob_match.rule.visible().to_owned(),

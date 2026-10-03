@@ -124,6 +124,9 @@ regex = '(demo_[a-z0-9]{16})'
 ''', encoding="utf-8")
     finding, = Scanner(Rules([path], builtins=False)).scan(mock.TOKEN)
     assert finding.rule_id == "custom.acme-token"
+    detail = Rules([path], builtins=False).detail(finding.rule_id)
+    assert detail["pattern"] == "(demo_[a-z0-9]{16})"
+    assert detail["validation"] is None and detail["revocation"] is None
     result, = Validator().validate([finding])
     assert result.outcome == "not_attempted"
     with pytest.raises(ValueError, match="no revocation"):
@@ -135,6 +138,49 @@ def test_example_lifecycle():
                             check=True, capture_output=True, text=True, timeout=60)
     assert "After revocation: verified_inactive" in result.stdout
     assert mock.TOKEN not in result.stdout
+
+
+def test_rule_detail_is_complete_offline_and_independent(rules):
+    detail = rules.detail(mock.RULE_ID)
+    assert detail["id"] == mock.RULE_ID
+    assert detail["pattern"] == r"\b(demo_[a-z0-9]{16})\b"
+    assert detail["detection_regex"] == detail["pattern"]
+    assert detail["validation"]["type"] == "Http"
+    assert detail["validation"]["content"]["request"]["method"] == "GET"
+    assert detail["revocation"]["content"]["request"]["method"] == "DELETE"
+    assert detail["examples"] == [mock.TOKEN]
+    assert "pattern_requirements" in detail and "depends_on_rule" in detail
+    detail["pattern"] = "modified"
+    assert rules.detail(mock.RULE_ID)["pattern"] != "modified"
+    assert len(Scanner(rules).scan(mock.TOKEN)) == 1
+    with pytest.raises(ValueError, match="exact rule ID"):
+        rules.detail("acme")
+    assert "pattern" not in rules.metadata()[0]  # Preserve the compact API.
+
+
+def test_rule_inspection_example(rules):
+    command = [sys.executable, str(EXAMPLES / "rules.py"), "--rules-path",
+               str(mock.RULE_PATH), "--no-builtins"]
+    result = subprocess.run(command + ["--with-revocation"], check=True,
+                            capture_output=True, text=True, timeout=60)
+    assert json.loads(result.stdout)["id"] == mock.RULE_ID
+    result = subprocess.run(command + [mock.RULE_ID, "--field", "validation", "--field", "revocation"],
+                            check=True, capture_output=True, text=True, timeout=60)
+    detail = json.loads(result.stdout)
+    assert set(detail) == {"id", "validation", "revocation"}
+    assert detail["revocation"]["type"] == "Http"
+
+
+def test_rule_detail_distinguishes_stored_and_compiled_patterns(tmp_path):
+    path = tmp_path / "commented.yml"
+    source = mock.RULE_PATH.read_text(encoding="utf-8").replace(
+        r"\b(demo_", r"\b(?#synthetic example)(demo_")
+    path.write_text(source, encoding="utf-8")
+    rules = Rules([path], builtins=False)
+    detail = rules.detail(mock.RULE_ID)
+    assert "(?#synthetic example)" in detail["pattern"]
+    assert "(?#synthetic example)" not in detail["detection_regex"]
+    assert len(Scanner(rules).scan(mock.TOKEN)) == 1
 
 
 def test_multistep_revocation(tmp_path):
@@ -178,3 +224,33 @@ def test_revocation_response_must_match(rules):
         assert not result.revoked
         assert result.http_status == 403
         assert handler.active
+
+
+def test_scan_deadlines_and_cancellation_are_per_call(rules, tmp_path):
+    from kingfisher_sdk import CancellationToken
+    scanner = Scanner(rules, dedup=True)
+    token = CancellationToken()
+    assert not token.is_cancelled
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(token.cancel).result()
+    assert token.is_cancelled
+    with pytest.raises(RuntimeError, match="cancelled"):
+        scanner.scan(mock.TOKEN, cancellation=token)
+    with pytest.raises(TimeoutError, match="deadline"):
+        scanner.scan(mock.TOKEN, timeout=1e-9)
+    path = tmp_path / "cancelled.txt"
+    path.write_bytes(mock.TOKEN.encode())
+    with pytest.raises(RuntimeError, match="cancelled"):
+        scanner.scan_file(path, cancellation=token)
+    with pytest.raises(TimeoutError):
+        scanner.scan_file(path, timeout=1e-9)
+    assert len(scanner.scan(mock.TOKEN)) == 1
+    assert scanner.scan(mock.TOKEN) == []
+    scanner.reset_dedup()
+    assert len(scanner.scan_file(path, timeout=10)) == 1
+
+
+@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan"), 1e30])
+def test_scan_rejects_invalid_timeouts(rules, timeout):
+    with pytest.raises(ValueError, match="timeout"):
+        Scanner(rules).scan(mock.TOKEN, timeout=timeout)

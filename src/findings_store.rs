@@ -278,8 +278,8 @@ impl FindingsStore {
     /// Returns the number of *new blobs* discovered in this batch.
     ///
     /// * `dedup == true` -- full cryptographic digests suppress duplicate findings.
-    /// * Side-tables (`blob_meta`, `origin_meta`) guarantee only one Arc per distinct
-    ///   `BlobMetadata` / `OriginSet`, so no more huge copies.
+    /// * Side-tables reuse metadata Arcs by blob ID and origin-set hash, avoiding
+    ///   repeated copies of shared metadata.
     pub fn record(&mut self, batch: Vec<FindingsStoreMessage>, dedup: bool) -> usize {
         let mut added = 0;
 

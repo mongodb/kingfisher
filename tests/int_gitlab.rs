@@ -1,4 +1,3 @@
-// tests/int_gitlab.rs
 use std::{
     str::FromStr,
     sync::{Arc, Mutex},

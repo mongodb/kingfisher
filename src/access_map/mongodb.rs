@@ -241,7 +241,7 @@ async fn connect(uri: &str) -> Result<Client> {
     opts.max_pool_size = Some(1);
     opts.min_pool_size = Some(0);
 
-    // Always use lax TLS for access-map (we're probing, not running production)
+    // This access mapper bypasses certificate verification regardless of the CLI TLS mode.
     let tls_options = TlsOptions::builder().allow_invalid_certificates(true).build();
     opts.tls = Some(Tls::Enabled(tls_options));
 

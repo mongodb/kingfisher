@@ -129,6 +129,24 @@ flowchart LR
 
 ## Notes And Boundaries
 
+- `src/main.rs` owns process setup and command dispatch. Private binary modules in
+  `src/app/` handle project configuration, configuration generation, and rule commands.
+  `src/lib.rs` is the application library façade; filesystem enumeration and Git
+  opening are implemented in the private `src/input.rs` module and re-exported
+  through their existing public paths.
+- Within `src/scanner/`, `runner.rs` coordinates scan phases, `discovery.rs` owns
+  repository discovery and artifact workers, `roots.rs` groups local inputs,
+  `storage.rs` batches datastore writes, and `rule_loading.rs` manages compilation
+  and the rule cache. These implementation modules remain private.
+- `src/reporter/commands.rs` generates suggested validation, revocation, and
+  access-map commands; the report builder and format-specific renderers consume them.
+- The rules crate owns the shared native scanner pool used by the CLI matcher,
+  embeddable scanner, and compiled rule filters. Its thread-local scratch arenas
+  are dropped before their database, and fallible callers propagate allocation,
+  reentrancy, and matching errors.
+- Pull-request CI checks Clippy and API documentation with warnings denied using Rust 1.99,
+  the workspace minimum and pinned build compiler. It checks the scanning-only
+  feature configuration independently of workspace feature unification.
 - The main CLI scan path is implemented primarily in the application modules under `src/`, not in `kingfisher-scanner`.
 - `kingfisher-scanner` is still important: it provides the embeddable scanner API plus shared validation and primitive functionality reused by the application.
 - The shared validation layer in `crates/kingfisher-scanner/src/validation/` contains the embeddable

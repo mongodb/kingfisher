@@ -1,4 +1,3 @@
-// tests/smoke_check_rules.rs
 use std::process::Command;
 
 use assert_cmd::prelude::*;

@@ -41,7 +41,7 @@ Use the repository issue templates when they fit your case.
 
 ## Development Setup
 
-Kingfisher is a Rust workspace. The workspace minimum Rust version is `1.96`.
+Kingfisher is a Rust workspace. The workspace minimum Rust version is `1.99`.
 
 The workspace uses the published [`kingfisher-vectorscan`](https://crates.io/crates/kingfisher-vectorscan)
 crate. On supported Linux GNU, macOS, and Windows GNU/LLVM targets, Cargo downloads

@@ -1,19 +1,15 @@
 use std::{
-    cell::RefCell,
     env, fs,
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::{Duration, Instant, SystemTime},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use kingfisher_vectorscan::{
-    BlockDatabase, BlockScanner, Error as VectorscanError, Flag, Pattern, Scan,
-};
+use kingfisher_vectorscan::{BlockDatabase, Error as VectorscanError, Flag, Pattern, Scan};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
-use thread_local::ThreadLocal;
 use tracing::{debug, debug_span, error, warn};
 use xxhash_rust::xxh3::xxh3_128;
 
@@ -24,12 +20,18 @@ use crate::{
     },
     rule::{BetterleaksExpr, RULE_COMMENTS_PATTERN, Rule},
     rules::Rules,
+    scanner_pool::ScannerPool,
 };
 
+/// Compiled detection rules, source-path prefilters, and finding-filter helpers.
+///
+/// Reuse one database across scans and threads. Compile a loaded [`Rules`]
+/// collection with [`Self::from_rule_collection`] to retain its source prefilter.
 pub struct RulesDatabase {
     // pub(crate) rules: Vec<Rule,>,
     pub(crate) rules: Vec<Arc<Rule>>,
     pub(crate) anchored_regexes: Vec<Regex>,
+    endpoint_regexes: Vec<OnceLock<Option<Regex>>>,
     pub(crate) self_identifying_flags: Vec<bool>,
     pub(crate) vsdb: BlockDatabase,
     vectorscan_prefilter_flags: Vec<bool>,
@@ -45,8 +47,7 @@ pub struct RulesDatabase {
 /// of the main content database without recompiling its regex list for every source path.
 struct BetterleaksPathPrefilter {
     expression: BetterleaksExpr,
-    database: Arc<BlockDatabase>,
-    scanners: ThreadLocal<RefCell<BlockScanner<'static>>>,
+    scanners: ScannerPool,
 }
 
 impl BetterleaksPathPrefilter {
@@ -65,24 +66,18 @@ impl BetterleaksPathPrefilter {
             BlockDatabase::new(patterns)
                 .context("compile the Betterleaks path prefilter with Vectorscan")?,
         );
-        Ok(Self { expression, database, scanners: ThreadLocal::new() })
+        Ok(Self { expression, scanners: ScannerPool::new(database) })
     }
 
     #[inline]
     fn is_match(&self, path: &str) -> Result<bool> {
-        let scanner = self.scanners.get_or(|| {
-            // The Arc owns the database for at least as long as every thread-local scanner. This
-            // is the same lifetime extension used by the content ScannerPool.
-            let database = unsafe { &*(self.database.as_ref() as *const BlockDatabase) };
-            RefCell::new(
-                BlockScanner::new(database).expect("Vectorscan path-prefilter scratch allocation"),
-            )
-        });
         let mut matched = false;
-        scanner.borrow_mut().scan(path.as_bytes(), |_id, _from, _to, _flags| {
-            matched = true;
-            Scan::Terminate
-        })?;
+        self.scanners.try_with(|scanner| {
+            scanner.scan(path.as_bytes(), |_id, _from, _to, _flags| {
+                matched = true;
+                Scan::Terminate
+            })
+        })??;
         Ok(matched)
     }
 }
@@ -304,11 +299,22 @@ impl RulesDatabase {
         self.rules.iter().find(|r| r.name() == name).cloned()
     }
 
+    /// Compile explicit rules without a database-level source prefilter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if rule regexes, source-path prefilters, or finding-filter
+    /// expressions cannot be compiled, or the native database cannot be allocated.
     pub fn from_rules(rules: Vec<Rule>) -> Result<Self> {
         Self::from_rules_with_betterleaks_prefilter(rules, None)
     }
 
     /// Compile a loaded rule collection while preserving its database-level metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns rule compilation or native allocation errors, as documented by
+    /// [`Self::from_rules`].
     pub fn from_rule_collection(rules: Rules) -> Result<Self> {
         let Rules { rules, betterleaks_prefilter } = rules;
         Self::from_rules_with_betterleaks_prefilter(
@@ -317,6 +323,12 @@ impl RulesDatabase {
         )
     }
 
+    /// Compile explicit rules with an optional imported source-path prefilter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if rule regexes, source-path prefilters, or finding-filter
+    /// expressions cannot be compiled, or the native database cannot be allocated.
     pub fn from_rules_with_betterleaks_prefilter(
         rules: Vec<Rule>,
         betterleaks_prefilter: Option<BetterleaksExpr>,
@@ -330,11 +342,22 @@ impl RulesDatabase {
         Self::from_arc_rules(rules, betterleaks_prefilter, betterleaks_filter_engine)
     }
 
+    /// Compile explicit rules using a reusable native-database cache.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if rule regexes, source-path prefilters, or finding-filter
+    /// expressions cannot be compiled, or the native database cannot be allocated.
     pub fn from_rules_with_cache(rules: Vec<Rule>, cache: &RuleCacheConfig) -> Result<Self> {
         Self::from_rules_with_cache_and_betterleaks_prefilter(rules, cache, None)
     }
 
     /// Compile and cache a loaded rule collection while preserving database-level metadata.
+    ///
+    /// # Errors
+    ///
+    /// Returns rule compilation or native allocation errors, as documented by
+    /// [`Self::from_rules`].
     pub fn from_rule_collection_with_cache(rules: Rules, cache: &RuleCacheConfig) -> Result<Self> {
         let Rules { rules, betterleaks_prefilter } = rules;
         Self::from_rules_with_cache_and_betterleaks_prefilter(
@@ -344,6 +367,12 @@ impl RulesDatabase {
         )
     }
 
+    /// Compile explicit rules with a cache and an optional source-path prefilter.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if rule regexes, source-path prefilters, or finding-filter
+    /// expressions cannot be compiled, or the native database cannot be allocated.
     pub fn from_rules_with_cache_and_betterleaks_prefilter(
         rules: Vec<Rule>,
         cache: &RuleCacheConfig,
@@ -381,6 +410,7 @@ impl RulesDatabase {
         let has_non_betterleaks_rules = betterleaks_rule_flags.contains(&false);
         debug!("Compiled {} rules: vectorscan {}s; regex {}s", rules.len(), d1, d2);
         Ok(RulesDatabase {
+            endpoint_regexes: (0..rules.len()).map(|_| OnceLock::new()).collect(),
             rules,
             vsdb,
             anchored_regexes,
@@ -444,6 +474,7 @@ impl RulesDatabase {
                 d2
             );
             return Ok(RulesDatabase {
+                endpoint_regexes: (0..rules.len()).map(|_| OnceLock::new()).collect(),
                 rules,
                 vsdb,
                 anchored_regexes,
@@ -522,13 +553,34 @@ impl RulesDatabase {
         self.vectorscan_prefilter_flags.get(index).copied().unwrap_or(false)
     }
 
-    /// Returns a slice of the anchored regexes.
+    /// Lazily compile an endpoint regex for candidate confirmation. If wrapping
+    /// exceeds the regex compiler's limit, callers retain the original search.
+    pub fn endpoint_regex(&self, index: usize) -> Option<&Regex> {
+        let rule = self.rules.get(index)?;
+        self.endpoint_regexes
+            .get(index)?
+            .get_or_init(|| match rule.syntax().as_endpoint_regex() {
+                Ok(regex) => Some(regex),
+                Err(error) => {
+                    debug!(rule_id = rule.id(), %error, "Using original candidate confirmation");
+                    None
+                }
+            })
+            .as_ref()
+    }
+
+    /// Original regexes for full-content searches. The historical method name is
+    /// retained for compatibility; these regexes are not endpoint-constrained.
     #[inline]
     pub fn anchored_regexes(&self) -> &[Regex] {
         &self.anchored_regexes
     }
 
     /// Return true when Betterleaks' database-level source prefilter excludes this path.
+    ///
+    /// # Errors
+    ///
+    /// Returns native scratch allocation, scanner borrowing, or matching errors.
     #[inline]
     pub fn is_path_prefiltered(&self, path: &str) -> Result<bool> {
         self.betterleaks_prefilter.as_ref().map_or(Ok(false), |prefilter| prefilter.is_match(path))
@@ -553,6 +605,10 @@ impl RulesDatabase {
 
     /// Evaluate an imported Betterleaks finding filter with the database's precompiled
     /// Vectorscan helper patterns.
+    ///
+    /// # Errors
+    ///
+    /// Returns expression evaluation errors or native allocation/matching errors.
     pub fn evaluate_betterleaks_filter(
         &self,
         expression: &BetterleaksExpr,

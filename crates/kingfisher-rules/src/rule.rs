@@ -19,7 +19,6 @@ use regex::Regex;
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
 use tracing::debug;
-// use sha1::{Digest, Sha1};
 use xxhash_rust::xxh3::xxh3_64;
 
 use crate::liquid_filters;
@@ -48,13 +47,9 @@ pub enum TlsMode {
     #[default]
     Strict,
 
-    /// Accept self-signed or unknown CA certificates, but still enforce:
-    /// - Hostname must match certificate's CN/SAN
-    /// - Certificate must not be expired
-    /// - TLS 1.2 or higher required
-    ///
-    /// Useful for database connections (PostgreSQL, MySQL, MongoDB) that often use
-    /// self-signed certificates or private CAs (e.g., Amazon RDS).
+    /// Permit certificate-verification bypass when both the global policy and
+    /// the rule opt into lax mode. Validators configure their own transports;
+    /// hostname and expiry checks are not guaranteed in this mode.
     Lax,
 
     /// Disable all TLS certificate validation. Use with extreme caution.
@@ -975,6 +970,12 @@ impl RuleSyntax {
     /// ```
     pub fn as_anchored_regex(&self) -> Result<regex::bytes::Regex> {
         Self::build_regex(&format!("{}$", self.uncommented_pattern()))
+    }
+
+    /// Compile a regex constrained to the actual end of a candidate window.
+    /// Grouping preserves alternatives; `\z` remains exact in multiline mode.
+    pub fn as_endpoint_regex(&self) -> Result<regex::bytes::Regex> {
+        Self::build_regex(&format!(r"(?:{})\z", self.uncommented_pattern()))
     }
 
     /// Computes a content-based fingerprint of the rule's pattern.

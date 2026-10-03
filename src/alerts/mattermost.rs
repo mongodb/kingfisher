@@ -1,15 +1,12 @@
 //! Mattermost incoming-webhook payload (Slack-compatible `attachments`).
 //!
-//! Mattermost has no canonical hostname (it is always self-hosted), so the
+//! Mattermost deployments have no single webhook hostname, so the
 //! `infer_from_url` heuristic cannot distinguish a Mattermost URL from any
 //! other generic webhook. Users must pass `--alert-format mattermost`
 //! explicitly.
 //!
-//! The legacy Slack `attachments` schema renders identically across Mattermost
-//! server versions ≥ 5.x and gives us the same red/amber/green sidebar that
-//! Teams/Discord use. We deliberately do **not** reuse `slack::build_payload`
-//! because Slack's Block Kit support in Mattermost is partial — older clients
-//! only render the top-level `text` and silently drop blocks.
+//! Uses Slack-compatible `attachments` for the red/amber/green sidebar and
+//! report link, independently of the Slack sink's Block Kit payload.
 
 use serde_json::{Value, json};
 
@@ -168,8 +165,8 @@ fn escape_for_code_span(s: &str) -> String {
     s.replace('`', "\u{02CB}").replace(['\n', '\r'], " ")
 }
 
-/// Escape values rendered inside a `**bold**` span — strip embedded `**`
-/// and `_` so a user-controlled value cannot end the bold or start a link.
+/// Replace bold delimiters, escape underscores/pipes, and normalize newlines
+/// in values rendered inside a `**bold**` span.
 fn escape_bold(s: &str) -> String {
     s.replace("**", "\u{02CB}\u{02CB}")
         .replace('_', "\\_")

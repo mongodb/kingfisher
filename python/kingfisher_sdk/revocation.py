@@ -15,7 +15,9 @@ class RevocationResult:
 
 
 class Revoker:
-    """Revoke by exact rule ID; no automatic retries or bulk selector expansion.
+    """Revoke by exact rule ID without bulk selector expansion.
+
+    HTTP revocation is not retried; AWS uses its provider-specific retry policy.
 
     Uses the shared CLI HTTP/multi-step engine and AWS/GCP helpers. Only load
     trusted rules and endpoints: revocation sends credentials to rule URLs,

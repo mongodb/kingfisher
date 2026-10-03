@@ -41,7 +41,7 @@ pub enum ReportOutputFormat {
     /// A human-friendly text-based format
     Pretty,
 
-    /// Pretty-printed JSON
+    /// Compact JSON report envelope
     Json,
 
     /// JSON Lines (one JSON object per line)

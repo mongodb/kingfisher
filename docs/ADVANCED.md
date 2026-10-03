@@ -746,6 +746,18 @@ scan:
 
 ## Notable Scan Options
 
+Git clone/update commands ignore global and system Git configuration and enable
+`core.longpaths=true` on Windows. Set `KF_GIT_BINARY` to select a Git executable;
+the same executable is used for local staged scans. Provider credentials must be
+supplied through Kingfisher's authentication options rather than inherited Git
+credential helpers.
+
+For HTTPS repositories using certificates in the Windows Certificate Store, set
+`KF_GIT_SSL_BACKEND=schannel` when using Git for Windows. Other installations can
+select `openssl` if their Git supports it. With OpenSSL, `GIT_SSL_CAINFO` and
+`GIT_SSL_CAPATH` can specify a CA file or directory. Selecting a TLS backend does
+not disable certificate verification.
+
 - `--jobs <N>`: Set the number of parallel scanner workers; see [Control Scan Concurrency](#control-scan-concurrency).
 - `--disk-offload`: Store accumulated repository findings in a private temporary file; see [Disk Offload](#disk-offload).
 - `--no-dedup`: Report every occurrence of a finding instead of grouping repeated credential content

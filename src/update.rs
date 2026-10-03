@@ -1,19 +1,8 @@
-// This module checks GitHub for a newer Kingfisher release and (optionally)
-// s.  Our release assets use short, user-friendly names such as
-// `kingfisher-linux-arm64.tgz`, `kingfisher-darwin-x64.tgz`, etc.  Those names
-// do **not** match the full Rust target triple that the `self_update` crate
-// expects (e.g. `aarch64-unknown-linux-musl`).  We therefore map the compile-
-// time target to the corresponding asset suffix via `builder.target()`.
-//
-// Version handling logic covers three scenarios:
-//   1. Running version == latest release →                   "up to date".
-//   2. Running version  > latest release → print a notice that the binary is **newer** than
-//      anything on GitHub (e.g. a dev build).
-//   3. Latest release  > running version → offer to self-update.
-//
-// All informational messages are printed with the
-// `style_finding_active_heading` style so that they stand out alongside normal
-// scan output.
+//! Release checks and optional binary self-updates.
+//!
+//! Release asset names use platform suffixes (for example, `darwin-x64`)
+//! rather than Rust target triples. The updater maps its target and archive
+//! format to those asset names before querying GitHub.
 
 use std::ffi::OsString;
 use std::io::{ErrorKind, Write};
@@ -80,8 +69,7 @@ fn styled_heading(styles: &Styles, text: &str) -> String {
 ///
 /// * `base_url` lets tests point at a mock server.
 /// * Self-update is performed only when `global_args.self_update` is set and `--no-update-check`
-///   was not passed. If the running binary is installed via a package manager the underlying
-///   `self_update` call surfaces a permission error which is reported to the user.
+///   was not passed. Download or replacement failures are reported to the user.
 pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> UpdateStatus {
     let running_version = cargo_crate_version!().to_string();
 
@@ -212,8 +200,7 @@ pub fn check_for_update(global_args: &GlobalArgs, base_url: Option<&str>) -> Upd
         };
     }
 
-    // Try semantic version comparison.  If parsing fails, fall back to the
-    // self-update code-path (which will treat the strings lexicographically).
+    // If semantic version parsing fails, let the updater decide whether to apply an update.
     if let (Ok(curr), Ok(latest)) =
         (Version::parse(&running_version), Version::parse(release.version()))
     {
@@ -327,15 +314,15 @@ pub async fn check_for_update_async(
 
 /// Rewrite the current process argv for re-execution into a freshly self-updated binary.
 ///
-/// - argv[0] is preserved unchanged.
+/// - `argv[0]` is preserved unchanged.
 /// - `--self-update` and `--update` (and their `--flag=value` forms) are stripped so the
 ///   re-exec'd binary does not loop back into another self-update.
-/// - `--no-update-check` is appended (idempotently) since we just performed the check.
+/// - `--no-update-check` is inserted before any `--` separator, unless already present.
 /// - Tokens after the first `--` separator are passed through untouched (they are positional
 ///   from clap's perspective and may legitimately contain anything).
-/// - If the input has no argv[0] (theoretical — real-world processes always have one), the
+/// - If the input has no `argv[0]` (theoretical — real-world processes always have one), the
 ///   output is empty too. This avoids producing a broken argv where `--no-update-check` would
-///   be promoted to the new process's argv[0].
+///   be promoted to the new process's `argv[0]`.
 pub fn rewrite_argv_for_reexec(argv: impl IntoIterator<Item = OsString>) -> Vec<OsString> {
     // Byte-level prefix check that works on both UTF-8 and non-UTF-8 OsStrings.
     fn os_starts_with(tok: &OsString, prefix: &[u8]) -> bool {

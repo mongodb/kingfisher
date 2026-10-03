@@ -184,7 +184,8 @@ pub fn get_writer_for_file_or_stdout<P: AsRef<Path>>(
 /// `report.json` in the workspace). Plain `File::create` follows it and
 /// truncates whatever the link targets, letting a malicious repo clobber files
 /// outside the workspace as the scanner user. `O_NOFOLLOW` makes the open fail
-/// atomically when the final component is a symlink, closing the TOCTOU window.
+/// atomically when the final component is a symlink on Unix. Other platforms
+/// use a pre-open check, which cannot eliminate the replacement race.
 pub fn create_no_follow(path: &Path) -> std::io::Result<File> {
     let mut opts = OpenOptions::new();
     opts.write(true).create(true).truncate(true);

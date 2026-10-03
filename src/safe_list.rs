@@ -26,7 +26,7 @@ struct SafeRule {
 /// Compile a bytes regex and panic on failure (at init time).
 fn compile(pattern: &'static str) -> Regex {
     Regex::new(pattern).unwrap_or_else(|e| {
-        // Compile happens once at startup, so panic is acceptable here.
+        // These embedded patterns are compiled on first use; invalid patterns are programmer errors.
         // We still emit a debug line to aid troubleshooting in non-panic logs.
         debug!("Failed to compile safe-list regex: {pattern}\nError: {e}");
         panic!("invalid safe-list regex: {pattern}: {e}");

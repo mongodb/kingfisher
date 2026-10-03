@@ -61,6 +61,43 @@ class LibraryExamplesTests(unittest.TestCase):
     def test_builtin_rules_load(self):
         self.assertRegex(self.run_example("load_rules"), r"^Compiled [1-9][0-9]* rules\n$")
 
+    def test_rule_inspection_catalog_and_details(self):
+        rows = [json.loads(line) for line in self.run_example(
+            "inspect_rules", "--with-validation", "--with-revocation").splitlines()]
+        self.assertTrue(rows)
+        self.assertTrue(all(row["validation"] and row["revocation"] for row in rows))
+        prefixed = [json.loads(line) for line in self.run_example(
+            "inspect_rules", "--id-prefix", "betterleaks.aws").splitlines()]
+        self.assertTrue(prefixed)
+        self.assertTrue(all(row["id"].startswith("betterleaks.aws") for row in prefixed))
+        detail = json.loads(self.run_example(
+            "inspect_rules", "betterleaks.aws-access-token"))
+        self.assertTrue(detail["pattern"])
+        self.assertTrue(detail["detection_regex"])
+        self.assertIsNotNone(detail["validation"])
+        self.assertIsNotNone(detail["revocation"])
+        selected = json.loads(self.run_example(
+            "inspect_rules", "betterleaks.aws-access-token", "--field", "pattern",
+            "--field", "validation", "--field", "revocation"))
+        self.assertEqual(set(selected), {"id", "pattern", "validation", "revocation"})
+        self.run_example("inspect_rules", "unknown.rule", succeeds=False)
+        self.run_example("inspect_rules", "--field", "pattern", succeeds=False)
+
+    def test_custom_rule_inspection_without_actions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "custom rules.yml"
+            path.write_text("""rules:
+  - id: acme.inspect
+    name: Inspection fixture
+    pattern: '(?#example)(demo_[a-z0-9]{16})'
+""", encoding="utf-8")
+            detail = json.loads(self.run_example(
+                "inspect_rules", "acme.inspect", "--rules-path", path, "--no-builtins"))
+            self.assertIn("(?#example)", detail["pattern"])
+            self.assertNotIn("(?#example)", detail["detection_regex"])
+            self.assertIsNone(detail["validation"])
+            self.assertIsNone(detail["revocation"])
+
     def test_custom_rules_load_in_both_formats(self):
         fixtures = {
             "toml": """[[rules]]

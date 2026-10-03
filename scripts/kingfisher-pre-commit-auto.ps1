@@ -6,9 +6,9 @@
     Downloads and caches the Kingfisher binary, then scans staged changes.
     No manual installation required.
 
-.PARAMETER Version
-    Specific version to download (e.g., "1.76.0" or "v1.76.0").
-    Defaults to "latest".
+.NOTES
+    Set KINGFISHER_VERSION in the environment to select a release (e.g.,
+    "1.76.0" or "v1.76.0"). Defaults to "latest".
 
 .PARAMETER Arch
     Optional architecture override. Defaults to auto-detection.

@@ -4,8 +4,8 @@
 //! way Discord/Teams/Mattermost do, so severity is encoded textually in the
 //! header title. The card uses two sections: a "Summary" with `decoratedText`
 //! widgets for the active/inactive/unknown counts, and a "Findings" section
-//! with a `textParagraph` widget. `textParagraph.text` accepts a small
-//! markdown subset (`*bold*`, `_italic_`, backtick code spans).
+//! with a `textParagraph` widget. Text is HTML-escaped before inserting the
+//! supported `<b>`, `<code>`, and `<br>` formatting tags.
 
 use serde_json::{Value, json};
 

@@ -7695,7 +7695,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kingfisher-bin"
-version = "2.9.1"
+version = "2.10.0"
 dependencies = [
  "anyhow",
  "asar",
@@ -7834,6 +7834,7 @@ dependencies = [
  "wait-timeout",
  "walkdir",
  "webbrowser",
+ "windows-sys 0.61.2",
  "wiremock",
  "xxhash-rust",
  "zip",
@@ -7865,7 +7866,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-python"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "kingfisher-core",
@@ -7895,7 +7896,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-rules"
-version = "1.0.1"
+version = "1.1.0"
 dependencies = [
  "anyhow",
  "base32",
@@ -7936,7 +7937,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-scanner"
-version = "1.1.0"
+version = "1.2.0"
 dependencies = [
  "anyhow",
  "aws-config",

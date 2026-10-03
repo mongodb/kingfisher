@@ -287,7 +287,7 @@ pub(crate) fn read_secret(secret_arg: Option<&str>) -> Result<String> {
     }
 }
 
-/// Render the validation URL using Liquid templates.
+/// Validate one explicitly selected rule after resolving its input variables.
 pub async fn run_direct_validation(
     args: &ValidateArgs,
     global_args: &GlobalArgs,

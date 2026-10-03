@@ -902,7 +902,7 @@ mod tests {
 
     #[tokio::test]
     async fn check_url_resolvable_rejects_ipv6_loopback_literal() {
-        // IPv6 literal URL — brackets are handled by reqwest::Url, host_str() returns "::1"
+        // URL host_str() retains IPv6 brackets; the host checker strips them.
         let url = Url::parse("https://[::1]/test").unwrap();
         let result = check_url_resolvable(&url, false).await;
         assert!(result.is_err());
