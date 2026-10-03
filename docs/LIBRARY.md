@@ -4,7 +4,7 @@ For in-process Python detection, validation and revocation, see the [Python SDK]
 
 [← Back to README](../README.md)
 
-The prepared library releases are **kingfisher-core 1.0.1**,
+The prepared library releases are **kingfisher-core 1.0.2**,
 **kingfisher-rules 1.1.0**, and **kingfisher-scanner 1.2.0**.
 They require Rust **1.99** or newer and are versioned independently of the
 `kingfisher-bin` CLI, currently **2.10.0**. See [publishing](PUBLISHING.md).
@@ -34,7 +34,9 @@ methods document their error conditions in rustdoc.
 For lower-level matching, `kingfisher_scanner::primitives::CandidateMatchIndex::new_in_range`
 indexes a byte range while retaining offsets relative to the complete input. Confirmation
 windows outside that range use the original regex search, allowing segment-sized indexes
-without limiting match length.
+without limiting match length. `CandidateMatchCache::get_or_insert_with` defers index construction
+until repeated endpoints justify the work; consider each distinct endpoint once, before widening
+its confirmation window.
 
 ## Quick Start
 
@@ -666,11 +668,11 @@ Rules 1.1.0 adds endpoint-confirmation helpers and reduces filter input copying.
 Scanner 1.2.0 adds optional cooperative scan deadlines/cancellation and improves
 candidate confirmation and span tracking while retaining existing scan methods
 and public helper signatures. Python SDK 1.1.0 adds per-call scan controls and
-`Rules.detail()` inspection. Core remains 1.0.1; the CLI is versioned separately.
+`Rules.detail()` inspection. Core remains 1.0.2; the CLI is versioned separately.
 
 Scanner 1.1.0 introduced `Revoker` and made validation all-or-nothing. Existing
 provider feature names remain aliases, so existing manifests keep working while
-compiling all validators. Python SDK 1.0.1 delegated revocation to the shared Rust
+compiling all validators. Python SDK 1.0.2 delegated revocation to the shared Rust
 runner.
 
 

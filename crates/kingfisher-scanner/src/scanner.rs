@@ -240,7 +240,8 @@ impl Scanner {
         let mut previous_full_spans: FxHashMap<usize, primitives::MatchSpans> =
             FxHashMap::default();
 
-        let mut candidate_indexes = FxHashMap::default();
+        let mut candidate_indexes: FxHashMap<usize, primitives::CandidateMatchCache> =
+            FxHashMap::default();
         let fragment_raw = std::cell::OnceCell::new();
         for (rule_id, _start, end) in raw_matches.into_iter().rev() {
             control.check()?;
@@ -275,22 +276,27 @@ impl Scanner {
                 (end.saturating_sub(RAW_MATCH_LOOKBACK), end)
             };
             let bounded_confirmation = !self.rules_db.uses_vectorscan_prefilter(rule_id);
+            let candidate_index = if bounded_confirmation {
+                candidate_indexes.entry(rule_id).or_default().get_or_try_insert_with(
+                    bytes.len(),
+                    RAW_MATCH_LOOKBACK,
+                    || {
+                        primitives::CandidateMatchIndex::with_control(
+                            confirmation_regex,
+                            bytes,
+                            control,
+                        )
+                    },
+                )?
+            } else {
+                None
+            };
             loop {
                 control.check()?;
                 let haystack = &bytes[scan_start..scan_end];
                 let mut confirmed = false;
 
-                let captures = if bounded_confirmation {
-                    let index = match candidate_indexes.entry(rule_id) {
-                        std::collections::hash_map::Entry::Occupied(entry) => entry.into_mut(),
-                        std::collections::hash_map::Entry::Vacant(entry) => {
-                            entry.insert(primitives::CandidateMatchIndex::with_control(
-                                confirmation_regex,
-                                bytes,
-                                control,
-                            )?)
-                        }
-                    };
+                let captures = if let Some(index) = candidate_index {
                     index.captures(
                         confirmation_regex,
                         self.rules_db.endpoint_regex(rule_id),

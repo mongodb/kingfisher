@@ -94,7 +94,7 @@ validation-all = ["validation"]
 
 [dependencies]
 # Internal dependencies
-kingfisher-core = { version = "1.0.1", path = "../kingfisher-core" }
+kingfisher-core = { version = "1.0.2", path = "../kingfisher-core" }
 kingfisher-rules = { version = "1.1.0", path = "../kingfisher-rules" }
 
 # Error handling

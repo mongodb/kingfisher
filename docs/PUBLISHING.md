@@ -14,7 +14,7 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
-| `kingfisher-core` | `1.0.1` | `kingfisher_core` library |
+| `kingfisher-core` | `1.0.2` | `kingfisher_core` library |
 | `kingfisher-rules` | `1.1.0` | `kingfisher_rules` library |
 | `kingfisher-scanner` | `1.2.0` | `kingfisher_scanner` library |
 | `kingfisher-bin` | `2.10.0` | `kingfisher` executable and library |

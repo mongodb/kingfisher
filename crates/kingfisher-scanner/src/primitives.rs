@@ -163,6 +163,46 @@ pub fn insert_span(spans: &mut Vec<OffsetSpan>, span: OffsetSpan) -> bool {
     true
 }
 
+/// Lazily index repeated candidate endpoints for one rule and input range.
+/// Sparse candidates retain bounded regex confirmation. An index is built after at least
+/// sixteen endpoints, once their combined initial window lengths reach the indexed byte count.
+#[derive(Debug, Default)]
+pub struct CandidateMatchCache {
+    candidates: usize,
+    index: Option<CandidateMatchIndex>,
+}
+
+impl CandidateMatchCache {
+    /// Consider one new endpoint, invoking `build` only when indexing is justified.
+    pub fn get_or_insert_with(
+        &mut self,
+        indexed_bytes: usize,
+        window_bytes: usize,
+        build: impl FnOnce() -> CandidateMatchIndex,
+    ) -> Option<&CandidateMatchIndex> {
+        self.get_or_try_insert_with(indexed_bytes, window_bytes, || {
+            Ok::<_, std::convert::Infallible>(build())
+        })
+        .expect("infallible index builder")
+    }
+
+    pub(crate) fn get_or_try_insert_with<E>(
+        &mut self,
+        indexed_bytes: usize,
+        window_bytes: usize,
+        build: impl FnOnce() -> Result<CandidateMatchIndex, E>,
+    ) -> Result<Option<&CandidateMatchIndex>, E> {
+        self.candidates = self.candidates.saturating_add(1);
+        if self.index.is_none()
+            && self.candidates >= 16
+            && self.candidates.saturating_mul(window_bytes) >= indexed_bytes
+        {
+            self.index = Some(build()?);
+        }
+        Ok(self.index.as_ref())
+    }
+}
+
 /// Original leftmost, non-overlapping regex matches, indexed once per rule and input range.
 /// Candidate windows normally share these boundaries. A window that changes the
 /// first match (for example by cutting through one) uses the original iterator.
@@ -406,6 +446,73 @@ pub fn find_secret_capture_with_group<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sparse_candidates_do_not_build_an_index() {
+        for input_len in [32, 8 * 1024 * 1024, 256 * 1024 * 1024] {
+            let mut cache = CandidateMatchCache::default();
+            for _ in 0..3 {
+                assert!(
+                    cache
+                        .get_or_insert_with(input_len, 4096, || {
+                            panic!("sparse confirmation must not scan the indexed input")
+                        })
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_candidates_build_once_and_preserve_confirmation() {
+        let regex = regex::bytes::Regex::new(r"(token_[a-z]{2})").unwrap();
+        let endpoint = regex::bytes::Regex::new(r"(token_[a-z]{2})\z").unwrap();
+        let input = b"token_ab token_cd\n".repeat(2500);
+        let builds = std::cell::Cell::new(0);
+        let mut cache = CandidateMatchCache::default();
+        let mut unindexed = 0;
+        for found in regex.find_iter(&input) {
+            let end = found.end();
+            let start = end.saturating_sub(4096);
+            let haystack = &input[start..end];
+            let index = cache.get_or_insert_with(input.len(), 4096, || {
+                builds.set(builds.get() + 1);
+                CandidateMatchIndex::new(&regex, &input)
+            });
+            let captures = if let Some(index) = index {
+                index.captures(&regex, Some(&endpoint), haystack, start)
+            } else {
+                unindexed += 1;
+                ConfirmationCaptures::Search(regex.captures_iter(haystack))
+            };
+            let confirmed: Vec<_> = captures
+                .filter_map(|captures| {
+                    let full = captures.get(0).unwrap();
+                    (full.end() == haystack.len() && (start == 0 || full.start() > 0))
+                        .then_some((start + full.start(), start + full.end()))
+                })
+                .collect();
+            assert_eq!(confirmed, vec![(found.start(), found.end())]);
+        }
+        assert!(unindexed >= 3);
+        assert_eq!(builds.get(), 1);
+    }
+
+    #[test]
+    fn candidate_index_build_errors_are_propagated_without_caching() {
+        let mut cache = CandidateMatchCache::default();
+        let mut attempted = false;
+        for _ in 0..100 {
+            let result = cache.get_or_try_insert_with(1, 4096, || Err("scan cancelled"));
+            if let Err(error) = result {
+                assert_eq!(error, "scan cancelled");
+                attempted = true;
+                break;
+            }
+        }
+        assert!(attempted);
+        assert!(cache.index.is_none());
+    }
 
     #[test]
     fn indexed_confirmation_agrees_with_original_window_searches() {

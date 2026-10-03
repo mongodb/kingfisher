@@ -105,7 +105,7 @@ gpui-kit = { version = "=0.6.6", optional = true }
 command-group = { version = "5.0.1", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Library crates
-kingfisher-core = { version = "1.0.1", path = "crates/kingfisher-core" }
+kingfisher-core = { version = "1.0.2", path = "crates/kingfisher-core" }
 kingfisher-rules = { version = "1.1.0", path = "crates/kingfisher-rules" }
 kingfisher-scanner = { version = "1.2.0", path = "crates/kingfisher-scanner", features = ["validation"] }
 

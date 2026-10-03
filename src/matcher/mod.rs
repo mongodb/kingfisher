@@ -344,7 +344,7 @@ impl<'a> Matcher<'a> {
         previous_full_matches: &mut FxHashMap<usize, MatchSpans>,
         candidate_indexes: &mut FxHashMap<
             usize,
-            kingfisher_scanner::primitives::CandidateMatchIndex,
+            kingfisher_scanner::primitives::CandidateMatchCache,
         >,
         index_range: std::ops::Range<usize>,
     ) where
@@ -382,6 +382,21 @@ impl<'a> Matcher<'a> {
                 continue;
             }
             let before_len = matches.len();
+            let candidate_index = if rules_db.uses_vectorscan_prefilter(rule_id_usize) {
+                None
+            } else {
+                candidate_indexes.entry(rule_id_usize).or_default().get_or_insert_with(
+                    index_range.len(),
+                    RAW_MATCH_LOOKBACK,
+                    || {
+                        kingfisher_scanner::primitives::CandidateMatchIndex::new_in_range(
+                            re,
+                            blob.bytes(),
+                            index_range.clone(),
+                        )
+                    },
+                )
+            };
             loop {
                 let confirmed = filter_match(
                     rules_db,
@@ -404,17 +419,7 @@ impl<'a> Matcher<'a> {
                     self.respect_ignore_if_contains,
                     &self.inline_ignore_config,
                     !rules_db.uses_vectorscan_prefilter(rule_id_usize),
-                    if rules_db.uses_vectorscan_prefilter(rule_id_usize) {
-                        None
-                    } else {
-                        Some(candidate_indexes.entry(rule_id_usize).or_insert_with(|| {
-                            kingfisher_scanner::primitives::CandidateMatchIndex::new_in_range(
-                                re,
-                                blob.bytes(),
-                                index_range.clone(),
-                            )
-                        }))
-                    },
+                    candidate_index,
                 );
                 if confirmed || scan_start == 0 {
                     break;

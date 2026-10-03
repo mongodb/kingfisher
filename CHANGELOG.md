@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 - Consolidated native scanner pooling and split application internals into private modules while preserving public APIs.
 - Added Clippy and API documentation checks to CI; fixed Windows test runtime setup and flaky fixtures.
 - Corrected source comments, API documentation, and CLI help; removed obsolete annotations.
-- Prepared `kingfisher-rules` 1.1.0, `kingfisher-scanner` 1.2.0, and Python SDK 1.1.0 for the new matching and embedding APIs; core remains 1.0.1.
+- Prepared `kingfisher-core` 1.0.2, `kingfisher-rules` 1.1.0, `kingfisher-scanner` 1.2.0, and Python SDK 1.1.0 for the toolchain, matching, and embedding updates.
 - Documented version-specific release verification, linked it from the README, and added a maintainer runbook for tag-based publishing. [#531](https://github.com/mongodb/kingfisher/issues/531)
 - Fixed repeated-candidate scan slowdowns in the SDK and CLI while preserving regex match semantics. [#532](https://github.com/mongodb/kingfisher/issues/532)
 - Reduced span-tracking costs and filter input copying.
