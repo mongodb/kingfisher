@@ -163,17 +163,34 @@ pub fn insert_span(spans: &mut Vec<OffsetSpan>, span: OffsetSpan) -> bool {
     true
 }
 
-/// Original leftmost, non-overlapping regex matches, indexed once per rule and input.
+/// Original leftmost, non-overlapping regex matches, indexed once per rule and input range.
 /// Candidate windows normally share these boundaries. A window that changes the
 /// first match (for example by cutting through one) uses the original iterator.
 #[derive(Debug)]
-pub struct CandidateMatchIndex(Vec<OffsetSpan>);
+pub struct CandidateMatchIndex {
+    spans: Vec<OffsetSpan>,
+    range: std::ops::Range<usize>,
+}
 
 impl CandidateMatchIndex {
     pub fn new(regex: &regex::bytes::Regex, input: &[u8]) -> Self {
-        Self(
-            regex.find_iter(input).map(|m| OffsetSpan { start: m.start(), end: m.end() }).collect(),
-        )
+        Self::new_in_range(regex, input, 0..input.len())
+    }
+
+    /// Index only `range`, keeping offsets relative to the complete input.
+    /// Confirmation windows outside this range retain the original regex search.
+    ///
+    /// Panics if `range` is not a valid slice of `input`.
+    pub fn new_in_range(
+        regex: &regex::bytes::Regex,
+        input: &[u8],
+        range: std::ops::Range<usize>,
+    ) -> Self {
+        let spans = regex
+            .find_iter(&input[range.clone()])
+            .map(|m| OffsetSpan { start: range.start + m.start(), end: range.start + m.end() })
+            .collect();
+        Self { spans, range }
     }
 
     pub(crate) fn with_control(
@@ -190,7 +207,7 @@ impl CandidateMatchIndex {
             spans.push(OffsetSpan { start: found.start(), end: found.end() });
         }
         control.check()?;
-        Ok(Self(spans))
+        Ok(Self { spans, range: 0..input.len() })
     }
 
     pub fn captures<'r, 'h>(
@@ -201,15 +218,18 @@ impl CandidateMatchIndex {
         start: usize,
     ) -> ConfirmationCaptures<'r, 'h> {
         let end = start + haystack.len();
-        if let Ok(index) = self.0.binary_search_by_key(&end, |span| span.end) {
-            let span = self.0[index];
+        if start < self.range.start || end > self.range.end {
+            return ConfirmationCaptures::Search(regex.captures_iter(haystack));
+        }
+        if let Ok(index) = self.spans.binary_search_by_key(&end, |span| span.end) {
+            let span = self.spans[index];
             if span.start >= start {
                 // Verify the window's first match agrees with the index before skipping
                 // earlier captures. EOF-sensitive alternatives can change selection
                 // even when the window starts at zero.
-                let first = self.0.partition_point(|span| span.start < start);
+                let first = self.spans.partition_point(|span| span.start < start);
                 let aligned = regex.find(haystack).is_some_and(|m| {
-                    self.0.get(first).is_some_and(|span| {
+                    self.spans.get(first).is_some_and(|span| {
                         span.start == start + m.start() && span.end == start + m.end()
                     })
                 });
@@ -402,7 +422,15 @@ mod tests {
         ] {
             let regex = regex::bytes::Regex::new(pattern).unwrap();
             let bytes = input.as_bytes();
-            let index = CandidateMatchIndex::new(&regex, bytes);
+            let indexes = [
+                CandidateMatchIndex::new(&regex, bytes),
+                CandidateMatchIndex::new_in_range(
+                    &regex,
+                    bytes,
+                    bytes.len() / 3..bytes.len() * 2 / 3,
+                ),
+                CandidateMatchIndex::new_in_range(&regex, bytes, bytes.len() / 2..bytes.len()),
+            ];
             let endpoint = regex::bytes::Regex::new(&format!(r"(?:{pattern})\z")).unwrap();
             for start in 0..bytes.len() {
                 for end in start + 1..=bytes.len() {
@@ -421,14 +449,31 @@ mod tests {
                     };
                     let original: Vec<_> =
                         regex.captures_iter(haystack).filter_map(accepted).collect();
-                    let indexed: Vec<_> = index
-                        .captures(&regex, Some(&endpoint), haystack, start)
-                        .filter_map(accepted)
-                        .collect();
-                    assert_eq!(indexed, original, "pattern={pattern} window={start}..{end}");
+                    for index in &indexes {
+                        let indexed: Vec<_> = index
+                            .captures(&regex, Some(&endpoint), haystack, start)
+                            .filter_map(accepted)
+                            .collect();
+                        assert_eq!(
+                            indexed, original,
+                            "pattern={pattern} range={:?} window={start}..{end}",
+                            index.range
+                        );
+                    }
                 }
             }
         }
+    }
+
+    #[test]
+    fn ranged_candidate_index_bounds_dense_match_storage() {
+        let regex = regex::bytes::Regex::new("a").unwrap();
+        let bytes = vec![b'a'; 1024 * 1024];
+        let range = 512 * 1024..512 * 1024 + 64;
+        let index = CandidateMatchIndex::new_in_range(&regex, &bytes, range.clone());
+        assert_eq!(index.spans.len(), range.len());
+        assert_eq!(index.spans.first().unwrap().start, range.start);
+        assert_eq!(index.spans.last().unwrap().end, range.end);
     }
 
     #[test]

@@ -4,20 +4,14 @@ This is an internal maintainer runbook for publishing GitHub release assets and 
 Docker, PyPI, and crates.io packages. End users should follow
 [release verification](../docs/INSTALLATION.md#verifying-release-artifacts).
 
-## Workflow migration required
+## Release workflow
 
-This runbook describes the agreed tag-based release process. The current workflow still
-publishes on pushes to `main` and accepts a separate tag input; migrate it before adopting
-this process:
+The workflow runs on `release: published` and `workflow_dispatch`. Every run must use a tag
+ref matching the root Cargo version, including the `v` prefix; this is checked before tests
+or builds start. Release assets are attested from that tag ref so consumers can verify the
+version-specific signing identity. Pushes to `main` do not publish releases.
 
-- Remove the `push: main` release trigger; keep `release: published` and `workflow_dispatch`.
-- Require a tag ref for every release run, derive the version from `github.ref_name`, and
-  reject a mismatch with the root Cargo version before starting builds.
-- Remove the separate `tag` dispatch input. Manual rebuilds must select the tag with `--ref`.
-
-Merge the workflow migration before creating the next release tag, so that tag contains the
-updated workflow. Until then, a push to `main` can publish assets signed from `main`; these
-cannot pass the end-user version-specific check.
+Manual rebuilds select the tag with `--ref`; there is no separate tag input.
 
 ## Before publishing
 

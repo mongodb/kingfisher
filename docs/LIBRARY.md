@@ -31,6 +31,11 @@ rule commands are private binary modules, rather than additional public APIs.
 Public fallible scanner, rule-compilation, validator-builder, and revocation
 methods document their error conditions in rustdoc.
 
+For lower-level matching, `kingfisher_scanner::primitives::CandidateMatchIndex::new_in_range`
+indexes a byte range while retaining offsets relative to the complete input. Confirmation
+windows outside that range use the original regex search, allowing segment-sized indexes
+without limiting match length.
+
 ## Quick Start
 
 Add the scanner crate to your application's `Cargo.toml`:

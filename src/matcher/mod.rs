@@ -286,10 +286,13 @@ impl<'a> Matcher<'a> {
 
         let mut seen_raw_match_ends: FxHashSet<(usize, usize)> = FxHashSet::default();
         let mut seen_prefilter_rules: FxHashSet<usize> = FxHashSet::default();
-        let mut candidate_indexes = FxHashMap::default();
         let mut previous_full_matches: FxHashMap<usize, MatchSpans> = FxHashMap::default();
 
         for range in ranges.into_iter().rev() {
+            // Index only this segment and the initial confirmation lookback. Drop the indexes
+            // after processing it so dense inputs cannot accumulate whole-blob regex spans.
+            let mut candidate_indexes = FxHashMap::default();
+            let index_range = range.start.saturating_sub(RAW_MATCH_LOOKBACK)..range.end;
             self.user_data.raw_matches_scratch.clear();
             let base = range.start as u64;
             self.scanner_pool.try_with(|scanner| {
@@ -317,6 +320,7 @@ impl<'a> Matcher<'a> {
                 &mut seen_prefilter_rules,
                 &mut previous_full_matches,
                 &mut candidate_indexes,
+                index_range,
             );
         }
 
@@ -342,6 +346,7 @@ impl<'a> Matcher<'a> {
             usize,
             kingfisher_scanner::primitives::CandidateMatchIndex,
         >,
+        index_range: std::ops::Range<usize>,
     ) where
         'a: 'b,
     {
@@ -403,9 +408,10 @@ impl<'a> Matcher<'a> {
                         None
                     } else {
                         Some(candidate_indexes.entry(rule_id_usize).or_insert_with(|| {
-                            kingfisher_scanner::primitives::CandidateMatchIndex::new(
+                            kingfisher_scanner::primitives::CandidateMatchIndex::new_in_range(
                                 re,
                                 blob.bytes(),
+                                index_range.clone(),
                             )
                         }))
                     },
@@ -1983,21 +1989,26 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
         let mut input = token.clone();
         input.push(b' ');
         input.extend_from_slice(&private_key);
-        let blob = Blob::from_bytes(input);
         let origin = OriginSet::from(Origin::from_file(PathBuf::from("long-secrets.txt")));
         let seen = BlobIdMap::new();
         let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
         let mut matcher =
             Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
 
-        let ScanResult::New(matches) =
-            matcher.scan_blob(&blob, &origin, None, false, false, true)?
-        else {
-            panic!("fresh blob should return new matches");
-        };
-        assert_eq!(matches.len(), 2);
-        assert!(matches.iter().any(|matched| matched.matching_input == token));
-        assert!(matches.iter().any(|matched| matched.matching_input == private_key));
+        // In the second case the key needs a wider confirmation window than the segment index.
+        for padding in [0, MAX_CHUNK_SIZE - CHUNK_OVERLAP + 128] {
+            let mut bytes = vec![b' '; padding];
+            bytes.extend_from_slice(&input);
+            let blob = Blob::from_bytes(bytes);
+            let ScanResult::New(matches) =
+                matcher.scan_blob(&blob, &origin, None, false, false, true)?
+            else {
+                panic!("fresh blob should return new matches");
+            };
+            assert_eq!(matches.len(), 2, "padding={padding}");
+            assert!(matches.iter().any(|matched| matched.matching_input == token));
+            assert!(matches.iter().any(|matched| matched.matching_input == private_key));
+        }
         Ok(())
     }
 
