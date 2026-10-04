@@ -6,7 +6,7 @@
 //! - A file path ([`Blob::from_file`])
 //! - Borrowed data ([`Blob::from_borrowed`])
 //!
-//! Large files are automatically memory-mapped for efficiency.
+//! Non-empty files are memory-mapped; empty files use owned bytes.
 
 use std::{
     borrow::Cow,
@@ -34,8 +34,8 @@ use crate::encoding;
 use crate::error::Result;
 use crate::git_commit_metadata::CommitMetadata;
 
-/// Threshold above which files are memory-mapped instead of read into memory.
-const LARGE_FILE_THRESHOLD: u64 = 0; // Currently: always mmap
+/// Files larger than this threshold are memory-mapped; zero maps every non-empty file.
+const LARGE_FILE_THRESHOLD: u64 = 0;
 
 /// Global counter for temporary blob IDs.
 static NEXT_ID: AtomicU64 = AtomicU64::new(1);
@@ -126,7 +126,7 @@ pub struct Blob<'a> {
 impl Blob<'_> {
     /// Create a new `Blob` by reading from a file.
     ///
-    /// Large files are automatically memory-mapped for efficiency.
+    /// Non-empty files are memory-mapped; empty files use owned bytes.
     #[inline]
     pub fn from_file<P: AsRef<Path>>(path: P) -> Result<Self> {
         let mut file = File::open(&path)?;
@@ -134,7 +134,7 @@ impl Blob<'_> {
 
         if file_size > LARGE_FILE_THRESHOLD {
             let temp_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-            // Large files: one mmap, zero extra copies.
+            // One mapping avoids copying non-empty file contents into an owned buffer.
             let mmap = unsafe { memmap2::Mmap::map(&file)? };
             let id = BlobId::new(&mmap);
             if let Some(decoded) = encoding::decode(&mmap) {
@@ -145,7 +145,7 @@ impl Blob<'_> {
                 Ok(Blob { id: OnceLock::new(), data: BlobData::Mapped(mmap), temp_id })
             }
         } else {
-            // Small files: read into memory.
+            // Empty files cannot be memory-mapped.
             let mut bytes = Vec::with_capacity(file_size as usize);
             file.read_to_end(&mut bytes)?;
             Ok(Self::from_bytes(bytes))
@@ -239,7 +239,10 @@ impl Drop for Blob<'_> {
     }
 }
 
-/// A content-based identifier for a blob, computed as a Git-compatible SHA-1 hash.
+/// A SHA-1-based content identifier with Git's blob header.
+///
+/// [`BlobId::new`] samples inputs larger than 128 KiB; only
+/// [`BlobId::compute_from_bytes`] always produces the full Git blob hash.
 #[derive(PartialEq, Eq, PartialOrd, Ord, Hash, Copy, Clone, Serialize)]
 #[serde(into = "String")]
 pub struct BlobId([u8; 20]);
@@ -254,7 +257,9 @@ impl Default for BlobId {
 impl BlobId {
     /// Computes a `BlobId` from raw bytes.
     ///
-    /// For large inputs, only the first and last 64KB are hashed for performance.
+    /// Includes Git's blob header and input length. Inputs larger than 128 KiB
+    /// contribute only their first and last 64 KiB, so equal-length inputs with
+    /// identical ends share an ID even if their middle bytes differ.
     #[inline]
     pub fn new(input: &[u8]) -> Self {
         const CHUNK: usize = 64 * 1024; // 64KB from start and end

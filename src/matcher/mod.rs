@@ -33,7 +33,7 @@ use crate::{
     scanner_pool::ScannerPool,
     validation_body::ValidationResponseBody,
 };
-use kingfisher_scanner::primitives::find_secret_capture_with_group;
+use kingfisher_scanner::primitives::{MatchSpans, find_secret_capture_with_group};
 
 use self::{base64_decode::get_base64_strings as get_b64_strings, filter::filter_match};
 
@@ -41,10 +41,7 @@ const MAX_CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8 MiB per scan segment
 const CHUNK_OVERLAP: usize = 64 * 1024; // 64 KiB overlap to catch boundary matches
 const RAW_MATCH_LOOKBACK: usize = 4 * 1024; // Initial exact-confirmation suffix.
 const BASE64_SCAN_LIMIT: usize = 64 * 1024 * 1024; // skip expensive Base64 pass on huge blobs
-// The old tree-sitter limit was 128 KiB due to full-AST parsing cost.
-// The lightweight regex-based lexer is O(n) line-by-line, so we can afford
-// a much higher ceiling.  We still cap it to avoid spending time on huge
-// generated/minified blobs where context verification adds little value.
+// Bound structural context checks on large generated/minified content.
 const CONTEXT_VERIFIER_MAX_LIMIT: usize = 2 * 1024 * 1024; // verify code context on blobs <= 2 MiB
 const CONTEXT_VERIFIER_MIN_LIMIT: usize = 0; // allow context verification starting at 0 bytes
 
@@ -58,8 +55,7 @@ pub(crate) fn should_attempt_context_verification(blob_len: usize) -> bool {
 // -------------------------------------------------------------------------------------------------
 /// A raw match, as recorded by a callback to Vectorscan.
 ///
-/// When matching with Vectorscan, we simply collect all matches into a
-/// preallocated `Vec`, and then go through them all after scanning is complete.
+/// Candidate endpoints are buffered per scan segment for exact regex confirmation.
 /// Block mode does not provide a reliable start offset; exact confirmation finds it.
 #[derive(PartialEq, Eq, Debug, Clone)]
 struct RawMatch {
@@ -134,7 +130,7 @@ pub struct Matcher<'a> {
     /// Local statistics for this `Matcher`
     local_stats: MatcherStats,
 
-    /// Global statistics, updated with the local statsistics when this
+    /// Global statistics, updated with the local statistics when this
     /// `Matcher` is dropped
     global_stats: Option<&'a Mutex<MatcherStats>>,
 
@@ -198,7 +194,6 @@ impl<'a> Matcher<'a> {
         disable_inline_ignores: bool,
         respect_ignore_if_contains: bool,
     ) -> Result<Self> {
-        // Changed: removed `with_capacity(16384)` so we don't pre-allocate a large Vec
         let raw_matches_scratch = Vec::new();
         let user_data = UserData { raw_matches_scratch, input_len: 0 };
         let profiler = shared_profiler.or_else(|| {
@@ -236,7 +231,7 @@ impl<'a> Matcher<'a> {
             let end = (offset + MAX_CHUNK_SIZE).min(input.len());
             let slice = &input[offset..end];
             let base = offset as u64;
-            self.scanner_pool.with(|scanner| {
+            self.scanner_pool.try_with(|scanner| {
                 scanner.scan(slice, |rule_id, _from, to, _flags| {
                     if (rule_id as usize) < self.rules_db.num_rules() {
                         self.user_data
@@ -245,7 +240,7 @@ impl<'a> Matcher<'a> {
                     }
                     kingfisher_vectorscan::Scan::Continue
                 })
-            })?;
+            })??;
 
             if end == input.len() {
                 break;
@@ -264,7 +259,7 @@ impl<'a> Matcher<'a> {
         filename: &str,
         redact: bool,
         matches: &mut Vec<BlobMatch<'b>>,
-        previous_matches: &mut FxHashMap<usize, Vec<OffsetSpan>>,
+        previous_matches: &mut FxHashMap<usize, MatchSpans>,
         seen_matches: &mut FxHashSet<u64>,
         match_rule_indices: &mut Vec<usize>,
         betterleaks_path_prefiltered: bool,
@@ -291,12 +286,16 @@ impl<'a> Matcher<'a> {
 
         let mut seen_raw_match_ends: FxHashSet<(usize, usize)> = FxHashSet::default();
         let mut seen_prefilter_rules: FxHashSet<usize> = FxHashSet::default();
-        let mut previous_full_matches: FxHashMap<usize, Vec<OffsetSpan>> = FxHashMap::default();
+        let mut previous_full_matches: FxHashMap<usize, MatchSpans> = FxHashMap::default();
 
         for range in ranges.into_iter().rev() {
+            // Index only this segment and the initial confirmation lookback. Drop the indexes
+            // after processing it so dense inputs cannot accumulate whole-blob regex spans.
+            let mut candidate_indexes = FxHashMap::default();
+            let index_range = range.start.saturating_sub(RAW_MATCH_LOOKBACK)..range.end;
             self.user_data.raw_matches_scratch.clear();
             let base = range.start as u64;
-            self.scanner_pool.with(|scanner| {
+            self.scanner_pool.try_with(|scanner| {
                 scanner.scan(&input[range], |rule_id, _from, to, _flags| {
                     if (rule_id as usize) < self.rules_db.num_rules() {
                         self.user_data
@@ -305,7 +304,7 @@ impl<'a> Matcher<'a> {
                     }
                     kingfisher_vectorscan::Scan::Continue
                 })
-            })?;
+            })??;
 
             self.process_raw_matches(
                 blob,
@@ -320,6 +319,8 @@ impl<'a> Matcher<'a> {
                 &mut seen_raw_match_ends,
                 &mut seen_prefilter_rules,
                 &mut previous_full_matches,
+                &mut candidate_indexes,
+                index_range,
             );
         }
 
@@ -334,13 +335,18 @@ impl<'a> Matcher<'a> {
         filename: &str,
         redact: bool,
         matches: &mut Vec<BlobMatch<'b>>,
-        previous_matches: &mut FxHashMap<usize, Vec<OffsetSpan>>,
+        previous_matches: &mut FxHashMap<usize, MatchSpans>,
         seen_matches: &mut FxHashSet<u64>,
         match_rule_indices: &mut Vec<usize>,
         betterleaks_path_prefiltered: bool,
         seen_raw_match_ends: &mut FxHashSet<(usize, usize)>,
         seen_prefilter_rules: &mut FxHashSet<usize>,
-        previous_full_matches: &mut FxHashMap<usize, Vec<OffsetSpan>>,
+        previous_full_matches: &mut FxHashMap<usize, MatchSpans>,
+        candidate_indexes: &mut FxHashMap<
+            usize,
+            kingfisher_scanner::primitives::CandidateMatchCache,
+        >,
+        index_range: std::ops::Range<usize>,
     ) where
         'a: 'b,
     {
@@ -364,9 +370,10 @@ impl<'a> Matcher<'a> {
                 if !seen_raw_match_ends.insert((rule_id_usize, end_idx_usize)) {
                     continue;
                 }
-                if previous_full_matches.get(&rule_id_usize).is_some_and(|spans| {
-                    spans.iter().any(|span| span.start < end_idx_usize && end_idx_usize <= span.end)
-                }) {
+                if previous_full_matches
+                    .get(&rule_id_usize)
+                    .is_some_and(|spans| spans.contains_end(end_idx_usize))
+                {
                     continue;
                 }
                 (end_idx_usize.saturating_sub(RAW_MATCH_LOOKBACK), end_idx_usize)
@@ -375,6 +382,21 @@ impl<'a> Matcher<'a> {
                 continue;
             }
             let before_len = matches.len();
+            let candidate_index = if rules_db.uses_vectorscan_prefilter(rule_id_usize) {
+                None
+            } else {
+                candidate_indexes.entry(rule_id_usize).or_default().get_or_insert_with(
+                    index_range.len(),
+                    RAW_MATCH_LOOKBACK,
+                    || {
+                        kingfisher_scanner::primitives::CandidateMatchIndex::new_in_range(
+                            re,
+                            blob.bytes(),
+                            index_range.clone(),
+                        )
+                    },
+                )
+            };
             loop {
                 let confirmed = filter_match(
                     rules_db,
@@ -397,6 +419,7 @@ impl<'a> Matcher<'a> {
                     self.respect_ignore_if_contains,
                     &self.inline_ignore_config,
                     !rules_db.uses_vectorscan_prefilter(rule_id_usize),
+                    candidate_index,
                 );
                 if confirmed || scan_start == 0 {
                     break;
@@ -467,7 +490,7 @@ impl<'a> Matcher<'a> {
 
         let lang_hint = lang.as_deref();
         let mut seen_matches = FxHashSet::default();
-        let mut previous_matches: FxHashMap<usize, Vec<OffsetSpan>> = FxHashMap::default();
+        let mut previous_matches: FxHashMap<usize, MatchSpans> = FxHashMap::default();
         let mut match_rule_indices: Vec<usize> = Vec::new();
 
         let blob_len = blob.len();
@@ -496,7 +519,7 @@ impl<'a> Matcher<'a> {
             while let Some((item, depth)) = b64_stack.pop() {
                 let mut candidate_rule_ids = Vec::new();
                 let mut seen_candidate_rules = FxHashSet::default();
-                self.scanner_pool.with(|scanner| {
+                self.scanner_pool.try_with(|scanner| {
                     scanner.scan(&item.decoded, |rule_id, _from, _to, _flags| {
                         let rule_id = rule_id as usize;
                         if rule_id < rules_db.num_rules() && seen_candidate_rules.insert(rule_id) {
@@ -504,7 +527,7 @@ impl<'a> Matcher<'a> {
                         }
                         kingfisher_vectorscan::Scan::Continue
                     })
-                })?;
+                })??;
                 for rule_id_usize in candidate_rule_ids {
                     if betterleaks_path_prefiltered && rules_db.is_betterleaks_rule(rule_id_usize) {
                         continue;
@@ -533,6 +556,7 @@ impl<'a> Matcher<'a> {
                         self.respect_ignore_if_contains,
                         &self.inline_ignore_config,
                         false,
+                        None,
                     );
                     match_rule_indices
                         .extend(std::iter::repeat_n(rule_id_usize, matches.len() - before_len));
@@ -580,8 +604,7 @@ impl<'a> Matcher<'a> {
         if self.user_data.raw_matches_scratch.capacity()
             > self.user_data.raw_matches_scratch.len() * 4
         {
-            // Vec::shrink_to_fit may re-allocate, but we're about to leave scan_blob
-            // so the cost is hidden off the hot path.
+            // Release excess scratch capacity before the next blob; shrinking can reallocate.
             self.user_data.raw_matches_scratch.shrink_to_fit();
         }
 
@@ -1971,21 +1994,26 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
         let mut input = token.clone();
         input.push(b' ');
         input.extend_from_slice(&private_key);
-        let blob = Blob::from_bytes(input);
         let origin = OriginSet::from(Origin::from_file(PathBuf::from("long-secrets.txt")));
         let seen = BlobIdMap::new();
         let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
         let mut matcher =
             Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
 
-        let ScanResult::New(matches) =
-            matcher.scan_blob(&blob, &origin, None, false, false, true)?
-        else {
-            panic!("fresh blob should return new matches");
-        };
-        assert_eq!(matches.len(), 2);
-        assert!(matches.iter().any(|matched| matched.matching_input == token));
-        assert!(matches.iter().any(|matched| matched.matching_input == private_key));
+        // In the second case the key needs a wider confirmation window than the segment index.
+        for padding in [0, MAX_CHUNK_SIZE - CHUNK_OVERLAP + 128] {
+            let mut bytes = vec![b' '; padding];
+            bytes.extend_from_slice(&input);
+            let blob = Blob::from_bytes(bytes);
+            let ScanResult::New(matches) =
+                matcher.scan_blob(&blob, &origin, None, false, false, true)?
+            else {
+                panic!("fresh blob should return new matches");
+            };
+            assert_eq!(matches.len(), 2, "padding={padding}");
+            assert!(matches.iter().any(|matched| matched.matching_input == token));
+            assert!(matches.iter().any(|matched| matched.matching_input == private_key));
+        }
         Ok(())
     }
 

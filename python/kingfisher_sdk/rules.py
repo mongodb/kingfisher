@@ -19,5 +19,17 @@ class Rules:
         """List exact IDs, names, visibility, validation and revocation support."""
         return json.loads(self._native.metadata())
 
+    def detail(self, rule_id: str) -> dict[str, Any]:
+        """Return an exact loaded rule's definition and compiled detection regex.
+
+        Includes pattern, entropy, filters, capture selection, dependencies,
+        examples, references, validation and revocation. Missing configurations
+        are None. Betterleaks logic is a serialized expression tree; typed/raw
+        handlers identify Rust implementations rather than exposing their code.
+        This is offline inspection. Returned data is a copy; editing it does not
+        change scanning behavior. Unknown IDs raise ValueError.
+        """
+        return json.loads(self._native.detail(rule_id))
+
     def __len__(self) -> int:
         return len(self.metadata())

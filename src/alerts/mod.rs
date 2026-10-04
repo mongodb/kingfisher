@@ -123,9 +123,9 @@ impl AlertFormat {
 
 /// Which findings a sink is allowed to report, independent of `min_confidence`.
 ///
-/// Each variant is a strict subset of the previous one: `AccessMapOnly` only
-/// ever matches findings that are also `OnlyActive` (access-mapping requires a
-/// validated, active credential), which is itself a subset of `All`.
+/// `AccessMapOnly` requires both a verified-active finding and a successful
+/// correlated mapping. A mapping alone is insufficient: some capabilities allow
+/// mapping after an inconclusive but reachable validation response.
 #[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 #[serde(rename_all = "kebab-case")]
 #[clap(rename_all = "kebab-case")]
@@ -139,7 +139,7 @@ pub enum AlertFindingFilter {
     /// was never live-validated.
     OnlyActive,
     /// Keep only findings with a matching successful `--blast-radius` result
-    /// (implies active, since access-mapping only runs on validated credentials).
+    /// and a `VerifiedActive` validation outcome.
     AccessMapOnly,
 }
 
@@ -173,11 +173,9 @@ pub struct AlertSink {
 /// Summary numbers we surface to every sink, regardless of format.
 ///
 /// Built per-sink in `dispatch` from that sink's own filtered finding list, so
-/// every count here (including `total`) always matches what's actually
-/// rendered in the payload below it — never the whole-scan numbers — with one
-/// deliberate exception: `unfiltered_total`, which exists precisely so a
-/// payload can tell a genuinely clean scan apart from a sink whose filters
-/// excluded everything.
+/// counts describe that filtered list even when detail rendering is capped.
+/// `unfiltered_total` retains the whole-scan count so payloads can distinguish
+/// a clean scan from one whose findings were all excluded by sink filters.
 ///
 /// Per-sink fields (`report_url`, `detail`, `unfiltered_total`) are overlaid
 /// by `dispatch` immediately after construction. They are intentionally not
@@ -198,9 +196,9 @@ pub struct AlertSummary {
     pub report_url: Option<String>,
     /// Resolved detail level (`Summary` or `Detail`, never `Auto`).
     pub detail: AlertDetail,
-    /// Sum of impacted-resource counts (from `--blast-radius`) across findings
-    /// in this summary. `0` when access-map wasn't run or none of this sink's
-    /// findings have a matching access-map result.
+    /// Sum of resource counts from distinct successful access-map entries
+    /// correlated with this sink's findings. Repeated occurrences of one mapping
+    /// count once. `0` when no successful mappings are correlated.
     pub impacted_resources: usize,
     /// Whole-scan finding count, before this sink's `min_confidence` /
     /// `finding_filter` were applied. Used only to distinguish "the scan

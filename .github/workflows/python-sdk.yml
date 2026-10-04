@@ -17,6 +17,7 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 env:
+  RUST_TOOLCHAIN: "1.99.0"
   CARGO_INCREMENTAL: '0'
   CARGO_PROFILE_DEV_DEBUG: '0'
   CARGO_PROFILE_RELEASE_LTO: 'false'
@@ -57,7 +58,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
-          toolchain: '1.96.0'
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
@@ -82,7 +83,7 @@ jobs:
           target: ${{ matrix.target }}
           manylinux: '2_28'
           maturin-version: 'v1.15.0'
-          rust-toolchain: '1.96.0'
+          rust-toolchain: ${{ env.RUST_TOOLCHAIN }}
           args: --profile python-release --locked --out dist-python --find-interpreter
           # Published Vectorscan archives require glibc 2.35. Build from the
           # vendored source inside manylinux to keep the advertised 2.28 floor.
@@ -143,13 +144,13 @@ jobs:
           path: dist-python/*.whl
           if-no-files-found: error
 
-  source-and-msrv:
+  source:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
-          toolchain: '1.96.0'
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
       - name: Format and shared revocation tests
@@ -174,7 +175,7 @@ jobs:
 
   publish:
     if: github.repository == 'mongodb/kingfisher' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/python-v'))
-    needs: [wheels, source-and-msrv]
+    needs: [wheels, source]
     runs-on: ubuntu-latest
     concurrency:
       group: pypi-sdk-publish-${{ github.run_id }}

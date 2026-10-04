@@ -1,4 +1,3 @@
-// tests/smoke_tfplan.rs
 use std::process::Command;
 
 use assert_cmd::prelude::*;

@@ -4,7 +4,7 @@
 //! The user runs the same flags they would normally pass to `kingfisher
 //! scan`, prefixed with `config init`. We walk the resulting `ArgMatches`,
 //! pick out only the values the user actually supplied (CLI defaults stay
-//! out so the emitted YAML is minimal), and serialize a [`KingfisherConfig`]
+//! out so the emitted YAML is minimal), and serialize a [`crate::cli::config::KingfisherConfig`]
 //! to stdout (or to `--out FILE`).
 //!
 //! Scan-target inputs (positional paths, `--git-url`, GitHub/GitLab/etc.

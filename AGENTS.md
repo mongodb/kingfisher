@@ -29,7 +29,7 @@ Kingfisher is a Rust secret scanner, live credential validator, revocation helpe
 
 ## Toolchain
 
-- Workspace minimum Rust version is `1.96` in `Cargo.toml`; `make check-rust` enforces `>= 1.96.0` for build targets.
+- Workspace minimum Rust version is `1.99` in `Cargo.toml`; `make check-rust` enforces `>= 1.99.0` for build targets.
 - Rust formatting is defined by `rustfmt.toml` (`max_width = 100`, 4 spaces, Unix newlines, reordered imports).
 - Build scripts assume `bash` with `set -eu -o pipefail`.
 - Windows Makefile targets expect MSYS2 with `pacman`.

@@ -67,9 +67,9 @@ fn image_dir_name(reference: &str) -> String {
     // keep it readable
     let mut name = reference.replace(['/', ':'], "_");
 
-    // add a truncated SHA-256 to guarantee uniqueness
+    // Distinguish references that sanitize to the same readable name.
     let hash = Sha256::digest(reference.as_bytes());
-    let short = &hex::encode(hash)[..8]; // 8-char prefix is plenty
+    let short = &hex::encode(hash)[..8];
     name.push('_');
     name.push_str(short);
     name

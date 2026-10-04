@@ -131,7 +131,7 @@ impl std::fmt::Display for Origin {
                     "git repo {}: first seen in commit {} as {}",
                     e.repo_path.display(),
                     md.commit_metadata.commit_id,
-                    &md.blob_path,
+                    md.blob_path,
                 ),
                 None => write!(f, "git repo {}", e.repo_path.display()),
             },

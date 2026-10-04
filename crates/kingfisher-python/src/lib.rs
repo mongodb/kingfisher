@@ -7,9 +7,12 @@ use std::{
 };
 
 use kingfisher_rules::{Confidence, Rules, RulesDatabase};
-use kingfisher_scanner::{Finding, Revoker, Scanner, ScannerConfig, Validator};
+use kingfisher_scanner::{
+    CancellationToken, Finding, Revoker, ScanAborted, ScanControl, Scanner, ScannerConfig,
+    Validator,
+};
 use pyo3::{
-    exceptions::{PyRuntimeError, PyValueError},
+    exceptions::{PyRuntimeError, PyTimeoutError, PyValueError},
     prelude::*,
 };
 use tokio::runtime::Runtime;
@@ -81,6 +84,17 @@ impl PyRules {
         })).collect();
         serde_json::to_string(&rules).map_err(error)
     }
+    fn detail(&self, rule_id: &str) -> PyResult<String> {
+        let (index, rule) =
+            self.db.rules().iter().enumerate().find(|(_, rule)| rule.id() == rule_id).ok_or_else(
+                || PyValueError::new_err(format!("unknown exact rule ID: {rule_id}")),
+            )?;
+        // Inspect the already-loaded definition and confirmation regex without
+        // recompilation, provider requests, or modifying the shared database.
+        let mut detail = serde_json::to_value(rule.syntax()).map_err(error)?;
+        detail["detection_regex"] = serde_json::json!(self.db.anchored_regexes()[index].as_str());
+        serde_json::to_string(&detail).map_err(error)
+    }
 }
 
 #[pyclass(module = "kingfisher_sdk._native", name = "Finding", frozen, from_py_object)]
@@ -103,6 +117,50 @@ impl PyFinding {
     #[getter]
     fn visible(&self) -> bool {
         self.finding.rule.syntax().visible
+    }
+}
+
+/// A signal that can be cancelled from another Python thread while scanning.
+#[pyclass(module = "kingfisher_sdk._native", name = "CancellationToken", frozen)]
+struct PyCancellationToken {
+    token: CancellationToken,
+}
+
+#[pymethods]
+impl PyCancellationToken {
+    #[new]
+    fn new() -> Self {
+        Self { token: CancellationToken::default() }
+    }
+    fn cancel(&self) {
+        self.token.cancel();
+    }
+    #[getter]
+    fn is_cancelled(&self) -> bool {
+        self.token.is_cancelled()
+    }
+}
+
+fn scan_control(
+    timeout: Option<f64>,
+    cancellation: Option<CancellationToken>,
+) -> PyResult<ScanControl> {
+    let mut control = ScanControl::default();
+    if let Some(timeout) = timeout {
+        control = control
+            .with_timeout(duration(timeout)?)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+    }
+    if let Some(token) = cancellation {
+        control = control.with_cancellation(token);
+    }
+    Ok(control)
+}
+
+fn scan_error(err: anyhow::Error) -> PyErr {
+    match err.downcast_ref::<ScanAborted>() {
+        Some(ScanAborted::TimedOut) => PyTimeoutError::new_err(err.to_string()),
+        _ => error(err),
     }
 }
 
@@ -135,20 +193,36 @@ impl PyScanner {
             ),
         })
     }
-    fn scan_bytes(&self, py: Python<'_>, data: Vec<u8>) -> PyResult<Vec<PyFinding>> {
+    #[pyo3(signature = (data, *, timeout=None, cancellation=None))]
+    fn scan_bytes(
+        &self,
+        py: Python<'_>,
+        data: Vec<u8>,
+        timeout: Option<f64>,
+        cancellation: Option<PyRef<'_, PyCancellationToken>>,
+    ) -> PyResult<Vec<PyFinding>> {
+        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
         py.detach(|| {
             self.scanner
-                .scan_bytes(&data)
+                .scan_bytes_with_control(&data, &control)
                 .map(|v| v.into_iter().map(|finding| PyFinding { finding }).collect())
-                .map_err(error)
+                .map_err(scan_error)
         })
     }
-    fn scan_file(&self, py: Python<'_>, path: PathBuf) -> PyResult<Vec<PyFinding>> {
+    #[pyo3(signature = (path, *, timeout=None, cancellation=None))]
+    fn scan_file(
+        &self,
+        py: Python<'_>,
+        path: PathBuf,
+        timeout: Option<f64>,
+        cancellation: Option<PyRef<'_, PyCancellationToken>>,
+    ) -> PyResult<Vec<PyFinding>> {
+        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
         py.detach(|| {
             self.scanner
-                .scan_file(path)
+                .scan_file_with_control(path, &control)
                 .map(|v| v.into_iter().map(|finding| PyFinding { finding }).collect())
-                .map_err(error)
+                .map_err(scan_error)
         })
     }
     fn reset_dedup(&self) {
@@ -272,6 +346,7 @@ fn shannon_entropy(data: &[u8]) -> f32 {
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyRules>()?;
     m.add_class::<PyScanner>()?;
+    m.add_class::<PyCancellationToken>()?;
     m.add_class::<PyFinding>()?;
     m.add_class::<PyValidator>()?;
     m.add_class::<PyRevoker>()?;

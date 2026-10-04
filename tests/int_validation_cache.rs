@@ -1,4 +1,3 @@
-// tests/int_validation_cache.rs
 use std::{
     fs,
     sync::{
@@ -174,7 +173,6 @@ async fn check_validation_cache_and_depvars(
             github_event_user: Vec::new(),
             github_event_lookback_hours: 24,
 
-            // new GitLab defaults
             gitlab_user: Vec::new(),
             gitlab_include_snippets: false,
             gitlab_group: Vec::new(),
@@ -325,10 +323,9 @@ async fn check_validation_cache_and_depvars(
 
     let datastore = Arc::new(Mutex::new(FindingsStore::new(work_dir.path().to_path_buf())));
 
-    // NEW: make the datastore aware of every rule
     {
         let mut ds = datastore.lock().unwrap();
-        ds.record_rules(rules_db.rules()); // <-- **add this line**
+        ds.record_rules(rules_db.rules());
     }
 
     let global_args = GlobalArgs {

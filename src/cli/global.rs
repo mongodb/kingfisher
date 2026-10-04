@@ -98,10 +98,10 @@ pub enum Command {
     #[command(name = "blast-radius", visible_alias = "access-map", aliases = ["blast_radius", "access_map"])]
     BlastRadius(BlastRadiusArgs),
 
-    /// View Kingfisher JSON/JSONL reports in a local web UI
+    /// View JSON, JSONL, and SARIF reports in a local web UI
     View(ViewArgs),
 
-    /// Generate or inspect `kingfisher.yaml` project config files
+    /// Generate a reusable `kingfisher.yaml` project config
     Config(ConfigArgs),
 
     /// Update the Kingfisher binary
@@ -145,7 +145,7 @@ pub struct GlobalArgs {
     /// TLS certificate validation mode for secret validation requests.
     ///
     /// - strict: Full WebPKI validation (default)
-    /// - lax: Accept self-signed/unknown CA, but enforce hostname + expiry
+    /// - lax: Bypass certificate verification for rules that explicitly opt in
     /// - off: Disable all certificate validation
     #[arg(global = true, long, value_enum, default_value = "strict")]
     pub tls_mode: TlsMode,
@@ -276,13 +276,9 @@ pub enum TlsMode {
     #[default]
     Strict,
 
-    /// Accept self-signed or unknown CA certificates, but still enforce:
-    /// - Hostname must match certificate's CN/SAN
-    /// - Certificate must not be expired
-    /// - TLS 1.2 or higher required
-    ///
-    /// Useful for database connections (PostgreSQL, MySQL, MongoDB) that often use
-    /// self-signed certificates or private CAs (e.g., Amazon RDS).
+    /// Permit certificate-verification bypass when both the global policy and
+    /// the rule opt into lax mode. Validators configure their own transports;
+    /// hostname and expiry checks are not guaranteed in this mode.
     Lax,
 
     /// Disable all TLS certificate validation. Use with extreme caution.

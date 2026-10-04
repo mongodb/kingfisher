@@ -1,11 +1,11 @@
 # kingfisher-scanner
 
-Embeddable, synchronous secret detection for Rust 1.96+. The `1.x` public Rust API
+Embeddable, synchronous secret detection for Rust 1.99+. The `1.x` public Rust API
 follows semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-scanner = "1.1.0"
+kingfisher-scanner = "1.2.0"
 anyhow = "1"
 ```
 
@@ -51,10 +51,41 @@ Use `scan_file(path)?`, `scan_blob(&blob)?`, or `scan_blob_at_path(&blob, source
 when scanning files or applying path-aware rules. Errors propagate; an empty successful
 result means no findings for that call, subject to configured filters and deduplication.
 
+For an optional per-call deadline or cancellation signal, use `ScanControl` with
+`scan_bytes_with_control`, `scan_file_with_control`, or `scan_blob_at_path_with_control`:
+
+```rust
+# fn example(scanner: &kingfisher_scanner::Scanner, bytes: &[u8]) -> anyhow::Result<()> {
+use std::time::Duration;
+use kingfisher_scanner::{CancellationToken, ScanControl};
+let cancellation = CancellationToken::default();
+let control = ScanControl::default()
+    .with_timeout(Duration::from_secs(2))?
+    .with_cancellation(cancellation.clone());
+let findings = scanner.scan_bytes_with_control(bytes, &control)?;
+// Another thread can call cancellation.cancel() while the scan runs.
+# Ok(())
+# }
+```
+
+Interruption returns an error containing `ScanAborted::TimedOut` or
+`ScanAborted::Cancelled`, without partial results or a dedup-cache entry.
+Cancellation tokens remain cancelled; create a fresh token for new work. Checks
+run between matching/filtering operations, in native match callbacks, and during
+Base64 enumeration. Individual native operations, file reads, decoding and rule
+compilation cannot be preempted. Use process isolation when a hard wall-clock
+limit is required. Existing scan methods remain unlimited.
+
 `Scanner` and `RulesDatabase` are `Send + Sync`. Share a scanner with `Arc` across worker
 threads. Each thread gets its own native scratch space. In async applications, schedule
 CPU-bound scanning on blocking workers. Callbacks into `ScannerPool::try_with` must not
 recursively borrow the same pool on the same thread; this returns an error.
+The CLI matcher and rule-filter helpers use the same pool implementation. Existing
+pool import paths remain compatible. The pool retains its database until all
+thread-local scanners have been dropped, and its callback cannot return a scanner
+borrowing that database. Fallible callbacks return a nested `Result`; handle both
+the pool error and the callback error. The compatibility `with` method panics on
+scratch allocation or reentrant borrowing errors; prefer `try_with`.
 
 ## Behavior contract
 
@@ -81,7 +112,7 @@ recursively borrow the same pool on the same thread; this returns an error.
 Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "1.1.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
 ```
 
 `validation` enables every supported family and its dependencies. Legacy
@@ -140,6 +171,55 @@ services with `allow_internal_ips(true)`. SDK/database/gRPC transports retain th
 own clients; the outer deadline applies to all families. See the library guide for
 [association rules and outcome semantics](https://github.com/mongodb/kingfisher/blob/main/docs/LIBRARY.md#supporting-credentials-and-validation-outcomes).
 
+## Inspect rules and configured actions
+
+`RulesDatabase::rules()` exposes the loaded catalog and each rule's serializable
+`RuleSyntax`. Inspection works without the `validation` feature and makes no
+provider requests:
+
+```rust
+use kingfisher_scanner::{get_builtin_rules, Confidence, RulesDatabase};
+
+let database = RulesDatabase::from_rule_collection(
+    get_builtin_rules(Some(Confidence::Low))?,
+)?;
+for rule in database.rules().iter().filter(|r| r.syntax().revocation.is_some()) {
+    println!("{}: {}", rule.id(), rule.name());
+}
+let (index, rule) = database.rules().iter().enumerate()
+    .find(|(_, r)| r.id() == "betterleaks.aws-access-token")
+    .ok_or_else(|| anyhow::anyhow!("rule not loaded"))?;
+println!("{}", rule.syntax().pattern);
+println!("{}", database.anchored_regexes()[index].as_str());
+println!("{}", serde_json::to_string_pretty(&rule.syntax().validation)?);
+println!("{}", serde_json::to_string_pretty(&rule.syntax().revocation)?);
+# Ok::<(), anyhow::Error>(())
+```
+
+Add `serde_json = "1"` when copying this into your project. The compiled regex
+has rule comments removed; the historical `anchored_regexes()` name does not
+mean these patterns are endpoint-constrained. Regex matches are candidates and
+still pass capture selection, entropy, filters and dependency checks.
+`RuleSyntax` also includes path predicates, pattern requirements, examples,
+references and dependency bindings. HTTP/gRPC definitions expose configured
+requests and matchers; Betterleaks exposes an expression tree. Typed/raw handlers
+show their dispatch type/name rather than their Rust implementation code. Original
+Betterleaks expression text may be absent in release builds. Missing actions
+serialize as `null`; configuration presence does not prove an action will succeed.
+
+The packaged [inspection example](examples/inspect_rules.rs) lists summaries,
+filters by ID prefix or action support, and prints full or selected details:
+
+```sh
+cargo run --locked -p kingfisher-scanner --example inspect_rules -- --with-revocation
+cargo run --locked -p kingfisher-scanner --example inspect_rules -- --id-prefix betterleaks.aws
+cargo run --locked -p kingfisher-scanner --example inspect_rules -- betterleaks.aws-access-token --field pattern --field validation --field revocation
+```
+
+Use repeated `--rules-path PATH` to add custom YAML/TOML rules and `--no-builtins`
+to inspect only your custom catalog. Output contains rule configuration, including
+custom literals, rather than redacted findings. See `--help` for all options.
+
 ## Runnable examples
 
 From the repository checkout:
@@ -164,6 +244,7 @@ More complete integrations (all included in the crate source):
 
 | Example | Demonstrates |
 | ------- | ------------ |
+| `inspect_rules` | Catalog summaries, exact definitions, regexes, filters, validation/revocation configurations |
 | `scan_files` | File batches, path-aware detection, JSON Lines reports without credentials |
 | `scan_custom_rules` | Load private YAML/TOML rules and scan a file |
 | `scan_async` | Shared scanner, Tokio blocking workers, bounded concurrency |

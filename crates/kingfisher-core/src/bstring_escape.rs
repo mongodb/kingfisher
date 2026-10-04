@@ -10,7 +10,7 @@ use std::{
 
 use console::strip_ansi_codes;
 
-/// Escapes non-printing characters in a string while preserving whitespace.
+/// Drops escape bytes and escapes other non-printing characters, preserving whitespace.
 ///
 /// Returns borrowed data if no escaping was needed, avoiding allocations.
 fn escape_nonprinting(s: &str) -> Cow<'_, str> {
@@ -23,7 +23,7 @@ fn escape_nonprinting(s: &str) -> Cow<'_, str> {
     let mut escaped = String::with_capacity(s.len() * 2);
     for ch in s.chars() {
         match ch {
-            // Handle ANSI escape sequences
+            // Drop any escape byte left after ANSI sequence stripping.
             '\x1B' => continue,
             // Escape non-whitespace control characters
             ch if ch.is_control() && !ch.is_whitespace() => {
@@ -43,7 +43,7 @@ fn escape_nonprinting(s: &str) -> Cow<'_, str> {
 /// When displayed, `Escaped` will:
 /// 1. Convert from UTF-8 with replacement of invalid sequences
 /// 2. Remove ANSI control sequences
-/// 3. Escape remaining control characters (except whitespace)
+/// 3. Drop remaining escape bytes and escape other control characters (except whitespace)
 ///
 /// # Examples
 ///

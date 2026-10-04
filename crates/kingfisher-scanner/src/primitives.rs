@@ -4,7 +4,10 @@
 //! binary crate's `Matcher`. Having a single canonical implementation
 //! eliminates duplicated logic across the codebase.
 
-use std::hash::{Hash, Hasher};
+use std::{
+    collections::BTreeMap,
+    hash::{Hash, Hasher},
+};
 
 use base64::{Engine, engine::general_purpose};
 use kingfisher_core::OffsetSpan;
@@ -46,14 +49,42 @@ pub fn is_base64_byte(b: u8) -> bool {
 /// Finds standalone Base64-encoded strings in the input and returns decoded data
 /// with byte-offset positions.
 pub fn get_base64_strings(input: &[u8]) -> Vec<DecodedData> {
+    get_base64_strings_with_control(input, &crate::ScanControl::default())
+        .expect("unlimited scan cannot be cancelled")
+}
+
+pub(crate) fn get_base64_strings_with_control(
+    input: &[u8],
+    control: &crate::ScanControl,
+) -> Result<Vec<DecodedData>, crate::ScanAborted> {
+    if control.is_limited() {
+        get_base64_strings_impl::<true>(input, control)
+    } else {
+        get_base64_strings_impl::<false>(input, control)
+    }
+}
+
+fn get_base64_strings_impl<const CHECK: bool>(
+    input: &[u8],
+    control: &crate::ScanControl,
+) -> Result<Vec<DecodedData>, crate::ScanAborted> {
     let mut results = Vec::new();
     let mut i = 0;
     while i < input.len() {
+        if CHECK {
+            control.check()?;
+        }
         while i < input.len() && !is_base64_byte(input[i]) {
+            if CHECK && i.is_multiple_of(64 * 1024) {
+                control.check()?;
+            }
             i += 1;
         }
         let start = i;
         while i < input.len() && is_base64_byte(input[i]) {
+            if CHECK && i.is_multiple_of(64 * 1024) {
+                control.check()?;
+            }
             i += 1;
         }
 
@@ -82,7 +113,10 @@ pub fn get_base64_strings(input: &[u8]) -> Vec<DecodedData> {
         }
     }
 
-    results
+    if CHECK {
+        control.check()?;
+    }
+    Ok(results)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -129,7 +163,182 @@ pub fn insert_span(spans: &mut Vec<OffsetSpan>, span: OffsetSpan) -> bool {
     true
 }
 
-/// Records a match span for a given rule, returning `false` if it's a duplicate.
+/// Lazily index repeated candidate endpoints for one rule and input range.
+/// Sparse candidates retain bounded regex confirmation. An index is built after at least
+/// sixteen endpoints, once their combined initial window lengths reach the indexed byte count.
+#[derive(Debug, Default)]
+pub struct CandidateMatchCache {
+    candidates: usize,
+    index: Option<CandidateMatchIndex>,
+}
+
+impl CandidateMatchCache {
+    /// Consider one new endpoint, invoking `build` only when indexing is justified.
+    pub fn get_or_insert_with(
+        &mut self,
+        indexed_bytes: usize,
+        window_bytes: usize,
+        build: impl FnOnce() -> CandidateMatchIndex,
+    ) -> Option<&CandidateMatchIndex> {
+        self.get_or_try_insert_with(indexed_bytes, window_bytes, || {
+            Ok::<_, std::convert::Infallible>(build())
+        })
+        .expect("infallible index builder")
+    }
+
+    pub(crate) fn get_or_try_insert_with<E>(
+        &mut self,
+        indexed_bytes: usize,
+        window_bytes: usize,
+        build: impl FnOnce() -> Result<CandidateMatchIndex, E>,
+    ) -> Result<Option<&CandidateMatchIndex>, E> {
+        self.candidates = self.candidates.saturating_add(1);
+        if self.index.is_none()
+            && self.candidates >= 16
+            && self.candidates.saturating_mul(window_bytes) >= indexed_bytes
+        {
+            self.index = Some(build()?);
+        }
+        Ok(self.index.as_ref())
+    }
+}
+
+/// Original leftmost, non-overlapping regex matches, indexed once per rule and input range.
+/// Candidate windows normally share these boundaries. A window that changes the
+/// first match (for example by cutting through one) uses the original iterator.
+#[derive(Debug)]
+pub struct CandidateMatchIndex {
+    spans: Vec<OffsetSpan>,
+    range: std::ops::Range<usize>,
+}
+
+impl CandidateMatchIndex {
+    pub fn new(regex: &regex::bytes::Regex, input: &[u8]) -> Self {
+        Self::new_in_range(regex, input, 0..input.len())
+    }
+
+    /// Index only `range`, keeping offsets relative to the complete input.
+    /// Confirmation windows outside this range retain the original regex search.
+    ///
+    /// Panics if `range` is not a valid slice of `input`.
+    pub fn new_in_range(
+        regex: &regex::bytes::Regex,
+        input: &[u8],
+        range: std::ops::Range<usize>,
+    ) -> Self {
+        let spans = regex
+            .find_iter(&input[range.clone()])
+            .map(|m| OffsetSpan { start: range.start + m.start(), end: range.start + m.end() })
+            .collect();
+        Self { spans, range }
+    }
+
+    pub(crate) fn with_control(
+        regex: &regex::bytes::Regex,
+        input: &[u8],
+        control: &crate::ScanControl,
+    ) -> Result<Self, crate::ScanAborted> {
+        if !control.is_limited() {
+            return Ok(Self::new(regex, input));
+        }
+        let mut spans = Vec::new();
+        for found in regex.find_iter(input) {
+            control.check()?;
+            spans.push(OffsetSpan { start: found.start(), end: found.end() });
+        }
+        control.check()?;
+        Ok(Self { spans, range: 0..input.len() })
+    }
+
+    pub fn captures<'r, 'h>(
+        &self,
+        regex: &'r regex::bytes::Regex,
+        endpoint_regex: Option<&regex::bytes::Regex>,
+        haystack: &'h [u8],
+        start: usize,
+    ) -> ConfirmationCaptures<'r, 'h> {
+        let end = start + haystack.len();
+        if start < self.range.start || end > self.range.end {
+            return ConfirmationCaptures::Search(regex.captures_iter(haystack));
+        }
+        if let Ok(index) = self.spans.binary_search_by_key(&end, |span| span.end) {
+            let span = self.spans[index];
+            if span.start >= start {
+                // Verify the window's first match agrees with the index before skipping
+                // earlier captures. EOF-sensitive alternatives can change selection
+                // even when the window starts at zero.
+                let first = self.spans.partition_point(|span| span.start < start);
+                let aligned = regex.find(haystack).is_some_and(|m| {
+                    self.spans.get(first).is_some_and(|span| {
+                        span.start == start + m.start() && span.end == start + m.end()
+                    })
+                });
+                // End anchoring can change lazy/alternative selection. Use it only
+                // as a guard: if it prefers an earlier start than the original index,
+                // retain the original iterator rather than merging separate matches.
+                let endpoint_agrees = endpoint_regex
+                    .and_then(|re| re.find(haystack))
+                    .is_some_and(|m| m.start() == span.start - start && m.end() == haystack.len());
+                if aligned && endpoint_agrees {
+                    let captures = regex.captures_at(haystack, span.start - start);
+                    if captures.as_ref().is_some_and(|captures| {
+                        let full = captures.get(0).unwrap();
+                        full.start() == span.start - start && full.end() == haystack.len()
+                    }) {
+                        return ConfirmationCaptures::One(captures);
+                    }
+                }
+            }
+        }
+        ConfirmationCaptures::Search(regex.captures_iter(haystack))
+    }
+}
+
+/// Either one indexed confirmation or the original search when window semantics differ.
+pub enum ConfirmationCaptures<'r, 'h> {
+    One(Option<regex::bytes::Captures<'h>>),
+    Search(regex::bytes::CaptureMatches<'r, 'h>),
+}
+
+impl<'h> Iterator for ConfirmationCaptures<'_, 'h> {
+    type Item = regex::bytes::Captures<'h>;
+    fn next(&mut self) -> Option<Self::Item> {
+        match self {
+            Self::One(captures) => captures.take(),
+            Self::Search(captures) => captures.next(),
+        }
+    }
+}
+
+/// Maximal match spans ordered by start. Ends also increase, so a predecessor
+/// lookup answers containment without walking all previous matches.
+#[derive(Debug, Default)]
+pub struct MatchSpans(BTreeMap<usize, usize>);
+
+impl MatchSpans {
+    /// Whether a recorded full match covers this candidate endpoint.
+    pub fn contains_end(&self, end: usize) -> bool {
+        self.0.range(..end).next_back().is_some_and(|(_, previous_end)| end <= *previous_end)
+    }
+
+    /// Record a span unless already contained. Each removed span is removed once;
+    /// insertion and predecessor searches do not shift an ever-growing vector.
+    pub fn insert(&mut self, span: OffsetSpan) -> bool {
+        if self.0.range(..=span.start).next_back().is_some_and(|(_, end)| *end >= span.end) {
+            return false;
+        }
+        while let Some((&start, &end)) = self.0.range(span.start..).next() {
+            if end > span.end {
+                break;
+            }
+            self.0.remove(&start);
+        }
+        self.0.insert(span.start, span.end);
+        true
+    }
+}
+
+/// Records a match span using the legacy sorted-vector containment tracker.
 #[inline]
 pub fn record_match(
     map: &mut FxHashMap<usize, Vec<OffsetSpan>>,
@@ -137,6 +346,16 @@ pub fn record_match(
     span: OffsetSpan,
 ) -> bool {
     insert_span(map.entry(rule_id).or_default(), span)
+}
+
+/// Records a match using ordered containment tracking on the scanner's hot path.
+#[inline]
+pub(crate) fn record_indexed_match(
+    map: &mut FxHashMap<usize, MatchSpans>,
+    rule_id: usize,
+    span: OffsetSpan,
+) -> bool {
+    map.entry(rule_id).or_default().insert(span)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -227,6 +446,167 @@ pub fn find_secret_capture_with_group<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sparse_candidates_do_not_build_an_index() {
+        for input_len in [32, 8 * 1024 * 1024, 256 * 1024 * 1024] {
+            let mut cache = CandidateMatchCache::default();
+            for _ in 0..3 {
+                assert!(
+                    cache
+                        .get_or_insert_with(input_len, 4096, || {
+                            panic!("sparse confirmation must not scan the indexed input")
+                        })
+                        .is_none()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn repeated_candidates_build_once_and_preserve_confirmation() {
+        let regex = regex::bytes::Regex::new(r"(token_[a-z]{2})").unwrap();
+        let endpoint = regex::bytes::Regex::new(r"(token_[a-z]{2})\z").unwrap();
+        let input = b"token_ab token_cd\n".repeat(2500);
+        let builds = std::cell::Cell::new(0);
+        let mut cache = CandidateMatchCache::default();
+        let mut unindexed = 0;
+        for found in regex.find_iter(&input) {
+            let end = found.end();
+            let start = end.saturating_sub(4096);
+            let haystack = &input[start..end];
+            let index = cache.get_or_insert_with(input.len(), 4096, || {
+                builds.set(builds.get() + 1);
+                CandidateMatchIndex::new(&regex, &input)
+            });
+            let captures = if let Some(index) = index {
+                index.captures(&regex, Some(&endpoint), haystack, start)
+            } else {
+                unindexed += 1;
+                ConfirmationCaptures::Search(regex.captures_iter(haystack))
+            };
+            let confirmed: Vec<_> = captures
+                .filter_map(|captures| {
+                    let full = captures.get(0).unwrap();
+                    (full.end() == haystack.len() && (start == 0 || full.start() > 0))
+                        .then_some((start + full.start(), start + full.end()))
+                })
+                .collect();
+            assert_eq!(confirmed, vec![(found.start(), found.end())]);
+        }
+        assert!(unindexed >= 3);
+        assert_eq!(builds.get(), 1);
+    }
+
+    #[test]
+    fn candidate_index_build_errors_are_propagated_without_caching() {
+        let mut cache = CandidateMatchCache::default();
+        let mut attempted = false;
+        for _ in 0..100 {
+            let result = cache.get_or_try_insert_with(1, 4096, || Err("scan cancelled"));
+            if let Err(error) = result {
+                assert_eq!(error, "scan cancelled");
+                attempted = true;
+                break;
+            }
+        }
+        assert!(attempted);
+        assert!(cache.index.is_none());
+    }
+
+    #[test]
+    fn indexed_confirmation_agrees_with_original_window_searches() {
+        for (pattern, input) in [
+            (r"(ab)|(bc)", "abc abc abc"),
+            (r"(ar)|(bar$)", "bar!"),
+            (r"(z)|(ar)|(bar$)", "zbar!"),
+            (r"(z)|(ar)|(b[a-z]+$)", "zbzar!"),
+            (r"(a+?)(a*)", "aaa aaa"),
+            (r"(?s)BEGIN(.*?)END", "BEGIN one END gap BEGIN two END"),
+            (r"(?m)^(token_[a-z]{2})$", "token_ab\ntoken_cd\ntrailing"),
+            (r"\b([a-z]{1,4})\b", "one two three four"),
+            (r"([a-z]{1,3})", "alphabet words"),
+        ] {
+            let regex = regex::bytes::Regex::new(pattern).unwrap();
+            let bytes = input.as_bytes();
+            let indexes = [
+                CandidateMatchIndex::new(&regex, bytes),
+                CandidateMatchIndex::new_in_range(
+                    &regex,
+                    bytes,
+                    bytes.len() / 3..bytes.len() * 2 / 3,
+                ),
+                CandidateMatchIndex::new_in_range(&regex, bytes, bytes.len() / 2..bytes.len()),
+            ];
+            let endpoint = regex::bytes::Regex::new(&format!(r"(?:{pattern})\z")).unwrap();
+            for start in 0..bytes.len() {
+                for end in start + 1..=bytes.len() {
+                    let haystack = &bytes[start..end];
+                    let accepted = |captures: regex::bytes::Captures<'_>| {
+                        let full = captures.get(0).unwrap();
+                        if full.end() != haystack.len() || (start > 0 && full.start() == 0) {
+                            return None;
+                        }
+                        Some(
+                            captures
+                                .iter()
+                                .map(|capture| capture.map(|m| (m.start(), m.end())))
+                                .collect::<Vec<_>>(),
+                        )
+                    };
+                    let original: Vec<_> =
+                        regex.captures_iter(haystack).filter_map(accepted).collect();
+                    for index in &indexes {
+                        let indexed: Vec<_> = index
+                            .captures(&regex, Some(&endpoint), haystack, start)
+                            .filter_map(accepted)
+                            .collect();
+                        assert_eq!(
+                            indexed, original,
+                            "pattern={pattern} range={:?} window={start}..{end}",
+                            index.range
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn ranged_candidate_index_bounds_dense_match_storage() {
+        let regex = regex::bytes::Regex::new("a").unwrap();
+        let bytes = vec![b'a'; 1024 * 1024];
+        let range = 512 * 1024..512 * 1024 + 64;
+        let index = CandidateMatchIndex::new_in_range(&regex, &bytes, range.clone());
+        assert_eq!(index.spans.len(), range.len());
+        assert_eq!(index.spans.first().unwrap().start, range.start);
+        assert_eq!(index.spans.last().unwrap().end, range.end);
+    }
+
+    #[test]
+    fn ordered_spans_agree_with_a_containment_oracle() {
+        let mut spans = MatchSpans::default();
+        let mut oracle: Vec<OffsetSpan> = Vec::new();
+        let mut state = 532_u64;
+        for _ in 0..2000 {
+            state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+            let start = (state >> 32) as usize % 200;
+            let end = start + (state as usize % 30);
+            let span = OffsetSpan { start, end };
+            let expected = !oracle.iter().any(|old| old.fully_contains(&span));
+            assert_eq!(spans.insert(span), expected);
+            if expected {
+                oracle.retain(|old| !span.fully_contains(old));
+                oracle.push(span);
+            }
+            for endpoint in 0..230 {
+                assert_eq!(
+                    spans.contains_end(endpoint),
+                    oracle.iter().any(|old| old.start < endpoint && endpoint <= old.end)
+                );
+            }
+        }
+    }
 
     #[test]
     fn base64_alphabet_accepts_only_standard_and_url_safe_bytes() {

@@ -263,8 +263,8 @@ func toolVersion(tool string) string {
 // ---------------------------------------------------------------------------
 // Request-counting proxy
 //
-// A minimal intercepting HTTP/HTTPS proxy that counts every request a scanning
-// tool makes. It does not decrypt TLS; CONNECT tunnels are blind-forwarded.
+// Counts plain HTTP requests and HTTPS CONNECT tunnels sent through the proxy.
+// TLS is forwarded without decryption, so requests inside a tunnel are not counted.
 // ---------------------------------------------------------------------------
 
 const proxyAddr = "127.0.0.1:9191"
@@ -418,9 +418,9 @@ func netReqSnapshot() int64 { return atomic.LoadInt64(&netReqCount) }
 
 // --- Output parsers ---
 
-// parseKingfisherSummary reads the trailing summary object from Kingfisher's
-// JSON output (the last line; the first line is the full findings array, which
-// can be very large, so we only read the tail).
+// parseKingfisherSummary expects the legacy trailing summary object with numeric
+// findings and successful_validations fields. It does not parse the current report
+// envelope's findings array; missing or incompatible fields produce zero counts.
 func parseKingfisherSummary(rawPath string) (findings, validated int) {
 	line, err := lastLine(rawPath)
 	if err != nil {

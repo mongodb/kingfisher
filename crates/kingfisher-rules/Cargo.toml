@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-rules"
-version = "1.0.1"
+version = "1.1.0"
 description = "Rule definitions and database for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -18,7 +18,7 @@ targets = ["x86_64-unknown-linux-gnu"]
 
 [dependencies]
 # Internal dependencies
-kingfisher-core = { version = "1.0.1", path = "../kingfisher-core" }
+kingfisher-core = { version = "1.0.2", path = "../kingfisher-core" }
 
 # Serialization
 serde.workspace = true

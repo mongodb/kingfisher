@@ -1,4 +1,4 @@
-//! tests/dedup_git.rs
+//! Reporting deduplicates identical fingerprints across different Git commits.
 use std::{
     path::PathBuf,
     sync::{Arc, Mutex},
@@ -166,7 +166,6 @@ fn reporter_deduplicates_across_git_commits() -> Result<()> {
     // no_dedup = false ⇒ we expect true deduplication.
     let deduped = reporter.deduplicate_matches(matches, /* no_dedup= */ false);
 
-    // Old code ⇒ len == 2  (fails).  Fixed code ⇒ len == 1  (passes).
     assert_eq!(deduped.len(), 1, "identical findings across commits must be merged");
 
     Ok(())

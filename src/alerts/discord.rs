@@ -12,10 +12,7 @@ use crate::reporter::FindingReporterRecord;
 
 const PER_FINDING_LIMIT: usize = 10;
 
-// Discord embed `description` is capped at 4096 chars and each `fields[].value`
-// at 1024. We keep the per-finding block well under both — the section is
-// truncated to 1900 chars (leaving room for the trailing "…N more" line) so
-// servers running older Discord clients render the embed without truncation.
+// Leave room in the embed description for the omitted-findings notice.
 const DESCRIPTION_SOFT_LIMIT: usize = 1900;
 
 const COLOR_RED: u32 = 0xC0_39_2B; // active live secrets

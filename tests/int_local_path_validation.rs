@@ -17,7 +17,6 @@ fn scan_local_path_finishes_without_repo_inputs() -> Result<()> {
         "json",
         "--only-valid",
     ]);
-    // .timeout(Duration::from_secs(40));
 
     let output = cmd.output()?;
     if !output.status.success() {

@@ -21,11 +21,10 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 // -----------------------------------------------------------------------------
-// Helper macro – keeps most filters <10 lines long
+// Declare Liquid filters with reflection and evaluation implementations.
 // -----------------------------------------------------------------------------
-// -- filters.rs (or wherever the macro lives) -------------------------------
 macro_rules! static_filter {
-    // ── original, zero-arg variant ────────────────────────────────
+    // Stateless filter.
     (
         $(#[$outer:meta])*
         $name:ident, $display:literal, $body:expr_2021
@@ -51,7 +50,7 @@ macro_rules! static_filter {
         }
     };
 
-    // -- NEW, second arm of the macro (add Default) ----------------------------
+    // Filter with stored fields.
 (
     $(#[$outer:meta])*
     $name:ident { $( $(#[$f_meta:meta])* $field:ident : $ty:ty ),+ $(,)? },
@@ -59,7 +58,7 @@ macro_rules! static_filter {
     $body:expr_2021
 ) => {
     $(#[$outer])*
-    #[derive(Debug, Clone, Default, FilterReflection, ParseFilter)]   // ← added Default
+    #[derive(Debug, Clone, Default, FilterReflection, ParseFilter)]
     #[filter(name = $display, description = $display, parsed($name))]
     pub struct $name { $( $(#[$f_meta])* pub $field : $ty ),+ }
 
@@ -1144,7 +1143,7 @@ pub fn register_all(builder: liquid::ParserBuilder) -> liquid::ParserBuilder {
 
 #[cfg(test)]
 mod tests {
-    use base64::{Engine as _, engine::general_purpose};
+    use base64::engine::general_purpose;
     use hmac::{Hmac, KeyInit, Mac};
     use liquid::{ParserBuilder, object};
     use percent_encoding::{NON_ALPHANUMERIC, utf8_percent_encode};

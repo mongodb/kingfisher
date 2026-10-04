@@ -405,6 +405,13 @@ For example, from a repository checkout:
 cargo run --locked -p kingfisher-scanner --example http_validation --features validation
 ```
 
+## Verifying Releases
+
+Before installing a pinned release, verify that your download came from Kingfisher's release
+workflow and matches the version you requested. This catches tampered downloads and substitution
+with an older genuine release, which matters when Kingfisher is your CI secrets gate.
+Follow the [release verification steps](docs/INSTALLATION.md#verifying-release-artifacts).
+
 ## Documentation
 
 - **[Documentation index](docs/INDEX.md):** task-oriented map of every user, operator, rule-author,

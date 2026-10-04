@@ -69,7 +69,7 @@ impl Finding {
         self.location.line
     }
 
-    /// Returns the start column (0-indexed).
+    /// Returns the start byte column (0-indexed).
     pub fn column(&self) -> usize {
         self.location.column
     }
@@ -87,13 +87,13 @@ pub struct FindingLocation {
     /// Start line number (1-indexed).
     pub line: usize,
 
-    /// Start column (0-indexed).
+    /// Start byte column (0-indexed).
     pub column: usize,
 
     /// End line number (1-indexed).
     pub end_line: usize,
 
-    /// End column (0-indexed).
+    /// End byte column (0-indexed).
     pub end_column: usize,
 }
 

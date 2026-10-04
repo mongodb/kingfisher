@@ -49,7 +49,6 @@ enum CodeFormat {
     /// Python 3.11-3.12: 5 leading i32s, 9 objects, 1 i32, 2 objects
     V311,
     /// Python 3.13+: 5 leading i32s, 8 objects, 1 i32, 2 objects
-    /// (varnames/freevars/cellvars replaced by localsplusnames/localspluskinds)
     V313,
 }
 

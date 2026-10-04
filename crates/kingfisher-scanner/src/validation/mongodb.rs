@@ -88,7 +88,9 @@ const SRV_PARSE_MS: u64 = 2_000;
 const SRV_CONNECT_MS: u64 = 2500;
 const SRV_SELECT_MS: u64 = 2500;
 
-/// Validates a MongoDB URI in ≤ 2 s.
+/// Validate a MongoDB URI using bounded parsing and driver connection attempts.
+/// The enclosing network policy can disable these timeouts; DNS and retry work
+/// means the driver limits are not a fixed total wall-clock deadline.
 pub async fn validate_mongodb(
     uri: &str,
     lax_tls: bool,

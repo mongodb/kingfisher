@@ -299,22 +299,16 @@ mod tests {
     fn includes_whole_match_when_multiple() {
         let captures = SerializableCaptures {
             captures: smallvec![
-                // --- FIX ---
-                // This test simulated a regex like `(abc)de(?P<foo>bcd)`.
-                // With our fix, group 0 ("abcde") is NOT serialized.
-                // We only get the explicit captures (group 1 and "foo").
                 SerializableCapture {
-                    // This is group 1 (unnamed)
                     name: None,
-                    match_number: 1, // Corrected match_number
+                    match_number: 1,
                     start: 1,
                     end: 4,
                     value: "bcd".into(),
                 },
                 SerializableCapture {
-                    // This is group 2 (named "foo")
                     name: Some("foo"),
-                    match_number: 2, // Corrected match_number
+                    match_number: 2,
                     start: 1,
                     end: 4,
                     value: "bcd".into(),
@@ -323,8 +317,6 @@ mod tests {
         };
         let result = process_captures(&captures);
 
-        // --- FIX ---
-        // The expected result now only contains the explicit captures.
         // The first unnamed capture ("bcd") becomes "TOKEN".
         assert_eq!(
             result,
@@ -333,29 +325,22 @@ mod tests {
                 ("FOO".to_string(), "bcd".to_string(), 1usize, 4usize),
             ]
         );
-        // --- END FIX ---
     }
 
     #[test]
     fn includes_whole_match_and_unnamed_groups() {
         let captures = SerializableCaptures {
             captures: smallvec![
-                // --- FIX ---
-                // This test simulated a regex like `(?P<foo>aa)bb(cc)`.
-                // With our fix, group 0 ("aabbcc") is NOT serialized.
-                // We only get the explicit captures ("foo" and group 2).
                 SerializableCapture {
-                    // This is group 1 (named "foo")
                     name: Some("foo"),
-                    match_number: 1, // Corrected match_number
+                    match_number: 1,
                     start: 0,
                     end: 2,
                     value: "aa".into(),
                 },
                 SerializableCapture {
-                    // This is group 2 (unnamed)
                     name: None,
-                    match_number: 2, // Corrected match_number
+                    match_number: 2,
                     start: 4,
                     end: 6,
                     value: "cc".into(),
@@ -364,17 +349,14 @@ mod tests {
         };
         let result = process_captures(&captures);
 
-        // --- FIX ---
-        // The expected result no longer contains the full match ("aabbcc").
-        // The first (and only) unnamed capture ("cc") is now correctly labeled "TOKEN".
+        // The unnamed capture becomes TOKEN alongside the named FOO capture.
         assert_eq!(
             result,
             vec![
-                ("FOO".to_string(), "aa".to_string(), 0usize, 2usize), // From named group 1
-                ("TOKEN".to_string(), "cc".to_string(), 4usize, 6usize), // From unnamed group 2
+                ("FOO".to_string(), "aa".to_string(), 0usize, 2usize),
+                ("TOKEN".to_string(), "cc".to_string(), 4usize, 6usize),
             ]
         );
-        // --- END FIX ---
     }
 
     #[test]

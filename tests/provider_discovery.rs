@@ -32,7 +32,7 @@ fn gitlab_user_files_reject_invalid_username_boundaries() {
         ])
         .unwrap();
         let Command::Scan(command) = args.command else { panic!() };
-        let error = command.into_operation().err().expect("invalid username accepted");
+        let error = command.into_operation().expect_err("invalid username accepted");
         assert!(error.to_string().contains("Invalid GitLab username"), "{error}");
     }
 }

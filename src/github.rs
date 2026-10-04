@@ -830,9 +830,6 @@ pub async fn list_repositories(
         repo_filter,
         exclude_repos: exclude_repos.to_vec(),
     };
-    // Create a progress bar just for displaying status
-    // let mut progress = ProgressBar::new_spinner("Fetching repositories...",
-    // true,);
     let mut progress = if progress_enabled {
         let style = ProgressStyle::with_template("{spinner} {msg} [{elapsed_precise}]")
             .expect("progress bar style template should compile");

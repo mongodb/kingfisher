@@ -151,7 +151,7 @@ fn truncate(s: &str, n: usize) -> String {
     format!("{prefix}…")
 }
 
-/// Slack mrkdwn requires `<>&` escaping; backticks are fine inside code spans.
+/// Escape `<>&` for Slack mrkdwn; code-span delimiters are handled separately.
 fn escape_mrkdwn(s: &str) -> String {
     s.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
 }

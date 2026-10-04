@@ -1,9 +1,8 @@
 //! Microsoft Teams incoming-webhook payload (legacy MessageCard schema).
 //!
-//! Teams' `IncomingWebhook` connector still accepts the simpler MessageCard
-//! schema in addition to Adaptive Cards. We use MessageCard for broader
-//! compatibility with both classic O365 connectors and newer Power Automate
-//! webhooks.
+//! Builds a MessageCard payload with an OpenUri report action. The configured
+//! webhook must support this schema; Power Automate workflows can require
+//! a different payload format.
 
 use serde_json::{Value, json};
 
@@ -130,8 +129,8 @@ fn escape_for_code_span(s: &str) -> String {
     s.replace('`', "\u{02CB}").replace(['\n', '\r'], " ")
 }
 
-/// Escape values rendered inside a `**bold**` span — strip embedded `**`
-/// and `_` so a user-controlled value cannot end the bold or start a link.
+/// Replace bold delimiters, escape underscores/pipes, and normalize newlines
+/// in values rendered inside a `**bold**` span.
 fn escape_bold(s: &str) -> String {
     s.replace("**", "\u{02CB}\u{02CB}")
         .replace('_', "\\_")

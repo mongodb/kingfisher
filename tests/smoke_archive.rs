@@ -1,4 +1,3 @@
-// tests/smoke_archive.rs
 use assert_cmd::prelude::*;
 use predicates::prelude::*;
 #[test]
@@ -29,7 +28,6 @@ fn smoke_scan_tar_gz_archive() -> anyhow::Result<()> {
         t.into_inner()?.finish()?;
     }
 
-    // Expected exit-code differs by OS
     let findings_code = 200;
 
     // ── 1) extraction ENABLED -- secret should be found ─────────────────────────

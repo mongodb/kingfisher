@@ -653,9 +653,8 @@ mod test {
     /// release that drops a provider fails the build instead of silently
     /// reducing detection coverage.
     ///
-    /// If this fails, either the alias target needs updating for an upstream
-    /// rename, or coverage genuinely regressed and the alias entry should be
-    /// removed in the same change (and noted in the changelog).
+    /// Resolve upstream renames or restore missing coverage when this fails.
+    /// Do not remove alias entries merely to make a regressed catalog pass.
     #[test]
     fn legacy_aliases_all_resolve_against_the_builtin_catalog() {
         let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();

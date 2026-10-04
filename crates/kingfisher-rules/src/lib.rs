@@ -17,12 +17,13 @@ pub mod liquid_filters;
 pub mod rule;
 pub mod rules;
 pub mod rules_database;
+#[doc(hidden)]
+pub mod scanner_pool;
 #[cfg(test)]
 #[allow(dead_code)]
 #[path = "../build_support/veles.rs"]
 mod veles;
 
-// Re-export rule types
 pub use rule::{
     BetterleaksAccessMap, BetterleaksAccessMapHandler, BetterleaksCapabilities, BetterleaksExpr,
     BetterleaksRevocationBindings, BetterleaksValidation, ChecksumActual, ChecksumRequirement,
@@ -33,19 +34,14 @@ pub use rule::{
     RuleSyntax, TlsMode, Validation,
 };
 
-// Re-export Rules collection
 pub use rules::{Rules, RulesError};
 
-// Re-export RulesDatabase
 pub use rules_database::{RuleCacheConfig, RulesDatabase, format_regex_pattern};
 
-// Re-export defaults
 pub use defaults::{
     get_betterleaks_rule_files, get_betterleaks_rules, get_builtin_rule_files, get_builtin_rules,
 };
 
-// Re-export legacy 1.x rule-selector aliases
 pub use legacy_aliases::{LEGACY_RULE_PREFIX, legacy_aliases, legacy_family, replacements_for};
 
-// Re-export liquid_filters registration
 pub use liquid_filters::register_all as register_liquid_filters;

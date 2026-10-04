@@ -20,9 +20,55 @@ env:
   CARGO_INCREMENTAL: "0"
   CARGO_PROFILE_DEV_DEBUG: "0"
   CARGO_PROFILE_TEST_DEBUG: "0"
-  RUST_TOOLCHAIN: "1.96.0"
+  RUST_TOOLCHAIN: "1.99.0"
 
 jobs:
+  lint:
+    name: Rust Clippy and API documentation
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+          components: clippy
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake pkg-config perl curl
+      - run: cargo clippy --locked --workspace --all-targets -- -D warnings
+        env:
+          CARGO_BUILD_JOBS: 2
+      # Workspace feature unification enables validation through the CLI.
+      # Check the dependency-light scanner configuration independently as well.
+      - run: cargo clippy --locked -p kingfisher-scanner --all-targets --no-default-features -- -D warnings
+      - name: Check application API documentation
+        run: cargo doc --locked -p kingfisher-bin --no-deps --lib
+        env:
+          CARGO_BUILD_JOBS: 2
+          RUSTDOCFLAGS: -D warnings
+
+  latest-stable:
+    name: Check latest stable Rust
+    runs-on: ubuntu-24.04
+    env:
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: stable
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - name: Install native dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends cmake pkg-config perl curl
+      - name: Check workspace and all targets
+        run: cargo check --locked --workspace --all-targets
+        env:
+          CARGO_BUILD_JOBS: 2
+
   rule-bundle:
     name: Verify prepared rule bundle
     runs-on: ubuntu-24.04
@@ -57,7 +103,7 @@ jobs:
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends cmake pkg-config perl curl libboost-all-dev ragel
       # Plain cargo test includes doctests, unlike --all-targets and nextest.
-      - name: Test libraries, consumer contracts, and README examples at MSRV
+      - name: Test libraries, consumer contracts, and README examples
         env:
           FEATURE_GROUP: ${{ matrix.features }}
           RUSTDOCFLAGS: -D warnings
@@ -213,6 +259,9 @@ jobs:
   windows:
     name: Windows ${{ matrix.arch }}
     runs-on: ${{ matrix.runs_on }}
+    env:
+      # Large static test binaries can exhaust memory when linked concurrently.
+      CARGO_BUILD_JOBS: 1
     strategy:
       fail-fast: false
       matrix:
@@ -229,6 +278,13 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
+
+      - name: Set up Python runtime for native binding tests
+        id: python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: '3.13'
+          architecture: ${{ matrix.arch }}
 
       - name: Set up MSYS2
         uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
@@ -250,4 +306,64 @@ jobs:
 
       - name: Run tests
         shell: msys2 {0}
-        run: make windows-test-${{ matrix.arch }}
+        env:
+          KF_TEST_PYTHON: ${{ steps.python.outputs.python-path }}
+        run: |
+          # MSYS2 does not inherit the full Windows PATH. PyO3's ABI3 test
+          # executable needs CPython's python3.dll for the target architecture.
+          python_bin_dir="$(dirname "$(cygpath -u "$KF_TEST_PYTHON")")"
+          export PATH="$python_bin_dir:$PATH"
+          make windows-test-${{ matrix.arch }}
+
+      - name: Test Git for Windows from PowerShell
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $candidates = @(
+            "$env:ProgramFiles/Git/cmd/git.exe",
+            "${env:ProgramFiles(x86)}/Git/cmd/git.exe",
+            (Get-Command git.exe -CommandType Application -ErrorAction SilentlyContinue).Source
+          )
+          $env:KF_GIT_BINARY = $null
+          foreach ($candidate in $candidates) {
+            if (Test-Path -LiteralPath $candidate) {
+              $version = & $candidate --version
+              if ($LASTEXITCODE -eq 0 -and $version -match '\.windows\.') {
+                $env:KF_GIT_BINARY = $candidate
+                break
+              }
+            }
+          }
+          if (-not $env:KF_GIT_BINARY) { throw 'Git for Windows was not found' }
+          & $env:KF_GIT_BINARY --version
+          if ($LASTEXITCODE -ne 0) { throw 'Git for Windows is unavailable' }
+          $triple = if ('${{ matrix.arch }}' -eq 'arm64') { 'aarch64-pc-windows-gnullvm' } else { 'x86_64-pc-windows-gnu' }
+          # These paths match the ci-test profile and default target directory used by
+          # make windows-test-* above. Keep them in sync if those build settings change.
+          $harnesses = Get-ChildItem "target/$triple/ci-test/deps/kingfisher-*.exe" | Sort-Object LastWriteTime -Descending
+          $gitHarnesses = @()
+          foreach ($harness in $harnesses) {
+            # Cargo also places the regular CLI executable in deps; it rejects --list.
+            $previousPreference = $ErrorActionPreference
+            try {
+              $ErrorActionPreference = 'Continue'
+              $cases = & $harness.FullName --list 2>$null
+              $listed = $LASTEXITCODE -eq 0
+            } finally {
+              $ErrorActionPreference = $previousPreference
+            }
+            if (-not $listed) { continue }
+            if ($cases -match 'git_binary::tests::git_executable_override_is_literal_and_shared') {
+              & $harness.FullName git_binary:: --skip test_create_fresh_clone --skip test_update_clone
+              if ($LASTEXITCODE -ne 0) { throw 'Git for Windows regressions failed' }
+              $gitHarnesses += $harness
+              break
+            }
+          }
+          if (-not $gitHarnesses) { throw 'Git regression harness was not found' }
+          $stagedHarnesses = Get-ChildItem "target/$triple/ci-test/deps/smoke_branch-*.exe" | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+          if (-not $stagedHarnesses) { throw 'Staged scan regression harness was not found' }
+          foreach ($harness in $stagedHarnesses) {
+            & $harness.FullName
+            if ($LASTEXITCODE -ne 0) { throw 'Branch/staged scans with Git for Windows failed' }
+          }

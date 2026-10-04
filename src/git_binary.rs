@@ -11,6 +11,22 @@ use wait_timeout::ChildExt;
 
 use crate::{bitbucket::is_bitbucket_access_token, git_url::GitUrl};
 
+#[cfg(windows)]
+mod windows;
+
+/// Use the same executable for clone/update and local staged Git operations.
+/// An explicit path also lets Windows users select Git for Windows over MSYS2 Git.
+pub fn git_command() -> Command {
+    let mut command =
+        Command::new(std::env::var_os("KF_GIT_BINARY").unwrap_or_else(|| "git".into()));
+    // Apply to local staged operations as well as clone/update, without changing
+    // any user or repository configuration on disk.
+    if cfg!(windows) {
+        command.args(["-c", "core.longpaths=true"]);
+    }
+    command
+}
+
 /// Default time budget for a fresh `git clone`. Generous so well-formed clones
 /// of large monorepos complete on slow networks, but bounded so a single
 /// unresponsive remote cannot park a clone worker indefinitely. Override per
@@ -51,8 +67,7 @@ fn git_update_timeout() -> Duration {
 /// a terminal `Ctrl-C` (SIGINT to the foreground group) no longer reaches
 /// `git` directly; the wall-clock timeout is what guarantees cleanup.
 ///
-/// On Windows this is a no-op — tearing down the whole tree there requires a
-/// Job Object, which we don't set up; the immediate child is still killed.
+/// On Windows, `windows::spawn` instead contains the child in a Job Object.
 #[cfg(unix)]
 fn set_own_process_group(cmd: &mut Command) {
     use std::os::unix::process::CommandExt;
@@ -400,13 +415,18 @@ impl Git {
 
     /// Create a basic `git` `Command` with environment variables set to
     /// limit config usage and (optionally) ignore certs. Includes credentials
-    /// if GitHub, GitLab, or Bitbucket tokens are present.
+    /// if GitHub, GitLab, Gitea, or Bitbucket tokens are present.
     fn git(&self) -> Command {
-        let mut cmd = Command::new("git");
+        let mut cmd = git_command();
         cmd.env("GIT_CONFIG_GLOBAL", "/dev/null");
         cmd.env("GIT_CONFIG_NOSYSTEM", "1");
         cmd.env("GIT_CONFIG_SYSTEM", "/dev/null");
         cmd.env("GIT_TERMINAL_PROMPT", "0");
+        if let Ok(backend) = std::env::var("KF_GIT_SSL_BACKEND")
+            && !backend.trim().is_empty()
+        {
+            cmd.arg("-c").arg(format!("http.sslBackend={}", backend.trim()));
+        }
         if self.ignore_certs {
             cmd.env("GIT_SSL_NO_VERIFY", "1");
         }
@@ -434,7 +454,7 @@ impl Git {
     /// Spawns the child, drains stdout/stderr in dedicated reader threads
     /// (otherwise a child that fills its pipe buffer would block before
     /// the deadline could fire), and uses `wait-timeout` to wait without a
-    /// per-process polling loop. On timeout the child is SIGKILL'd and a
+    /// per-process polling loop. On timeout the process tree is killed and a
     /// [`GitError::Timeout`] is returned so callers can surface the stuck
     /// repo and move on instead of parking a clone worker forever.
     fn run_cmd(&self, mut cmd: Command, timeout: Duration) -> Result<(), GitError> {
@@ -451,12 +471,24 @@ impl Git {
         if bounded {
             set_own_process_group(&mut cmd);
         }
-        let mut child = cmd.spawn()?;
+        let spawn_error = |error: std::io::Error| {
+            if error.kind() == std::io::ErrorKind::NotFound {
+                std::io::Error::new(
+                    error.kind(),
+                    format!("{error}; install Git on PATH or set KF_GIT_BINARY to its executable"),
+                )
+            } else {
+                error
+            }
+        };
+        #[cfg(windows)]
+        let (mut child, mut job) = windows::spawn(&mut cmd, bounded).map_err(spawn_error)?;
+        #[cfg(not(windows))]
+        let mut child = cmd.spawn().map_err(spawn_error)?;
 
         // Drain stdout/stderr off the main thread. Reader threads exit as
         // soon as the child closes its end of the pipe, so this adds two
-        // short-lived threads per `git` invocation — comparable to what
-        // `Command::output()` does internally.
+        // short-lived threads per `git` invocation.
         let mut stdout_pipe = child.stdout.take().expect("stdout was piped");
         let mut stderr_pipe = child.stderr.take().expect("stderr was piped");
         let stdout_reader = std::thread::spawn(move || -> std::io::Result<Vec<u8>> {
@@ -474,16 +506,18 @@ impl Git {
             match if bounded { child.wait_timeout(timeout) } else { child.wait().map(Some) } {
                 Ok(Some(status)) => status,
                 Ok(None) => {
-                    // Timeout. Killing the whole process group closes every
+                    // Timeout. Killing the whole process tree closes every
                     // writer on the stdout/stderr pipes — including helpers like
                     // `git-remote-https`/`ssh` that may have inherited git's pipe
                     // ends — which unblocks the reader threads. `kill_process_tree`
                     // also reaps the direct child so we don't leave a zombie.
                     let secs = timeout.as_secs();
                     warn!(
-                        "git command exceeded {secs}s timeout; killing process group of pid {}",
+                        "git command exceeded {secs}s timeout; killing process tree of pid {}",
                         child.id()
                     );
+                    #[cfg(windows)]
+                    drop(job.take());
                     kill_process_tree(&mut child, bounded);
                     let _ = stdout_reader.join();
                     let _ = stderr_reader.join();
@@ -492,6 +526,8 @@ impl Git {
                 Err(e) => {
                     // wait_timeout itself failed — kill defensively so we don't
                     // leak the child (or its helpers), then surface the I/O error.
+                    #[cfg(windows)]
+                    drop(job.take());
                     kill_process_tree(&mut child, bounded);
                     let _ = stdout_reader.join();
                     let _ = stderr_reader.join();
@@ -499,6 +535,9 @@ impl Git {
                 }
             };
 
+        // A helper must not retain our pipe handles after Git exits either.
+        #[cfg(windows)]
+        drop(job.take());
         let stdout = stdout_reader.join().unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
         let stderr = stderr_reader.join().unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
 
@@ -649,6 +688,131 @@ mod tests {
     use tempfile::TempDir;
 
     use super::*;
+
+    #[test]
+    fn git_executable_override_is_literal_and_shared() {
+        if let Some(expected) = std::env::var_os("KF_TEST_EXPECT_GIT_BINARY") {
+            assert_eq!(git_command().get_program(), expected);
+            assert_eq!(Git::default().git().get_program(), expected);
+            return;
+        }
+        // Keep executable selection out of this test process's global environment:
+        // other tests may be cloning concurrently.
+        let path = Path::new("tools with spaces").join("git-custom.exe");
+        for override_path in [Some(path.as_os_str()), None] {
+            let mut command = Command::new(std::env::current_exe().unwrap());
+            command
+                .args([
+                    "--exact",
+                    "git_binary::tests::git_executable_override_is_literal_and_shared",
+                ])
+                .env(
+                    "KF_TEST_EXPECT_GIT_BINARY",
+                    override_path.unwrap_or(std::ffi::OsStr::new("git")),
+                )
+                .env_remove("KF_GIT_BINARY");
+            if let Some(path) = override_path {
+                command.env("KF_GIT_BINARY", path);
+            }
+            let output = command.output().unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        }
+    }
+
+    #[test]
+    fn git_tls_backend_can_be_selected_without_loading_user_config() {
+        if std::env::var_os("KF_TEST_GIT_TLS_CHILD").is_some() {
+            let command = Git::default().git();
+            assert!(command.get_args().any(|arg| arg == "http.sslBackend=schannel"));
+            assert!(command.get_envs().any(|(key, value)| {
+                key == "GIT_CONFIG_NOSYSTEM" && value == Some(std::ffi::OsStr::new("1"))
+            }));
+            return;
+        }
+        let output = Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "git_binary::tests::git_tls_backend_can_be_selected_without_loading_user_config",
+            ])
+            .env("KF_TEST_GIT_TLS_CHILD", "1")
+            .env("KF_GIT_SSL_BACKEND", " schannel ")
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn checkout_supports_long_paths_with_git_for_windows() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+        let source = git2::Repository::init_bare(temp.path().join("source"))?;
+        let blob = source.blob(b"long path fixture")?;
+        let mut builder = source.treebuilder(None)?;
+        builder.insert("fixture.txt", blob, 0o100644)?;
+        let mut tree = builder.write()?;
+        let segment = "nested".repeat(15);
+        for _ in 0..3 {
+            let mut builder = source.treebuilder(None)?;
+            builder.insert(&segment, tree, 0o040000)?;
+            tree = builder.write()?;
+        }
+        let signature = git2::Signature::now("tester", "tester@example.com")?;
+        source.commit(
+            Some("refs/heads/main"),
+            &signature,
+            &signature,
+            "fixture",
+            &source.find_tree(tree)?,
+            &[],
+        )?;
+        source.set_head("refs/heads/main")?;
+        let url: GitUrl = "https://example.invalid/long-path-fixture.git".parse().unwrap();
+        let local = source.path().to_string_lossy().replace('\\', "/");
+        let mut git = Git::default();
+        git.credentials.extend(["-c".into(), format!("url.{local}.insteadOf={url}")]);
+        let destination = temp.path().join("checkout with spaces");
+        git.create_fresh_clone(&url, &destination, CloneMode::Checkout)?;
+        let file = destination.join(&segment).join(&segment).join(&segment).join("fixture.txt");
+        assert!(file.as_os_str().len() > 260);
+        assert_eq!(std::fs::read(file)?, b"long path fixture");
+        Ok(())
+    }
+
+    #[test]
+    fn github_shell_helper_executes_and_does_not_offer_tokens_to_other_hosts() {
+        use std::io::Write;
+
+        let token = "kingfisher-credential-helper-fixture";
+        let git = Git::with_provider_hosts_and_github_token(
+            false,
+            &ProviderHosts::saas_defaults(),
+            Some(token.into()),
+        );
+        for (host, succeeds) in [("github.com", true), ("example.invalid", false)] {
+            let mut command = git.git();
+            command
+                .args(["credential", "fill"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped());
+            let mut child = command.spawn().unwrap();
+            writeln!(child.stdin.take().unwrap(), "protocol=https\nhost={host}\n").unwrap();
+            let output = child.wait_with_output().unwrap();
+            assert_eq!(
+                output.status.success(),
+                succeeds,
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if succeeds {
+                assert!(stdout.contains("username=x-access-token"));
+                assert!(stdout.contains(&format!("password={token}")));
+            } else {
+                assert!(!stdout.contains(token));
+            }
+        }
+    }
 
     fn github_is_reachable() -> bool {
         ("github.com", 443).to_socket_addrs().is_ok()
@@ -889,7 +1053,9 @@ mod tests {
             false,
         )?;
         let url: GitUrl = "https://example.invalid/branch-fixture.git".parse().unwrap();
-        let local = source.path().canonicalize()?.to_string_lossy().replace('\\', "/");
+        // Canonicalization adds a Windows verbatim prefix (`//?/C:/...`) that
+        // Git for Windows interprets as a remote path in an insteadOf rewrite.
+        let local = std::path::absolute(source.path())?.to_string_lossy().replace('\\', "/");
         let mut git = Git::default();
         git.credentials.extend(["-c".into(), format!("url.{local}.insteadOf={url}")]);
         let destination = temp.path().join("cache").join("selected");
@@ -1092,6 +1258,39 @@ mod tests {
 #[cfg(test)]
 mod unlimited_tests {
     use super::*;
+
+    #[test]
+    fn inherited_pipe_child() {
+        let Ok(role) = std::env::var("KF_TEST_PIPE_CHILD") else { return };
+        let marker = std::env::var_os("KF_TEST_PIPE_MARKER").unwrap();
+        if role == "parent" {
+            let mut helper = Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "git_binary::unlimited_tests::inherited_pipe_child"])
+                .env("KF_TEST_PIPE_CHILD", "helper")
+                .spawn()
+                .unwrap();
+            helper.wait().unwrap();
+        } else {
+            std::fs::write(marker, "ready").unwrap();
+            std::thread::sleep(Duration::from_secs(30));
+        }
+    }
+
+    #[test]
+    fn timeout_kills_helpers_holding_output_pipes() {
+        let temp = tempfile::tempdir().unwrap();
+        let marker = temp.path().join("helper-ready");
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", "git_binary::unlimited_tests::inherited_pipe_child"])
+            .env("KF_TEST_PIPE_CHILD", "parent")
+            .env("KF_TEST_PIPE_MARKER", &marker);
+        let start = std::time::Instant::now();
+        let error = Git::default().run_cmd(command, Duration::from_secs(5)).unwrap_err();
+        assert!(marker.exists(), "helper must start before the timeout");
+        assert!(matches!(error, GitError::Timeout { .. }));
+        assert!(start.elapsed() < Duration::from_secs(12), "inherited pipes delayed cleanup");
+    }
 
     #[test]
     fn delayed_child() {

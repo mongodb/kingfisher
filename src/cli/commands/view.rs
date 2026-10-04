@@ -194,13 +194,10 @@ fn is_report_extension(path: &Path) -> bool {
 }
 
 /// Load multiple report files and emit genuine JSONL so the viewer's
-/// multi-document parser can split on newline boundaries. Kingfisher's
-/// `json_format` writes pretty-printed (multi-line) documents; naive
-/// concatenation would produce output that is neither valid JSON nor
-/// valid JSONL and the viewer's fallback splitter would shatter nested
-/// objects. For each file we try to parse the whole payload as a single
-/// JSON value and emit it as one compact line; on failure we assume
-/// JSONL input and re-emit each non-blank line compacted.
+/// multi-document parser can split on newline boundaries. Imported or older
+/// reports may contain pretty-printed JSON, which cannot be concatenated as
+/// JSONL directly. Parse each file as one JSON value and compact it; otherwise
+/// treat it as JSONL and compact each non-blank line.
 // nosemgrep: tokio::fs::read below operates on CLI-supplied paths (the
 // user explicitly ran `kingfisher view <path>`); path-traversal rules
 // designed for HTTP handlers don't apply to a CLI.

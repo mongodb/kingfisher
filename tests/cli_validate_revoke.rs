@@ -1,8 +1,8 @@
-// tests/cli_validate_revoke.rs
 //
 // CLI tests for the `kingfisher validate` and `kingfisher revoke` commands.
 // These tests validate CLI argument parsing, error messages, and basic functionality
-// without requiring actual network connections or valid credentials.
+// using synthetic credentials and loopback mocks. Some built-in validator tests
+// may attempt provider requests, but do not require valid credentials.
 
 use assert_cmd::Command;
 use predicates::{prelude::PredicateBooleanExt, str::contains};
@@ -213,6 +213,16 @@ mod validate {
     /// the secret is not leaked into stdout via the error message.
     #[test]
     fn validate_http_failure_emits_structured_result() {
+        // Closing an accepted connection fails immediately on every platform;
+        // a closed port can instead exhaust the deadline on Windows.
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("github=http://{}", listener.local_addr().unwrap());
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+            let mut request = [0_u8; 4096];
+            assert!(stream.read(&mut request).unwrap() > 0);
+        });
         let secret = "ghp_redaction_test_secret_value_xyz";
         let assert = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args([
@@ -224,9 +234,9 @@ mod validate {
                 "json",
                 "--allow-internal-ips",
                 "--endpoint",
-                "github=http://127.0.0.1:1",
+                &endpoint,
                 "--timeout",
-                "2",
+                "10",
                 "--retries",
                 "0",
                 "--no-update-check",
@@ -247,6 +257,7 @@ mod validate {
         // when the upstream validation fails. We emit a generic error
         // message and only log the underlying detail at debug level.
         assert!(!stdout.contains(secret), "secret must not appear in stdout output, got: {stdout}");
+        server.join().unwrap();
     }
 
     /// gRPC infrastructure failures must surface as a structured

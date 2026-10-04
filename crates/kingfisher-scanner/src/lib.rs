@@ -3,18 +3,18 @@
 mod finding;
 #[doc(hidden)]
 pub mod primitives;
+mod scan_control;
 mod scanner;
 mod scanner_pool;
 
-// Validation module (feature-gated)
 #[cfg(feature = "validation")]
 pub mod validation;
 
 pub use finding::{Finding, FindingLocation, SerializableCapture, SerializableCaptures};
+pub use scan_control::{CancellationToken, ScanAborted, ScanControl};
 pub use scanner::{Scanner, ScannerConfig};
 pub use scanner_pool::ScannerPool;
 
-// Re-export commonly needed types from dependencies
 pub use kingfisher_core::{
     Blob, BlobId, Location, OffsetSpan, SourcePoint, SourceSpan, ValidationOutcome,
 };

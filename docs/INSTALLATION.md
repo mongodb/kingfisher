@@ -29,46 +29,48 @@ Pre-built binaries are available from the [Releases](https://github.com/mongodb/
 
 ## Verifying Release Artifacts
 
-Every release ships
-[SLSA v1 build-provenance attestations](https://github.com/actions/attest-build-provenance)
-using Sigstore keyless OIDC. The attestation ties an artifact digest to Kingfisher's release
-workflow, tag, and source commit. It is available through GitHub's attestation store and as the
-`multiple.intoto.jsonl` release asset.
+Verify a downloaded release **before extracting or running it**. This checks that the file
+matches a signed artifact from Kingfisher's release workflow and the exact version you requested.
+It prevents a modified download or an older genuine release from silently replacing your pinned
+version in CI.
 
-The simplest verification path uses the [GitHub CLI](https://cli.github.com/):
-
-```bash
-gh release download <version> --repo mongodb/kingfisher --pattern 'kingfisher-linux-x64.tgz'
-gh attestation verify kingfisher-linux-x64.tgz --repo mongodb/kingfisher
-```
-
-For offline-friendly verification, use [cosign](https://docs.sigstore.dev/system_config/installation/)
-2.x or later with the downloaded attestation bundle:
+Install a current [GitHub CLI](https://cli.github.com/) and authenticate with `gh auth login`.
+In a fresh directory, run these Bash commands, replacing `vX.Y.Z` with your pinned release tag:
 
 ```bash
-gh release download <version> --repo mongodb/kingfisher \
-  --pattern 'kingfisher-linux-x64.tgz' --pattern 'multiple.intoto.jsonl'
+set -euo pipefail
+VERSION=vX.Y.Z
+ASSET=kingfisher-linux-x64.tgz
 
-cosign verify-blob-attestation \
-  --bundle multiple.intoto.jsonl \
-  --new-bundle-format \
-  --certificate-identity-regexp '^https://github.com/mongodb/kingfisher/\.github/workflows/release\.yml@refs/tags/v.*$' \
-  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  kingfisher-linux-x64.tgz
+gh release download "$VERSION" --repo mongodb/kingfisher \
+  --pattern "$ASSET" --pattern multiple.intoto.jsonl
+
+gh attestation verify "$ASSET" \
+  --repo mongodb/kingfisher \
+  --signer-workflow mongodb/kingfisher/.github/workflows/release.yml \
+  --source-ref "refs/tags/$VERSION" \
+  --bundle multiple.intoto.jsonl
 ```
 
-You can also use [slsa-verifier](https://github.com/slsa-framework/slsa-verifier):
+Change `ASSET` for your platform: `kingfisher-linux-arm64.tgz`,
+`kingfisher-darwin-x64.tgz`, `kingfisher-darwin-arm64.tgz`,
+`kingfisher-windows-x64.zip`, or `kingfisher-windows-arm64.zip`.
+The same verification command works for release `.deb` and `.rpm` packages and
+`kingfisher-rule-bundle.tgz`.
 
-```bash
-slsa-verifier verify-artifact kingfisher-linux-x64.tgz \
-  --provenance-path multiple.intoto.jsonl \
-  --source-uri github.com/mongodb/kingfisher \
-  --source-tag <version>
-```
+Only install the file if verification succeeds. Keep `--source-ref`: verifying just the
+repository or workflow accepts genuine artifacts from other versions too. Renaming an older
+archive does not bypass the tag check. In CI, let a failed verification stop the install.
 
-A successful verification proves the artifact's SHA-256, signing workflow, tag, and source commit.
-Sigstore records the signing event in the public
-[Rekor transparency log](https://search.sigstore.dev/).
+The downloaded `multiple.intoto.jsonl` contains the
+[SLSA build-provenance attestation](https://github.com/actions/attest-build-provenance).
+The GitHub CLI verifies the signature and artifact digest, then enforces the workflow and tag.
+See the [verification options](https://cli.github.com/manual/gh_attestation_verify).
+This verifies release provenance; it does not guarantee that the software has no vulnerabilities.
+
+Older releases attested from `refs/heads/main` cannot pass this version-specific check.
+Do not remove `--source-ref` to make them pass: use a release attested from its version tag,
+or independently pin a trusted artifact SHA-256 for a legacy release.
 
 ## Homebrew
 
@@ -122,6 +124,14 @@ curl --silent --location \
 ```
 
 ## Windows
+
+Remote repository scans and `--staged` scans require [Git for Windows](https://gitforwindows.org/).
+Install it with command-line access enabled and verify `git --version` in PowerShell.
+If Git is installed outside `PATH`, or MSYS2 supplies a different Git, select the executable:
+
+```powershell
+$env:KF_GIT_BINARY = 'C:\Program Files\Git\cmd\git.exe'
+```
 
 Download and run the PowerShell installer to place the binary in
 `$env:USERPROFILE\bin` (or another directory you specify):
@@ -406,7 +416,7 @@ cargo install --locked kingfisher-bin
 kingfisher --version
 ```
 
-This compiles from source and requires Rust 1.96 or newer and the platform's native build
+This compiles from source and requires Rust 1.99 or newer and the platform's native build
 prerequisites described below. The rule catalog is bundled; installation does not fetch
 Betterleaks or Veles sources.
 

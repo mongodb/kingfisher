@@ -1,6 +1,7 @@
 #![allow(clippy::items_after_test_module)]
 
 use std::{
+    path::PathBuf,
     str::FromStr,
     sync::{Arc, Mutex},
 };
@@ -15,7 +16,7 @@ use url::Url;
 
 use crate::blob::BlobIdMap;
 use crate::{
-    PathBuf, azure,
+    azure,
     binary::is_binary,
     bitbucket,
     blob::BlobMetadata,
@@ -1439,17 +1440,14 @@ pub async fn fetch_s3_objects(
         if let Some((origin, blob_md, scored_matches)) =
             processor.run(origin, blob, args.no_dedup, args.redact, args.no_base64, args.turbo)?
         {
-            // Wrap origin & metadata once:
             let origin_arc = Arc::new(origin);
             let blob_arc = Arc::new(blob_md);
 
-            // Now build a batch of exactly one FindingsStoreMessage per Match
             let mut batch = Vec::with_capacity(scored_matches.len());
             for (_score, m) in scored_matches {
                 batch.push((origin_arc.clone(), blob_arc.clone(), m));
             }
 
-            // Call record with the right type
             let added = datastore.lock().unwrap().record(batch, !args.no_dedup);
             debug!("Added {} new S3 blobs", added);
         }

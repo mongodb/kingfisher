@@ -28,7 +28,7 @@ use super::{
 
 // Re-use the canonical secret capture selection from kingfisher-scanner.
 use kingfisher_rules::{RulesDatabase, betterleaks_filter::BetterleaksFilterContext};
-use kingfisher_scanner::primitives::find_secret_capture_with_group;
+use kingfisher_scanner::primitives::{MatchSpans, find_secret_capture_with_group};
 
 // -------------------------------------------------------------------------------------------------
 // Entropy and safe-list check
@@ -202,8 +202,8 @@ pub(crate) fn filter_match<'b>(
     start: usize,
     end: usize,
     matches: &mut Vec<BlobMatch<'b>>,
-    full_matches: Option<&mut FxHashMap<usize, Vec<OffsetSpan>>>,
-    previous_matches: &mut FxHashMap<usize, Vec<OffsetSpan>>,
+    full_matches: Option<&mut FxHashMap<usize, MatchSpans>>,
+    previous_matches: &mut FxHashMap<usize, MatchSpans>,
     rule_id: usize,
     seen_matches: &mut FxHashSet<u64>,
     _origin: &OriginSet,
@@ -215,6 +215,7 @@ pub(crate) fn filter_match<'b>(
     respect_ignore_if_contains: bool,
     inline_ignore_config: &InlineIgnoreConfig,
     bounded_confirmation: bool,
+    candidate_index: Option<&kingfisher_scanner::primitives::CandidateMatchIndex>,
 ) -> bool {
     if !rule.matches_path(filename) {
         return false;
@@ -231,7 +232,12 @@ pub(crate) fn filter_match<'b>(
     let haystack = ts_match.unwrap_or(default_slice);
     let mut confirmed = false;
 
-    for captures in re.captures_iter(haystack) {
+    let captures = if let Some(index) = candidate_index {
+        index.captures(re, rules_db.endpoint_regex(rule_id), haystack, start)
+    } else {
+        kingfisher_scanner::primitives::ConfirmationCaptures::Search(re.captures_iter(haystack))
+    };
+    for captures in captures {
         let full_capture = captures.get(0).unwrap();
         if bounded_confirmation
             && ((start > 0 && full_capture.start() == 0) || full_capture.end() != haystack.len())

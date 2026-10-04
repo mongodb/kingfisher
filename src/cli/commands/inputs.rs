@@ -280,7 +280,7 @@ pub struct InputSpecifierArgs {
     #[arg(long = "azure-repo-type", default_value_t = AzureRepoType::Source, hide = true)]
     pub azure_repo_type: AzureRepoType,
 
-    /// Jira base URL (e.g. https://jira.example.com)
+    /// Jira base URL (e.g. <https://jira.example.com>)
     #[arg(long, value_hint = ValueHint::Url, requires = "jql", hide = true)]
     pub jira_url: Option<Url>,
 
@@ -296,7 +296,7 @@ pub struct InputSpecifierArgs {
     #[arg(long = "jira-include-changelog", requires = "jira_url", hide = true)]
     pub jira_include_changelog: bool,
 
-    /// Confluence base URL (e.g. https://confluence.example.com)
+    /// Confluence base URL (e.g. <https://confluence.example.com>)
     #[arg(long, value_hint = ValueHint::Url, requires = "cql", hide = true)]
     pub confluence_url: Option<Url>,
 

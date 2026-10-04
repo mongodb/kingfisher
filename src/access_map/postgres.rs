@@ -95,10 +95,8 @@ pub async fn map_access_from_uri(pg_url: &str) -> Result<AccessMapResult> {
     // pg_auth_members:
     // https://www.postgresql.org/docs/current/view-pg-roles.html
     // https://www.postgresql.org/docs/current/catalog-pg-auth-members.html
-    // Database/table checks below use the documented privilege inquiry functions and
-    // information_schema.role_table_grants:
+    // Database/table checks below use the documented effective-privilege inquiry functions:
     // https://www.postgresql.org/docs/current/functions-info.html
-    // https://www.postgresql.org/docs/current/infoschema-role-table-grants.html
 
     // ── 2. Role attributes ───────────────────────────────────────────────────
     let role_attrs = query_role_attributes(&client, &current_user).await.unwrap_or_else(|e| {

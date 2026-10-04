@@ -1,19 +1,18 @@
 //! Runtime evaluation for filter expressions imported from Betterleaks.
 
 use std::{
-    cell::RefCell,
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     str::FromStr,
     sync::Arc,
 };
 
 use anyhow::{Context, Result, anyhow, bail};
-use kingfisher_vectorscan::{BlockDatabase, BlockScanner, Flag, Pattern, Scan};
+use kingfisher_vectorscan::{BlockDatabase, Flag, Pattern, Scan};
 use regex::Regex;
-use thread_local::ThreadLocal;
 use tiktoken_rs::cl100k_base_singleton;
 
-use crate::{BetterleaksExpr, Confidence};
+use crate::{BetterleaksExpr, Confidence, scanner_pool::ScannerPool};
 
 /// Candidate data exposed to a Betterleaks filter expression.
 #[derive(Debug)]
@@ -128,8 +127,7 @@ impl BetterleaksFilterEngine {
 
 struct VectorscanRegexDatabase {
     pattern_ids: BTreeMap<String, u32>,
-    database: Arc<BlockDatabase>,
-    scanners: ThreadLocal<RefCell<BlockScanner<'static>>>,
+    scanners: ScannerPool,
 }
 
 impl VectorscanRegexDatabase {
@@ -156,19 +154,7 @@ impl VectorscanRegexDatabase {
             BlockDatabase::new(patterns)
                 .with_context(|| format!("compile Betterleaks {helper_name} filters"))?,
         );
-        Ok(Some(Self { pattern_ids, database, scanners: ThreadLocal::new() }))
-    }
-
-    fn with_scanner<T>(&self, operation: impl FnOnce(&mut BlockScanner<'_>) -> T) -> T {
-        let scanner = self.scanners.get_or(|| {
-            // The Arc owns the database for at least as long as every thread-local scanner.
-            let database = unsafe { &*(self.database.as_ref() as *const BlockDatabase) };
-            RefCell::new(
-                BlockScanner::new(database)
-                    .expect("Vectorscan Betterleaks-filter scratch allocation"),
-            )
-        });
-        operation(&mut scanner.borrow_mut())
+        Ok(Some(Self { pattern_ids, scanners: ScannerPool::new(database) }))
     }
 
     fn matches_any(&self, input: &[u8], patterns: &[&str]) -> Result<bool> {
@@ -185,7 +171,7 @@ impl VectorscanRegexDatabase {
         allowed_ids.dedup();
 
         let mut matched = false;
-        self.with_scanner(|scanner| {
+        self.scanners.try_with(|scanner| {
             scanner.scan(input, |id, _from, _to, _flags| {
                 if allowed_ids.binary_search(&id).is_ok() {
                     matched = true;
@@ -194,7 +180,7 @@ impl VectorscanRegexDatabase {
                     Scan::Continue
                 }
             })
-        })?;
+        })??;
         Ok(matched)
     }
 }
@@ -289,17 +275,21 @@ fn collect_filter_regex_patterns(
 }
 
 #[derive(Debug, Clone, PartialEq)]
-enum Value {
+enum Value<'a> {
     Nil,
     Bool(bool),
     Integer(i64),
     Float(f64),
-    String(String),
-    Array(Vec<Value>),
-    Map(BTreeMap<String, Value>),
+    String(Cow<'a, str>),
+    Array(Vec<Value<'a>>),
+    Map(BTreeMap<String, Value<'a>>),
 }
 
-impl Value {
+impl<'a> Value<'a> {
+    fn string(value: impl Into<Cow<'a, str>>) -> Self {
+        Self::String(value.into())
+    }
+
     fn truthy(&self) -> bool {
         match self {
             Self::Nil => false,
@@ -321,7 +311,7 @@ impl Value {
 
     fn into_string(self) -> Result<String> {
         match self {
-            Self::String(value) => Ok(value),
+            Self::String(value) => Ok(value.into_owned()),
             other => bail!("expected string, found {other:?}"),
         }
     }
@@ -344,7 +334,7 @@ impl Value {
 }
 
 struct Evaluator<'a> {
-    variables: BTreeMap<String, Value>,
+    variables: BTreeMap<String, Value<'a>>,
     confidence: Option<Confidence>,
     filter_engine: &'a BetterleaksFilterEngine,
 }
@@ -364,13 +354,13 @@ pub(crate) fn evaluate_filter_with_engine(
     filter_engine: &BetterleaksFilterEngine,
 ) -> Result<BetterleaksFilterOutcome> {
     let mut finding = BTreeMap::new();
-    finding.insert("secret".to_string(), Value::String(context.secret.to_string()));
-    finding.insert("match".to_string(), Value::String(context.full_match.to_string()));
-    finding.insert("line".to_string(), Value::String(context.line.to_string()));
-    finding.insert("rule_id".to_string(), Value::String(context.rule_id.to_string()));
-    finding.insert("description".to_string(), Value::String(context.description.to_string()));
-    finding.insert("context".to_string(), Value::String(context.full_match.to_string()));
-    finding.insert("fragment_raw".to_string(), Value::String(context.fragment_raw.to_string()));
+    finding.insert("secret".to_string(), Value::string(context.secret));
+    finding.insert("match".to_string(), Value::string(context.full_match));
+    finding.insert("line".to_string(), Value::string(context.line));
+    finding.insert("rule_id".to_string(), Value::string(context.rule_id));
+    finding.insert("description".to_string(), Value::string(context.description));
+    finding.insert("context".to_string(), Value::string(context.full_match));
+    finding.insert("fragment_raw".to_string(), Value::string(context.fragment_raw));
     finding.insert("match_start_idx".to_string(), Value::Integer(context.match_start_idx as i64));
     finding.insert("match_end_idx".to_string(), Value::Integer(context.match_end_idx as i64));
     finding.insert(
@@ -387,7 +377,7 @@ pub(crate) fn evaluate_filter_with_engine(
             context
                 .captures
                 .iter()
-                .map(|(key, value)| (key.clone(), Value::String(value.clone())))
+                .map(|(key, value)| (key.clone(), Value::string(value.clone())))
                 .collect(),
         ),
     );
@@ -396,10 +386,7 @@ pub(crate) fn evaluate_filter_with_engine(
         ("finding".to_string(), Value::Map(finding)),
         (
             "attributes".to_string(),
-            Value::Map(BTreeMap::from([(
-                "path".to_string(),
-                Value::String(context.path.to_string()),
-            )])),
+            Value::Map(BTreeMap::from([("path".to_string(), Value::string(context.path))])),
         ),
     ]);
     let mut evaluator = Evaluator { variables, confidence: None, filter_engine };
@@ -433,8 +420,8 @@ pub fn evaluate_prefilter(expression: &BetterleaksExpr, path: &str) -> Result<bo
     .discard)
 }
 
-impl Evaluator<'_> {
-    fn eval(&mut self, expression: &BetterleaksExpr) -> Result<Value> {
+impl<'a> Evaluator<'a> {
+    fn eval(&mut self, expression: &BetterleaksExpr) -> Result<Value<'a>> {
         match expression {
             BetterleaksExpr::Nil => Ok(Value::Nil),
             BetterleaksExpr::Identifier { value } => {
@@ -443,7 +430,7 @@ impl Evaluator<'_> {
             BetterleaksExpr::Integer { value } => Ok(Value::Integer(*value)),
             BetterleaksExpr::Float { value } => Ok(Value::Float(value.parse()?)),
             BetterleaksExpr::Bool { value } => Ok(Value::Bool(*value)),
-            BetterleaksExpr::String { value } => Ok(Value::String(value.clone())),
+            BetterleaksExpr::String { value } => Ok(Value::string(value.clone())),
             BetterleaksExpr::Unary { operator, node } => {
                 let value = self.eval(node)?;
                 match operator.as_str() {
@@ -533,7 +520,7 @@ impl Evaluator<'_> {
         operator: &str,
         left: &BetterleaksExpr,
         right: &BetterleaksExpr,
-    ) -> Result<Value> {
+    ) -> Result<Value<'a>> {
         let left = self.eval(left)?;
         match operator {
             "||" | "or" if left.truthy() => return Ok(Value::Bool(true)),
@@ -560,7 +547,7 @@ impl Evaluator<'_> {
             "+" => match (left, right) {
                 (Value::Integer(left), Value::Integer(right)) => Ok(Value::Integer(left + right)),
                 (Value::String(mut left), Value::String(right)) => {
-                    left.push_str(&right);
+                    left.to_mut().push_str(&right);
                     Ok(Value::String(left))
                 }
                 (left, right) => Ok(Value::Float(left.as_f64()? + right.as_f64()?)),
@@ -579,10 +566,10 @@ impl Evaluator<'_> {
         }
     }
 
-    fn member(&self, container: Value, property: Value) -> Result<Value> {
+    fn member(&self, container: Value<'a>, property: Value<'a>) -> Result<Value<'a>> {
         match (container, property) {
             (Value::Map(values), Value::String(key)) => {
-                Ok(values.get(&key).cloned().unwrap_or(Value::Nil))
+                Ok(values.get(key.as_ref()).cloned().unwrap_or(Value::Nil))
             }
             (Value::Array(values), property) => {
                 let index = usize::try_from(property.as_i64()?).ok();
@@ -592,7 +579,7 @@ impl Evaluator<'_> {
                 let index = usize::try_from(property.as_i64()?).ok();
                 Ok(index
                     .and_then(|index| value.as_bytes().get(index).copied())
-                    .map(|byte| Value::String(char::from(byte).to_string()))
+                    .map(|byte| Value::string(char::from(byte).to_string()))
                     .unwrap_or(Value::Nil))
             }
             (Value::Nil, _) => Ok(Value::Nil),
@@ -602,14 +589,14 @@ impl Evaluator<'_> {
         }
     }
 
-    fn slice(&self, value: Value, from: i64, to: i64) -> Result<Value> {
+    fn slice(&self, value: Value<'a>, from: i64, to: i64) -> Result<Value<'a>> {
         let from = usize::try_from(from.max(0)).unwrap_or(usize::MAX);
         let to = usize::try_from(to.max(0)).unwrap_or(usize::MAX);
         match value {
             Value::String(value) => {
                 let from = from.min(value.len());
                 let to = to.min(value.len()).max(from);
-                Ok(Value::String(String::from_utf8_lossy(&value.as_bytes()[from..to]).into_owned()))
+                Ok(Value::string(String::from_utf8_lossy(&value.as_bytes()[from..to]).into_owned()))
             }
             Value::Array(values) => {
                 let from = from.min(values.len());
@@ -620,7 +607,11 @@ impl Evaluator<'_> {
         }
     }
 
-    fn call(&mut self, callee: &BetterleaksExpr, arguments: &[BetterleaksExpr]) -> Result<Value> {
+    fn call(
+        &mut self,
+        callee: &BetterleaksExpr,
+        arguments: &[BetterleaksExpr],
+    ) -> Result<Value<'a>> {
         if let Some(name) = expression_name(callee)
             && name.starts_with("filter.")
         {
@@ -637,7 +628,7 @@ impl Evaluator<'_> {
         self.call_named(&name, arguments)
     }
 
-    fn call_named(&mut self, name: &str, arguments: &[BetterleaksExpr]) -> Result<Value> {
+    fn call_named(&mut self, name: &str, arguments: &[BetterleaksExpr]) -> Result<Value<'a>> {
         if name == "any" {
             return self.call_any(arguments);
         }
@@ -663,11 +654,11 @@ impl Evaluator<'_> {
         }
     }
 
-    fn eval_arguments(&mut self, arguments: &[BetterleaksExpr]) -> Result<Vec<Value>> {
+    fn eval_arguments(&mut self, arguments: &[BetterleaksExpr]) -> Result<Vec<Value<'a>>> {
         arguments.iter().map(|argument| self.eval(argument)).collect()
     }
 
-    fn call_any(&mut self, arguments: &[BetterleaksExpr]) -> Result<Value> {
+    fn call_any(&mut self, arguments: &[BetterleaksExpr]) -> Result<Value<'a>> {
         let [items, predicate] = arguments else {
             bail!("any expects two arguments");
         };
@@ -694,16 +685,16 @@ impl Evaluator<'_> {
         Ok(Value::Bool(false))
     }
 
-    fn set_confidence(&mut self, arguments: Vec<Value>) -> Result<Value> {
+    fn set_confidence(&mut self, arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
         let [value] = arguments.as_slice() else {
             bail!("filter.setConfidence expects one argument");
         };
         let value = value.as_string()?;
         self.confidence = Some(Confidence::from_str(value)?);
-        Ok(Value::String(value.to_string()))
+        Ok(Value::string(value.to_string()))
     }
 
-    fn matches_any(&self, arguments: Vec<Value>) -> Result<Value> {
+    fn matches_any(&self, arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
         let [input, patterns] = arguments.as_slice() else {
             bail!("matchesAny expects two arguments");
         };
@@ -711,14 +702,19 @@ impl Evaluator<'_> {
         Ok(Value::Bool(self.filter_engine.matches_any(input.as_string()?, &patterns)?))
     }
 
-    fn find_match(&self, arguments: Vec<Value>) -> Result<Value> {
+    fn find_match(&self, arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
         let [input, pattern] = arguments.as_slice() else {
             bail!("findMatch expects two arguments");
         };
-        Ok(Value::String(self.filter_engine.find_match(input.as_string()?, pattern.as_string()?)?))
+        Ok(Value::string(self.filter_engine.find_match(input.as_string()?, pattern.as_string()?)?))
     }
 
-    fn call_method(&mut self, receiver: Value, name: &str, arguments: Vec<Value>) -> Result<Value> {
+    fn call_method(
+        &mut self,
+        receiver: Value<'a>,
+        name: &str,
+        arguments: Vec<Value<'a>>,
+    ) -> Result<Value<'a>> {
         match name {
             "contains" => {
                 let [needle] = arguments.as_slice() else {
@@ -768,7 +764,11 @@ fn expression_name(expression: &BetterleaksExpr) -> Option<String> {
     }
 }
 
-fn numeric_binary(left: Value, right: Value, operation: fn(f64, f64) -> f64) -> Result<Value> {
+fn numeric_binary<'a>(
+    left: Value<'a>,
+    right: Value<'a>,
+    operation: fn(f64, f64) -> f64,
+) -> Result<Value<'a>> {
     if let (Value::Integer(left), Value::Integer(right)) = (&left, &right) {
         let value = operation(*left as f64, *right as f64);
         if value.fract() == 0.0 {
@@ -778,7 +778,7 @@ fn numeric_binary(left: Value, right: Value, operation: fn(f64, f64) -> f64) -> 
     Ok(Value::Float(operation(left.as_f64()?, right.as_f64()?)))
 }
 
-fn values_equal(left: &Value, right: &Value) -> bool {
+fn values_equal<'a>(left: &Value<'a>, right: &Value<'a>) -> bool {
     match (left, right) {
         (Value::Integer(left), Value::Float(right)) => (*left as f64) == *right,
         (Value::Float(left), Value::Integer(right)) => *left == (*right as f64),
@@ -786,14 +786,14 @@ fn values_equal(left: &Value, right: &Value) -> bool {
     }
 }
 
-fn strings(value: &Value) -> Result<Vec<&str>> {
+fn strings<'v>(value: &'v Value<'_>) -> Result<Vec<&'v str>> {
     let Value::Array(values) = value else {
         bail!("expected an array of strings");
     };
     values.iter().map(Value::as_string).collect()
 }
 
-fn contains_any(arguments: Vec<Value>) -> Result<Value> {
+fn contains_any<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let [input, terms] = arguments.as_slice() else {
         bail!("containsAny expects two arguments");
     };
@@ -801,7 +801,7 @@ fn contains_any(arguments: Vec<Value>) -> Result<Value> {
     Ok(Value::Bool(strings(terms)?.into_iter().any(|term| input.contains(&term.to_lowercase()))))
 }
 
-fn entropy(arguments: Vec<Value>) -> Result<Value> {
+fn entropy<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let [input] = arguments.as_slice() else {
         bail!("entropy expects one argument");
     };
@@ -825,7 +825,7 @@ fn entropy(arguments: Vec<Value>) -> Result<Value> {
     Ok(Value::Float(entropy))
 }
 
-fn token_ratio(arguments: Vec<Value>) -> Result<Value> {
+fn token_ratio<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let [input] = arguments.as_slice() else {
         bail!("tokenRatio expects one argument");
     };
@@ -835,7 +835,7 @@ fn token_ratio(arguments: Vec<Value>) -> Result<Value> {
     Ok(Value::Float(ratio))
 }
 
-fn fails_token_efficiency(arguments: Vec<Value>) -> Result<Value> {
+fn fails_token_efficiency<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let [input] = arguments.as_slice() else {
         bail!("failsTokenEfficiency expects one argument");
     };
@@ -852,7 +852,7 @@ fn fails_token_efficiency(arguments: Vec<Value>) -> Result<Value> {
     Ok(Value::Bool(failed))
 }
 
-fn length(arguments: Vec<Value>) -> Result<Value> {
+fn length<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let [value] = arguments.as_slice() else {
         bail!("len/size expects one argument");
     };
@@ -865,7 +865,7 @@ fn length(arguments: Vec<Value>) -> Result<Value> {
     Ok(Value::Integer(length as i64))
 }
 
-fn min_or_max(arguments: Vec<Value>, maximum: bool) -> Result<Value> {
+fn min_or_max<'a>(arguments: Vec<Value<'a>>, maximum: bool) -> Result<Value<'a>> {
     let [left, right] = arguments.as_slice() else {
         bail!("min/max expects two arguments");
     };
@@ -881,7 +881,7 @@ fn min_or_max(arguments: Vec<Value>, maximum: bool) -> Result<Value> {
     }
 }
 
-fn split(arguments: Vec<Value>) -> Result<Value> {
+fn split<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let [input, separator] = arguments.as_slice() else {
         bail!("split expects two arguments");
     };
@@ -889,19 +889,19 @@ fn split(arguments: Vec<Value>) -> Result<Value> {
         input
             .as_string()?
             .split(separator.as_string()?)
-            .map(|value| Value::String(value.to_string()))
+            .map(|value| Value::string(value.to_string()))
             .collect(),
     ))
 }
 
-fn join(arguments: Vec<Value>) -> Result<Value> {
+fn join<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let [values, separator] = arguments.as_slice() else {
         bail!("join expects two arguments");
     };
-    Ok(Value::String(strings(values)?.join(separator.as_string()?)))
+    Ok(Value::string(strings(values)?.join(separator.as_string()?)))
 }
 
-fn substring(receiver: Value, arguments: Vec<Value>) -> Result<Value> {
+fn substring<'a>(receiver: Value<'a>, arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let input = receiver.as_string()?;
     let start = arguments.first().ok_or_else(|| anyhow!("substring expects a start index"))?;
     let start = usize::try_from(start.as_i64()?.max(0)).unwrap_or(usize::MAX).min(input.len());
@@ -912,10 +912,10 @@ fn substring(receiver: Value, arguments: Vec<Value>) -> Result<Value> {
         .and_then(|length| usize::try_from(length.max(0)).ok())
         .map(|length| start.saturating_add(length).min(input.len()))
         .unwrap_or(input.len());
-    Ok(Value::String(String::from_utf8_lossy(&input.as_bytes()[start..end]).into_owned()))
+    Ok(Value::string(String::from_utf8_lossy(&input.as_bytes()[start..end]).into_owned()))
 }
 
-fn last_index_of(arguments: Vec<Value>) -> Result<Value> {
+fn last_index_of<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let [input, needle] = arguments.as_slice() else {
         bail!("lastIndexOf expects two arguments");
     };
@@ -928,11 +928,11 @@ fn last_index_of(arguments: Vec<Value>) -> Result<Value> {
     ))
 }
 
-fn replace(arguments: Vec<Value>) -> Result<Value> {
+fn replace<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let [input, from, to] = arguments.as_slice() else {
         bail!("replace expects three arguments");
     };
-    Ok(Value::String(input.as_string()?.replace(from.as_string()?, to.as_string()?)))
+    Ok(Value::string(input.as_string()?.replace(from.as_string()?, to.as_string()?)))
 }
 
 #[cfg(test)]
@@ -954,6 +954,29 @@ mod tests {
             description: "test",
             captures: BTreeMap::new(),
         }
+    }
+
+    #[test]
+    fn borrowed_fragment_clones_share_storage_and_mutations_own_the_result() {
+        let fragment = "source data".repeat(10000);
+        let original = Value::string(fragment.as_str());
+        let cloned = original.clone();
+        assert_eq!(original.as_string().unwrap().as_ptr(), fragment.as_ptr());
+        assert_eq!(cloned.as_string().unwrap().as_ptr(), fragment.as_ptr());
+        let engine = BetterleaksFilterEngine::compile(std::iter::empty()).unwrap();
+        let mut evaluator = Evaluator {
+            variables: BTreeMap::from([("source".into(), original)]),
+            confidence: None,
+            filter_engine: &engine,
+        };
+        let expr = BetterleaksExpr::Binary {
+            operator: "+".into(),
+            left: Box::new(BetterleaksExpr::Identifier { value: "source".into() }),
+            right: Box::new(BetterleaksExpr::String { value: " suffix".into() }),
+        };
+        let result = evaluator.eval(&expr).unwrap();
+        assert_eq!(result.as_string().unwrap(), format!("{fragment} suffix"));
+        assert_eq!(evaluator.variables["source"].as_string().unwrap(), fragment);
     }
 
     #[test]

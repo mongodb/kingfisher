@@ -8,10 +8,9 @@ pub(crate) fn decode(input: &[u8]) -> Option<Vec<u8>> {
             // when the payload consists of complete, valid Unicode scalars.
             // If both interpretations are valid, retain UTF-32 BOM precedence.
             let payload = &input[4..];
-            if payload.len() % 4 == 0
-                && payload.chunks_exact(4).all(|chunk| {
-                    char::from_u32(u32::from_le_bytes(chunk.try_into().unwrap())).is_some()
-                })
+            let (chunks, remainder) = payload.as_chunks::<4>();
+            if remainder.is_empty()
+                && chunks.iter().all(|&chunk| char::from_u32(u32::from_le_bytes(chunk)).is_some())
             {
                 (Encoding::Utf32Le, 4)
             } else {
@@ -28,11 +27,11 @@ pub(crate) fn decode(input: &[u8]) -> Option<Vec<u8>> {
     let mut output = Vec::new();
     match encoding {
         Encoding::Utf16Le | Encoding::Utf16Be => {
-            let units = input[start..].chunks_exact(2).map(|chunk| {
+            let units = input[start..].as_chunks::<2>().0.iter().map(|&chunk| {
                 if encoding == Encoding::Utf16Le {
-                    u16::from_le_bytes([chunk[0], chunk[1]])
+                    u16::from_le_bytes(chunk)
                 } else {
-                    u16::from_be_bytes([chunk[0], chunk[1]])
+                    u16::from_be_bytes(chunk)
                 }
             });
             for character in char::decode_utf16(units) {
@@ -40,11 +39,11 @@ pub(crate) fn decode(input: &[u8]) -> Option<Vec<u8>> {
             }
         }
         Encoding::Utf32Le | Encoding::Utf32Be => {
-            for chunk in input[start..].chunks_exact(4) {
+            for &chunk in input[start..].as_chunks::<4>().0 {
                 let value = if encoding == Encoding::Utf32Le {
-                    u32::from_le_bytes(chunk.try_into().unwrap())
+                    u32::from_le_bytes(chunk)
                 } else {
-                    u32::from_be_bytes(chunk.try_into().unwrap())
+                    u32::from_be_bytes(chunk)
                 };
                 output.extend(
                     char::from_u32(value).unwrap_or('\u{fffd}').encode_utf8(&mut [0; 4]).as_bytes(),
@@ -67,7 +66,7 @@ fn guess(input: &[u8]) -> Option<(Encoding, usize)> {
     // Every BOM-less encoding heuristic below requires zero-byte padding.
     // Ordinary source text has none; use the vectorized search to avoid
     // repeatedly walking the whole blob to score individual byte lanes.
-    if input.len() < 8 || input.len() % 2 != 0 || memchr::memchr(0, input).is_none() {
+    if input.len() < 8 || !input.len().is_multiple_of(2) || memchr::memchr(0, input).is_none() {
         return None;
     }
     let score = |offset: usize, stride: usize| {
@@ -78,7 +77,7 @@ fn guess(input: &[u8]) -> Option<(Encoding, usize)> {
     };
     // Text has zero padding in specific byte lanes, not in every lane.
     // Otherwise zero-filled binary headers (such as .pyc files) look like text.
-    if input.len() % 4 == 0 {
+    if input.len().is_multiple_of(4) {
         if !score(0, 4) && score(1, 4) && score(2, 4) && score(3, 4) {
             return Some((Encoding::Utf32Le, 0));
         }
@@ -86,7 +85,7 @@ fn guess(input: &[u8]) -> Option<(Encoding, usize)> {
             return Some((Encoding::Utf32Be, 0));
         }
     }
-    if input.len() % 2 == 0 {
+    if input.len().is_multiple_of(2) {
         if !score(0, 2) && score(1, 2) {
             return Some((Encoding::Utf16Le, 0));
         }

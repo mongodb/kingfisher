@@ -1,4 +1,4 @@
-//! Betterleaks-derived default rule loading.
+//! Betterleaks- and Veles-derived default rule loading.
 //!
 //! This module re-exports the builtin rule loader from [`kingfisher_rules::defaults`].
 

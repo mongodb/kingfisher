@@ -1,4 +1,3 @@
-// tests/cli_failure.rs
 use std::fs;
 
 use assert_cmd::Command;

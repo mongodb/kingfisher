@@ -149,9 +149,9 @@ fn parse_webhook_url(url: &str) -> Result<ParsedWebhookUrl> {
     Ok(ParsedWebhookUrl { tenant_id, webhook_id, subdomain, is_workflow_webhook: is_workflow })
 }
 
-/// Sends a benign probe to check whether the webhook is still active.
-/// Posts an empty text body — valid webhooks respond with HTTP 400 and
-/// "Text is required", confirming the endpoint is live without side effects.
+/// Post an empty text body to probe the webhook. Treat a successful response or
+/// HTTP 400 containing "Text is required" as a liveness signal. The empty body
+/// aims to avoid posting a message; workflow behavior depends on its configuration.
 async fn probe_webhook(client: &Client, webhook_url: &str) -> bool {
     let resp = client
         .post(webhook_url)

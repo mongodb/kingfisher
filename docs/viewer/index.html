@@ -5775,8 +5775,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
     }
 
     // Two paths match if they're equal, or one is a path-suffix of the other.
-    // Handles Kingfisher absolute filesystem paths vs imported repo-relative
-    // repo-relative paths for the same file.
+    // Handles Kingfisher absolute paths vs imported repo-relative paths for the same file.
     function pathsCompatible(a, b) {
       if (!a || !b) return false;
       if (a === b) return true;

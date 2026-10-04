@@ -56,7 +56,7 @@ macro_rules! safe_println {
                 // Silently exit: the consumer went away
                 std::process::exit(0);
             } else {
-                // Unexpected I/O error – keep the old behaviour
+                // Unexpected stdout failures remain fatal.
                 panic!("stdout error: {}", e);
             }
         }
@@ -146,7 +146,6 @@ pub fn print_scan_summary(
     datastore: &Arc<Mutex<findings_store::FindingsStore>>,
     global_args: &global::GlobalArgs,
     args: &scan::ScanArgs,
-    // inputs: &FilesystemEnumeratorResult,
     rules_db: &RulesDatabase,
     matcher_stats: &Mutex<MatcherStats>,
     profiler: Option<&ConcurrentRuleProfiler>,

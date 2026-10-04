@@ -5,7 +5,6 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
     sync::{Arc, LazyLock, Mutex},
     time::{Duration, Instant},
 };
@@ -295,8 +294,8 @@ impl ScanAuditCollector {
     ///
     /// Callers that share the audit collector across scan workers should
     /// gather the snapshot with [`git_snapshot`] *before* taking the audit
-    /// mutex: `git_snapshot` runs blocking Git subprocesses, and holding the
-    /// lock while they run serializes worker startup across the scan. Pass
+    /// mutex: `git_snapshot` traverses Git history, and holding the
+    /// lock during traversal serializes worker startup across the scan. Pass
     /// `None` for roots that are not Git repositories so no git boundary is
     /// recorded for them.
     pub fn scan_started_with_snapshot(
@@ -465,15 +464,25 @@ fn sanitize_error(error: &str) -> String {
 
 /// Gathers the git boundary information for a repository scan.
 ///
-/// This runs blocking Git subprocesses and must be called *outside* any lock
+/// This reads repository metadata and must be called *outside* any lock
 /// shared with other scan workers (see [`ScanAuditCollector::scan_started_with_snapshot`]).
-/// Commands share the repository timeout from `args`; zero or `--no-limits` disables it.
+/// Operations share the repository timeout from `args`; zero or `--no-limits` disables it.
 pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAuditSnapshot {
     let deadline = if args.content_filtering_args.no_limits || args.git_repo_timeout == 0 {
         None
     } else {
         Instant::now().checked_add(Duration::from_secs(args.git_repo_timeout))
     };
+    // Open once for all metadata queries. Isolated options match the scanner and
+    // avoid consulting unrelated user/system configuration or executing helpers.
+    let pack_cache_bytes =
+        crate::input::gix_pack_cache_bytes_for_threads(rayon::current_num_threads());
+    let options = gix::open::Options::isolated()
+        .config_overrides([format!("gitoxide.core.deltaBaseCacheLimit={pack_cache_bytes}")]);
+    let repository = gix::discover_opts(root, Default::default(), options)
+        .map_err(|error| debug!("Failed to open audit repository {}: {error}", root.display()))
+        .ok();
+    let repository = repository.as_ref().filter(|_| audit_before_deadline(deadline));
     let input = &args.input_specifier_args;
     let branch_root_enabled = input.branch_root || input.branch_root_commit.is_some();
     let scope = if input.staged {
@@ -499,8 +508,11 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
     // when the repository has no commits).
     let (tip_ref, tip_sha, base_ref) = if input.staged {
         let base = input.since_commit.clone().or_else(|| {
-            git_output(root, deadline, &["rev-parse", "--verify", "HEAD"])
-                .or_else(|| git_output(root, deadline, &["hash-object", "-t", "tree", "/dev/null"]))
+            let repository = repository?;
+            repository.head_id().ok().map(|id| id.to_hex().to_string()).or_else(|| {
+                audit_before_deadline(deadline)
+                    .then(|| repository.object_hash().empty_tree().to_hex().to_string())
+            })
         });
         ("(staged index)".to_string(), None, base)
     } else if (input.since_commit.is_some() || input.since_hours.is_some())
@@ -519,7 +531,7 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
         } else {
             input.branch.clone().unwrap_or_else(|| "HEAD".to_string())
         };
-        let tip_sha = git_commit_sha(root, deadline, &tip_ref);
+        let tip_sha = repository.and_then(|repo| git_commit_sha(repo, deadline, &tip_ref));
         (tip_ref, tip_sha, input.since_commit.clone())
     };
     let inclusive_root_ref = if branch_root_enabled {
@@ -535,12 +547,11 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
         }
     });
     let fetched_commit_count = if scope == "all_fetched_git_objects" {
-        git_output(root, deadline, &["rev-list", "--all", "--count"])
-            .and_then(|value| value.parse().ok())
+        repository.and_then(|repo| git_commit_count(repo, deadline, None))
     } else if scope == "branch_history" {
-        tip_sha.as_deref().and_then(|tip| {
-            git_output(root, deadline, &["rev-list", "--count", tip])
-                .and_then(|value| value.parse().ok())
+        repository.zip(tip_sha.as_deref()).and_then(|(repo, tip)| {
+            let tip = gix::ObjectId::from_hex(tip.as_bytes()).ok()?;
+            git_commit_count(repo, deadline, Some(tip))
         })
     } else {
         None
@@ -552,15 +563,18 @@ pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAud
         tip_ref,
         since_timestamp: history_time_range.map(|(start, _)| start),
         until_timestamp: history_time_range.map(|(_, end)| end),
-        base_sha: base_ref.as_ref().and_then(|value| git_commit_sha(root, deadline, value)),
+        base_sha: base_ref
+            .as_ref()
+            .and_then(|value| repository.and_then(|repo| git_commit_sha(repo, deadline, value))),
         base_ref,
         inclusive_root_sha: inclusive_root_ref
             .as_ref()
-            .and_then(|value| git_commit_sha(root, deadline, value)),
+            .and_then(|value| repository.and_then(|repo| git_commit_sha(repo, deadline, value))),
         inclusive_root_ref,
         clone_mode,
-        shallow: git_output(root, deadline, &["rev-parse", "--is-shallow-repository"])
-            .map(|value| value == "true"),
+        shallow: repository
+            .filter(|_| audit_before_deadline(deadline))
+            .map(gix::Repository::is_shallow),
         fetched_commit_count,
         target_snapshots: Vec::new(),
     }
@@ -601,99 +615,134 @@ pub fn combine_git_snapshots(
     }
 }
 
-/// Resolves a ref (branch, tag, or commit SHA) to its commit SHA.
-///
-/// Verifies each local or remote-tracking candidate with `rev-parse --verify
-/// --end-of-options`, so user input cannot be interpreted as command options.
-/// Then `rev-list -n 1` peels the verified object ID to a commit without adding
-/// caret syntax, which Windows command wrappers can mangle.
-fn git_commit_sha(root: &Path, deadline: Option<Instant>, ref_name: &str) -> Option<String> {
+/// Resolves one revision to a commit, preserving the scanner's local and
+/// remote-tracking candidate order. Ranges and non-commit objects are rejected.
+fn git_commit_sha(
+    repository: &gix::Repository,
+    deadline: Option<Instant>,
+    ref_name: &str,
+) -> Option<String> {
     crate::scanner::reference_candidates(ref_name).into_iter().find_map(|candidate| {
-        let oid =
-            git_output(root, deadline, &["rev-parse", "--verify", "--end-of-options", &candidate])?;
-        git_output(root, deadline, &["rev-list", "-n", "1", &oid, "--"])
+        if !audit_before_deadline(deadline) {
+            return None;
+        }
+        let commit = repository
+            .rev_parse_single(candidate.as_bytes())
+            .ok()?
+            .object()
+            .ok()?
+            .peel_to_commit()
+            .ok()?;
+        audit_before_deadline(deadline).then(|| commit.id.to_hex().to_string())
     })
 }
 
-/// Git for Windows does not accept the extended-length path prefix returned by
-/// `std::fs::canonicalize`, even though the Windows filesystem APIs do.
-fn git_path(path: &Path) -> PathBuf {
-    #[cfg(windows)]
-    {
-        let text = path.as_os_str().to_string_lossy();
-        if let Some(unc_path) = text.strip_prefix(r"\\?\UNC\") {
-            return PathBuf::from(format!(r"\\{unc_path}"));
-        }
-        if let Some(dos_path) = text.strip_prefix(r"\\?\") {
-            return PathBuf::from(dos_path);
-        }
-    }
-    path.to_path_buf()
+fn audit_before_deadline(deadline: Option<Instant>) -> bool {
+    deadline.is_none_or(|deadline| Instant::now() < deadline)
 }
 
-fn git_output(root: &Path, deadline: Option<Instant>, args: &[&str]) -> Option<String> {
-    let git_root = git_path(root);
-    let mut command = Command::new("git");
-    if root.join("HEAD").is_file() && root.join("objects").is_dir() {
-        command.arg("--git-dir").arg(&git_root);
-    } else {
-        command.arg("-C").arg(&git_root);
+/// Match `rev-list --all`: this worktree's refs plus HEAD, including the main
+/// and linked worktrees' detached HEADs, but excluding reflog-only objects.
+fn git_count_tips(
+    repository: &gix::Repository,
+    deadline: Option<Instant>,
+) -> Option<Vec<gix::ObjectId>> {
+    let mut tips = gix::hashtable::HashSet::default();
+    let references = repository.references().ok()?;
+    for reference in references.all().ok()?.peeled().ok()? {
+        if !audit_before_deadline(deadline) {
+            return None;
+        }
+        let reference = reference.ok()?;
+        let object = reference.id().object().ok()?;
+        // Git permits tags and other refs to point to trees or blobs.
+        if object.kind == gix::object::Kind::Commit {
+            tips.insert(object.id);
+        }
     }
-    command.args(args).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
-    let mut child = match command.spawn() {
-        Ok(child) => child,
-        Err(error) => {
-            debug!("Failed to spawn git {}: {error}", args.join(" "));
+    let mut add_head = |repo: &gix::Repository| -> Option<()> {
+        if !audit_before_deadline(deadline) {
             return None;
         }
+        if let Some(id) = repo.head().ok()?.try_peel_to_id().ok()?
+            && id.object().ok()?.kind == gix::object::Kind::Commit
+        {
+            tips.insert(id.detach());
+        }
+        Some(())
     };
+    add_head(repository)?;
+    if repository.git_dir() != repository.common_dir() {
+        add_head(&repository.main_repo().ok()?)?;
+    }
+    // Locked or removed checkouts still have countable HEADs in their private
+    // git directories. If that metadata cannot be read, keep the count unknown
+    // rather than silently reporting an incomplete total.
+    for worktree in repository
+        .worktrees()
+        .inspect_err(|error| debug!(%error, "Cannot enumerate worktrees for audit commit count"))
+        .ok()?
+    {
+        if !audit_before_deadline(deadline) {
+            return None;
+        }
+        if worktree.git_dir() != repository.git_dir() {
+            let repo = worktree
+                .into_repo_with_possibly_inaccessible_worktree()
+                .inspect_err(|error| debug!(%error, "Cannot open worktree for audit commit count"))
+                .ok()?;
+            add_head(&repo)?;
+        }
+    }
+    Some(tips.into_iter().collect())
+}
 
-    // Poll for completion so a wedged Git subprocess cannot outlive the
-    // repository timeout (plain `output()` would block without bound). Every
-    // audited command produces tiny output, so the pipe cannot fill while we
-    // poll; an unexpected chatty command would simply hit the deadline.
-    let mut backoff = Duration::from_millis(1);
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) => {
-                if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    debug!("git {} timed out against {}", args.join(" "), root.display());
-                    return None;
-                }
-                std::thread::sleep(backoff);
-                backoff = (backoff * 2).min(Duration::from_millis(50));
-            }
-            Err(error) => {
-                debug!("Failed to wait for git {}: {error}", args.join(" "));
-                return None;
-            }
-        }
-    };
-    let output = match child.wait_with_output() {
-        Ok(output) => output,
-        Err(error) => {
-            debug!("Failed to read git {} output: {error}", args.join(" "));
-            return None;
-        }
-    };
-    if !status.success() {
-        debug!(
-            "git {} against {} failed: {}",
-            args.join(" "),
-            root.display(),
-            String::from_utf8_lossy(&output.stderr).trim()
-        );
+fn git_commit_count(
+    repository: &gix::Repository,
+    deadline: Option<Instant>,
+    tip: Option<gix::ObjectId>,
+) -> Option<u64> {
+    if !audit_before_deadline(deadline) {
         return None;
     }
-    let value = String::from_utf8(output.stdout).ok()?;
-    let value = value.trim();
-    (!value.is_empty()).then(|| value.to_string()).or_else(|| {
-        debug!("git {} against {} produced no output", args.join(" "), root.display());
-        None
-    })
+    let tips = match tip {
+        Some(tip) => vec![tip],
+        None => git_count_tips(repository, deadline)?,
+    };
+    let mut count = 0;
+    if let Some(shallow) = repository.shallow_commits().ok()? {
+        // gix's walker skips shallow parents globally, which can hide history
+        // still reachable from another tip or merge parent. Stop only the edges
+        // of each shallow commit, as Git does.
+        let mut pending = tips;
+        let mut seen = gix::hashtable::HashSet::default();
+        while let Some(id) = pending.pop() {
+            if !audit_before_deadline(deadline) {
+                return None;
+            }
+            if !seen.insert(id) {
+                continue;
+            }
+            let commit = repository.find_commit(id).ok()?;
+            count += 1;
+            if shallow.binary_search(&id).is_err() {
+                pending.extend(commit.parent_ids().map(|parent| parent.detach()));
+            }
+        }
+    } else {
+        // Keep the walk streaming and let gix use the commit-graph cache when
+        // present. Counting never needs tree/blob data or full commit metadata.
+        let mut commits = repository.rev_walk(tips).all().ok()?;
+        loop {
+            if !audit_before_deadline(deadline) {
+                return None;
+            }
+            let Some(commit) = commits.next() else { break };
+            commit.ok()?;
+            count += 1;
+        }
+    }
+    audit_before_deadline(deadline).then_some(count)
 }
 
 #[cfg(test)]
@@ -718,14 +767,14 @@ mod tests {
 
         for reference in ["HEAD", "release", "feature", "origin/feature", &commit.to_string()] {
             assert_eq!(
-                git_commit_sha(&root, deadline, reference),
+                git_commit_sha(&gix::open(&root).unwrap(), deadline, reference),
                 Some(commit.to_string()),
                 "failed to resolve {reference}"
             );
         }
         for reference in ["missing", "--all", "--help", "HEAD..HEAD", &tree_id.to_string()] {
             assert_eq!(
-                git_commit_sha(&root, deadline, reference),
+                git_commit_sha(&gix::open(&root).unwrap(), deadline, reference),
                 None,
                 "unexpected commit for {reference}"
             );
@@ -768,14 +817,320 @@ mod tests {
         }
     }
 
-    #[cfg(windows)]
-    #[test]
-    fn git_path_removes_windows_extended_length_prefix() {
-        assert_eq!(git_path(Path::new(r"\\?\C:\repo")), PathBuf::from(r"C:\repo"));
-        assert_eq!(
-            git_path(Path::new(r"\\?\UNC\server\share\repo")),
-            PathBuf::from(r"\\server\share\repo")
+    fn scan_args(options: &[&str]) -> scan::ScanArgs {
+        use clap::Parser;
+
+        let command = crate::cli::CommandLineArgs::try_parse_from(
+            ["kingfisher", "scan", "."].into_iter().chain(options.iter().copied()),
+        )
+        .unwrap();
+        let crate::cli::global::Command::Scan(command) = command.command else { panic!() };
+        let crate::cli::commands::scan::ScanOperation::Scan(args) =
+            command.into_operation().unwrap()
+        else {
+            panic!()
+        };
+        args
+    }
+
+    fn commit(repo: &git2::Repository, parents: &[git2::Oid]) -> git2::Oid {
+        let signature = git2::Signature::now("tester", "tester@example.com").unwrap();
+        let tree_id = repo.treebuilder(None).unwrap().write().unwrap();
+        let tree = repo.find_tree(tree_id).unwrap();
+        let parents: Vec<_> = parents.iter().map(|id| repo.find_commit(*id).unwrap()).collect();
+        let parent_refs: Vec<_> = parents.iter().collect();
+        repo.commit(None, &signature, &signature, "audit fixture", &tree, &parent_refs).unwrap()
+    }
+
+    fn git_value(root: &Path, args: &[&str]) -> String {
+        let output =
+            std::process::Command::new("git").current_dir(root).args(args).output().unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
         );
+        String::from_utf8(output.stdout).unwrap().trim().to_string()
+    }
+
+    fn assert_count_matches_git(root: &Path, branch: Option<&str>, expected: u64) {
+        let args = match branch {
+            Some(branch) => scan_args(&["--branch", branch]),
+            None => scan_args(&[]),
+        };
+        let snapshot = git_snapshot(root, &args, false);
+        let git_count = match branch {
+            Some(branch) => git_value(root, &["rev-list", "--count", branch]),
+            None => git_value(root, &["rev-list", "--all", "--count"]),
+        };
+        assert_eq!(git_count.parse::<u64>().unwrap(), expected);
+        assert_eq!(snapshot.fetched_commit_count, Some(expected));
+        assert_eq!(
+            snapshot.shallow,
+            Some(git_value(root, &["rev-parse", "--is-shallow-repository"]) == "true")
+        );
+    }
+
+    #[test]
+    fn audit_counts_unique_reachable_commits_and_peels_packed_tags() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let repo = git2::Repository::init(root).unwrap();
+        let initial = commit(&repo, &[]);
+        let left = commit(&repo, &[initial]);
+        // Distinguish sibling commits even when written in the same second.
+        let signature = git2::Signature::now("tester", "tester@example.com").unwrap();
+        let tree = repo.find_commit(left).unwrap().tree().unwrap();
+        let right = repo
+            .commit(
+                None,
+                &signature,
+                &signature,
+                "other branch",
+                &tree,
+                &[&repo.find_commit(initial).unwrap()],
+            )
+            .unwrap();
+        let merge = commit(&repo, &[left, right]);
+        let tag_only = commit(&repo, &[right]);
+        let detached = commit(&repo, &[initial, left]);
+        let unreachable = commit(&repo, &[merge]);
+        repo.reference("refs/heads/main", merge, true, "main").unwrap();
+        repo.reference("refs/remotes/origin/feature", right, true, "remote").unwrap();
+        repo.tag(
+            "release",
+            &repo.find_object(tag_only, None).unwrap(),
+            &signature,
+            "tag-only history",
+            false,
+        )
+        .unwrap();
+        repo.tag_lightweight("tree-only", tree.as_object(), false).unwrap();
+        let blob = repo.blob(b"not a commit").unwrap();
+        repo.tag_lightweight("blob-only", &repo.find_object(blob, None).unwrap(), false).unwrap();
+        repo.set_head_detached(unreachable).unwrap();
+        repo.set_head_detached(detached).unwrap();
+
+        assert_count_matches_git(root, None, 6);
+        assert_count_matches_git(root, Some("main"), 4);
+        assert_count_matches_git(root, Some("release"), 3);
+        let gix_repo = gix::open(root).unwrap();
+        assert_eq!(git_commit_sha(&gix_repo, None, "release"), Some(tag_only.to_string()));
+        assert_eq!(git_commit_sha(&gix_repo, None, "main~1"), Some(left.to_string()));
+        assert_eq!(git_commit_sha(&gix_repo, None, "HEAD^2"), Some(left.to_string()));
+        assert_eq!(
+            git_commit_sha(&gix_repo, None, &merge.to_string()[..10]),
+            Some(merge.to_string())
+        );
+        assert_eq!(git_commit_sha(&gix_repo, None, "blob-only"), None);
+        assert_eq!(git_commit_sha(&gix_repo, None, "tree-only"), None);
+
+        git_value(root, &["pack-refs", "--all", "--prune"]);
+        git_value(root, &["repack", "-ad"]);
+        git_value(root, &["commit-graph", "write", "--reachable"]);
+        assert_count_matches_git(root, None, 6);
+        assert_count_matches_git(root, Some("main"), 4);
+        assert_count_matches_git(root, Some("release"), 3);
+    }
+
+    #[test]
+    fn audit_shallow_counts_stop_only_at_the_boundary_commits() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let repo = git2::Repository::init(root).unwrap();
+        let initial = commit(&repo, &[]);
+        let middle = commit(&repo, &[initial]);
+        let shallow_tip = commit(&repo, &[middle]);
+        let merge = commit(&repo, &[shallow_tip, middle]);
+        repo.reference("refs/heads/main", merge, true, "main").unwrap();
+        repo.reference("refs/heads/boundary", shallow_tip, true, "shallow tip").unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        std::fs::write(repo.path().join("shallow"), format!("{shallow_tip}\n")).unwrap();
+        assert_count_matches_git(root, None, 4);
+        assert_count_matches_git(root, Some("main"), 4);
+        assert_count_matches_git(root, Some("boundary"), 1);
+
+        // A genuine truncated clone: the boundary's parent need not exist.
+        repo.set_head("refs/heads/boundary").unwrap();
+        repo.find_reference("refs/heads/main").unwrap().delete().unwrap();
+        let middle_hex = middle.to_string();
+        std::fs::remove_file(
+            repo.path().join("objects").join(&middle_hex[..2]).join(&middle_hex[2..]),
+        )
+        .unwrap();
+        assert_count_matches_git(root, None, 1);
+    }
+
+    #[test]
+    fn audit_counts_worktree_heads_and_private_refs_from_either_worktree() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let repo = git2::Repository::init(root).unwrap();
+        let initial = commit(&repo, &[]);
+        let main_detached = commit(&repo, &[initial]);
+        let linked_detached = commit(&repo, &[main_detached]);
+        let private_tip = commit(&repo, &[linked_detached]);
+        repo.reference("refs/heads/main", initial, true, "main").unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        let linked = root.join("linked worktree");
+        repo.worktree("linked", &linked, None).unwrap();
+        let linked_repo = git2::Repository::open(&linked).unwrap();
+        linked_repo.set_head_detached(linked_detached).unwrap();
+        linked_repo.reference("refs/worktree/private", private_tip, true, "private ref").unwrap();
+        repo.set_head_detached(main_detached).unwrap();
+        // --all includes other worktree HEADs, but only the current worktree's
+        // private refs.
+        assert_count_matches_git(root, None, 3);
+        assert_count_matches_git(&linked, None, 4);
+        // Main HEAD must still be counted when it is the only reference to a commit.
+        git_value(&linked, &["update-ref", "-d", "refs/worktree/private"]);
+        linked_repo.set_head_detached(initial).unwrap();
+        assert_count_matches_git(&linked, None, 2);
+    }
+
+    #[test]
+    fn audit_counts_heads_of_locked_and_removed_worktrees() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let repo = git2::Repository::init(root).unwrap();
+        let initial = commit(&repo, &[]);
+        let detached = commit(&repo, &[initial]);
+        repo.reference("refs/heads/main", initial, true, "main").unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        let linked = root.join("linked worktree");
+        let worktree = repo.worktree("linked", &linked, None).unwrap();
+        let linked_repo = git2::Repository::open(&linked).unwrap();
+        linked_repo.set_head_detached(detached).unwrap();
+        worktree.lock(Some("offline worktree")).unwrap();
+        assert_count_matches_git(root, None, 2);
+
+        // Close handles before removing the checkout, especially on Windows.
+        drop(linked_repo);
+        drop(worktree);
+        std::fs::remove_dir_all(&linked).unwrap();
+        // Its private git directory still has a HEAD that Git counts.
+        assert_count_matches_git(root, None, 2);
+    }
+
+    #[test]
+    fn audit_handles_bare_empty_missing_and_nested_repositories() {
+        let temp = tempdir().unwrap();
+        let root = temp.path().join("bare repository");
+        let repo = git2::Repository::init_bare(&root).unwrap();
+        assert_count_matches_git(&root, None, 0);
+        let snapshot = git_snapshot(&root, &scan_args(&["--staged"]), false);
+        assert_eq!(snapshot.base_ref.as_deref(), Some("4b825dc642cb6eb9a060e54bf8d69288fbee4904"));
+        assert!(snapshot.base_sha.is_none());
+        assert!(snapshot.tip_sha.is_none());
+        let initial = commit(&repo, &[]);
+        repo.reference("refs/heads/main", initial, true, "main").unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        assert_count_matches_git(&root, None, 1);
+        let staged = git_snapshot(&root, &scan_args(&["--staged"]), false);
+        assert_eq!(staged.base_ref, Some(initial.to_string()));
+        assert_eq!(staged.base_sha, Some(initial.to_string()));
+        assert!(staged.fetched_commit_count.is_none());
+
+        let working = temp.path().join("working repository");
+        let working_repo = git2::Repository::init(&working).unwrap();
+        let initial = commit(&working_repo, &[]);
+        working_repo.reference("refs/heads/main", initial, true, "main").unwrap();
+        working_repo.set_head("refs/heads/main").unwrap();
+        let nested = working.join("subdirectory");
+        std::fs::create_dir(&nested).unwrap();
+        assert_count_matches_git(&nested, None, 1);
+
+        let missing = git_snapshot(temp.path(), &scan_args(&[]), false);
+        assert!(missing.tip_sha.is_none());
+        assert!(missing.shallow.is_none());
+        assert!(missing.fetched_commit_count.is_none());
+    }
+
+    #[test]
+    fn audit_preserves_explicit_boundaries_and_snapshot_scopes() {
+        let temp = tempdir().unwrap();
+        let root = temp.path();
+        let repo = git2::Repository::init(root).unwrap();
+        let initial = commit(&repo, &[]);
+        let tip = commit(&repo, &[initial]);
+        repo.reference("refs/heads/main", tip, true, "main").unwrap();
+        repo.reference("refs/remotes/origin/base", initial, true, "base").unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        for options in [
+            vec!["--since-commit", "base"],
+            vec!["--branch", "main", "--since-commit", "base"],
+            vec!["--staged", "--since-commit", "base"],
+        ] {
+            let snapshot = git_snapshot(root, &scan_args(&options), false);
+            assert_eq!(snapshot.base_ref.as_deref(), Some("base"));
+            assert_eq!(snapshot.base_sha, Some(initial.to_string()));
+            assert!(snapshot.fetched_commit_count.is_none());
+        }
+        let snapshot =
+            git_snapshot(root, &scan_args(&["--branch", "base", "--branch-root"]), false);
+        assert_eq!(snapshot.tip_sha, Some(tip.to_string()));
+        assert_eq!(snapshot.inclusive_root_sha, Some(initial.to_string()));
+        let snapshot = git_snapshot(root, &scan_args(&["--git-history", "none"]), true);
+        assert_eq!(snapshot.clone_mode.as_deref(), Some("checkout"));
+        assert!(snapshot.fetched_commit_count.is_none());
+    }
+
+    #[test]
+    fn audit_snapshot_works_without_git_on_path() {
+        let temp = tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let initial = commit(&repo, &[]);
+        repo.reference("refs/heads/main", initial, true, "main").unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        let empty_path = temp.path().join("empty path");
+        std::fs::create_dir(&empty_path).unwrap();
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "scan_audit::tests::audit_without_git_child", "--nocapture"])
+            .env("PATH", &empty_path)
+            .env("KF_TEST_AUDIT_REPO", temp.path())
+            .env("KF_TEST_AUDIT_COMMIT", initial.to_string())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "child audit failed: {} {}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    #[test]
+    fn audit_without_git_child() {
+        let Some(root) = std::env::var_os("KF_TEST_AUDIT_REPO") else { return };
+        assert!(std::process::Command::new("git").arg("--version").output().is_err());
+        let snapshot = git_snapshot(Path::new(&root), &scan_args(&[]), false);
+        assert_eq!(snapshot.tip_sha, Some(std::env::var("KF_TEST_AUDIT_COMMIT").unwrap()));
+        assert_eq!(snapshot.fetched_commit_count, Some(1));
+        assert_eq!(snapshot.shallow, Some(false));
+    }
+
+    #[test]
+    fn audit_does_not_report_partial_counts_or_expired_metadata() {
+        let temp = tempdir().unwrap();
+        let repo = git2::Repository::init(temp.path()).unwrap();
+        let initial = commit(&repo, &[]);
+        let tip = commit(&repo, &[initial]);
+        repo.reference("refs/heads/main", tip, true, "main").unwrap();
+        repo.set_head("refs/heads/main").unwrap();
+        let gix_repo = gix::open(temp.path()).unwrap();
+        let expired = Some(Instant::now() - Duration::from_secs(1));
+        assert!(git_commit_sha(&gix_repo, expired, "HEAD").is_none());
+        assert!(git_commit_count(&gix_repo, expired, None).is_none());
+        let initial_hex = initial.to_string();
+        std::fs::remove_file(
+            repo.path().join("objects").join(&initial_hex[..2]).join(&initial_hex[2..]),
+        )
+        .unwrap();
+        assert!(git_commit_count(&gix_repo, None, None).is_none());
+        let snapshot = git_snapshot(temp.path(), &scan_args(&[]), false);
+        assert_eq!(snapshot.tip_sha, Some(tip.to_string()));
+        assert!(snapshot.fetched_commit_count.is_none());
+        assert_eq!(snapshot.shallow, Some(false));
     }
 
     #[test]

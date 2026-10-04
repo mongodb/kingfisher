@@ -14,10 +14,13 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
-| `kingfisher-core` | `1.0.1` | `kingfisher_core` library |
-| `kingfisher-rules` | `1.0.1` | `kingfisher_rules` library |
-| `kingfisher-scanner` | `1.1.0` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.9.1` | `kingfisher` executable and library |
+| `kingfisher-core` | `1.0.2` | `kingfisher_core` library |
+| `kingfisher-rules` | `1.1.0` | `kingfisher_rules` library |
+| `kingfisher-scanner` | `1.2.0` | `kingfisher_scanner` library |
+| `kingfisher-bin` | `2.10.0` | `kingfisher` executable and library |
+
+The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
+`1.1.0` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
 
 The libraries establish their stable `1.x` API at `1.0.0`; they do not inherit the CLI
 version. See the [compatibility contract](LIBRARY.md#api-stability).
@@ -27,11 +30,11 @@ version. See the [compatibility contract](LIBRARY.md#api-stability).
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.9.1
+cargo install --locked kingfisher-bin --version 2.10.0
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
-for registry dependency examples. All four packages require Rust 1.96 or newer.
+for registry dependency examples. All four packages require Rust 1.99 or newer.
 The [release workflow](../.github/workflows/release.yml) publishes missing crate versions
 after its cross-platform tests, builds, and GitHub release succeed. It is restricted
 to `mongodb/kingfisher`; forks and the private development mirror do not publish crates.

@@ -11,7 +11,7 @@ resolver = "2"
 
 [workspace.package]
 edition = "2024"
-rust-version = "1.96"
+rust-version = "1.99"
 license = "Apache-2.0"
 authors = ["Mick Grove <mick.grove@mongodb.com>"]
 homepage = "https://github.com/mongodb/kingfisher"
@@ -55,7 +55,7 @@ thread_local = "1.1.10"
 
 [package]
 name = "kingfisher-bin"
-version = "2.9.1"
+version = "2.10.0"
 description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -105,9 +105,9 @@ gpui-kit = { version = "=0.6.6", optional = true }
 command-group = { version = "5.0.1", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Library crates
-kingfisher-core = { version = "1.0.1", path = "crates/kingfisher-core" }
-kingfisher-rules = { version = "1.0.1", path = "crates/kingfisher-rules" }
-kingfisher-scanner = { version = "1.1.0", path = "crates/kingfisher-scanner", features = ["validation"] }
+kingfisher-core = { version = "1.0.2", path = "crates/kingfisher-core" }
+kingfisher-rules = { version = "1.1.0", path = "crates/kingfisher-rules" }
+kingfisher-scanner = { version = "1.2.0", path = "crates/kingfisher-scanner", features = ["validation"] }
 
 clap = { version = "4.6", default-features = false, features = [
     "derive",
@@ -287,6 +287,9 @@ optional = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_System_Diagnostics_ToolHelp", "Win32_System_JobObjects", "Win32_System_Threading"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "0.6", optional = true }

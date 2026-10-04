@@ -57,15 +57,23 @@ def mock_provider():
 
 
 def main():
+    # Compile only the synthetic catalog; this example never uses real credentials.
     rules = Rules([RULE_PATH], builtins=False)
-    findings = Scanner(rules).scan(f"token={TOKEN}")
+    scanner = Scanner(rules)
+    findings = scanner.scan(f"token={TOKEN}", timeout=2.0)
     assert len(findings) == 1
     with mock_provider() as (endpoint, _):
         variables = {"ENDPOINT": endpoint}
         validator = Validator(variables=variables, allow_internal_ips=True)
+        # Validate the full input's list before applying reporting predicates.
+        # Invisible helper rules can be required for multi-part credentials.
         before = validator.validate(findings)[0]
         assert before.outcome == "verified_active", before
         print("Before revocation:", before.outcome)
+        # Real workflows can filter results by outcome, finding.rule_id,
+        # finding.visible, http_status, or finding.to_dict()["entropy"].
+        # Report with before.to_dict() to redact credentials and captures.
+        # This explicit action is safe here because the endpoint is our mock.
         revoked = Revoker(rules).revoke(RULE_ID, findings[0].secret,
                                        confirm=True, variables=variables)
         assert revoked.revoked

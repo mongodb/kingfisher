@@ -8,11 +8,6 @@ use super::{
 };
 
 pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
-    // For CLI usage, we might expect a token via env var or file, strictly speaking
-    // the CLI usually takes a file path for credentials.
-    // For Slack, it's just a token string.
-    // We'll assume the file contains the token, or if it's not a file, maybe it's the token itself?
-    // But consistency with other providers suggests reading from file.
     let path = args
         .credential_path
         .as_deref()
@@ -51,7 +46,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
 
     let identity = AccessSummary {
         id: format!("{}@{}", user, team),
-        access_type: "user".into(), // Could be bot, but auth.test doesn't strictly say. xoxb is bot.
+        access_type: "user".into(), // This mapper labels all identities as users, including bot-token identities.
         project: Some(team.clone()),
         tenant: Some(team_id.clone()),
         account_id: Some(user_id.clone()),

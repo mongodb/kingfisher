@@ -26,7 +26,6 @@ pub struct RuleProfile {
 }
 // Thread-safe wrapper for concurrent profiling
 pub struct ConcurrentRuleProfiler {
-    // Change to store rules and times in the same RwLock
     inner: Arc<RwLock<ProfilerState>>,
 }
 #[derive(Default)]
@@ -48,12 +47,10 @@ impl ConcurrentRuleProfiler {
 
     pub fn start_rule(&self, rule_id: &str, rule_name: &str, pattern: &str, filename: &str) {
         let mut state = self.inner.write();
-        // debug!("Starting rule: {} ({})", rule_name, rule_id);
-        // Create composite key
         let key = (rule_id.to_string(), filename.to_string());
         state.start_times.insert(key, (Instant::now(), filename.to_string()));
         state.rules.entry(rule_id.to_string()).or_insert_with(|| {
-            // debug!("Creating new stats for rule: {} ({})", rule_name, rule_id);
+            // Preserve the first scan's rule metadata while later scans accumulate counters.
             RuleStats {
                 rule_id: rule_id.to_string(),
                 rule_name: rule_name.to_string(),
@@ -68,7 +65,6 @@ impl ConcurrentRuleProfiler {
                 fastest_filename: String::new(),
             }
         });
-        // debug!("Current rules count: {}", state.rules.len());
     }
 
     pub fn end_rule(
@@ -103,18 +99,11 @@ impl ConcurrentRuleProfiler {
                         );
                     }
                 }
-                // debug!(
-                //     "Updated stats for rule {}: matches={}, false_pos={}",
-                //     rule_id, stats.total_matches, stats.false_positives
-                // );
             }
         }
     }
 
     fn generate_report_internal(&self, state: &ProfilerState) -> Vec<RuleStats> {
-        // debug!("Generating report. Rules count: {}", state.rules.len());
-        // let rules_present: Vec<_> = state.rules.keys().collect();
-        // debug!("Rules present: {:?}", rules_present);
         let mut stats: Vec<_> = state.rules.values().cloned().collect();
         stats.sort_by_key(|b| std::cmp::Reverse(b.slowest_match_time));
         stats
@@ -124,16 +113,12 @@ impl ConcurrentRuleProfiler {
         let state = self.inner.read();
         self.generate_report_internal(&state)
     }
-    // pub fn export_json(&self) -> String {
-    //     self.inner.read().export_json()
-    // }
 }
 // Convenience RAII guard for timing rule execution
 pub struct RuleTimer<'a> {
     profiler: &'a ConcurrentRuleProfiler,
     rule_id: String,
     filename: String,
-    // start_time: Instant,
 }
 impl<'a> RuleTimer<'a> {
     pub fn new(
@@ -144,12 +129,7 @@ impl<'a> RuleTimer<'a> {
         filename: &str,
     ) -> Self {
         profiler.start_rule(rule_id, rule_name, pattern, filename);
-        Self {
-            profiler,
-            rule_id: rule_id.to_string(),
-            filename: filename.to_string(),
-            // start_time: Instant::now(),
-        }
+        Self { profiler, rule_id: rule_id.to_string(), filename: filename.to_string() }
     }
 
     pub fn end(self, matched: bool, matches: u64, false_positives: u64) {

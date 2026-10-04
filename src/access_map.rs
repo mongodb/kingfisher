@@ -1456,8 +1456,3 @@ mod tests {
         assert_eq!(probe["http_status"], 403);
     }
 }
-
-// /// Fallback handler for unsupported providers.
-// async fn unsupported_provider(provider: &AccessMapProvider) -> Result<AccessMapResult> {
-//     bail!("Identity mapping for {:?} is not implemented", provider)
-// }

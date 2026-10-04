@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.10.0]
+
+- Fixed Windows Git timeout cleanup and long-path support; added `KF_GIT_BINARY`, `KF_GIT_SSL_BACKEND`, and Git for Windows CI coverage.
+- Pinned builds to Rust 1.99.0 and fuzzing to `nightly-2026-10-02`; added latest-stable CI coverage. Minimum Rust is now 1.99.
+- Simplified Unicode decoding and resolved Rust 1.99 Clippy warnings.
+- Consolidated native scanner pooling and split application internals into private modules while preserving public APIs.
+- Added Clippy and API documentation checks to CI; fixed Windows test runtime setup and flaky fixtures.
+- Corrected source comments, API documentation, and CLI help; removed obsolete annotations.
+- Prepared `kingfisher-core` 1.0.2, `kingfisher-rules` 1.1.0, `kingfisher-scanner` 1.2.0, and Python SDK 1.1.0 for the toolchain, matching, and embedding updates.
+- Documented version-specific release verification, linked it from the README, and added a maintainer runbook for tag-based publishing. [#531](https://github.com/mongodb/kingfisher/issues/531)
+- Fixed repeated-candidate scan slowdowns in the SDK and CLI while preserving regex match semantics. [#532](https://github.com/mongodb/kingfisher/issues/532)
+- Reduced span-tracking costs and filter input copying.
+- Replaced Git subprocesses with `gix` for faster repository audit metadata.
+- Added optional cooperative scan timeouts and cancellation to the Rust and Python SDKs.
+- Added Python rule-detail inspection and a Rust embedding example for regexes, filters, dependencies, validation and revocation definitions.
+- Expanded Python examples and documentation for directory scans, filtering, validation, deduplication, and cancellation.
+
 ## [v2.9.1]
 - Updated PyO3 to 0.29.3 to fix Python binding memory-safety and thread-safety advisories.
 - Fixed crates.io packaging and bumped `kingfisher-core` to 1.0.1.

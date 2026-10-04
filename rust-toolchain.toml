@@ -1,0 +1,5 @@
+[toolchain]
+# Pin the build compiler to the workspace minimum declared in Cargo.toml.
+channel = "1.99.0"
+profile = "minimal"
+components = ["clippy", "rustfmt"]

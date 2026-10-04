@@ -1,4 +1,6 @@
 // Avoid "installer" in the test binary name: Windows may otherwise require elevation.
+#![cfg(not(windows))]
+
 use assert_cmd::Command;
 use assert_cmd::assert::OutputAssertExt;
 use predicates::str::contains;
@@ -69,10 +71,9 @@ fn install(repo: &Path, hooks_path: &Path) {
 
 //
 // =====================================================
-// REPO-MODE TESTS (original ones, unchanged)
+// REPO-MODE TESTS
 // =====================================================
 //
-#[cfg(not(windows))]
 #[test]
 fn installs_wrapper_without_existing_hook() {
     let (_tmp, repo, hooks_path) = init_repo();
@@ -92,7 +93,6 @@ fn installs_wrapper_without_existing_hook() {
     assert!(!legacy.exists());
 }
 
-#[cfg(not(windows))]
 #[test]
 fn preserves_existing_hook_and_runs_it_first() {
     let (_tmp, repo, hooks_path) = init_repo();
@@ -131,7 +131,6 @@ fn preserves_existing_hook_and_runs_it_first() {
     assert!(hooks_path.join("pre-commit.legacy.kingfisher").exists());
 }
 
-#[cfg(not(windows))]
 #[test]
 fn uninstall_restores_original_hook() {
     let (_tmp, repo, hooks_path) = init_repo();
@@ -159,7 +158,6 @@ fn uninstall_restores_original_hook() {
     assert!(!hooks_path.join("pre-commit.legacy.kingfisher").exists());
 }
 
-#[cfg(not(windows))]
 #[test]
 fn uninstall_removes_wrapper_when_no_previous_hook() {
     let (_tmp, repo, hooks_path) = init_repo();
@@ -180,7 +178,6 @@ fn uninstall_removes_wrapper_when_no_previous_hook() {
     assert!(!hooks_path.join("pre-commit.legacy.kingfisher").exists());
 }
 
-#[cfg(not(windows))]
 #[test]
 fn pre_commit_framework_invokes_kingfisher() {
     // Skip this test if `pre-commit` is not available (e.g., in some CI images).
@@ -239,7 +236,6 @@ fn pre_commit_framework_invokes_kingfisher() {
     assert!(log_contents.contains("--redact"));
 }
 
-#[cfg(not(windows))]
 #[test]
 fn installer_hook_executes_kingfisher_command() {
     let (_tmp, repo, hooks_path) = init_repo();
@@ -290,7 +286,6 @@ fn init_fake_global() -> (TempDir, PathBuf, PathBuf) {
     (tmp, root, fake_global_hooks)
 }
 
-#[cfg(not(windows))]
 #[test]
 fn global_semantics_installs_wrapper_and_inner_hook() {
     let (_tmp, root, hooks) = init_fake_global();
@@ -311,7 +306,6 @@ fn global_semantics_installs_wrapper_and_inner_hook() {
     assert!(hooks.join("kingfisher-pre-commit").exists());
 }
 
-#[cfg(not(windows))]
 #[test]
 fn global_semantics_preserves_existing_hook_and_backup() {
     let (_tmp, root, hooks) = init_fake_global();
@@ -336,7 +330,6 @@ fn global_semantics_preserves_existing_hook_and_backup() {
     assert!(hooks.join("pre-commit.legacy.kingfisher").exists());
 }
 
-#[cfg(not(windows))]
 #[test]
 fn global_semantics_uninstall_restores_or_removes() {
     let (_tmp, root, hooks) = init_fake_global();

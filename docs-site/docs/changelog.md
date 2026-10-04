@@ -7,6 +7,23 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.10.0]
+
+- Fixed Windows Git timeout cleanup and long-path support; added `KF_GIT_BINARY`, `KF_GIT_SSL_BACKEND`, and Git for Windows CI coverage.
+- Pinned builds to Rust 1.99.0 and fuzzing to `nightly-2026-10-02`; added latest-stable CI coverage. Minimum Rust is now 1.99.
+- Simplified Unicode decoding and resolved Rust 1.99 Clippy warnings.
+- Consolidated native scanner pooling and split application internals into private modules while preserving public APIs.
+- Added Clippy and API documentation checks to CI; fixed Windows test runtime setup and flaky fixtures.
+- Corrected source comments, API documentation, and CLI help; removed obsolete annotations.
+- Prepared `kingfisher-core` 1.0.2, `kingfisher-rules` 1.1.0, `kingfisher-scanner` 1.2.0, and Python SDK 1.1.0 for the toolchain, matching, and embedding updates.
+- Documented version-specific release verification, linked it from the README, and added a maintainer runbook for tag-based publishing. [#531](https://github.com/mongodb/kingfisher/issues/531)
+- Fixed repeated-candidate scan slowdowns in the SDK and CLI while preserving regex match semantics. [#532](https://github.com/mongodb/kingfisher/issues/532)
+- Reduced span-tracking costs and filter input copying.
+- Replaced Git subprocesses with `gix` for faster repository audit metadata.
+- Added optional cooperative scan timeouts and cancellation to the Rust and Python SDKs.
+- Added Python rule-detail inspection and a Rust embedding example for regexes, filters, dependencies, validation and revocation definitions.
+- Expanded Python examples and documentation for directory scans, filtering, validation, deduplication, and cancellation.
+
 ## [v2.9.1]
 - Updated PyO3 to 0.29.3 to fix Python binding memory-safety and thread-safety advisories.
 - Fixed crates.io packaging and bumped `kingfisher-core` to 1.0.1.
@@ -16,9 +33,10 @@ All notable changes to this project will be documented in this file.
 ## [v2.9.0]
 - Fixed the validation-phase message to appear when credential validation begins.
 - Reduced scan CPU use in Base64 and Unicode detection without changing scan results.
-- Added `--no-limits` for unlimited scan budgets and timeouts. [#524](https://github.com/mongodb/kingfisher/issues/524)
-- GitHub user/org and GitLab user/group scans now overlap discovery, cloning, and scanning; added `--user-file` for both providers. Clone limits select the first unique repositories discovered. [#525](https://github.com/mongodb/kingfisher/issues/525)
-- Added `--since-hours N` for recent Git history scans and made `--since-commit` scan all refs by default; `--branch` restricts either scan. [#526](https://github.com/mongodb/kingfisher/issues/526)
+- **Library behavior change:** validation `timeout(Duration::ZERO)` and `max_response_bytes(0)` now disable their respective limits instead of returning a build error.
+- Added `--no-limits` for unlimited scan budgets and timeouts. **Behavior change:** `--extraction-depth 0` disables the archive depth limit; use `--no-extract-archives` to disable extraction. [#524](https://github.com/mongodb/kingfisher/issues/524)
+- GitHub user/org and GitLab user/group scans now overlap discovery, cloning, and scanning; added `--user-file` for both providers. **Behavior change:** clone limits select the first unique repositories discovered per provider in API order; explicit Git URLs and added wiki URLs are not counted. [#525](https://github.com/mongodb/kingfisher/issues/525)
+- Added `--since-hours N` for recent Git history scans. **Behavior change:** `--since-commit` now scans all refs by default; use `--branch HEAD` to retain the previous scope. `--branch` restricts either scan. [#526](https://github.com/mongodb/kingfisher/issues/526)
 
 ## [v2.8.0]
 - **Behavior change:** `--since-commit` now scans full commit ranges by default, catching secrets later deleted. Use `--git-history none` for net-diff scanning. [#518](https://github.com/mongodb/kingfisher/issues/518)

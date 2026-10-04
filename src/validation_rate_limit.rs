@@ -115,7 +115,7 @@ fn selector_matches(rule_id: &str, selector: &str) -> bool {
             && !selector.starts_with("kingfisher.")
             && ["betterleaks.", "kingfisher."]
                 .into_iter()
-                .any(|namespace| rule_id.strip_prefix(namespace).is_some_and(&matches_prefix)))
+                .any(|namespace| rule_id.strip_prefix(namespace).is_some_and(matches_prefix)))
 }
 
 pub fn should_rate_limit_validation(validation: &Validation) -> bool {

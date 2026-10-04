@@ -9,7 +9,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! kingfisher-scanner = { version = "1.1.0", features = ["validation"] }
+//! kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
 //! ```
 //!
 //! Prefer `Validator` for automatic rule dispatch, credential association,
@@ -65,7 +65,6 @@ pub mod ethereum;
 
 pub mod raw;
 
-// Re-exports
 pub use utils::{find_closest_variable, process_captures};
 pub use validation_body::{ValidationResponseBody, as_str, clone_as_string, from_string};
 
@@ -96,7 +95,6 @@ use std::{
 use crossbeam_skiplist::SkipMap;
 
 /// User agent string used for HTTP validation requests.
-
 pub static GLOBAL_USER_AGENT: LazyLock<String> = LazyLock::new(build_user_agent);
 
 static USER_AGENT_SUFFIX: OnceLock<String> = OnceLock::new();
@@ -119,7 +117,6 @@ fn build_user_agent() -> String {
 /// The suffix is inserted before the browser portion of the user-agent. Empty or whitespace-only
 /// values are ignored. This should be called once near program start prior to accessing
 /// [`GLOBAL_USER_AGENT`].
-
 pub fn set_user_agent_suffix<S: Into<String>>(suffix: Option<S>) {
     if let Some(suffix) = suffix {
         let trimmed = suffix.into().trim().to_string();

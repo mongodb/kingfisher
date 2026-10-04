@@ -285,17 +285,9 @@ pub(crate) fn skip_ambiguous_dependencies(m: &mut OwnedBlobMatch) -> bool {
 
 /// Returns an opaque key for internal validation deduplication.
 ///
-/// This is an INTERNAL key used only for validation deduplication within a single scan.
-/// It uses `captures.get(0)` to get the primary secret value and includes the
-/// primary named captures and selected dependent values used by validation.
-///
-/// **Important**: This is distinct from the EXTERNAL `finding_fingerprint` used for:
-/// - Baseline comparisons across scans
-/// - Deduplication entries in external systems
-/// - Reporting output
-///
-/// The external fingerprint uses `get(1).or_else(get(0))` for backward compatibility
-/// and must remain stable. This internal key can evolve independently.
+/// Hashes the rule, actual validator input, ambiguity state, and resolved capture
+/// context. CredentialUri uses its full URI rather than the reported password.
+/// This scan-local key is independent of externally persisted finding fingerprints.
 fn validation_dedup_key(m: &OwnedBlobMatch) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"kingfisher.validation-dedup.v1\0");
@@ -642,8 +634,8 @@ async fn validate_resolved_match(
 }
 
 /// Perform the actual validation of a match.
-/// Guarantees that each <RULE-ID>|<secret> is validated only once per scan,
-/// even when `--no-dedup` is used.
+/// Concurrent occurrences share one request for the same rule, validation input,
+/// and resolved capture context, including when `--no-dedup` is enabled.
 #[allow(clippy::too_many_arguments)]
 async fn timed_validate_single_match(
     owns_in_flight: &mut bool,
