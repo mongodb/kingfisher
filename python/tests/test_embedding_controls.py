@@ -6,6 +6,7 @@ from threading import Event, Thread
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 import socket
+from socketserver import TCPServer
 import subprocess
 import sys
 import textwrap
@@ -66,6 +67,14 @@ def test_structured_results_are_copies_and_preserve_redaction(rules):
 def slow_provider():
     entered, release = Event(), Event()
 
+    class LoopbackServer(ThreadingHTTPServer):
+        def server_bind(self):
+            # HTTPServer.server_bind does reverse DNS even for 127.0.0.1.
+            # Keep this local fixture independent of the host's DNS resolver.
+            TCPServer.server_bind(self)
+            self.server_name = "localhost"
+            self.server_port = self.server_address[1]
+
     class Handler(BaseHTTPRequestHandler):
         def handle_request(self):
             entered.set()
@@ -78,7 +87,7 @@ def slow_provider():
         def log_message(self, *_):
             pass
 
-    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server = LoopbackServer(("127.0.0.1", 0), Handler)
     worker = Thread(target=server.serve_forever, daemon=True)
     worker.start()
     try:
@@ -88,6 +97,16 @@ def slow_provider():
         server.shutdown()
         server.server_close()
         worker.join(timeout=5)
+
+
+def test_slow_provider_starts_without_hostname_resolution(monkeypatch):
+    def unexpected_lookup(_):
+        raise AssertionError("loopback fixture must not resolve its hostname")
+
+    monkeypatch.setattr(socket, "getfqdn", unexpected_lookup)
+    with slow_provider() as (endpoint, entered):
+        assert endpoint.startswith("http://127.0.0.1:")
+        assert not entered.is_set()
 
 
 @pytest.mark.parametrize("operation", ["validate", "revoke"])
@@ -208,9 +227,15 @@ def test_keyboard_interrupt_stops_pending_provider_work(operation, restricted_si
             assert not worker.is_alive()
         faulthandler.cancel_dump_traceback_later()
     """)
-    result = subprocess.run(
-        [sys.executable, "-c", script, str(Path(__file__).resolve().parent),
-         str(mock.RULE_PATH), operation, "restricted" if restricted_signals else "default"],
-        capture_output=True, text=True, timeout=15,
-    )
+    try:
+        result = subprocess.run(
+            [sys.executable, "-c", script, str(Path(__file__).resolve().parent),
+             str(mock.RULE_PATH), operation, "restricted" if restricted_signals else "default"],
+            capture_output=True, text=True, timeout=15,
+        )
+    except subprocess.TimeoutExpired as exc:
+        diagnostics = exc.stderr
+        if isinstance(diagnostics, bytes):
+            diagnostics = diagnostics.decode("utf-8", errors="replace")
+        pytest.fail(f"Interrupt subprocess timed out:\n{diagnostics}", pytrace=False)
     assert result.returncode == 0, result.stderr
