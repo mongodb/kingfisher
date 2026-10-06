@@ -149,17 +149,31 @@ def test_revocation_failure_category_does_not_expose_request(rules):
 
 
 @pytest.mark.parametrize("operation", ["validate", "revoke"])
-def test_keyboard_interrupt_stops_pending_provider_work(operation):
+@pytest.mark.parametrize("restricted_signals", [False, True], ids=["default", "restricted"])
+def test_keyboard_interrupt_stops_pending_provider_work(operation, restricted_signals):
     # Isolate SIGINT so a regression cannot interrupt the parent test runner.
     # On Unix, send a process signal as terminal Ctrl-C would. raise_signal
     # targets the calling worker thread and may leave delivery thread-bound.
     # Windows needs raise_signal; os.kill(SIGINT) terminates its target there.
     script = textwrap.dedent("""
+        import faulthandler
         import os
         import signal
         import sys
         import time
         from threading import Thread
+
+        # CI launchers can leave SIGINT ignored or blocked across exec. This
+        # isolated child must establish the KeyboardInterrupt behavior it tests.
+        if sys.argv[4] == "restricted":
+            signal.signal(signal.SIGINT, signal.SIG_IGN)
+            if hasattr(signal, "pthread_sigmask"):
+                signal.pthread_sigmask(signal.SIG_BLOCK, {signal.SIGINT})
+        signal.signal(signal.SIGINT, signal.default_int_handler)
+        if hasattr(signal, "pthread_sigmask"):
+            signal.pthread_sigmask(signal.SIG_UNBLOCK, {signal.SIGINT})
+        faulthandler.dump_traceback_later(10)
+
         sys.path.insert(0, sys.argv[1])
         from test_embedding_controls import slow_provider
         from test_sdk import mock
@@ -192,10 +206,11 @@ def test_keyboard_interrupt_stops_pending_provider_work(operation):
                 raise AssertionError("SIGINT did not interrupt provider work")
             worker.join(timeout=3)
             assert not worker.is_alive()
+        faulthandler.cancel_dump_traceback_later()
     """)
     result = subprocess.run(
         [sys.executable, "-c", script, str(Path(__file__).resolve().parent),
-         str(mock.RULE_PATH), operation],
+         str(mock.RULE_PATH), operation, "restricted" if restricted_signals else "default"],
         capture_output=True, text=True, timeout=15,
     )
     assert result.returncode == 0, result.stderr
