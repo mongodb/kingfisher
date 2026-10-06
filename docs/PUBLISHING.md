@@ -185,8 +185,10 @@ forcing a new rules release for every CLI release.
 Publishing runs in the `publish-crates` job of
 [`.github/workflows/release.yml`](../.github/workflows/release.yml), in the
 `mongodb/kingfisher` repository, using the `crates-io` GitHub environment.
-It follows the existing release triggers (main pushes, published releases, and manual
-dispatch). The release tag must be `v<kingfisher-bin version>` and point to the exact
+It follows version-tag pushes and manual dispatch on a tag. The workflow builds and tests,
+uploads assets to a draft GitHub release, and publishes it before starting downstream
+package publication. See the [maintainer release checklist](../.github/RELEASING.md).
+The release tag must be `v<kingfisher-bin version>` and point to the exact
 commit tested by the parent workflow. A stale tag pointing elsewhere stops publication.
 Concurrent publish jobs are serialized and never canceled halfway through an upload.
 
