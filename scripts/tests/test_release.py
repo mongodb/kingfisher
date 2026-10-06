@@ -109,6 +109,15 @@ class ReleaseTests(unittest.TestCase):
             self.release()
         self.assertEqual(self.git("rev-parse", "v2.11.0"), tag)
 
+    def test_rejects_lightweight_local_tag_on_same_commit(self):
+        self.git("tag", "v2.11.0")
+        tag = self.git("rev-parse", "v2.11.0")
+        with self.assertRaisesRegex(ValueError, "must be annotated"):
+            self.release()
+        self.assertEqual(self.git("rev-parse", "v2.11.0"), tag)
+        self.assertEqual(self.git("cat-file", "-t", "refs/tags/v2.11.0"), "commit")
+        self.assertEqual(self.git("ls-remote", "--tags", "origin"), "")
+
     def test_fetch_failure_does_not_create_tag(self):
         with self.assertRaises(subprocess.CalledProcessError):
             self.release(remote=(self.remote.parent / "missing.git").as_posix())

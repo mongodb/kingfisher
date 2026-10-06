@@ -43,8 +43,9 @@ make release VERSION=X.Y.Z
 
 The version may include a leading `v`. The command checks it against the committed root
 Cargo version, verifies the commit is on the remote's `main`, creates an annotated tag,
-and pushes only that tag. It rejects existing remote tags and local tags on another commit.
-If a push fails, retrying can reuse the local tag on the same commit.
+and pushes only that tag. It rejects existing remote tags, lightweight local tags, and local
+tags on another commit. If a push fails, retrying can reuse the annotated local tag on the
+same commit.
 
 The remote defaults to `origin`; confirm it points to `mongodb/kingfisher`, or specify it:
 

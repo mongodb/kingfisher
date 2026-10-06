@@ -37,8 +37,11 @@ def release(version, remote="origin", *, root=ROOT):
     local_tag = git("rev-parse", "--verify", "--quiet", f"{tag_ref}^{{commit}}", root=root, check=False)
     if local_tag.returncode not in (0, 1):
         local_tag.check_returncode()
-    if local_tag.returncode == 0 and local_tag.stdout.strip() != commit:
-        raise ValueError(f"Local tag {tag} already points to another commit; do not move it")
+    if local_tag.returncode == 0:
+        if local_tag.stdout.strip() != commit:
+            raise ValueError(f"Local tag {tag} already points to another commit; do not move it")
+        if git("cat-file", "-t", tag_ref, root=root).stdout.strip() != "tag":
+            raise ValueError(f"Local tag {tag} must be annotated before it can be reused")
 
     git("fetch", "--no-tags", remote, "refs/heads/main", root=root)
     on_main = git("merge-base", "--is-ancestor", commit, "FETCH_HEAD", root=root, check=False)
