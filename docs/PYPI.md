@@ -516,6 +516,8 @@ Depth zero disables the pass; `base64=False` also disables it. Use a different
 nonnegative depth or `base64_max_input_bytes=None` explicitly to change those limits.
 Nested findings identify the outer encoded region. `Scanner` keeps its existing
 one-layer, uncapped Base64 default.
+Containment checks are separate for raw input and each decoded buffer, preserving
+separately encoded sibling secrets even when they share the outer region's offsets.
 
 Choose context policies independently with `inline_ignores=False` or
 `markup_context=False`. Inline-ignore and containment checks run before markup

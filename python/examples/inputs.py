@@ -24,7 +24,8 @@ def python_files(root):
         for path in root.rglob("*"):
             # This is Python path selection, not .gitignore parsing. Change
             # the predicate or glob here to implement your application policy.
-            if path.is_file() and not path.is_symlink() and ".git" not in path.relative_to(root).parts:
+            if (path.is_file() and not path.is_symlink()
+                    and all(part.casefold() != ".git" for part in path.relative_to(root).parts)):
                 # Defers the file read while preserving its path for rule filters.
                 yield ScanInput.from_file(path)
 

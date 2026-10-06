@@ -74,7 +74,7 @@ pub(crate) fn filter_findings(
         for finding in std::mem::take(findings) {
             control.check()?;
             if crate::primitives::record_indexed_match(
-                &mut spans,
+                spans.entry(finding.buffer_id).or_default(),
                 finding.rule_index,
                 finding.secret_span,
             ) {

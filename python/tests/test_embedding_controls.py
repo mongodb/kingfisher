@@ -151,8 +151,11 @@ def test_revocation_failure_category_does_not_expose_request(rules):
 @pytest.mark.parametrize("operation", ["validate", "revoke"])
 def test_keyboard_interrupt_stops_pending_provider_work(operation):
     # Isolate SIGINT so a regression cannot interrupt the parent test runner.
-    # raise_signal also works without Unix-only subprocess/process-group APIs.
+    # On Unix, send a process signal as terminal Ctrl-C would. raise_signal
+    # targets the calling worker thread and may leave delivery thread-bound.
+    # Windows needs raise_signal; os.kill(SIGINT) terminates its target there.
     script = textwrap.dedent("""
+        import os
         import signal
         import sys
         import time
@@ -167,7 +170,10 @@ def test_keyboard_interrupt_stops_pending_provider_work(operation):
         with slow_provider() as (endpoint, entered):
             def interrupt():
                 if entered.wait(timeout=3):
-                    signal.raise_signal(signal.SIGINT)
+                    if os.name == "nt":
+                        signal.raise_signal(signal.SIGINT)
+                    else:
+                        os.kill(os.getpid(), signal.SIGINT)
 
             worker = Thread(target=interrupt, daemon=True)
             worker.start()

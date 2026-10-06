@@ -5,6 +5,7 @@ import bz2
 import gzip
 import inspect
 import io
+import importlib.util
 import lzma
 import os
 from pathlib import Path
@@ -122,6 +123,20 @@ def test_python_inputs_lazy_grouping_and_errors(scanner, tmp_path):
         scanner.scan_input(TOKEN)
     with pytest.raises(RuntimeError):
         scanner.scan_input(ScanInput.from_file(tmp_path / "missing"))
+
+
+@pytest.mark.parametrize("git_dir", [".git", ".GIT", ".Git"])
+def test_python_file_example_excludes_git_directory_case_variants(tmp_path, git_dir):
+    spec = importlib.util.spec_from_file_location("input_example", RULE_PATH.with_name("inputs.py"))
+    example = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(example)
+    metadata = tmp_path / git_dir
+    metadata.mkdir()
+    (metadata / "config").write_bytes(TOKEN)
+    regular = tmp_path / "config.txt"
+    regular.write_bytes(TOKEN)
+    inputs = list(example.python_files(tmp_path))
+    assert [Path(item.path) for item in inputs] == [regular]
 
 
 def test_path_filters_and_dedup_for_custom_enumeration(tmp_path):

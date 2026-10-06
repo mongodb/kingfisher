@@ -69,6 +69,17 @@ def test_detection_base64_policy_preserves_legacy_defaults(rules):
             DetectionScanner(rules, **options)
 
 
+@pytest.mark.parametrize("second", [b"demo_1234abcd5678efgh", TOKEN])
+def test_detection_preserves_separately_encoded_sibling_secrets(rules, second):
+    siblings = b" ".join(base64.b64encode(b"token=" + token) for token in (TOKEN, second))
+    encoded = base64.b64encode(siblings)
+    findings = DetectionScanner(rules).scan(encoded)
+    assert sorted(f.secret.encode() for f in findings) == sorted([TOKEN, second])
+    assert all(f.is_base64_encoded for f in findings)
+    assert all((f.location["start_offset"], f.location["end_offset"]) == (0, len(encoded))
+               for f in findings)
+
+
 def test_markup_and_redaction(rules):
     scanner = DetectionScanner(rules, redact=True)
     comment = ScanInput("config.HTML", b"<!-- " + TOKEN + b" -->")

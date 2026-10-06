@@ -151,6 +151,8 @@ behavior is unchanged. It defaults to full-match
 component windows, URI fallback/secret containment suppression, two Base64 layers,
 and a 64 MiB original-input cap for the Base64 pass. Raw scanning still runs above
 the cap; nested findings keep the outer encoded region's offsets.
+Containment checks are separate for raw input and each decoded buffer, preserving
+separately encoded sibling secrets even when they share those outer offsets.
 Set `cli_match_semantics=False`, `base64_max_depth=1`, and
 `base64_max_input_bytes=None` to retain legacy SDK matching/decoding while choosing
 context filters. Each policy can be configured independently. `expand_content` extracts SQLite SQL and `.pyc` strings without

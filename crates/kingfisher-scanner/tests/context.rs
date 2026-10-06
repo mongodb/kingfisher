@@ -259,6 +259,63 @@ fn cli_policy_uses_full_match_component_anchors_without_changing_reported_locati
 }
 
 #[test]
+fn nested_base64_siblings_have_separate_containment_scopes() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let scanner = Scanner::new(Arc::new(
+        RulesDatabase::from_rules(vec![Rule::new(RuleSyntax::new(
+            "acme.context",
+            "Context",
+            r"(demo_[a-z0-9]{16})",
+        ))])
+        .unwrap(),
+    ));
+    for second in ["demo_1234abcd5678efgh", "demo_abcd1234efgh5678"] {
+        let siblings = format!(
+            "{} {}",
+            STANDARD.encode("token=demo_abcd1234efgh5678"),
+            STANDARD.encode(format!("token={second}")),
+        );
+        let encoded = STANDARD.encode(siblings);
+        let blob = Blob::from_bytes(encoded.as_bytes().to_vec());
+        let findings = scanner
+            .scan_blob_at_path_with_options(&blob, "config.env", &DetectionOptions::default())
+            .unwrap();
+        let mut secrets: Vec<_> = findings.iter().map(|finding| finding.secret.as_str()).collect();
+        secrets.sort_unstable();
+        let mut expected = vec!["demo_abcd1234efgh5678", second];
+        expected.sort_unstable();
+        assert_eq!(secrets, expected);
+        assert!(findings.iter().all(|finding| {
+            finding.is_base64_encoded
+                && finding.location.start_offset == 0
+                && finding.location.end_offset == encoded.len()
+        }));
+    }
+}
+
+#[test]
+fn raw_and_decoded_findings_have_separate_containment_scopes() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let secret = "demo_abcd1234efgh5678";
+    let encoded = STANDARD.encode(format!("token={secret}"));
+    let scanner = Scanner::new(Arc::new(
+        RulesDatabase::from_rules(vec![Rule::new(RuleSyntax::new(
+            "acme.context",
+            "Context",
+            format!("({encoded}|demo_[a-z0-9]{{16}})"),
+        ))])
+        .unwrap(),
+    ));
+    let blob = Blob::from_bytes(encoded.as_bytes().to_vec());
+    let findings = scanner
+        .scan_blob_at_path_with_options(&blob, "config.env", &DetectionOptions::default())
+        .unwrap();
+    assert_eq!(findings.len(), 2);
+    assert!(findings.iter().any(|finding| !finding.is_base64_encoded && finding.secret == encoded));
+    assert!(findings.iter().any(|finding| finding.is_base64_encoded && finding.secret == secret));
+}
+
+#[test]
 fn nested_base64_depth_and_input_caps_preserve_legacy_defaults() {
     use base64::{Engine, engine::general_purpose::STANDARD};
     let scanner = scanner(r"(demo_[a-z0-9]{16})");

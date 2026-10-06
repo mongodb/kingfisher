@@ -30,6 +30,10 @@ pub(crate) struct ScanFinding {
     pub secret_span: OffsetSpan,
     #[cfg(feature = "context")]
     pub rule_index: usize,
+    // Secret spans from different decoded buffers use unrelated synthetic coordinates.
+    // Zero identifies raw input; every decoded buffer receives its own scope.
+    #[cfg(feature = "context")]
+    pub buffer_id: usize,
 }
 
 impl std::ops::Deref for ScanFinding {
@@ -540,6 +544,8 @@ impl Scanner {
                         secret_span: offset_span,
                         #[cfg(feature = "context")]
                         rule_index: rule_id,
+                        #[cfg(feature = "context")]
+                        buffer_id: 0,
                     });
                 }
 
@@ -659,8 +665,19 @@ impl Scanner {
         if max_depth == 1 {
             b64_items.reverse();
         }
+        #[cfg(feature = "context")]
+        let mut buffer_id = 0;
         while let Some((item, depth)) = b64_items.pop() {
             control.check()?;
+            #[cfg(feature = "context")]
+            {
+                buffer_id += 1;
+            }
+            // CLI spans belong to this decoded buffer. Legacy scans retain their
+            // historical source-span deduplication across first-layer buffers.
+            let mut decoded_seen_matches = FxHashSet::default();
+            let seen_matches =
+                if cli_match_semantics { &mut decoded_seen_matches } else { &mut *seen_matches };
             let fragment_raw = std::cell::OnceCell::new();
             let line_index = std::cell::OnceCell::new();
             let mut filter_lines = FxHashMap::default();
@@ -828,6 +845,8 @@ impl Scanner {
                         ),
                         #[cfg(feature = "context")]
                         rule_index: rule_id,
+                        #[cfg(feature = "context")]
+                        buffer_id,
                     });
                 }
             }

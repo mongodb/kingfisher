@@ -828,6 +828,8 @@ Set `base64_max_depth` independently (zero disables decoding), and use
 `enable_base64_decoding = false` disables decoding regardless of these options.
 Nested findings keep the outer encoded region's offsets. Existing scanner methods
 retain their one-layer, uncapped Base64 behavior.
+Containment checks are separate for raw input and each decoded buffer, preserving
+separately encoded sibling secrets even when they share the outer region's offsets.
 
 Inline-ignore and containment filtering run before markup verification, followed
 by component requirements, URI fallback suppression, catalog deduplication and

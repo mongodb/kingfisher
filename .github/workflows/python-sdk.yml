@@ -140,13 +140,19 @@ jobs:
         run: uv run --no-project --python .venv-wheel python -m pytest python/tests -q
       - name: Seed compiled cache fixtures for other hosts
         shell: bash
+        id: cache-fixtures
         run: |
-          uv run --no-project --python .venv-wheel python python/tests/cache_portability.py seed compiled-rule-cache
-          uv run --no-project --python .venv-wheel python python/tests/cache_portability.py check compiled-rule-cache --require-hit
+          # Use the same private temporary area as the SDK tests. Windows
+          # checkout directories can inherit ACLs that permit other users to
+          # replace cache ancestors, so native bytecode correctly bypasses them.
+          SDK_CACHE_FIXTURES=$(uv run --no-project --python .venv-wheel python -c 'import tempfile; from pathlib import Path; print(Path(tempfile.mkdtemp(prefix="kingfisher-rule-cache-")).as_posix())')
+          echo "path=$SDK_CACHE_FIXTURES" >> "$GITHUB_OUTPUT"
+          uv run --no-project --python .venv-wheel python python/tests/cache_portability.py seed "$SDK_CACHE_FIXTURES"
+          uv run --no-project --python .venv-wheel python python/tests/cache_portability.py check "$SDK_CACHE_FIXTURES" --require-hit
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: rule-cache-${{ matrix.target }}
-          path: compiled-rule-cache
+          path: ${{ steps.cache-fixtures.outputs.path }}
           if-no-files-found: error
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
@@ -184,20 +190,28 @@ jobs:
         with:
           name: python-${{ matrix.target }}
           path: dist-python
+      - name: Select private directory for transferred caches
+        id: cache-fixtures
+        shell: bash
+        run: |
+          SDK_CACHE_FIXTURES=$(uv run --no-project python -c 'import tempfile; from pathlib import Path; print(Path(tempfile.mkdtemp(prefix="kingfisher-foreign-cache-")).as_posix())')
+          echo "path=$SDK_CACHE_FIXTURES" >> "$GITHUB_OUTPUT"
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
         with:
           pattern: rule-cache-*
-          path: cache-fixtures
+          path: ${{ steps.cache-fixtures.outputs.path }}
       - name: Assign downloaded caches to the Windows runtime account
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          SDK_CACHE_FIXTURES: ${{ steps.cache-fixtures.outputs.path }}
         run: |
           $ErrorActionPreference = 'Stop'
           # Artifact extraction can assign Administrators as owner under an
           # elevated token. Normalize only these freshly downloaded fixtures;
           # native bytecode still must pass the existing DACL and path checks.
           $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
-          $fixtures = (Resolve-Path -LiteralPath 'cache-fixtures').Path
+          $fixtures = (Resolve-Path -LiteralPath $env:SDK_CACHE_FIXTURES).Path
           & "$env:SystemRoot\System32\icacls.exe" $fixtures /setowner "*$sid" /T /Q
           if ($LASTEXITCODE -ne 0) {
             throw "Cannot assign cache fixtures to the runtime account"
@@ -206,10 +220,11 @@ jobs:
         shell: bash
         env:
           SDK_TARGET: ${{ matrix.target }}
+          SDK_CACHE_FIXTURES: ${{ steps.cache-fixtures.outputs.path }}
         run: |
           uv venv .venv-wheel --python 3.13
           uv pip install --python .venv-wheel dist-python/*.whl
-          for cache in cache-fixtures/rule-cache-*; do
+          for cache in "$SDK_CACHE_FIXTURES"/rule-cache-*; do
             # Require reuse from this exact wheel build. Foreign builds may differ
             # in native engine identity even when their CPU baseline is compatible.
             require_hit=()

@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 - Propagated strict archive member errors, removed partial ZIP/TAR files, preserved TAR/ZIP bytes when no output directory is supplied, and bounded best-effort SQLite schema listing with skipped-table warnings.
 - Pruned stale compiled-cache temporary files, preserved existing entries when replacement fails, reported cache rejection reasons once per process, and bound line-filter cache keys to source identity without cloning patterns on hits.
 - Validated Python archive/content options eagerly, excluded case variants of `.git`, rejected unrepresentable Git hour bounds, and clarified extraction budgets and format-specific entry accounting.
+- Preserved separately encoded secrets in nested Base64 siblings by scoping CLI and SDK containment checks to each decoded buffer.
 
 - Refreshed the Betterleaks catalog to [v2.0.0-rc.1](https://github.com/betterleaks/betterleaks/tree/b3b4cbb586c964701f78bbfb6bc2129ced99bed3),
   adding Bitbucket Data Center HTTP access tokens, Cloudflare `cfut_`/`cfat_` tokens and their

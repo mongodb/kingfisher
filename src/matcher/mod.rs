@@ -529,6 +529,10 @@ impl<'a> Matcher<'a> {
             let mut b64_stack: Vec<(DecodedData, usize)> =
                 b64_items.drain(..).map(|d| (d, 0)).collect();
             while let Some((item, depth)) = b64_stack.pop() {
+                // Synthetic decoded offsets are local to this buffer, including
+                // siblings that share one outer encoded source span.
+                let mut previous_matches = FxHashMap::default();
+                let mut seen_matches = FxHashSet::default();
                 let mut candidate_rule_ids = Vec::new();
                 let mut seen_candidate_rules = FxHashSet::default();
                 let mut filter_line_cache =
@@ -1174,8 +1178,28 @@ mod test {
             (vec![fallback, specific], STANDARD.encode(format!("SERVICE {uri}")).into_bytes()),
             (vec![token.clone()], double.into_bytes()),
             (
-                vec![token],
+                vec![token.clone()],
                 STANDARD.encode(b"demo_abcd1234efgh5678 demo_abcd1234efgh5678").into_bytes(),
+            ),
+            (
+                vec![token.clone()],
+                STANDARD
+                    .encode(format!(
+                        "{} {}",
+                        STANDARD.encode("token=demo_abcd1234efgh5678"),
+                        STANDARD.encode("token=demo_1234abcd5678efgh"),
+                    ))
+                    .into_bytes(),
+            ),
+            (
+                vec![token],
+                STANDARD
+                    .encode(format!(
+                        "{} {}",
+                        STANDARD.encode("token=demo_abcd1234efgh5678"),
+                        STANDARD.encode("token=demo_abcd1234efgh5678"),
+                    ))
+                    .into_bytes(),
             ),
             (
                 vec![compatibility_rule(
