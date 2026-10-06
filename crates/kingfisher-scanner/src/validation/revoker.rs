@@ -24,6 +24,32 @@ pub struct Revoker {
 }
 
 impl Revoker {
+    /// Classify a failure without exposing URLs, credentials, or provider bodies.
+    /// Categories describe transport/response failures; an unknown category can
+    /// also indicate rule configuration or a provider-specific helper failure.
+    pub fn error_category(error: &anyhow::Error) -> &'static str {
+        if error.downcast_ref::<tokio::time::error::Elapsed>().is_some() {
+            return "timeout";
+        }
+        if let Some(error) = error.downcast_ref::<reqwest::Error>() {
+            if error.is_timeout() {
+                "timeout"
+            } else if error.is_connect() {
+                "connection"
+            } else if error.is_status() {
+                "http_status"
+            } else if error.is_body() || error.is_decode() {
+                "response"
+            } else {
+                "request"
+            }
+        } else if error.downcast_ref::<std::io::Error>().is_some() {
+            "io"
+        } else {
+            "configuration_or_provider"
+        }
+    }
+
     /// Create a runner with strict TLS, redirects disabled, and a 10-second deadline.
     ///
     /// # Errors

@@ -754,6 +754,18 @@ fn archive_staged_name(logical: &str) -> String {
         .to_string()
 }
 
+fn archive_staging_tempdir() -> std::io::Result<tempfile::TempDir> {
+    let builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::PermissionsExt;
+        let mut builder = builder;
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+        builder
+    };
+    builder.tempdir()
+}
+
 /// Extract one archive layer from bytes, returning paths rooted at `logical`.
 /// Decompression failures deliberately return `None` so callers can still scan the original entry
 /// as raw content.
@@ -799,7 +811,8 @@ fn extract_archive_bytes(
         );
     }
 
-    let staging = tempfile::tempdir().context("Failed to create staging tempdir for archive")?;
+    let staging =
+        archive_staging_tempdir().context("Failed to create staging tempdir for archive")?;
     let staged_path = staging.path().join(archive_staged_name(logical));
     std::fs::write(&staged_path, data)
         .with_context(|| format!("Failed to stage archive to {}", staged_path.display()))?;
@@ -1672,15 +1685,15 @@ fn enumerate_git_diff_repo(
         // an index-backed attribute cache on every call (rebuilding HEAD's index in
         // bare clones) and performs unnecessary rename similarity checks. A rename
         // is equally useful here as a deletion plus an addition at its new path.
-        let empty_tree = repository.empty_tree();
-        let base_tree = base_tree.as_ref().unwrap_or(&empty_tree);
-        let mut changes = gix::diff::tree::Recorder::default();
-        gix::diff::tree(
-            gix::objs::TreeRefIter::from_bytes(&base_tree.data, base_tree.id.kind()),
-            gix::objs::TreeRefIter::from_bytes(&head_tree.data, head_tree.id.kind()),
-            &mut gix::diff::tree::State::default(),
-            &repository.objects,
-            &mut changes,
+        let mut control = kingfisher_scanner::ScanControl::default();
+        if let Some(deadline) = deadline {
+            control = control.with_deadline(deadline);
+        }
+        let changes = kingfisher_scanner::__cli_internals::git_tree_changes(
+            &repository,
+            &head_tree,
+            base_tree.as_ref(),
+            &control,
         )
         .with_context(|| {
             if let Some(ref since_ref_value) = since_ref {
@@ -1721,7 +1734,7 @@ fn enumerate_git_diff_repo(
         };
 
         let mut blobs = Vec::new();
-        for change in changes.records {
+        for change in changes {
             check_repo_deadline(deadline, path, "git diff change enumeration")?;
             let (entry_mode, id, location) = match change {
                 Change::Addition { entry_mode, oid, path, .. }
@@ -1800,17 +1813,21 @@ fn resolve_optional_diff_ref(
 }
 
 fn run_git_command(path: &Path, args: &[&str], bubble_up_error: bool) -> Result<Option<String>> {
-    let output = crate::git_binary::git_command().arg("-C").arg(path).args(args).output().context(
+    let mut command = crate::git_binary::git_command();
+    command.arg("-C").arg(path).args(args);
+    let executable_hint = crate::git_binary::git_command_failure_hint(&command);
+    let output = command.output().context(
         "Failed to execute Git; install Git on PATH or set KF_GIT_BINARY to its executable",
     )?;
 
     if !output.status.success() {
         if bubble_up_error {
             bail!(
-                "Git command failed ({}): git -C {} {}",
+                "Git command failed ({}): git -C {} {}{}",
                 output.status,
                 path.display(),
-                args.join(" ")
+                args.join(" "),
+                executable_hint
             );
         }
         return Ok(None);
@@ -1920,6 +1937,17 @@ mod tests {
     use rusqlite::Connection;
     use tempfile::tempdir;
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
+
+    #[cfg(unix)]
+    #[test]
+    fn owned_archive_staging_excludes_group_and_other_access() -> std::io::Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let staging = super::archive_staging_tempdir()?;
+        std::fs::write(staging.path().join("payload.tar"), b"synthetic archive")?;
+        assert_eq!(staging.path().metadata()?.permissions().mode() & 0o077, 0);
+        Ok(())
+    }
 
     #[test]
     fn reference_candidates_for_plain_branch() {

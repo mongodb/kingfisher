@@ -254,3 +254,27 @@ def test_scan_deadlines_and_cancellation_are_per_call(rules, tmp_path):
 def test_scan_rejects_invalid_timeouts(rules, timeout):
     with pytest.raises(ValueError, match="timeout"):
         Scanner(rules).scan(mock.TOKEN, timeout=timeout)
+
+
+def test_dense_planetscale_issue_537_preserves_findings():
+    import random
+    import string
+    rng = random.Random(3)
+    parts, size = [], 0
+    while size < 25_000:
+        junk = ["".join(rng.choices(string.printable, k=rng.randrange(16))) for _ in range(2)]
+        token = "".join(rng.choices(string.ascii_lowercase + string.digits, k=12))
+        part = f"pscale{junk[0]}ID{junk[1]}{token}\n"
+        parts.append(part)
+        size += len(part)
+    scanner = Scanner(Rules())
+    content = "".join(parts)
+    def planetscale_findings():
+        return [f for f in scanner.scan(content) if f.rule_id == "betterleaks.planetscale-id"]
+    found = planetscale_findings()
+    # Scope the #537 regression to its detector so unrelated catalog additions
+    # cannot change the expected count.
+    assert len(found) == 662
+    assert [(f.secret, f.to_dict()["location"]) for f in planetscale_findings()] == [
+        (f.secret, f.to_dict()["location"]) for f in found
+    ]

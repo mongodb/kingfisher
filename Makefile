@@ -423,6 +423,8 @@ windows-arm64: require-windows-host prepare-release-notices
 	  echo "Built archive: target/release/$(PROJECT_NAME)-windows-arm64.zip"; \
 	'
 
+# MSYS2's shared /tmp permits other users to replace cache fixtures. Native tests
+# use the protected user temporary directory so cache trust checks remain meaningful.
 windows-test-x64: require-windows-host
 	@bash -eu -o pipefail -c '\
 	  case "$${MSYSTEM:-}" in \
@@ -449,6 +451,11 @@ windows-test-x64: require-windows-host
 	    fi; \
 	  fi; \
 	  export RUSTFLAGS="$${RUSTFLAGS:-} $$extra_native_lib_dirs -C target-feature=+crt-static -C link-arg=-static"; \
+	  if [ -z "$${LOCALAPPDATA:-}" ]; then echo "LOCALAPPDATA is required for Windows tests."; exit 1; fi; \
+	  test_tmp_dir="$$(cygpath -u "$$LOCALAPPDATA")/Temp"; \
+	  mkdir -p "$$test_tmp_dir"; \
+	  native_test_tmp="$$(cygpath -w "$$test_tmp_dir")"; \
+	  export TMP="$$native_test_tmp" TEMP="$$native_test_tmp"; unset TMPDIR; \
 	  echo "▶ cargo test --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
 	  cargo test --profile ci-test --workspace --all-targets --target "$$target_triple"; \
 	'
@@ -468,6 +475,11 @@ windows-test-arm64: require-windows-host
 	    fi; \
 	  fi; \
 	  export RUSTFLAGS="$${RUSTFLAGS:-} -L native=$$toolchain_root/lib -C target-feature=+crt-static -C link-arg=-static"; \
+	  if [ -z "$${LOCALAPPDATA:-}" ]; then echo "LOCALAPPDATA is required for Windows tests."; exit 1; fi; \
+	  test_tmp_dir="$$(cygpath -u "$$LOCALAPPDATA")/Temp"; \
+	  mkdir -p "$$test_tmp_dir"; \
+	  native_test_tmp="$$(cygpath -w "$$test_tmp_dir")"; \
+	  export TMP="$$native_test_tmp" TEMP="$$native_test_tmp"; unset TMPDIR; \
 	  echo "▶ cargo test --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
 	  cargo test --profile ci-test --workspace --all-targets --target "$$target_triple"; \
 	'

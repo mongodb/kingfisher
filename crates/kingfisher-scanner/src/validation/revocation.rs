@@ -167,14 +167,14 @@ pub async fn execute_http_revocation(
         parser,
         globals,
     )
-    .map_err(|e| anyhow!("Failed to build request: {}", e))?;
+    .map_err(|e| anyhow!("Failed to build request: {e}"))?;
 
     let backoff_min = Duration::from_millis(100);
     let backoff_max = Duration::from_secs(2);
 
     let response = retry_request(request_builder, retries, backoff_min, backoff_max)
         .await
-        .map_err(|e| anyhow!("Request failed: {}", e))?;
+        .context("Request failed")?;
 
     let status = response.status();
     let headers = response.headers().clone();
@@ -231,14 +231,14 @@ async fn execute_revocation_step(
         parser,
         globals,
     )
-    .map_err(|e| anyhow!("Failed to build request for {}: {}", step_name, e))?;
+    .map_err(|e| anyhow!("Failed to build request for {step_name}: {e}"))?;
 
     let backoff_min = Duration::from_millis(100);
     let backoff_max = Duration::from_secs(2);
 
     let response = retry_request(request_builder, retries, backoff_min, backoff_max)
         .await
-        .map_err(|e| anyhow!("Request failed for {}: {}", step_name, e))?;
+        .with_context(|| format!("Request failed for {step_name}"))?;
 
     let status = response.status();
     let headers = response.headers().clone();

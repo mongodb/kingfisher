@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-python"
-version = "1.1.0"
+version = "1.3.0"
 description = "Native Python bindings for Kingfisher"
 repository.workspace = true
 edition.workspace = true
@@ -16,7 +16,11 @@ crate-type = ["cdylib", "rlib"]
 pyo3 = { version = "0.29", features = ["abi3-py310", "generate-import-lib"] }
 kingfisher-core = { path = "../kingfisher-core" }
 kingfisher-rules = { path = "../kingfisher-rules" }
-kingfisher-scanner = { path = "../kingfisher-scanner", features = ["validation"] }
+kingfisher-scanner = { path = "../kingfisher-scanner", features = ["validation", "archives", "context", "extraction", "git"] }
 anyhow.workspace = true
 serde_json.workspace = true
-tokio = { version = "1.53", features = ["rt-multi-thread", "time", "net"] }
+serde.workspace = true
+tokio = { version = "1.53", features = ["rt-multi-thread", "time", "net", "macros"] }
+
+ignore.workspace = true
+tempfile = "3.27"

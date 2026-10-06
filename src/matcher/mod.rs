@@ -22,7 +22,7 @@ use tracing::debug;
 
 use crate::{
     blob::{Blob, BlobId, BlobIdMap},
-    inline_ignore::InlineIgnoreConfig,
+    inline_ignore::{InlineIgnoreConfig, InlineIgnoreIndex},
     location::OffsetSpan,
     origin::OriginSet,
     parser,
@@ -263,6 +263,7 @@ impl<'a> Matcher<'a> {
         seen_matches: &mut FxHashSet<u64>,
         match_rule_indices: &mut Vec<usize>,
         betterleaks_path_prefiltered: bool,
+        inline_ignore_index: &std::sync::OnceLock<InlineIgnoreIndex>,
     ) -> Result<()>
     where
         'a: 'b,
@@ -287,6 +288,8 @@ impl<'a> Matcher<'a> {
         let mut seen_raw_match_ends: FxHashSet<(usize, usize)> = FxHashSet::default();
         let mut seen_prefilter_rules: FxHashSet<usize> = FxHashSet::default();
         let mut previous_full_matches: FxHashMap<usize, MatchSpans> = FxHashMap::default();
+        let mut filter_line_cache =
+            kingfisher_rules::betterleaks_filter::BetterleaksFilterLineCache::default();
 
         for range in ranges.into_iter().rev() {
             // Index only this segment and the initial confirmation lookback. Drop the indexes
@@ -316,11 +319,13 @@ impl<'a> Matcher<'a> {
                 seen_matches,
                 match_rule_indices,
                 betterleaks_path_prefiltered,
+                inline_ignore_index,
                 &mut seen_raw_match_ends,
                 &mut seen_prefilter_rules,
                 &mut previous_full_matches,
                 &mut candidate_indexes,
                 index_range,
+                &mut filter_line_cache,
             );
         }
 
@@ -339,6 +344,7 @@ impl<'a> Matcher<'a> {
         seen_matches: &mut FxHashSet<u64>,
         match_rule_indices: &mut Vec<usize>,
         betterleaks_path_prefiltered: bool,
+        inline_ignore_index: &std::sync::OnceLock<InlineIgnoreIndex>,
         seen_raw_match_ends: &mut FxHashSet<(usize, usize)>,
         seen_prefilter_rules: &mut FxHashSet<usize>,
         previous_full_matches: &mut FxHashMap<usize, MatchSpans>,
@@ -347,6 +353,7 @@ impl<'a> Matcher<'a> {
             kingfisher_scanner::primitives::CandidateMatchCache,
         >,
         index_range: std::ops::Range<usize>,
+        filter_line_cache: &mut kingfisher_rules::betterleaks_filter::BetterleaksFilterLineCache,
     ) where
         'a: 'b,
     {
@@ -389,8 +396,9 @@ impl<'a> Matcher<'a> {
                     index_range.len(),
                     RAW_MATCH_LOOKBACK,
                     || {
-                        kingfisher_scanner::primitives::CandidateMatchIndex::new_in_range(
-                            re,
+                        kingfisher_scanner::__cli_internals::candidate_index(
+                            rules_db,
+                            rule_id_usize,
                             blob.bytes(),
                             index_range.clone(),
                         )
@@ -418,8 +426,10 @@ impl<'a> Matcher<'a> {
                     self.profiler.as_ref(),
                     self.respect_ignore_if_contains,
                     &self.inline_ignore_config,
+                    inline_ignore_index,
                     !rules_db.uses_vectorscan_prefilter(rule_id_usize),
                     candidate_index,
+                    filter_line_cache,
                 );
                 if confirmed || scan_start == 0 {
                     break;
@@ -447,6 +457,7 @@ impl<'a> Matcher<'a> {
     where
         'a: 'b,
     {
+        let inline_ignore_index = std::sync::OnceLock::new();
         // Update local stats
         self.local_stats.blobs_seen += 1;
         self.local_stats.bytes_seen += blob.bytes().len() as u64;
@@ -505,6 +516,7 @@ impl<'a> Matcher<'a> {
             &mut seen_matches,
             &mut match_rule_indices,
             betterleaks_path_prefiltered,
+            &inline_ignore_index,
         )?;
         if matches.is_empty() && b64_items.is_empty() {
             return Ok(ScanResult::New(Vec::new()));
@@ -519,6 +531,8 @@ impl<'a> Matcher<'a> {
             while let Some((item, depth)) = b64_stack.pop() {
                 let mut candidate_rule_ids = Vec::new();
                 let mut seen_candidate_rules = FxHashSet::default();
+                let mut filter_line_cache =
+                    kingfisher_rules::betterleaks_filter::BetterleaksFilterLineCache::default();
                 self.scanner_pool.try_with(|scanner| {
                     scanner.scan(&item.decoded, |rule_id, _from, _to, _flags| {
                         let rule_id = rule_id as usize;
@@ -535,6 +549,10 @@ impl<'a> Matcher<'a> {
                     let rule = &rules_db.rules()[rule_id_usize];
                     let re = &rules_db.anchored_regexes()[rule_id_usize];
                     let before_len = matches.len();
+                    // Association offsets use decoded positions relative to the
+                    // outer encoded start, including nested decodes. Keep this
+                    // convention aligned with the embedding scanner; it does not
+                    // map decoded byte positions back into the encoded source.
                     filter_match(
                         rules_db,
                         blob,
@@ -555,8 +573,10 @@ impl<'a> Matcher<'a> {
                         self.profiler.as_ref(),
                         self.respect_ignore_if_contains,
                         &self.inline_ignore_config,
+                        &inline_ignore_index,
                         false,
                         None,
+                        &mut filter_line_cache,
                     );
                     match_rule_indices
                         .extend(std::iter::repeat_n(rule_id_usize, matches.len() - before_len));
@@ -613,36 +633,22 @@ impl<'a> Matcher<'a> {
 }
 
 fn suppress_credential_uri_fallbacks(matches: &mut Vec<BlobMatch<'_>>) {
-    let mut keep = vec![true; matches.len()];
-    for (fallback_index, fallback) in matches.iter().enumerate() {
-        if !fallback.rule.visible()
-            || !fallback.rule.id().starts_with("betterleaks.")
-            || !matches!(
-                &fallback.rule.syntax().validation,
-                Some(crate::rules::Validation::CredentialUri)
-            )
-            || fallback.matching_input.is_empty()
-        {
-            continue;
-        }
-
-        let has_specific_finding = matches.iter().enumerate().any(|(specific_index, specific)| {
-            specific_index != fallback_index
-                && specific.rule.visible()
-                && specific.rule.id().starts_with("betterleaks.")
-                && specific.rule.id() != fallback.rule.id()
-                && specific.association_offset_span.start < fallback.association_offset_span.end
-                && fallback.association_offset_span.start < specific.association_offset_span.end
-                && specific
-                    .matching_input
-                    .windows(fallback.matching_input.len())
-                    .any(|window| window == fallback.matching_input)
-        });
-        if has_specific_finding {
-            keep[fallback_index] = false;
-        }
-    }
-
+    let keep = kingfisher_scanner::__cli_internals::credential_uri_keep(
+        matches.iter().map(|finding| {
+            let secret = if finding.is_base64 {
+                finding
+                    .captures
+                    .captures
+                    .first()
+                    .map_or(finding.matching_input, |capture| capture.raw_value().as_bytes())
+            } else {
+                finding.matching_input
+            };
+            (finding.rule.as_ref(), finding.association_offset_span, secret)
+        }),
+        &kingfisher_scanner::ScanControl::default(),
+    )
+    .expect("unlimited scan cannot be cancelled");
     let mut index = 0;
     matches.retain(|_| {
         let retain = keep[index];
@@ -652,36 +658,11 @@ fn suppress_credential_uri_fallbacks(matches: &mut Vec<BlobMatch<'_>>) {
 }
 
 fn deduplicate_imported_catalog_matches(matches: &mut Vec<BlobMatch<'_>>) {
-    let mut keep = vec![true; matches.len()];
-    for left in 0..matches.len() {
-        if !keep[left] || !matches[left].rule.visible() {
-            continue;
-        }
-        let left_catalog = imported_catalog(matches[left].rule.id());
-        let Some(left_catalog) = left_catalog else { continue };
-        for right in (left + 1)..matches.len() {
-            if !keep[right]
-                || !matches[right].rule.visible()
-                || matches[left].matching_input_offset_span
-                    != matches[right].matching_input_offset_span
-            {
-                continue;
-            }
-            let Some(right_catalog) = imported_catalog(matches[right].rule.id()) else {
-                continue;
-            };
-            if left_catalog == right_catalog {
-                continue;
-            }
-            let left_rank = imported_rule_rank(matches[left].rule.as_ref());
-            let right_rank = imported_rule_rank(matches[right].rule.as_ref());
-            if right_rank > left_rank {
-                keep[left] = false;
-                break;
-            }
-            keep[right] = false;
-        }
-    }
+    let keep = kingfisher_scanner::__cli_internals::catalog_keep(
+        matches.iter().map(|finding| (finding.rule.as_ref(), finding.matching_input_offset_span)),
+        &kingfisher_scanner::ScanControl::default(),
+    )
+    .expect("unlimited scan cannot be cancelled");
     let mut index = 0;
     matches.retain(|_| {
         let retain = keep[index];
@@ -690,108 +671,11 @@ fn deduplicate_imported_catalog_matches(matches: &mut Vec<BlobMatch<'_>>) {
     });
 }
 
-fn imported_catalog(rule_id: &str) -> Option<bool> {
-    if rule_id.starts_with("betterleaks.") {
-        Some(true)
-    } else if rule_id.starts_with("veles.") {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-fn imported_rule_rank(rule: &Rule) -> (bool, bool) {
-    (rule.syntax().validation.is_some(), rule.id().starts_with("betterleaks."))
-}
-
-#[derive(Clone, Copy, Default)]
-struct ComponentWindow {
-    cols_before: usize,
-    cols_after: usize,
-    lines_before: usize,
-    lines_after: usize,
-    has_lines: bool,
-}
-
-fn parse_component_window(value: &str) -> Option<ComponentWindow> {
-    let value = value.trim();
-    if value.is_empty() || value == "0" {
-        return Some(ComponentWindow::default());
-    }
-
-    let mut window = ComponentWindow::default();
-    for token in value.split(',').map(str::trim) {
-        let (direction, amount_and_unit) = match token.as_bytes().first() {
-            Some(b'+' | b'-') => (token.as_bytes()[0], &token[1..]),
-            _ => (b' ', token),
-        };
-        let (amount, is_lines) = match amount_and_unit.as_bytes().last() {
-            Some(b'L' | b'l') => (&amount_and_unit[..amount_and_unit.len() - 1], true),
-            Some(b'C' | b'c') => (&amount_and_unit[..amount_and_unit.len() - 1], false),
-            _ => (amount_and_unit, false),
-        };
-        let mut amount = amount.parse::<usize>().ok()?;
-        if is_lines {
-            amount = amount.saturating_sub(1);
-            window.has_lines = true;
-            if direction != b'+' {
-                window.lines_before = window.lines_before.max(amount);
-            }
-            if direction != b'-' {
-                window.lines_after = window.lines_after.max(amount);
-            }
-        } else {
-            if direction != b'+' {
-                window.cols_before = window.cols_before.max(amount);
-            }
-            if direction != b'-' {
-                window.cols_after = window.cols_after.max(amount);
-            }
-        }
-    }
-    Some(window)
-}
-
-fn component_is_within(
-    bytes: &[u8],
-    line_starts: &[usize],
-    primary: OffsetSpan,
-    component: OffsetSpan,
-    within: &str,
-) -> bool {
-    let Some(window) = parse_component_window(within) else {
-        return false;
-    };
-    if within.trim().is_empty() || within.trim() == "0" {
-        return true;
-    }
-
-    if !window.has_lines {
-        return component.start >= primary.start.saturating_sub(window.cols_before)
-            && component.start < primary.end.saturating_add(window.cols_after).min(bytes.len());
-    }
-
-    let line =
-        |offset: usize| line_starts.partition_point(|start| *start <= offset).saturating_sub(1);
-    let primary_start_line = line(primary.start);
-    let primary_end_line = line(primary.end);
-    let component_line = line(component.start);
-    if component_line < primary_start_line.saturating_sub(window.lines_before)
-        || component_line > primary_end_line.saturating_add(window.lines_after)
-    {
-        return false;
-    }
-    if primary_start_line == primary_end_line && (window.cols_before > 0 || window.cols_after > 0) {
-        let column = |offset: usize| {
-            let line = line(offset);
-            offset.saturating_sub(line_starts.get(line).copied().unwrap_or_default())
-        };
-        let component_column = column(component.start);
-        return component_column >= column(primary.start).saturating_sub(window.cols_before)
-            && component_column < column(primary.end).saturating_add(window.cols_after);
-    }
-    true
-}
+#[cfg(test)]
+use kingfisher_scanner::__cli_internals::{component_candidate_range, component_is_within};
+use kingfisher_scanner::__cli_internals::{
+    component_candidate_range_with_window, component_is_within_window, parse_component_window,
+};
 
 fn associate_betterleaks_components<'a>(
     bytes: &[u8],
@@ -802,43 +686,78 @@ fn associate_betterleaks_components<'a>(
         return;
     }
     let mut line_starts = vec![0];
-    line_starts.extend(
-        bytes.iter().enumerate().filter(|(_, byte)| **byte == b'\n').map(|(index, _)| index + 1),
-    );
+    {
+        use bstr::ByteSlice;
+        line_starts.extend(bytes.find_iter(b"\n").map(|index| index + 1));
+    }
 
-    let mut keep = vec![true; matches.len()];
-    loop {
-        let mut changed = false;
-        for (primary_index, primary) in matches.iter().enumerate() {
-            if !keep[primary_index] {
-                continue;
-            }
-            for dependency in primary.rule.syntax().depends_on_rule.iter().flatten() {
-                let Some(within) = dependency.within.as_deref() else {
-                    continue;
-                };
-                let found = matches.iter().enumerate().any(|(candidate_index, candidate)| {
-                    keep[candidate_index]
-                        && candidate.rule.id() == dependency.rule_id
-                        && component_is_within(
-                            bytes,
+    let mut candidate_index =
+        kingfisher_scanner::__cli_internals::RuleMatchIndex::new(matches.iter().enumerate().map(
+            |(index, finding)| (finding.rule.id(), finding.association_offset_span.start, index),
+        ));
+    let dependency_counts: Vec<_> = matches
+        .iter()
+        .map(|finding| {
+            finding
+                .rule
+                .syntax()
+                .depends_on_rule
+                .iter()
+                .flatten()
+                .filter(|dependency| !dependency.optional && dependency.within.is_some())
+                .count()
+        })
+        .collect();
+    let keep = kingfisher_scanner::__cli_internals::dependency_keep(
+        &dependency_counts,
+        &mut candidate_index,
+        |candidate_index, primary_index, dependency_index| {
+            let primary = &matches[primary_index];
+            let dependency = primary
+                .rule
+                .syntax()
+                .depends_on_rule
+                .iter()
+                .flatten()
+                .filter(|dependency| !dependency.optional && dependency.within.is_some())
+                .nth(dependency_index)
+                .expect("required dependency index is valid");
+            let within = dependency.within.as_deref().expect("required dependency has a window");
+            let window = parse_component_window(within);
+            Ok(candidate_index
+                .candidates(
+                    &dependency.rule_id,
+                    window.map_or(0..0, |window| {
+                        component_candidate_range_with_window(
+                            bytes.len(),
                             &line_starts,
                             primary.association_offset_span,
-                            candidate.association_offset_span,
-                            within,
+                            window,
                         )
-                });
-                if !found && !dependency.optional {
-                    keep[primary_index] = false;
-                    changed = true;
-                    break;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
-    }
+                    }),
+                )
+                .find_map(|&(_, index)| {
+                    let candidate = &matches[index];
+                    (candidate.rule.id() == dependency.rule_id
+                        && window.is_some_and(|window| {
+                            component_is_within_window(
+                                bytes.len(),
+                                &line_starts,
+                                primary.association_offset_span,
+                                candidate.association_offset_span,
+                                window,
+                            )
+                        }))
+                    .then_some(index)
+                }))
+        },
+        |candidate_index, index| {
+            let finding = &matches[index];
+            candidate_index.remove(finding.rule.id(), finding.association_offset_span.start, index);
+        },
+        &kingfisher_scanner::ScanControl::default(),
+    )
+    .expect("unlimited scan cannot be cancelled");
 
     let scopes = if matches
         .iter()
@@ -848,6 +767,7 @@ fn associate_betterleaks_components<'a>(
     } else {
         Default::default()
     };
+    let mut global_values = FxHashMap::<&str, std::collections::BTreeSet<String>>::default();
     let mut candidates = vec![std::collections::BTreeMap::new(); matches.len()];
     let mut associated = vec![std::collections::BTreeMap::new(); matches.len()];
     let mut ambiguous = vec![std::collections::BTreeMap::new(); matches.len()];
@@ -863,21 +783,60 @@ fn associate_betterleaks_components<'a>(
                     primary.rule.syntax(),
                     dependency,
                 );
+            if !try_candidates
+                && dependency
+                    .within
+                    .as_deref()
+                    .is_none_or(|within| within.trim().is_empty() || within.trim() == "0")
+            {
+                let values = global_values.entry(&dependency.rule_id).or_insert_with(|| {
+                    candidate_index
+                        .candidates(&dependency.rule_id, 0..usize::MAX)
+                        .filter(|&&(_, index)| keep[index])
+                        .map(|&(_, index)| {
+                            let candidate = &matches[index];
+                            candidate.captures.captures.first().map_or_else(
+                                || String::from_utf8_lossy(candidate.matching_input).into_owned(),
+                                |capture| capture.raw_value().to_string(),
+                            )
+                        })
+                        .collect()
+                });
+                let variable = dependency.variable.to_uppercase();
+                if values.len() > 1 {
+                    ambiguous[primary_index].insert(variable, values.len());
+                } else if let Some(value) = values.first() {
+                    associated[primary_index].insert(variable, value.clone());
+                }
+                continue;
+            }
             let family = try_candidates
                 .then(|| {
                     candidate_context::assignment_family(bytes, primary.matching_input_offset_span)
                 })
                 .flatten();
-            for (index, candidate) in matches.iter().enumerate() {
+            let window = parse_component_window(dependency.within.as_deref().unwrap_or(""));
+            for &(_, index) in candidate_index.candidates(
+                &dependency.rule_id,
+                window.map_or(0..0, |window| {
+                    component_candidate_range_with_window(
+                        bytes.len(),
+                        &line_starts,
+                        primary.association_offset_span,
+                        window,
+                    )
+                }),
+            ) {
+                let candidate = &matches[index];
                 if keep[index]
                     && candidate.rule.id() == dependency.rule_id
-                    && dependency.within.as_deref().is_none_or(|within| {
-                        component_is_within(
-                            bytes,
+                    && window.is_some_and(|window| {
+                        component_is_within_window(
+                            bytes.len(),
                             &line_starts,
                             primary.association_offset_span,
                             candidate.association_offset_span,
-                            within,
+                            window,
                         )
                     })
                 {
@@ -987,7 +946,8 @@ fn maybe_apply_markup_context_gate<'a>(
         .iter()
         .enumerate()
         .filter(|(idx, m)| {
-            if m.is_base64 {
+            // Markup parsers normalize invalid UTF-8 and cannot verify these bytes.
+            if m.is_base64 || std::str::from_utf8(m.matching_input).is_err() {
                 return false;
             }
             match match_rule_indices.get(*idx) {
@@ -1002,23 +962,33 @@ fn maybe_apply_markup_context_gate<'a>(
         return;
     }
 
-    let mut remaining = candidate_indices.clone();
+    // Confirm a rule once per parser candidate, sharing the result across equal
+    // secrets and their occurrences. Per-finding regex searches are quadratic
+    // when one HTML/CSS value contains many distinct findings.
+    let mut remaining: FxHashMap<usize, FxHashMap<&[u8], Vec<usize>>> = FxHashMap::default();
+    for idx in candidate_indices {
+        remaining
+            .entry(match_rule_indices[idx])
+            .or_default()
+            .entry(matches[idx].matching_input)
+            .or_default()
+            .push(idx);
+    }
     let verification = parser::stream_context_candidates(blob.bytes(), &language, |text| {
-        remaining.retain(|idx| {
-            let Some(rule_idx) = match_rule_indices.get(*idx).copied() else {
+        remaining.retain(|rule_idx, secrets| {
+            let Some(rule) = rules_db.get_rule(*rule_idx) else {
                 return false;
             };
-            let Some(rule) = rules_db.get_rule(rule_idx) else {
-                return false;
-            };
-            let re = &rules_db.anchored_regexes()[rule_idx];
-            let expected_secret = matches[*idx].matching_input;
-            !verify_match_in_context_text(
-                re,
-                expected_secret,
-                text.as_bytes(),
-                rule.betterleaks_secret_group(),
-            )
+            let re = &rules_db.anchored_regexes()[*rule_idx];
+            for captures in re.captures_iter(text.as_bytes()) {
+                let secret =
+                    find_secret_capture_with_group(re, &captures, rule.betterleaks_secret_group());
+                secrets.remove(secret.as_bytes());
+                if secrets.is_empty() {
+                    break;
+                }
+            }
+            !secrets.is_empty()
         });
         !remaining.is_empty()
     });
@@ -1033,7 +1003,7 @@ fn maybe_apply_markup_context_gate<'a>(
     }
 
     let mut keep = vec![true; matches.len()];
-    for idx in remaining {
+    for idx in remaining.into_values().flat_map(|secrets| secrets.into_values().flatten()) {
         keep[idx] = false;
     }
     let mut filtered = Vec::with_capacity(matches.len());
@@ -1043,18 +1013,6 @@ fn maybe_apply_markup_context_gate<'a>(
         }
     }
     *matches = filtered;
-}
-
-fn verify_match_in_context_text(
-    re: &regex::bytes::Regex,
-    expected_secret: &[u8],
-    text: &[u8],
-    betterleaks_secret_group: Option<usize>,
-) -> bool {
-    re.captures_iter(text).any(|captures| {
-        find_secret_capture_with_group(re, &captures, betterleaks_secret_group).as_bytes()
-            == expected_secret
-    })
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1140,6 +1098,147 @@ mod test {
         })
     }
 
+    #[test]
+    fn sdk_detection_policy_agrees_with_cli_windows_uri_suppression_and_base64() -> Result<()> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        use kingfisher_scanner::{Scanner, context::DetectionOptions};
+        let helper = compatibility_rule(
+            "acme.helper",
+            r"(HELP_[a-z0-9]{8})",
+            Confidence::High,
+            None,
+            vec![],
+            false,
+        );
+        let make_primary = |pattern: &str, within: &str| {
+            compatibility_rule(
+                "acme.primary",
+                pattern,
+                Confidence::High,
+                None,
+                vec![DependsOnRule {
+                    rule_id: "acme.helper".into(),
+                    variable: "COMPONENT".into(),
+                    within: Some(within.into()),
+                    optional: false,
+                    verify_candidates: false,
+                }],
+                true,
+            )
+        };
+        let uri = "https://u8q3n:p7v9c2k4m1@api.q7r9v3.net";
+        let mut fallback = compatibility_rule(
+            "betterleaks.uri-fallback",
+            r"(https://[a-z0-9]+:[a-z0-9]+@api\.q7r9v3\.net)",
+            Confidence::High,
+            None,
+            vec![],
+            true,
+        );
+        fallback.syntax.validation = Some(Validation::CredentialUri);
+        let specific = compatibility_rule(
+            "betterleaks.specific",
+            r"SERVICE (https://[a-z0-9]+:[a-z0-9]+@api\.q7r9v3\.net)",
+            Confidence::High,
+            None,
+            vec![],
+            true,
+        );
+        let token = compatibility_rule(
+            "acme.token",
+            r"(demo_[a-z0-9]{16})",
+            Confidence::High,
+            None,
+            vec![],
+            true,
+        );
+        let double = STANDARD.encode(STANDARD.encode(b"token=demo_abcd1234efgh5678"));
+        let cases = vec![
+            (
+                vec![helper.clone(), make_primary(r"PREFIX_x{48}(PRIMARY_[a-z0-9]{8})", "16C")],
+                format!("HELP_efgh5678 PREFIX_{}PRIMARY_abcd1234", "x".repeat(48)).into_bytes(),
+            ),
+            (
+                vec![helper.clone(), make_primary(r"(PRIMARY_[a-z0-9]{8})\n", "1L")],
+                b"PRIMARY_abcd1234\nHELP_efgh5678".to_vec(),
+            ),
+            (
+                vec![helper.clone(), make_primary(r"(PRIMARY_[a-z0-9]{8})", "-2L")],
+                b"HELP_efgh5678\nPRIMARY_abcd1234".to_vec(),
+            ),
+            (
+                vec![helper, make_primary(r"(PRIMARY_[a-z0-9]{8})", "+2L")],
+                b"HELP_efgh5678\nPRIMARY_abcd1234".to_vec(),
+            ),
+            (vec![fallback.clone(), specific.clone()], format!("SERVICE {uri}").into_bytes()),
+            (vec![fallback, specific], STANDARD.encode(format!("SERVICE {uri}")).into_bytes()),
+            (vec![token.clone()], double.into_bytes()),
+            (
+                vec![token],
+                STANDARD.encode(b"demo_abcd1234efgh5678 demo_abcd1234efgh5678").into_bytes(),
+            ),
+            (
+                vec![compatibility_rule(
+                    "acme.hex",
+                    r"([0-9a-f]{32})",
+                    Confidence::High,
+                    None,
+                    vec![],
+                    true,
+                )],
+                (0..5001)
+                    .scan(0x739b_u64, |state, _| {
+                        *state = state.wrapping_mul(6364136223846793005).wrapping_add(1);
+                        Some(b"0123456789abcdef"[(*state >> 60) as usize])
+                    })
+                    .collect(),
+            ),
+        ];
+        for (rules, input) in cases {
+            let rules_db = Arc::new(RulesDatabase::from_rules(rules)?);
+            let seen = BlobIdMap::new();
+            let pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+            let mut matcher =
+                Matcher::new(&rules_db, pool, &seen, None, false, None, &[], false, true)?;
+            let blob = Blob::from_bytes(input);
+            let origin = OriginSet::from(Origin::from_file(PathBuf::from("parity.txt")));
+            let ScanResult::New(matches) =
+                matcher.scan_blob(&blob, &origin, None, false, true, false)?
+            else {
+                panic!("dedup disabled")
+            };
+            let mut cli: Vec<_> = matches
+                .iter()
+                .map(|m| {
+                    (
+                        m.rule.id().to_owned(),
+                        m.captures.captures.first().unwrap().raw_value().to_owned(),
+                        m.is_base64,
+                        (!m.is_base64).then_some((
+                            m.matching_input_offset_span.start,
+                            m.matching_input_offset_span.end,
+                        )),
+                    )
+                })
+                .collect();
+            let scanner = Scanner::new(Arc::clone(&rules_db));
+            let options = DetectionOptions { markup_context: false, ..Default::default() };
+            let mut sdk: Vec<_> = scanner
+                .scan_blob_at_path_with_options(&blob, "parity.txt", &options)?
+                .into_iter()
+                .map(|f| {
+                    let span = (!f.is_base64_encoded)
+                        .then_some((f.location.start_offset, f.location.end_offset));
+                    (f.rule_id, f.secret, f.is_base64_encoded, span)
+                })
+                .collect();
+            cli.sort();
+            sdk.sort();
+            assert_eq!(sdk, cli, "input length {}", blob.len());
+        }
+        Ok(())
+    }
+
     fn set_confidence_filter(confidence: &str) -> crate::rules::BetterleaksExpr {
         crate::rules::BetterleaksExpr::Sequence {
             nodes: vec![
@@ -1180,6 +1279,76 @@ mod test {
         let findings =
             scan_test_rules(vec![promoted, demoted], b"PROMOTE_123456ABCDEF DEMOTE_123456ABCDEF")?;
         assert_eq!(findings, [("betterleaks.promoted".to_string(), Confidence::High, None, true)]);
+        Ok(())
+    }
+
+    #[test]
+    fn dense_line_filters_preserve_secret_results_for_raw_and_decoded_bytes() -> Result<()> {
+        use crate::rules::BetterleaksExpr as Expr;
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        let filter = |field: &str, pattern: &str| Expr::Call {
+            callee: Box::new(Expr::Identifier { value: "matchesAny".into() }),
+            arguments: vec![
+                Expr::Member {
+                    node: Box::new(Expr::Identifier { value: "finding".into() }),
+                    property: Box::new(Expr::String { value: field.into() }),
+                    optional: false,
+                    method: false,
+                },
+                Expr::Array { nodes: vec![Expr::String { value: pattern.into() }] },
+            ],
+        };
+        let rule = compatibility_rule(
+            "acme.filtered",
+            r"(demo_[a-z0-9]{16})",
+            Confidence::High,
+            Some(Expr::Binary {
+                operator: "||".into(),
+                left: Box::new(filter("line", "IGNORE-LINE")),
+                right: Box::new(filter("secret", "^demo_a9c300000020f7d2$")),
+            }),
+            vec![],
+            true,
+        );
+        let rules_db = RulesDatabase::from_rules(vec![rule])?;
+        let secrets: Vec<_> = (0..128).map(|index| format!("demo_a9c3{index:08x}f7d2")).collect();
+        let mut bytes = b"\xff ".to_vec();
+        bytes.extend(secrets[..64].join(" ").as_bytes());
+        bytes.extend(b"\r\n\xff IGNORE-LINE ");
+        bytes.extend(secrets[64..].join(" ").as_bytes());
+        // The Base64 pass intentionally accepts only ASCII decoded payloads.
+        let decoded: Vec<_> =
+            bytes.iter().map(|&byte| if byte.is_ascii() { byte } else { b' ' }).collect();
+
+        for (input, base64) in [(bytes, false), (STANDARD.encode(decoded).into_bytes(), true)] {
+            let seen = BlobIdMap::new();
+            let scanner_pool =
+                Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+            let mut matcher =
+                Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
+            let blob = Blob::from_bytes(input);
+            let origin = OriginSet::from(Origin::from_file(PathBuf::from("dense.txt")));
+            let ScanResult::New(found) =
+                matcher.scan_blob(&blob, &origin, None, false, true, false)?
+            else {
+                panic!("deduplication is disabled");
+            };
+            let mut values: Vec<_> = found
+                .iter()
+                .map(|finding| {
+                    assert_eq!(finding.is_base64, base64);
+                    finding.captures.captures.first().unwrap().raw_value().to_owned()
+                })
+                .collect();
+            values.sort();
+            let expected: Vec<_> = secrets[..64]
+                .iter()
+                .filter(|secret| *secret != "demo_a9c300000020f7d2")
+                .cloned()
+                .collect();
+            assert_eq!(values, expected, "base64={base64}");
+        }
         Ok(())
     }
 
@@ -1252,6 +1421,66 @@ mod test {
         )?;
         assert!(!far.iter().any(|(id, _, _, _)| id == "betterleaks.byte-primary"));
         Ok(())
+    }
+
+    #[test]
+    fn dense_component_windows_and_global_values_preserve_association() -> Result<()> {
+        for within in
+            [Some("1L"), Some("+1L"), Some("-1L"), Some("16C"), Some("1L,16C"), Some("0"), None]
+        {
+            let helper = compatibility_rule(
+                "acme.helper",
+                r"(HELP_[a-z0-9]{8})",
+                Confidence::High,
+                None,
+                vec![],
+                false,
+            );
+            let primary = compatibility_rule(
+                "acme.primary",
+                r"(PRIMARY_[a-z0-9]{8})",
+                Confidence::High,
+                None,
+                vec![DependsOnRule {
+                    rule_id: "acme.helper".into(),
+                    variable: "COMPONENT".into(),
+                    within: within.map(str::to_owned),
+                    optional: false,
+                    verify_candidates: false,
+                }],
+                true,
+            );
+            let input = "PRIMARY_abcd1234 HELP_efgh5678\n".repeat(2500);
+            let findings = scan_test_rules(vec![primary, helper], input.as_bytes())?;
+            assert_eq!(findings.len(), 5000, "{within:?}");
+            assert!(
+                findings
+                    .iter()
+                    .filter(|(id, _, _, _)| id == "acme.primary")
+                    .all(|(_, _, value, _)| value.as_deref() == Some("HELP_efgh5678")),
+                "{within:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn component_candidate_ranges_cover_exact_window_semantics() {
+        let bytes = b"first\nsecond\nthird\nfourth\n";
+        let lines = [0, 6, 13, 19, 26];
+        for within in ["", "0", "1L", "2L", "+2L", "-2L", "2C", "+3C", "1L,2C", "2L,3C", "invalid"]
+        {
+            for start in 0..bytes.len() {
+                let primary = OffsetSpan { start, end: (start + 4).min(bytes.len()) };
+                let range = component_candidate_range(bytes.len(), &lines, primary, Some(within));
+                for candidate in 0..=bytes.len() {
+                    let component = OffsetSpan { start: candidate, end: candidate };
+                    if component_is_within(bytes, &lines, primary, component, within) {
+                        assert!(range.contains(&candidate), "{within} {primary:?} {candidate}");
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -2564,6 +2793,74 @@ line2
             authoritative: true,
             vectorscan_compatible: true,
         })
+    }
+
+    #[test]
+    fn html_gate_preserves_non_utf8_secret() -> Result<()> {
+        let rule = Rule::new(RuleSyntax::new("acme.context", "Context", r"(demo_[^\x22]{4})"));
+        let rules_db = RulesDatabase::from_rules(vec![rule])?;
+        let seen = BlobIdMap::new();
+        let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let mut matcher =
+            Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
+        let blob = Blob::from_bytes(b"<input password=\"demo_abc\xff\">".to_vec());
+        let origin = OriginSet::from(Origin::from_file(PathBuf::from("page.html")));
+        let ScanResult::New(found) =
+            matcher.scan_blob(&blob, &origin, Some("html".to_string()), false, false, false)?
+        else {
+            panic!("unexpected scan result");
+        };
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].matching_input, b"demo_abc\xff");
+        Ok(())
+    }
+
+    #[test]
+    fn markup_gate_handles_dense_distinct_values_and_duplicate_occurrences() -> Result<()> {
+        let rule = compatibility_rule(
+            "acme.context",
+            r"(?:password|secret)=(demo_[a-z0-9]{16})",
+            Confidence::High,
+            None,
+            vec![],
+            true,
+        );
+        let rules_db = RulesDatabase::from_rules(vec![rule])?;
+        assert!(!rules_db.is_rule_self_identifying(0));
+        let secrets: Vec<_> = (0..1024).map(|index| format!("demo_a9c3{index:08x}f7d2")).collect();
+        let values = secrets.iter().map(|secret| format!("password={secret}")).collect::<Vec<_>>();
+        let values = format!("{} password={}", values.join(" "), secrets[0]);
+        let excluded = "demo_q8r2m6v4c9x7z3k5";
+
+        for (language, body) in [
+            ("html", format!(r#"<input data-config="{values}"><!-- password={excluded} -->"#)),
+            ("css", format!(r#".sample {{ content: "{values}"; }} /* password={excluded} */"#)),
+        ] {
+            let seen = BlobIdMap::new();
+            let scanner_pool =
+                Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+            let mut matcher =
+                Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
+            let blob = Blob::from_bytes(body.into_bytes());
+            let origin =
+                OriginSet::from(Origin::from_file(PathBuf::from(format!("dense.{language}"))));
+            let ScanResult::New(found) =
+                matcher.scan_blob(&blob, &origin, Some(language.into()), false, true, true)?
+            else {
+                panic!("deduplication is disabled");
+            };
+            assert_eq!(found.len(), secrets.len() + 1, "{language}");
+            assert_eq!(
+                found
+                    .iter()
+                    .filter(|finding| finding.matching_input == secrets[0].as_bytes())
+                    .count(),
+                2,
+                "{language}"
+            );
+            assert!(!found.iter().any(|finding| finding.matching_input == excluded.as_bytes()));
+        }
+        Ok(())
     }
 
     #[test]

@@ -1,4 +1,5 @@
 """Check main-merge SDK publishing without performing any registry writes."""
+import re
 from pathlib import Path
 import unittest
 
@@ -16,7 +17,13 @@ class PythonSdkReleaseTests(unittest.TestCase):
         for guard in ("github.repository == 'mongodb/kingfisher'",
                       "github.event_name == 'push'", "github.ref == 'refs/heads/main'"):
             self.assertIn(guard, condition)
-        self.assertIn("needs: [wheels, source]", publish)
+        # Accept flow/block lists, quoting, whitespace and any dependency order.
+        needs = re.search(r"(?m)^    needs:[ \t]*(\[[^\]]*\]|(?:\n[ \t]{6,}-[^\n]+)+)", publish)
+        self.assertIsNotNone(needs)
+        dependency_list = re.sub(r"#[^\n]*", "", needs.group(1))
+        dependencies = set(re.findall(r"[\w-]+", dependency_list))
+        for required in ("wheels", "source", "cache-portability"):
+            self.assertIn(required, dependencies)
         self.assertIn("name: pypi-sdk", publish)
         self.assertIn("group: pypi-sdk-publish-${{ github.run_id }}", publish)
         self.assertIn("skip-existing: true", publish)

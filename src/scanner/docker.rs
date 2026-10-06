@@ -17,7 +17,7 @@ use sha2::{Digest, Sha256};
 use tracing::debug;
 use walkdir::WalkDir;
 
-use crate::decompress::decompress_file_with_single_stream_cap_and_limits;
+use crate::decompress::{CompressedContent, decompress_file_with_single_stream_cap_and_limits};
 
 /// Docker/OCI image layers are often large tar streams. Keep this high enough
 /// to avoid silently dropping scan coverage for normal base OS layers while
@@ -316,6 +316,84 @@ fn remove_tar_wrapped_intermediate(path: &Path, out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Restore the logical Docker/OCI filesystem layout from the shared extractor's
+/// per-occurrence storage. Docker consumers resolve manifests by their member
+/// paths and apply layers in order; later occurrences replace earlier files.
+/// Generic archive scanning still retains every occurrence independently.
+fn extract_docker_filesystem(
+    archive_path: &Path,
+    out_dir: &Path,
+    resources: crate::limits::ResourceLimits,
+) -> Result<()> {
+    // Stage on the same filesystem so hard links avoid copying large layer
+    // blobs. The staging lifetime ends only after all members are materialized.
+    let mut staging_builder = tempfile::Builder::new();
+    staging_builder.prefix(".kingfisher-docker-");
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        staging_builder.permissions(std::fs::Permissions::from_mode(0o700));
+    }
+    let staging = staging_builder.tempdir_in(out_dir)?;
+    let content = decompress_file_with_single_stream_cap_and_limits(
+        archive_path,
+        Some(staging.path()),
+        MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES,
+        resources,
+    )?;
+    let archive_prefix = format!("{}!", archive_path.display());
+    let intermediate_prefix = tar_wrapped_intermediate_path(archive_path, staging.path())
+        .map(|path| format!("{}!", path.display()));
+    let relative_member = |logical: &str| -> Result<PathBuf> {
+        // Strip the complete known label, rather than splitting on '!': caller
+        // directory names may themselves contain the archive path delimiter.
+        let name = logical
+            .strip_prefix(&archive_prefix)
+            .or_else(|| {
+                intermediate_prefix.as_ref().and_then(|prefix| logical.strip_prefix(prefix))
+            })
+            .ok_or_else(|| anyhow!("Docker archive member has an unexpected source label"))?;
+        let path = PathBuf::from(name);
+        if !is_safe_relative_path(&path) {
+            return Err(anyhow!("unsafe Docker archive member path"));
+        }
+        Ok(path)
+    };
+    match content {
+        CompressedContent::ArchiveFiles(entries) => {
+            for (logical, source) in entries {
+                let destination = out_dir.join(relative_member(&logical)?);
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                // Removing the destination before linking prevents two archived
+                // occurrences from sharing one mutable inode. Handles are closed
+                // by the extractor before this step, including on Windows.
+                if destination.exists() {
+                    std::fs::remove_file(&destination)?;
+                }
+                link_or_copy_layer(&source, &destination)?;
+            }
+        }
+        CompressedContent::Archive(entries) => {
+            for (logical, bytes) in entries {
+                let destination = out_dir.join(relative_member(&logical)?);
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                if destination.exists() {
+                    std::fs::remove_file(&destination)?;
+                }
+                std::fs::write(destination, bytes)?;
+            }
+        }
+        // Preserve the shared best-effort behavior for malformed/unsupported
+        // layers. Their original archive bytes are handled by the caller.
+        CompressedContent::Raw(_) | CompressedContent::RawFile(_) => {}
+    }
+    Ok(())
+}
+
 fn extract_layer_archive(
     path: &Path,
     out_dir: &Path,
@@ -332,12 +410,7 @@ fn extract_layer_archive(
         &aliased_path
     };
 
-    let result = decompress_file_with_single_stream_cap_and_limits(
-        layer_path,
-        Some(out_dir),
-        MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES,
-        resources,
-    );
+    let result = extract_docker_filesystem(layer_path, out_dir, resources);
     let cleanup_result = if layer_path != path && layer_path.exists() {
         std::fs::remove_file(layer_path)
     } else {
@@ -361,12 +434,7 @@ fn extract_saved_archive_layers(
     resources: crate::limits::ResourceLimits,
 ) -> Result<usize> {
     pb.set_message("extracting layers");
-    decompress_file_with_single_stream_cap_and_limits(
-        archive_path,
-        Some(out_dir),
-        MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES,
-        resources,
-    )?;
+    extract_docker_filesystem(archive_path, out_dir, resources)?;
     remove_tar_wrapped_intermediate(archive_path, out_dir)?;
 
     let layer_paths = collect_saved_archive_layers(out_dir)?;
@@ -540,12 +608,10 @@ impl Docker {
             let tmp_path = out_dir.join(file_name);
             let mut tmp = std::fs::File::create(&tmp_path)?;
             tmp.write_all(&layer.data)?;
-            decompress_file_with_single_stream_cap_and_limits(
-                &tmp_path,
-                Some(out_dir),
-                MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES,
-                self.resources,
-            )?;
+            // Close before extraction/removal so the layer is readable and can
+            // be removed on Windows without retaining a writer handle.
+            drop(tmp);
+            extract_docker_filesystem(&tmp_path, out_dir, self.resources)?;
             std::fs::remove_file(&tmp_path)?;
             pb.inc(1);
         }
@@ -764,6 +830,32 @@ mod tests {
         assert!(out.join("app/secret.txt").exists());
         assert!(out.join("blobs/sha256/attestation-layer").exists());
         assert!(!out.join("blobs/sha256/layer").exists());
+        Ok(())
+    }
+    #[test]
+    fn docker_layout_restores_members_and_applies_duplicate_entries_in_order() -> Result<()> {
+        let dir = tempdir()?;
+        let root = dir.path().join("image!with delimiter");
+        std::fs::create_dir_all(&root)?;
+        let archive = root.join("image!backup.tar.gz");
+        let out = root.join("output!directory");
+        let mut layer = tar::Builder::new(Vec::new());
+        append_bytes(&mut layer, "app/secret.txt", b"previous value")?;
+        append_bytes(&mut layer, "app/secret.txt", b"current value")?;
+        let layer_bytes = layer.into_inner()?;
+        let gz = GzEncoder::new(File::create(&archive)?, Compression::default());
+        let mut outer = tar::Builder::new(gz);
+        append_bytes(&mut outer, "manifest.json", br#"[{"Layers":["abc/layer.tar"]}]"#)?;
+        append_bytes(&mut outer, "abc/layer.tar", &layer_bytes)?;
+        outer.into_inner()?.finish()?;
+
+        Docker::new().save_archive_to_dir(&archive, &out, false)?;
+        assert_eq!(std::fs::read(out.join("app/secret.txt"))?, b"current value");
+        assert!(out.join("manifest.json").is_file());
+        assert!(!out.join("abc/layer.tar").exists());
+        assert!(!std::fs::read_dir(&out)?.any(|entry| entry.is_ok_and(|entry| {
+            entry.file_name().to_string_lossy().starts_with(".kingfisher-docker-")
+        })));
         Ok(())
     }
 }

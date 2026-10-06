@@ -60,6 +60,17 @@ fn staged_scan_uses_git_executable_override() -> Result<()> {
         .env("KF_GIT_BINARY", temp.path().join("missing git.exe"))
         .assert()
         .stderr(contains("KF_GIT_BINARY"));
+
+    // A real executable that rejects Git arguments reports a nonzero child exit.
+    // Some emulator/interpreter failures use this path even for a missing binary.
+    Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+        .arg("scan")
+        .arg(&repo_dir)
+        .args(["--staged", "--no-validate", "--no-update-check", "--format", "toon"])
+        .env("KF_GIT_BINARY", std::env::current_exe()?)
+        .assert()
+        .stdout(contains("scan_partial: 1"))
+        .stderr(contains("Git command failed").and(contains("KF_GIT_BINARY")));
     Ok(())
 }
 

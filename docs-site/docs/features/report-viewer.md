@@ -21,7 +21,7 @@ Both render reports entirely client-side. Nothing about the uploaded report leav
 
 ## Why a visual viewer/triager matters
 
-Gitleaks and TruffleHog are great at emitting candidate matches; Kingfisher goes further by live-validating and mapping blast radius. But raw JSON and SARIF are not how a human decides which finding to rotate first. The viewer turns that output into a triage workflow:
+The viewer brings detection, validation and available blast-radius evidence from supported reports into one triage workflow:
 
 - **Skim at a glance** — findings are grouped by detector, rule, file, and repository with counts and validation state, instead of one JSON object per line in a terminal.
 - **Cross-tool triage in one place** — import a Gitleaks scan, a TruffleHog scan, and a Kingfisher scan of the same codebase and look at them side-by-side with deduplication, rather than reconciling three different schemas by hand.
@@ -30,11 +30,12 @@ Gitleaks and TruffleHog are great at emitting candidate matches; Kingfisher goes
 - **See blast radius** — when a Kingfisher report was generated with `--blast-radius`, the viewer opens an interactive blast-radius graph with a side inspector and details view, so you can trace the identity, resources, and permissions without digging through nested JSON.
 - **Share and archive** — export filtered subsets for tickets, rotation runbooks, or audit reviewers.
 
-Tools like Gitleaks and TruffleHog surface candidates. Kingfisher's viewer helps you decide which ones matter — and it works with their output, not just its own.
+Kingfisher's viewer works with reports from all supported tools, preserving available validation evidence.
 
 ## Using the local viewer via the `kingfisher` CLI
 
-The local viewer is part of the `kingfisher` binary — no separate install, no network calls.
+The local viewer is bundled in the `kingfisher` binary. Its browser fetches the report
+from the local server; report rendering does not contact external services.
 
 ```bash
 # Open a Kingfisher scan report

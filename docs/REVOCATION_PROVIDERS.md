@@ -19,10 +19,12 @@ Kingfisher supports direct revocation for selected built-in imported detectors a
 rule-level `revocation:` block in the Kingfisher rule format. The current open-source
 catalog includes 34 revocation-enabled rules across 15 provider families.
 
-Betterleaks does not currently define revocation metadata. Kingfisher therefore keeps operational
-revocation actions in `crates/kingfisher-rules/data/imported-rules-capabilities.yml`. This file is not a
-detection catalog: it contains no regexes or filters, and every entry is joined to the downloaded
-imported-detector catalog by upstream ID during bundle generation.
+Kingfisher keeps reviewed operational revocation actions in
+`crates/kingfisher-rules/data/imported-rules-capabilities.yml`. This file contains no candidate
+detector regexes; it may add narrow operational filters and capability metadata. Every entry
+is joined to the pinned imported-detector catalog by upstream ID during bundle generation.
+Betterleaks 2.x supports `revoke` expressions, but Kingfisher's importer currently uses
+these overlay actions instead of executing those expressions.
 
 Current built-in provider families include:
 

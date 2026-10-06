@@ -216,11 +216,11 @@ kingfisher view ./reports/
 
 The browser-based viewer also supports loading multiple files via drag-and-drop or the file picker, with the same fingerprint-based deduplication.
 
-#### Report viewer (local and hosted) {#report-viewer-local-and-hosted}
+#### Report viewer (local and hosted)
 
 The same viewer that powers `kingfisher view` and `--view-report` also accepts **SARIF 2.1.0**, **Gitleaks JSON**, and **TruffleHog JSON/JSONL** as imported report formats, and is published in two forms:
 
-1. **Local CLI viewer** — bundled into every Kingfisher binary. No network calls, no install step beyond Kingfisher itself.
+1. **Local CLI viewer** — bundled into every Kingfisher binary. No external services, no install step beyond Kingfisher itself.
 
    ```bash
    # Open a Kingfisher scan
@@ -426,15 +426,6 @@ endpoints:
 kingfisher scan ./repo --endpoint-config ./kingfisher-endpoints.yml --allow-internal-ips
 ```
 
-**Rule prefix matching:** Use short IDs such as `github-pat` instead of `betterleaks.github-pat`. If a prefix matches multiple rules, **all matching rules with compatible variables are tried**:
-
-```bash
-$ kingfisher validate --rule github-pat "ghp_..."
-Rule:     GitHub Personal Access Token (betterleaks.github-pat)
-Result:   ✓ VALID
-Response: arn:aws:iam::123456789012:user/example
-```
-
 For scans, repeat `--rule` and `--exclude-rule` as needed:
 
 ```bash
@@ -472,9 +463,9 @@ Adapt their quoting before pasting into PowerShell or cmd.exe.
 ### Direct secret revocation with `kingfisher revoke`
 
 Use `kingfisher revoke` to invoke either a mapped Betterleaks revocation capability or a Kingfisher
-custom rule's `revocation` configuration without scanning files. Betterleaks does not currently
-provide revocation metadata, so built-in actions are maintained as a detection-free capability
-overlay and joined to upstream rule IDs during bundle generation. HTTP actions use the same Liquid templating
+custom rule's `revocation` configuration without scanning files. Kingfisher's importer
+uses reviewed capability-overlay actions joined to upstream detector IDs; it does
+not execute Betterleaks 2.x `revoke` expressions. HTTP actions use the same Liquid templating
 and response matchers as Kingfisher YAML `validation`.
 
 For supported provider flows, this lets an authorized defender contain the credential without first
@@ -1911,12 +1902,19 @@ _If no token is provided Kingfisher still works for public repositories._
 
 | Code | Meaning                        |
 | ---- | ------------------------------ |
-| 0    | No findings                    |
-| 1    | Scan or runtime error          |
+| 0    | No visible findings            |
+| 1    | Fatal scan or runtime error    |
 | 2    | Invalid command-line arguments |
 | 3    | No inputs discovered to scan   |
-| 200  | Findings discovered            |
-| 205  | Validated findings discovered  |
+| 200  | Visible findings discovered    |
+| 205  | Visible validated findings discovered |
+
+Finding exit codes (`0`, `200`, `205`) reflect visible matches. Best-effort
+scanning can continue after a repository enumeration or read error and return one
+of these codes with partial coverage. Automated workflows should also inspect
+`audit.summary.scan_partial`, `audit.summary.scan_failed`, and repository statuses
+in structured reports, or use the [repository audit log](AUDIT_LOG.md), when
+complete coverage is required.
 
 Input discovery can return exit code `3` when, for example, a GitHub user has no
 matching repositories or all discovered repositories are excluded. Orchestrators

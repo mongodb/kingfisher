@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-rules"
-version = "1.1.0"
+version = "1.2.0"
 description = "Rule definitions and database for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -16,9 +16,13 @@ include = ["src/**", "examples/**", "build_support/**", "generated/**", "data/*.
 features = ["kingfisher-vectorscan/build-from-source"]
 targets = ["x86_64-unknown-linux-gnu"]
 
+[features]
+# Unstable regex-bound integration used by kingfisher-scanner; no semver guarantee.
+__scanner-internals = []
+
 [dependencies]
 # Internal dependencies
-kingfisher-core = { version = "1.0.2", path = "../kingfisher-core" }
+kingfisher-core = { version = "1.0.3", path = "../kingfisher-core" }
 
 # Serialization
 serde.workspace = true
@@ -33,7 +37,7 @@ thiserror.workspace = true
 
 # Regex
 regex.workspace = true
-regex-syntax = "0.8"
+regex-syntax.workspace = true
 
 # Hashing
 xxhash-rust.workspace = true
@@ -59,6 +63,9 @@ zeroize.workspace = true
 
 # Vectorscan for pattern matching
 kingfisher-vectorscan.workspace = true
+# Keep this exact pin in sync with cache_vectorscan_version(). Dependency feature
+# unification may alter the native build; the full runtime build version is also keyed.
+kingfisher-vectorscan-sys = "=0.1.1"
 thread_local.workspace = true
 
 # Logging
@@ -71,6 +78,12 @@ ignore.workspace = true
 
 # Embedded rule bundle
 flate2 = "1.1"
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_SystemServices", "Win32_System_Threading"] }
 
 [dev-dependencies]
 pretty_assertions = "1.4"

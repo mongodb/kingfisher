@@ -7,6 +7,45 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.11.0]
+
+- Handled malformed Git tree modes without panics, guarded staged tree ancestry, normalized legacy index modes, and avoided revisiting reachable commits when including unreachable objects.
+- Propagated strict archive member errors, removed partial ZIP/TAR files, preserved TAR/ZIP bytes when no output directory is supplied, and bounded best-effort SQLite schema listing with skipped-table warnings.
+- Pruned stale compiled-cache temporary files, preserved existing entries when replacement fails, reported cache rejection reasons once per process, and bound line-filter cache keys to source identity without cloning patterns on hits.
+- Validated Python archive/content options eagerly, excluded case variants of `.git`, rejected unrepresentable Git hour bounds, and clarified extraction budgets and format-specific entry accounting.
+
+- Refreshed the Betterleaks catalog to [v2.0.0-rc.1](https://github.com/betterleaks/betterleaks/tree/b3b4cbb586c964701f78bbfb6bc2129ced99bed3),
+  adding Bitbucket Data Center HTTP access tokens, Cloudflare `cfut_`/`cfat_` tokens and their
+  account-ID helper, and fixing Tableau personal access tokens beginning with `+` or `/`.
+  The legacy Cloudflare rule is now `betterleaks.cloudflare-api-key.1`; the family selector
+  continues to cover both formats. Updated expression-helper support preserves upstream
+  validation checks. Built-in coverage is now 488 rules (462 Betterleaks and 26 Veles),
+  with 255 supporting validation. Regenerated the bundle, provenance, source archive, and docs.
+- Preserved every repeated TAR member during extraction and made SDK compressed-stream budget exhaustion fail before returning partial archive members.
+- Reused compiled rule caches across compatible deployments with exact engine build identity and automatic recompilation on native CPU/version rejection. [#538](https://github.com/mongodb/kingfisher/issues/538)
+- Enabled Python SDK caching by default with `Rules(cache_dir=...)` and `Rules(cache=False)` controls.
+- Fixed SDK lazy-span scan slowdowns (up to 50× faster) without changing findings. [#536](https://github.com/mongodb/kingfisher/issues/536)
+- Fixed dense-finding scan slowdowns in regex confirmation, catalog/component matching, URI overlap, and inline-ignore checks. [#537](https://github.com/mongodb/kingfisher/issues/537)
+- Improved dense scans with long lines, chained components, Base64 URIs, and HTML/CSS; fixed inconsistent source locations.
+- Added regression benchmarks: up to 144× faster SDK and 74× faster CLI on the issue reproducer, with unchanged finding counts and comparable or improved repository and Git-history scan times.
+- Added composable Python filesystem and Git-history enumeration through `ScanInput`, `filesystem()`, `git_history()`, and `Scanner.scan_inputs()`. Callers can supply their own Python iterators or use native enumeration without changing existing SDK signatures or behavior.
+- Added explicit Python archive expansion with shared CLI extractors, nested-depth and per-root budgets, cooperative controls, and source/Git metadata retained with each findings group.
+- Added commented Python examples for filesystem enumeration, native versus Python-managed Git history, and archive scanning from files or bytes; documented composition, limits, and validation grouping.
+- Preserved invalid UTF-8 secrets during HTML/CSS context filtering in the CLI and SDK.
+- Added opt-in Python `DetectionScanner` and Rust detection options for shared CLI confirmation/component-window semantics, credential-URI fallback and secret containment suppression, bounded two-level Base64 decoding, inline-ignore and HTML/CSS context filtering. Existing SDK signatures and defaults remain unchanged.
+- Isolated new CLI helper APIs behind explicitly unstable features, kept optimized confirmation state opaque, and preserved exhaustive matches of the existing embedding confirmation enum.
+- Added CLI/SDK parity, nested Base64 limit, full-match component-anchor, and context-phase interruption regressions; interrupted scans return no partial findings or dedup commits.
+- Added composable `expand_content()` for shared SQLite SQL and Python bytecode string extraction from files, historical blobs and archive members, with source provenance, per-input budgets and controls retained.
+- Added native `git_inputs()` with `GitScope` history baselines, inclusive branch roots, time windows, snapshots, net diffs, staged index content and unreachable object coverage; `GitInput` retains multiple scoped occurrences, author/committer identities and times, parents and messages without modifying repositories.
+- Added commented detection, SQLite/bytecode and Git-scope examples, contract/regression tests and updated SDK/Rust documentation.
+- Added frozen Python `DetectionPolicy` configuration, direct native finding properties and structured result conversion, and scanning of borrowed Python bytes.
+- Improved dense multiline credential scanning by reusing confirmed matches while preserving capture values and offsets.
+- Shared native Git scope enumeration with the Rust library, skipped unchanged subtrees, shared commit metadata, and added blob/preparation limits, non-UTF-8 path provenance and explicit missing-object handling.
+- Enforced nested extraction budgets while writing, hardened SQLite parsing, supported temporary-directory selection and reported malformed-content fallback diagnostics. Corrected Python 3.11+ marshal code-object parsing and handled Python 3.14 slice constants.
+- Added cancellable validation/revocation batch deadlines, Ctrl-C handling and safe revocation error categories.
+- Hardened compiled cache ownership/permissions and payload integrity, removed the shared temporary fallback, and preserved exact native engine build identity.
+- Bumped `kingfisher-core` to 1.0.3, `kingfisher-rules` to 1.2.0 and `kingfisher-scanner` and Python SDK to 1.3.0.
+
 ## [v2.10.0]
 
 - Fixed Windows Git timeout cleanup and long-path support; added `KF_GIT_BINARY`, `KF_GIT_SSL_BACKEND`, and Git for Windows CI coverage.

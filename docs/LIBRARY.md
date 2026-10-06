@@ -4,10 +4,10 @@ For in-process Python detection, validation and revocation, see the [Python SDK]
 
 [← Back to README](../README.md)
 
-The prepared library releases are **kingfisher-core 1.0.2**,
-**kingfisher-rules 1.1.0**, and **kingfisher-scanner 1.2.0**.
+The prepared library releases are **kingfisher-core 1.0.3**,
+**kingfisher-rules 1.2.0**, and **kingfisher-scanner 1.3.0**.
 They require Rust **1.99** or newer and are versioned independently of the
-`kingfisher-bin` CLI, currently **2.10.0**. See [publishing](PUBLISHING.md).
+`kingfisher-bin` CLI, currently **2.11.0**. See [publishing](PUBLISHING.md).
 
 ## Crate Overview
 
@@ -36,7 +36,11 @@ indexes a byte range while retaining offsets relative to the complete input. Con
 windows outside that range use the original regex search, allowing segment-sized indexes
 without limiting match length. `CandidateMatchCache::get_or_insert_with` defers index construction
 until repeated endpoints justify the work; consider each distinct endpoint once, before widening
-its confirmation window.
+its confirmation window. These existing low-level embedding APIs retain their signatures
+and original confirmation enum. The CLI's additional indexes and opaque optimized iterator
+are exposed only through `__cli-internals`, an unsupported feature whose API may change
+without notice. The rule crate's `__scanner-internals` feature is likewise an unsupported
+implementation detail enabled by the scanner crate.
 
 ## Quick Start
 
@@ -44,7 +48,7 @@ Add the scanner crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-kingfisher-scanner = "1.2.0"
+kingfisher-scanner = "1.3.0"
 anyhow = "1"
 ```
 
@@ -78,6 +82,8 @@ Each publishable package includes runnable source examples. Run these from the r
 | `kingfisher-rules` | [Load and compile rules](../crates/kingfisher-rules/examples/load_rules.rs) | `cargo run -p kingfisher-rules --example load_rules` |
 | `kingfisher-scanner` | [Inspect rules, regexes and configured actions](../crates/kingfisher-scanner/examples/inspect_rules.rs) | `cargo run -p kingfisher-scanner --example inspect_rules -- --with-revocation` |
 | `kingfisher-scanner` | [Scan, redact, and share across threads](../crates/kingfisher-scanner/examples/scan_content.rs) | `cargo run -p kingfisher-scanner --example scan_content` |
+| `kingfisher-scanner` | [CLI-compatible detection with explicit limits](../crates/kingfisher-scanner/examples/detection_policy.rs) | `cargo run -p kingfisher-scanner --features context --example detection_policy` |
+| `kingfisher-scanner` | [Read-only Git scopes and provenance](../crates/kingfisher-scanner/examples/git_inputs.rs) | `cargo run -p kingfisher-scanner --features git --example git_inputs -- path/to/repo` |
 | `kingfisher-scanner` | [Explicit local validation](../crates/kingfisher-scanner/examples/local_validation.rs) | `cargo run -p kingfisher-scanner --example local_validation --features validation` |
 | `kingfisher-scanner` | [Scan file batches to JSON Lines](../crates/kingfisher-scanner/examples/scan_files.rs) | `cargo run -p kingfisher-scanner --example scan_files -- Cargo.toml README.md` |
 | `kingfisher-scanner` | [Scan with private YAML/TOML rules](../crates/kingfisher-scanner/examples/scan_custom_rules.rs) | `cargo run -p kingfisher-scanner --example scan_custom_rules -- crates/kingfisher-scanner/examples/fixtures/acme-http.yml README.md` |
@@ -99,12 +105,12 @@ additional validator features your project needs.
 To install the CLI from crates.io:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.10.0
+cargo install --locked kingfisher-bin --version 2.11.0
 kingfisher scan path/to/project --no-validate --format toon --no-update-check
 ```
 
 For the `kingfisher-bin` library example in your own application, use
-`kingfisher = { package = "kingfisher-bin", version = "2.10.0" }` and `anyhow = "1"`.
+`kingfisher = { package = "kingfisher-bin", version = "2.11.0" }` and `anyhow = "1"`.
 The focused library examples use the crate versions listed above;
 `kingfisher-rules` and `kingfisher-scanner` examples also use `anyhow = "1"`.
 
@@ -113,18 +119,20 @@ The focused library examples use the crate versions listed above;
 Start with a complete example above and copy it into `src/main.rs` in a small Rust
 application. These are public-API consumers; no CLI process or private Kingfisher
 module is required. Choose dependencies from this table in addition to
-`kingfisher-scanner = "1.2.0"` and `anyhow = "1"`:
+`kingfisher-scanner = "1.3.0"` and `anyhow = "1"`:
 
 | Recipe | Additional dependencies / features |
 | ------ | ---------------------------------- |
 | `scan_content` | None |
-| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "1.1.0"` for loading custom YAML/TOML |
+| `detection_policy` | Scanner feature `context` |
+| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "1.2.0"` for loading custom YAML/TOML |
 | `scan_files` | `serde_json = "1"` |
-| `scan_custom_rules` | `kingfisher-rules = "1.1.0"` |
+| `scan_custom_rules` | `kingfisher-rules = "1.2.0"` |
 | `scan_async` | `tokio = { version = "1.53", features = ["macros", "rt", "sync"] }` |
-| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "1.1.0"` |
+| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "1.2.0"` |
 | `http_validation` | Complete manifest below; also copy `fixtures/acme-http.yml` and `support/mod.rs` into `src/fixtures/` and `src/support/` |
 | `validate_file` | Scanner feature `validation`; `serde_json = "1"`; `tokio = { version = "1.53", features = ["macros", "rt"] }` |
+| `git_inputs` | Scanner feature `git` |
 
 The examples use the published crate versions. For local development, replace each
 Kingfisher dependency version with a `path` to the corresponding crate in a local
@@ -255,8 +263,8 @@ rust-version = "1.99"
 
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
-kingfisher-rules = "1.1.0"
+kingfisher-scanner = { version = "1.3.0", features = ["validation"] }
+kingfisher-rules = "1.2.0"
 serde_json = "1"
 tokio = { version = "1.53", features = ["macros", "rt", "net", "io-util", "time"] }
 ```
@@ -397,7 +405,7 @@ Compile once and share the database. Preserve catalog metadata with
 `RulesDatabase::from_rule_collection`; converting the loaded collection into a
 `Vec<Rule>` loses its database-level source prefilter.
 
-For custom files, add `kingfisher-rules = "1.1.0"` and use:
+For custom files, add `kingfisher-rules = "1.2.0"` and use:
 
 ```rust
 use kingfisher_rules::{Confidence, Rules, RulesDatabase};
@@ -450,12 +458,27 @@ Pass it to `Scanner::with_config(Arc::clone(&database), config)`.
 | `redact_secrets` | `false` | Replace returned secret and capture values with `[REDACTED]` |
 
 Deduplication is scoped to one scanner and cleared by `reset_dedup()` or dropping
-that scanner. Concurrent first scans may both report findings. Source paths are
+that scanner. Concurrent first scans may both report findings, and in-flight scans
+may commit entries after a reset. Finish them before resetting a batch. Source paths are
 compared as supplied, without canonicalization. The cache retains entries for scans
 that returned findings; it grows until reset. Leave it disabled for request-oriented
 services or when every file occurrence must be reported.
 
 ## Scanning Methods
+
+For reuse across processes, add `kingfisher-rules = "1.2.0"` to your dependencies and load the collection with
+`kingfisher_rules::RulesDatabase::from_rule_collection_with_cache` and
+`kingfisher_rules::RuleCacheConfig::from_dir_or_env(None)` (or `RuleCacheConfig::new(path)`).
+This is the CLI/Python compiled content-database cache and honors `KF_RULE_CACHE_DIR`.
+Entries require the same native engine build and exact binding versions, plus
+compatible architecture, pointer width and endianness. Cache read failures and native CPU/version rejection fall back to
+compilation; writes are best effort. Confirmation regexes and path/finding filters
+still initialize per database. Existing uncached Rust constructors remain uncached.
+`RulesDatabase::cache_status()` reports `Loaded`, `Stored` or `Bypassed`, so
+applications can require persistence when prewarming. Cache directories must be
+trusted; unsafe ownership, permissions or symlinks bypass caching. Without a
+per-user directory, automatic cache configuration disables disk use. SHA-256
+checks payload integrity before native deserialization.
 
 All scanning methods return `anyhow::Result<Vec<Finding>>`; propagate or explicitly
 handle errors. A failed scan is not an empty successful scan.
@@ -475,7 +498,9 @@ keeping a finding that should have been filtered. Fix the rule and retry the inp
 
 A scan performs detection and filtering, including entropy, catalog filters, and
 component requirements. It does not run validators, revoke credentials, traverse
-repositories, decompress arbitrary archives, or reproduce every CLI pipeline stage.
+remote repositories or reproduce every CLI pipeline stage. Optional `git`,
+`archives`, `extraction` and `context` features provide explicit local enumeration,
+transforms and detection policies; see the sections below.
 Enabling a validation feature does not change this boundary.
 
 ## Working with Findings
@@ -528,7 +553,7 @@ No validator features are enabled by default:
 
 ```toml
 [dependencies]
-kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.3.0", features = ["validation"] }
 ```
 
 `validation` enables all supported validators and revocation: HTTP, gRPC,
@@ -545,7 +570,7 @@ logging or serializing it:
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.3.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -590,7 +615,7 @@ No dependency on the CLI crate is needed.
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.3.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -626,7 +651,9 @@ accepts an application-owned client for HTTP rules; AWS and GCP use their own
 transports. HTTP rules can reach internal addresses, so callers own endpoint policy.
 HTTP rule requests are not retried; AWS retains its provider-specific retry policy.
 The default total deadline is 10 seconds;
-change it with `Revoker::timeout`. A timed-out request may already have revoked the
+change it with `Revoker::timeout`. `Revoker::error_category` classifies failures without returning endpoint URLs or
+provider bodies, for applications that need safe operational logs. A timed-out
+request may already have revoked the
 credential. Results include the rule identity, success flag, optional HTTP status,
 and response message. Provider responses and errors may contain sensitive data.
 Missing revocation configuration, execution
@@ -655,7 +682,7 @@ input limits and bound worker counts for untrusted or large workloads.
 The full application's library is available separately:
 
 ```toml
-kingfisher = { package = "kingfisher-bin", version = "2.10.0" }
+kingfisher = { package = "kingfisher-bin", version = "2.11.0" }
 ```
 
 It carries CLI dependencies and all validator features. The stable embedding
@@ -664,11 +691,16 @@ for detection, validation, and revocation integration.
 
 ## API Stability
 
+Scanner and Python SDK 1.3.0 add opt-in CLI detection policies, shared
+SQLite/bytecode extraction and richer Python Git scopes/provenance. Existing
+scanner configuration, method signatures and defaults remain unchanged.
+
 Rules 1.1.0 adds endpoint-confirmation helpers and reduces filter input copying.
 Scanner 1.2.0 adds optional cooperative scan deadlines/cancellation and improves
 candidate confirmation and span tracking while retaining existing scan methods
 and public helper signatures. Python SDK 1.1.0 adds per-call scan controls and
-`Rules.detail()` inspection. Core remains 1.0.2; the CLI is versioned separately.
+`Rules.detail()` inspection. Core 1.0.3 avoids duplicate hashing of borrowed
+content while preserving its public API; the CLI is versioned separately.
 
 Scanner 1.1.0 introduced `Revoker` and made validation all-or-nothing. Existing
 provider feature names remain aliases, so existing manifests keep working while
@@ -708,7 +740,8 @@ behavior; review and behavioral tests remain required.
 - Repeated calls return findings by default; explicitly enable cross-call deduplication
   when wanted. Deduplication now includes the source path.
 - Remove unused `language_hint` and `max_base64_depth` fields from `ScannerConfig`.
-  Base64 detection currently scans one decoding layer.
+  Default Base64 detection scans one decoding layer; the opt-in detection policy
+  supports bounded nested decoding.
 - Redaction now uses `[REDACTED]` for secrets and captures, and preserves the unredacted
   fingerprint. It no longer reveals a secret prefix.
 - `SerializableCapture` owns its name and value strings. The leaking `intern` helper
@@ -719,3 +752,138 @@ behavior; review and behavioral tests remain required.
 - [Rule authoring](RULES.md)
 - [Publishing and package versions](PUBLISHING.md)
 - [CLI usage](USAGE.md)
+
+## Shared archive extraction
+
+The optional `kingfisher-scanner` feature `archives` exposes the CLI/Python archive
+helpers in `archive::decompress` and their budgets in `archive::limits`.
+`Scanner` methods continue to scan their supplied content without enumeration or
+extraction. Extract explicitly and pass member bytes and logical paths to
+`scan_blob_at_path`. Shared extraction is best effort and can skip entries or
+truncate content at format limits. Python users can compose native filesystem and
+reachable Git history iterators with archive expansion through the
+[Python input APIs](PYPI.md#compose-filesystem-git-history-and-archives).
+
+For strict byte budgets, use
+`archive::decompress::decompress_file_with_strict_single_stream_cap_and_limits`
+with `ResourceLimits::default()`. It fails on stream-cap exhaustion before parsing
+a partially decoded TAR. `decompress_file_with_budget` also accepts a strict
+entry budget and `ScanControl`, returning an `ArchiveExpansion` with inspected
+entry usage so nested callers can debit one aggregate root budget.
+`extract_zip_archive_in_memory_with_budget` performs bounded ZIP extraction
+without temporary storage and reports inspected entry usage. Existing best-effort entry points keep their truncation
+behavior. TAR members use independent physical staging paths while
+preserving their logical names, including repeated names.
+
+With no output directory, TAR/ZIP extraction returns `CompressedContent::Archive`
+with member bytes in memory. To retain disk-backed members, use
+`decompress_file_to_temp_with_limits` and keep its returned `TempDir` alive.
+`ArchiveExpansion::inspected_entries` counts TAR/ZIP directories and skipped
+members, ASAR indexed files, and HWP streams.
+
+Owned directories from `decompress_file_to_temp` use Unix mode 0700; standalone
+decoded files created without an output directory use mode 0600 and require caller
+cleanup. The umask may restrict these modes further. Windows inherits the
+temporary parent's DACL. Choose a protected temporary parent on every platform;
+caller-supplied output directories retain their permissions and must also be
+protected. Cleanup is not secure erasure and can leave remnants after a crash;
+use encrypted or memory-backed storage when needed.
+
+## Optional CLI detection policies and content extraction
+
+Enable `context` for opt-in CLI matching, bounded Base64 decoding, inline-ignore
+and HTML/CSS parser policies.
+Existing `ScannerConfig` and scanner methods retain their signatures and behavior.
+Use `context::DetectionOptions` with `scan_blob_at_path_with_options` for unlimited
+controls, or `scan_blob_at_path_with_options_and_control` for a deadline/cancellation:
+
+```rust
+# use std::sync::Arc;
+# use kingfisher_scanner::{Blob, RulesDatabase, Scanner, ScanControl, get_builtin_rules};
+# #[cfg(feature = "context")]
+# fn main() -> anyhow::Result<()> {
+# let scanner = Scanner::new(Arc::new(RulesDatabase::from_rule_collection(get_builtin_rules(None)?)?));
+use kingfisher_scanner::context::DetectionOptions;
+let blob = Blob::from_bytes(b"ordinary configuration".to_vec());
+let findings = scanner.scan_blob_at_path_with_options_and_control(
+    &blob, "config.html", &DetectionOptions::default(), &ScanControl::default(),
+)?;
+# Ok(())
+# }
+# #[cfg(not(feature = "context"))]
+# fn main() {}
+```
+
+The options entry point enables CLI matching by default: a 4 KiB initial
+confirmation window (widened when needed), full-match component windows,
+per-rule secret containment suppression, and overlapping Betterleaks credential-URI
+fallback suppression. `cli_match_semantics = false` retains the SDK's 64 KiB
+confirmation alignment and secret-based component windows. Full-match metadata
+stays private; reported locations and the public `Finding` shape are unchanged.
+
+Base64 decoding defaults to two layers and skips the Base64 pass when the
+original input exceeds 64 MiB. Raw matching still runs above that limit.
+Set `base64_max_depth` independently (zero disables decoding), and use
+`base64_max_input_bytes = None` to remove the input cap. `ScannerConfig`'s
+`enable_base64_decoding = false` disables decoding regardless of these options.
+Nested findings keep the outer encoded region's offsets. Existing scanner methods
+retain their one-layer, uncapped Base64 behavior.
+
+Inline-ignore and containment filtering run before markup verification, followed
+by component requirements, URI fallback suppression, catalog deduplication and
+redaction. Interrupted calls return no partial findings and do not commit dedup
+state. The dedup key is the blob ID and path; it does not include detection options.
+With deduplication enabled, use a separate scanner per detection policy.
+The markup gate uses shared language inference, bypasses self-identifying/Base64
+candidates and retains candidates above 2 MiB or with invalid UTF-8 secrets.
+Set `inline_ignores = false` or `markup_context = false` independently.
+The parser, inline-ignore, index and confirmation helpers are isolated behind
+the explicitly unstable `__cli-internals` feature for CLI orchestration. Embedders should use the supported scanner entry points.
+
+The optional `extraction` feature enables `archives` and exposes
+`extraction::sqlite::extract_sqlite_contents[_with_limits]` and
+`extraction::pyc::extract_pyc_strings[_with_limits]`. SQLite extraction opens the
+supplied file read-only and emits SQL per user table; bytecode parsing extracts
+marshal strings without executing Python. These low-level helpers use the CLI's
+best-effort limits and may skip/truncate content. Strict counterparts
+`extract_sqlite_contents_with_budget` and
+`extract_pyc_strings_from_bytes_with_budget` enforce output budgets while
+extracting and propagate `ExtractionLimitExceeded` without partial text.
+SQLite uses read-only/defensive connections, disables trusted schema expressions,
+bounds native SQLite allocations and checks controls through a VM progress hook.
+The bytecode helper borrows input bytes and checks controls during parsing. Extraction is explicit and
+separate from scanning; findings refer to extracted content. The Python
+`expand_content()` adapter stages a separate copy and adds per-input budgets and
+cooperative controls. Choose a protected `temp_dir` parent on every platform.
+SDK staging directories use owner-only Unix mode 0700 (the umask may restrict it
+further); Windows inherits the parent DACL. See
+[the SDK guide](PYPI.md#extract-sqlite-and-python-bytecode).
+
+## Optional local Git enumeration
+
+Enable `git` to use `git::GitInputs`, `GitScope`, `GitOptions` and `GitEvent`.
+Prepare descriptors once, then scan each `GitEvent::Input` payload with its
+repository-relative path. `GitEvent::Skipped` reports explicit oversized or
+missing-blob skips; decide whether incomplete coverage is acceptable in the
+embedding. The [Git example](../crates/kingfisher-scanner/examples/git_inputs.rs)
+shows scoped selection, budgets, controls and redacted reporting.
+
+History traverses every selected merge parent and compares each commit to its
+first parent. Identical subtrees are skipped; commit metadata is shared with
+`Arc`. Payloads load lazily, while descriptors and ancestry prepare eagerly.
+`max_commits` bounds distinct visited commits (including exclusion ancestry),
+`max_inputs` bounds distinct raw-path/blob descriptors, and `max_blob_size`
+checks object headers before reading payloads. Preparation budget exhaustion
+fails rather than truncating coverage. The `ScanControl` deadline covers iterator
+lifetime, including time spent by the consumer. Limits are optional and unlimited
+by default; configure them for service workloads.
+
+Snapshots, net diffs, staged index content, time ranges, branch roots and stored
+unreachable objects are explicit `GitScope` choices. Native acquisition is
+read-only and offline. Missing blobs fail unless `skip_missing_blobs` explicitly
+requests skipped events; missing trees/commits still fail. Partial clones are
+never fetched. Non-UTF-8 paths retain `raw_path` bytes with a lossy display name.
+Default ancestor discovery is preserved; set `discover = false` for explicit
+repository roots. Revisions use local Git grammar, including reflog expressions.
+See [Python Git scope semantics](PYPI.md#select-git-scopes-and-retain-provenance)
+for provenance and selection details shared by both SDKs.

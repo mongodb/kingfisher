@@ -201,8 +201,8 @@ kingfisher revoke --rules-path ./custom-rules.yml \
 ```
 
 Find → prioritize → revoke, all without leaving the terminal. Kingfisher's capability overlay or a
-custom rule supplies the provider-approved revocation action; Betterleaks itself does not currently
-publish one.
+custom rule supplies the provider-approved revocation action. Kingfisher currently uses those
+actions instead of executing Betterleaks 2.x `revoke` expressions.
 
 ## Self-hosted and enterprise
 

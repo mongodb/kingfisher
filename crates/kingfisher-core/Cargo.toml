@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-core"
-version = "1.0.2"
+version = "1.0.3"
 description = "Core types and traits for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true

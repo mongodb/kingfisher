@@ -83,7 +83,7 @@ struct BetterleaksRule {
     description: String,
     regex: Option<String>,
     path: Option<String>,
-    #[serde(default)]
+    #[serde(default, alias = "valueGroup")]
     secret_group: usize,
     #[serde(default)]
     confidence: String,
@@ -799,6 +799,7 @@ fn validate_filter_expression(expression: &BetterleaksExpr) -> Result<()> {
                         | "min"
                         | "split"
                         | "join"
+                        | "lower"
                 )
             };
             if !supported {
@@ -910,6 +911,7 @@ fn validate_validation_expression(expression: &BetterleaksExpr) -> Result<()> {
                             | "crypto.hmacSha1"
                             | "crypto.hmacSha256"
                             | "strings.urlQueryEscape"
+                            | "strings.splitTrim"
                             | "json.string"
                             | "time.nowUnix"
                             | "time.nowRFC3339"
@@ -923,7 +925,20 @@ fn validate_validation_expression(expression: &BetterleaksExpr) -> Result<()> {
                             | "azure.validateServiceBusSAS"
                     )
             } else {
-                matches!(name.as_str(), "bytes" | "size" | "substring")
+                matches!(
+                    name.as_str(),
+                    "bytes"
+                        | "size"
+                        | "substring"
+                        | "toJSON"
+                        | "type"
+                        | "string"
+                        | "int"
+                        | "len"
+                        | "trim"
+                        | "split"
+                        | "matchesAny"
+                )
             };
             if !supported {
                 bail!("unsupported Betterleaks validation call {name:?}");
@@ -934,7 +949,7 @@ fn validate_validation_expression(expression: &BetterleaksExpr) -> Result<()> {
             }
         }
         BetterleaksExpr::Builtin { name, arguments } => {
-            if !matches!(name.as_str(), "any" | "lastIndexOf" | "replace") {
+            if !matches!(name.as_str(), "any" | "all" | "filter" | "lastIndexOf" | "replace") {
                 bail!("unsupported Betterleaks validation builtin {name:?}");
             }
             for argument in arguments {
@@ -950,7 +965,7 @@ fn validate_validation_expression(expression: &BetterleaksExpr) -> Result<()> {
         BetterleaksExpr::Binary { operator, left, right } => {
             if !matches!(
                 operator.as_str(),
-                "&&" | "||" | "??" | "+" | "==" | "!=" | ">" | "in" | "contains"
+                "&&" | "||" | "??" | "+" | "==" | "!=" | ">" | "in" | "contains" | "startsWith"
             ) {
                 bail!("unsupported Betterleaks validation binary operator {operator:?}");
             }
@@ -1248,7 +1263,10 @@ impl Parser {
                     }
                     let builtin_name = match &node {
                         BetterleaksExpr::Identifier { value }
-                            if matches!(value.as_str(), "any" | "lastIndexOf" | "replace") =>
+                            if matches!(
+                                value.as_str(),
+                                "any" | "all" | "filter" | "lastIndexOf" | "replace"
+                            ) =>
                         {
                             Some(value.clone())
                         }
@@ -1373,7 +1391,7 @@ fn binary_precedence(operator: &str) -> Option<(u8, bool)> {
         "??" => (2, true),
         "&&" | "and" => (3, false),
         "==" | "!=" => (4, false),
-        "in" | "not in" | "contains" | "<" | "<=" | ">" | ">=" => (5, false),
+        "in" | "not in" | "contains" | "startsWith" | "<" | "<=" | ">" | ">=" => (5, false),
         "+" | "-" => (6, false),
         "*" | "/" | "%" => (7, false),
         _ => return None,
@@ -1433,7 +1451,7 @@ fn lex(source: &str) -> Result<Vec<Token>> {
                     "true" => Token::Bool(true),
                     "false" => Token::Bool(false),
                     "nil" => Token::Nil,
-                    "and" | "or" | "in" | "contains" | "not" => {
+                    "and" | "or" | "in" | "contains" | "startsWith" | "not" => {
                         if word == "not" {
                             let saved = chars.clone();
                             while chars.peek().is_some_and(|(_, value)| value.is_whitespace()) {
@@ -1547,6 +1565,34 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn v2_validation_helpers_import_without_executing_analysis_or_revocation() {
+        let source = r#"
+[[rules]]
+id = "v2-token"
+description = "Synthetic v2 token"
+regex = '(cf[ua]t_[A-Za-z0-9]{48})'
+filter = 'lower(finding["match"]) contains "client"'
+validate = '''
+let account_token = finding["secret"] startsWith "cfat_";
+let scopes = filter(["read", 42], {type(#) == "string"});
+let valid = all(scopes, {type(#) == "string"}) && len(scopes) > 0;
+valid ? {"result": "valid", "analysis": {"account_token": account_token}} : {"result": "unknown"}
+'''
+analyze = 'http.delete("https://example.invalid/analysis")'
+revoke = 'http.delete("https://example.invalid/revoke")'
+"#;
+        let yaml = import_config(source, "synthetic-v2", "version: 1\nrules: {}\n").unwrap();
+        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let rule = &snapshot["rules"][0];
+        assert_eq!(rule["validation"]["type"].as_str(), Some("Betterleaks"));
+        assert!(rule["validation"]["content"]["source"].as_str().unwrap().contains("startsWith"));
+        assert!(yaml.contains("name: filter"));
+        assert!(yaml.contains("name: all"));
+        assert!(rule["revocation"].is_null());
+        assert!(!yaml.contains("http.delete"));
+    }
 
     #[test]
     fn bare_preserves_flags_names_and_boundaries() {
@@ -1702,21 +1748,20 @@ skipReport = true
 
     #[test]
     fn preserves_capture_names_and_records_secret_group() {
-        let yaml = import_config(
-            r#"
+        let source = r#"
 [[rules]]
 id = "capture-selection"
 description = "Capture selection"
 regex = '''(kind)-(?P<secret>[a-z]+)-([0-9]+)'''
 secretGroup = 3
-"#,
-            "test",
-            EMPTY_CAPABILITIES,
-        )
-        .unwrap();
-
-        assert!(yaml.contains("pattern: (kind)-(?P<secret>[a-z]+)-([0-9]+)"));
-        assert!(yaml.contains("betterleaks_secret_group: 3"));
+"#;
+        for field in ["secretGroup", "valueGroup"] {
+            let yaml =
+                import_config(&source.replace("secretGroup", field), "test", EMPTY_CAPABILITIES)
+                    .unwrap();
+            assert!(yaml.contains("pattern: (kind)-(?P<secret>[a-z]+)-([0-9]+)"));
+            assert!(yaml.contains("betterleaks_secret_group: 3"), "{field}");
+        }
     }
 
     #[test]

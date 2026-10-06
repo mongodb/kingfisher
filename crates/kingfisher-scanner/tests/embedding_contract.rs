@@ -279,3 +279,239 @@ fn indexed_confirmation_does_not_merge_lazy_matches_or_add_overlapping_alternati
         assert_eq!(actual, expected);
     }
 }
+
+#[test]
+fn dense_lazy_spans_preserve_secrets_and_locations() {
+    let pattern =
+        r"(PuTTY-User-Key-File-3:(?:[^\n]|\n){20,10240}?Private-MAC: ?[0-9a-fA-F]{40,64})";
+    let scanner = Scanner::with_config(
+        Arc::new(
+            RulesDatabase::from_rules(vec![Rule::new(RuleSyntax::new(
+                "acme.lazy-span",
+                "Lazy span regression (#536)",
+                pattern,
+            ))])
+            .unwrap(),
+        ),
+        ScannerConfig { enable_base64_decoding: false, ..Default::default() },
+    );
+    let mut input = String::new();
+    let mut expected = Vec::new();
+    for i in 0..477 {
+        // Mix ordinary records with lazy spans requiring confirmation to widen.
+        // Dense assertion-free rules reuse complete indexed matches; repeatedly
+        // end-anchoring each candidate would turn this small fixture into wide,
+        // expensive PikeVM searches. Keep exact secrets and locations as the oracle.
+        let length = if i % 127 == 0 { 8192 } else { 26 };
+        let body: String = "abcdefghijklmnopqrstuvwxyz".chars().cycle().take(length).collect();
+        let secret = format!("PuTTY-User-Key-File-3:{body}\nPrivate-MAC: {i:064x}");
+        expected.push((input.len(), input.len() + secret.len(), secret));
+        input.push_str(&expected.last().unwrap().2);
+        input.push('\n');
+    }
+    let mut findings = scanner.scan_bytes(input.as_bytes()).unwrap();
+    findings.sort_by_key(|finding| finding.location.start_offset);
+    assert_eq!(findings.len(), expected.len());
+    for (i, (finding, (start, end, secret))) in findings.iter().zip(&expected).enumerate() {
+        assert_eq!(&finding.secret, secret);
+        assert_eq!(finding.location.start_offset, *start);
+        assert_eq!(finding.location.end_offset, *end);
+        assert_eq!(finding.line(), 2 * i + 1);
+        assert_eq!(finding.column(), 0);
+    }
+}
+
+#[test]
+fn confirmation_widens_for_secrets_beyond_four_and_sixty_four_kib() {
+    let pattern = r"(BEGIN\n[A-Za-z0-9\n]+\nEND)";
+    let scanner = Scanner::with_config(
+        Arc::new(
+            RulesDatabase::from_rules(vec![Rule::new(RuleSyntax::new(
+                "acme.long-secret",
+                "Long secret",
+                pattern,
+            ))])
+            .unwrap(),
+        ),
+        ScannerConfig { enable_base64_decoding: false, ..Default::default() },
+    );
+    for padding in [0, 19] {
+        for length in [4096, 8192, 70 * 1024] {
+            let body: String =
+                "abcdefghijklmnopqrstuvwxyz0123456789\n".chars().cycle().take(length).collect();
+            let secret = format!("BEGIN\n{body}\nEND");
+            let input = format!("{}{secret}\n", " ".repeat(padding));
+            let findings = scanner.scan_bytes(input.as_bytes()).unwrap();
+            assert_eq!(findings.len(), 1, "padding={padding} length={length}");
+            assert_eq!(findings[0].secret, secret);
+            assert_eq!(findings[0].location.start_offset, padding);
+            assert_eq!(findings[0].location.end_offset, padding + secret.len());
+        }
+    }
+}
+
+#[test]
+fn dense_dependencies_preserve_optional_required_windows_and_cascading_removal() {
+    use kingfisher_rules::DependsOnRule;
+    let dependency = |id: &str, within: &str, optional| {
+        Some(DependsOnRule {
+            rule_id: id.into(),
+            variable: "COMPONENT".into(),
+            within: Some(within.into()),
+            optional,
+            verify_candidates: false,
+        })
+    };
+    for within in ["1L", "+1L", "-1L", "16C", "1L,16C"] {
+        let mut primary = RuleSyntax::new("acme.primary", "Primary", r"(PRIMARY_[a-z0-9]{8})");
+        primary.depends_on_rule = vec![dependency("acme.helper", within, false)];
+        let mut helper = RuleSyntax::new("acme.helper", "Helper", r"(HELP_[a-z0-9]{8})");
+        helper.visible = false;
+        let scanner = Scanner::with_config(
+            Arc::new(
+                RulesDatabase::from_rules(vec![Rule::new(primary), Rule::new(helper)]).unwrap(),
+            ),
+            ScannerConfig { enable_base64_decoding: false, ..Default::default() },
+        );
+        let input = "PRIMARY_abcd1234 HELP_efgh5678\n".repeat(2500);
+        let findings = scanner.scan_bytes(input.as_bytes()).unwrap();
+        assert_eq!(findings.len(), 5000, "{within}");
+    }
+    let mut optional = RuleSyntax::new("acme.optional", "Optional", r"(OPTIONAL_[a-z0-9]{8})");
+    optional.depends_on_rule = vec![dependency("acme.missing", "invalid", true)];
+    let mut primary = RuleSyntax::new("acme.primary", "Primary", r"(PRIMARY_[a-z0-9]{8})");
+    primary.depends_on_rule = vec![dependency("acme.helper", "0", false)];
+    let mut helper = RuleSyntax::new("acme.helper", "Helper", r"(HELP_[a-z0-9]{8})");
+    helper.depends_on_rule = vec![dependency("acme.missing", "1L", false)];
+    let scanner = Scanner::new(Arc::new(
+        RulesDatabase::from_rules(vec![Rule::new(primary), Rule::new(helper), Rule::new(optional)])
+            .unwrap(),
+    ));
+    let input = "HELP_efgh5678\nPRIMARY_abcd1234\nOPTIONAL_ab12cd34\n".repeat(1000);
+    let findings = scanner.scan_bytes(input.as_bytes()).unwrap();
+    assert_eq!(findings.len(), 1000);
+    assert!(findings.iter().all(|finding| finding.rule_id == "acme.optional"));
+}
+
+#[test]
+fn fixed_width_runs_preserve_sdk_offsets_and_fingerprints() {
+    let scanner = Scanner::with_config(
+        Arc::new(
+            RulesDatabase::from_rules(vec![Rule::new(RuleSyntax::new(
+                "acme.hex",
+                "Fixed-width hex",
+                r"([0-9a-f]{32})",
+            ))])
+            .unwrap(),
+        ),
+        ScannerConfig { enable_base64_decoding: false, ..Default::default() },
+    );
+    // Nonuniform hex makes a shifted match change both the secret and its fingerprint.
+    let input: Vec<_> = (0..5001).map(|i| b"0123456789abcdef"[i % 16]).collect();
+    let blob = Blob::from_bytes(input);
+    let mut findings = scanner.scan_blob(&blob).unwrap();
+    findings.sort_by_key(|f| f.location.start_offset);
+    assert_eq!(findings.len(), 156);
+    for (i, finding) in findings.iter().enumerate() {
+        let start = i * 32;
+        let end = start + 32;
+        assert_eq!(finding.location.start_offset, start);
+        assert_eq!(finding.location.end_offset, end);
+        assert_eq!(finding.secret.as_bytes(), &blob.bytes()[start..end]);
+        assert_eq!(
+            finding.fingerprint,
+            kingfisher_scanner::primitives::compute_finding_fingerprint(
+                &finding.secret,
+                &blob.id().to_string(),
+                start as u64,
+                end as u64,
+            )
+        );
+    }
+}
+
+#[test]
+fn required_components_reject_candidates_outside_each_window() {
+    use kingfisher_rules::DependsOnRule;
+    for (within, input, expected) in [
+        ("1L", "PRIMARY_abcd1234\n\nHELP_efgh5678", false),
+        ("1L", "PRIMARY_abcd1234 HELP_efgh5678", true),
+        ("16C", "PRIMARY_abcd1234                                 HELP_efgh5678", false),
+        ("+2L", "PRIMARY_abcd1234\nHELP_efgh5678", true),
+        ("-2L", "PRIMARY_abcd1234\nHELP_efgh5678", false),
+        ("+2L", "HELP_efgh5678\nPRIMARY_abcd1234", false),
+        ("-2L", "HELP_efgh5678\nPRIMARY_abcd1234", true),
+        // 1L includes only the primary's line, even when directional.
+        ("+1L", "PRIMARY_abcd1234\nHELP_efgh5678", false),
+        ("-1L", "HELP_efgh5678\nPRIMARY_abcd1234", false),
+        ("5LL", "PRIMARY_abcd1234 HELP_efgh5678", false),
+    ] {
+        let mut primary = RuleSyntax::new("acme.primary", "Primary", r"(PRIMARY_[a-z0-9]{8})");
+        primary.depends_on_rule = vec![Some(DependsOnRule {
+            rule_id: "acme.helper".into(),
+            variable: "HELPER".into(),
+            within: Some(within.into()),
+            optional: false,
+            verify_candidates: false,
+        })];
+        let helper = RuleSyntax::new("acme.helper", "Helper", r"(HELP_[a-z0-9]{8})");
+        let scanner = Scanner::with_config(
+            Arc::new(
+                RulesDatabase::from_rules(vec![Rule::new(primary), Rule::new(helper)]).unwrap(),
+            ),
+            ScannerConfig { enable_base64_decoding: false, ..Default::default() },
+        );
+        let findings = scanner.scan_bytes(input.as_bytes()).unwrap();
+        assert_eq!(
+            findings.iter().any(|f| f.rule_id == "acme.primary"),
+            expected,
+            "{within}: {input:?}"
+        );
+    }
+}
+
+#[test]
+fn indexed_dense_confirmation_preserves_widened_delimiter_runs() {
+    let db = Arc::new(
+        RulesDatabase::from_rules(vec![Rule::new(RuleSyntax::new(
+            "acme.delimited",
+            "Delimiter run",
+            r"([a-z]+\nEND)",
+        ))])
+        .unwrap(),
+    );
+    assert!(db.confirmation_maximum_len(0).is_some());
+    let scanner = Scanner::with_config(
+        db,
+        ScannerConfig { enable_base64_decoding: false, ..Default::default() },
+    );
+    let mut input = String::new();
+    let mut expected = Vec::new();
+    for length in std::iter::repeat_n(4, 20).chain([70 * 1024]).chain(std::iter::repeat_n(4, 20)) {
+        let start = input.len();
+        input.push_str(&"a".repeat(length));
+        input.push_str("\nEND");
+        expected.push((start, input.len()));
+        input.push(' ');
+    }
+    let mut findings = scanner.scan_bytes(input.as_bytes()).unwrap();
+    findings.sort_by_key(|f| f.location.start_offset);
+    assert_eq!(findings.len(), expected.len());
+    for (finding, &(start, end)) in findings.iter().zip(&expected) {
+        assert_eq!((finding.location.start_offset, finding.location.end_offset), (start, end));
+        assert_eq!(finding.secret, input[start..end]);
+    }
+}
+
+#[test]
+fn legacy_confirmation_enum_remains_exhaustively_matchable() {
+    use kingfisher_scanner::primitives::{CandidateMatchIndex, ConfirmationCaptures};
+    let regex = RuleSyntax::new("acme.legacy", "Legacy", "(ab)").as_regex().unwrap();
+    let input = b"ab ab";
+    let index = CandidateMatchIndex::new(&regex, input);
+    let count = match index.captures(&regex, None, input, 0) {
+        ConfirmationCaptures::One(captures) => usize::from(captures.is_some()),
+        ConfirmationCaptures::Search(captures) => captures.count(),
+    };
+    assert_eq!(count, 2);
+}

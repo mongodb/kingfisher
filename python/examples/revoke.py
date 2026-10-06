@@ -29,5 +29,7 @@ rules = Rules(args.rules_path, builtins=not args.no_builtins)
 result = Revoker(rules, timeout=args.timeout).revoke(args.rule_id, os.environ["KINGFISHER_SECRET"],
                          confirm=args.confirm,
                          variables=json.loads(os.environ.get("KINGFISHER_VARIABLES", "{}")))
+# revoke(..., timeout=..., cancellation=token) also supports application
+# shutdown controls. Interruption cannot undo a submitted provider action.
 # No automatic retries: a timeout can happen after the provider applied the action.
 print(json.dumps(asdict(result)))  # Contains status, never the credential.

@@ -1102,7 +1102,15 @@ mod tests {
     #[test]
     fn audit_without_git_child() {
         let Some(root) = std::env::var_os("KF_TEST_AUDIT_REPO") else { return };
-        assert!(std::process::Command::new("git").arg("--version").output().is_err());
+        let empty_path = Path::new(&root).join("empty path");
+        assert_eq!(std::env::var_os("PATH").as_deref(), Some(empty_path.as_os_str()));
+        // Emulated process launchers can report an absent executable as a child
+        // failure (for example, exit 127 under Rosetta) rather than a spawn error.
+        let git_available = std::process::Command::new("git")
+            .arg("--version")
+            .output()
+            .is_ok_and(|output| output.status.success());
+        assert!(!git_available, "Git must be unavailable with an empty PATH");
         let snapshot = git_snapshot(Path::new(&root), &scan_args(&[]), false);
         assert_eq!(snapshot.tip_sha, Some(std::env::var("KF_TEST_AUDIT_COMMIT").unwrap()));
         assert_eq!(snapshot.fetched_commit_count, Some(1));

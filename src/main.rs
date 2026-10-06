@@ -95,6 +95,19 @@ use app::{
     run_rules_compile_cache, run_rules_list, run_rules_prune_cache,
 };
 
+fn scan_tempdir() -> std::io::Result<TempDir> {
+    let builder = tempfile::Builder::new();
+    #[cfg(unix)]
+    let builder = {
+        use std::os::unix::fs::PermissionsExt;
+        let mut builder = builder;
+        // This root holds cloned content, Docker layers and staged stdin.
+        builder.permissions(std::fs::Permissions::from_mode(0o700));
+        builder
+    };
+    builder.tempdir()
+}
+
 fn main() -> anyhow::Result<()> {
     raise_nproc_soft_limit();
     const STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MiB
@@ -750,7 +763,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                         let view_scan_started_at = chrono::Local::now();
                         let view_scan_start_time = Instant::now();
                         let temp_dir =
-                            TempDir::new().context("Failed to create temporary directory")?;
+                            scan_tempdir().context("Failed to create temporary directory")?;
                         let temp_dir_path = temp_dir.path().to_path_buf();
                         let clone_dir = if let Some(clone_dir) =
                             scan_args.input_specifier_args.git_clone_dir.as_ref()
@@ -1032,3 +1045,16 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
 #[cfg(test)]
 #[path = "app/config_tests.rs"]
 mod apply_config_tests;
+
+#[cfg(all(test, unix))]
+mod staging_tests {
+    use std::os::unix::fs::PermissionsExt;
+
+    #[test]
+    fn owned_scan_staging_root_excludes_group_and_other_access() -> std::io::Result<()> {
+        let root = super::scan_tempdir()?;
+        std::fs::write(root.path().join("stdin_input"), b"synthetic credential")?;
+        assert_eq!(root.path().metadata()?.permissions().mode() & 0o077, 0);
+        Ok(())
+    }
+}

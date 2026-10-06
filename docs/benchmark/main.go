@@ -66,7 +66,7 @@ type ScanResult struct {
 	Duration  time.Duration
 	Findings  int   // total findings reported
 	Validated int   // validated/verified findings (0 when the tool can't validate)
-	NetReq    int64 // HTTP requests observed by the proxy during the scan
+	NetReq    int64 // Plain HTTP requests and HTTPS CONNECT tunnels observed by the proxy
 }
 
 // RepoResult aggregates every tool's ScanResult for one repository.
@@ -577,7 +577,7 @@ func writeReport(w io.Writer, results []RepoResult, tools []string, versions map
 	}
 
 	fmt.Fprintln(w, "*Lower runtimes are better. Validated/Verified counts are reported where available. "+
-		"'Network Requests' is the number of HTTP requests each tool made during scanning.*")
+		"'Network Requests' counts plain HTTP requests and HTTPS CONNECT tunnels observed by the proxy; TLS requests inside tunnels are not counted.*")
 }
 
 // canValidate reports whether a tool produces validated/verified counts.

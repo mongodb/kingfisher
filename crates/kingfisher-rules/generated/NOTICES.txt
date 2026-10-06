@@ -7,7 +7,7 @@ upstream-sources.json.gz. Compression does not change the applicable licenses.
 
 ===== Betterleaks (MIT) =====
 
-https://raw.githubusercontent.com/betterleaks/betterleaks/95237cf8eb4d8e9f67409595b245e674832992cf/LICENSE
+https://raw.githubusercontent.com/betterleaks/betterleaks/b3b4cbb586c964701f78bbfb6bc2129ced99bed3/LICENSE
 
 MIT License
 

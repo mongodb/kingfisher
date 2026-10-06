@@ -32,6 +32,8 @@ workflows: `kingfisher scan <target> --format toon --no-update-check`.
 - [Rust integration recipes: scanning + validation](https://mongodb.github.io/kingfisher/reference/library/#integration-recipes-for-rust-projects-and-llm-agents)
 - [Runnable Rust example sources](https://github.com/mongodb/kingfisher/tree/main/crates/kingfisher-scanner/examples)
 - [Rust library API](https://mongodb.github.io/kingfisher/reference/library/)
+- [Python SDK: in-process scanning, validation, and revocation](https://github.com/mongodb/kingfisher/blob/main/docs/PYPI.md)
+- [Runnable Python example sources](https://github.com/mongodb/kingfisher/tree/main/python/examples)
 - [Architecture](https://mongodb.github.io/kingfisher/reference/architecture/)
 - [Project background](https://mongodb.github.io/kingfisher/reference/project/)
 

@@ -45,7 +45,10 @@ def main():
     # Validate ONE INPUT's complete list, including invisible component helpers.
     # Report filters below do not reduce provider requests. To limit detection,
     # load a focused custom Rules(..., builtins=False) catalog instead.
-    for result in validator.validate(findings):
+    # The constructor timeout bounds each provider request; the call deadline
+    # bounds the entire batch, including queued work. A CancellationToken can
+    # also be signalled by another application thread during shutdown.
+    for result in validator.validate(findings, timeout=args.timeout * 2):
         if not result.finding.visible:
             continue
         if args.outcome and result.outcome not in args.outcome:

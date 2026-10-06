@@ -10,18 +10,28 @@ use anyhow::{Context, Result, anyhow, bail};
 use kingfisher_vectorscan::{BlockDatabase, Error as VectorscanError, Flag, Pattern, Scan};
 use regex::bytes::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use tracing::{debug, debug_span, error, warn};
 use xxhash_rust::xxh3::xxh3_128;
 
 use crate::{
     betterleaks_filter::{
-        BetterleaksFilterContext, BetterleaksFilterEngine, BetterleaksFilterOutcome,
-        evaluate_filter_with_engine,
+        BetterleaksFilterContext, BetterleaksFilterEngine, BetterleaksFilterLineCache,
+        BetterleaksFilterOutcome, evaluate_filter_with_engine,
+        evaluate_filter_with_engine_and_line_cache,
     },
     rule::{BetterleaksExpr, RULE_COMMENTS_PATTERN, Rule},
     rules::Rules,
     scanner_pool::ScannerPool,
 };
+
+#[cfg(windows)]
+#[path = "rule_cache_security_windows.rs"]
+mod cache_security_windows;
+
+#[cfg(target_os = "macos")]
+#[path = "rule_cache_security_macos.rs"]
+mod cache_security_macos;
 
 /// Compiled detection rules, source-path prefilters, and finding-filter helpers.
 ///
@@ -32,6 +42,8 @@ pub struct RulesDatabase {
     pub(crate) rules: Vec<Arc<Rule>>,
     pub(crate) anchored_regexes: Vec<Regex>,
     endpoint_regexes: Vec<OnceLock<Option<Regex>>>,
+    #[cfg(feature = "__scanner-internals")]
+    confirmation_maximum_lengths: Vec<OnceLock<ConfirmationLengths>>,
     pub(crate) self_identifying_flags: Vec<bool>,
     pub(crate) vsdb: BlockDatabase,
     vectorscan_prefilter_flags: Vec<bool>,
@@ -39,6 +51,19 @@ pub struct RulesDatabase {
     has_non_betterleaks_rules: bool,
     betterleaks_prefilter: Option<BetterleaksPathPrefilter>,
     betterleaks_filter_engine: BetterleaksFilterEngine,
+    cache_status: RuleCacheStatus,
+}
+
+/// Whether this database was successfully loaded from or persisted to disk.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum RuleCacheStatus {
+    /// Caching was not requested, was unavailable/unsafe, or its write failed.
+    Bypassed,
+    /// A valid cache entry supplied the compiled database.
+    Loaded,
+    /// Compilation succeeded and the resulting entry was persisted successfully.
+    Stored,
 }
 
 /// The Betterleaks source-path prefilter compiled once into its own Vectorscan database.
@@ -134,21 +159,37 @@ pub struct RuleCacheConfig {
 }
 
 impl RuleCacheConfig {
+    /// Select a trusted cache directory. Unsafe locations are ignored during construction.
+    ///
+    /// Entries contain native Vectorscan bytecode. The directory and its ancestors must
+    /// prevent modification by other users. An empty path disables caching.
     pub fn new(cache_dir: impl Into<PathBuf>) -> Self {
         Self { cache_dir: cache_dir.into() }
     }
 
+    /// Use the explicit directory, `KF_RULE_CACHE_DIR`, or a per-user OS cache directory.
+    ///
+    /// When no user cache directory can be resolved, caching is disabled instead of
+    /// falling back to a shared temporary directory.
     pub fn from_dir_or_env(cache_dir: Option<PathBuf>) -> Self {
-        Self::new(cache_dir.unwrap_or_else(default_rule_cache_dir))
+        Self::new(cache_dir.or_else(default_rule_cache_dir).unwrap_or_default())
     }
 
+    /// The configured path, or an empty path when no per-user directory is available.
     pub fn cache_dir(&self) -> &Path {
         &self.cache_dir
+    }
+
+    /// Whether a cache location was configured. Trust and availability are checked on use.
+    pub fn is_enabled(&self) -> bool {
+        !self.cache_dir.as_os_str().is_empty()
     }
 }
 
 const CACHE_MAGIC: &[u8] = b"KFRULEDB";
-const CACHE_FORMAT_VERSION: u32 = 4;
+const CACHE_FORMAT_VERSION: u32 = 6;
+const MAX_CACHE_HEADER_BYTES: usize = 1024 * 1024;
+const MAX_CACHE_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_RULE_CACHE_MAX_ENTRIES: usize = 10;
 pub const DEFAULT_RULE_CACHE_MAX_AGE: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 
@@ -160,6 +201,10 @@ struct CacheHeader {
     vectorscan_version: String,
     target: String,
     database_kind: String,
+    /// Corruption check before passing bytes to the native deserializer; not authentication.
+    /// Legacy headers remain readable for pruning; they are never loaded without a digest.
+    #[serde(default)]
+    database_sha256: String,
     #[serde(default)]
     prefilter_rule_indices: Vec<usize>,
 }
@@ -167,6 +212,8 @@ struct CacheHeader {
 #[derive(Debug, Clone)]
 pub struct RuleCachePruneConfig {
     pub max_entries: usize,
+    /// Minimum age for pruning. Recognized temporary files have no entry floor
+    /// and use at least a one-day grace period to protect concurrent writers.
     pub max_age: Duration,
     pub protected_cache_key: Option<String>,
     pub dry_run: bool,
@@ -354,6 +401,13 @@ impl RulesDatabase {
 
     /// Compile and cache a loaded rule collection while preserving database-level metadata.
     ///
+    /// Reuse entries from the same native engine build, architecture, pointer width, and
+    /// endianness. The exact binding/native crate versions and full engine build version
+    /// are keyed; native deserialization additionally checks CPU compatibility. Unsafe,
+    /// unavailable, corrupt, or incompatible caches fall back to compilation; writes are
+    /// best effort. Only the main content database is persisted, not confirmation regexes
+    /// or collection-level path/finding filters. See [`RuleCacheConfig`] for directory trust.
+    ///
     /// # Errors
     ///
     /// Returns rule compilation or native allocation errors, as documented by
@@ -411,6 +465,8 @@ impl RulesDatabase {
         debug!("Compiled {} rules: vectorscan {}s; regex {}s", rules.len(), d1, d2);
         Ok(RulesDatabase {
             endpoint_regexes: (0..rules.len()).map(|_| OnceLock::new()).collect(),
+            #[cfg(feature = "__scanner-internals")]
+            confirmation_maximum_lengths: (0..rules.len()).map(|_| OnceLock::new()).collect(),
             rules,
             vsdb,
             anchored_regexes,
@@ -420,6 +476,7 @@ impl RulesDatabase {
             has_non_betterleaks_rules,
             betterleaks_prefilter,
             betterleaks_filter_engine,
+            cache_status: RuleCacheStatus::Bypassed,
         })
     }
 
@@ -434,15 +491,25 @@ impl RulesDatabase {
             bail!("No rules to compile");
         }
 
+        if !cache.is_enabled() {
+            debug!("No per-user rule cache directory available; compiling without disk caching");
+            return Self::from_arc_rules(rules, betterleaks_prefilter, betterleaks_filter_engine);
+        }
+        if let Err(err) = prepare_rule_cache_dir(&cache.cache_dir) {
+            warn!(cache_dir = %cache.cache_dir.display(), %err, "Ignoring unsafe or unavailable rule cache directory");
+            return Self::from_arc_rules(rules, betterleaks_prefilter, betterleaks_filter_engine);
+        }
+
         let cache_key = compute_cache_key(&rules);
         let cache_path = cache.cache_dir.join(format!("{cache_key}.vscdb"));
         let mut header = CacheHeader {
             format_version: CACHE_FORMAT_VERSION,
             cache_key,
             rule_count: rules.len(),
-            vectorscan_version: kingfisher_vectorscan::version(),
+            vectorscan_version: cache_vectorscan_version(),
             target: cache_target(),
             database_kind: "block".to_string(),
+            database_sha256: String::new(),
             prefilter_rule_indices: Vec::new(),
         };
 
@@ -462,9 +529,9 @@ impl RulesDatabase {
             let has_non_betterleaks_rules = betterleaks_rule_flags.contains(&false);
             let mut vectorscan_prefilter_flags = vec![false; rules.len()];
             for index in cached_header.prefilter_rule_indices {
-                let Some(flag) = vectorscan_prefilter_flags.get_mut(index) else {
-                    bail!("Vectorscan cache contains out-of-range prefilter rule index {index}");
-                };
+                let flag = vectorscan_prefilter_flags
+                    .get_mut(index)
+                    .expect("cache loader checked the prefilter rule index");
                 *flag = true;
             }
             debug!(
@@ -475,6 +542,8 @@ impl RulesDatabase {
             );
             return Ok(RulesDatabase {
                 endpoint_regexes: (0..rules.len()).map(|_| OnceLock::new()).collect(),
+                #[cfg(feature = "__scanner-internals")]
+                confirmation_maximum_lengths: (0..rules.len()).map(|_| OnceLock::new()).collect(),
                 rules,
                 vsdb,
                 anchored_regexes,
@@ -484,17 +553,20 @@ impl RulesDatabase {
                 has_non_betterleaks_rules,
                 betterleaks_prefilter,
                 betterleaks_filter_engine,
+                cache_status: RuleCacheStatus::Loaded,
             });
         }
 
-        let db = Self::from_arc_rules(rules, betterleaks_prefilter, betterleaks_filter_engine)?;
+        let mut db = Self::from_arc_rules(rules, betterleaks_prefilter, betterleaks_filter_engine)?;
         header.prefilter_rule_indices = db
             .vectorscan_prefilter_flags
             .iter()
             .enumerate()
             .filter_map(|(index, enabled)| enabled.then_some(index))
             .collect();
-        store_cached_vectorscan_db(&cache_path, &header, db.vectorscan_db());
+        if store_cached_vectorscan_db(&cache_path, &header, db.vectorscan_db()) {
+            db.cache_status = RuleCacheStatus::Stored;
+        }
         Ok(db)
     }
 
@@ -527,6 +599,12 @@ impl RulesDatabase {
     #[inline]
     pub fn num_rules(&self) -> usize {
         self.rules.len()
+    }
+
+    /// Report the cache outcome so explicit prewarming can require persistence.
+    /// Ordinary scanning still succeeds when the cache is bypassed.
+    pub fn cache_status(&self) -> RuleCacheStatus {
+        self.cache_status
     }
 
     #[inline]
@@ -567,6 +645,42 @@ impl RulesDatabase {
                 }
             })
             .as_ref()
+    }
+
+    /// Cached safe tail bound for the rule's byte regex, compiled with Unicode disabled.
+    /// `None` retains the original search for unbounded or empty-match expressions.
+    #[cfg(feature = "__scanner-internals")]
+    #[doc(hidden)]
+    pub fn confirmation_maximum_len(&self, index: usize) -> Option<usize> {
+        let regex = self.anchored_regexes.get(index)?;
+        self.confirmation_maximum_lengths
+            .get(index)?
+            .get_or_init(|| confirmation_maximum_lengths(regex))
+            .safe_tail
+    }
+
+    /// Certify positive-width, assertion-free rule expressions for indexed prefix reuse.
+    /// Generic regex callers must remain conservative: this follows the rule builder flags.
+    #[cfg(feature = "__scanner-internals")]
+    #[doc(hidden)]
+    pub fn confirmation_prefix_stable(&self, index: usize) -> bool {
+        self.anchored_regexes
+            .get(index)
+            .zip(self.confirmation_maximum_lengths.get(index))
+            .is_some_and(|(regex, metadata)| {
+                metadata.get_or_init(|| confirmation_maximum_lengths(regex)).prefix_stable
+            })
+    }
+
+    /// Cached maximum consuming match length for endpoint searches, excluding unbounded runs.
+    #[cfg(feature = "__scanner-internals")]
+    #[doc(hidden)]
+    pub fn confirmation_match_maximum_len(&self, index: usize) -> Option<usize> {
+        let regex = self.anchored_regexes.get(index)?;
+        self.confirmation_maximum_lengths
+            .get(index)?
+            .get_or_init(|| confirmation_maximum_lengths(regex))
+            .full_match
     }
 
     /// Original regexes for full-content searches. The historical method name is
@@ -617,6 +731,26 @@ impl RulesDatabase {
         evaluate_filter_with_engine(expression, context, &self.betterleaks_filter_engine)
     }
 
+    /// Internal scanner reuse of fixed regex results for one immutable source buffer.
+    /// `line_range` must identify exactly `context.line` within that buffer; create
+    /// a fresh cache for each raw or decoded buffer.
+    #[doc(hidden)]
+    pub fn evaluate_betterleaks_filter_with_line_cache(
+        &self,
+        expression: &BetterleaksExpr,
+        context: &BetterleaksFilterContext<'_>,
+        line_range: std::ops::Range<usize>,
+        cache: &mut BetterleaksFilterLineCache,
+    ) -> Result<BetterleaksFilterOutcome> {
+        evaluate_filter_with_engine_and_line_cache(
+            expression,
+            context,
+            &self.betterleaks_filter_engine,
+            line_range,
+            Some(cache),
+        )
+    }
+
     /// Returns true when the rule at `index` is recognised as
     /// self-identifying by literal pattern shape (e.g. `GHP_`, `AIzaSy`,
     /// `xox[pbarose]`, PEM envelopes, Slack webhook URLs). Self-identifying
@@ -643,40 +777,163 @@ impl RulesDatabase {
     }
 }
 
-fn default_rule_cache_dir() -> PathBuf {
-    if let Some(path) = non_empty_env_path("KF_RULE_CACHE_DIR") {
-        return path;
+fn default_rule_cache_dir() -> Option<PathBuf> {
+    default_rule_cache_dir_from(non_empty_env_path)
+}
+
+fn default_rule_cache_dir_from(get_path: impl Fn(&str) -> Option<PathBuf>) -> Option<PathBuf> {
+    if let Some(path) = get_path("KF_RULE_CACHE_DIR") {
+        return Some(path);
     }
 
     if cfg!(windows) {
-        if let Some(path) = non_empty_env_path("LOCALAPPDATA") {
-            return path.join("Kingfisher").join("rule-cache");
+        if let Some(path) = get_path("LOCALAPPDATA") {
+            return Some(path.join("Kingfisher").join("rule-cache"));
         }
-        if let Some(path) = non_empty_env_path("USERPROFILE") {
-            return path.join("AppData").join("Local").join("Kingfisher").join("rule-cache");
+        if let Some(path) = get_path("USERPROFILE") {
+            return Some(path.join("AppData").join("Local").join("Kingfisher").join("rule-cache"));
         }
     }
 
     if cfg!(target_os = "macos")
-        && let Some(path) = non_empty_env_path("HOME")
+        && let Some(path) = get_path("HOME")
     {
-        return path.join("Library").join("Caches").join("kingfisher").join("rule-cache");
+        return Some(path.join("Library").join("Caches").join("kingfisher").join("rule-cache"));
     }
 
-    if let Some(path) = non_empty_env_path("XDG_CACHE_HOME") {
-        return path.join("kingfisher").join("rule-cache");
+    if let Some(path) = get_path("XDG_CACHE_HOME") {
+        return Some(path.join("kingfisher").join("rule-cache"));
     }
 
-    if let Some(path) = non_empty_env_path("HOME") {
-        return path.join(".cache").join("kingfisher").join("rule-cache");
+    if let Some(path) = get_path("HOME") {
+        return Some(path.join(".cache").join("kingfisher").join("rule-cache"));
     }
 
-    env::temp_dir().join("kingfisher").join("rule-cache")
+    None
 }
 
 fn non_empty_env_path(name: &str) -> Option<PathBuf> {
     let value = env::var_os(name)?;
     if value.is_empty() { None } else { Some(PathBuf::from(value)) }
+}
+
+fn prepare_rule_cache_dir(path: &Path) -> Result<()> {
+    // Do not chmod an existing directory: a configured shared location must be rejected,
+    // and changing permissions on a caller's directory would hide that configuration error.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::DirBuilderExt;
+        fs::DirBuilder::new().recursive(true).mode(0o700).create(path)?;
+    }
+    #[cfg(windows)]
+    cache_security_windows::create_directory(path)?;
+    #[cfg(not(any(unix, windows)))]
+    fs::create_dir_all(path)?;
+    verify_rule_cache_dir(path)
+}
+
+fn verify_rule_cache_dir(path: &Path) -> Result<()> {
+    let metadata = fs::symlink_metadata(path)?;
+    if !metadata.is_dir() || metadata.file_type().is_symlink() {
+        bail!("cache location must be a directory, not a symlink");
+    }
+    #[cfg(target_os = "macos")]
+    cache_security_macos::verify_path(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid() has no arguments or memory-safety preconditions.
+        let uid = unsafe { libc::geteuid() };
+        if metadata.uid() != uid || metadata.mode() & 0o022 != 0 {
+            bail!(
+                "cache directory must be owned by the current user and not writable by group or others"
+            );
+        }
+        let absolute =
+            if path.is_absolute() { path.to_path_buf() } else { env::current_dir()?.join(path) };
+        // Canonicalization alone would hide a replaceable symlink on the supplied
+        // route (for example /tmp/someone-elses-link -> a private cache directory).
+        let mut route_child_owner = uid;
+        for ancestor in absolute.ancestors().skip(1) {
+            let metadata = fs::symlink_metadata(ancestor)?;
+            if metadata.uid() != uid && metadata.uid() != 0 {
+                bail!("cache directory route is owned by another user");
+            }
+            if !metadata.file_type().is_symlink()
+                && metadata.mode() & 0o022 != 0
+                && !(metadata.mode() & 0o1000 != 0
+                    && (route_child_owner == uid || route_child_owner == 0))
+            {
+                bail!("cache directory route is writable by group or others");
+            }
+            route_child_owner = metadata.uid();
+            #[cfg(target_os = "macos")]
+            cache_security_macos::verify_path(ancestor)?;
+        }
+        let canonical = fs::canonicalize(path)?;
+        let mut child_owner = uid;
+        for ancestor in canonical.ancestors().skip(1) {
+            let metadata = fs::metadata(ancestor)?;
+            if metadata.uid() != uid && metadata.uid() != 0 {
+                bail!("cache directory ancestor is owned by another user");
+            }
+            // A sticky ancestor protects children owned by this user or trusted root. Other
+            // writable ancestors could substitute the directory despite its private mode.
+            if metadata.mode() & 0o022 != 0
+                && !(metadata.mode() & 0o1000 != 0 && (child_owner == uid || child_owner == 0))
+            {
+                bail!("cache directory ancestor is writable by group or others");
+            }
+            child_owner = metadata.uid();
+            #[cfg(target_os = "macos")]
+            cache_security_macos::verify_path(ancestor)?;
+        }
+    }
+    #[cfg(windows)]
+    cache_security_windows::verify_directory(path)?;
+    #[cfg(not(any(unix, windows)))]
+    bail!("cache directory ownership verification is unavailable on this platform");
+    Ok(())
+}
+
+fn open_cache_file(path: &Path) -> Result<fs::File> {
+    let mut options = fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        // Bind validation to the open inode, preventing a symlink substitution between
+        // the permission check and read. The trusted parent prevents rename attacks.
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::OpenOptionsExt;
+        options.custom_flags(windows_sys::Win32::Storage::FileSystem::FILE_FLAG_OPEN_REPARSE_POINT);
+    }
+    let file = options.open(path).with_context(|| format!("open {}", path.display()))?;
+    let metadata = file.metadata()?;
+    if !metadata.is_file() {
+        bail!("cache entry must be a regular file");
+    }
+    if metadata.len() > MAX_CACHE_ENTRY_BYTES {
+        bail!("cache entry exceeds the maximum supported size");
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: geteuid() has no arguments or memory-safety preconditions.
+        if metadata.uid() != unsafe { libc::geteuid() } || metadata.mode() & 0o022 != 0 {
+            bail!(
+                "cache entry must be owned by the current user and not writable by group or others"
+            );
+        }
+    }
+    #[cfg(windows)]
+    cache_security_windows::verify_file(path, &metadata)?;
+    #[cfg(target_os = "macos")]
+    cache_security_macos::verify_file(&file)?;
+    Ok(file)
 }
 
 fn compute_cache_key(rules: &[Arc<Rule>]) -> String {
@@ -686,8 +943,7 @@ fn compute_cache_key(rules: &[Arc<Rule>]) -> String {
 fn compute_cache_key_from_rules<'a>(rules: impl IntoIterator<Item = &'a Rule>) -> String {
     let mut input = Vec::new();
     input.extend_from_slice(format!("cache-format={CACHE_FORMAT_VERSION}\n").as_bytes());
-    input
-        .extend_from_slice(format!("vectorscan={}\n", kingfisher_vectorscan::version()).as_bytes());
+    input.extend_from_slice(format!("vectorscan={}\n", cache_vectorscan_version()).as_bytes());
     input.extend_from_slice(format!("target={}\n", cache_target()).as_bytes());
     input.extend_from_slice(b"mode=block\n");
     for (index, rule) in rules.into_iter().enumerate() {
@@ -715,6 +971,10 @@ fn prune_rule_cache_at(
     now: SystemTime,
 ) -> Result<RuleCachePruneSummary> {
     let mut summary = RuleCachePruneSummary::default();
+    if !cache.is_enabled() || !cache.cache_dir.exists() {
+        return Ok(summary);
+    }
+    verify_rule_cache_dir(&cache.cache_dir)?;
     let read_dir = match fs::read_dir(&cache.cache_dir) {
         Ok(entries) => entries,
         Err(err) if err.kind() == ErrorKind::NotFound => return Ok(summary),
@@ -724,6 +984,7 @@ fn prune_rule_cache_at(
     };
 
     let mut entries = Vec::new();
+    let mut temporary_entries = Vec::new();
     for entry in read_dir {
         let entry = match entry {
             Ok(entry) => entry,
@@ -733,12 +994,13 @@ fn prune_rule_cache_at(
             }
         };
         let path = entry.path();
-        if path.extension().and_then(|ext| ext.to_str()) != Some("vscdb") {
+        let temporary = is_cache_temp_path(&path);
+        if !temporary && path.extension().and_then(|ext| ext.to_str()) != Some("vscdb") {
             continue;
         }
         summary.scanned_entries += 1;
 
-        let metadata = match entry.metadata() {
+        let metadata = match fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.is_file() => metadata,
             Ok(_) => continue,
             Err(err) => {
@@ -747,6 +1009,20 @@ fn prune_rule_cache_at(
                 continue;
             }
         };
+        if temporary {
+            // Never prune recent writers, even with an aggressive configured age.
+            // Temporary entries have no retention floor or protected cache key.
+            let age = now.duration_since(metadata.modified()?).unwrap_or_default();
+            if age > config.max_age.max(Duration::from_secs(24 * 60 * 60)) {
+                temporary_entries.push(CacheEntry {
+                    path,
+                    cache_key: String::new(),
+                    modified: metadata.modified()?,
+                    size: metadata.len(),
+                });
+            }
+            continue;
+        }
         let header = match read_cached_vectorscan_header(&path) {
             Ok(header) => header,
             Err(err) => {
@@ -768,12 +1044,8 @@ fn prune_rule_cache_at(
     }
 
     summary.valid_entries = entries.len();
-    if entries.len() <= config.max_entries {
-        return Ok(summary);
-    }
-
     entries.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.path.cmp(&b.path)));
-    for entry in entries.iter().skip(config.max_entries) {
+    for entry in entries.iter().skip(config.max_entries).chain(&temporary_entries) {
         if config.protected_cache_key.as_deref() == Some(entry.cache_key.as_str()) {
             summary.protected_entries += 1;
             continue;
@@ -810,15 +1082,34 @@ fn prune_rule_cache_at(
     Ok(summary)
 }
 
+fn is_cache_temp_path(path: &Path) -> bool {
+    let Some(name) = path.file_name().and_then(|name| name.to_str()) else { return false };
+    let Some(name) = name.strip_prefix('.').and_then(|name| name.strip_suffix(".tmp")) else {
+        return false;
+    };
+    let Some((name, uuid)) = name.rsplit_once('.') else { return false };
+    let Some((name, pid)) = name.rsplit_once('.') else { return false };
+    name.ends_with(".vscdb") && pid.parse::<u32>().is_ok() && uuid::Uuid::parse_str(uuid).is_ok()
+}
+
 fn cache_target() -> String {
+    // Serialized databases contain pattern bytecode, not OS executables. Keep architecture
+    // boundaries, but let Vectorscan's deserializer check CPU features on the receiving host.
     format!(
-        "{}-{}-{}-{}bit-{}",
-        env::consts::OS,
+        "{}-{}bit-{}",
         env::consts::ARCH,
-        env::consts::FAMILY,
         usize::BITS,
         if cfg!(target_endian = "little") { "little" } else { "big" }
     )
+}
+
+fn cache_vectorscan_version() -> String {
+    // Keep the exact binding/sys pins in Cargo.toml in sync with this identity. The full
+    // runtime version includes the build date: release-only keys could admit bytecode
+    // from patched or differently configured native builds. Reuse within one deployed
+    // build still avoids compilation across processes. CPU compatibility is checked by
+    // Vectorscan itself when deserializing; OS labels alone do not establish compatibility.
+    format!("binding=0.1.1;sys=0.1.1;runtime={}", kingfisher_vectorscan::version())
 }
 
 fn load_cached_vectorscan_db(
@@ -836,11 +1127,13 @@ fn load_cached_vectorscan_db(
             Some(cached)
         }
         Err(err) => {
-            debug!(
-                path = %path.display(),
-                %err,
-                "Ignoring stale or invalid Vectorscan rule cache entry"
-            );
+            static REJECTION_WARNING: std::sync::Once = std::sync::Once::new();
+            REJECTION_WARNING.call_once(|| {
+                warn!(path = %path.display(), reason = %format!("{err:#}"),
+                    "Ignoring stale or invalid Vectorscan rule cache entry; further rejections logged at debug level");
+            });
+            debug!(path = %path.display(), reason = %format!("{err:#}"),
+                "Ignoring stale or invalid Vectorscan rule cache entry");
             None
         }
     }
@@ -850,7 +1143,14 @@ fn load_cached_vectorscan_db_inner(
     path: &Path,
     expected_header: &CacheHeader,
 ) -> Result<(BlockDatabase, CacheHeader)> {
-    let bytes = fs::read(path).with_context(|| format!("read {}", path.display()))?;
+    let mut bytes = Vec::new();
+    open_cache_file(path)?
+        .take(MAX_CACHE_ENTRY_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .with_context(|| format!("read {}", path.display()))?;
+    if bytes.len() as u64 > MAX_CACHE_ENTRY_BYTES {
+        bail!("cache entry exceeds the maximum supported size");
+    }
     let Some(rest) = bytes.strip_prefix(CACHE_MAGIC) else {
         bail!("invalid cache magic");
     };
@@ -861,6 +1161,9 @@ fn load_cached_vectorscan_db_inner(
     let mut len_bytes = [0_u8; 4];
     len_bytes.copy_from_slice(&rest[..4]);
     let header_len = u32::from_le_bytes(len_bytes) as usize;
+    if header_len > MAX_CACHE_HEADER_BYTES {
+        bail!("cache header is too large");
+    }
     let header_start = 4_usize;
     let Some(header_end) = header_start.checked_add(header_len) else {
         bail!("cache header length overflow");
@@ -880,14 +1183,21 @@ fn load_cached_vectorscan_db_inner(
     {
         bail!("cache metadata mismatch");
     }
+    if header.prefilter_rule_indices.iter().any(|&index| index >= header.rule_count) {
+        bail!("cache contains out-of-range prefilter rule index");
+    }
 
-    let database = BlockDatabase::deserialize(&rest[header_end..])
-        .context("deserialize Vectorscan database")?;
+    let database_bytes = &rest[header_end..];
+    if hex::encode(Sha256::digest(database_bytes)) != header.database_sha256 {
+        bail!("cache database SHA-256 mismatch");
+    }
+    let database =
+        BlockDatabase::deserialize(database_bytes).context("deserialize Vectorscan database")?;
     Ok((database, header))
 }
 
 fn read_cached_vectorscan_header(path: &Path) -> Result<CacheHeader> {
-    let mut file = fs::File::open(path).with_context(|| format!("open {}", path.display()))?;
+    let mut file = open_cache_file(path)?;
     let mut magic = [0_u8; 8];
     file.read_exact(&mut magic).with_context(|| format!("read magic from {}", path.display()))?;
     if magic.as_slice() != CACHE_MAGIC {
@@ -898,19 +1208,24 @@ fn read_cached_vectorscan_header(path: &Path) -> Result<CacheHeader> {
     file.read_exact(&mut len_bytes)
         .with_context(|| format!("read header length from {}", path.display()))?;
     let header_len = u32::from_le_bytes(len_bytes) as usize;
+    if header_len > MAX_CACHE_HEADER_BYTES {
+        bail!("cache header is too large");
+    }
     let mut header_bytes = vec![0_u8; header_len];
     file.read_exact(&mut header_bytes)
         .with_context(|| format!("read header from {}", path.display()))?;
     serde_json::from_slice(&header_bytes).context("parse Vectorscan cache header")
 }
 
-fn store_cached_vectorscan_db(path: &Path, header: &CacheHeader, vsdb: &BlockDatabase) {
+fn store_cached_vectorscan_db(path: &Path, header: &CacheHeader, vsdb: &BlockDatabase) -> bool {
     match store_cached_vectorscan_db_inner(path, header, vsdb) {
         Ok(()) => {
             debug!(path = %path.display(), "Wrote Vectorscan rule cache entry");
+            true
         }
         Err(err) => {
             debug!(path = %path.display(), %err, "Failed to write Vectorscan rule cache entry");
+            false
         }
     }
 }
@@ -920,16 +1235,34 @@ fn store_cached_vectorscan_db_inner(
     header: &CacheHeader,
     vsdb: &BlockDatabase,
 ) -> Result<()> {
+    store_cached_vectorscan_db_with_limit(path, header, vsdb, MAX_CACHE_ENTRY_BYTES)
+}
+
+fn store_cached_vectorscan_db_with_limit(
+    path: &Path,
+    header: &CacheHeader,
+    vsdb: &BlockDatabase,
+    max_entry_bytes: u64,
+) -> Result<()> {
     let Some(parent) = path.parent() else {
         bail!("cache path has no parent");
     };
-    fs::create_dir_all(parent).with_context(|| format!("create {}", parent.display()))?;
+    verify_rule_cache_dir(parent)?;
 
-    let header_bytes = serde_json::to_vec(header).context("serialize Vectorscan cache header")?;
-    if header_bytes.len() > u32::MAX as usize {
+    let db_bytes = vsdb.serialize().context("serialize Vectorscan database")?;
+    let mut header = header.clone();
+    header.database_sha256 = hex::encode(Sha256::digest(&db_bytes));
+    let header_bytes = serde_json::to_vec(&header).context("serialize Vectorscan cache header")?;
+    if header_bytes.len() > MAX_CACHE_HEADER_BYTES {
         bail!("cache header is too large");
     }
-    let db_bytes = vsdb.serialize().context("serialize Vectorscan database")?;
+    let entry_bytes = (CACHE_MAGIC.len() as u64)
+        .saturating_add(4)
+        .saturating_add(header_bytes.len() as u64)
+        .saturating_add(db_bytes.len() as u64);
+    if entry_bytes > max_entry_bytes {
+        bail!("serialized cache entry exceeds the maximum supported size");
+    }
 
     let tmp_path = parent.join(format!(
         ".{}.{}.{}.tmp",
@@ -937,9 +1270,30 @@ fn store_cached_vectorscan_db_inner(
         std::process::id(),
         uuid::Uuid::new_v4()
     ));
+    let mut created = false;
     let result = (|| -> Result<()> {
-        let mut file = fs::File::create(&tmp_path)
+        #[cfg(not(windows))]
+        let mut file = {
+            let mut options = fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::OpenOptionsExt;
+                options.mode(0o600);
+            }
+            options.open(&tmp_path).with_context(|| format!("create {}", tmp_path.display()))?
+        };
+        #[cfg(windows)]
+        let mut file = cache_security_windows::create_file(&tmp_path)
             .with_context(|| format!("create {}", tmp_path.display()))?;
+        created = true;
+        // A private directory may have inherit-only ACLs that make new files
+        // writable by other accounts. Verify the actual file before publishing
+        // bytecode or reporting that an entry is ready for reuse.
+        #[cfg(windows)]
+        cache_security_windows::verify_file(&tmp_path, &file.metadata()?)?;
+        #[cfg(target_os = "macos")]
+        cache_security_macos::verify_file(&file)?;
         file.write_all(CACHE_MAGIC)?;
         file.write_all(&(header_bytes.len() as u32).to_le_bytes())?;
         file.write_all(&header_bytes)?;
@@ -949,36 +1303,17 @@ fn store_cached_vectorscan_db_inner(
         replace_cache_file(&tmp_path, path)?;
         Ok(())
     })();
-    if result.is_err() {
+    if result.is_err() && created {
         fs::remove_file(&tmp_path).ok();
     }
     result
 }
 
 fn replace_cache_file(tmp_path: &Path, path: &Path) -> Result<()> {
-    match fs::rename(tmp_path, path) {
-        Ok(()) => Ok(()),
-        Err(_err) if cfg!(windows) && path.exists() => {
-            match fs::remove_file(path) {
-                Ok(()) => {}
-                Err(remove_err) if remove_err.kind() == ErrorKind::NotFound => {}
-                Err(remove_err) => {
-                    return Err(remove_err)
-                        .with_context(|| format!("remove existing {}", path.display()));
-                }
-            }
-            fs::rename(tmp_path, path).with_context(|| {
-                format!(
-                    "rename {} to {} after removing existing cache entry",
-                    tmp_path.display(),
-                    path.display()
-                )
-            })
-        }
-        Err(err) => {
-            Err(err).with_context(|| format!("rename {} to {}", tmp_path.display(), path.display()))
-        }
-    }
+    // std uses replacement semantics on Windows as well. If a destination is
+    // locked, leave the previous valid entry intact and discard our temporary.
+    fs::rename(tmp_path, path)
+        .with_context(|| format!("rename {} to {}", tmp_path.display(), path.display()))
 }
 
 fn has_self_identifying_shape(normalized_pattern: &str) -> bool {
@@ -1013,6 +1348,96 @@ fn has_self_identifying_shape(normalized_pattern: &str) -> bool {
         && normalized_pattern.contains("private\\ key")
         && normalized_pattern.contains("-----end\\ ");
     has_pem_escaped_space || has_pem_literal_space
+}
+
+#[cfg(any(feature = "__scanner-internals", test))]
+#[derive(Clone, Copy, Default)]
+struct ConfirmationLengths {
+    prefix_stable: bool,
+    safe_tail: Option<usize>,
+    full_match: Option<usize>,
+}
+
+#[cfg(any(feature = "__scanner-internals", test))]
+fn confirmation_maximum_lengths(regex: &Regex) -> ConfirmationLengths {
+    fn compute(regex: &Regex) -> Option<ConfirmationLengths> {
+        let hir = regex_syntax::ParserBuilder::new()
+            .unicode(false)
+            .utf8(false)
+            .build()
+            .parse(regex.as_str())
+            .ok()?;
+        // SearchFrom only handles consuming matches; empty-match iteration keeps the
+        // regex crate's own handling of UTF-8 boundaries and repeated empty matches.
+        if !hir.properties().minimum_len().is_some_and(|length| length > 0) {
+            return None;
+        }
+        // With no assertions, removing bytes after an indexed consuming match
+        // cannot introduce a new accepting path or invalidate that match. Parse
+        // with the same Unicode default as RuleSyntax::build_regex; inline flags
+        // remain in regex.as_str() and are interpreted by this parser.
+        let prefix_stable = hir.properties().look_set().is_empty();
+        if let Some(maximum_len) = hir.properties().maximum_len() {
+            return Some(ConfirmationLengths {
+                prefix_stable,
+                safe_tail: Some(maximum_len),
+                full_match: Some(maximum_len),
+            });
+        }
+        // A delimiter-terminated character run cannot grow across its literal
+        // suffix. This covers unbounded hostname labels while excluding greedy
+        // wildcards and alternatives that can change earlier matches at EOF.
+        fn flatten<'a>(
+            hir: &'a regex_syntax::hir::Hir,
+            nodes: &mut Vec<&'a regex_syntax::hir::Hir>,
+        ) {
+            use regex_syntax::hir::HirKind;
+            match hir.kind() {
+                HirKind::Capture(capture) => flatten(&capture.sub, nodes),
+                HirKind::Concat(parts) => parts.iter().for_each(|part| flatten(part, nodes)),
+                _ => nodes.push(hir),
+            }
+        }
+        use regex_syntax::hir::{Class, HirKind, Look};
+        let mut nodes = Vec::new();
+        flatten(&hir, &mut nodes);
+        let consuming: Vec<_> =
+            nodes.iter().filter(|node| !matches!(node.kind(), HirKind::Look(_))).collect();
+        if let [run, suffix, rest @ ..] = consuming.as_slice()
+            && let HirKind::Repetition(repetition) = run.kind()
+            && repetition.min > 0
+            && repetition.max.is_none()
+            && let HirKind::Class(class) = repetition.sub.kind()
+            && let HirKind::Literal(literal) = suffix.kind()
+            && let Some(&delimiter) = literal.0.first()
+            && delimiter.is_ascii()
+            && !nodes.iter().any(|node| {
+                matches!(node.kind(), HirKind::Look(Look::End | Look::EndLF | Look::EndCRLF))
+            })
+        {
+            let consumes_delimiter = match class {
+                Class::Bytes(class) => {
+                    class.iter().any(|range| range.start() <= delimiter && delimiter <= range.end())
+                }
+                Class::Unicode(class) => class.iter().any(|range| {
+                    range.start() <= char::from(delimiter) && char::from(delimiter) <= range.end()
+                }),
+            };
+            if !consumes_delimiter {
+                let mut maximum_len = suffix.properties().maximum_len()?;
+                for node in rest {
+                    maximum_len = maximum_len.checked_add(node.properties().maximum_len()?)?;
+                }
+                return Some(ConfirmationLengths {
+                    prefix_stable,
+                    safe_tail: Some(maximum_len),
+                    full_match: None,
+                });
+            }
+        }
+        Some(ConfirmationLengths { prefix_stable, ..Default::default() })
+    }
+    compute(regex).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -1067,11 +1492,21 @@ rules:
 
         let db = RulesDatabase::from_rules_with_cache(rule_vec.clone(), &cache)?;
         assert_eq!(db.num_rules(), 1);
+        assert_eq!(db.cache_status(), RuleCacheStatus::Stored);
         assert!(!db.uses_vectorscan_prefilter(0));
         let entries = fs::read_dir(&cache_dir)?.count();
         assert_eq!(entries, 1);
+        let cache_path = cache_dir.join(format!("{}.vscdb", compute_rule_cache_key(&rule_vec)));
+        let old_time = SystemTime::UNIX_EPOCH + Duration::from_secs(1_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&cache_path)?
+            .set_times(fs::FileTimes::new().set_modified(old_time))?;
+        let before = fs::metadata(&cache_path)?.modified()?;
 
         let cached_db = RulesDatabase::from_rules_with_cache(rule_vec, &cache)?;
+        assert_eq!(cached_db.cache_status(), RuleCacheStatus::Loaded);
+        assert_eq!(fs::metadata(&cache_path)?.modified()?, before, "cache hit must not rewrite");
         assert!(!cached_db.uses_vectorscan_prefilter(0));
         let mut scanner = BlockScanner::new(cached_db.vectorscan_db())?;
         let mut matches = Vec::new();
@@ -1082,6 +1517,258 @@ rules:
 
         fs::remove_dir_all(cache_dir).ok();
         assert_eq!(matches, vec![(0, 15)]);
+        Ok(())
+    }
+
+    #[test]
+    fn cache_compatibility_keeps_the_exact_engine_build() {
+        let target = cache_target();
+        assert!(!target.contains(env::consts::OS));
+        assert!(!target.contains(env::consts::FAMILY));
+        let identity = cache_vectorscan_version();
+        assert!(identity.starts_with("binding=0.1.1;sys=0.1.1;runtime="));
+        assert!(identity.ends_with(&kingfisher_vectorscan::version()));
+    }
+
+    #[test]
+    fn cache_is_disabled_without_a_per_user_location() -> Result<()> {
+        assert_eq!(default_rule_cache_dir_from(|_| None), None);
+        let cache = RuleCacheConfig::new(PathBuf::new());
+        assert!(!cache.is_enabled());
+        assert_eq!(
+            prune_rule_cache_at(&cache, &RuleCachePruneConfig::default(), SystemTime::now())?,
+            RuleCachePruneSummary::default()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn cache_header_length_is_bounded_before_allocation() -> Result<()> {
+        let cache_dir =
+            env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
+        prepare_rule_cache_dir(&cache_dir)?;
+        let path = cache_dir.join("oversized.vscdb");
+        let mut bytes = CACHE_MAGIC.to_vec();
+        bytes.extend_from_slice(&u32::MAX.to_le_bytes());
+        fs::write(&path, bytes)?;
+        assert!(
+            read_cached_vectorscan_header(&path).unwrap_err().to_string().contains("too large")
+        );
+        fs::remove_dir_all(cache_dir)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unsafe_cache_directory_compiles_without_reading_or_writing() -> Result<()> {
+        use std::os::unix::fs::PermissionsExt;
+
+        let cache_dir =
+            env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
+        prepare_rule_cache_dir(&cache_dir)?;
+        fs::set_permissions(&cache_dir, fs::Permissions::from_mode(0o777))?;
+        let rule =
+            Rule::new(crate::rule::RuleSyntax::new("demo.secret", "Demo Secret", "demo_[0-9]{4}"));
+        let database =
+            RulesDatabase::from_rules_with_cache(vec![rule], &RuleCacheConfig::new(&cache_dir))?;
+        assert_eq!(database.num_rules(), 1);
+        assert_eq!(database.cache_status(), RuleCacheStatus::Bypassed);
+        assert_eq!(
+            fs::read_dir(&cache_dir)?.count(),
+            0,
+            "unsafe directory must receive no compiled bytecode"
+        );
+        fs::remove_dir_all(cache_dir)?;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cache_rejects_symlinks_and_writable_entries() -> Result<()> {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+
+        let cache_dir =
+            env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
+        prepare_rule_cache_dir(&cache_dir)?;
+        assert_eq!(fs::metadata(&cache_dir)?.permissions().mode() & 0o777, 0o700);
+        let target = cache_dir.join("target.vscdb");
+        fs::write(&target, b"untrusted database")?;
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o666))?;
+        assert!(open_cache_file(&target).is_err());
+        fs::set_permissions(&target, fs::Permissions::from_mode(0o600))?;
+        let link = cache_dir.join("link.vscdb");
+        symlink(&target, &link)?;
+        assert!(open_cache_file(&link).is_err());
+        let directory_link = cache_dir.with_extension("link");
+        symlink(&cache_dir, &directory_link)?;
+        assert!(verify_rule_cache_dir(&directory_link).is_err());
+        fs::remove_file(directory_link)?;
+        fs::remove_dir_all(cache_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn cache_checks_database_sha256_before_native_deserialization() -> Result<()> {
+        let cache_dir =
+            env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
+        let rule =
+            Rule::new(crate::rule::RuleSyntax::new("demo.secret", "Demo Secret", "demo_[0-9]{4}"));
+        let rules = vec![rule];
+        RulesDatabase::from_rules_with_cache(rules.clone(), &RuleCacheConfig::new(&cache_dir))?;
+        let path = cache_dir.join(format!("{}.vscdb", compute_rule_cache_key(&rules)));
+        let header = read_cached_vectorscan_header(&path)?;
+        let mut bytes = fs::read(&path)?;
+        *bytes.last_mut().expect("serialized database is not empty") ^= 1;
+        fs::write(&path, bytes)?;
+        assert!(
+            load_cached_vectorscan_db_inner(&path, &header)
+                .expect_err("corruption must be rejected")
+                .to_string()
+                .contains("SHA-256 mismatch")
+        );
+        RulesDatabase::from_rules_with_cache(rules, &RuleCacheConfig::new(&cache_dir))?;
+        assert!(load_cached_vectorscan_db_inner(&path, &header).is_ok());
+        fs::remove_dir_all(cache_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn failed_cache_write_is_observable_without_preventing_compilation() -> Result<()> {
+        let cache_dir =
+            env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
+        prepare_rule_cache_dir(&cache_dir)?;
+        let rule =
+            Rule::new(crate::rule::RuleSyntax::new("demo.secret", "Demo Secret", "demo_[0-9]{4}"));
+        let rules = vec![rule];
+        let cache_path = cache_dir.join(format!("{}.vscdb", compute_rule_cache_key(&rules)));
+        // A directory at the destination causes atomic publication to fail on every OS.
+        fs::create_dir(&cache_path)?;
+        let database =
+            RulesDatabase::from_rules_with_cache(rules, &RuleCacheConfig::new(&cache_dir))?;
+        assert_eq!(database.num_rules(), 1);
+        assert_eq!(database.cache_status(), RuleCacheStatus::Bypassed);
+        assert_eq!(
+            fs::read_dir(&cache_dir)?.count(),
+            1,
+            "failed writes must remove their temporary file"
+        );
+        fs::remove_dir_all(cache_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn oversized_database_is_rejected_before_cache_publication() -> Result<()> {
+        let cache_dir =
+            env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
+        prepare_rule_cache_dir(&cache_dir)?;
+        let rule =
+            Rule::new(crate::rule::RuleSyntax::new("demo.secret", "Demo Secret", "demo_[0-9]{4}"));
+        let database = RulesDatabase::from_rules(vec![rule])?;
+        let header = CacheHeader {
+            format_version: CACHE_FORMAT_VERSION,
+            cache_key: "size-test".to_owned(),
+            rule_count: 1,
+            vectorscan_version: cache_vectorscan_version(),
+            target: cache_target(),
+            database_kind: "block".to_owned(),
+            database_sha256: String::new(),
+            prefilter_rule_indices: Vec::new(),
+        };
+        // Exercise the real serializer and atomic publication path with a small
+        // injected cap, avoiding a half-gigabyte test fixture on every platform.
+        let error = store_cached_vectorscan_db_with_limit(
+            &cache_dir.join("size-test.vscdb"),
+            &header,
+            database.vectorscan_db(),
+            64,
+        )
+        .expect_err("oversized database must not be published");
+        assert!(error.to_string().contains("exceeds the maximum supported size"));
+        assert_eq!(fs::read_dir(&cache_dir)?.count(), 0);
+        fs::remove_dir_all(cache_dir)?;
+        Ok(())
+    }
+
+    #[test]
+    fn cached_vectorscan_database_recompiles_rejected_entries() -> Result<()> {
+        use kingfisher_vectorscan::{BlockScanner, HyperscanErrorCode};
+
+        let yaml = br#"
+rules:
+  - id: demo.secret
+    name: Demo Secret
+    pattern: "demo_[0-9]{4}"
+    confidence: low
+"#;
+        let rules = Rules::from_paths_and_contents(
+            [(Path::new("demo.yml"), yaml.as_slice())],
+            Confidence::Low,
+        )?;
+        let rule_vec: Vec<Rule> = rules.into_iter().map(Rule::new).collect();
+        let cache_dir =
+            env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
+        let cache = RuleCacheConfig::new(&cache_dir);
+        let original = RulesDatabase::from_rules_with_cache(rule_vec.clone(), &cache)?;
+        let cache_path = cache_dir.join(format!("{}.vscdb", compute_rule_cache_key(&rule_vec)));
+        let header = read_cached_vectorscan_header(&cache_path)?;
+        let native_bytes = original.vectorscan_db().serialize()?;
+
+        for rejection in ["cpu", "native-version", "architecture", "metadata", "prefilter"] {
+            let mut bad_header = header.clone();
+            let mut bad_native = native_bytes.clone();
+            // Vectorscan 5.x serialization starts with u32 magic/version/length followed by
+            // u64 platform. Alter only compatibility fields, leaving valid bytecode and CRC.
+            // Assert the actual native rejection so this exercises CPU/version fallback.
+            let expected_code = match rejection {
+                "cpu" => {
+                    bad_native[12..20].copy_from_slice(&u64::MAX.to_ne_bytes());
+                    Some(HyperscanErrorCode::DbPlatformError)
+                }
+                "native-version" => {
+                    bad_native[4..8].fill(0);
+                    Some(HyperscanErrorCode::DbVersionError)
+                }
+                "architecture" => {
+                    bad_header.target = "incompatible-architecture".to_string();
+                    None
+                }
+                "metadata" => {
+                    bad_header.format_version -= 1;
+                    None
+                }
+                "prefilter" => {
+                    bad_header.prefilter_rule_indices.push(header.rule_count);
+                    None
+                }
+                _ => unreachable!(),
+            };
+            if let Some(expected_code) = expected_code {
+                assert!(matches!(
+                    BlockDatabase::deserialize(&bad_native),
+                    Err(VectorscanError::Hyperscan(code, _)) if code == expected_code
+                ));
+            }
+            // Keep the corruption checksum valid to exercise native compatibility checks.
+            bad_header.database_sha256 = hex::encode(Sha256::digest(&bad_native));
+            let header_bytes = serde_json::to_vec(&bad_header)?;
+            let mut entry = CACHE_MAGIC.to_vec();
+            entry.extend_from_slice(&(header_bytes.len() as u32).to_le_bytes());
+            entry.extend_from_slice(&header_bytes);
+            entry.extend_from_slice(&bad_native);
+            fs::write(&cache_path, entry)?;
+            assert!(load_cached_vectorscan_db(&cache_path, &header).is_none(), "{rejection}");
+
+            let rebuilt = RulesDatabase::from_rules_with_cache(rule_vec.clone(), &cache)?;
+            let mut scanner = BlockScanner::new(rebuilt.vectorscan_db())?;
+            let mut matches = Vec::new();
+            scanner.scan(b"token demo_1234", |id, _from, to, _flags| {
+                matches.push((id, to));
+                Scan::Continue
+            })?;
+            assert_eq!(matches, vec![(0, 15)], "{rejection}");
+            assert!(load_cached_vectorscan_db(&cache_path, &header).is_some(), "{rejection}");
+        }
+        fs::remove_dir_all(cache_dir)?;
         Ok(())
     }
 
@@ -1309,9 +1996,10 @@ rules:
             format_version: CACHE_FORMAT_VERSION,
             cache_key: cache_key.to_string(),
             rule_count: 1,
-            vectorscan_version: kingfisher_vectorscan::version(),
+            vectorscan_version: cache_vectorscan_version(),
             target: cache_target(),
             database_kind: "block".to_string(),
+            database_sha256: hex::encode(Sha256::digest(b"not-a-real-vectorscan-db")),
             prefilter_rule_indices: Vec::new(),
         };
         let header_bytes = serde_json::to_vec(&header)?;
@@ -1322,6 +2010,41 @@ rules:
         bytes.extend_from_slice(b"not-a-real-vectorscan-db");
         fs::write(&path, bytes)?;
         Ok(path)
+    }
+
+    #[test]
+    fn prune_rule_cache_removes_only_stale_owned_temporaries_without_an_entry_floor() -> Result<()>
+    {
+        let cache_dir =
+            env::temp_dir().join(format!("kingfisher-rule-cache-test-{}", uuid::Uuid::new_v4()));
+        prepare_rule_cache_dir(&cache_dir)?;
+        let cache = RuleCacheConfig::new(&cache_dir);
+        let old = cache_dir.join(format!(".old.vscdb.42.{}.tmp", uuid::Uuid::new_v4()));
+        let recent = cache_dir.join(format!(".recent.vscdb.42.{}.tmp", uuid::Uuid::new_v4()));
+        let unrelated = cache_dir.join(".notes.tmp");
+        for path in [&old, &recent, &unrelated] {
+            fs::write(path, b"temporary")?;
+        }
+        let now = SystemTime::now();
+        let old_time = now - Duration::from_secs(2 * 24 * 60 * 60);
+        fs::File::options()
+            .write(true)
+            .open(&old)?
+            .set_times(fs::FileTimes::new().set_modified(old_time))?;
+        let mut config =
+            RuleCachePruneConfig { max_age: Duration::ZERO, dry_run: true, ..Default::default() };
+        let summary = prune_rule_cache_at(&cache, &config, now)?;
+        assert_eq!(summary.candidate_entries, 1);
+        assert_eq!(summary.removed_entries, 0);
+        assert!(old.exists());
+        config.dry_run = false;
+        let summary = prune_rule_cache_at(&cache, &config, now)?;
+        assert_eq!(summary.removed_entries, 1);
+        assert!(!old.exists());
+        assert!(recent.exists());
+        assert!(unrelated.exists());
+        fs::remove_dir_all(cache_dir)?;
+        Ok(())
     }
 
     #[test]
@@ -1440,5 +2163,55 @@ mod test_regex_cleaning {
             )"#;
         let data = format_regex_pattern(input);
         println!("{}", data);
+    }
+}
+
+#[cfg(test)]
+mod confirmation_bounds {
+    use super::*;
+    use crate::RuleSyntax;
+
+    #[test]
+    fn prefix_certificates_follow_rule_builder_flags_and_assertions() {
+        for (pattern, expected) in [
+            (r"(ab)|(bc)", true),
+            (r"(?s)BEGIN(.*?)END", true),
+            (
+                r"(PuTTY-User-Key-File-3:(?:[^\n]|\n){20,10240}?Private-MAC: ?[0-9a-fA-F]{40,64})",
+                true,
+            ),
+            ("(?x)(token_ [a-z]{2}) # ignored $ and \\b\n", true),
+            ("(?x)#[\n(z)|(ar)|(bar$)#]\n", false),
+            (r"(z)|(ar)|(bar$)", false),
+            (r"(?m)^token_[a-z]{2}$", false),
+            (r"(token_[a-z]{2})\b", false),
+            (r"(?u)(é+)\b", false),
+            (r"()|a", false),
+            (r"a*", false),
+        ] {
+            let rule = RuleSyntax::new("acme.prefix", "Prefix certificate", pattern);
+            let regex = rule.as_regex().unwrap();
+            assert_eq!(confirmation_maximum_lengths(&regex).prefix_stable, expected, "{pattern}");
+        }
+    }
+
+    #[test]
+    fn tail_bounds_follow_rule_builder_flags_and_delimiters() {
+        for (pattern, expected) in [
+            (r"(.{32})", Some(32)),
+            (r"([^z]{32})", Some(32)),
+            (r"(?u)(.{32})", Some(128)),
+            (r"([a-z]+\.example\.com)", Some(12)),
+            (r"([a-z]+z)", None),
+            (r"([a-z]+\.example\.com)$", None),
+            (r"()|a", None),
+        ] {
+            let rule = RuleSyntax::new("acme.bound", "Bound", pattern);
+            let regex = rule.as_regex().unwrap();
+            let bounds = confirmation_maximum_lengths(&regex);
+            assert_eq!(bounds.safe_tail, expected, "{pattern}");
+            let full = if pattern == r"([a-z]+\.example\.com)" { None } else { expected };
+            assert_eq!(bounds.full_match, full, "{pattern}");
+        }
     }
 }

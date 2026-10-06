@@ -175,3 +175,4 @@ does not regenerate the catalog. See [publishing guidance](docs/PUBLISHING.md) f
 - Deployment/install: `docs/INSTALLATION.md`, `docs/DEPLOYMENT.md`, `docs/PYPI.md`
 - Rust embedding: [library guide](docs/LIBRARY.md), [runnable examples](crates/kingfisher-scanner/examples) (`kingfisher-scanner`; validation and revocation via `validation`)
 - Python embedding: [SDK guide](docs/PYPI.md), [runnable examples](python/examples) (install `kingfisher-secret-scanner`, import `kingfisher_sdk`)
+- Python SDK development: read [SDK contributor guidance](python/AGENTS.md) when changing Python-facing behavior, including changes implemented in shared Rust crates; [native binding guidance](crates/kingfisher-python/AGENTS.md) applies to the PyO3 bridge.

@@ -1,0 +1,8 @@
+# Keep repository history, Rust build outputs and local environments out of the
+# example's build context. Place the selected wheel in dist-python/.
+**
+!dist-python/
+!dist-python/*.whl
+!python/
+!python/examples/
+!python/examples/rule_cache.py

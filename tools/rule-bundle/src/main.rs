@@ -22,9 +22,9 @@ use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-// Prefer a release. This post-release commit retains detectors absent from the latest release.
-const BETTERLEAKS_REVISION: &str = "95237cf8eb4d8e9f67409595b245e674832992cf";
-const BETTERLEAKS_SHA256: &str = "b45bd602f46f1fce1f9a6d86b054096d9f2d1c2fe29d2e5b9ef3a7923195fe1a";
+// Betterleaks v2.0.0-rc.1 includes Cloudflare cfut_/cfat_ formats absent from stable v1.9.0.
+const BETTERLEAKS_REVISION: &str = "b3b4cbb586c964701f78bbfb6bc2129ced99bed3";
+const BETTERLEAKS_SHA256: &str = "b8627cfd4b12beb833f0b7e1173157b1a2988ceb87cf3e2e2882182d7229adf7";
 const RULES: &str = "crates/kingfisher-rules";
 const GENERATED: &str = "crates/kingfisher-rules/generated";
 const DOCS: &str = "docs-site/docs/rules/builtin-rules.md";

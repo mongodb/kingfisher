@@ -126,13 +126,13 @@ DOC_MAP = {
     ),
     "RULES.md": (
         "rules/overview.md",
-        "Kingfisher 1.x Custom Rules",
-        "Write private Kingfisher 1.x YAML custom rules with regex patterns, validation, revocation, and checksums; contribute general rules to Betterleaks.",
+        "Kingfisher Custom Rules",
+        "Write shared or private custom rules in Kingfisher YAML or Betterleaks TOML; contribute generally useful detectors to Betterleaks.",
     ),
     "ARCHITECTURE.md": (
         "reference/architecture.md",
         "Architecture",
-        "High-level architecture of Kingfisher: CLI, scanner pipeline, rule engine, validation, blast-radius mapping, and output formats.",
+        "Kingfisher architecture: CLI orchestration, shared detection, Rust/Python embedding, execution controls, validation, and reporting.",
     ),
     "LIBRARY.md": (
         "reference/library.md",
@@ -147,7 +147,7 @@ DOC_MAP = {
     "COMPARISON.md": (
         "reference/comparison.md",
         "Benchmarks & Comparison",
-        "Benchmark results comparing Kingfisher performance against TruffleHog, GitLeaks, and detect-secrets across major open source repositories.",
+        "Open-source capabilities and published secret-scanning runtime, network-request, and binary-size benchmarks.",
     ),
     "PROJECT.md": (
         "reference/project.md",
@@ -257,7 +257,7 @@ def rewrite_links(content: str) -> str:
         "](https://github.com/mongodb/kingfisher/blob/main/LICENSE)",
     )
     # Source-only guides and Rust examples are browsed in the repository.
-    for guide in ("PUBLISHING.md", "WIZARD.md"):
+    for guide in ("PUBLISHING.md", "WIZARD.md", "benchmark/README.md"):
         content = content.replace(
             "](" + guide,
             "](https://github.com/mongodb/kingfisher/blob/main/docs/" + guide,

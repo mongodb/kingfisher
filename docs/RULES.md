@@ -8,9 +8,20 @@ useful detectors and validation improvements should still be contributed to Bett
 When the Betterleaks catalog covers a Veles detector, the Betterleaks detector is preferred and
 the overlapping Veles detector is not bundled.
 
-The current built-in catalog contains **485 rules**, including selected Veles rules and hidden
+The current built-in catalog contains **488 rules**, including selected Veles rules and hidden
 component/helper rules. See the [built-in rules listing](../docs-site/docs/rules/builtin-rules.md) for the per-rule catalog
 and capability counts.
+
+The Betterleaks source is pinned to [v2.0.0-rc.1](https://github.com/betterleaks/betterleaks/tree/b3b4cbb586c964701f78bbfb6bc2129ced99bed3).
+It includes Bitbucket Data Center HTTP access tokens (`betterleaks.bitbucket-data-center-token`),
+Cloudflare `cfut_` user tokens and `cfat_` account tokens (`betterleaks.cloudflare-api-key.2`),
+and Tableau personal access tokens beginning with `+` or `/`. Cloudflare account-token
+validation requires a nearby account ID; the hidden `betterleaks.cloudflare-account-id.1`
+component is optional for detection and searched within `5L` (the match line and up to four
+lines before or after). Without it, a `cfat_` token remains unvalidated.
+The former `betterleaks.cloudflare-api-key` rule is now `betterleaks.cloudflare-api-key.1`;
+`scan --rule cloudflare-api-key` continues to select both formats. Direct validation requires
+an unambiguous selector: use `validate --rule cloudflare-api-key.2` for the new token formats.
 
 Kingfisher fully supports loading both the **Kingfisher rule format** (`.yml`/`.yaml`)
 and **Betterleaks TOML** (`.toml`) for custom rules. Either format can be used for
