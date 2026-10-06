@@ -209,6 +209,12 @@ kingfisher scan /path/to/code \
 - `--max-validation-response-length BYTES`: maximum bytes stored from validation response bodies (default: 2048; `0` disables truncation at storage time).
 - `--full-validation-response`: include complete validation response bodies end-to-end. This bypasses both storage-time truncation and reporter display truncation, and takes precedence over `--max-validation-response-length`.
 
+Repository discovery and scanning overlap. Streaming output and audit records can
+arrive before discovery completes. Treat a nonzero exit caused by discovery or
+artifact-fetching errors as an incomplete scan, even if findings were printed.
+The audit log emits `run_failed` on these failures; only a successful run emits
+`run_completed`.
+
 ## Scanning in CI Pipelines
 
 ### Changes in the last N hours
@@ -372,15 +378,23 @@ KF_RULE_CACHE_DIR=.kingfisher-cache kingfisher scan . --staged
 kingfisher scan . --staged --rule-cache-dir .kingfisher-cache
 ```
 
-For Docker runs, the default cache directory lives inside the container and is lost when the container is removed. Mount a host directory and set `KF_RULE_CACHE_DIR` so repeated `docker run --rm` scans reuse the cache:
+For Docker runs, the default cache directory lives inside the container and is
+lost when the container is removed. On a Unix host, create a private directory,
+mount it and run as its owner so repeated `docker run --rm` scans reuse the cache:
 
 ```bash
+install -d -m 0700 "$HOME/.cache/kingfisher-rule-cache"
 docker run --rm \
+  --user "$(id -u):$(id -g)" \
   -v "$PWD":/src \
   -v "$HOME/.cache/kingfisher-rule-cache":/kf-cache \
   -e KF_RULE_CACHE_DIR=/kf-cache \
   ghcr.io/mongodb/kingfisher:latest scan /src --staged
 ```
+
+Docker-managed volumes or user-namespace mappings must likewise give the cache
+directory and entries to the UID visible inside the container. A root container
+cannot reuse an unprivileged user's cache merely because the directory is mounted.
 
 Use `--no-rule-cache` to disable the cache for a scan:
 
@@ -394,7 +408,7 @@ To pre-warm the cache before the first scan, run:
 kingfisher rules compile-cache
 ```
 
-Cache pruning is opt-in. To remove old compiled databases during a scan, pass `--prune-rule-cache`. By default, pruning keeps at least 10 cache entries and removes only entries older than 30 days. Tune those thresholds with `--rule-cache-max-entries` and `--rule-cache-max-age`:
+Cache pruning is opt-in. To remove old compiled databases during a scan, pass `--prune-rule-cache`. By default, pruning keeps at least 10 cache entries and removes only entries older than 30 days. Recognized cache temporary files left by interrupted writes are also pruned after the configured age, with a minimum one-day grace period; the entry retention floor does not apply to those temporary files. Tune those thresholds with `--rule-cache-max-entries` and `--rule-cache-max-age`:
 
 ```bash
 kingfisher scan . --staged --prune-rule-cache
@@ -417,7 +431,38 @@ kingfisher rules prune-cache \
 
 By default, Kingfisher logs the cache directory in use. Pass `--debug` or `-v` to see cache hit/miss details and when new entries are written.
 
-The cache key includes the resolved rule order, rule patterns, platform, cache format, and Vectorscan runtime version. This works with the default Betterleaks catalog and custom rules loaded through `--rules-path`. When any loaded rule pattern or the Vectorscan runtime version changes, Kingfisher uses a new cache entry automatically. If a cache entry is missing, corrupt, or incompatible with the current platform, Kingfisher falls back to compiling normally and refreshes the cache.
+The cache key includes resolved rule order and patterns, CPU architecture, pointer
+width, endianness, cache format, exact binding/native crate versions and full
+Vectorscan build identity. Use the same wheel or engine build for deployment
+prewarming. A different operating system or native build may require recompilation;
+Vectorscan also checks CPU-feature compatibility during deserialization. This
+applies to built-in and custom rules. Missing, corrupt, stale or incompatible
+entries fall back to compilation and best-effort replacement; older cache formats
+recompile once.
+
+Compiled databases are trusted native engine input. Cache directories and files
+must belong to the current user. Unix cache directories/files exclude group/other
+writes, and parent directories must prevent replacement. Windows DACLs also
+permit Administrators/SYSTEM. New Windows cache objects receive the process user
+SID as owner at creation, including for SYSTEM services. Existing paths still
+require that ownership. Protected Windows ancestors may
+additionally be owned or maintained by TrustedInstaller; other accounts must not
+be able to replace the cache. New Unix directories/files use 0700/0600;
+unsafe ownership, permissions, symlinks or nontrusted writable ACLs disable caching.
+There is no shared temporary-directory fallback: without a per-user location,
+scans compile in memory. SHA-256 payload verification detects corruption before
+native deserialization; it cannot authenticate writers with the same privileges.
+`rules compile-cache` requires successful persistence or reuse and fails if the
+cache is disabled, unsafe or unwritable.
+
+These ownership checks apply to the deployed files; cache bytes are not bound to
+the builder's account or host. For images built as root and run as a service UID,
+transfer the directory and every entry with `COPY --chown` or recursive `chown`
+before deployment. Valid entries can load from a read-only filesystem; rejected
+entries still recompile, but storing a replacement requires a writable cache.
+See the [SDK container prewarming example](../reference/python-bindings.md#prewarm-a-container-image-for-a-non-root-service).
+
+The [Python SDK](../reference/python-bindings.md#reuse-the-compiled-rule-cache) uses the same cache by default, including `KF_RULE_CACHE_DIR`. Pass `Rules(cache_dir=...)` to override the location or `Rules(cache=False)` to opt out. Prewarm with matching rules and confidence to share entries between the CLI and SDK. Only the main Vectorscan database is persisted; rule loading and confirmation/path/filter initialization still run.
 
 ## Default Betterleaks Rules
 
@@ -439,7 +484,7 @@ from the built-in catalog because their broad patterns provide low signal at dis
 cost. Use a targeted custom TOML or YAML rule when your organization needs generic credential
 detection for a known naming convention.
 
-Kingfisher embeds 485 built-in rules from a prepared compressed bundle. Normal compilation
+Kingfisher embeds 488 built-in rules from a prepared compressed bundle. Normal compilation
 does not download rule sources. Exact upstream inputs, licenses, hashes, and source revisions
 are archived under `crates/kingfisher-rules/generated/`. Maintainers regenerate the bundle
 with `cargo run --locked -p kingfisher-rule-bundle`; `--refresh` fetches pinned upstream sources,
@@ -457,15 +502,24 @@ are intentionally ignored because Vectorscan already performs candidate selectio
 validation runs in Rust; Go and Betterleaks itself are not runtime dependencies. Provider endpoint
 overrides are exposed to Betterleaks validation environment variables.
 
+The pinned Betterleaks v2.0.0-rc.1 catalog uses both older namespaced helpers and newer
+expression helpers such as `type`, `string`, `int`, `toJSON`, `len`, `filter`, `all`, and
+`strings.splitTrim`. Kingfisher evaluates the imported validation expressions and preserves
+their provider-result checks. Upstream `analyze` expressions are not executed; blast-radius
+analysis continues to use Kingfisher's reviewed access-map handlers. Capture selection accepts
+both the v2 `valueGroup` field and the older `secretGroup` field in Betterleaks TOML.
+
 The source prefilter applies only to Betterleaks rules. Custom and Veles rules still run on paths
 that Betterleaks excludes.
 
 `--blast-radius` (alias `--access-map`) works for validated Betterleaks findings when Kingfisher has
-an access-map handler for the credential shape. Because Betterleaks currently has no revocation or
-checksum metadata, Kingfisher maintains a checked-in capability overlay for access-map bindings and
+an access-map handler for the credential shape. Kingfisher maintains a checked-in capability
+overlay for access-map bindings and
 selected safe revocation actions. It contains no candidate detector regexes, but may add narrow
 operational filters and capability metadata; it is validated against the downloaded imported-detector IDs
-and components during the build. Checksum templates remain available to
+and components during bundle generation. Betterleaks 2.x supports `revoke` expressions;
+Kingfisher's importer currently uses the reviewed overlay instead of executing those expressions.
+Checksum templates remain available to
 Kingfisher custom rules; Betterleaks detectors rely on their upstream regex/filter behavior until the
 upstream schema exposes checksum metadata.
 
@@ -592,7 +646,7 @@ perform final processing. All findings are restored to RAM before the final cons
 it cannot prevent an out-of-memory failure if that final working set is too large. Digest
 and blob-ID indexes also remain in memory throughout the scan.
 
-For example, when `kingfisher scan ~/mms --disk-offload --format toon` scans `~/mms`
+For example, when `kingfisher scan ~/example-repo --disk-offload --format toon` scans `~/example-repo`
 as a single repository, all of that repository's findings accumulate in RAM until its scan
 finishes. They are then written to disk and loaded back into RAM for final processing.
 **Similar memory usage with and without the flag is expected for this workload**, including
@@ -697,6 +751,17 @@ sweep for such remnants. If a leftover is found in the chosen temporary director
 sensitive data and remove it after confirming it is no longer in use. Filesystem snapshots,
 backups, or recoverable storage blocks can also retain data after deletion.
 
+### Temporary input content
+
+Cloned repositories, staged stdin, Docker layers and decoded archive members can
+contain credentials independently of findings. Kingfisher's owned staging
+directories use Unix mode 0700 (the umask may restrict it further). Windows
+inherits the temporary parent's DACL. Choose a protected temporary parent on
+every platform; on Unix, `TMPDIR` selects it. If you supply `--git-clone-dir`, its
+permissions remain your responsibility. Normal cleanup removes owned temporary
+directories unless clones are retained, but crashes can leave remnants. Deletion
+is not secure erasure; use encrypted or memory-backed storage when needed.
+
 ## Unlimited scans
 
 Use `--no-limits` when scan completeness takes priority over bounded time, memory,
@@ -720,7 +785,7 @@ configuration file. Defaults are unchanged when it is absent. It removes:
 
 Worker counts, bounded queues, request rate limits, finite retry counts, scan
 selectors/exclusions, `--no-base64`, `--no-extract-archives`, detection rules, and
-archive path checks remain in effect. ZIP extraction still switches to disk for
+archive path checks and ancestor-cycle detection remain in effect. ZIP extraction still switches to disk for
 large inputs. Scan-time blast-radius network deadlines are also disabled, while
 its enumeration and evidence caps remain in effect. Report presentation limits,
 operating system limits, remote service limits, and format/protocol validity checks
@@ -765,7 +830,7 @@ not disable certificate verification.
 - `--include-contributors`: When scanning GitHub or GitLab URLs, include contributor-owned repos in the scan
 - `--git-clone-dir <DIR>`: Choose the parent directory for cloned repos and scan artifacts (use with Git URL scans)
 - `--keep-clones`: Preserve cloned repositories on disk after a scan completes
-- `--repo-clone-limit <N>`: Cap GitHub and GitLab clone targets when enumerating users, orgs/groups, or contributor repos; this includes opted-in GitHub gists and GitLab snippets
+- `--repo-clone-limit <N>`: Cap GitHub and GitLab clone targets when enumerating users, orgs/groups, or contributor repos; this includes opted-in GitHub gists and GitLab snippets. The first unique repositories discovered are selected, so provider ordering changes can change the selected subset across runs.
 - `--no-binary`: Skip binary files
 - `--no-extract-archives`: Do not scan inside archives
 - `--extraction-depth <N>`: Specifies how deep nested archives should be extracted and scanned (default: 2; 0 = unlimited)

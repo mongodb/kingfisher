@@ -95,7 +95,7 @@ mise use --global github:mongodb/kingfisher
 Append a version to install a specific release:
 
 ```bash
-mise use --global github:mongodb/kingfisher@1.113.0
+mise use --global github:mongodb/kingfisher@2.10.0
 ```
 
 ## Linux and macOS
@@ -123,7 +123,7 @@ To install a specific tag:
 ```bash
 curl --silent --location \
   https://raw.githubusercontent.com/mongodb/kingfisher/main/scripts/install-kingfisher.sh | \
-  bash -s -- --tag v1.71.0
+  bash -s -- --tag v2.10.0
 ```
 
 ## Windows
@@ -158,7 +158,7 @@ You can provide a custom destination using the `-InstallDir` parameter:
 To install a specific tag:
 
 ```powershell
-./install-kingfisher.ps1 -Tag v1.71.0
+./install-kingfisher.ps1 -Tag v2.10.0
 ```
 
 To explicitly override architecture selection:
@@ -444,7 +444,7 @@ and platform prerequisites.
 
 ## Compile from Source
 
-Source builds embed the prepared catalog of 485 rules; they do not download Betterleaks or
+Source builds embed the prepared catalog of 488 rules; they do not download Betterleaks or
 Veles sources. Cargo dependencies and native build prerequisites must still be available.
 The repository preserves license texts, source headers, and provenance under
 `crates/kingfisher-rules/generated/`; the source archive includes those files.
@@ -580,5 +580,6 @@ Or run it without installation using `uvx`:
 uvx kingfisher-bin --help
 ```
 
-For maintainers who need to build and publish wheels, see
-[docs/PYPI.md](../reference/python-bindings.md).
+For in-process Python embedding, install `kingfisher-secret-scanner` and import
+`kingfisher_sdk`; `kingfisher-bin` installs the CLI command. See the
+[Python SDK and wheel guide](../reference/python-bindings.md) for SDK examples and publishing.

@@ -344,7 +344,7 @@ KF_GITHUB_TOKEN="ghp_…" kingfisher scan github \
   --allow-internal-ips
 
 # 5. Validate a single PAT against GHE without scanning anything
-kingfisher validate --rule github \
+kingfisher validate --rule github-pat \
   --endpoint github=https://ghe.corp.example.com \
   "<your-github-pat>"
 
@@ -497,7 +497,7 @@ KF_GITLAB_TOKEN="glpat-…" kingfisher scan gitlab \
   --allow-internal-ips
 
 # 5. Validate a single PAT against self-hosted GitLab without scanning anything
-kingfisher validate --rule gitlab \
+kingfisher validate --rule gitlab-pat \
   --endpoint gitlab=https://gitlab.corp.example.com \
   "<your-gitlab-pat>"
 

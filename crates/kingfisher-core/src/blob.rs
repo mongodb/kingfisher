@@ -219,12 +219,12 @@ impl<'a> Blob<'a> {
     pub fn from_borrowed(bytes: &'a [u8]) -> Self {
         let temp_id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
         let id = BlobId::new(bytes);
+        let cell = OnceLock::new();
+        let _ = cell.set(id);
         if let Some(decoded) = encoding::decode(bytes) {
-            let cell = OnceLock::new();
-            let _ = cell.set(id);
             Blob { id: cell, data: BlobData::Owned(decoded), temp_id }
         } else {
-            Blob { id: OnceLock::new(), data: BlobData::Borrowed(bytes), temp_id }
+            Blob { id: cell, data: BlobData::Borrowed(bytes), temp_id }
         }
     }
 }

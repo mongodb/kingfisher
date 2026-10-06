@@ -138,11 +138,101 @@ jobs:
       - name: Test installed wheel (no editable source imports)
         shell: bash
         run: uv run --no-project --python .venv-wheel python -m pytest python/tests -q
+      - name: Seed compiled cache fixtures for other hosts
+        shell: bash
+        id: cache-fixtures
+        run: |
+          # Use the same private temporary area as the SDK tests. Windows
+          # checkout directories can inherit ACLs that permit other users to
+          # replace cache ancestors, so native bytecode correctly bypasses them.
+          SDK_CACHE_FIXTURES=$(uv run --no-project --python .venv-wheel python -c 'import tempfile; from pathlib import Path; print(Path(tempfile.mkdtemp(prefix="kingfisher-rule-cache-")).as_posix())')
+          echo "path=$SDK_CACHE_FIXTURES" >> "$GITHUB_OUTPUT"
+          uv run --no-project --python .venv-wheel python python/tests/cache_portability.py seed "$SDK_CACHE_FIXTURES"
+          uv run --no-project --python .venv-wheel python python/tests/cache_portability.py check "$SDK_CACHE_FIXTURES" --require-hit
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: rule-cache-${{ matrix.target }}
+          path: ${{ steps.cache-fixtures.outputs.path }}
+          if-no-files-found: error
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
         with:
           name: python-${{ matrix.target }}
           path: dist-python/*.whl
           if-no-files-found: error
+
+  cache-portability:
+    name: Cache portability (${{ matrix.target }})
+    needs: wheels
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-gnu
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: macos-15
+            target: aarch64-apple-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-gnu
+          - os: windows-11-arm
+            target: aarch64-pc-windows-gnullvm
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: python-${{ matrix.target }}
+          path: dist-python
+      - name: Select private directory for transferred caches
+        id: cache-fixtures
+        shell: bash
+        run: |
+          SDK_CACHE_FIXTURES=$(uv run --no-project python -c 'import tempfile; from pathlib import Path; print(Path(tempfile.mkdtemp(prefix="kingfisher-foreign-cache-")).as_posix())')
+          echo "path=$SDK_CACHE_FIXTURES" >> "$GITHUB_OUTPUT"
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          pattern: rule-cache-*
+          path: ${{ steps.cache-fixtures.outputs.path }}
+      - name: Assign downloaded caches to the Windows runtime account
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          SDK_CACHE_FIXTURES: ${{ steps.cache-fixtures.outputs.path }}
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Artifact extraction can assign Administrators as owner under an
+          # elevated token. Normalize only these freshly downloaded fixtures;
+          # native bytecode still must pass the existing DACL and path checks.
+          $sid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User.Value
+          $fixtures = (Resolve-Path -LiteralPath $env:SDK_CACHE_FIXTURES).Path
+          & "$env:SystemRoot\System32\icacls.exe" $fixtures /setowner "*$sid" /T /Q
+          if ($LASTEXITCODE -ne 0) {
+            throw "Cannot assign cache fixtures to the runtime account"
+          }
+      - name: Load foreign caches and verify local reuse after fallback
+        shell: bash
+        env:
+          SDK_TARGET: ${{ matrix.target }}
+          SDK_CACHE_FIXTURES: ${{ steps.cache-fixtures.outputs.path }}
+        run: |
+          uv venv .venv-wheel --python 3.13
+          uv pip install --python .venv-wheel dist-python/*.whl
+          for cache in "$SDK_CACHE_FIXTURES"/rule-cache-*; do
+            # Require reuse from this exact wheel build. Foreign builds may differ
+            # in native engine identity even when their CPU baseline is compatible.
+            require_hit=()
+            if [[ "$cache" == */rule-cache-"$SDK_TARGET" ]]; then
+              require_hit=(--require-hit)
+            fi
+            uv run --no-project --python .venv-wheel python python/tests/cache_portability.py check "$cache" "${require_hit[@]}"
+          done
 
   source:
     runs-on: ubuntu-24.04
@@ -151,12 +241,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
-          components: rustfmt
+          components: rustfmt, clippy
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
-      - name: Format and shared revocation tests
+      - name: Format, lint, and shared scanner tests
         run: |
           cargo fmt --all --check
+          cargo clippy --locked -p kingfisher-python --all-targets -- -D warnings
           cargo test --locked -p kingfisher-scanner --features validation validation::revocation
+          cargo test --locked -p kingfisher-scanner --features context --test context
       - name: Build source distribution
         run: uv run --no-project --with maturin==1.15.0 maturin sdist --out dist-python
       - name: Build and test from sdist with oldest Python
@@ -175,7 +267,7 @@ jobs:
 
   publish:
     if: github.repository == 'mongodb/kingfisher' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/python-v'))
-    needs: [wheels, source]
+    needs: [wheels, source, cache-portability]
     runs-on: ubuntu-latest
     concurrency:
       group: pypi-sdk-publish-${{ github.run_id }}

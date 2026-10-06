@@ -413,6 +413,7 @@ impl Evaluator<'_> {
             )),
             "in" => Ok(Value::Bool(value_in(&left, &right))),
             "contains" => Ok(Value::Bool(value_contains(&left, &right))),
+            "startsWith" => Ok(Value::Bool(left.as_string().starts_with(&right.as_string()))),
             other => bail!("unsupported binary operator {other}"),
         }
     }
@@ -454,7 +455,54 @@ impl Evaluator<'_> {
             "http.post" => self.http_request(Method::POST, &args).await,
             "validate.unknown" => Ok(unknown_result(args.first().cloned().unwrap_or(Value::Null))),
             "bytes" => Ok(Value::Bytes(args.first().map(Value::as_bytes).unwrap_or_default())),
-            "size" => Ok(Value::Integer(value_size(args.first()))),
+            "size" | "len" => Ok(Value::Integer(value_size(args.first()))),
+            "string" => Ok(Value::String(args.first().map(Value::as_string).unwrap_or_default())),
+            "int" => Ok(Value::Integer(
+                args.first().and_then(Value::as_i64).context("int: expected a number")?,
+            )),
+            "type" => Ok(Value::String(
+                match args.first() {
+                    None | Some(Value::Null) => "nil",
+                    Some(Value::Bool(_)) => "bool",
+                    Some(Value::Integer(_)) => "int",
+                    Some(Value::Float(_)) => "float",
+                    Some(Value::String(_)) => "string",
+                    Some(Value::Array(_) | Value::Bytes(_)) => "array",
+                    Some(Value::Object(_)) => "map",
+                }
+                .to_string(),
+            )),
+            "toJSON" => Ok(Value::String(serde_json::to_string(
+                &args.first().unwrap_or(&Value::Null).to_json(),
+            )?)),
+            "trim" => Ok(Value::String(
+                args.first().map(Value::as_string).unwrap_or_default().trim().to_string(),
+            )),
+            "split" | "strings.splitTrim" => {
+                let input = args.first().map(Value::as_string).unwrap_or_default();
+                let separator = args.get(1).map(Value::as_string).unwrap_or_default();
+                if name == "strings.splitTrim" && separator.is_empty() {
+                    bail!("strings.splitTrim: separator must not be empty");
+                }
+                let parts = if separator.is_empty() {
+                    input.chars().map(|ch| ch.to_string()).collect::<Vec<_>>()
+                } else {
+                    input.split(&separator).map(str::to_string).collect()
+                };
+                Ok(Value::Array(
+                    parts
+                        .into_iter()
+                        .filter_map(|part| {
+                            if name == "strings.splitTrim" {
+                                let part = part.trim();
+                                (!part.is_empty()).then(|| Value::String(part.to_string()))
+                            } else {
+                                Some(Value::String(part))
+                            }
+                        })
+                        .collect(),
+                ))
+            }
             "substring" => {
                 let value = args.first().map(Value::as_string).unwrap_or_default();
                 let start = args.get(1).and_then(Value::as_i64).unwrap_or_default().max(0) as usize;
@@ -500,7 +548,7 @@ impl Evaluator<'_> {
                         .unwrap_or(fallback),
                 ))
             }
-            "filter.matchesAny" => matches_any(&args),
+            "filter.matchesAny" | "matchesAny" => matches_any(&args),
             "aws.validate" => self.aws_validate(&args).await,
             "gcp.validate" => self.gcp_validate(&args).await,
             "azure.validateStorage" => self.azure_validate_storage(&args).await,
@@ -520,20 +568,35 @@ impl Evaluator<'_> {
     }
 
     async fn eval_builtin(&mut self, name: &str, arguments: &[BetterleaksExpr]) -> Result<Value> {
-        if name == "any" {
-            let values = self.eval(&arguments[0]).await?;
-            let Value::Array(values) = values else {
-                return Ok(Value::Bool(false));
+        if matches!(name, "any" | "all" | "filter") {
+            let [input, predicate] = arguments else {
+                bail!("{name}: expected an array and predicate");
             };
+            let values = self.eval(input).await?;
+            let Value::Array(values) = values else {
+                bail!("{name}: expected an array");
+            };
+            let mut filtered = Vec::new();
             for value in values {
-                let previous = self.pointer.replace(value);
-                let matches = self.eval(&arguments[1]).await?.truthy();
+                let previous = self.pointer.replace(value.clone());
+                let result = self.eval(predicate).await;
                 self.pointer = previous;
-                if matches {
+                let matches = result?.truthy();
+                if name == "any" && matches {
                     return Ok(Value::Bool(true));
                 }
+                if name == "all" && !matches {
+                    return Ok(Value::Bool(false));
+                }
+                if name == "filter" && matches {
+                    filtered.push(value);
+                }
             }
-            return Ok(Value::Bool(false));
+            return Ok(if name == "filter" {
+                Value::Array(filtered)
+            } else {
+                Value::Bool(name == "all")
+            });
         }
 
         let args = self.eval_arguments(arguments).await?;
@@ -1067,23 +1130,229 @@ mod tests {
                 "hex.encode",
                 "http.get",
                 "http.post",
+                "int",
                 "json.string",
+                "len",
+                "matchesAny",
                 "member.contains",
                 "member.split",
                 "size",
+                "split",
+                "string",
+                "strings.splitTrim",
                 "strings.urlQueryEscape",
                 "substring",
                 "time.nowRFC3339",
                 "time.nowUnix",
+                "toJSON",
+                "trim",
+                "type",
                 "validate.unknown",
             ])),
             "unsupported calls: {calls:?}"
         );
-        assert!(builtins.is_subset(&set(&["any", "lastIndexOf", "replace"])));
-        assert!(
-            binary.is_subset(&set(&["!=", "&&", "+", ">", "==", "??", "contains", "in", "||"]))
-        );
+        assert!(builtins.is_subset(&set(&["any", "all", "filter", "lastIndexOf", "replace"])));
+        assert!(binary.is_subset(&set(&[
+            "!=",
+            "&&",
+            "+",
+            ">",
+            "==",
+            "??",
+            "contains",
+            "in",
+            "startsWith",
+            "||"
+        ])));
         assert!(unary.is_subset(&set(&["!", "-", "not"])));
+    }
+
+    #[tokio::test]
+    async fn cloudflare_v2_validation_routes_tokens_and_requires_active_provider_evidence() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let active = serde_json::json!({"success": true, "result": {"id": "mock-token", "status": "active"}});
+        let cases = [
+            ("cfut_", "", active.clone(), ValidationOutcome::VerifiedActive, 1),
+            ("cfat_", "mock-account", active.clone(), ValidationOutcome::VerifiedActive, 1),
+            ("cfat_", "", active.clone(), ValidationOutcome::Unavailable, 0),
+            (
+                "cfut_",
+                "",
+                serde_json::json!({"success": false, "result": {"id": "mock-token", "status": "active"}}),
+                ValidationOutcome::Unavailable,
+                1,
+            ),
+            (
+                "cfut_",
+                "",
+                serde_json::json!({"success": true, "result": {"status": "active"}}),
+                ValidationOutcome::Unavailable,
+                1,
+            ),
+            (
+                "cfut_",
+                "",
+                serde_json::json!({"success": true, "result": {"id": "mock-token", "status": "expired"}}),
+                ValidationOutcome::VerifiedInactive,
+                1,
+            ),
+            (
+                "cfut_",
+                "",
+                serde_json::json!({"success": true, "result": {"id": "mock-token", "status": "disabled"}}),
+                ValidationOutcome::VerifiedInactive,
+                1,
+            ),
+        ];
+        let rule = get_betterleaks_rules(None)
+            .unwrap()
+            .into_iter()
+            .find(|rule| rule.id == "betterleaks.cloudflare-api-key.2")
+            .unwrap();
+        let Some(Validation::Betterleaks(validation)) = rule.validation else {
+            panic!("missing Cloudflare validation")
+        };
+        for (prefix, account, response, expected, requests) in cases {
+            let calls = Arc::new(AtomicUsize::new(0));
+            let observed = calls.clone();
+            let route = if prefix == "cfat_" {
+                "/accounts/mock-account/tokens/verify"
+            } else {
+                "/user/tokens/verify"
+            };
+            let app = Router::new().route(
+                route,
+                get(move || {
+                    let response = response.clone();
+                    let observed = observed.clone();
+                    async move {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        response.to_string()
+                    }
+                }),
+            );
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+            let mut validation = validation.clone();
+            replace_string_literal(
+                &mut validation.expression,
+                "https://api.cloudflare.com/client/v4",
+                &format!("http://{address}"),
+            );
+            let mut globals = LiquidObject::new();
+            if !account.is_empty() {
+                globals.insert("CLOUDFLARE_ACCOUNT_ID_1".into(), LiquidValue::scalar(account));
+            }
+            let token = format!("{prefix}{}deadbeef", "Ab3DeF9gHk".repeat(4));
+            let outcome = validate(
+                &validation,
+                &[("TOKEN".to_string(), token.clone(), 0, token.len())],
+                &globals,
+                &Client::new(),
+                true,
+            )
+            .await;
+            server.abort();
+            assert_eq!(outcome.outcome, expected, "{prefix}/{account}: {}", outcome.body);
+            assert_eq!(calls.load(Ordering::SeqCst), requests);
+            assert_eq!(outcome.valid, expected == ValidationOutcome::VerifiedActive);
+        }
+    }
+
+    #[tokio::test]
+    async fn v2_response_helpers_preserve_types_and_predicate_scope() {
+        fn call(name: &str, arguments: Vec<BetterleaksExpr>) -> BetterleaksExpr {
+            BetterleaksExpr::Call {
+                callee: Box::new(BetterleaksExpr::Identifier { value: name.to_string() }),
+                arguments,
+            }
+        }
+        fn string(value: &str) -> BetterleaksExpr {
+            BetterleaksExpr::String { value: value.to_string() }
+        }
+        let mut evaluator = Evaluator {
+            client: &Client::new(),
+            allow_internal_ips: false,
+            environment: BTreeMap::new(),
+            variables: BTreeMap::new(),
+            pointer: Some(Value::String("outer".to_string())),
+            last_status: None,
+        };
+        let array = BetterleaksExpr::Array {
+            nodes: vec![string("read"), BetterleaksExpr::Integer { value: 42 }, string("write")],
+        };
+        let predicate = BetterleaksExpr::Binary {
+            operator: "==".to_string(),
+            left: Box::new(call("type", vec![BetterleaksExpr::Pointer { name: "#".to_string() }])),
+            right: Box::new(string("string")),
+        };
+        let filtered = BetterleaksExpr::Builtin {
+            name: "filter".to_string(),
+            arguments: vec![array.clone(), predicate.clone()],
+        };
+        assert_eq!(
+            evaluator.eval(&filtered).await.unwrap(),
+            Value::Array(vec![
+                Value::String("read".to_string()),
+                Value::String("write".to_string())
+            ])
+        );
+        assert_eq!(evaluator.pointer, Some(Value::String("outer".to_string())));
+        assert_eq!(
+            evaluator
+                .eval(&BetterleaksExpr::Builtin {
+                    name: "all".to_string(),
+                    arguments: vec![array, predicate.clone()]
+                })
+                .await
+                .unwrap(),
+            Value::Bool(false)
+        );
+        assert_eq!(
+            evaluator
+                .eval(&BetterleaksExpr::Builtin {
+                    name: "all".to_string(),
+                    arguments: vec![filtered.clone(), predicate]
+                })
+                .await
+                .unwrap(),
+            Value::Bool(true)
+        );
+        for (expression, expected) in [
+            (call("len", vec![filtered]), Value::Integer(2)),
+            (
+                call(
+                    "string",
+                    vec![call("int", vec![BetterleaksExpr::Float { value: "123.0".to_string() }])],
+                ),
+                Value::String("123".to_string()),
+            ),
+            (call("trim", vec![string("  mock user  ")]), Value::String("mock user".to_string())),
+            (call("toJSON", vec![string("a\"b")]), Value::String("\"a\\\"b\"".to_string())),
+        ] {
+            assert_eq!(evaluator.eval(&expression).await.unwrap(), expected);
+        }
+        let namespace_call = BetterleaksExpr::Call {
+            callee: Box::new(BetterleaksExpr::Member {
+                node: Box::new(BetterleaksExpr::Identifier { value: "strings".to_string() }),
+                property: Box::new(string("splitTrim")),
+                optional: false,
+                method: true,
+            }),
+            arguments: vec![string(" read, ,write ,"), string(",")],
+        };
+        assert_eq!(
+            evaluator.eval(&namespace_call).await.unwrap(),
+            Value::Array(vec![
+                Value::String("read".to_string()),
+                Value::String("write".to_string())
+            ])
+        );
+        assert!(evaluator.eval(&call("int", vec![string("not-a-number")])).await.is_err());
     }
 
     #[tokio::test]

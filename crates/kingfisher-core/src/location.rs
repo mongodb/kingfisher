@@ -7,7 +7,7 @@
 //! - [`LocationMapping`] - Efficient offset-to-line/column conversion
 
 use core::ops::Range;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -104,32 +104,39 @@ impl std::fmt::Display for SourceSpan {
 pub struct LocationMapping<'a> {
     bytes: &'a [u8],
     newline_offsets: RefCell<Vec<usize>>,
+    scanned_until: Cell<usize>,
 }
 
 impl<'a> LocationMapping<'a> {
     /// Creates a new mapping for the given input bytes.
     pub fn new(input: &'a [u8]) -> Self {
-        LocationMapping { bytes: input, newline_offsets: RefCell::new(Vec::new()) }
+        LocationMapping {
+            bytes: input,
+            newline_offsets: RefCell::new(Vec::new()),
+            scanned_until: Cell::new(0),
+        }
     }
 
     fn ensure_offsets_up_to(&self, offset: usize) {
-        let mut offsets = self.newline_offsets.borrow_mut();
-        let start = offsets.last().map_or(0, |&last| last + 1);
-        if offset < start {
+        let start = self.scanned_until.get();
+        let end = offset.min(self.bytes.len());
+        if end <= start {
             return;
         }
-        let end = offset.min(self.bytes.len());
+        let mut offsets = self.newline_offsets.borrow_mut();
         for nl in memchr::memchr_iter(b'\n', &self.bytes[start..end]) {
             offsets.push(start + nl);
         }
+        // A long line can contain many findings without adding any newline offsets.
+        // Remember the scanned byte boundary so each byte is searched at most once.
+        self.scanned_until.set(end);
     }
 
     fn source_point_from_offsets(offsets: &[usize], offset: usize) -> SourcePoint {
-        let line = match offsets.binary_search(&offset) {
-            Ok(idx) => idx + 2,
-            Err(idx) => idx + 1,
-        };
-        let column = if let Some(&last) = offsets.get(line.saturating_sub(2)) {
+        // A newline byte belongs to the preceding line, even when a later query
+        // has already cached that newline. Query order must not change locations.
+        let line = offsets.partition_point(|&newline| newline < offset) + 1;
+        let column = if let Some(&last) = line.checked_sub(2).and_then(|index| offsets.get(index)) {
             offset.saturating_sub(last + 1)
         } else {
             offset
@@ -292,5 +299,44 @@ mod tests {
 
         // Second line, first character
         assert_eq!(mapping.get_source_point(6), SourcePoint { line: 2, column: 0 });
+    }
+
+    #[test]
+    fn location_mapping_is_independent_of_query_order() {
+        let input = b"first\r\nsecond\n\nlast";
+        let cached = LocationMapping::new(input);
+        cached.get_source_point(input.len());
+
+        for offset in 0..=input.len() {
+            let fresh = LocationMapping::new(input);
+            assert_eq!(cached.get_source_point(offset), fresh.get_source_point(offset), "{offset}");
+        }
+        assert_eq!(cached.get_source_point(4), SourcePoint { line: 1, column: 4 });
+        assert_eq!(cached.get_source_point(6), SourcePoint { line: 1, column: 6 });
+        assert_eq!(cached.get_source_point(7), SourcePoint { line: 2, column: 0 });
+        assert_eq!(cached.get_source_point(13), SourcePoint { line: 2, column: 6 });
+        assert_eq!(cached.get_source_point(14), SourcePoint { line: 3, column: 0 });
+        assert_eq!(cached.get_source_point(15), SourcePoint { line: 4, column: 0 });
+    }
+
+    #[test]
+    fn dense_spans_on_long_lines_advance_the_scan_cursor_without_newlines() {
+        let mut input = vec![b'x'; 64 * 1024];
+        input.push(b'\n');
+        input.extend(std::iter::repeat_n(b'x', 64 * 1024));
+        let mapping = LocationMapping::new(&input);
+
+        for start in (0..input.len() - 8).step_by(16) {
+            let span = OffsetSpan::from_range(start..start + 8);
+            let source = mapping.get_source_span(&span);
+            let line_start = if start > 64 * 1024 { 64 * 1024 + 1 } else { 0 };
+            assert_eq!(source.start.line, if line_start == 0 { 1 } else { 2 });
+            assert_eq!(source.start.column, start - line_start);
+            // Reaching a later finding must advance beyond a newline-free prefix.
+            // Earlier and repeated queries must never make the next lookup rescan it.
+            assert_eq!(mapping.scanned_until.get(), span.end - 1);
+            mapping.get_source_point(start);
+            assert_eq!(mapping.scanned_until.get(), span.end - 1);
+        }
     }
 }

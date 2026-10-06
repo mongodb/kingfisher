@@ -55,15 +55,15 @@ out of a paste, a log, or a customer ticket:
 
 ```bash
 # Hit GitHub's user API to confirm the token works
-kingfisher validate --rule github "$GITHUB_TOKEN"
+kingfisher validate --rule github-pat "$GITHUB_TOKEN"
 
 # AWS needs both halves of the keypair
-kingfisher validate --rule aws \
-  --arg "$AWS_ACCESS_KEY_ID" \
-  "$AWS_SECRET_ACCESS_KEY"
+kingfisher validate --rule aws-access-token \
+  --var AWS_SECRET_ACCESS_KEY="$AWS_SECRET_ACCESS_KEY" \
+  "$AWS_ACCESS_KEY_ID"
 
 # A GCP service account JSON, straight from the file
-kingfisher validate --rule gcp "$(cat service-account.json)"
+kingfisher validate --rule gcp-service-account "$(cat service-account.json)"
 
 # A Postgres connection URI — does it actually authenticate?
 kingfisher validate --rule postgres "$POSTGRES_URI"
@@ -120,8 +120,8 @@ manager than pasting IAM JSON into chat.
 Validation tells you a credential is live. Blast radius tells you why it's
 urgent. Revocation closes the loop.
 
-The current Betterleaks schema does not publish revocation metadata. Kingfisher binds selected
-detectors to reviewed provider actions through a detection-free capability overlay. The Kingfisher
+Kingfisher binds selected imported detectors to reviewed provider actions through
+its capability overlay; the importer does not execute Betterleaks 2.x `revoke` expressions. The Kingfisher
 rule format (YAML) also supports HTTP, multi-step HTTP, AWS, and GCP revocation:
 
 ```bash

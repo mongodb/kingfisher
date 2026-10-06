@@ -27,6 +27,16 @@ pub fn git_command() -> Command {
     command
 }
 
+/// Identify an explicitly selected executable without logging command arguments
+/// or environment entries, which may contain provider credentials.
+pub(crate) fn git_command_failure_hint(command: &Command) -> String {
+    if std::env::var_os("KF_GIT_BINARY").as_deref() == Some(command.get_program()) {
+        format!("; check KF_GIT_BINARY (selected Git executable: {:?})", command.get_program())
+    } else {
+        String::new()
+    }
+}
+
 /// Default time budget for a fresh `git clone`. Generous so well-formed clones
 /// of large monorepos complete on slow networks, but bounded so a single
 /// unresponsive remote cannot park a clone worker indefinitely. Override per
@@ -216,17 +226,17 @@ pub enum GitError {
     IOError(#[from] std::io::Error),
 
     #[error(
-        "git execution failed (status: {status}){summary}",
+        "git execution failed (status: {status}){summary}{executable_hint}",
         status = format_exit_status(.status),
         summary = format_git_error_summary(.stdout.as_slice(), .stderr.as_slice())
     )]
-    GitError { stdout: Vec<u8>, stderr: Vec<u8>, status: ExitStatus },
+    GitError { stdout: Vec<u8>, stderr: Vec<u8>, status: ExitStatus, executable_hint: String },
 
     /// `git` exceeded the configured per-operation time budget and was killed.
     /// Surfaced to the caller so a single stuck repo doesn't park a clone
     /// worker forever during large multi-repo scans.
-    #[error("git execution timed out after {secs} seconds")]
-    Timeout { secs: u64 },
+    #[error("git execution timed out after {secs} seconds{executable_hint}")]
+    Timeout { secs: u64, executable_hint: String },
 }
 
 fn format_exit_status(status: &ExitStatus) -> String {
@@ -461,6 +471,7 @@ impl Git {
         // Command's explicit environment can contain freshly minted GitHub
         // App and Bitbucket credentials, so never debug-format it.
         debug!("Executing git command");
+        let executable_hint = git_command_failure_hint(&cmd);
         cmd.stdout(Stdio::piped()).stderr(Stdio::piped());
         // Put `git` in its own process group so that on timeout we can signal
         // the entire tree, not just the immediate child (see
@@ -472,7 +483,9 @@ impl Git {
             set_own_process_group(&mut cmd);
         }
         let spawn_error = |error: std::io::Error| {
-            if error.kind() == std::io::ErrorKind::NotFound {
+            if !executable_hint.is_empty() {
+                std::io::Error::new(error.kind(), format!("{error}{executable_hint}"))
+            } else if error.kind() == std::io::ErrorKind::NotFound {
                 std::io::Error::new(
                     error.kind(),
                     format!("{error}; install Git on PATH or set KF_GIT_BINARY to its executable"),
@@ -521,7 +534,7 @@ impl Git {
                     kill_process_tree(&mut child, bounded);
                     let _ = stdout_reader.join();
                     let _ = stderr_reader.join();
-                    return Err(GitError::Timeout { secs });
+                    return Err(GitError::Timeout { secs, executable_hint });
                 }
                 Err(e) => {
                     // wait_timeout itself failed — kill defensively so we don't
@@ -542,7 +555,7 @@ impl Git {
         let stderr = stderr_reader.join().unwrap_or_else(|_| Ok(Vec::new())).unwrap_or_default();
 
         if !status.success() {
-            return Err(GitError::GitError { stdout, stderr, status });
+            return Err(GitError::GitError { stdout, stderr, status, executable_hint });
         }
         Ok(())
     }
@@ -717,6 +730,37 @@ mod tests {
             let output = command.output().unwrap();
             assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
         }
+    }
+
+    #[test]
+    fn failed_git_override_retains_exit_diagnostics() {
+        if std::env::var_os("KF_TEST_GIT_FAILURE_CHILD").is_some() {
+            // The test executable rejects Git arguments on every platform. This
+            // exercises a real nonzero child exit, rather than depending on how
+            // a missing executable is reported by the OS or an emulator.
+            let mut command = git_command();
+            command.arg("--kingfisher-unsupported-git-option");
+            let error = Git::default().run_cmd(command, Duration::ZERO).unwrap_err();
+            let message = error.to_string();
+            let GitError::GitError { stderr, status, .. } = error else {
+                panic!("expected a child exit failure, got {message}");
+            };
+            assert!(!status.success());
+            assert!(!stderr.is_empty(), "child stderr must remain available");
+            assert!(message.contains(&format!("status: {}", format_exit_status(&status))));
+            assert!(message.contains("check KF_GIT_BINARY"), "{message}");
+            assert!(message.contains(&format!("{:?}", std::env::current_exe().unwrap())));
+            return;
+        }
+        // Do not mutate executable selection while other tests run concurrently.
+        let executable = std::env::current_exe().unwrap();
+        let output = Command::new(&executable)
+            .args(["--exact", "git_binary::tests::failed_git_override_retains_exit_diagnostics"])
+            .env("KF_TEST_GIT_FAILURE_CHILD", "1")
+            .env("KF_GIT_BINARY", &executable)
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     }
 
     #[test]
@@ -1125,7 +1169,7 @@ mod tests {
         let err = git.run_cmd(cmd, Duration::from_millis(200)).unwrap_err();
         let elapsed = start.elapsed();
 
-        assert!(matches!(err, GitError::Timeout { secs: 0 }), "expected Timeout, got {err:?}");
+        assert!(matches!(err, GitError::Timeout { secs: 0, .. }), "expected Timeout, got {err:?}");
         // Allow generous slack for slow CI but make sure we didn't actually
         // wait the full 30s.
         assert!(elapsed < Duration::from_secs(5), "should have killed promptly, took {elapsed:?}");

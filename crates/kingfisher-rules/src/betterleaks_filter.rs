@@ -3,6 +3,7 @@
 use std::{
     borrow::Cow,
     collections::{BTreeMap, BTreeSet},
+    ops::Range,
     str::FromStr,
     sync::Arc,
 };
@@ -11,6 +12,7 @@ use anyhow::{Context, Result, anyhow, bail};
 use kingfisher_vectorscan::{BlockDatabase, Flag, Pattern, Scan};
 use regex::Regex;
 use tiktoken_rs::cl100k_base_singleton;
+use xxhash_rust::xxh3::Xxh3;
 
 use crate::{BetterleaksExpr, Confidence, scanner_pool::ScannerPool};
 
@@ -38,6 +40,23 @@ pub struct BetterleaksFilterOutcome {
     pub discard: bool,
     /// Some generic rules dynamically refine their configured confidence.
     pub confidence: Option<Confidence>,
+}
+
+/// Reuses source-line regex results within one immutable source buffer.
+/// Create a separate cache for each raw or decoded buffer. Line ranges must
+/// identify the exact bytes used to construct `BetterleaksFilterContext::line`.
+#[doc(hidden)]
+#[derive(Default)]
+pub struct BetterleaksFilterLineCache {
+    matches_any: BTreeMap<LineCacheKey, Vec<CachedPatterns>>,
+    #[cfg(test)]
+    scans: usize,
+}
+
+type LineCacheKey = (usize, usize, usize, usize, u128);
+struct CachedPatterns {
+    patterns: Vec<String>,
+    matched: bool,
 }
 
 /// Vectorscan databases shared by every imported Betterleaks finding filter.
@@ -333,10 +352,13 @@ impl<'a> Value<'a> {
     }
 }
 
-struct Evaluator<'a> {
+struct Evaluator<'a, 'c> {
     variables: BTreeMap<String, Value<'a>>,
     confidence: Option<Confidence>,
     filter_engine: &'a BetterleaksFilterEngine,
+    source_line: &'a str,
+    line_range: Range<usize>,
+    line_cache: Option<&'c mut BetterleaksFilterLineCache>,
 }
 
 /// Evaluate a Betterleaks filter against a candidate finding.
@@ -352,6 +374,16 @@ pub(crate) fn evaluate_filter_with_engine(
     expression: &BetterleaksExpr,
     context: &BetterleaksFilterContext<'_>,
     filter_engine: &BetterleaksFilterEngine,
+) -> Result<BetterleaksFilterOutcome> {
+    evaluate_filter_with_engine_and_line_cache(expression, context, filter_engine, 0..0, None)
+}
+
+pub(crate) fn evaluate_filter_with_engine_and_line_cache(
+    expression: &BetterleaksExpr,
+    context: &BetterleaksFilterContext<'_>,
+    filter_engine: &BetterleaksFilterEngine,
+    line_range: Range<usize>,
+    line_cache: Option<&mut BetterleaksFilterLineCache>,
 ) -> Result<BetterleaksFilterOutcome> {
     let mut finding = BTreeMap::new();
     finding.insert("secret".to_string(), Value::string(context.secret));
@@ -389,7 +421,14 @@ pub(crate) fn evaluate_filter_with_engine(
             Value::Map(BTreeMap::from([("path".to_string(), Value::string(context.path))])),
         ),
     ]);
-    let mut evaluator = Evaluator { variables, confidence: None, filter_engine };
+    let mut evaluator = Evaluator {
+        variables,
+        confidence: None,
+        filter_engine,
+        source_line: context.line,
+        line_range,
+        line_cache,
+    };
     let discard = evaluator.eval(expression)?.truthy();
     Ok(BetterleaksFilterOutcome { discard, confidence: evaluator.confidence })
 }
@@ -420,7 +459,7 @@ pub fn evaluate_prefilter(expression: &BetterleaksExpr, path: &str) -> Result<bo
     .discard)
 }
 
-impl<'a> Evaluator<'a> {
+impl<'a> Evaluator<'a, '_> {
     fn eval(&mut self, expression: &BetterleaksExpr) -> Result<Value<'a>> {
         match expression {
             BetterleaksExpr::Nil => Ok(Value::Nil),
@@ -644,6 +683,12 @@ impl<'a> Evaluator<'a> {
             }
             "filter.setConfidence" | "setConfidence" => self.set_confidence(arguments),
             "len" | "size" => length(arguments),
+            "lower" => {
+                let [value] = arguments.as_slice() else {
+                    bail!("lower expects one argument");
+                };
+                Ok(Value::string(value.as_string()?.to_lowercase()))
+            }
             "max" => min_or_max(arguments, true),
             "min" => min_or_max(arguments, false),
             "split" => split(arguments),
@@ -694,12 +739,55 @@ impl<'a> Evaluator<'a> {
         Ok(Value::string(value.to_string()))
     }
 
-    fn matches_any(&self, arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
+    fn matches_any(&mut self, arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
         let [input, patterns] = arguments.as_slice() else {
             bail!("matchesAny expects two arguments");
         };
         let patterns = strings(patterns)?;
-        Ok(Value::Bool(self.filter_engine.matches_any(input.as_string()?, &patterns)?))
+        let input = input.as_string()?;
+        // Cache only the unmodified source line. Derived strings and shadowed
+        // variables still evaluate normally, even when the helper appears in
+        // an expression that otherwise refers to finding["line"]. The pointer
+        // comparison establishes provenance within this evaluation. Include
+        // source identity in the key too, so different live buffers cannot share
+        // results merely because their line ranges coincide.
+        let same_line =
+            input.as_ptr() == self.source_line.as_ptr() && input.len() == self.source_line.len();
+        if same_line && let Some(cache) = self.line_cache.as_deref_mut() {
+            let mut hash = Xxh3::new();
+            for pattern in &patterns {
+                hash.update(&pattern.len().to_le_bytes());
+                hash.update(pattern.as_bytes());
+            }
+            let key = (
+                input.as_ptr() as usize,
+                input.len(),
+                self.line_range.start,
+                self.line_range.end,
+                hash.digest128(),
+            );
+            if let Some(results) = cache.matches_any.get(&key)
+                && let Some(result) = results.iter().find(|result| {
+                    result.patterns.len() == patterns.len()
+                        && result.patterns.iter().zip(&patterns).all(|(a, b)| a == b)
+                })
+            {
+                return Ok(Value::Bool(result.matched));
+            }
+            let matched = self.filter_engine.matches_any(input, &patterns)?;
+            #[cfg(test)]
+            {
+                cache.scans += 1;
+            }
+            // Compare the actual list on hits: a hash collision must never
+            // change filtering. Clone patterns only when populating the cache.
+            cache.matches_any.entry(key).or_default().push(CachedPatterns {
+                patterns: patterns.iter().map(|pattern| (*pattern).to_owned()).collect(),
+                matched,
+            });
+            return Ok(Value::Bool(matched));
+        }
+        Ok(Value::Bool(self.filter_engine.matches_any(input, &patterns)?))
     }
 
     fn find_match(&self, arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
@@ -956,6 +1044,139 @@ mod tests {
         }
     }
 
+    fn finding_member(field: &str) -> BetterleaksExpr {
+        BetterleaksExpr::Member {
+            node: Box::new(BetterleaksExpr::Identifier { value: "finding".into() }),
+            property: Box::new(BetterleaksExpr::String { value: field.into() }),
+            optional: false,
+            method: false,
+        }
+    }
+
+    fn regex_helper(input: BetterleaksExpr, pattern: &str) -> BetterleaksExpr {
+        BetterleaksExpr::Call {
+            callee: Box::new(BetterleaksExpr::Identifier { value: "matchesAny".into() }),
+            arguments: vec![
+                input,
+                BetterleaksExpr::Array {
+                    nodes: vec![BetterleaksExpr::String { value: pattern.into() }],
+                },
+            ],
+        }
+    }
+
+    #[test]
+    fn dense_source_line_filters_scan_once_and_keep_candidate_results() {
+        let line_filter = regex_helper(finding_member("line"), "competing-token");
+        let expression = BetterleaksExpr::Binary {
+            operator: "||".into(),
+            left: Box::new(BetterleaksExpr::Binary {
+                operator: "==".into(),
+                left: Box::new(finding_member("secret")),
+                right: Box::new(BetterleaksExpr::String { value: "discard-token".into() }),
+            }),
+            right: Box::new(line_filter),
+        };
+        let engine = BetterleaksFilterEngine::compile([&expression]).unwrap();
+        let line = "candidate-token ".repeat(10_000);
+        let mut cache = BetterleaksFilterLineCache::default();
+        for secret in std::iter::repeat_n("keep-token", 1000).chain(["discard-token"]) {
+            let mut context = context(secret, "dense.txt");
+            context.line = &line;
+            let expected = evaluate_filter_with_engine(&expression, &context, &engine).unwrap();
+            let cached = evaluate_filter_with_engine_and_line_cache(
+                &expression,
+                &context,
+                &engine,
+                0..line.len(),
+                Some(&mut cache),
+            )
+            .unwrap();
+            assert_eq!(cached, expected);
+            assert_eq!(cached.discard, secret == "discard-token");
+        }
+        assert_eq!(cache.scans, 1);
+        assert_eq!(cache.matches_any.len(), 1);
+    }
+
+    #[test]
+    fn source_line_cache_separates_live_buffers_with_identical_ranges() {
+        let expression = regex_helper(finding_member("line"), "present");
+        let engine = BetterleaksFilterEngine::compile([&expression]).unwrap();
+        let first = String::from("present");
+        let second = String::from("missing");
+        let mut cache = BetterleaksFilterLineCache::default();
+        for (line, discard) in [(&first, true), (&second, false), (&first, true)] {
+            let mut context = context("secret", "source.txt");
+            context.line = line;
+            let result = evaluate_filter_with_engine_and_line_cache(
+                &expression,
+                &context,
+                &engine,
+                0..7,
+                Some(&mut cache),
+            )
+            .unwrap();
+            assert_eq!(result.discard, discard);
+        }
+        assert_eq!(cache.scans, 2);
+    }
+
+    #[test]
+    fn source_line_cache_separates_ranges_patterns_and_derived_inputs() {
+        let absent = regex_helper(finding_member("line"), "absent$");
+        let present = regex_helper(finding_member("line"), "present$");
+        let derived = regex_helper(
+            BetterleaksExpr::Binary {
+                operator: "+".into(),
+                left: Box::new(finding_member("line")),
+                right: Box::new(BetterleaksExpr::String { value: "absent".into() }),
+            },
+            "absent$",
+        );
+        let secret_filter = regex_helper(finding_member("secret"), "absent$");
+        let engine =
+            BetterleaksFilterEngine::compile([&absent, &present, &derived, &secret_filter])
+                .unwrap();
+        let mut context = context("absent", "source.txt");
+        context.line = "present";
+        let mut cache = BetterleaksFilterLineCache::default();
+        for (expression, range, discard) in [
+            (&absent, 0..7, false),
+            (&absent, 0..7, false),
+            (&absent, 8..15, false),
+            (&present, 0..7, true),
+            (&derived, 0..7, true),
+            (&secret_filter, 0..7, true),
+        ] {
+            let result = evaluate_filter_with_engine_and_line_cache(
+                expression,
+                &context,
+                &engine,
+                range,
+                Some(&mut cache),
+            )
+            .unwrap();
+            assert_eq!(result.discard, discard);
+        }
+        assert_eq!(cache.scans, 3);
+        assert_eq!(cache.matches_any.len(), 3);
+
+        let uncompiled = regex_helper(finding_member("line"), "uncompiled");
+        assert!(
+            evaluate_filter_with_engine_and_line_cache(
+                &uncompiled,
+                &context,
+                &engine,
+                0..7,
+                Some(&mut cache),
+            )
+            .is_err()
+        );
+        assert_eq!(cache.scans, 3);
+        assert_eq!(cache.matches_any.len(), 3);
+    }
+
     #[test]
     fn borrowed_fragment_clones_share_storage_and_mutations_own_the_result() {
         let fragment = "source data".repeat(10000);
@@ -968,6 +1189,9 @@ mod tests {
             variables: BTreeMap::from([("source".into(), original)]),
             confidence: None,
             filter_engine: &engine,
+            source_line: "",
+            line_range: 0..0,
+            line_cache: None,
         };
         let expr = BetterleaksExpr::Binary {
             operator: "+".into(),

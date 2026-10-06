@@ -1,10 +1,10 @@
 """Explicit, potentially irreversible provider revocation."""
 from __future__ import annotations
 from dataclasses import dataclass
-import json
 from typing import Mapping
 from . import _native
 from .rules import Rules
+from .scanner import CancellationToken
 
 
 @dataclass(frozen=True)
@@ -28,13 +28,16 @@ class Revoker:
         self._native = _native.Revoker(self.rules._native, timeout)
 
     def revoke(self, rule_id: str, secret: str, *, confirm: bool = False,
-               variables: Mapping[str, str] | None = None) -> RevocationResult:
+               variables: Mapping[str, str] | None = None,
+               timeout: float | None = None,
+               cancellation: CancellationToken | None = None) -> RevocationResult:
         """Perform revocation only with confirm=True. Pass supporting values
         (e.g. AKID, KEY_ID and enterprise endpoint variables) explicitly.
         A timeout/error can mean the provider applied the operation without a
-        response; inspect provider state before manually retrying.
+        response. Cancellation and Ctrl-C have the same ambiguity; inspect provider state before manually retrying.
         """
         if confirm is not True:
             raise ValueError("revocation requires confirm=True")
-        return RevocationResult(**json.loads(
-            self._native.revoke(rule_id, secret, dict(variables or {}))))
+        return RevocationResult(**self._native.revoke(
+            rule_id, secret, dict(variables or {}),
+            timeout=timeout, cancellation=cancellation))

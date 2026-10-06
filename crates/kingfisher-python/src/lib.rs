@@ -1,19 +1,26 @@
 //! In-process Python bindings. No CLI subprocess or Python-owned async runtime.
+mod git_inputs;
+mod inputs;
+
 use std::{
     collections::BTreeMap,
+    future::Future,
     path::PathBuf,
     sync::{Arc, OnceLock},
     time::Duration,
 };
 
-use kingfisher_rules::{Confidence, Rules, RulesDatabase};
+use kingfisher_rules::{Confidence, RuleCacheConfig, Rules, RulesDatabase};
 use kingfisher_scanner::{
     CancellationToken, Finding, Revoker, ScanAborted, ScanControl, Scanner, ScannerConfig,
     Validator,
 };
 use pyo3::{
+    IntoPyObjectExt,
     exceptions::{PyRuntimeError, PyTimeoutError, PyValueError},
     prelude::*,
+    pybacked::PyBackedBytes,
+    types::{PyDict, PyList},
 };
 use tokio::runtime::Runtime;
 
@@ -34,10 +41,44 @@ fn runtime() -> PyResult<&'static Runtime> {
     static RUNTIME: OnceLock<std::io::Result<Runtime>> = OnceLock::new();
     RUNTIME
         .get_or_init(|| {
-            tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build()
+            let workers = std::thread::available_parallelism().map_or(2, usize::from).clamp(2, 32);
+            tokio::runtime::Builder::new_multi_thread().worker_threads(workers).enable_all().build()
         })
         .as_ref()
         .map_err(error)
+}
+
+/// Convert structured results without allocating and reparsing a JSON string.
+pub(crate) fn json_to_python(py: Python<'_>, value: serde_json::Value) -> PyResult<Py<PyAny>> {
+    use serde_json::Value;
+    match value {
+        Value::Null => Ok(py.None()),
+        Value::Bool(value) => value.into_py_any(py),
+        Value::Number(value) => {
+            if let Some(value) = value.as_u64() {
+                value.into_py_any(py)
+            } else if let Some(value) = value.as_i64() {
+                value.into_py_any(py)
+            } else {
+                value.as_f64().into_py_any(py)
+            }
+        }
+        Value::String(value) => value.into_py_any(py),
+        Value::Array(values) => {
+            let list = PyList::empty(py);
+            for value in values {
+                list.append(json_to_python(py, value)?)?;
+            }
+            Ok(list.into_any().unbind())
+        }
+        Value::Object(values) => {
+            let dict = PyDict::new(py);
+            for (key, value) in values {
+                dict.set_item(key, json_to_python(py, value)?)?;
+            }
+            Ok(dict.into_any().unbind())
+        }
+    }
 }
 
 #[pyclass(module = "kingfisher_sdk._native", name = "Rules", frozen, skip_from_py_object)]
@@ -49,12 +90,14 @@ struct PyRules {
 #[pymethods]
 impl PyRules {
     #[new]
-    #[pyo3(signature = (paths, builtins, confidence))]
+    #[pyo3(signature = (paths, builtins, confidence, *, cache=true, cache_dir=None))]
     fn new(
         py: Python<'_>,
         paths: Vec<PathBuf>,
         builtins: bool,
         confidence: &str,
+        cache: bool,
+        cache_dir: Option<PathBuf>,
     ) -> PyResult<Self> {
         let confidence = match confidence {
             "low" => Confidence::Low,
@@ -74,17 +117,25 @@ impl PyRules {
             if rules.is_empty() {
                 return Err(PyValueError::new_err("no rules loaded"));
             }
-            Ok(Self { db: Arc::new(RulesDatabase::from_rule_collection(rules).map_err(error)?) })
+            let db = if cache {
+                RulesDatabase::from_rule_collection_with_cache(
+                    rules,
+                    &RuleCacheConfig::from_dir_or_env(cache_dir),
+                )
+            } else {
+                RulesDatabase::from_rule_collection(rules)
+            };
+            Ok(Self { db: Arc::new(db.map_err(error)?) })
         })
     }
-    fn metadata(&self) -> PyResult<String> {
+    fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let rules: Vec<_> = self.db.rules().iter().map(|rule| serde_json::json!({
             "id": rule.id(), "name": rule.name(), "visible": rule.syntax().visible,
             "validation": rule.syntax().validation.is_some(), "revocation": rule.syntax().revocation.is_some(),
         })).collect();
-        serde_json::to_string(&rules).map_err(error)
+        json_to_python(py, serde_json::Value::Array(rules))
     }
-    fn detail(&self, rule_id: &str) -> PyResult<String> {
+    fn detail(&self, py: Python<'_>, rule_id: &str) -> PyResult<Py<PyAny>> {
         let (index, rule) =
             self.db.rules().iter().enumerate().find(|(_, rule)| rule.id() == rule_id).ok_or_else(
                 || PyValueError::new_err(format!("unknown exact rule ID: {rule_id}")),
@@ -93,7 +144,19 @@ impl PyRules {
         // recompilation, provider requests, or modifying the shared database.
         let mut detail = serde_json::to_value(rule.syntax()).map_err(error)?;
         detail["detection_regex"] = serde_json::json!(self.db.anchored_regexes()[index].as_str());
-        serde_json::to_string(&detail).map_err(error)
+        json_to_python(py, detail)
+    }
+    fn __len__(&self) -> usize {
+        self.db.num_rules()
+    }
+    #[getter]
+    fn cache_status(&self) -> &'static str {
+        use kingfisher_rules::RuleCacheStatus;
+        match self.db.cache_status() {
+            RuleCacheStatus::Loaded => "loaded",
+            RuleCacheStatus::Stored => "stored",
+            _ => "bypassed",
+        }
     }
 }
 
@@ -104,15 +167,63 @@ struct PyFinding {
 }
 #[pymethods]
 impl PyFinding {
-    fn to_json(&self, redact: bool) -> PyResult<String> {
-        let mut finding = self.finding.clone();
+    fn to_dict(&self, py: Python<'_>, redact: bool) -> PyResult<Py<PyAny>> {
+        // Serialize once into structured values. Never clone the full finding or
+        // round-trip text merely to inspect a field.
+        let mut finding = serde_json::to_value(&self.finding).map_err(error)?;
         if redact {
-            finding.secret = "[REDACTED]".into();
-            for v in finding.captures.values_mut() {
-                *v = "[REDACTED]".into();
+            finding["secret"] = "[REDACTED]".into();
+            if let Some(captures) = finding["captures"].as_object_mut() {
+                for value in captures.values_mut() {
+                    *value = "[REDACTED]".into();
+                }
             }
         }
-        serde_json::to_string(&finding).map_err(error)
+        json_to_python(py, finding)
+    }
+    #[getter]
+    fn rule_id(&self) -> &str {
+        &self.finding.rule_id
+    }
+    #[getter]
+    fn rule_name(&self) -> &str {
+        &self.finding.rule_name
+    }
+    #[getter]
+    fn secret(&self) -> &str {
+        &self.finding.secret
+    }
+    #[getter]
+    fn entropy(&self) -> f32 {
+        self.finding.entropy
+    }
+    #[getter]
+    fn fingerprint(&self) -> u64 {
+        self.finding.fingerprint
+    }
+    #[getter]
+    fn blob_id(&self) -> String {
+        self.finding.blob_id.hex()
+    }
+    #[getter]
+    fn is_base64_encoded(&self) -> bool {
+        self.finding.is_base64_encoded
+    }
+    #[getter]
+    fn confidence(&self) -> &'static str {
+        match self.finding.confidence {
+            Confidence::Low => "low",
+            Confidence::Medium => "medium",
+            Confidence::High => "high",
+        }
+    }
+    #[getter]
+    fn location(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_python(py, serde_json::to_value(&self.finding.location).map_err(error)?)
+    }
+    #[getter]
+    fn captures(&self) -> BTreeMap<String, String> {
+        self.finding.captures.iter().map(|(key, value)| (key.clone(), value.clone())).collect()
     }
     #[getter]
     fn visible(&self) -> bool {
@@ -164,24 +275,79 @@ fn scan_error(err: anyhow::Error) -> PyErr {
     }
 }
 
+/// Await provider work on the calling thread so Ctrl-C can be checked while
+/// Python is detached. Dropping the future cancels pending I/O, not a request
+/// the provider has already applied. No detached tasks or retries are added.
+fn run_async<T: Send, F: Future<Output = T>>(
+    py: Python<'_>,
+    runtime: &Runtime,
+    control: ScanControl,
+    operation: impl FnOnce() -> F + Send,
+) -> PyResult<T> {
+    py.detach(|| {
+        runtime.block_on(async {
+            control.check().map_err(|err| scan_error(err.into()))?;
+            Python::attach(|py| py.check_signals())?;
+            let operation = operation();
+            tokio::pin!(operation);
+            let mut ticks = tokio::time::interval(Duration::from_millis(10));
+            loop {
+                tokio::select! {
+                    result = &mut operation => {
+                        control.check().map_err(|err| scan_error(err.into()))?;
+                        return Ok(result);
+                    }
+                    _ = ticks.tick() => {
+                        control.check().map_err(|err| scan_error(err.into()))?;
+                        Python::attach(|py| py.check_signals())?;
+                    }
+                }
+            }
+        })
+    })
+}
+
+#[derive(FromPyObject)]
+struct PyDetectionPolicy {
+    inline_ignores: bool,
+    ignore_comments: Vec<String>,
+    markup_context: bool,
+    language: Option<String>,
+    cli_match_semantics: bool,
+    base64_max_depth: usize,
+    base64_max_input_bytes: Option<usize>,
+}
+
 #[pyclass(module = "kingfisher_sdk._native", name = "Scanner", frozen)]
 struct PyScanner {
     scanner: Scanner,
+    detection: Option<kingfisher_scanner::context::DetectionOptions>,
 }
 #[pymethods]
 impl PyScanner {
     #[new]
+    #[pyo3(signature = (rules, base64, dedup, redact, min_entropy, *, policy=None))]
     fn new(
         rules: &PyRules,
         base64: bool,
         dedup: bool,
         redact: bool,
         min_entropy: Option<f32>,
+        policy: Option<PyDetectionPolicy>,
     ) -> PyResult<Self> {
         if min_entropy.is_some_and(|v| !v.is_finite() || !(0.0..=8.0).contains(&v)) {
             return Err(PyValueError::new_err("min_entropy must be between 0 and 8"));
         }
         Ok(Self {
+            detection: policy.map(|policy| kingfisher_scanner::context::DetectionOptions {
+                inline_ignores: policy.inline_ignores,
+                ignore_comments: policy.ignore_comments,
+                markup_context: policy.markup_context,
+                language: policy.language,
+                cli_match_semantics: policy.cli_match_semantics,
+                base64_max_depth: policy.base64_max_depth,
+                base64_max_input_bytes: policy.base64_max_input_bytes,
+            }),
             scanner: Scanner::with_config(
                 rules.db.clone(),
                 ScannerConfig {
@@ -197,17 +363,11 @@ impl PyScanner {
     fn scan_bytes(
         &self,
         py: Python<'_>,
-        data: Vec<u8>,
+        data: PyBackedBytes,
         timeout: Option<f64>,
         cancellation: Option<PyRef<'_, PyCancellationToken>>,
     ) -> PyResult<Vec<PyFinding>> {
-        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
-        py.detach(|| {
-            self.scanner
-                .scan_bytes_with_control(&data, &control)
-                .map(|v| v.into_iter().map(|finding| PyFinding { finding }).collect())
-                .map_err(scan_error)
-        })
+        self.scan_input(py, data, String::new(), timeout, cancellation)
     }
     #[pyo3(signature = (path, *, timeout=None, cancellation=None))]
     fn scan_file(
@@ -219,14 +379,48 @@ impl PyScanner {
     ) -> PyResult<Vec<PyFinding>> {
         let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
         py.detach(|| {
-            self.scanner
-                .scan_file_with_control(path, &control)
-                .map(|v| v.into_iter().map(|finding| PyFinding { finding }).collect())
-                .map_err(scan_error)
+            control.check()?;
+            let blob = kingfisher_scanner::Blob::from_file(&path)?;
+            self.detect(&blob, &path.to_string_lossy(), &control)
         })
+        .map_err(scan_error)
+    }
+    #[pyo3(signature = (data, path, *, timeout=None, cancellation=None))]
+    fn scan_input(
+        &self,
+        py: Python<'_>,
+        data: PyBackedBytes,
+        path: String,
+        timeout: Option<f64>,
+        cancellation: Option<PyRef<'_, PyCancellationToken>>,
+    ) -> PyResult<Vec<PyFinding>> {
+        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
+        py.detach(|| {
+            control.check()?;
+            let blob = kingfisher_scanner::Blob::from_borrowed(&data);
+            self.detect(&blob, &path, &control)
+        })
+        .map_err(scan_error)
     }
     fn reset_dedup(&self) {
         self.scanner.reset_dedup();
+    }
+}
+
+impl PyScanner {
+    fn detect(
+        &self,
+        blob: &kingfisher_scanner::Blob,
+        path: &str,
+        control: &ScanControl,
+    ) -> anyhow::Result<Vec<PyFinding>> {
+        let findings = match self.detection.as_ref() {
+            Some(options) => self
+                .scanner
+                .scan_blob_at_path_with_options_and_control(blob, path, options, control),
+            None => self.scanner.scan_blob_at_path_with_control(blob, path, control),
+        }?;
+        Ok(findings.into_iter().map(|finding| PyFinding { finding }).collect())
     }
 }
 
@@ -257,21 +451,27 @@ impl PyValidator {
         }
         Ok(Self { validator: builder.build().map_err(error)?, runtime: runtime()? })
     }
-    fn validate(&self, py: Python<'_>, findings: Vec<PyFinding>) -> PyResult<String> {
-        py.detach(|| {
-            let results = self.runtime.block_on(
-                self.validator.validate_findings(findings.into_iter().map(|v| v.finding).collect()),
-            );
-            let results: Vec<_> = results
-                .into_iter()
-                .map(|r| {
-                    serde_json::json!({
-                        "outcome": r.outcome, "reason": r.reason, "http_status": r.http_status,
-                    })
+    #[pyo3(signature = (findings, *, timeout=None, cancellation=None))]
+    fn validate(
+        &self,
+        py: Python<'_>,
+        findings: Vec<PyFinding>,
+        timeout: Option<f64>,
+        cancellation: Option<PyRef<'_, PyCancellationToken>>,
+    ) -> PyResult<Py<PyAny>> {
+        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
+        let results = run_async(py, self.runtime, control, || {
+            self.validator.validate_findings(findings.into_iter().map(|v| v.finding).collect())
+        })?;
+        let results: Vec<_> = results
+            .into_iter()
+            .map(|r| {
+                serde_json::json!({
+                    "outcome": r.outcome, "reason": r.reason, "http_status": r.http_status,
                 })
-                .collect();
-            serde_json::to_string(&results).map_err(error)
-        })
+            })
+            .collect();
+        json_to_python(py, serde_json::Value::Array(results))
     }
 }
 
@@ -291,13 +491,17 @@ impl PyRevoker {
             runtime: runtime()?,
         })
     }
+    #[pyo3(signature = (rule_id, secret, variables, *, timeout=None, cancellation=None))]
     fn revoke(
         &self,
         py: Python<'_>,
         rule_id: String,
         secret: String,
         variables: BTreeMap<String, String>,
-    ) -> PyResult<String> {
+        timeout: Option<f64>,
+        cancellation: Option<PyRef<'_, PyCancellationToken>>,
+    ) -> PyResult<Py<PyAny>> {
+        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
         if secret.is_empty() || secret == "[REDACTED]" {
             return Err(PyValueError::new_err("a non-redacted secret is required"));
         }
@@ -322,18 +526,23 @@ impl PyRevoker {
             kingfisher_scanner::validation::aws::validate_aws_credentials_input(akid, &secret)
                 .map_err(|_| PyValueError::new_err("invalid AWS credential format"))?;
         }
-        py.detach(|| {
-            let result = self
-                .runtime
-                .block_on(self.revoker.revoke(&rule, &secret, &variables))
-                .map_err(|_| error("revocation request failed; outcome may be unknown"))?;
-            Ok(serde_json::json!({
+        let result = run_async(py, self.runtime, control, || {
+            self.revoker.revoke(&rule, &secret, &variables)
+        })?
+        .map_err(|err| {
+            error(format!(
+                "revocation request failed ({}); outcome may be unknown",
+                kingfisher_scanner::validation::Revoker::error_category(&err),
+            ))
+        })?;
+        json_to_python(
+            py,
+            serde_json::json!({
                 "rule_id": result.rule_id,
                 "revoked": result.revoked,
                 "http_status": result.status_code,
-            })
-            .to_string())
-        })
+            }),
+        )
     }
 }
 
@@ -344,6 +553,11 @@ fn shannon_entropy(data: &[u8]) -> f32 {
 
 #[pymodule]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    m.add_class::<inputs::Filesystem>()?;
+    m.add_class::<git_inputs::GitInputs>()?;
+    m.add_class::<git_inputs::GitCommit>()?;
+    m.add_function(wrap_pyfunction!(inputs::expand_archive, m)?)?;
+    m.add_function(wrap_pyfunction!(inputs::expand_content, m)?)?;
     m.add_class::<PyRules>()?;
     m.add_class::<PyScanner>()?;
     m.add_class::<PyCancellationToken>()?;

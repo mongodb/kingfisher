@@ -20,7 +20,7 @@ betterleaks:
     confidence: medium
   # These detector formats are live-validated by selected Veles adapters. Keep Betterleaks as the
   # catalog source for the remaining formats while suppressing only exact overlapping findings.
-  cloudflare-api-key:
+  cloudflare-api-key.1:
     filter_override: 'matchesAny(finding["line"], [`(?i)["'']?\b(?:CLOUDFLARE_API_TOKEN|CLOUDFLARE_API_KEY|CF_API_TOKEN|CF_API_KEY|CLOUDFLARE_TOKEN|CF_TOKEN|CLOUDFLARE_AUTH_KEY|CF_ACCOUNT_ID)\b["'']?\s*[=:].{0,20}?\b[A-Za-z0-9_-]{40}\b`])'
   digitalocean-pat:
     filter_override: 'true'

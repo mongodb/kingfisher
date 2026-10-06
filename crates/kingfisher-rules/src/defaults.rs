@@ -268,6 +268,89 @@ mod test {
     }
 
     #[test]
+    fn box_client_tokens_are_filtered_case_insensitively() {
+        let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        let rule = &rules.rules["betterleaks.box-api-access-token"];
+        let token = "aB3dE5fG7hJ9kL2mN4pQ6rS8tU0vW1xY";
+        assert!(filter_discards(
+            rule,
+            "fixture.env",
+            token,
+            &format!("BOX_CLIENT_TOKEN={token}"),
+            &[]
+        ));
+        assert!(!filter_discards(
+            rule,
+            "fixture.env",
+            token,
+            &format!("BOX_API_TOKEN={token}"),
+            &[]
+        ));
+    }
+
+    #[test]
+    fn refreshed_betterleaks_formats_detect_and_compile() {
+        let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        let cases = [
+            ("bitbucket-data-center-token", format!("BBDC-{}", "Ab3D+eF/9gHk2mNp".repeat(2))),
+            ("cloudflare-api-key.2", format!("cfut_{}deadbeef", "Ab3DeF9gHk".repeat(4))),
+            ("cloudflare-api-key.2", format!("cfat_{}deadbeef", "Ab3DeF9gHk".repeat(4))),
+            (
+                "tableau-personal-access-token.1",
+                format!("+{}==:{}", "aB3dE5fG7hJ9kL2mN4pQ6", "aB3dE5fG7hJ9kL2m".repeat(2)),
+            ),
+            (
+                "tableau-personal-access-token.1",
+                format!("/{}==:{}", "aB3dE5fG7hJ9kL2mN4pQ6", "aB3dE5fG7hJ9kL2m".repeat(2)),
+            ),
+        ];
+        let mut selected = Rules::new();
+        for (id, token) in &cases {
+            let rule = &rules.rules[&format!("betterleaks.{id}")];
+            let regex = rule.as_regex().unwrap();
+            for input in [token.clone(), format!("TOKEN=\"{token}\"")] {
+                let captures = regex.captures(input.as_bytes()).unwrap();
+                assert_eq!(captures.get(1).unwrap().as_bytes(), token.as_bytes(), "{id}");
+                assert!(!filter_discards(rule, "fixture.txt", token, &input, &[]), "{id}");
+            }
+            for input in [format!("x{token}"), format!("{token}x")] {
+                // Bitbucket's upstream format intentionally allows variable-length tokens.
+                if *id != "bitbucket-data-center-token" || input.starts_with('x') {
+                    assert!(!regex.is_match(input.as_bytes()), "{id}: {input}");
+                }
+            }
+            selected.rules.insert(rule.id.clone(), rule.clone());
+        }
+        let cf = &rules.rules["betterleaks.cloudflare-api-key.2"];
+        assert!(matches!(cf.validation, Some(Validation::Betterleaks(_))));
+        let account = cf.depends_on_rule.first().unwrap().as_ref().unwrap();
+        assert_eq!(account.rule_id, "betterleaks.cloudflare-account-id.1");
+        assert!(account.optional);
+        assert_eq!(account.within.as_deref(), Some("5L"));
+        assert!(!rules.rules[&account.rule_id].visible);
+        assert!(!rules.rules.contains_key("betterleaks.cloudflare-api-key"));
+
+        let db = crate::RulesDatabase::from_rule_collection(selected).unwrap();
+        let mut scanner = kingfisher_vectorscan::BlockScanner::new(db.vectorscan_db()).unwrap();
+        for (id, token) in cases {
+            let mut found = false;
+            scanner
+                .scan(token.as_bytes(), |index, from, to, _| {
+                    if db.get_rule(index as usize).unwrap().id() == format!("betterleaks.{id}") {
+                        let captures = db.anchored_regexes()[index as usize]
+                            .captures(&token.as_bytes()[from as usize..to as usize])
+                            .unwrap();
+                        assert_eq!(captures.get(1).unwrap().as_bytes(), token.as_bytes());
+                        found = true;
+                    }
+                    kingfisher_vectorscan::Scan::Continue
+                })
+                .unwrap();
+            assert!(found, "{id}: Vectorscan did not detect {token}");
+        }
+    }
+
+    #[test]
     fn test_get_default_rules() {
         assert!(get_builtin_rules(None).unwrap().num_rules() >= 400);
     }
@@ -519,7 +602,7 @@ mod test {
             "generic-credential-uri",
             "gitlab-incoming-mail-address-token",
             "circleci-project-token",
-            "cloudflare-api-key",
+            "cloudflare-api-key.1",
             "digitalocean-pat",
             "heroku-api-key-v2",
             "npm-access-token",
@@ -586,7 +669,7 @@ mod test {
         }
 
         for id in [
-            "betterleaks.cloudflare-api-key",
+            "betterleaks.cloudflare-api-key.1",
             "betterleaks.digitalocean-pat",
             "betterleaks.generic-credential-uri",
             "betterleaks.heroku-api-key-v2",
@@ -619,7 +702,7 @@ mod test {
             &[],
         ));
 
-        let cloudflare = &rules.rules["betterleaks.cloudflare-api-key"];
+        let cloudflare = &rules.rules["betterleaks.cloudflare-api-key.1"];
         let token = ["aB3dE5fG", "7hJ9kL2m", "N4pQ6rS8", "tU0vW1xY", "-z_C9dEf"].concat();
         assert!(filter_discards(
             cloudflare,

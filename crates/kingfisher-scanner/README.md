@@ -5,7 +5,7 @@ follows semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-scanner = "1.2.0"
+kingfisher-scanner = "1.3.0"
 anyhow = "1"
 ```
 
@@ -94,6 +94,7 @@ scratch allocation or reentrant borrowing errors; prefer `try_with`.
 - `enable_dedup` suppresses previously reported content at the same source path.
   Concurrent first scans may both return findings. This cache grows until
   `reset_dedup()` or scanner drop; leave it disabled for independent requests.
+  In-flight scans may commit entries after a reset; finish them before resetting a batch.
 - UTF-16/32 content is normalized to UTF-8. Offsets and byte columns refer to the
   normalized content, with zero-based offsets/columns and one-based lines.
   Base64 locations cover the encoded region, not the decoded secret's byte position.
@@ -112,7 +113,7 @@ scratch allocation or reentrant borrowing errors; prefer `try_with`.
 Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.3.0", features = ["validation"] }
 ```
 
 `validation` enables every supported family and its dependencies. Legacy
@@ -315,3 +316,142 @@ require an explicit rule configuration, resolved Liquid globals, client, parser,
 timeout and retry count. Callers own authorization, endpoint policy and the total
 deadline; use a client with redirects disabled and zero retries for destructive
 operations. AWS and GCP helpers are included in the same feature.
+
+## Optional archive extraction
+
+The `archives` feature exposes the shared CLI/Python extraction helpers under
+`archive::decompress` and resource budgets under `archive::limits`. It is disabled
+by default so byte-only Rust embedders do not pull in archive dependencies.
+Extraction is separate from `Scanner`: use `scan_blob_at_path` to scan extracted
+bytes with their logical source path. Extraction is best effort and format limits
+can skip entries or truncate content. The Python SDK offers a composable input
+layer with filesystem/history iterators and bounded archive expansion; see
+[the Python guide](../../docs/PYPI.md#compose-filesystem-git-history-and-archives).
+
+For strict byte budgets, use
+`archive::decompress::decompress_file_with_strict_single_stream_cap_and_limits`
+with `ResourceLimits::default()`. It fails on stream-cap exhaustion before parsing
+a partially decoded TAR. Existing best-effort entry points keep their truncation
+behavior. TAR members use independent physical staging paths while
+preserving their logical names, including repeated names.
+`decompress_file_with_budget` and `extract_zip_archive_in_memory_with_budget`
+also enforce strict byte/entry budgets with `ScanControl` and return inspected
+entry usage, allowing nested callers to debit one aggregate root budget.
+
+Owned directories from `decompress_file_to_temp` use Unix mode 0700; standalone
+decoded files created without an output directory use mode 0600 and require caller
+cleanup. The umask may restrict these modes further. Windows inherits the
+temporary parent's DACL. Choose a protected temporary parent on every platform;
+caller-supplied output directories retain their permissions and must also be
+protected. Cleanup is not secure erasure and can leave remnants after a crash;
+use encrypted or memory-backed storage when needed.
+
+## Optional CLI detection policies and content extraction
+
+Enable `context` for opt-in CLI matching, bounded Base64 decoding, inline-ignore
+and HTML/CSS parser policies.
+Existing `ScannerConfig` and scanner methods retain their signatures and behavior.
+Use `context::DetectionOptions` with `scan_blob_at_path_with_options` for unlimited
+controls, or `scan_blob_at_path_with_options_and_control` for a deadline/cancellation:
+
+```rust
+# use std::sync::Arc;
+# use kingfisher_scanner::{Blob, RulesDatabase, Scanner, ScanControl, get_builtin_rules};
+# #[cfg(feature = "context")]
+# fn main() -> anyhow::Result<()> {
+# let scanner = Scanner::new(Arc::new(RulesDatabase::from_rule_collection(get_builtin_rules(None)?)?));
+use kingfisher_scanner::context::DetectionOptions;
+let blob = Blob::from_bytes(b"ordinary configuration".to_vec());
+let findings = scanner.scan_blob_at_path_with_options_and_control(
+    &blob, "config.html", &DetectionOptions::default(), &ScanControl::default(),
+)?;
+# Ok(())
+# }
+# #[cfg(not(feature = "context"))]
+# fn main() {}
+```
+
+The options entry point enables CLI matching by default: a 4 KiB initial
+confirmation window (widened when needed), full-match component windows,
+per-rule secret containment suppression, and overlapping Betterleaks credential-URI
+fallback suppression. `cli_match_semantics = false` retains the SDK's 64 KiB
+confirmation alignment and secret-based component windows. Full-match metadata
+stays private; reported locations and the public `Finding` shape are unchanged.
+
+Base64 decoding defaults to two layers and skips the Base64 pass when the
+original input exceeds 64 MiB. Raw matching still runs above that limit.
+Set `base64_max_depth` independently (zero disables decoding), and use
+`base64_max_input_bytes = None` to remove the input cap. `ScannerConfig`'s
+`enable_base64_decoding = false` disables decoding regardless of these options.
+Nested findings keep the outer encoded region's offsets. Existing scanner methods
+retain their one-layer, uncapped Base64 behavior.
+
+Inline-ignore and containment filtering run before markup verification, followed
+by component requirements, URI fallback suppression, catalog deduplication and
+redaction. Interrupted calls return no partial findings and do not commit dedup
+state. The dedup key is the blob ID and path; it does not include detection options.
+With deduplication enabled, use a separate scanner per detection policy.
+The markup gate uses shared language inference, bypasses self-identifying/Base64
+candidates and retains candidates above 2 MiB or with invalid UTF-8 secrets.
+Set `inline_ignores = false` or `markup_context = false` independently.
+Dense candidate confirmation reuses complete indexed matches for consuming
+rules with no assertions, certified using the rule builder's flags. This avoids
+repeated end-anchored searches over long lazy spans; partial endpoints resume
+after the last complete indexed match. EOF-sensitive alternatives
+and word boundaries retain the guarded confirmation and original iterator;
+arbitrary regex builders receive no such certificate.
+The parser, inline-ignore, index and confirmation helpers are isolated behind
+the explicitly unstable `__cli-internals` feature for CLI orchestration. Embedders should use the supported scanner entry points.
+
+The optional `extraction` feature enables `archives` and exposes
+`extraction::sqlite::extract_sqlite_contents[_with_limits]` and
+`extraction::pyc::extract_pyc_strings[_with_limits]`. SQLite extraction opens the
+supplied file read-only and emits SQL per user table; bytecode parsing extracts
+marshal strings without executing Python. These low-level helpers use the CLI's
+best-effort limits and may skip/truncate content. The strict
+`extract_sqlite_contents_with_budget` and `extract_pyc_strings_from_bytes_with_budget`
+counterparts enforce output budgets and controls during extraction, propagating
+`ExtractionLimitExceeded` without partial text. Extraction is explicit and
+separate from scanning; findings refer to extracted content. The Python
+`expand_content()` adapter stages a separate copy and adds per-input budgets and
+cooperative controls. Choose a protected `temp_dir` parent on every platform.
+SDK staging directories use owner-only Unix mode 0700 (the umask may restrict it
+further); Windows inherits the parent DACL. See
+[the SDK guide](../../docs/PYPI.md#extract-sqlite-and-python-bytecode).
+
+## Offline Git inputs (`git` feature)
+
+Enable `git` for `git::{GitInputs, GitScope, GitMode, GitOptions, GitEvent}`.
+This is a read-only input source independent of detection and validation. No Git
+executable, network, checkout, or repository writes are required. History visits
+all merge parents, compares each selected commit with its first parent, and skips
+identical subtrees. Snapshot, net-diff, and staged-index scopes are also available.
+
+Descriptors and ancestry are prepared eagerly; blob payloads are loaded lazily.
+Commit metadata uses shared `Arc<GitCommit>` instances across file versions.
+`max_commits` bounds visited ancestry and `max_inputs` bounds distinct raw-path/blob
+versions; exceeding either limit fails preparation. `max_blob_size` checks object
+headers before reading and yields explicit `GitEvent::Skipped` coverage gaps.
+Limits default to unlimited. Missing blobs fail by default; the explicit
+`skip_missing_blobs` option yields coverage gaps instead. Partial clones never
+fetch automatically; missing trees/commits and corruption remain errors.
+
+Repository discovery searches ancestors by default for Python compatibility;
+set `discover: false` to require an explicit repository root/Git directory. Git
+revision grammar includes reflogs and `@{...}` forms, evaluated locally. Raw path
+bytes remain available when lossy display paths collide. Shared controls cover
+preparation and iterator lifetime, including consumer processing time; individual
+native reads cannot be preempted. Payloads, messages, and email addresses are
+excluded from default debug output. Finding redaction does not scrub provenance.
+
+See the commented [Git example](examples/git_inputs.rs):
+
+```sh
+cargo run -p kingfisher-scanner --features git --example git_inputs -- /path/to/repo
+```
+
+Archive helpers return TAR/ZIP member bytes in memory when no output directory
+is supplied. Use `decompress_file_to_temp_with_limits` and retain its `TempDir`
+for disk-backed members. Strict extraction propagates corrupt-member errors;
+best-effort SQLite extraction warns when a table cannot be dumped and caps
+schema-list storage. Git `since_hours` must fit in signed 64-bit seconds.

@@ -36,7 +36,7 @@ pub use rule::{
 
 pub use rules::{Rules, RulesError};
 
-pub use rules_database::{RuleCacheConfig, RulesDatabase, format_regex_pattern};
+pub use rules_database::{RuleCacheConfig, RuleCacheStatus, RulesDatabase, format_regex_pattern};
 
 pub use defaults::{
     get_betterleaks_rule_files, get_betterleaks_rules, get_builtin_rule_files, get_builtin_rules,

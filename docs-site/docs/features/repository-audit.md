@@ -141,6 +141,11 @@ names, local paths, commit identifiers, and operational failures may be sensitiv
 
 ## Report format locations
 
+The finding-based CLI exit codes (`0`, `200`, `205`) can accompany partial or
+failed repository coverage when best-effort scanning continues. Check the audit
+summary and each repository's status to establish complete coverage; the exit
+code alone describes the visible findings.
+
 | Format | Audit location |
 |---|---|
 | JSON | Top-level `audit` object |

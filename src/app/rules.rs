@@ -2,7 +2,7 @@
 
 use std::io::Write;
 
-use anyhow::{Context, Result};
+use anyhow::{Context, Result, bail};
 use clap::Parser;
 use console::Term;
 use kingfisher::{
@@ -14,7 +14,9 @@ use kingfisher::{
         },
     },
     rule_loader::RuleLoader,
-    rules_database::{RuleCacheConfig, RuleCachePruneConfig, RulesDatabase, prune_rule_cache},
+    rules_database::{
+        RuleCacheConfig, RuleCachePruneConfig, RuleCacheStatus, RulesDatabase, prune_rule_cache,
+    },
 };
 use serde_json::json;
 use tracing::{error, info, warn};
@@ -42,6 +44,9 @@ pub(crate) fn run_rules_compile_cache(args: &RulesCompileCacheArgs) -> Result<()
     let resolved = loaded.resolve_enabled_rules_owned().context("Failed to resolve rules")?;
     let betterleaks_prefilter = loaded.betterleaks_prefilter_for(&resolved);
     let cache = RuleCacheConfig::from_dir_or_env(args.cache.rule_cache_dir.clone());
+    if !cache.is_enabled() {
+        bail!("No per-user rule cache directory is available; provide --rule-cache-dir");
+    }
     info!(cache_dir = %cache.cache_dir().display(), "Using Vectorscan rule cache");
     let rules_db = RulesDatabase::from_rules_with_cache_and_betterleaks_prefilter(
         resolved,
@@ -49,6 +54,13 @@ pub(crate) fn run_rules_compile_cache(args: &RulesCompileCacheArgs) -> Result<()
         betterleaks_prefilter,
     )
     .context("Failed to compile rules with Vectorscan cache")?;
+
+    if rules_db.cache_status() == RuleCacheStatus::Bypassed {
+        bail!(
+            "Rules compiled, but the cache could not be persisted in {}. Check directory ownership, permissions, and available disk space",
+            cache.cache_dir().display()
+        );
+    }
 
     println!("Rule cache ready: {} rules in {}", rules_db.num_rules(), cache.cache_dir().display());
     Ok(())

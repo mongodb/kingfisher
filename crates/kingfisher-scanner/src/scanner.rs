@@ -7,7 +7,8 @@ use std::sync::Arc;
 use anyhow::Result;
 use kingfisher_core::{Blob, BlobId, LocationMapping, OffsetSpan, calculate_shannon_entropy};
 use kingfisher_rules::{
-    Confidence, Rule, RulesDatabase, betterleaks_filter::BetterleaksFilterContext,
+    Confidence, Rule, RulesDatabase,
+    betterleaks_filter::{BetterleaksFilterContext, BetterleaksFilterLineCache},
 };
 use parking_lot::RwLock;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -18,7 +19,34 @@ use crate::finding::{Finding, FindingLocation};
 use crate::primitives;
 use crate::scanner_pool::ScannerPool;
 
+// Preserve the SDK's historical window alignment, including fixed-width runs.
+// Dense rules use the candidate index to skip earlier matches. Failed confirmation
+// doubles this window below, so this is not a limit on match length.
 const RAW_MATCH_LOOKBACK: usize = 64 * 1024;
+
+pub(crate) struct ScanFinding {
+    pub finding: Finding,
+    pub association_span: OffsetSpan,
+    pub secret_span: OffsetSpan,
+    #[cfg(feature = "context")]
+    pub rule_index: usize,
+    // Secret spans from different decoded buffers use unrelated synthetic coordinates.
+    // Zero identifies raw input; every decoded buffer receives its own scope.
+    #[cfg(feature = "context")]
+    pub buffer_id: usize,
+}
+
+impl std::ops::Deref for ScanFinding {
+    type Target = Finding;
+    fn deref(&self) -> &Finding {
+        &self.finding
+    }
+}
+impl std::ops::DerefMut for ScanFinding {
+    fn deref_mut(&mut self) -> &mut Finding {
+        &mut self.finding
+    }
+}
 
 /// Configuration options for the scanner.
 #[derive(Debug, Clone)]
@@ -190,6 +218,62 @@ impl Scanner {
         path: &str,
         control: &ScanControl,
     ) -> Result<Vec<Finding>> {
+        self.scan_blob_impl(
+            blob,
+            path,
+            control,
+            #[cfg(feature = "context")]
+            None,
+        )
+    }
+
+    /// Scan with opt-in CLI detection policies and unlimited execution controls.
+    /// See [`Self::scan_blob_at_path_with_options_and_control`] for interruption and dedup semantics.
+    #[cfg(feature = "context")]
+    pub fn scan_blob_at_path_with_options(
+        &self,
+        blob: &Blob,
+        path: &str,
+        options: &crate::context::DetectionOptions,
+    ) -> Result<Vec<Finding>> {
+        self.scan_blob_at_path_with_options_and_control(
+            blob,
+            path,
+            options,
+            &ScanControl::default(),
+        )
+    }
+
+    /// Scan with opt-in CLI matching, Base64 and context policies under cooperative controls.
+    /// The dedup key contains the blob ID and path, but not `options`.
+    /// Use a separate scanner for each policy when enabling deduplication.
+    /// Interrupted calls return no partial findings and commit no dedup state.
+    ///
+    /// # Errors
+    /// Returns matching/filtering errors, or a [`crate::ScanAborted`] on interruption.
+    #[cfg(feature = "context")]
+    pub fn scan_blob_at_path_with_options_and_control(
+        &self,
+        blob: &Blob,
+        path: &str,
+        options: &crate::context::DetectionOptions,
+        control: &ScanControl,
+    ) -> Result<Vec<Finding>> {
+        self.scan_blob_impl(blob, path, control, Some(options))
+    }
+
+    fn scan_blob_impl(
+        &self,
+        blob: &Blob,
+        path: &str,
+        control: &ScanControl,
+        #[cfg(feature = "context")] options: Option<&crate::context::DetectionOptions>,
+    ) -> Result<Vec<Finding>> {
+        #[cfg(feature = "context")]
+        let cli_match_semantics = options.is_some_and(|options| options.cli_match_semantics);
+        #[cfg(not(feature = "context"))]
+        let cli_match_semantics = false;
+        let lookback = if cli_match_semantics { 4 * 1024 } else { RAW_MATCH_LOOKBACK };
         control.check()?;
         // Check for dedup
         if self.config.enable_dedup {
@@ -243,6 +327,9 @@ impl Scanner {
         let mut candidate_indexes: FxHashMap<usize, primitives::CandidateMatchCache> =
             FxHashMap::default();
         let fragment_raw = std::cell::OnceCell::new();
+        let line_index = std::cell::OnceCell::new();
+        let mut filter_lines = FxHashMap::default();
+        let mut filter_line_cache = BetterleaksFilterLineCache::default();
         for (rule_id, _start, end) in raw_matches.into_iter().rev() {
             control.check()?;
             if betterleaks_path_prefiltered && self.rules_db.is_betterleaks_rule(rule_id) {
@@ -273,18 +360,21 @@ impl Scanner {
                 if previous_full_spans.get(&rule_id).is_some_and(|spans| spans.contains_end(end)) {
                     continue;
                 }
-                (end.saturating_sub(RAW_MATCH_LOOKBACK), end)
+                (end.saturating_sub(lookback), end)
             };
             let bounded_confirmation = !self.rules_db.uses_vectorscan_prefilter(rule_id);
             let candidate_index = if bounded_confirmation {
                 candidate_indexes.entry(rule_id).or_default().get_or_try_insert_with(
                     bytes.len(),
-                    RAW_MATCH_LOOKBACK,
+                    lookback,
                     || {
                         primitives::CandidateMatchIndex::with_control(
                             confirmation_regex,
                             bytes,
                             control,
+                            self.rules_db.confirmation_maximum_len(rule_id),
+                            self.rules_db.confirmation_match_maximum_len(rule_id),
+                            self.rules_db.confirmation_prefix_stable(rule_id),
                         )
                     },
                 )?
@@ -296,19 +386,22 @@ impl Scanner {
                 let haystack = &bytes[scan_start..scan_end];
                 let mut confirmed = false;
 
-                let captures = if let Some(index) = candidate_index {
-                    index.captures(
+                let mut captures = if let Some(index) = candidate_index {
+                    index.captures_with_control(
                         confirmation_regex,
-                        self.rules_db.endpoint_regex(rule_id),
+                        if self.rules_db.confirmation_prefix_stable(rule_id) {
+                            None
+                        } else {
+                            self.rules_db.endpoint_regex(rule_id)
+                        },
                         haystack,
                         scan_start,
-                    )
+                        control,
+                    )?
                 } else {
-                    primitives::ConfirmationCaptures::Search(
-                        confirmation_regex.captures_iter(haystack),
-                    )
+                    crate::confirmation::IndexedCaptures::search(confirmation_regex, haystack)
                 };
-                for captures in captures {
+                while let Some(captures) = captures.next_with_control(control)? {
                     control.check()?;
                     let full_capture = captures.get(0).unwrap();
                     if bounded_confirmation
@@ -354,10 +447,18 @@ impl Scanner {
                             fragment_raw.get_or_init(|| String::from_utf8_lossy(bytes));
                         let match_start_idx = scan_start + full_capture.start();
                         let match_end_idx = scan_start + full_capture.end();
-                        let (match_line_start_idx, match_line_end_idx) =
-                            line_bounds(bytes, match_start_idx, match_end_idx);
-                        let line = String::from_utf8_lossy(
-                            &bytes[match_line_start_idx..match_line_end_idx],
+                        let (match_line_start_idx, match_line_end_idx) = line_index
+                            .get_or_init(|| crate::line_index::LineIndex::new(bytes))
+                            .bounds(match_start_idx, match_end_idx);
+                        let line = filter_line(
+                            bytes,
+                            match fragment_raw {
+                                std::borrow::Cow::Borrowed(text) => Some(*text),
+                                _ => None,
+                            },
+                            (match_line_start_idx, match_line_end_idx),
+                            line_index.get().unwrap(),
+                            &mut filter_lines,
                         );
                         let context = BetterleaksFilterContext {
                             path,
@@ -373,7 +474,12 @@ impl Scanner {
                             description: rule.name(),
                             captures: capture_map.clone(),
                         };
-                        Some(self.rules_db.evaluate_betterleaks_filter(expression, &context)?)
+                        Some(self.rules_db.evaluate_betterleaks_filter_with_line_cache(
+                            expression,
+                            &context,
+                            match_line_start_idx..match_line_end_idx,
+                            &mut filter_line_cache,
+                        )?)
                     } else {
                         None
                     };
@@ -413,25 +519,33 @@ impl Scanner {
                         offset_span.end as u64,
                     );
 
-                    findings.push(Finding {
-                        rule: finding_rule(&rule, confidence),
-                        rule_id: rule.id().to_string(),
-                        rule_name: rule.name().to_string(),
-                        secret,
-                        location: FindingLocation::new(
-                            offset_span.start,
-                            offset_span.end,
-                            source_span.start.line,
-                            source_span.start.column,
-                            source_span.end.line,
-                            source_span.end.column,
-                        ),
-                        confidence,
-                        entropy,
-                        fingerprint,
-                        captures: capture_map.into_iter().collect::<HashMap<_, _>>(),
-                        is_base64_encoded: false,
-                        blob_id: blob.id(),
+                    findings.push(ScanFinding {
+                        finding: Finding {
+                            rule: finding_rule(&rule, confidence),
+                            rule_id: rule.id().to_string(),
+                            rule_name: rule.name().to_string(),
+                            secret,
+                            location: FindingLocation::new(
+                                offset_span.start,
+                                offset_span.end,
+                                source_span.start.line,
+                                source_span.start.column,
+                                source_span.end.line,
+                                source_span.end.column,
+                            ),
+                            confidence,
+                            entropy,
+                            fingerprint,
+                            captures: capture_map.into_iter().collect::<HashMap<_, _>>(),
+                            is_base64_encoded: false,
+                            blob_id: blob.id(),
+                        },
+                        association_span: full_capture_span,
+                        secret_span: offset_span,
+                        #[cfg(feature = "context")]
+                        rule_index: rule_id,
+                        #[cfg(feature = "context")]
+                        buffer_id: 0,
                     });
                 }
 
@@ -455,13 +569,38 @@ impl Scanner {
                 &loc_mapping,
                 &mut seen_matches,
                 control,
+                #[cfg(feature = "context")]
+                options,
             )?;
             findings.extend(b64_findings);
         }
 
-        enforce_betterleaks_components(&mut findings, control)?;
+        #[cfg(feature = "context")]
+        if let Some(options) = options {
+            crate::context::filter_findings(
+                &self.rules_db,
+                blob,
+                path,
+                &mut findings,
+                options,
+                control,
+            )?;
+        }
+        enforce_betterleaks_components(&mut findings, bytes, cli_match_semantics, control)?;
+        if cli_match_semantics {
+            let keep = crate::postprocess::credential_uri_keep(
+                findings.iter().map(|f| (f.rule.as_ref(), f.association_span, f.secret.as_bytes())),
+                control,
+            )?;
+            let mut index = 0;
+            findings.retain(|_| {
+                let retain = keep[index];
+                index += 1;
+                retain
+            });
+        }
         control.check()?;
-        deduplicate_imported_catalog_findings(&mut findings, control)?;
+        deduplicate_imported_catalog_findings(&mut findings, cli_match_semantics, control)?;
         control.check()?;
 
         // Redact only after dependency matching and fingerprint calculation.
@@ -480,17 +619,19 @@ impl Scanner {
             self.seen_blobs.write().insert((blob.id(), path.to_owned()));
         }
 
-        Ok(findings)
+        Ok(findings.into_iter().map(|matched| matched.finding).collect())
     }
 
     /// Resets the deduplication state.
     ///
     /// Call this to clear the seen blobs cache if you want to rescan
-    /// previously scanned content.
+    /// previously scanned content. Scans already in flight can still commit entries
+    /// after the reset; wait for them to finish before resetting for a fresh batch.
     pub fn reset_dedup(&self) {
         self.seen_blobs.write().clear();
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn scan_base64_content(
         &self,
         blob: &Blob,
@@ -499,16 +640,48 @@ impl Scanner {
         loc_mapping: &LocationMapping,
         seen_matches: &mut FxHashSet<u64>,
         control: &ScanControl,
-    ) -> Result<Vec<Finding>> {
+        #[cfg(feature = "context")] options: Option<&crate::context::DetectionOptions>,
+    ) -> Result<Vec<ScanFinding>> {
         let mut findings = Vec::new();
         let bytes = blob.bytes();
+        #[cfg(feature = "context")]
+        let cli_match_semantics = options.is_some_and(|o| o.cli_match_semantics);
+        #[cfg(not(feature = "context"))]
+        let cli_match_semantics = false;
 
-        // Find Base64-encoded strings
-        let b64_items = primitives::get_base64_strings_with_control(bytes, control)?;
-
-        for item in b64_items {
+        #[cfg(feature = "context")]
+        let (max_depth, max_input_bytes) =
+            options.map_or((1, None), |o| (o.base64_max_depth, o.base64_max_input_bytes));
+        #[cfg(not(feature = "context"))]
+        let (max_depth, max_input_bytes) = (1, None::<usize>);
+        if max_depth == 0 || max_input_bytes.is_some_and(|limit| bytes.len() > limit) {
+            return Ok(findings);
+        }
+        let mut b64_items: Vec<_> = primitives::get_base64_strings_with_control(bytes, control)?
+            .into_iter()
+            .map(|item| (item, 1))
+            .collect();
+        // Preserve legacy first-layer order; CLI-compatible scans use a stack for nested decoding.
+        if max_depth == 1 {
+            b64_items.reverse();
+        }
+        #[cfg(feature = "context")]
+        let mut buffer_id = 0;
+        while let Some((item, depth)) = b64_items.pop() {
             control.check()?;
+            #[cfg(feature = "context")]
+            {
+                buffer_id += 1;
+            }
+            // CLI spans belong to this decoded buffer. Legacy scans retain their
+            // historical source-span deduplication across first-layer buffers.
+            let mut decoded_seen_matches = FxHashSet::default();
+            let seen_matches =
+                if cli_match_semantics { &mut decoded_seen_matches } else { &mut *seen_matches };
             let fragment_raw = std::cell::OnceCell::new();
+            let line_index = std::cell::OnceCell::new();
+            let mut filter_lines = FxHashMap::default();
+            let mut filter_line_cache = BetterleaksFilterLineCache::default();
             let mut candidate_rule_ids = Vec::new();
             let mut seen_candidate_rules = FxHashSet::default();
             let scan_result = self.scanner_pool.try_with(|scanner| {
@@ -561,10 +734,18 @@ impl Scanner {
                         let secret = String::from_utf8_lossy(secret_bytes);
                         let fragment_raw =
                             fragment_raw.get_or_init(|| String::from_utf8_lossy(&item.decoded));
-                        let (match_line_start_idx, match_line_end_idx) =
-                            line_bounds(&item.decoded, full_capture.start(), full_capture.end());
-                        let line = String::from_utf8_lossy(
-                            &item.decoded[match_line_start_idx..match_line_end_idx],
+                        let (match_line_start_idx, match_line_end_idx) = line_index
+                            .get_or_init(|| crate::line_index::LineIndex::new(&item.decoded))
+                            .bounds(full_capture.start(), full_capture.end());
+                        let line = filter_line(
+                            &item.decoded,
+                            match fragment_raw {
+                                std::borrow::Cow::Borrowed(text) => Some(*text),
+                                _ => None,
+                            },
+                            (match_line_start_idx, match_line_end_idx),
+                            line_index.get().unwrap(),
+                            &mut filter_lines,
                         );
                         let context = BetterleaksFilterContext {
                             path,
@@ -580,7 +761,12 @@ impl Scanner {
                             description: rule.name(),
                             captures: capture_map.clone(),
                         };
-                        Some(self.rules_db.evaluate_betterleaks_filter(expression, &context)?)
+                        Some(self.rules_db.evaluate_betterleaks_filter_with_line_cache(
+                            expression,
+                            &context,
+                            match_line_start_idx..match_line_end_idx,
+                            &mut filter_line_cache,
+                        )?)
                     } else {
                         None
                     };
@@ -594,11 +780,23 @@ impl Scanner {
                         continue;
                     }
 
+                    // CLI-compatible association coordinates translate decoded
+                    // offsets from the outer encoded start, at every depth.
+                    // They are synthetic, not byte positions in the source.
+                    // Public locations always cover the outer encoded span.
+                    let key_span = if cli_match_semantics {
+                        OffsetSpan::from_range(
+                            (item.pos_start + secret_capture.start())
+                                ..(item.pos_start + secret_capture.end()),
+                        )
+                    } else {
+                        OffsetSpan::from_range(item.pos_start..item.pos_end)
+                    };
                     let match_key = primitives::compute_match_key(
                         secret_bytes,
                         rule.id().as_bytes(),
-                        item.pos_start,
-                        item.pos_end,
+                        key_span.start,
+                        key_span.end,
                     );
                     if !seen_matches.insert(match_key) {
                         continue;
@@ -616,26 +814,52 @@ impl Scanner {
                         offset_span.end as u64,
                     );
 
-                    findings.push(Finding {
-                        rule: finding_rule(&rule, confidence),
-                        rule_id: rule.id().to_string(),
-                        rule_name: rule.name().to_string(),
-                        secret,
-                        location: FindingLocation::new(
-                            offset_span.start,
-                            offset_span.end,
-                            source_span.start.line,
-                            source_span.start.column,
-                            source_span.end.line,
-                            source_span.end.column,
+                    findings.push(ScanFinding {
+                        finding: Finding {
+                            rule: finding_rule(&rule, confidence),
+                            rule_id: rule.id().to_string(),
+                            rule_name: rule.name().to_string(),
+                            secret,
+                            location: FindingLocation::new(
+                                offset_span.start,
+                                offset_span.end,
+                                source_span.start.line,
+                                source_span.start.column,
+                                source_span.end.line,
+                                source_span.end.column,
+                            ),
+                            confidence,
+                            entropy,
+                            fingerprint,
+                            captures: capture_map.into_iter().collect::<HashMap<_, _>>(),
+                            is_base64_encoded: true,
+                            blob_id: blob.id(),
+                        },
+                        association_span: OffsetSpan::from_range(
+                            (item.pos_start + full_capture.start())
+                                ..(item.pos_start + full_capture.end()),
                         ),
-                        confidence,
-                        entropy,
-                        fingerprint,
-                        captures: capture_map.into_iter().collect::<HashMap<_, _>>(),
-                        is_base64_encoded: true,
-                        blob_id: blob.id(),
+                        secret_span: OffsetSpan::from_range(
+                            (item.pos_start + secret_capture.start())
+                                ..(item.pos_start + secret_capture.end()),
+                        ),
+                        #[cfg(feature = "context")]
+                        rule_index: rule_id,
+                        #[cfg(feature = "context")]
+                        buffer_id,
                     });
+                }
+            }
+            if depth < max_depth {
+                for nested in primitives::get_base64_strings_with_control(&item.decoded, control)? {
+                    b64_items.push((
+                        primitives::DecodedData {
+                            decoded: nested.decoded,
+                            pos_start: item.pos_start,
+                            pos_end: item.pos_end,
+                        },
+                        depth + 1,
+                    ));
                 }
             }
         }
@@ -645,42 +869,25 @@ impl Scanner {
 }
 
 fn deduplicate_imported_catalog_findings(
-    findings: &mut Vec<Finding>,
+    findings: &mut Vec<ScanFinding>,
+    cli_match_semantics: bool,
     control: &ScanControl,
 ) -> Result<()> {
-    let mut keep = vec![true; findings.len()];
-    for left in 0..findings.len() {
-        control.check()?;
-        if !keep[left] || !findings[left].rule.visible() {
-            continue;
-        }
-        let Some(left_catalog) = imported_catalog(&findings[left].rule_id) else {
-            continue;
-        };
-        for right in (left + 1)..findings.len() {
-            control.check()?;
-            if !keep[right]
-                || !findings[right].rule.visible()
-                || findings[left].location.start_offset != findings[right].location.start_offset
-                || findings[left].location.end_offset != findings[right].location.end_offset
-            {
-                continue;
-            }
-            let Some(right_catalog) = imported_catalog(&findings[right].rule_id) else {
-                continue;
-            };
-            if left_catalog == right_catalog {
-                continue;
-            }
-            let left_rank = imported_rule_rank(findings[left].rule.as_ref());
-            let right_rank = imported_rule_rank(findings[right].rule.as_ref());
-            if right_rank > left_rank {
-                keep[left] = false;
-                break;
-            }
-            keep[right] = false;
-        }
-    }
+    let keep = crate::postprocess::catalog_keep(
+        findings.iter().map(|finding| {
+            (
+                finding.rule.as_ref(),
+                if cli_match_semantics {
+                    finding.secret_span
+                } else {
+                    OffsetSpan::from_range(
+                        finding.location.start_offset..finding.location.end_offset,
+                    )
+                },
+            )
+        }),
+        control,
+    )?;
     let mut index = 0;
     findings.retain(|_| {
         let retain = keep[index];
@@ -688,20 +895,6 @@ fn deduplicate_imported_catalog_findings(
         retain
     });
     Ok(())
-}
-
-fn imported_catalog(rule_id: &str) -> Option<bool> {
-    if rule_id.starts_with("betterleaks.") {
-        Some(true)
-    } else if rule_id.starts_with("veles.") {
-        Some(false)
-    } else {
-        None
-    }
-}
-
-fn imported_rule_rank(rule: &Rule) -> (bool, bool) {
-    (rule.syntax().validation.is_some(), rule.id().starts_with("betterleaks."))
 }
 
 fn finding_rule(rule: &Arc<Rule>, confidence: Confidence) -> Arc<Rule> {
@@ -720,43 +913,122 @@ fn finding_rule(rule: &Arc<Rule>, confidence: Confidence) -> Arc<Rule> {
 }
 
 fn enforce_betterleaks_components(
-    findings: &mut Vec<Finding>,
+    findings: &mut Vec<ScanFinding>,
+    bytes: &[u8],
+    cli_match_semantics: bool,
     control: &ScanControl,
 ) -> Result<()> {
-    let mut keep = vec![true; findings.len()];
-    loop {
-        let mut changed = false;
-        for (primary_index, primary) in findings.iter().enumerate() {
-            control.check()?;
-            if !keep[primary_index] {
-                continue;
-            }
-            for dependency in primary.rule.syntax().depends_on_rule.iter().flatten() {
-                let Some(within) = dependency.within.as_deref() else {
-                    continue;
-                };
-                let mut found = false;
-                for (candidate_index, candidate) in findings.iter().enumerate() {
-                    control.check()?;
-                    if keep[candidate_index]
-                        && candidate.rule_id == dependency.rule_id
-                        && finding_is_within(primary, candidate, within)
-                    {
-                        found = true;
-                        break;
-                    }
-                }
-                if !found && !dependency.optional {
-                    keep[primary_index] = false;
-                    changed = true;
-                    break;
-                }
-            }
-        }
-        if !changed {
-            break;
-        }
+    if !findings.iter().any(|finding| {
+        finding
+            .rule
+            .syntax()
+            .depends_on_rule
+            .iter()
+            .flatten()
+            .any(|dependency| !dependency.optional && dependency.within.is_some())
+    }) {
+        return Ok(());
     }
+    let mut line_starts = vec![0];
+    for (chunk, data) in bytes.chunks(64 * 1024).enumerate() {
+        use bstr::ByteSlice;
+        control.check()?;
+        line_starts.extend(data.find_iter(b"\n").map(|offset| chunk * 64 * 1024 + offset + 1));
+    }
+    let association_start = |f: &ScanFinding| {
+        if cli_match_semantics { f.association_span.start } else { f.location.start_offset }
+    };
+    let offsets = crate::postprocess::RuleMatchIndex::new(
+        findings
+            .iter()
+            .enumerate()
+            .map(|(index, finding)| (finding.rule_id.as_str(), association_start(finding), index)),
+    );
+    let lines = crate::postprocess::RuleMatchIndex::new(
+        findings
+            .iter()
+            .enumerate()
+            .map(|(index, finding)| (finding.rule_id.as_str(), finding.location.line, index)),
+    );
+    fn dependencies(
+        primary: &ScanFinding,
+    ) -> impl Iterator<Item = &kingfisher_rules::DependsOnRule> {
+        primary
+            .rule
+            .syntax()
+            .depends_on_rule
+            .iter()
+            .flatten()
+            .filter(|dependency| !dependency.optional && dependency.within.is_some())
+    }
+    let counts: Vec<_> = findings.iter().map(|primary| dependencies(primary).count()).collect();
+    let keep = crate::components::dependency_keep(
+        &counts,
+        &mut (offsets, lines),
+        |(offsets, lines), primary_index, dependency_index| {
+            let primary = &findings[primary_index];
+            let dependency = dependencies(primary).nth(dependency_index).unwrap();
+            let within = dependency.within.as_deref().unwrap();
+            let window = FindingWindow::parse(primary, within);
+            let component_window = crate::postprocess::parse_component_window(within);
+            let (index, range) = if cli_match_semantics {
+                (
+                    offsets,
+                    component_window.map_or(0..0, |window| {
+                        crate::postprocess::component_candidate_range_with_window(
+                            bytes.len(),
+                            &line_starts,
+                            primary.association_span,
+                            window,
+                        )
+                    }),
+                )
+            } else {
+                match &window {
+                    FindingWindow::Offsets(range) => (offsets, range.clone()),
+                    FindingWindow::Lines(range, Some(columns))
+                        if range.end.min(line_starts.len().saturating_add(1))
+                            == range.start.max(1).saturating_add(1) =>
+                    {
+                        let start = line_starts[range.start.max(1) - 1];
+                        (
+                            offsets,
+                            start.saturating_add(columns.start)..start.saturating_add(columns.end),
+                        )
+                    }
+                    FindingWindow::Lines(range, _) => (lines, range.clone()),
+                    FindingWindow::Any => (offsets, 0..usize::MAX),
+                    FindingWindow::Invalid => (offsets, 0..0),
+                }
+            };
+            for &(_, candidate_index) in index.candidates(&dependency.rule_id, range) {
+                control.check()?;
+                let candidate = &findings[candidate_index];
+                if if cli_match_semantics {
+                    component_window.is_some_and(|window| {
+                        crate::postprocess::component_is_within_window(
+                            bytes.len(),
+                            &line_starts,
+                            primary.association_span,
+                            candidate.association_span,
+                            window,
+                        )
+                    })
+                } else {
+                    window.contains(candidate)
+                } {
+                    return Ok(Some(candidate_index));
+                }
+            }
+            Ok(None)
+        },
+        |(offsets, lines), primary_index| {
+            let primary = &findings[primary_index];
+            offsets.remove(&primary.rule_id, association_start(primary), primary_index);
+            lines.remove(&primary.rule_id, primary.location.line, primary_index);
+        },
+        control,
+    )?;
 
     let mut index = 0;
     findings.retain(|_| {
@@ -767,62 +1039,94 @@ fn enforce_betterleaks_components(
     Ok(())
 }
 
-pub(crate) fn finding_is_within(primary: &Finding, component: &Finding, within: &str) -> bool {
-    let within = within.trim();
-    if within.is_empty() || within == "0" {
-        return true;
+enum FindingWindow {
+    Any,
+    Invalid,
+    Offsets(std::ops::Range<usize>),
+    Lines(std::ops::Range<usize>, Option<std::ops::Range<usize>>),
+}
+
+impl FindingWindow {
+    fn parse(primary: &Finding, within: &str) -> Self {
+        let within = within.trim();
+        if within.is_empty() || within == "0" {
+            return Self::Any;
+        }
+
+        let mut cols_before = 0;
+        let mut cols_after = 0;
+        let mut lines_before = None;
+        let mut lines_after = None;
+        for token in within.split(',').map(str::trim) {
+            let (direction, amount_and_unit) = match token.as_bytes().first() {
+                Some(b'+' | b'-') => (token.as_bytes()[0], &token[1..]),
+                _ => (b' ', token),
+            };
+            let is_lines = amount_and_unit.ends_with(['L', 'l']);
+            let amount =
+                amount_and_unit.strip_suffix(['L', 'l', 'C', 'c']).unwrap_or(amount_and_unit);
+            let Ok(mut amount) = amount.parse::<usize>() else {
+                return Self::Invalid;
+            };
+            if is_lines {
+                amount = amount.saturating_sub(1);
+                if direction != b'+' {
+                    lines_before = Some(lines_before.unwrap_or(0).max(amount));
+                }
+                if direction != b'-' {
+                    lines_after = Some(lines_after.unwrap_or(0).max(amount));
+                }
+            } else {
+                if direction != b'+' {
+                    cols_before = cols_before.max(amount);
+                }
+                if direction != b'-' {
+                    cols_after = cols_after.max(amount);
+                }
+            }
+        }
+
+        if lines_before.is_none() && lines_after.is_none() {
+            return Self::Offsets(
+                primary.location.start_offset.saturating_sub(cols_before)
+                    ..primary.location.end_offset.saturating_add(cols_after),
+            );
+        }
+        let columns = (primary.location.line == primary.location.end_line
+            && (cols_before > 0 || cols_after > 0))
+            .then(|| {
+                primary.location.column.saturating_sub(cols_before)
+                    ..primary.location.end_column.saturating_add(cols_after)
+            });
+        Self::Lines(
+            primary.location.line.saturating_sub(lines_before.unwrap_or_default())
+                ..primary
+                    .location
+                    .end_line
+                    .saturating_add(lines_after.unwrap_or_default())
+                    .saturating_add(1),
+            columns,
+        )
     }
 
-    let mut cols_before = 0;
-    let mut cols_after = 0;
-    let mut lines_before = None;
-    let mut lines_after = None;
-    for token in within.split(',').map(str::trim) {
-        let (direction, amount_and_unit) = match token.as_bytes().first() {
-            Some(b'+' | b'-') => (token.as_bytes()[0], &token[1..]),
-            _ => (b' ', token),
-        };
-        let is_lines = amount_and_unit.ends_with(['L', 'l']);
-        let amount = amount_and_unit.trim_end_matches(['L', 'l', 'C', 'c']);
-        let Ok(mut amount) = amount.parse::<usize>() else {
-            return false;
-        };
-        if is_lines {
-            amount = amount.saturating_sub(1);
-            if direction != b'+' {
-                lines_before = Some(lines_before.unwrap_or(0).max(amount));
-            }
-            if direction != b'-' {
-                lines_after = Some(lines_after.unwrap_or(0).max(amount));
-            }
-        } else {
-            if direction != b'+' {
-                cols_before = cols_before.max(amount);
-            }
-            if direction != b'-' {
-                cols_after = cols_after.max(amount);
+    fn contains(&self, component: &Finding) -> bool {
+        match self {
+            Self::Any => true,
+            Self::Invalid => false,
+            Self::Offsets(range) => range.contains(&component.location.start_offset),
+            Self::Lines(lines, columns) => {
+                lines.contains(&component.location.line)
+                    && columns
+                        .as_ref()
+                        .is_none_or(|range| range.contains(&component.location.column))
             }
         }
     }
+}
 
-    if lines_before.is_none() && lines_after.is_none() {
-        return component.location.start_offset
-            >= primary.location.start_offset.saturating_sub(cols_before)
-            && component.location.start_offset
-                < primary.location.end_offset.saturating_add(cols_after);
-    }
-    if component.location.line
-        < primary.location.line.saturating_sub(lines_before.unwrap_or_default())
-        || component.location.line
-            > primary.location.end_line.saturating_add(lines_after.unwrap_or_default())
-    {
-        return false;
-    }
-    if primary.location.line == primary.location.end_line && (cols_before > 0 || cols_after > 0) {
-        return component.location.column >= primary.location.column.saturating_sub(cols_before)
-            && component.location.column < primary.location.end_column.saturating_add(cols_after);
-    }
-    true
+#[cfg(feature = "validation")]
+pub(crate) fn finding_is_within(primary: &Finding, component: &Finding, within: &str) -> bool {
+    FindingWindow::parse(primary, within).contains(component)
 }
 
 fn named_captures(
@@ -840,14 +1144,30 @@ fn named_captures(
         .collect()
 }
 
-fn line_bounds(bytes: &[u8], start: usize, end: usize) -> (usize, usize) {
-    let line_start =
-        bytes[..start].iter().rposition(|byte| *byte == b'\n').map_or(0, |index| index + 1);
-    let line_end = bytes[end..]
-        .iter()
-        .position(|byte| *byte == b'\n')
-        .map_or(bytes.len(), |index| end + index);
-    (line_start, line_end)
+// Valid UTF-8 fragments let line filters borrow without revalidating each long line.
+// For lossy input, cache only complete individual lines: their total storage is bounded
+// by the input, even when many multiline matches overlap.
+fn filter_line<'a>(
+    bytes: &[u8],
+    fragment: Option<&'a str>,
+    (start, end): (usize, usize),
+    line_index: &crate::line_index::LineIndex,
+    cache: &'a mut FxHashMap<(usize, usize), String>,
+) -> std::borrow::Cow<'a, str> {
+    if let Some(text) = fragment {
+        return std::borrow::Cow::Borrowed(&text[start..end]);
+    }
+    let line = &bytes[start..end];
+    if line_index.is_single_line(start, end) {
+        std::borrow::Cow::Borrowed(
+            cache
+                .entry((start, end))
+                .or_insert_with(|| String::from_utf8_lossy(line).into_owned())
+                .as_str(),
+        )
+    } else {
+        std::borrow::Cow::Owned(String::from_utf8_lossy(line).into_owned())
+    }
 }
 
 #[cfg(test)]
@@ -884,6 +1204,73 @@ mod tests {
 
     fn create_test_scanner() -> Scanner {
         create_test_scanner_with_engine(true)
+    }
+
+    #[cfg(feature = "context")]
+    #[test]
+    fn interruption_during_context_never_returns_partial_findings_or_commits_dedup() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let rules = Arc::new(
+            RulesDatabase::from_rules(vec![Rule::new(RuleSyntax::new(
+                "acme.context",
+                "Context",
+                r"(demo_[a-z0-9]{16})",
+            ))])
+            .unwrap(),
+        );
+        for (reason, markup) in [crate::ScanAborted::Cancelled, crate::ScanAborted::TimedOut]
+            .into_iter()
+            .flat_map(|reason| [(reason, false), (reason, true)])
+        {
+            let scanner = Scanner::with_config(
+                Arc::clone(&rules),
+                ScannerConfig {
+                    enable_dedup: true,
+                    enable_base64_decoding: false,
+                    ..Default::default()
+                },
+            );
+            let checks = Arc::new(AtomicUsize::new(0));
+            let observed = Arc::clone(&checks);
+            let control = ScanControl::default().with_check_observer(move |location| {
+                if location.file().replace('\\', "/").ends_with("context/mod.rs")
+                    && observed.fetch_add(1, Ordering::SeqCst) >= 1
+                {
+                    return Err(reason);
+                }
+                Ok(())
+            });
+            let blob = Blob::from_bytes(if markup {
+                br#"<input password="demo_abcd1234efgh5678"><input password="demo_ijkl9012mnop3456"><input password="demo_qrst7890uvwx1234">"#.to_vec()
+            } else {
+                b"demo_abcd1234efgh5678\ndemo_ijkl9012mnop3456\ndemo_qrst7890uvwx1234".to_vec()
+            });
+            let options = crate::context::DetectionOptions {
+                inline_ignores: !markup,
+                cli_match_semantics: !markup,
+                markup_context: markup,
+                language: markup.then(|| "html".into()),
+                ..Default::default()
+            };
+            let error = scanner
+                .scan_blob_at_path_with_options_and_control(&blob, "config.env", &options, &control)
+                .unwrap_err();
+            assert_eq!(error.downcast_ref::<crate::ScanAborted>(), Some(&reason));
+            assert!(checks.load(Ordering::SeqCst) >= 2);
+            assert_eq!(
+                scanner
+                    .scan_blob_at_path_with_options(&blob, "config.env", &options)
+                    .unwrap()
+                    .len(),
+                3
+            );
+            assert!(
+                scanner
+                    .scan_blob_at_path_with_options(&blob, "config.env", &options)
+                    .unwrap()
+                    .is_empty()
+            );
+        }
     }
 
     #[test]

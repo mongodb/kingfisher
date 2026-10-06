@@ -119,19 +119,34 @@ mod tests {
 
     #[tokio::test]
     async fn unlimited_timeout_is_scoped_and_preserves_other_tasks() {
-        let work = || async {
-            timeout(Duration::from_millis(1), async {
-                tokio::time::sleep(Duration::from_millis(25)).await;
-                42
-            })
-            .await
-        };
-        let (unlimited, bounded) = tokio::join!(
-            NetworkLimits { no_timeouts: true, ..Default::default() }.scope(work()),
-            work(),
-        );
-        assert_eq!(unlimited.unwrap(), 42);
+        let (release, receiver) = tokio::sync::oneshot::channel();
+        let unlimited = NetworkLimits { no_timeouts: true, ..Default::default() }
+            .scope(timeout(Duration::from_millis(1), async { receiver.await.unwrap() }));
+        tokio::pin!(unlimited);
+        // Start the scoped future while its work remains under our control.
+        std::future::poll_fn(|context| {
+            assert!(unlimited.as_mut().poll(context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        // Pending work cannot win a delayed timer poll, unlike two short sleeps
+        // that may both be ready under coarse Windows timers or executor load.
+        let bounded = tokio::time::timeout(
+            Duration::from_secs(10),
+            timeout(Duration::from_millis(1), std::future::pending::<()>()),
+        )
+        .await
+        .expect("the unrelated future must retain its finite timeout");
         assert!(bounded.is_err());
+        // Its nominal deadline has now passed, but the unlimited scope still
+        // waits for the value instead of inheriting the other caller's budget.
+        std::future::poll_fn(|context| {
+            assert!(unlimited.as_mut().poll(context).is_pending());
+            std::task::Poll::Ready(())
+        })
+        .await;
+        release.send(42).unwrap();
+        assert_eq!(unlimited.await.unwrap(), 42);
         assert!(!NetworkLimits::current().no_timeouts);
     }
 }

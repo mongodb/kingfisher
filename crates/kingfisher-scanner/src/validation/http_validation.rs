@@ -260,9 +260,15 @@ where
         }
         retries += 1;
         if retries > max_retries {
+            // Keep the transport error chain for safe operational classification.
+            // Formatting it into a new error discarded DNS/TLS/timeout identity.
+            if let Err(error) = result {
+                return Err(error.context("Max retries reached"));
+            }
             break;
         }
-        let backoff = backoff_min.saturating_mul(2u32.pow(retries as u32)).min(backoff_max);
+        let backoff =
+            backoff_min.saturating_mul(2u32.saturating_pow(retries as u32)).min(backoff_max);
         sleep(backoff).await;
     }
     Err(anyhow!("Max retries reached"))

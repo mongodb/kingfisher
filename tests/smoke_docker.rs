@@ -46,11 +46,14 @@ fn smoke_scan_docker_image() -> anyhow::Result<()> {
             "ghcr.io/owasp/wrongsecrets/wrongsecrets-master:latest-master",
             "--format",
             "json",
+            "--no-validate",
             "--no-update-check",
         ])
         .output()?;
 
-    if !output.status.success() {
+    // Finding secrets is a completed scan with exit code 200, so still verify
+    // coverage instead of silently skipping the report assertions.
+    if !output.status.success() && output.status.code() != Some(200) {
         eprintln!("Skipping test: {}", String::from_utf8_lossy(&output.stderr));
         return Ok(());
     }
@@ -61,7 +64,7 @@ fn smoke_scan_docker_image() -> anyhow::Result<()> {
         .filter(|line| !line.is_empty())
         .find_map(|line| {
             let value: Value = serde_json::from_slice(line).ok()?;
-            value.get("blobs_scanned").is_some().then_some(value)
+            value.pointer("/metadata/summary").cloned()
         })
         .expect("scan output must contain a JSON summary");
     assert!(summary["blobs_scanned"].as_u64().unwrap_or_default() > 0);

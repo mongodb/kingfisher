@@ -8,7 +8,7 @@ use tracing::debug;
 use crate::{
     blob::Blob,
     entropy::calculate_shannon_entropy,
-    inline_ignore::InlineIgnoreConfig,
+    inline_ignore::{InlineIgnoreConfig, InlineIgnoreIndex},
     location::OffsetSpan,
     origin::OriginSet,
     rule_profiling::{ConcurrentRuleProfiler, RuleTimer},
@@ -27,7 +27,10 @@ use super::{
 };
 
 // Re-use the canonical secret capture selection from kingfisher-scanner.
-use kingfisher_rules::{RulesDatabase, betterleaks_filter::BetterleaksFilterContext};
+use kingfisher_rules::{
+    RulesDatabase,
+    betterleaks_filter::{BetterleaksFilterContext, BetterleaksFilterLineCache},
+};
 use kingfisher_scanner::primitives::{MatchSpans, find_secret_capture_with_group};
 
 // -------------------------------------------------------------------------------------------------
@@ -214,8 +217,10 @@ pub(crate) fn filter_match<'b>(
     profiler: Option<&Arc<ConcurrentRuleProfiler>>,
     respect_ignore_if_contains: bool,
     inline_ignore_config: &InlineIgnoreConfig,
+    inline_ignore_index: &std::sync::OnceLock<InlineIgnoreIndex>,
     bounded_confirmation: bool,
     candidate_index: Option<&kingfisher_scanner::primitives::CandidateMatchIndex>,
+    filter_line_cache: &mut BetterleaksFilterLineCache,
 ) -> bool {
     if !rule.matches_path(filename) {
         return false;
@@ -230,12 +235,25 @@ pub(crate) fn filter_match<'b>(
     let blob_bytes = blob.bytes();
     let default_slice = &blob_bytes[start..end];
     let haystack = ts_match.unwrap_or(default_slice);
+    let line_index = std::cell::OnceCell::new();
+    let fragment_raw = std::cell::OnceCell::new();
+    let mut line_text = FxHashMap::default();
     let mut confirmed = false;
 
     let captures = if let Some(index) = candidate_index {
-        index.captures(re, rules_db.endpoint_regex(rule_id), haystack, start)
+        kingfisher_scanner::__cli_internals::confirm(
+            index,
+            re,
+            if rules_db.confirmation_prefix_stable(rule_id) {
+                None
+            } else {
+                rules_db.endpoint_regex(rule_id)
+            },
+            haystack,
+            start,
+        )
     } else {
-        kingfisher_scanner::primitives::ConfirmationCaptures::Search(re.captures_iter(haystack))
+        kingfisher_scanner::__cli_internals::IndexedCaptures::search(re, haystack)
     };
     for captures in captures {
         let full_capture = captures.get(0).unwrap();
@@ -281,15 +299,29 @@ pub(crate) fn filter_match<'b>(
         let filter_outcome = rule.betterleaks_filter().and_then(|expression| {
             let match_start_idx = full_capture.start();
             let match_end_idx = full_capture.end();
-            let match_line_start_idx = haystack[..match_start_idx]
-                .iter()
-                .rposition(|byte| *byte == b'\n')
-                .map_or(0, |position| position + 1);
-            let match_line_end_idx = haystack[match_end_idx..]
-                .iter()
-                .position(|byte| *byte == b'\n')
-                .map_or(haystack.len(), |position| match_end_idx + position);
-            let line = String::from_utf8_lossy(&haystack[match_line_start_idx..match_line_end_idx]);
+            let line_index = line_index
+                .get_or_init(|| kingfisher_scanner::__cli_internals::LineIndex::new(haystack));
+            let (match_line_start_idx, match_line_end_idx) =
+                line_index.bounds(match_start_idx, match_end_idx);
+            let fragment_raw = fragment_raw.get_or_init(|| String::from_utf8_lossy(haystack));
+            let uncached_line;
+            let line = if let std::borrow::Cow::Borrowed(text) = fragment_raw {
+                &text[match_line_start_idx..match_line_end_idx]
+            } else if line_index.is_single_line(match_line_start_idx, match_line_end_idx) {
+                // Cache disjoint lines only: malformed UTF-8 may allocate an
+                // owned conversion, and overlapping multiline spans must not
+                // accumulate copies of the whole haystack.
+                let converted = line_text
+                    .entry((match_line_start_idx, match_line_end_idx))
+                    .or_insert_with(|| {
+                        String::from_utf8_lossy(&haystack[match_line_start_idx..match_line_end_idx])
+                    });
+                &**converted
+            } else {
+                uncached_line =
+                    String::from_utf8_lossy(&haystack[match_line_start_idx..match_line_end_idx]);
+                uncached_line.as_ref()
+            };
             let captures = re
                 .capture_names()
                 .flatten()
@@ -301,13 +333,12 @@ pub(crate) fn filter_match<'b>(
                 .collect::<BTreeMap<_, _>>();
             let secret = String::from_utf8_lossy(entropy_bytes);
             let full_match = String::from_utf8_lossy(full_bytes);
-            let fragment_raw = String::from_utf8_lossy(haystack);
             let context = BetterleaksFilterContext {
                 path: filename,
                 secret: &secret,
                 full_match: &full_match,
-                line: &line,
-                fragment_raw: &fragment_raw,
+                line,
+                fragment_raw,
                 match_start_idx,
                 match_end_idx,
                 match_line_start_idx,
@@ -316,7 +347,12 @@ pub(crate) fn filter_match<'b>(
                 description: rule.name(),
                 captures,
             };
-            match rules_db.evaluate_betterleaks_filter(expression, &context) {
+            match rules_db.evaluate_betterleaks_filter_with_line_cache(
+                expression,
+                &context,
+                start + match_line_start_idx..start + match_line_end_idx,
+                filter_line_cache,
+            ) {
                 Ok(outcome) => Some(outcome),
                 Err(error) => {
                     debug!(rule_id = rule.id(), %error, "Betterleaks filter evaluation failed");
@@ -342,7 +378,11 @@ pub(crate) fn filter_match<'b>(
         );
 
         // Check inline ignore directives
-        if inline_ignore_config.should_ignore(blob_bytes, &matching_input_offset_span) {
+        if inline_ignore_config.should_ignore_cached(
+            blob_bytes,
+            &matching_input_offset_span,
+            inline_ignore_index,
+        ) {
             debug!("Skipping match due to inline ignore directive");
             continue;
         }

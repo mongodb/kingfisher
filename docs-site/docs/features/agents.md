@@ -24,7 +24,7 @@ kingfisher revoke --rule betterleaks.github-pat "ghp_xxx" --format toon
 ```
 
 Betterleaks rules provide default validation where upstream defines it. Kingfisher supplies
-selected safe revocation actions through a build-validated capability overlay; Kingfisher custom YAML
+selected safe revocation actions through a bundle-validated capability overlay; Kingfisher custom YAML
 rules may also define a `revocation:` block.
 
 !!! tip "When to use TOON"
@@ -89,40 +89,44 @@ For deep integration, use Kingfisher as a library in your Rust-based agent:
 
 ```rust
 use std::sync::Arc;
-use kingfisher_rules::defaults::get_builtin_rules;
-use kingfisher_rules::RulesDatabase;
-use kingfisher_scanner::Scanner;
+use kingfisher_rules::{defaults::get_builtin_rules, RulesDatabase};
+use kingfisher_scanner::{Scanner, ScannerConfig};
 
-// Load the built-in rules and compile the scanner database
+// Compile once and reuse this scanner for each supplied prompt.
 let rules = get_builtin_rules(None)?;
-let rules_db = Arc::new(RulesDatabase::from_rules(rules.into_rules())?);
-let mut scanner = Scanner::new(rules_db);
-
-// Scan a byte slice for secrets
-let findings = scanner.scan_bytes(b"AKIA...");
+let database = Arc::new(RulesDatabase::from_rule_collection(rules)?);
+let scanner = Scanner::with_config(database, ScannerConfig {
+    redact_secrets: true,
+    ..Default::default()
+});
+// A scan failure must not be treated as a clean prompt.
+let findings = scanner.scan_bytes(b"your supplied prompt")?;
 ```
 
 See [Rust Library Crates](../reference/library.md) for complete documentation.
 
 ## Python Integration
 
-Kingfisher is available as a Python package for integration with Python-based agent frameworks:
+Install the native SDK into your application environment:
 
 ```bash
-uv tool install kingfisher-bin
+uv add kingfisher-secret-scanner
 ```
 
-Then call it from your Python agent:
+Compile once, then scan supplied prompts before forwarding them to another service:
 
 ```python
-import subprocess
-import json
+from kingfisher_sdk import Scanner
 
-result = subprocess.run(
-    ["kingfisher", "scan", "-", "--format", "json", "--no-validate"],
-    input=user_prompt,
-    capture_output=True,
-    text=True,
-)
-findings = json.loads(result.stdout) if result.stdout else []
+scanner = Scanner()  # Native detection is offline; reuse across requests.
+user_prompt = "your supplied prompt"
+findings = scanner.scan(user_prompt, timeout=5)
+# Apply your application's block/redact policy before sending user_prompt.
+# Serialization redacts secrets and captures; it does not change user_prompt.
+report = [finding.to_dict() for finding in findings if finding.visible]
 ```
+
+Scan errors and timeouts propagate; handle them explicitly instead of forwarding
+an unchecked prompt. Input enumeration, extraction, live validation and revocation
+are separate operations. See the [Python SDK guide](../reference/python-bindings.md)
+and its commented examples for composition, limits and provenance.

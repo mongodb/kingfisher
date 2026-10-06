@@ -3,13 +3,14 @@
 A Go-based benchmarking tool that clones a set of repositories, runs secret-scanning
 tools (Kingfisher, TruffleHog, and optionally GitLeaks), and reports execution times,
 findings, and network-request counts. An intercepting HTTP proxy (without TLS
-decryption) counts the network requests each tool makes.
+decryption) counts plain HTTP requests and HTTPS CONNECT tunnels. Requests inside
+a TLS tunnel and traffic that bypasses the proxy are not observed.
 
 ## Features
 
 - **Repository cloning** — clones a predefined list of repositories (skips ones already present).
 - **Tool execution** — runs each enabled scanner and collects timing, findings, and validation metrics.
-- **Network-request counting** — an HTTP proxy on `127.0.0.1:9191` counts every request a tool makes.
+- **Network-request counting** — an HTTP proxy on `127.0.0.1:9191` counts plain HTTP requests and HTTPS CONNECT tunnels sent through it.
 - **Tool versions** — records `kingfisher`/`trufflehog`/`gitleaks` versions and includes them in the report and chart.
 - **Timestamped results folder** — every run writes a `benchmark-<timestamp>/` directory (see below).
 - **Markdown report** — environment, tool versions, runtime, findings, validated/verified, and

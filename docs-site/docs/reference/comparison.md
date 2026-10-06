@@ -1,6 +1,6 @@
 ---
 title: "Benchmarks & Comparison"
-description: "Published secret-scanning runtime, network-request, and binary-size benchmarks."
+description: "Open-source capabilities and published secret-scanning runtime, network-request, and binary-size benchmarks."
 ---
 
 # Capabilities and Benchmarks
@@ -19,7 +19,15 @@ credentials. No enterprise subscription is required.
 
 ✅ Supported · ❌ Not Supported
 
+Provider coverage differs between tools. Capability references: [Betterleaks 2.0 RC1](https://github.com/betterleaks/betterleaks/blob/v2.0.0-rc.1/README.md), [TruffleHog OSS](https://github.com/trufflesecurity/trufflehog/blob/v3.97.2/README.md), and [Gitleaks](https://github.com/gitleaks/gitleaks/blob/v8.30.1/README.md).
+
 ## Runtime Comparison (seconds)
+
+These are published reference results, not a fresh benchmark of the current release.
+Repository revisions, rule catalogs, network conditions and tool versions affect
+runtime and findings. See the [benchmark harness](https://github.com/mongodb/kingfisher/blob/main/docs/benchmark/README.md) to generate
+a new report recording tool versions and raw results.
+
 *Lower runtimes are better.*
 
 | Repository | Kingfisher Runtime | TruffleHog Runtime | Gitleaks Runtime |
@@ -55,7 +63,7 @@ Gitleaks does not perform live validation; its verified counts are **N/A**, not 
 | typescript | 0 | 0 | N/A |
 
 ### Network Requests Comparison
-*'Network Requests' shows HTTP calls recorded during these scans. Gitleaks does not perform live credential validation; zero here describes this benchmark, not every possible network interaction.*
+*'Network Requests' counts plain HTTP requests and HTTPS CONNECT tunnels observed by the benchmark proxy. TLS is not decrypted, so individual requests inside a tunnel are not counted; clients that bypass the proxy are not observed. Gitleaks does not perform live validation; zero describes these runs, not every possible network interaction.*
 
 | Repository | Kingfisher Network Requests | TruffleHog Network Requests | Gitleaks Network Requests |
 |------------|-----------------------------|-----------------------------|---------------------------|
@@ -69,7 +77,7 @@ Gitleaks does not perform live validation; its verified counts are **N/A**, not 
 | linux | 0 | 287 | 0 |
 | typescript | 0 | 10 | 0 |
 
-*Lower runtimes are better. Validated/Verified counts are reported where available. 'Network Requests' indicates the number of HTTP requests made during scanning.*
+*Lower runtimes are better. Validated/Verified counts are reported where available. 'Network Requests' is the benchmark proxy's request/tunnel count.*
 
 ### Binary Size Comparison (macOS arm64)
 

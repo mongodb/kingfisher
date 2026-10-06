@@ -69,11 +69,18 @@ See:
 
 ### Embedded Library Usage
 
-Best when you want Kingfisher scanning inside another Rust application or service.
+Best when you want Kingfisher scanning inside a Rust or Python application or service.
 
 - Use `kingfisher-core` for shared content and location types.
 - Use `kingfisher-rules` to load or compile rules.
 - Use `kingfisher-scanner` for the embeddable scanning API.
+- Install `kingfisher-secret-scanner` and import `kingfisher_sdk` for Python.
+- Prewarm the compiled rule cache during image construction with the same SDK
+  wheel, rules and confidence used at startup. Give the runtime account ownership
+  of both the directory and files; `COPY --chown` supports root builds with a
+  non-root service. See the [container prewarming guide](PYPI.md#prewarm-a-container-image-for-a-non-root-service).
+- Compose local input enumeration and extraction explicitly; detection stays offline,
+  while validation and revocation are separate calls.
 
 This model is useful for:
 
@@ -85,6 +92,7 @@ This model is useful for:
 See:
 
 - [LIBRARY.md](LIBRARY.md)
+- [PYPI.md](PYPI.md)
 
 ## Operational Guidance
 

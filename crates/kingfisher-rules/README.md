@@ -8,7 +8,7 @@ secrets are detected without changing the Rust API.
 
 ```toml
 [dependencies]
-kingfisher-rules = "1.1.0"
+kingfisher-rules = "1.2.0"
 anyhow = "1"
 ```
 
@@ -29,6 +29,53 @@ For custom files use `Rules::from_paths`, `Rules::from_toml_file`, or
 Construction and compilation do not run validation or contact providers.
 Compilation is fallible and relatively expensive: compile once, share with `Arc`,
 and reuse. Vectorscan is a native build dependency.
+
+To persist the main Vectorscan database across processes, use
+`RulesDatabase::from_rule_collection_with_cache(rules, &RuleCacheConfig::from_dir_or_env(None))`.
+This honors `KF_RULE_CACHE_DIR` or a per-user OS cache directory;
+`RuleCacheConfig::new(path)` selects an explicit directory. If no user directory is
+available, caching is disabled; it never falls back to a shared temporary directory.
+Cache failures fall back to compilation and writes are best effort. Confirmation
+regexes and path/finding filters still initialize per database. Ordinary uncached
+constructors retain their behavior.
+
+`database.cache_status()` distinguishes `RuleCacheStatus::Loaded`, `Stored`, and
+`Bypassed`. Use it when explicitly prewarming an image must persist the database;
+the CLI's `rules compile-cache` fails if compilation succeeded without a usable
+cache entry. Ordinary scan commands continue when caching is unavailable.
+
+Treat the cache as trusted native bytecode. New Unix cache directories and entries
+use modes `0700` and `0600`. Existing locations must be owned by the current user,
+with no group/other write access, and their ancestors must prevent substitution.
+Symlink entries are rejected. On Windows, the cache directory and files must be
+owned by the current user; DACLs permit writes by that user, Administrators and
+SYSTEM. New Windows directories and entries receive the process user SID as owner
+at creation, including when running as SYSTEM. Existing paths must satisfy the
+same ownership and DACL checks. Protected ancestors may also be owned or maintained
+by TrustedInstaller; other accounts must not be able to replace the cache.
+Reparse points are rejected.
+Unsafe or unverifiable directories are ignored and rules compile without using disk caching.
+Read permission alone does not invalidate an otherwise protected cache.
+Ownership is a check of the deployed filesystem, not part of the cache key or
+serialized database. A container may compile as root during image construction,
+then copy the directory and all entries with `COPY --chown=<runtime-uid>:<runtime-gid>`.
+The same image can run on another host as that UID, including with a read-only
+filesystem when the entry is compatible. See the
+[Python container example](../../python/examples/rule_cache.Dockerfile).
+
+Each entry includes a SHA-256 of the serialized database, checked before native
+deserialization. This detects corruption; it does not authenticate data written by
+the same user or a privileged administrator. Protect that account and its cache
+directory as you would the executable or installed SDK itself.
+
+Entries are keyed by ordered rule patterns, cache format, exact binding/native crate
+versions, full engine build version, architecture, pointer width, and endianness.
+Reuse entries from the same deployed CLI binary or SDK wheel. Compatibility across
+different native builds or operating systems is not guaranteed. Native CPU/version
+rejection falls back to compilation, so an incompatible cache cannot prevent scanning.
+Externally supplied or patched engines that preserve the same runtime version string
+cannot be distinguished by that identity. Give each such engine build a separate
+cache directory, or use the uncached constructors.
 
 This crate provides:
 
@@ -101,8 +148,11 @@ cargo run --locked -p kingfisher-rule-bundle
 cargo run --locked -p kingfisher-rule-bundle -- --check
 ```
 
-A Betterleaks release is preferred; the current post-release commit retains detectors absent
-from the latest release. Its revision and expected digest live in `tools/rule-bundle/src/main.rs`;
+A Betterleaks release is preferred. The current bundle pins v2.0.0-rc.1 at
+`b3b4cbb586c964701f78bbfb6bc2129ced99bed3`, because stable v1.9.0 lacks the Cloudflare
+`cfut_`/`cfat_` detectors. The exact `config/betterleaks.toml` SHA-256 is
+`b8627cfd4b12beb833f0b7e1173157b1a2988ceb87cf3e2e2882182d7229adf7`.
+Its revision and expected digest live in `tools/rule-bundle/src/main.rs`;
 Veles selections and revision live in `data/veles-rules.yml`. Update the pins, run `--refresh`,
 review the provenance and license changes, and commit the generated artifacts together.
 The old `KINGFISHER_BETTERLEAKS_CONFIG` and `KINGFISHER_BETTERLEAKS_CONFIG_URL` build overrides
@@ -127,3 +177,8 @@ To load a custom rule file instead of the embedded catalog:
 ```sh
 cargo run --locked -p kingfisher-rules --example load_rules -- path/to/rules.toml
 ```
+
+The `__scanner-internals` feature exposes implementation details used by
+`kingfisher-scanner`. It is unstable, unsupported, and has no semantic-versioning
+guarantee; its APIs may change in any release. Applications should use the supported
+rule-loading and database APIs above.

@@ -181,7 +181,11 @@ fn uninstall_removes_wrapper_when_no_previous_hook() {
 #[test]
 fn pre_commit_framework_invokes_kingfisher() {
     // Skip this test if `pre-commit` is not available (e.g., in some CI images).
-    if StdCommand::new("pre-commit").arg("--version").output().is_err() {
+    if !StdCommand::new("pre-commit")
+        .arg("--version")
+        .output()
+        .is_ok_and(|output| output.status.success())
+    {
         eprintln!(
             "skipping pre_commit_framework_invokes_kingfisher: `pre-commit` not found in PATH"
         );

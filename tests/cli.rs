@@ -9,6 +9,8 @@ mod test {
     use super::*;
 
     fn write_fake_cache_entry(cache_dir: &std::path::Path, cache_key: &str) {
+        // Historical entries omit the current payload digest. They must remain
+        // discoverable by pruning even though they cannot be loaded for scanning.
         let header = serde_json::json!({
             "format_version": 1,
             "cache_key": cache_key,

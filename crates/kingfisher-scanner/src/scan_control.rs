@@ -43,6 +43,21 @@ pub enum ScanAborted {
 pub struct ScanControl {
     deadline: Option<Instant>,
     cancellation: Option<CancellationToken>,
+    #[cfg(test)]
+    observer: Option<CheckObserver>,
+}
+
+#[cfg(test)]
+#[derive(Clone)]
+struct CheckObserver(Arc<CheckCallback>);
+#[cfg(test)]
+type CheckCallback =
+    dyn Fn(&'static std::panic::Location<'static>) -> Result<(), ScanAborted> + Send + Sync;
+#[cfg(test)]
+impl std::fmt::Debug for CheckObserver {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("CheckObserver")
+    }
 }
 
 impl ScanControl {
@@ -71,7 +86,23 @@ impl ScanControl {
     }
 
     pub(crate) fn is_limited(&self) -> bool {
+        #[cfg(test)]
+        if self.observer.is_some() {
+            return true;
+        }
         self.deadline.is_some() || self.cancellation.is_some()
+    }
+
+    #[cfg(test)]
+    pub(crate) fn with_check_observer(
+        mut self,
+        observer: impl Fn(&'static std::panic::Location<'static>) -> Result<(), ScanAborted>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        self.observer = Some(CheckObserver(Arc::new(observer)));
+        self
     }
 
     /// Check the cancellation signal and deadline without performing scan work.
@@ -81,7 +112,12 @@ impl ScanControl {
     /// Returns [`ScanAborted::Cancelled`] if cancelled, otherwise
     /// [`ScanAborted::TimedOut`] if the deadline was reached.
     #[inline]
+    #[cfg_attr(test, track_caller)]
     pub fn check(&self) -> Result<(), ScanAborted> {
+        #[cfg(test)]
+        if let Some(observer) = &self.observer {
+            (observer.0)(std::panic::Location::caller())?;
+        }
         if self.cancellation.as_ref().is_some_and(CancellationToken::is_cancelled) {
             return Err(ScanAborted::Cancelled);
         }
