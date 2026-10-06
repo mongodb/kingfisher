@@ -1,4 +1,30 @@
+use anyhow::Result;
+use regex::bytes::Regex;
+
 pub use kingfisher_scanner::__cli_internals::parser::*;
+
+/// Checks whether a parser context candidate contains the expected secret.
+///
+/// Retains the application library's capture selection: prefer a named `TOKEN`
+/// capture (case-insensitive), then the first matched named capture, then group 1,
+/// and finally the full match.
+pub fn verify_match_in_context(
+    source: &[u8],
+    language: &Language,
+    re: &Regex,
+    expected_secret: &[u8],
+) -> Result<bool> {
+    use kingfisher_scanner::primitives::find_secret_capture;
+
+    let mut verified = false;
+    stream_context_candidates(source, language, |text| {
+        verified = re
+            .captures_iter(text.as_bytes())
+            .any(|captures| find_secret_capture(re, &captures).as_bytes() == expected_secret);
+        !verified
+    })?;
+    Ok(verified)
+}
 
 #[cfg(test)]
 mod tests {
@@ -155,7 +181,7 @@ mod tests {
         let source = br#"
             <html>
               <body>
-                <script>// AIzaSyBUPHAjZl3n8Eza66ka6B78iVyPteC5MgM</script>
+                <script>// comment-only-secret</script>
                 <div>visible text</div>
               </body>
             </html>
@@ -168,7 +194,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            !texts.iter().any(|text| text.contains("AIzaSyBUPHAjZl3n8Eza66ka6B78iVyPteC5MgM")),
+            !texts.iter().any(|text| text.contains("comment-only-secret")),
             "expected commented-out script secrets to stay ignored"
         );
         assert!(
