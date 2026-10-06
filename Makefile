@@ -5,6 +5,9 @@ PROJECT_NAME := kingfisher
 ZIG_VERSION ?= 0.15.1
 RUST_FUZZ_TOOLCHAIN ?= nightly-2026-10-02
 SKIP_TESTS ?= 0
+RELEASE_REMOTE ?= origin
+export KINGFISHER_RELEASE_VERSION = $(VERSION)
+export KINGFISHER_RELEASE_REMOTE = $(RELEASE_REMOTE)
 
 # Normalize uname once for platform checks (uname reports Darwin on macOS).
 OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
@@ -47,7 +50,7 @@ ARCHIVE_CMD = $(TAR_CMD) $(TAR_OPTS)
 SUDO_CMD := $(shell command -v sudo 2>/dev/null)
 
 .PHONY: \
-        default help create-dockerignore setup-zig wizard-gui \
+        default help release create-dockerignore setup-zig wizard-gui \
         ubuntu-x64 ubuntu-arm64 linux-x64 linux-arm64 linux linux-all \
         darwin-arm64 darwin-x64 darwin-dev darwin darwin-all \
         require-windows-host windows-x64 windows-arm64 windows-test-x64 windows-test-arm64 windows-test windows \
@@ -58,6 +61,7 @@ default: help
 
 help:
 	@echo "Available targets:"
+	@echo "  release            Start a release: make release VERSION=X.Y.Z (RELEASE_REMOTE=origin)"
 	@echo "  linux              Build Linux archive for current host arch via Docker"
 	@echo "  linux-x64          Build Linux x64 archive via Docker (SKIP_TESTS=1 to skip tests)"
 	@echo "  linux-arm64        Build Linux arm64 archive via Docker (SKIP_TESTS=1 to skip tests)"
@@ -86,6 +90,9 @@ help:
 	@echo "  notices            Generate third-party notices"
 	@echo "  yaml-fmt           Format all built-in YAML rule files with prettier"
 	@echo "  clean              Remove build artifacts"
+
+release:
+	@python3 scripts/release.py --version "$$KINGFISHER_RELEASE_VERSION" --remote "$$KINGFISHER_RELEASE_REMOTE"
 
 create-dockerignore:
 	@printf '%s\n' target/ .git/ .vscode/ bin/ > .dockerignore

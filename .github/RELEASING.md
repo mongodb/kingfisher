@@ -6,10 +6,14 @@ Docker, PyPI, and crates.io packages. End users should follow
 
 ## Release workflow
 
-The workflow runs on `release: published` and `workflow_dispatch`. Every run must use a tag
+The workflow runs on pushes of `v*` tags and `workflow_dispatch`. Every run must use a tag
 ref matching the root Cargo version, including the `v` prefix; this is checked before tests
 or builds start. Release assets are attested from that tag ref so consumers can verify the
 version-specific signing identity. Pushes to `main` do not publish releases.
+
+After all tests and builds pass, the workflow creates or updates a draft release, uploads
+all assets, and publishes it only after the uploads succeed. A build or upload failure leaves
+the release unpublished. Docker, PyPI, and crates.io publication follows the GitHub release.
 
 Manual rebuilds select the tag with `--ref`; there is no separate tag input.
 
@@ -20,42 +24,46 @@ Manual rebuilds select the tag with `--ref`; there is no separate tag input.
    [package preparation checks](../docs/PUBLISHING.md).
 2. Include regenerated rule-bundle provenance when required, including after root `Cargo.toml`
    or `Cargo.lock` changes. Run `python3 scripts/update-rule-bundle.py --check`.
-3. Confirm CI passed and identify the merged commit you intend to release. The commands below
-   target the current tip of `main`; if newer changes have landed, use the intended commit SHA
-   with `--target`, or create the tag on that commit before selecting it in the UI.
+3. Confirm CI passed and identify the merged commit you intend to release. Ensure that commit
+   includes the tag-triggered release workflow before creating the tag.
 4. Use a new tag matching the root Cargo version exactly, including the `v` prefix.
    Do not move an existing release tag to a different commit.
 
-Choose one of the following publishing methods. Both publish a GitHub release and trigger the
-same tag-based build workflow. No separate Actions dispatch is needed.
-
-## Publish through GitHub
-
-1. Open the repository's **Releases** page and click **Draft a new release**.
-2. In **Choose a tag**, enter `vX.Y.Z` and select **Create new tag**.
-3. Set **Target** to `main` (or select an existing tag on the intended release commit).
-4. Enter the title `Kingfisher vX.Y.Z` and release notes, then click **Publish release**.
-5. Follow **build-and-release** under **Actions** until all publishing jobs finish.
-
-Saving a draft does not trigger the build. The published release initially has no compiled
-assets; the workflow uploads them after the cross-platform tests and builds succeed.
-This process requires mutable releases because assets are attached after publication.
+Push the release tag to start the workflow. No separate release creation or Actions dispatch
+is needed for a new tag.
 
 ## Publish through the terminal
 
-With an authenticated GitHub CLI, replace `vX.Y.Z` with the release version:
+From a clean checkout of the intended merged commit, run with Python 3.11+ and authenticated
+Git access to `mongodb/kingfisher`:
 
 ```bash
-gh release create vX.Y.Z \
-  --repo mongodb/kingfisher \
-  --target main \
-  --title "Kingfisher vX.Y.Z" \
-  --generate-notes
+make release VERSION=X.Y.Z
 ```
 
-This creates the tag if it does not exist, publishes the release, and triggers the build.
-There is no need to run `git tag`, `git push`, or `gh workflow run` as well.
-The workflow uses the latest changelog section for the final release notes.
+The version may include a leading `v`. The command checks it against the committed root
+Cargo version, verifies the commit is on the remote's `main`, creates an annotated tag,
+and pushes only that tag. It rejects existing remote tags and local tags on another commit.
+If a push fails, retrying can reuse the local tag on the same commit.
+
+The remote defaults to `origin`; confirm it points to `mongodb/kingfisher`, or specify it:
+
+```bash
+make release VERSION=X.Y.Z RELEASE_REMOTE=git@github.com:mongodb/kingfisher.git
+```
+
+Follow **build-and-release** under **Actions** until all publishing jobs finish.
+The workflow uses the latest changelog section for the release notes.
+
+Do not start a release with `gh release create` or the GitHub **Publish release** button:
+those publish immediately, before the build. Adding `--draft` prevents immediate publication
+but does not trigger this workflow; push the tag or dispatch on an existing tag instead.
+
+## Run through GitHub Actions
+
+For an existing tag, open **Actions → build-and-release → Run workflow**, select the tag,
+and run the workflow. Saving or publishing a release in the **Releases** UI is not the build
+trigger. Manual dispatch requires the workflow to exist on the default branch as well.
 
 ## Finish and recover
 
@@ -65,7 +73,9 @@ the new version, and check the Docker, PyPI, and crates.io publishing jobs separ
 
 If a job fails, inspect its logs and rerun the failed jobs from the original Actions run where
 appropriate. Keep the original tag and commit. A code fix needs a new release version.
-For a deliberate rebuild of an existing tag, dispatch the workflow on that tag:
+An upload failure leaves a draft that the next attempt can update. Published releases are
+skipped by the upload step so reruns do not replace their assets; rerun failed downstream
+jobs to recover package publication. To restart an unpublished release on an existing tag:
 
 ```bash
 gh workflow run release.yml --repo mongodb/kingfisher --ref vX.Y.Z

@@ -1,9 +1,13 @@
 name: build-and-release
 
 on:
-  release:
-    types: [published]
+  push:
+    tags: ["v*"]
   workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -351,8 +355,22 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          path: target/release/kingfisher-*
+          pattern: kingfisher-*
+          path: target/release
           merge-multiple: true
+      - name: Require every platform archive and Linux package
+        shell: bash
+        run: |
+          set -euo pipefail
+          for platform in linux-x64 linux-arm64 darwin-x64 darwin-arm64; do
+            test -s "target/release/kingfisher-${platform}.tgz"
+          done
+          for arch in x64 arm64; do
+            test -s "target/release/kingfisher-windows-${arch}.zip"
+            for format in deb rpm; do
+              test -s "target/release/kingfisher-linux-${arch}.${format}"
+            done
+          done
       - name: Stage rule provenance and archived inputs
         run: |
           mkdir -p target/release
@@ -380,8 +398,7 @@ jobs:
         id: attest
         uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
-          # Match the actual artifact files under target/release/ (download-artifact
-          # places them in a subdirectory, so we use ** to recurse).
+          # Include platform packages and the archived rule bundle.
           subject-path: |
             target/release/**/kingfisher-*.tgz
             target/release/**/kingfisher-*.zip
@@ -403,16 +420,27 @@ jobs:
           echo "Bundle line count (one DSSE-wrapped attestation per subject):"
           wc -l target/release/multiple.intoto.jsonl
 
-      # ── create the release using just that snippet ─────────────────────
-      - name: Create release & upload assets
+      # Keep new releases and retries in draft until all uploads succeed.
+      - name: Create draft release & upload assets
+        id: draft
         uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1.21.0
         with:
           tag: ${{ needs.validate-release.outputs.tag }}
           name: "Kingfisher ${{ needs.validate-release.outputs.tag }}"
           bodyFile: .latest_changelog.md # ← only the most-recent entry
           allowUpdates: true
+          skipIfReleaseExists: true
+          draft: true
+          artifactErrorsFailBuild: true
           generateReleaseNotes: false
-          artifacts: target/release/**
+          artifacts: target/release/*
+
+      - name: Publish release after successful asset uploads
+        if: steps.draft.outputs.id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.tag }}
+        run: gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --draft=false
 
   # ──────────────── Publish Docker image ────────────────
   publish-docker:
