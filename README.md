@@ -1,4 +1,4 @@
-# Detect and Validate Secrets Anywhere. Map Access. Revoke Fast. Embed in Rust or Python.
+# Detect and Validate Secrets Anywhere. Map Access. Revoke Fast.
 
 <p align="center">
   <img src="docs/kingfisher_logo.png" alt="Kingfisher Logo" width="126" height="173" />
