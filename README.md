@@ -158,7 +158,7 @@ always confirm the target and operational impact before containment.
 
 ### Performance, Accuracy, and Extensible Rules
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
-- **Extensible rules**: Betterleaks is the main catalog, with selected Veles detectors filling gaps;
+- **Extensible rules**: [Betterleaks](https://github.com/betterleaks/betterleaks/blob/main/config/betterleaks.toml) is the main catalog, with selected [Veles detectors](https://github.com/google/osv-scalibr/tree/main/veles/secrets) filling gaps;
   both Betterleaks TOML (`.toml`) and the Kingfisher rule format (`.yml`/`.yaml`) are fully supported via `--rules-path` ([built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), [docs/RULES.md](docs/RULES.md))
 - **Validation and defender-led revocation**: validate discovered credentials live, then revoke supported credentials from the CLI. For supported provider flows, responders can contain a leaked token even when its owner is unknown or has left the company ([docs/USAGE.md](docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](docs/REVOCATION_PROVIDERS.md))
 - **Blast-radius mapping included by default**: use `--blast-radius` (alias `--access-map`) to map supported credentials to their effective identities, permissions, reachable roles/service accounts, and impacted resource scopes. All 43 providers—including advanced AWS role-assumption and GCP service-account impersonation analysis—are included in the Apache-2.0 release ([blast-radius docs](https://mongodb.github.io/kingfisher/features/blast-radius/))
