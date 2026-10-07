@@ -155,6 +155,31 @@ class PublishTests(unittest.TestCase):
         self.assertEqual(events, [(action, name) for name in publisher.PACKAGES[1:]
                                   for action in ["publish", "wait"]])
 
+    def test_unchanged_published_crates_do_not_upload(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            packages = []
+            for name in publisher.PACKAGES:
+                (root / f"{name}-1.0.0.crate").write_bytes(crate(name))
+                packages.append({"name": name, "version": "1.0.0", "publish": ["crates-io"]})
+
+            def published(name, version):
+                return {"checksum": hashlib.sha256(crate(name, version)).hexdigest()}
+
+            def download(url):
+                name = url.split("/")[-2]
+                return crate(name)
+
+            with patch.object(publisher, "published_version", side_effect=published), \
+                 patch.object(publisher, "fetch", side_effect=download):
+                plan = publisher.make_plan({"packages": packages}, root)
+            self.assertFalse(any(item["publish"] for item in plan))
+            with patch.object(publisher.subprocess, "run") as upload, \
+                 patch.object(publisher, "wait_for_index") as wait:
+                publisher.publish_plan(plan, run=upload, wait=wait)
+                upload.assert_not_called()
+                wait.assert_not_called()
+
     def test_index_propagation_retries_until_exact_version_is_visible(self):
         with patch.object(publisher, "fetch", side_effect=[None, b'{"vers":"1.0.0","yanked":false}\n']), \
              patch.object(publisher.time, "sleep") as sleep:

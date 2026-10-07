@@ -56,6 +56,12 @@ make release VERSION=X.Y.Z RELEASE_REMOTE=git@github.com:mongodb/kingfisher.git
 Follow **build-and-release** under **Actions** until all publishing jobs finish.
 The workflow uses the latest changelog section for the release notes.
 
+Unchanged libraries keep their existing versions: the crates.io planner verifies their
+packaged contents and skips their uploads. `make release` pushes only the CLI's `v*` tag;
+it does not trigger the independently versioned Python SDK workflow. On main merges and
+`python-v*` SDK tags, that workflow checks the SDK version on PyPI and skips the
+protected publish job entirely if that version already exists.
+
 Do not start a release with `gh release create` or the GitHub **Publish release** button:
 those publish immediately, before the build. Adding `--draft` prevents immediate publication
 but does not trigger this workflow; push the tag or dispatch on an existing tag instead.
