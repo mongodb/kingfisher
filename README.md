@@ -1,4 +1,4 @@
-# Detect and Validate Secrets Anywhere. Map Access. Revoke Fast.
+# Detect and Validate Secrets Anywhere. Map Access. Revoke Fast. Embed in Rust or Python.
 
 <p align="center">
   <img src="docs/kingfisher_logo.png" alt="Kingfisher Logo" width="126" height="173" />
@@ -32,18 +32,24 @@ Kingfisher is a blazingly fast, completely free and open source secret scanner b
 
 > **Defender workflow:** Follow the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md) for secret detection, validation, notifications, blast-radius mapping, and revocation.
 
-## Embed Kingfisher as a Rust library or Python module
+## Optionally Embed Kingfisher as a Rust library or Python module
 
 Add Kingfisher's fast secret scanning, live credential validation, and revocation
-to your own applications through a native Rust library or Python module.
+to your own applications through a Python module or native Rust library.
 Everything runs in-process, with no CLI subprocess required.
 
+<p align="center">
+  <img src="docs/embeddable.png"
+       alt="Embedding Kingfisher in Python and Rust applications"
+       width="800" />
+</p>
+
+- **Python:** Install `uv add kingfisher-secret-scanner` and import `kingfisher_sdk`.
+  See the [Python SDK guide](docs/PYPI.md) and [runnable examples](python/examples)
+  for scanning, validation, rule inspection, and explicit revocation.
 - **Rust:** Use `kingfisher-scanner`. See the [library guide](docs/LIBRARY.md) and
   [runnable examples](crates/kingfisher-scanner/examples) for scanning and validation,
   plus [revocation via `kingfisher-scanner`](docs/LIBRARY.md#revoke-a-credential).
-- **Python:** Install `uv add kingfisher-secret-scanner` and import `kingfisher_sdk`.
-  See the [Python SDK guide](docs/PYPI.md) and [runnable examples](python/examples)
-  for scanning, validation, and explicit revocation.
 
 ## Scan Targets
 

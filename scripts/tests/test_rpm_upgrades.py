@@ -2,6 +2,7 @@
 
 import importlib.util
 from pathlib import Path
+import shutil
 import subprocess
 import tempfile
 import tomllib
@@ -51,6 +52,8 @@ class RpmUpgradeTests(unittest.TestCase):
                     if command[0] == "cargo":
                         directory = kwargs["cwd"]
                         fixture_directories.append(directory)
+                        self.assertEqual((directory / "src" / "main.rs").read_text(encoding="utf-8"),
+                                         "fn main() {}\n")
                         self.assertEqual((directory / "corrected.rpm").read_bytes(), b"corrected fixture")
                         with (directory / "Cargo.toml").open("rb") as source:
                             fixture = tomllib.load(source)
@@ -80,6 +83,26 @@ class RpmUpgradeTests(unittest.TestCase):
                 self.assertEqual(identities, [("kingfisher", "2.7.0"), ("kingfisher-bin", "2.11.0")])
                 self.assertEqual([command[0] for command in commands], ["cargo", "docker", "cargo", "docker"])
                 self.assertTrue(all(not directory.exists() for directory in fixture_directories))
+
+    @unittest.skipUnless(shutil.which("cargo"), "cargo is required to validate fixture metadata")
+    def test_legacy_manifests_load_with_real_cargo_metadata(self):
+        real_run = subprocess.run
+        validated = []
+
+        def run(command, **kwargs):
+            if command[0] != "cargo":
+                return
+            directory = kwargs["cwd"]
+            result = real_run(
+                ["cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"],
+                cwd=directory, check=False, capture_output=True, text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            validated.append(directory)
+
+        self.invoke("x64", run)
+        self.assertEqual(len(validated), 2)
+        self.assertTrue(all(not directory.exists() for directory in validated))
 
     def test_failed_packaging_or_transaction_stops_and_cleans_fixtures(self):
         for failed_tool in ("cargo", "docker"):

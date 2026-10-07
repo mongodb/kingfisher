@@ -28,6 +28,9 @@ def main() -> None:
     with tempfile.TemporaryDirectory(prefix="kingfisher-rpm-upgrades-") as directory:
         fixtures = Path(directory)
         shutil.copyfile(package, fixtures / "corrected.rpm")
+        # cargo-generate-rpm loads Cargo metadata even though the payload is prebuilt.
+        (fixtures / "src").mkdir()
+        (fixtures / "src" / "main.rs").write_text("fn main() {}\n", encoding="utf-8")
         (fixtures / "kingfisher").write_text("#!/bin/sh\necho legacy-fixture\n", encoding="utf-8")
         (fixtures / "NOTICE").write_text("Legacy package notice\n", encoding="utf-8")
         (fixtures / "THIRD_PARTY_NOTICES").write_text("Legacy third-party notice\n", encoding="utf-8")
