@@ -7,6 +7,11 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.11.1]
+
+- Fixed RPM upgrade file conflicts by restoring the `kingfisher` package name and replacing misnamed packages.
+- Added Linux package metadata checks and Amazon Linux 2023 upgrade tests for x64 and ARM64.
+
 ## [v2.11.0]
 
 - Handled malformed Git tree modes without panics, guarded staged tree ancestry, normalized legacy index modes, and avoided revisiting reachable commits when including unreachable objects.

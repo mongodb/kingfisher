@@ -10,7 +10,7 @@ For in-process Python detection, validation and revocation, see the [Python SDK]
 The prepared library releases are **kingfisher-core 1.0.3**,
 **kingfisher-rules 1.2.0**, and **kingfisher-scanner 1.3.0**.
 They require Rust **1.99** or newer and are versioned independently of the
-`kingfisher-bin` CLI, currently **2.11.0**. See [publishing](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md).
+`kingfisher-bin` CLI, currently **2.11.1**. See [publishing](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md).
 
 ## Crate Overview
 
@@ -108,12 +108,12 @@ additional validator features your project needs.
 To install the CLI from crates.io:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.11.0
+cargo install --locked kingfisher-bin --version 2.11.1
 kingfisher scan path/to/project --no-validate --format toon --no-update-check
 ```
 
 For the `kingfisher-bin` library example in your own application, use
-`kingfisher = { package = "kingfisher-bin", version = "2.11.0" }` and `anyhow = "1"`.
+`kingfisher = { package = "kingfisher-bin", version = "2.11.1" }` and `anyhow = "1"`.
 The focused library examples use the crate versions listed above;
 `kingfisher-rules` and `kingfisher-scanner` examples also use `anyhow = "1"`.
 
@@ -685,7 +685,7 @@ input limits and bound worker counts for untrusted or large workloads.
 The full application's library is available separately:
 
 ```toml
-kingfisher = { package = "kingfisher-bin", version = "2.11.0" }
+kingfisher = { package = "kingfisher-bin", version = "2.11.1" }
 ```
 
 It carries CLI dependencies and all validator features. The stable embedding

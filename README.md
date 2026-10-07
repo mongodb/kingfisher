@@ -32,18 +32,24 @@ Kingfisher is a blazingly fast, completely free and open source secret scanner b
 
 > **Defender workflow:** Follow the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md) for secret detection, validation, notifications, blast-radius mapping, and revocation.
 
-## Embed Kingfisher as a Rust library or Python module
+## Optionally Embed Kingfisher as a Rust library or Python module
 
 Add Kingfisher's fast secret scanning, live credential validation, and revocation
-to your own applications through a native Rust library or Python module.
+to your own applications through a Python module or native Rust library.
 Everything runs in-process, with no CLI subprocess required.
 
+<p align="center">
+  <img src="docs/embeddable.png"
+       alt="Embedding Kingfisher in Python and Rust applications"
+       width="800" />
+</p>
+
+- **Python:** Install `uv add kingfisher-secret-scanner` and import `kingfisher_sdk`.
+  See the [Python SDK guide](docs/PYPI.md) and [runnable examples](python/examples)
+  for scanning, validation, rule inspection, and explicit revocation.
 - **Rust:** Use `kingfisher-scanner`. See the [library guide](docs/LIBRARY.md) and
   [runnable examples](crates/kingfisher-scanner/examples) for scanning and validation,
   plus [revocation via `kingfisher-scanner`](docs/LIBRARY.md#revoke-a-credential).
-- **Python:** Install `uv add kingfisher-secret-scanner` and import `kingfisher_sdk`.
-  See the [Python SDK guide](docs/PYPI.md) and [runnable examples](python/examples)
-  for scanning, validation, and explicit revocation.
 
 ## Scan Targets
 
@@ -152,7 +158,7 @@ always confirm the target and operational impact before containment.
 
 ### Performance, Accuracy, and Extensible Rules
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
-- **Extensible rules**: Betterleaks is the main catalog, with selected Veles detectors filling gaps;
+- **Extensible rules**: [Betterleaks](https://github.com/betterleaks/betterleaks/blob/main/config/betterleaks.toml) is the main catalog, with selected [Veles detectors](https://github.com/google/osv-scalibr/tree/main/veles/secrets) filling gaps;
   both Betterleaks TOML (`.toml`) and the Kingfisher rule format (`.yml`/`.yaml`) are fully supported via `--rules-path` ([built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), [docs/RULES.md](docs/RULES.md))
 - **Validation and defender-led revocation**: validate discovered credentials live, then revoke supported credentials from the CLI. For supported provider flows, responders can contain a leaked token even when its owner is unknown or has left the company ([docs/USAGE.md](docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](docs/REVOCATION_PROVIDERS.md))
 - **Blast-radius mapping included by default**: use `--blast-radius` (alias `--access-map`) to map supported credentials to their effective identities, permissions, reachable roles/service accounts, and impacted resource scopes. All 43 providers—including advanced AWS role-assumption and GCP service-account impersonation analysis—are included in the Apache-2.0 release ([blast-radius docs](https://mongodb.github.io/kingfisher/features/blast-radius/))

@@ -57,8 +57,8 @@ thread_local = "1.1.10"
 
 [package]
 name = "kingfisher-bin"
-version = "2.11.0"
-description = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
+version = "2.11.1"
+description = "MongoDB's blazingly fast and accurate secret scanning, validation, blast radius mapping, and secret revocation tool"
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -90,7 +90,9 @@ assets = [
 ]
 
 [package.metadata.generate-rpm]
-package = "kingfisher"
+# Keep the OS package identity independent of the Cargo/PyPI package name.
+name = "kingfisher"
+release = "1"
 summary = "MongoDB's blazingly fast and accurate secret scanning and validation tool"
 license = "Apache-2.0"
 url = "https://github.com/mongodb/kingfisher"
@@ -100,6 +102,14 @@ assets = [
     { source = "THIRD_PARTY_NOTICES", dest = "/usr/share/doc/kingfisher/THIRD_PARTY_NOTICES", mode = "644", doc = true },
     { source = "third-party/kingfisher-vectorscan/NOTICE", dest = "/usr/share/doc/kingfisher/kingfisher-vectorscan-NOTICE", mode = "644", doc = true }
 ]
+
+# Migrate RPMs accidentally published under the Cargo package name through v2.11.0.
+# Keep this bound fixed: future releases use the canonical kingfisher identity.
+[package.metadata.generate-rpm.obsoletes]
+kingfisher-bin = "<= 2.11.0-1"
+
+[package.metadata.generate-rpm.provides]
+kingfisher-bin = "= 2.11.0-1"
 
 [dependencies]
 # Native workspace is opt-in; headless CLI builds do not link GPUI.

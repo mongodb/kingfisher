@@ -56,6 +56,12 @@ make release VERSION=X.Y.Z RELEASE_REMOTE=git@github.com:mongodb/kingfisher.git
 Follow **build-and-release** under **Actions** until all publishing jobs finish.
 The workflow uses the latest changelog section for the release notes.
 
+Unchanged libraries keep their existing versions: the crates.io planner verifies their
+packaged contents and skips their uploads. `make release` pushes only the CLI's `v*` tag;
+it does not trigger the independently versioned Python SDK workflow. On main merges and
+`python-v*` SDK tags, that workflow checks the SDK version on PyPI and skips the
+protected publish job entirely if that version already exists.
+
 Do not start a release with `gh release create` or the GitHub **Publish release** button:
 those publish immediately, before the build. Adding `--draft` prevents immediate publication
 but does not trigger this workflow; push the tag or dispatch on an existing tag instead.
@@ -71,6 +77,14 @@ trigger. Manual dispatch requires the workflow to exist on the default branch as
 Confirm all expected platform archives, Linux packages, `kingfisher-rule-bundle.tgz`, and
 `multiple.intoto.jsonl` are attached. Verify an artifact using the end-user instructions with
 the new version, and check the Docker, PyPI, and crates.io publishing jobs separately.
+
+For both Linux architectures, inspect the package headers, not just filenames: RPM `Name`
+and DEB `Package` must be `kingfisher`. Corrected RPMs must include
+`Obsoletes: kingfisher-bin <= 2.11.0-1`. Test upgrades from both historical RPM names
+in disposable Linux environments; only
+`kingfisher` should remain installed and own `/usr/bin/kingfisher`. The Cargo and PyPI
+package names intentionally remain `kingfisher-bin`. See the
+[Linux package installation guidance](../docs/INSTALLATION.md#linux-packages-rpm-and-deb).
 
 If a job fails, inspect its logs and rerun the failed jobs from the original Actions run where
 appropriate. Keep the original tag and commit. A code fix needs a new release version.

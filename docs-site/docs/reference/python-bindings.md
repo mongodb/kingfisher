@@ -978,8 +978,10 @@ to `mongodb/kingfisher` and uses the protected `pypi-sdk` environment.
 
 The SDK version comes from `crates/kingfisher-python/Cargo.toml` and is independent
 of the CLI version. Increment it when SDK code or its embedded Rust dependencies
-change. Already-published files are skipped on unrelated main merges and retries;
-PyPI does not replace existing files. Optional `python-v<version>` tag pushes can
+change. A read-only PyPI plan checks whether the SDK version already exists.
+If it does, the entire protected publish job is skipped without requesting credentials
+or attempting uploads, even if that version is missing a platform wheel. Publishing
+requires a new SDK version. Optional `python-v<version>` tag pushes can
 also publish, and the tag must exactly match the SDK package version.
 
 Maintainer release checklist:
@@ -988,7 +990,7 @@ Maintainer release checklist:
    `uv.lock` and `Cargo.lock`, regenerate the rule provenance as described in
    [publishing guidance](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md), and merge through the normal process.
 2. Inspect all six tested wheels and the source artifact in the main-branch run.
-   The protected publish job runs after every build and test succeeds.
+   The protected publish job runs only when all tests succeed and the SDK version is new on PyPI.
 3. Configure PyPI Trusted Publishing for owner `mongodb`, repository `kingfisher`,
    workflow `python-sdk.yml`, and environment `pypi-sdk`. The GitHub environment
    must allow the `main` branch (and `python-v*` tags if using tag releases).
