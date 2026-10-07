@@ -23,6 +23,15 @@ env:
   RUST_TOOLCHAIN: "1.99.0"
 
 jobs:
+  packaging:
+    name: Linux packaging contracts
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - run: python3 scripts/check-linux-packages.py --manifest-only
+      - run: python3 -m unittest discover -s scripts/tests -p test_linux_packages.py -v
+      - run: python3 -m unittest discover -s scripts/tests -p test_rpm_upgrades.py -v
+
   lint:
     name: Rust Clippy and API documentation
     runs-on: ubuntu-24.04

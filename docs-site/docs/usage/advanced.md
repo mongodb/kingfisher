@@ -917,7 +917,7 @@ Kingfisher automatically queries GitHub for a newer release when it starts and t
 
 - **Disable version checks** – Pass `--no-update-check` to skip both the startup and shutdown checks entirely. Recommended for CI runs to keep behavior reproducible.
 
-Self-update writes to wherever the running binary lives, so it requires the calling user to have write access to that location. If you installed Kingfisher via a package manager (Homebrew, the `.deb`/`.rpm` packages, the PyPI wrapper, etc.), use that package manager's upgrade command instead — Kingfisher will detect the permission error and tell you so.
+Self-update writes to wherever the running binary lives, so it requires the calling user to have write access to that location. If you installed Kingfisher via a package manager (Homebrew, the `.deb`/`.rpm` packages, the PyPI wrapper, etc.), update through that package manager instead, even if you have root access: self-update bypasses the package manager's version and file tracking. For downloaded Linux packages, download and verify the newer release, then install the local package with DNF/Yum or APT; a repository upgrade command alone does not fetch GitHub release assets. See [Linux package installation and RPM migration](../getting-started/installation.md#linux-packages-rpm-and-deb).
 
 Self-update supports all six release platforms: Linux x64/arm64, macOS x64/arm64, and Windows x64/arm64.
 

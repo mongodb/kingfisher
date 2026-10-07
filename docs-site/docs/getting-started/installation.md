@@ -11,6 +11,7 @@ This guide covers all installation methods for Kingfisher, including pre-commit 
 
 - [Pre-built Releases](#pre-built-releases)
 - [Verifying Release Artifacts](#verifying-release-artifacts)
+- [Linux Packages (RPM and DEB)](#linux-packages-rpm-and-deb)
 - [Homebrew](#homebrew)
 - [mise](#mise)
 - [Linux and macOS](#linux-and-macos)
@@ -74,6 +75,34 @@ This verifies release provenance; it does not guarantee that the software has no
 Older releases attested from `refs/heads/main` cannot pass this version-specific check.
 Do not remove `--source-ref` to make them pass: use a release attested from its version tag,
 or independently pin a trusted artifact SHA-256 for a legacy release.
+
+## Linux Packages (RPM and DEB)
+
+The native Linux package name is **`kingfisher`**, and the command is `kingfisher`.
+This is separate from the intentional crates.io and PyPI name `kingfisher-bin`.
+
+Download the `.rpm` or `.deb` for your architecture from
+[Releases](https://github.com/mongodb/kingfisher/releases), then
+[verify it](#verifying-release-artifacts) before installing. These examples use x64;
+substitute `arm64` in the filename for ARM64:
+
+```bash
+# RPM: install or upgrade.
+sudo dnf install ./kingfisher-linux-x64.rpm
+# DEB: install or upgrade.
+sudo apt install ./kingfisher-linux-x64.deb
+```
+
+For updates, download and verify the newer release and run the corresponding local-file
+install command again. A repository upgrade command alone does not fetch GitHub release
+assets. Do not use `kingfisher self-update` to overwrite a package-managed binary.
+
+To uninstall:
+
+```bash
+sudo dnf remove kingfisher  # RPM; use yum instead of dnf where applicable.
+sudo apt remove kingfisher # DEB
+```
 
 ## Homebrew
 

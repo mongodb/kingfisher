@@ -2,11 +2,17 @@
 
 [← Back to README](../README.md)
 
-The root package is `kingfisher-bin`; its executable and Rust library retain the name
+The root Cargo package is `kingfisher-bin`; its executable and Rust library retain the name
 `kingfisher`. The `kingfisher` crates.io name belongs to another project. The reusable library packages
 are `kingfisher-core`, `kingfisher-rules`, and `kingfisher-scanner`. The maintainer-only
 `kingfisher-rule-bundle` package is never published. The `kingfisher-python` binding
 crate is packaged by Maturin for the separate Python SDK release, not crates.io.
+
+Native Linux RPM and DEB packages use the system package name `kingfisher`; do not derive
+it from the Cargo or PyPI package name. Keep the RPM compatibility metadata for previously
+misnamed packages. See
+[Linux package installation](INSTALLATION.md#linux-packages-rpm-and-deb)
+and the [maintainer package checks](../.github/RELEASING.md#finish-and-recover).
 
 ## Package versions and consumers
 
@@ -17,7 +23,7 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | `kingfisher-core` | `1.0.3` | `kingfisher_core` library |
 | `kingfisher-rules` | `1.2.0` | `kingfisher_rules` library |
 | `kingfisher-scanner` | `1.3.0` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.11.0` | `kingfisher` executable and library |
+| `kingfisher-bin` | `2.11.1` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
 `1.3.0` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
@@ -30,7 +36,7 @@ version. See the [compatibility contract](LIBRARY.md#api-stability).
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.11.0
+cargo install --locked kingfisher-bin --version 2.11.1
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)

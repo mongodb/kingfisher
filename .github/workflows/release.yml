@@ -84,7 +84,10 @@ jobs:
           cache-on-failure: true
 
       - name: Install packaging tools
-        run: cargo install cargo-deb cargo-generate-rpm
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends rpm
+          cargo install cargo-deb cargo-generate-rpm
 
       # Alpine supplies the GCC musl runtime required by Vectorscan 0.1.2 archives.
       # The reusable CI workflow runs tests separately.
@@ -114,6 +117,12 @@ jobs:
         run: |
           cargo generate-rpm --target x86_64-unknown-linux-musl \
             --output target/release/kingfisher-linux-x64.rpm
+
+      - name: Verify Linux package metadata
+        run: python3 scripts/check-linux-packages.py --arch x64
+
+      - name: Test RPM upgrades on Amazon Linux 2023
+        run: python3 scripts/test-rpm-upgrades.py --arch x64
 
       - name: Move artifact to dist
         shell: bash
@@ -165,7 +174,10 @@ jobs:
           cache-on-failure: true
 
       - name: Install packaging tools
-        run: cargo install cargo-deb cargo-generate-rpm
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends rpm
+          cargo install cargo-deb cargo-generate-rpm
 
       # Alpine supplies the GCC musl runtime required by Vectorscan 0.1.2 archives.
       # The reusable CI workflow runs tests separately.
@@ -195,6 +207,12 @@ jobs:
         run: |
           cargo generate-rpm --target aarch64-unknown-linux-musl \
             --output target/release/kingfisher-linux-arm64.rpm
+
+      - name: Verify Linux package metadata
+        run: python3 scripts/check-linux-packages.py --arch arm64
+
+      - name: Test RPM upgrades on Amazon Linux 2023
+        run: python3 scripts/test-rpm-upgrades.py --arch arm64
 
       - name: Move artifact to dist
         shell: bash
@@ -380,6 +398,7 @@ jobs:
         run: |
           awk '
             BEGIN            { grabbing = 0 }
+            /^## \[Unreleased\]/ { next }
             /^## \[/         {
                                if (grabbing) exit;  # already grabbed latest entry
                                grabbing = 1

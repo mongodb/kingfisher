@@ -72,6 +72,14 @@ Confirm all expected platform archives, Linux packages, `kingfisher-rule-bundle.
 `multiple.intoto.jsonl` are attached. Verify an artifact using the end-user instructions with
 the new version, and check the Docker, PyPI, and crates.io publishing jobs separately.
 
+For both Linux architectures, inspect the package headers, not just filenames: RPM `Name`
+and DEB `Package` must be `kingfisher`. Corrected RPMs must include
+`Obsoletes: kingfisher-bin <= 2.11.0-1`. Test upgrades from both historical RPM names
+in disposable Linux environments; only
+`kingfisher` should remain installed and own `/usr/bin/kingfisher`. The Cargo and PyPI
+package names intentionally remain `kingfisher-bin`. See the
+[Linux package installation guidance](../docs/INSTALLATION.md#linux-packages-rpm-and-deb).
+
 If a job fails, inspect its logs and rerun the failed jobs from the original Actions run where
 appropriate. Keep the original tag and commit. A code fix needs a new release version.
 An upload failure leaves a draft that the next attempt can update. Published releases are
