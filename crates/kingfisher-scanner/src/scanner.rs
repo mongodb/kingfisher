@@ -549,12 +549,18 @@ impl Scanner {
                     });
                 }
 
-                if confirmed || scan_start == 0 {
+                if !primitives::confirmation_needs_wider_window(
+                    confirmed,
+                    scan_start,
+                    scan_end,
+                    self.rules_db.confirmation_match_maximum_len(rule_id),
+                ) {
                     break;
                 }
 
                 // Keep the bounded fast path for ordinary candidates and widen only when exact
-                // confirmation fails, removing the match-length limit without routine blob scans.
+                // confirmation may exceed it, removing the match-length limit without routine
+                // blob scans.
                 let lookback = scan_end - scan_start;
                 scan_start = scan_end.saturating_sub(lookback.saturating_mul(2));
             }

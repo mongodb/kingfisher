@@ -431,12 +431,18 @@ impl<'a> Matcher<'a> {
                     candidate_index,
                     filter_line_cache,
                 );
-                if confirmed || scan_start == 0 {
+                if !kingfisher_scanner::__cli_internals::confirmation_needs_wider_window(
+                    confirmed,
+                    scan_start,
+                    scan_end,
+                    rules_db.confirmation_match_maximum_len(rule_id_usize),
+                ) {
                     break;
                 }
 
                 // Ordinary candidates keep the bounded confirmation path. Only a failed exact
-                // scan widens toward the start of the blob, so matches have no lookback limit.
+                // scan that may exceed the current window widens toward the start of the blob,
+                // so unbounded matches retain no lookback limit.
                 let lookback = scan_end - scan_start;
                 scan_start = scan_end.saturating_sub(lookback.saturating_mul(2));
             }
