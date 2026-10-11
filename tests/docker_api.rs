@@ -35,7 +35,11 @@ fn image_archive() -> Result<Vec<u8>> {
 }
 
 fn scan_command(work: &Path, host: &str, image: &str) -> Command {
-    let mut command = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
+    scan_command_with_binary(assert_cmd::cargo::cargo_bin!("kingfisher"), work, host, image)
+}
+
+fn scan_command_with_binary(binary: &Path, work: &Path, host: &str, image: &str) -> Command {
+    let mut command = Command::new(binary);
     command
         .args(["-v", "scan", "--git-clone-dir"])
         .arg(work.join("scan output"))
@@ -50,7 +54,7 @@ fn scan_command(work: &Path, host: &str, image: &str) -> Command {
         ])
         .env("DOCKER_CONFIG", work.join("docker config"))
         .env("DOCKER_HOST", host)
-        // A real Docker installation must not influence these regression tests.
+        // Keep PATH isolated; Windows CLI fixtures also isolate the application directory.
         .env("PATH", work.join("empty bin"));
     for name in [
         "DOCKER_CONTEXT",
@@ -102,7 +106,7 @@ async fn failing_api(requests: u64) -> MockServer {
     server
 }
 
-fn compile_docker_cli_fixture(work: &Path) -> Result<PathBuf> {
+fn compile_docker_cli_fixture(work: &Path) -> Result<(PathBuf, PathBuf)> {
     let bin_dir = work.join("fake bin with spaces");
     std::fs::create_dir_all(&bin_dir)?;
     let binary = bin_dir.join(format!("docker{}", std::env::consts::EXE_SUFFIX));
@@ -133,7 +137,12 @@ fn compile_docker_cli_fixture(work: &Path) -> Result<PathBuf> {
     }
     let output = command.arg(source).arg("-o").arg(&binary).output()?;
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
-    Ok(bin_dir)
+    // Windows searches the application directory and system directories before
+    // inherited PATH. Run a private scanner copy beside the stub so a system
+    // docker.exe cannot take precedence, even when PATH is isolated.
+    let scanner = bin_dir.join(format!("kingfisher{}", std::env::consts::EXE_SUFFIX));
+    std::fs::copy(assert_cmd::cargo::cargo_bin!("kingfisher"), &scanner)?;
+    Ok((bin_dir, scanner))
 }
 
 #[tokio::test]
@@ -195,7 +204,7 @@ async fn scan_through_compatible_api_without_docker_cli() -> Result<()> {
 #[tokio::test]
 async fn docker_tls_settings_use_cli_without_probing_api() -> Result<()> {
     let work = tempfile::tempdir()?;
-    let bin_dir = compile_docker_cli_fixture(work.path())?;
+    let (bin_dir, scanner) = compile_docker_cli_fixture(work.path())?;
     let archive = work.path().join("fixture.tar");
     std::fs::write(&archive, image_archive()?)?;
     let server = failing_api(0).await;
@@ -209,7 +218,7 @@ async fn docker_tls_settings_use_cli_without_probing_api() -> Result<()> {
         let scan_dir = work.path().join(case);
         std::fs::create_dir_all(&scan_dir)?;
         let trace = scan_dir.join("cli-trace.txt");
-        let mut command = scan_command(&scan_dir, &server.uri(), IMAGE);
+        let mut command = scan_command_with_binary(&scanner, &scan_dir, &server.uri(), IMAGE);
         command
             .envs(settings.iter().copied())
             .env("PATH", &bin_dir)
@@ -232,7 +241,7 @@ async fn docker_tls_settings_use_cli_without_probing_api() -> Result<()> {
 #[tokio::test]
 async fn scan_falls_back_to_docker_cli_and_cleans_failed_cli_exports() -> Result<()> {
     let work = tempfile::tempdir()?;
-    let bin_dir = compile_docker_cli_fixture(work.path())?;
+    let (bin_dir, scanner) = compile_docker_cli_fixture(work.path())?;
     let archive = work.path().join("fixture.tar");
     std::fs::write(&archive, image_archive()?)?;
     let server = failing_api(2).await;
@@ -242,7 +251,7 @@ async fn scan_falls_back_to_docker_cli_and_cleans_failed_cli_exports() -> Result
         let trace = scan_dir.join("cli-trace.txt");
         // Also verify a failed local export never reaches registry fallback.
         let image = if fail_save { "invalid image reference" } else { IMAGE };
-        let mut command = scan_command(&scan_dir, &server.uri(), image);
+        let mut command = scan_command_with_binary(&scanner, &scan_dir, &server.uri(), image);
         command
             .env("PATH", &bin_dir)
             .env("KF_TEST_DOCKER_ARCHIVE", &archive)
@@ -268,11 +277,12 @@ async fn scan_falls_back_to_docker_cli_and_cleans_failed_cli_exports() -> Result
 #[tokio::test]
 async fn unavailable_api_and_cli_image_absence_reach_oci_fallback() -> Result<()> {
     let work = tempfile::tempdir()?;
-    let bin_dir = compile_docker_cli_fixture(work.path())?;
+    let (bin_dir, scanner) = compile_docker_cli_fixture(work.path())?;
     let trace = work.path().join("cli-trace.txt");
     let server = failing_api(1).await;
     // Invalid registry syntax proves the OCI path is reached without a live registry request.
-    let mut command = scan_command(work.path(), &server.uri(), "invalid image reference");
+    let mut command =
+        scan_command_with_binary(&scanner, work.path(), &server.uri(), "invalid image reference");
     command
         .env("PATH", bin_dir)
         .env("KF_TEST_DOCKER_TRACE", &trace)

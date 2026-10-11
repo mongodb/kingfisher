@@ -881,6 +881,9 @@ Docker API negotiation and inspection wait up to 10 seconds for response headers
 requests wait up to 600 seconds for response headers. Export streaming, extraction, and
 Docker CLI operations have no overall timeout. An API failure may cause the CLI to repeat
 the full export.
+Docker API export downloads are capped at 4 GiB before writing an excess chunk to disk.
+Exceeding this limit fails the export without retrying through the CLI. `--unlimited` disables
+the byte limit.
 
 To use Podman, point `DOCKER_HOST` at its running Docker-compatible API socket
 (for rootless Linux, `unix://$XDG_RUNTIME_DIR/podman/podman.sock`).

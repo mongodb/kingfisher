@@ -6,7 +6,9 @@ All notable changes to this project will be documented in this file.
 
 - Avoided redundant regex confirmation widening in the CLI and SDK while preserving matches when iterator alignment shifts. [#545](https://github.com/mongodb/kingfisher/pull/545)
 - Fixed prepared validation outcome parity, preserved scan state during credential preparation, and retained completed revocation evidence across cancellation.
-- Preserved per-rule revocation results after failures; HTTP revocation now defaults to no retries and only explicit throttling responses can be retried. AWS IAM mutations retry definitive throttling without repeating ambiguous failures.
+- Preserved per-rule revocation results after failures; HTTP revocation now defaults to no retries and retries HTTP 429 only on read-only lookup steps. Custom mutations are never retried, and mutating 429 responses have unknown outcomes. AWS IAM mutations retry definitive throttling without repeating ambiguous failures.
+- Removed secret-bearing URLs from CLI HTTP revocation errors and capped Docker API export downloads before writing excess bytes to disk, preserving explicit unlimited mode.
+- Isolated the Docker CLI test fixture from system executables on Windows.
 - Fixed Docker host precedence, surfaced local image export failures, preserved files named `layer.tar`, and isolated image output directories without deleting existing caller files.
 - Fixed Python source-package fixtures and Windows Docker test executables, preserved the stable Rust credential URI API, and distinguished revocation failures before mutation from unknown submitted outcomes.
 - Enforced release tag ancestry, matching changelog notes and existing release commit identity; SDK publish retries now upload missing PyPI distributions.

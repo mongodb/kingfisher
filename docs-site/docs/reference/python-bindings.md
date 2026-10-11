@@ -1040,7 +1040,9 @@ revocation requests are not retried; AWS retries only definitive IAM throttling 
 A `RevocationResult` contains `rule_id`, `revoked`, `http_status`; it never contains
 provider bodies. Missing/unsupported rules and invalid configuration raise
 `ValueError` or `RuntimeError`. A timeout or transport failure may occur after the
-provider applied revocation: inspect provider state before retrying.
+provider applied revocation: inspect provider state before retrying. A mutating HTTP 429
+also has an unknown outcome and is never retried; rate limiting does not prove the action
+was rejected before it was applied.
 `revoke(..., timeout=None, cancellation=None)` also accepts an application
 deadline/cancellation signal and responds to Ctrl-C. Interruption has the same
 unknown-outcome risk and never triggers retries. Failure messages preserve safe

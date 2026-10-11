@@ -36,6 +36,10 @@ struct LocalImageAbsent;
 #[error("local Docker image was found but could not be exported")]
 struct LocalImageExportFailed;
 
+#[derive(Debug, thiserror::Error)]
+#[error("Docker API export exceeds maximum allowed size of {0} bytes")]
+struct DockerApiExportLimitExceeded(u64);
+
 fn helper_get_creds(helper: &str, registry: &str) -> Option<(String, String)> {
     fn run(bin: &str, registry: &str) -> Option<(String, String)> {
         let mut child = Command::new(bin)
@@ -632,6 +636,38 @@ fn prepare_image_directory(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
+async fn write_docker_api_export(
+    mut stream: impl futures::Stream<Item = Result<bytes::Bytes, bollard::errors::Error>> + Unpin,
+    tar_path: &Path,
+    max_bytes: Option<u64>,
+) -> Result<()> {
+    let mut file = tokio::fs::File::create(tar_path).await?;
+    let result: Result<()> = async {
+        let mut written = 0_u64;
+        while let Some(bytes) = stream.try_next().await.context("exporting local Docker image")? {
+            let next = written
+                .checked_add(bytes.len() as u64)
+                .context("Docker API export size overflow")?;
+            if let Some(limit) = max_bytes
+                && next > limit
+            {
+                return Err(DockerApiExportLimitExceeded(limit).into());
+            }
+            file.write_all(&bytes).await?;
+            written = next;
+        }
+        Ok(())
+    }
+    .await;
+    // Finish pending file writes and close the archive on errors too, before
+    // extraction or temporary-directory cleanup can run (especially on Windows).
+    let flush = file.flush().await;
+    drop(file);
+    result?;
+    flush?;
+    Ok(())
+}
+
 pub struct Docker {
     resources: crate::limits::ResourceLimits,
 }
@@ -666,17 +702,13 @@ impl Docker {
         pb.set_message(format!("saving local {image} via Docker API"));
         let result = async {
             let tar_path = out_dir.join("local_image.tar");
-            let mut file = tokio::fs::File::create(&tar_path).await?;
             let client = client.with_timeout(Duration::from_secs(600));
-            let mut stream = client.export_image(image);
-            while let Some(bytes) =
-                stream.try_next().await.context("exporting local Docker image")?
-            {
-                file.write_all(&bytes).await?;
-            }
-            file.flush().await?;
-            // Close the archive before extraction/removal, including on Windows.
-            drop(file);
+            write_docker_api_export(
+                client.export_image(image),
+                &tar_path,
+                self.resources.limit(MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES),
+            )
+            .await?;
             let count = extract_saved_archive_layers(&tar_path, out_dir, &pb, self.resources)?;
             if count == 0 {
                 return Err(anyhow!("Docker API export did not contain image layers"));
@@ -710,7 +742,11 @@ impl Docker {
             Err(error) => Err(error),
         };
         let api_error = match api_result {
-            Err(error) if error.is::<LocalImageAbsent>() => return Err(error),
+            Err(error)
+                if error.is::<LocalImageAbsent>() || error.is::<DockerApiExportLimitExceeded>() =>
+            {
+                return Err(error);
+            }
             Ok(()) => return publish_local_image(staging.path(), out_dir),
             Err(error) => {
                 debug!("Docker API lookup/export failed for {image}: {error:#}; trying CLI");
@@ -941,6 +977,50 @@ mod tests {
     #[test]
     fn docker_struct_new() {
         let _ = Docker::new();
+    }
+
+    #[tokio::test]
+    async fn docker_api_export_checks_byte_limit_before_writing() -> Result<()> {
+        for (unlimited, chunks, expected, exceeds_limit) in [
+            (false, vec!["abc", "de"], "abcde", false),
+            (false, vec!["abc", "de", "f", "not consumed"], "abcde", true),
+            (true, vec!["abc", "de", "f"], "abcdef", false),
+        ] {
+            let dir = tempdir()?;
+            let archive = dir.path().join("export.tar");
+            let stream = futures::stream::iter(chunks.into_iter().map(|chunk| {
+                Ok::<_, bollard::errors::Error>(bytes::Bytes::from_static(chunk.as_bytes()))
+            }));
+            let resources = crate::limits::ResourceLimits { unlimited };
+            let result = write_docker_api_export(stream, &archive, resources.limit(5)).await;
+            if exceeds_limit {
+                assert!(result.unwrap_err().is::<DockerApiExportLimitExceeded>());
+            } else {
+                result?;
+            }
+            assert_eq!(std::fs::read(&archive)?, expected.as_bytes());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn docker_api_export_limit_does_not_retry_through_cli() -> Result<()> {
+        let dir = tempdir()?;
+        let out = dir.path().join("out");
+        let error = Docker::new()
+            .try_save_local_image_with_fallback(
+                Err(anyhow!(DockerApiExportLimitExceeded(5)).context(LocalImageExportFailed)),
+                "local-test:latest",
+                &out,
+                false,
+                |_| panic!("CLI export must not bypass the resource limit"),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.is::<DockerApiExportLimitExceeded>());
+        assert!(!out.exists());
+        assert_eq!(std::fs::read_dir(dir.path())?.count(), 0);
+        Ok(())
     }
 
     fn append_bytes(tar: &mut tar::Builder<impl Write>, path: &str, data: &[u8]) -> Result<()> {

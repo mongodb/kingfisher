@@ -378,7 +378,8 @@ It deduplicates exact original action definitions and complete resolved inputs
 within the call, preserving different AWS pairs and endpoints. Different rule IDs
 remain distinct, so callers must resolve overlapping detector ambiguity first.
 Failures before mutation return `failed`; ambiguous submitted actions return
-`unknown`. Processing continues without retries; response matcher
+`unknown`, including a mutating HTTP 429 response. Rate limiting does not prove the
+action was rejected before it was applied. Processing continues without retries; response matcher
 failures return `not_confirmed`, without proving the mutation did not occur.
 Total deadline/cancellation/Ctrl-C stops pending actions and propagates an exception
 carrying `.completed` statuses and `.pending_indices`. Interrupted in-flight actions

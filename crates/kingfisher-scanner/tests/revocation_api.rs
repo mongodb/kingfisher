@@ -495,7 +495,7 @@ async fn iam_mutations_retry_only_definitive_throttling_and_stop_after_three_att
 }
 
 #[tokio::test]
-async fn explicit_http_retries_never_repeat_ambiguous_responses() {
+async fn explicit_http_retries_never_repeat_mutations() {
     use kingfisher_scanner::validation::revocation::{
         RevocationSubmitted, execute_http_revocation,
     };
@@ -533,13 +533,131 @@ async fn explicit_http_retries_never_repeat_ambiguous_responses() {
             2,
         )
         .await;
-        if status == StatusCode::TOO_MANY_REQUESTS {
-            assert!(result.unwrap().revoked);
-            assert_eq!(hits.load(Ordering::SeqCst), 2);
-        } else {
-            assert!(result.unwrap_err().is::<RevocationSubmitted>());
-            assert_eq!(hits.load(Ordering::SeqCst), 1);
+        assert!(result.unwrap_err().is::<RevocationSubmitted>(), "{status}");
+        assert_eq!(hits.load(Ordering::SeqCst), 1, "{status}");
+    }
+}
+
+#[tokio::test]
+async fn explicit_http_retries_only_repeat_read_only_lookup_steps() {
+    use kingfisher_scanner::validation::revocation::{
+        RevocationSubmitted, execute_multi_step_revocation,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for method in ["GET", "HEAD", "OPTIONS", "POST", "DELETE"] {
+        for rejected in [2, 10] {
+            let lookups = Arc::new(AtomicUsize::new(0));
+            let observed_lookups = lookups.clone();
+            let mutations = Arc::new(AtomicUsize::new(0));
+            let observed_mutations = mutations.clone();
+            let server = serve(
+                Router::new()
+                    .route(
+                        "/lookup",
+                        axum::routing::any(move || {
+                            let attempt = observed_lookups.fetch_add(1, Ordering::SeqCst);
+                            async move {
+                                if attempt < rejected {
+                                    StatusCode::TOO_MANY_REQUESTS
+                                } else {
+                                    StatusCode::OK
+                                }
+                            }
+                        }),
+                    )
+                    .route(
+                        "/mutate",
+                        delete(move || {
+                            observed_mutations.fetch_add(1, Ordering::SeqCst);
+                            async { StatusCode::NO_CONTENT }
+                        }),
+                    ),
+            )
+            .await;
+            let mut lookup = request(format!("{}/lookup", server.url));
+            lookup.method = method.into();
+            lookup.response_matcher = None;
+            let steps = HttpMultiStepRevocation {
+                steps: vec![
+                    RevocationStep { name: None, request: lookup, multipart: None, extract: None },
+                    RevocationStep {
+                        name: None,
+                        request: request(format!("{}/mutate", server.url)),
+                        multipart: None,
+                        extract: None,
+                    },
+                ],
+            };
+            let parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
+            let mut globals = liquid::Object::from_iter([(
+                "TOKEN".into(),
+                liquid::model::Value::scalar("fixture-token"),
+            )]);
+            let result = execute_multi_step_revocation(
+                &steps,
+                &mut globals,
+                &reqwest::Client::new(),
+                &parser,
+                Duration::from_secs(2),
+                2,
+            )
+            .await;
+            let may_mutate = matches!(method, "POST" | "DELETE");
+            assert_eq!(lookups.load(Ordering::SeqCst), if may_mutate { 1 } else { 3 }, "{method}");
+            if !may_mutate && rejected == 2 {
+                assert!(result.unwrap().revoked);
+                assert_eq!(mutations.load(Ordering::SeqCst), 1);
+            } else {
+                assert_eq!(result.unwrap_err().is::<RevocationSubmitted>(), may_mutate, "{method}");
+                assert_eq!(mutations.load(Ordering::SeqCst), 0);
+            }
         }
+    }
+}
+
+#[tokio::test]
+async fn final_http_step_is_not_retried_even_with_read_only_method() {
+    use kingfisher_scanner::validation::revocation::{
+        RevocationSubmitted, execute_multi_step_revocation,
+    };
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    for method in ["GET", "HEAD", "OPTIONS"] {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let observed = hits.clone();
+        let server = serve(Router::new().route(
+            "/",
+            axum::routing::any(move || {
+                observed.fetch_add(1, Ordering::SeqCst);
+                async { StatusCode::TOO_MANY_REQUESTS }
+            }),
+        ))
+        .await;
+        let mut action = request(server.url.clone());
+        action.method = method.into();
+        let steps = HttpMultiStepRevocation {
+            steps: vec![RevocationStep {
+                name: None,
+                request: action,
+                multipart: None,
+                extract: None,
+            }],
+        };
+        let parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
+        let mut globals = liquid::Object::from_iter([(
+            "TOKEN".into(),
+            liquid::model::Value::scalar("fixture-token"),
+        )]);
+        let result = execute_multi_step_revocation(
+            &steps,
+            &mut globals,
+            &reqwest::Client::new(),
+            &parser,
+            Duration::from_secs(2),
+            2,
+        )
+        .await;
+        assert!(result.unwrap_err().is::<RevocationSubmitted>(), "{method}");
+        assert_eq!(hits.load(Ordering::SeqCst), 1);
     }
 }
 

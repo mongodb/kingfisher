@@ -158,6 +158,20 @@ def test_unknown_provider_failure_is_not_retried_for_duplicate(tmp_path, monkeyp
         assert calls == [("GET", "/identity")]
 
 
+@pytest.mark.parametrize("status", [429, 503])
+def test_native_mutation_http_error_is_unknown_and_not_retried(tmp_path, status):
+    with provider(delete_status=status) as (endpoint, calls):
+        revoker, validator = setup(tmp_path, endpoint)
+        result, = revoker.prepare(ACCOUNT + "\n" + TOKEN).validate(validator)
+        with pytest.raises(RuntimeError, match="outcome may be unknown") as caught:
+            revoker.revoke(result, confirm=True)
+        assert caught.value.outcome_unknown is True
+        assert all(value not in str(caught.value) for value in (TOKEN, ACCOUNT, endpoint))
+        batch = revoker.revoke_many([result, result], confirm=True)
+        assert [item.outcome for item in batch] == ["unknown", "duplicate"]
+        assert calls == [("GET", "/identity"), ("DELETE", "/token"), ("DELETE", "/token")]
+
+
 @pytest.mark.parametrize("failure", ["invalid_url", "unsupported_scheme"])
 def test_native_preflight_failure_is_failed_not_unknown(tmp_path, failure):
     with provider() as (endpoint, calls):

@@ -42,11 +42,13 @@ async fn send_revocation_request(
                 let could_submit = may_mutate && !error.is_builder();
                 submitted_error(error.into(), could_submit)
             })?;
-        // A definitive rate-limit rejection is the only automatic retry. Lost
-        // responses, 408 and 5xx can follow an already-applied mutation.
-        if response.status() != StatusCode::TOO_MANY_REQUESTS || attempt == retries {
+        // A custom endpoint can return 429 after applying a mutation. Only
+        // read-only lookup steps can safely retry rate-limited requests.
+        if response.status() != StatusCode::TOO_MANY_REQUESTS || may_mutate || attempt == retries {
             if response.status() == StatusCode::TOO_MANY_REQUESTS {
-                return response.error_for_status().map_err(Into::into);
+                return response
+                    .error_for_status()
+                    .map_err(|error| submitted_error(error.into(), may_mutate));
             }
             if response.status().is_server_error()
                 || response.status() == StatusCode::REQUEST_TIMEOUT
@@ -255,6 +257,7 @@ pub async fn execute_http_revocation(
 }
 
 /// Execute a single revocation step and extract variables from the response.
+#[allow(clippy::too_many_arguments)]
 async fn execute_revocation_step(
     step: &RevocationStep,
     globals: &mut Object,
@@ -263,6 +266,7 @@ async fn execute_revocation_step(
     timeout: Duration,
     retries: u32,
     step_number: usize,
+    is_final_step: bool,
 ) -> Result<(reqwest::StatusCode, reqwest::header::HeaderMap, String)> {
     let default_step_name = format!("step_{}", step_number);
     let step_name = step.name.as_deref().unwrap_or(&default_step_name);
@@ -283,7 +287,8 @@ async fn execute_revocation_step(
     )
     .map_err(|e| anyhow!("Failed to build request for {step_name}: {e}"))?;
 
-    let may_mutate = is_mutating_method(&step.request.method);
+    // The final step is the revocation action, even for a custom GET endpoint.
+    let may_mutate = is_final_step || is_mutating_method(&step.request.method);
     let response = send_revocation_request(request_builder, retries, may_mutate)
         .await
         .with_context(|| format!("Request failed for {step_name}"))?;
@@ -391,6 +396,7 @@ pub async fn execute_multi_step_revocation(
             timeout,
             retries,
             step_number,
+            is_final_step,
         )
         .await
         {

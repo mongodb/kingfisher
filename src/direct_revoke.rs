@@ -183,6 +183,7 @@ fn http_revocation_outcome(
             (result, status)
         }
         Err(error) => {
+            let category = kingfisher_scanner::Revoker::error_category(&error);
             let status = if error.is::<RevocationSubmitted>() {
                 CliRevocationStatus::Unknown
             } else {
@@ -194,7 +195,13 @@ fn http_revocation_outcome(
                     rule_name: String::new(),
                     revoked: false,
                     status_code: None,
-                    message: format!("HTTP revocation error: {error:#}"),
+                    message: if status == CliRevocationStatus::Unknown {
+                        format!(
+                            "HTTP revocation error ({category}); outcome is unknown; verify provider state before retrying"
+                        )
+                    } else {
+                        format!("HTTP revocation error ({category}); failed before mutation")
+                    },
                 },
                 status,
             )

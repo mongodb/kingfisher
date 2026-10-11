@@ -621,7 +621,7 @@ rules:
 
     #[test]
     fn validate_jwt_token() {
-        // A fake JWT token (will fail validation but tests the flow)
+        // kingfisher:ignore (synthetic JWT fixture used only to test the validation flow)
         let fake_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args(["validate", "--rule", "jwt", fake_jwt, "--no-update-check"])
@@ -653,6 +653,76 @@ rules:
 
 mod revoke {
     use super::*;
+
+    #[tokio::test]
+    async fn revoke_http_errors_do_not_expose_url_credentials() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(429))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let work = TempDir::new().unwrap();
+        let rules_path = work.path().join("redaction.yml");
+        for (url, outcome, category) in [
+            (
+                format!("{}/{{{{ TOKEN }}}}/{{{{ COMPANION }}}}", server.uri()),
+                "unknown",
+                "http_status",
+            ),
+            (
+                "invalid URL {{ TOKEN }} {{ COMPANION }}".into(),
+                "failed",
+                "configuration_or_provider",
+            ),
+        ] {
+            fs::write(
+                &rules_path,
+                serde_json::to_vec(&serde_json::json!({"rules": [{
+                    "id": "acme.redaction", "name": "Redaction regression", "pattern": "(fixture)",
+                    "revocation": {"type": "Http", "content": {"request": {
+                        "method": "DELETE", "url": url,
+                        "response_matcher": [{"type": "StatusMatch", "status": [204]}],
+                    }}},
+                }]}))
+                .unwrap(),
+            )
+            .unwrap();
+            for format in ["text", "json", "toon"] {
+                let mut command =
+                    std::process::Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
+                command
+                    .args(["revoke", "--rule", "acme.redaction", "redaction-secret-fixture"])
+                    .args(["--var", "COMPANION=redaction-companion-fixture", "--rules-path"])
+                    .arg(&rules_path)
+                    .args([
+                        "--no-builtins",
+                        "--no-update-check",
+                        "--retries",
+                        "2",
+                        "--format",
+                        format,
+                    ]);
+                let output =
+                    tokio::task::spawn_blocking(move || command.output()).await.unwrap().unwrap();
+                assert_eq!(output.status.code(), Some(1));
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                let stderr = String::from_utf8(output.stderr).unwrap();
+                assert!(stdout.contains(category), "{format}: {stdout}");
+                for sensitive in
+                    ["redaction-secret-fixture", "redaction-companion-fixture", &server.uri()]
+                {
+                    assert!(!stdout.contains(sensitive), "{format}: {stdout}");
+                    assert!(!stderr.contains(sensitive), "{format}: {stderr}");
+                }
+                if format == "json" {
+                    let result: Value = serde_json::from_str(&stdout).unwrap();
+                    assert_eq!(result["revocation_status"], outcome);
+                }
+            }
+        }
+    }
 
     #[test]
     fn revoke_help() {

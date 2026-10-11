@@ -110,6 +110,8 @@ TLS environment settings (`DOCKER_TLS`, `DOCKER_TLS_VERIFY`, and `DOCKER_CERT_PA
 also use the Docker CLI fallback, which applies Docker's certificate and verification settings.
 This requires the Docker CLI, including when `DOCKER_TLS_VERIFY` is present but empty.
 Local images require daemon access; registry credentials apply only to pulls.
+Docker API export downloads are capped at 4 GiB unless `--unlimited` is set.
+Exceeding the limit fails the export without retrying through the CLI.
 
 To use Podman, point `DOCKER_HOST` at its running Docker-compatible API socket
 (for rootless Linux, `unix://$XDG_RUNTIME_DIR/podman/podman.sock`). A nonempty `DOCKER_HOST`

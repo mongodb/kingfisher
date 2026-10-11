@@ -699,6 +699,8 @@ accepts an application-owned client for HTTP rules; AWS and GCP use their own
 transports. HTTP rules can reach internal addresses, so callers own endpoint policy.
 HTTP rule requests are not retried. AWS STS identity lookup may retry transient
 failures, but IAM mutations retry only definitive throttling responses, with at most three attempts and SDK retries disabled.
+Mutating HTTP 429 responses have unknown outcomes because a custom endpoint may rate-limit
+after applying the action; they are never retried.
 The default total deadline is 10 seconds;
 change it with `Revoker::timeout`. `Revoker::error_category` classifies failures without returning endpoint URLs or
 provider bodies, for applications that need safe operational logs. A timed-out

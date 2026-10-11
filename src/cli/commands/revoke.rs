@@ -51,7 +51,7 @@ pub struct RevokeArgs {
     )]
     pub timeout: u64,
 
-    /// Retries for explicit HTTP 429 responses (0-5); ambiguous failures are never retried
+    /// HTTP 429 retries for read-only lookup steps (0-5); no retries for HTTP mutations
     #[arg(
         long = "retries",
         default_value_t = 0,

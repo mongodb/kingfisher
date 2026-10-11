@@ -20,7 +20,7 @@ RULE_ID = "acme.multipart"
 
 
 @contextmanager
-def provider(*, remapped=False, delay_delete=False):
+def provider(*, remapped=False, delay_delete=False, delete_status=None):
     class Calls(list):
         entered = Event()
         release = Event()
@@ -50,7 +50,8 @@ def provider(*, remapped=False, delay_delete=False):
             secret, companion = (ACCOUNT, TOKEN) if remapped else (TOKEN, ACCOUNT)
             valid = (self.headers.get("Authorization") == f"Bearer {secret}"
                      and self.headers.get("X-Account") == companion)
-            self.send_response(204 if valid else 403)
+            status = delete_status if delete_status is not None else (204 if valid else 403)
+            self.send_response(status)
             self.end_headers()
 
         def log_message(self, *_):
