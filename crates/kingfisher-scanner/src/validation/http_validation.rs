@@ -602,6 +602,15 @@ pub async fn check_host_resolvable(
     port: u16,
     allow_internal_ips: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    resolve_host_addresses(host, port, allow_internal_ips).await.map(|_| ())
+}
+
+/// Resolve once and retain the SSRF-approved addresses for callers that can pin connections.
+pub(crate) async fn resolve_host_addresses(
+    host: &str,
+    port: u16,
+    allow_internal_ips: bool,
+) -> Result<Vec<std::net::SocketAddr>, Box<dyn std::error::Error>> {
     // Tolerate bracketed IPv6 literals (`[::1]`) and a stray trailing dot on
     // fully-qualified names (`example.com.`).
     let host = host.trim();
@@ -622,14 +631,13 @@ pub async fn check_host_resolvable(
             ))
             .into());
         }
-        return Ok(());
+        return Ok(vec![std::net::SocketAddr::new(ip, port)]);
     }
 
     // Hostname — resolve via DNS and check each resolved address.
     let addr = format!("{}:{}", host, port);
-    let mut resolved_any = false;
-    for socket_addr in lookup_host(&addr).await? {
-        resolved_any = true;
+    let addresses: Vec<_> = lookup_host(&addr).await?.collect();
+    for socket_addr in &addresses {
         if !allow_internal_ips && !is_ssrf_safe_ip(&socket_addr.ip()) {
             return Err(SsrfBlockedError(format!(
                 "SSRF protection: resolved IP {} for host '{}' is not a public address. \
@@ -640,10 +648,10 @@ pub async fn check_host_resolvable(
             .into());
         }
     }
-    if !resolved_any {
+    if addresses.is_empty() {
         return Err("Failed to resolve URL".into());
     }
-    Ok(())
+    Ok(addresses)
 }
 
 /// Backwards-compatible wrapper: checks URL resolvability with SSRF protection
@@ -930,6 +938,24 @@ mod tests {
     async fn check_host_resolvable_allows_public_literals() {
         assert!(check_host_resolvable("8.8.8.8", 27017, false).await.is_ok());
         assert!(check_host_resolvable("2606:4700::1111", 27017, false).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn resolved_addresses_retain_ports_and_apply_the_ssrf_gate() {
+        for host in ["8.8.8.8", "[2606:4700::1111]"] {
+            let addresses = resolve_host_addresses(host, 587, false).await.unwrap();
+            assert_eq!(addresses.len(), 1);
+            assert_eq!(addresses[0].port(), 587);
+            assert!(is_ssrf_safe_ip(&addresses[0].ip()));
+        }
+        for host in ["127.0.0.1", "[::1]", "localhost."] {
+            let error = resolve_host_addresses(host, 465, false).await.unwrap_err();
+            assert!(error.downcast_ref::<SsrfBlockedError>().is_some());
+            let addresses = resolve_host_addresses(host, 465, true).await.unwrap();
+            assert!(!addresses.is_empty());
+            assert!(addresses.iter().all(|address| address.port() == 465));
+            assert!(addresses.iter().all(|address| address.ip().is_loopback()));
+        }
     }
 
     #[tokio::test]

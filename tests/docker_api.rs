@@ -13,6 +13,7 @@ use wiremock::{
 };
 
 const IMAGE: &str = "local-test:latest";
+// kingfisher:ignore (test fixture, not a real token)
 const SECRET: &str = "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";
 
 fn append_bytes(tar: &mut tar::Builder<impl Write>, path: &str, data: &[u8]) -> Result<()> {
@@ -184,7 +185,7 @@ async fn scan_falls_back_to_docker_cli_and_cleans_failed_cli_exports() -> Result
         let scan_dir = work.path().join(if fail_save { "failed" } else { "completed" });
         std::fs::create_dir_all(&scan_dir)?;
         let trace = scan_dir.join("cli-trace.txt");
-        // Invalid registry syntax makes the final OCI fallback fail offline.
+        // Also verify a failed local export never reaches registry fallback.
         let image = if fail_save { "invalid image reference" } else { IMAGE };
         let mut command = scan_command(&scan_dir, &server.uri(), image);
         command
@@ -199,7 +200,8 @@ async fn scan_falls_back_to_docker_cli_and_cleans_failed_cli_exports() -> Result
         if fail_save {
             assert!(!output.status.success());
             assert!(stderr.contains("invalid image reference"));
-            assert!(stderr.contains("trying OCI"));
+            assert!(stderr.contains("failed to save local image"));
+            assert!(!stderr.contains("trying OCI"));
             assert_no_staging_files(&scan_dir)?;
         } else {
             assert_completed_scan(&scan_dir, &output)?;
@@ -209,14 +211,39 @@ async fn scan_falls_back_to_docker_cli_and_cleans_failed_cli_exports() -> Result
 }
 
 #[tokio::test]
-async fn scan_without_docker_cli_reaches_oci_fallback() -> Result<()> {
+async fn unavailable_api_and_cli_image_absence_reach_oci_fallback() -> Result<()> {
+    let work = tempfile::tempdir()?;
+    let bin_dir = compile_docker_cli_fixture(work.path())?;
+    let trace = work.path().join("cli-trace.txt");
+    let server = failing_api(1).await;
+    // Invalid registry syntax proves the OCI path is reached without a live registry request.
+    let mut command = scan_command(work.path(), &server.uri(), "invalid image reference");
+    command
+        .env("PATH", bin_dir)
+        .env("KF_TEST_DOCKER_TRACE", &trace)
+        .env("KF_TEST_DOCKER_IMAGE_ABSENT", "1");
+    let output = run_scan(command).await?;
+    assert!(!output.status.success());
+    assert_eq!(std::fs::read_to_string(trace)?, "inspect\n");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("trying CLI"));
+    assert!(stderr.contains("trying OCI"));
+    assert!(stderr.contains("invalid image reference"));
+    assert_no_staging_files(work.path())?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn unavailable_api_and_missing_cli_report_lookup_failure() -> Result<()> {
     let work = tempfile::tempdir()?;
     let server = failing_api(1).await;
     let output =
         run_scan(scan_command(work.path(), &server.uri(), "invalid image reference")).await?;
     assert!(!output.status.success());
     let stderr = String::from_utf8_lossy(&output.stderr);
-    assert!(stderr.contains("trying OCI"));
+    // Neither lookup established absence, so preserve the lookup error.
+    assert!(stderr.contains("Docker CLI lookup/export failed"));
+    assert!(!stderr.contains("trying OCI"));
     assert!(stderr.contains("invalid image reference"));
     assert_no_staging_files(work.path())?;
     Ok(())

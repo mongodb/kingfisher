@@ -84,7 +84,8 @@ ambient AWS credentials implicitly. `--aws-action deactivate` is the default and
 The responder configuration's resolved region is preserved. Use `--aws-region` to select a different
 region explicitly; this is required for self-revocation in AWS GovCloud or China partitions. The
 CLI timeout applies to each AWS request, while `--retries` applies only to configurable HTTP
-revocation. STS identity lookups have bounded read retries, but IAM mutations never retry.
+revocation. STS identity lookups have bounded read retries. IAM mutations retry only definitive
+throttling responses, with at most three attempts; ambiguous failures are not retried.
 
 AWS permission failures are not repaired by retrying the same request. If the response is lost
 after IAM may have accepted a mutation, Kingfisher reports an unknown outcome rather than claiming

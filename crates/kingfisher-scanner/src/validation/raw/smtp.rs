@@ -1,9 +1,7 @@
 //! SMTP AUTH only: never create a mail transaction or send message data.
-use super::{
-    B64, DynStream, RawValidationOutcome, connect_plain, connect_tls, string_var, tls_connector,
-};
+use super::{B64, DynStream, RawValidationOutcome, string_var, tls_connector};
 use crate::validation::{
-    http_validation::{SsrfBlockedError, check_host_resolvable},
+    http_validation::{SsrfBlockedError, resolve_host_addresses},
     limits::timeout,
 };
 use anyhow::{Result, anyhow, ensure};
@@ -12,8 +10,9 @@ use http::StatusCode;
 use liquid::Object;
 use percent_encoding::percent_decode_str;
 use rustls::pki_types::ServerName;
-use std::time::Duration;
+use std::{net::SocketAddr, time::Duration};
 use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufStream};
+use tokio::net::TcpStream;
 use url::Url;
 
 struct Credentials {
@@ -119,38 +118,52 @@ async fn validate(
         host => host.to_string(),
     };
     let probes = ports(&credentials.target);
-    if let Err(error) = check_host_resolvable(&host, probes[0].0, allow_internal_ips).await {
-        let blocked = error.downcast_ref::<SsrfBlockedError>().is_some();
-        return Ok(RawValidationOutcome {
-            valid: false,
-            status: if blocked {
-                StatusCode::PRECONDITION_REQUIRED
-            } else {
-                StatusCode::BAD_GATEWAY
-            },
-            body: if blocked {
-                "SMTP validation skipped: target blocked".into()
-            } else {
-                "SMTP authentication inconclusive: host resolution failed".into()
-            },
-        });
-    }
+    let addresses = match resolve_host_addresses(&host, probes[0].0, allow_internal_ips).await {
+        Ok(addresses) => addresses,
+        Err(error) => {
+            let blocked = error.downcast_ref::<SsrfBlockedError>().is_some();
+            return Ok(RawValidationOutcome {
+                valid: false,
+                status: if blocked {
+                    StatusCode::PRECONDITION_REQUIRED
+                } else {
+                    StatusCode::BAD_GATEWAY
+                },
+                body: if blocked {
+                    "SMTP validation skipped: target blocked".into()
+                } else {
+                    "SMTP authentication inconclusive: host resolution failed".into()
+                },
+            });
+        }
+    };
     // Leave time for all common ports within the engine's default ten-second deadline.
     // An explicit port gets a longer budget. The enclosing engine deadline still applies.
     let budget = Duration::from_secs(if probes.len() == 1 { 10 } else { 3 });
-    probe(&host, &credentials, probes, budget, use_lax_tls).await
+    probe(&host, &addresses, &credentials, probes, budget, use_lax_tls).await
 }
 
 async fn probe(
     host: &str,
+    addresses: &[SocketAddr],
     credentials: &Credentials,
     probes: Vec<(u16, bool)>,
     budget: Duration,
     use_lax_tls: bool,
 ) -> Result<RawValidationOutcome> {
     for (port, implicit_tls) in probes {
+        // Reuse the checked DNS snapshot across all fallback ports. Only the port changes.
+        let addresses: Vec<_> = addresses
+            .iter()
+            .copied()
+            .map(|mut address| {
+                address.set_port(port);
+                address
+            })
+            .collect();
         if let Ok(Ok(code)) =
-            timeout(budget, authenticate(host, port, implicit_tls, credentials, use_lax_tls)).await
+            timeout(budget, authenticate(host, &addresses, implicit_tls, credentials, use_lax_tls))
+                .await
         {
             // RFC 4954: only these AUTH replies establish acceptance or rejection.
             // Policy errors (534/538), temporary failures (454), and syntax/mechanism
@@ -224,15 +237,18 @@ async fn ehlo(stream: &mut BufStream<DynStream>) -> Result<Reply> {
 
 async fn authenticate(
     host: &str,
-    port: u16,
+    addresses: &[SocketAddr],
     implicit_tls: bool,
     credentials: &Credentials,
     use_lax_tls: bool,
 ) -> Result<u16> {
-    let socket = if implicit_tls {
-        connect_tls(host, port, use_lax_tls).await?
+    // Connecting to socket addresses prevents a second DNS lookup. TLS still verifies the host.
+    let tcp = TcpStream::connect(addresses).await?;
+    let socket: DynStream = if implicit_tls {
+        let server_name = ServerName::try_from(host.to_string())?;
+        Box::new(tls_connector(use_lax_tls)?.connect(server_name, tcp).await?)
     } else {
-        connect_plain(host, port).await?
+        Box::new(tcp)
     };
     let mut stream = BufStream::new(socket);
     ensure!(reply(&mut stream).await?.code == 220, "SMTP greeting failed");
@@ -344,6 +360,7 @@ mod tests {
         ] {
             assert_eq!(ports(&uri_credentials(uri).unwrap().target), expected);
         }
+        // kingfisher:ignore (test fixture, not a real credential)
         let credentials = uri_credentials("smtp://user%40example.com:p%3A%40ss@[::1]:587").unwrap();
         assert_eq!(credentials.username, "user@example.com");
         assert_eq!(credentials.password, "p:@ss");
@@ -376,9 +393,11 @@ mod tests {
             stream.write_all(b"250 No STARTTLS\r\n").await.unwrap();
             stream.flush().await.unwrap();
         });
-        let credentials = uri_credentials("smtp://u:p@127.0.0.1").unwrap();
+        // The hostname is deliberately unresolvable: every fallback must use the DNS snapshot.
+        let credentials = uri_credentials("smtp://u:p@unresolvable.invalid").unwrap();
         let result = probe(
-            "127.0.0.1",
+            "unresolvable.invalid",
+            &[SocketAddr::from(([127, 0, 0, 1], 587))],
             &credentials,
             vec![(closed_port, false), (stalled_port, false), (next_port, false)],
             Duration::from_millis(200),
@@ -388,6 +407,75 @@ mod tests {
         .unwrap();
         assert_eq!(result.status, StatusCode::BAD_GATEWAY);
         tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
+    }
+
+    #[tokio::test]
+    async fn smtp_pins_connections_and_preserves_tls_server_name() {
+        for implicit_tls in [false, true] {
+            let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+            let address = listener.local_addr().unwrap();
+            let task = tokio::spawn(async move {
+                let (socket, _) = listener.accept().await.unwrap();
+                let mut stream = BufStream::new(socket);
+                if !implicit_tls {
+                    stream.write_all(b"220 fixture\r\n").await.unwrap();
+                    stream.flush().await.unwrap();
+                    for (expected, response) in [
+                        ("EHLO kingfisher.invalid\r\n", "250-STARTTLS\r\n250 AUTH PLAIN\r\n"),
+                        ("STARTTLS\r\n", "220 Start TLS\r\n"),
+                    ] {
+                        let mut line = String::new();
+                        stream.read_line(&mut line).await.unwrap();
+                        assert_eq!(line, expected);
+                        stream.write_all(response.as_bytes()).await.unwrap();
+                        stream.flush().await.unwrap();
+                    }
+                }
+                // Inspect ClientHello without completing TLS or submitting credentials.
+                let mut acceptor = rustls::server::Acceptor::default();
+                let mut buffer = [0; 4096];
+                loop {
+                    let read = stream.read(&mut buffer).await.unwrap();
+                    assert!(read > 0, "connection closed before ClientHello");
+                    acceptor.read_tls(&mut std::io::Cursor::new(&buffer[..read])).unwrap();
+                    match acceptor.accept() {
+                        Ok(Some(accepted)) => {
+                            assert_eq!(
+                                accepted.client_hello().server_name(),
+                                Some("unresolvable.invalid")
+                            );
+                            break;
+                        }
+                        Ok(None) => {}
+                        Err(_) => panic!("invalid ClientHello"),
+                    }
+                }
+            });
+            let credentials = uri_credentials("smtp://u:p@unresolvable.invalid").unwrap();
+            let result = probe(
+                "unresolvable.invalid",
+                &[address],
+                &credentials,
+                vec![(address.port(), implicit_tls)],
+                Duration::from_secs(5),
+                true,
+            )
+            .await
+            .unwrap();
+            assert_eq!(result.status, StatusCode::BAD_GATEWAY);
+            tokio::time::timeout(Duration::from_secs(5), task).await.unwrap().unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn smtp_blocks_internal_targets_before_connecting() {
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let uri = format!("smtp://user:password@{}", listener.local_addr().unwrap());
+        let result = validate_uri(&uri, true, false).await.unwrap();
+        assert_eq!(result.status, StatusCode::PRECONDITION_REQUIRED);
+        assert_eq!(result.body, "SMTP validation skipped: target blocked");
+        assert!(!result.valid);
+        assert!(tokio::time::timeout(Duration::from_millis(100), listener.accept()).await.is_err());
     }
 
     #[tokio::test]

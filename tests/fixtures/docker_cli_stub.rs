@@ -11,15 +11,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .open(env::var_os("KF_TEST_DOCKER_TRACE").unwrap())?;
     writeln!(trace, "{operation}")?;
     match operation {
-        "inspect" => assert_eq!(args.len(), 3),
-        "save" => {
-            assert_eq!(args.len(), 5);
-            assert_eq!(args[3], "-o");
-            if env::var("KF_TEST_DOCKER_FAIL_SAVE").as_deref() == Ok("1") {
-                fs::write(&args[4], b"partial archive")?;
+        "inspect" => {
+            assert_eq!(args.len(), 4);
+            assert_eq!(args[2], "--");
+            if env::var("KF_TEST_DOCKER_IMAGE_ABSENT").as_deref() == Ok("1") {
+                eprintln!(
+                    "Error response from daemon: No such image: {}",
+                    args[3].to_string_lossy()
+                );
                 process::exit(1);
             }
-            fs::copy(env::var_os("KF_TEST_DOCKER_ARCHIVE").unwrap(), &args[4])?;
+        }
+        "save" => {
+            assert_eq!(args.len(), 6);
+            assert_eq!(args[2], "-o");
+            assert_eq!(args[4], "--");
+            if env::var("KF_TEST_DOCKER_FAIL_SAVE").as_deref() == Ok("1") {
+                fs::write(&args[3], b"partial archive")?;
+                process::exit(1);
+            }
+            fs::copy(env::var_os("KF_TEST_DOCKER_ARCHIVE").unwrap(), &args[3])?;
         }
         _ => panic!("unexpected Docker CLI operation"),
     }
