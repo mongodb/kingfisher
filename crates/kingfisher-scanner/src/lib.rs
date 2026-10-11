@@ -99,4 +99,18 @@ pub mod __cli_internals {
             .captures_with_control(regex, endpoint, haystack, start, &crate::ScanControl::default())
             .expect("unlimited scan cannot be cancelled")
     }
+
+    pub fn confirmation_needs_wider_window(
+        confirmed: bool,
+        window_start: usize,
+        window_end: usize,
+        maximum_match_len: Option<usize>,
+    ) -> bool {
+        crate::primitives::confirmation_needs_wider_window(
+            confirmed,
+            window_start,
+            window_end,
+            maximum_match_len,
+        )
+    }
 }

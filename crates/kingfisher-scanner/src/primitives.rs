@@ -172,6 +172,24 @@ pub struct CandidateMatchCache {
     index: Option<CandidateMatchIndex>,
 }
 
+/// Return whether a failed exact candidate confirmation needs a wider search window.
+///
+/// A rule with a certified finite maximum match length cannot produce a match ending at the
+/// candidate after a strictly larger suffix has already been searched. Equality still widens:
+/// callers exclude matches touching a non-zero left boundary because they may be truncated.
+#[inline]
+pub(crate) fn confirmation_needs_wider_window(
+    confirmed: bool,
+    window_start: usize,
+    window_end: usize,
+    maximum_match_len: Option<usize>,
+) -> bool {
+    !confirmed
+        && window_start > 0
+        && maximum_match_len
+            .is_none_or(|maximum| maximum >= window_end.saturating_sub(window_start))
+}
+
 impl CandidateMatchCache {
     /// Consider one new endpoint, invoking `build` only when indexing is justified.
     pub fn get_or_insert_with(
@@ -679,6 +697,15 @@ pub fn find_secret_capture_with_group<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bounded_failed_confirmation_does_not_widen_past_a_complete_window() {
+        assert!(!confirmation_needs_wider_window(false, 4096, 8192, Some(79)));
+        assert!(confirmation_needs_wider_window(false, 4096, 8192, Some(4096)));
+        assert!(confirmation_needs_wider_window(false, 4096, 8192, None));
+        assert!(!confirmation_needs_wider_window(true, 4096, 8192, None));
+        assert!(!confirmation_needs_wider_window(false, 0, 4096, None));
+    }
 
     #[test]
     fn sparse_candidates_do_not_build_an_index() {
