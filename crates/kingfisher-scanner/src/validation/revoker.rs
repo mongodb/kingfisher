@@ -12,10 +12,11 @@ use super::revocation::{
 
 /// Reusable, explicitly invoked revocation runner (requires `validation`).
 ///
-/// Scanning and validation never call this API. The caller selects the credential
-/// and supplies companion variables and endpoint overrides required by the rule.
-/// HTTP rule requests are not retried. AWS retains its provider-specific retry
-/// policy. Requires a Tokio runtime with I/O and time enabled.
+/// Scanning and validation never call this API. Reuse a validated credential
+/// snapshot, or supply a rule, secret, companion variables and endpoint overrides.
+/// HTTP rule requests are not retried. AWS STS identity lookup may retry transient
+/// failures, but IAM mutations retry only definitive throttling responses. Requires a Tokio runtime with
+/// I/O and time enabled.
 /// Provider responses in results and errors may contain sensitive information.
 pub struct Revoker {
     client: Client,
@@ -86,6 +87,28 @@ impl Revoker {
         ensure!(!timeout.is_zero(), "Revocation timeout must be nonzero");
         self.timeout = timeout;
         Ok(self)
+    }
+
+    /// Revoke a verified active result using its original rule and resolved inputs.
+    /// No components are re-associated and no environment/configuration is read.
+    /// Calling this method is an explicit destructive action; validation alone
+    /// never revokes credentials.
+    ///
+    /// # Errors
+    ///
+    /// Rejects non-active results and absent/redacted/unsupported inputs before
+    /// making requests. Execution errors have the same semantics as [`Self::revoke`].
+    pub async fn revoke_validated(
+        &self,
+        validated: &super::ValidatedFinding,
+    ) -> Result<DirectRevocationResult> {
+        ensure!(
+            validated.outcome.is_verified_active(),
+            "Revocation requires verified_active validation"
+        );
+        let credential = validated.credential.as_ref().context("No resolved credential inputs")?;
+        let inputs = credential.revocation.as_ref().context("No resolved revocation inputs")?;
+        self.revoke(validated.finding.rule(), &inputs.secret, &inputs.variables).await
     }
 
     /// Revoke a known secret using a built-in or custom rule, without scanning.

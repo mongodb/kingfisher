@@ -28,7 +28,10 @@ pub use kingfisher_core::{
 pub use kingfisher_rules::{Confidence, Rule, RuleSyntax, RulesDatabase, get_builtin_rules};
 
 #[cfg(feature = "validation")]
-pub use validation::{ValidatedFinding, ValidationReason, Validator, ValidatorBuilder};
+pub use validation::{
+    CredentialInputDiagnostic, ResolvedCredential, RevocationInputs, ValidatedFinding,
+    ValidationReason, Validator, ValidatorBuilder,
+};
 
 #[cfg(feature = "validation")]
 pub use validation::{Revoker, revocation::DirectRevocationResult};
@@ -50,6 +53,8 @@ pub mod __cli_internals {
     pub use crate::confirmation::IndexedCaptures;
     pub use crate::line_index::LineIndex;
     pub use crate::postprocess::*;
+    #[cfg(feature = "validation")]
+    pub use crate::validation::template_vars::extract_template_vars;
 
     /// Internal CLI tree-diff adapter; no blob reads or rename detection.
     #[cfg(feature = "git")]
@@ -85,6 +90,7 @@ pub mod __cli_internals {
             db.confirmation_maximum_len(rule),
             db.confirmation_match_maximum_len(rule),
             db.confirmation_prefix_stable(rule),
+            db.confirmation_line_restart_safe(rule),
         )
     }
 
@@ -98,5 +104,23 @@ pub mod __cli_internals {
         index
             .captures_with_control(regex, endpoint, haystack, start, &crate::ScanControl::default())
             .expect("unlimited scan cannot be cancelled")
+    }
+
+    pub fn confirmation_needs_wider_window(
+        db: &crate::RulesDatabase,
+        rule: usize,
+        confirmed: bool,
+        window_start: usize,
+        haystack: &[u8],
+        endpoint_match: &mut Option<bool>,
+    ) -> bool {
+        crate::primitives::confirmation_needs_wider_window(
+            db,
+            rule,
+            confirmed,
+            window_start,
+            haystack,
+            endpoint_match,
+        )
     }
 }

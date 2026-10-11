@@ -42,6 +42,29 @@ def fixtures():
     ):
         for size in (25_000, 50_000, 100_000, 200_000):
             yield name, size, line * ((size + len(line) - 1) // len(line))
+    dense_rng = random.Random(3)
+    lower = string.ascii_lowercase + string.digits
+    alnum = string.ascii_letters + string.digits
+    hexdigits = "0123456789abcdef"
+    def random_text(chars, minimum, maximum):
+        return "".join(dense_rng.choices(chars, k=dense_rng.randint(minimum, maximum)))
+    shapes = {
+        "auth0-domain": lambda: ".".join(
+            random_text(lower, 3, 12) for _ in range(dense_rng.randint(1, 3))
+        ) + ".auth0.com",
+        "ebay-client-id": lambda: (
+            f"{random_text(alnum, 4, 12)}-{random_text(alnum, 4, 12)}-PRD-"
+            f"{random_text(hexdigits, 8, 12)}-{random_text(hexdigits, 8, 12)}"
+        ),
+    }
+    for name, make in shapes.items():
+        for size in (100_000, 200_000, 400_000):
+            parts, length = [], 0
+            while length < size:
+                part = make() + "\n"
+                parts.append(part)
+                length += len(part)
+            yield name, size, "".join(parts)
     for size in (25_000, 50_000, 100_000, 200_000):
         # Different decoded values must survive deduplication despite sharing
         # one encoded span. CLI-compatible scans also run URI suppression.
@@ -58,6 +81,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repeats", type=int, default=3)
     parser.add_argument("--case", action="append", help="run only selected cases")
+    parser.add_argument("--size", type=int, action="append", help="run only selected nominal byte sizes")
     parser.add_argument("--cli", type=Path, help="benchmark a CLI binary (includes startup and reporting)")
     parser.add_argument("--detection", action="store_true", help="use SDK CLI-compatible detection policies")
     args = parser.parse_args()
@@ -89,8 +113,10 @@ def main():
             def scan(content):
                 return len(scanner.scan(content))
         print("case,bytes,findings,median_seconds", flush=True)
-        for name, _, content in fixtures():
+        for name, size, content in fixtures():
             if args.case and name not in args.case:
+                continue
+            if args.size and size not in args.size:
                 continue
             elapsed = []
             count = None

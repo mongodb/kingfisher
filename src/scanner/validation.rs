@@ -1516,6 +1516,7 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                 CredentialUriTarget::MongoDB(uri) => collector.record_mongodb(&uri, fp.clone()),
                 CredentialUriTarget::MySQL(uri) => collector.record_mysql(&uri, fp.clone()),
                 CredentialUriTarget::Http(_)
+                | CredentialUriTarget::Smtp(_)
                 | CredentialUriTarget::Jdbc(_)
                 | CredentialUriTarget::Unsupported(_) => {}
             }

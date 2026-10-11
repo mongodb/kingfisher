@@ -16,9 +16,11 @@ python scripts/benchmarks/dense_findings.py --cli target/release/kingfisher
 ```
 
 Use `--case issue-537` to run just the exact issue reproducer, or repeat `--case`
-to select other fixtures. `--repeats` defaults to three. The fixtures cover
+to select other fixtures. `--size` limits runs to selected nominal input sizes;
+`--repeats` defaults to three. The fixtures cover
 PlanetScale, JFrog, ClickHouse, Cloudinary, Salesforce, Tableau, visible catalog
-findings, and repeated credential components. Scans never validate credentials.
+findings, repeated credential components, Auth0 domains, and eBay client IDs. Scans never
+validate credentials.
 
 Measurements recorded on October 5, 2026, on macOS 26.7.1 arm64 with Rust 1.99.0
 and Python 3.11. Before: installed SDK 1.1.0, CLI 2.10.0, scanner crate 1.2.0.
@@ -46,7 +48,8 @@ at 200 KB and improves CLI time from 3.876 to 0.669 seconds (**5.8× faster**).
 
 These are local microbenchmarks, not cross-machine performance guarantees.
 Unbounded EOF-sensitive expressions
-retain the original search when safe skipping cannot be proved.
+retain the original search when safe skipping cannot be proved. A regex may restart after a
+newline only when HIR analysis proves that no match can consume a newline and then continue.
 
 Verification for the recorded benchmark run: 1,552 Rust workspace tests passed (two existing tests ignored),
 19 Python tests passed, workspace Clippy passed with warnings denied, and the
@@ -135,3 +138,43 @@ The additional working-tree occurrence check returned 543 findings in the local 
 and 547 in `bench-repos` in each version. Per-rule counts, complete coverage,
 fingerprint multisets, and finding-record multisets (excluding salted redactions)
 matched exactly, including hidden helper findings.
+
+## Auth0 and eBay follow-up (October 8, 2026)
+
+The later [issue #537 comment](https://github.com/mongodb/kingfisher/issues/537#issuecomment-6063792972)
+reports dense Auth0 domains and eBay client IDs on separate lines. For these
+unbounded, assertion-sensitive rules, regex analysis certifies that a match cannot
+continue after a newline. The match index records the most recent safe line start
+once per indexed match, so confirmation does not repeatedly search earlier lines.
+
+The SDK fixture uses all built-in rules with rule compilation outside the timer.
+These are three-run medians on macOS arm64. The before extension was the existing
+editable SDK 1.3.0 build; the after extension was rebuilt from this worktree and
+also reports 1.3.0. The 400 KB before SDK cases were omitted because the 200 KB
+baseline already took 39 seconds for Auth0 and 8 seconds for eBay per scan.
+
+| Fixture | Bytes | Findings (both) | SDK before (s) | SDK after (s) |
+| --- | ---: | ---: | ---: | ---: |
+| Auth0 domains | 100,018 | 3,702 | 9.758 | 0.042 |
+| Auth0 domains | 200,010 | 7,381 | 39.071 | 0.064 |
+| Auth0 domains | 400,022 | 14,815 | not run | 0.112 |
+| eBay client IDs | 100,024 | 2,268 | 2.364 | 0.048 |
+| eBay client IDs | 200,015 | 4,540 | 8.454 | 0.069 |
+| eBay client IDs | 400,008 | 9,094 | not run | 0.113 |
+
+Run just the completed before/after sizes with:
+
+```sh
+python scripts/benchmarks/dense_findings.py \
+  --case auth0-domain --case ebay-client-id --size 100000 --size 200000
+```
+
+The CLI comparison used the installed 2.11.1 binary and the patched 2.12.0
+release build. At 400 KB, Auth0 took 1.159 versus 0.454 seconds and eBay took
+0.645 versus 0.388 seconds, with identical finding counts. Working-tree scans
+of a local large repository had medians of 17.082 versus 16.827 seconds (three
+paired runs); `~/dev/bench-repos` had medians of 20.986 versus 21.328 seconds
+(five paired runs). The latter difference was within observed run-to-run variation.
+Counts, per-rule totals, and scan coverage matched on every run. Strict
+all-occurrence scans also matched finding and fingerprint digests: 543 findings
+in the local repository and 547 in `bench-repos`.

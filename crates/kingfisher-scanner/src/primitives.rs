@@ -172,6 +172,65 @@ pub struct CandidateMatchCache {
     index: Option<CandidateMatchIndex>,
 }
 
+const MAX_UTF8_CHAR_LEN: usize = 4;
+
+/// Return whether a failed exact candidate confirmation needs a wider search window.
+///
+/// A finite match bound alone cannot certify failure: moving the window's left edge can
+/// change the non-overlapping iterator's alignment. Stop only when the original regex cannot
+/// select the endpoint from any overlapping start within the certified consuming bound.
+/// Callers must pass the entire confirmation window, not just its tail, and only confirm
+/// captures ending at the window's endpoint (as in Scanner and the CLI's filter_match).
+/// Retain `MAX_UTF8_CHAR_LEN` bytes of left context for Unicode boundaries; shorter windows and
+/// unavailable certificates retain the original widening fallback. Initialize `endpoint_match`
+/// to `None` for each candidate. Once the context is complete, its verdict remains valid while
+/// widening that candidate's window, so repeated rounds reuse it without further regex searches.
+#[inline]
+pub(crate) fn confirmation_needs_wider_window(
+    rules_db: &kingfisher_rules::RulesDatabase,
+    rule_id: usize,
+    confirmed: bool,
+    window_start: usize,
+    haystack: &[u8],
+    endpoint_match: &mut Option<bool>,
+) -> bool {
+    if confirmed || window_start == 0 {
+        return false;
+    }
+    let Some(maximum) = rules_db.confirmation_match_maximum_len(rule_id) else {
+        return true;
+    };
+    bounded_endpoint_can_match(
+        &rules_db.anchored_regexes()[rule_id],
+        maximum,
+        haystack,
+        endpoint_match,
+    )
+}
+
+fn bounded_endpoint_can_match(
+    regex: &regex::bytes::Regex,
+    maximum: usize,
+    haystack: &[u8],
+    endpoint_match: &mut Option<bool>,
+) -> bool {
+    if haystack.len() <= maximum.saturating_add(MAX_UTF8_CHAR_LEN) {
+        return true;
+    }
+    *endpoint_match.get_or_insert_with(|| {
+        let mut position = haystack.len() - maximum;
+        while let Some(found) = regex.find_at(haystack, position) {
+            if found.end() == haystack.len() {
+                return true;
+            }
+            // An earlier match can hide a later overlapping one in captures_iter. Advancing
+            // past its start, rather than its end, checks every possible iterator alignment.
+            position = found.start() + 1;
+        }
+        false
+    })
+}
+
 impl CandidateMatchCache {
     /// Consider one new endpoint, invoking `build` only when indexing is justified.
     pub fn get_or_insert_with(
@@ -213,6 +272,7 @@ pub struct CandidateMatchIndex {
     maximum_len: Option<usize>,
     endpoint_maximum_len: Option<usize>,
     prefix_stable: bool,
+    line_restart_position: Option<parking_lot::Mutex<(usize, usize)>>,
     chains: parking_lot::Mutex<FxHashMap<(usize, u32), usize>>,
 }
 
@@ -232,7 +292,7 @@ impl CandidateMatchIndex {
         input: &[u8],
         range: std::ops::Range<usize>,
     ) -> Self {
-        Self::new_in_range_with_maximum_len(regex, input, range, None, None, false)
+        Self::new_in_range_with_maximum_len(regex, input, range, None, None, false, false)
     }
 
     /// Index a rule regex with a precomputed safe confirmation-tail bound.
@@ -241,8 +301,8 @@ impl CandidateMatchIndex {
     /// bound the complete consuming match (not just a delimiter-terminated suffix);
     /// use `None` for arbitrary regexes. `prefix_stable` must come from the rule
     /// builder's certified HIR metadata, never an arbitrary Regex's pattern text.
-    /// Rule callers use `RulesDatabase::confirmation_maximum_len` and
-    /// `RulesDatabase::confirmation_prefix_stable`.
+    /// `line_restart_safe` certifies that a match cannot consume bytes after a newline.
+    /// Rule callers obtain these certificates from `RulesDatabase`.
     pub(crate) fn new_in_range_with_maximum_len(
         regex: &regex::bytes::Regex,
         input: &[u8],
@@ -250,12 +310,20 @@ impl CandidateMatchIndex {
         maximum_len: Option<usize>,
         endpoint_maximum_len: Option<usize>,
         prefix_stable: bool,
+        line_restart_safe: bool,
     ) -> Self {
         let spans = regex
             .find_iter(&input[range.clone()])
             .map(|m| OffsetSpan { start: range.start + m.start(), end: range.start + m.end() })
             .collect();
-        Self::from_spans(spans, range, maximum_len, endpoint_maximum_len, prefix_stable)
+        Self::from_spans(
+            spans,
+            range,
+            maximum_len,
+            endpoint_maximum_len,
+            prefix_stable,
+            line_restart_safe,
+        )
     }
 
     pub(crate) fn with_control(
@@ -265,6 +333,7 @@ impl CandidateMatchIndex {
         maximum_len: Option<usize>,
         endpoint_maximum_len: Option<usize>,
         prefix_stable: bool,
+        line_restart_safe: bool,
     ) -> Result<Self, crate::ScanAborted> {
         if !control.is_limited() {
             return Ok(Self::new_in_range_with_maximum_len(
@@ -274,6 +343,7 @@ impl CandidateMatchIndex {
                 maximum_len,
                 endpoint_maximum_len,
                 prefix_stable,
+                line_restart_safe,
             ));
         }
         let mut spans = Vec::new();
@@ -288,6 +358,7 @@ impl CandidateMatchIndex {
             maximum_len,
             endpoint_maximum_len,
             prefix_stable,
+            line_restart_safe,
         ))
     }
 
@@ -297,13 +368,20 @@ impl CandidateMatchIndex {
         maximum_len: Option<usize>,
         endpoint_maximum_len: Option<usize>,
         prefix_stable: bool,
+        line_restart_safe: bool,
     ) -> Self {
+        let line_restart_position = (line_restart_safe
+            && !prefix_stable
+            && maximum_len.is_none()
+            && endpoint_maximum_len.is_none())
+        .then(|| parking_lot::Mutex::new((range.start, 0)));
         Self {
             spans,
             range,
             maximum_len,
             endpoint_maximum_len,
             prefix_stable,
+            line_restart_position,
             chains: parking_lot::Mutex::new(FxHashMap::default()),
         }
     }
@@ -413,6 +491,37 @@ impl CandidateMatchIndex {
         if let Ok(index) = self.spans.binary_search_by_key(&end, |span| span.end) {
             let span = self.spans[index];
             if span.start >= start {
+                if let Some(position) = &self.line_restart_position {
+                    let mut position = position.lock();
+                    // Cache only a cursor and its latest newline. Ordered candidates inspect
+                    // each byte once; out-of-order windows search their own prefix safely.
+                    let cursor =
+                        if position.0 <= span.start { position.0.max(start) } else { start };
+                    let mut line_start = if cursor == start { 0 } else { position.1 };
+                    let mut stop = span.start - start;
+                    while stop > cursor - start {
+                        control.check()?;
+                        let begin = (stop.saturating_sub(64 * 1024)).max(cursor - start);
+                        if let Some(newline) =
+                            haystack[begin..stop].iter().rposition(|b| *b == b'\n')
+                        {
+                            line_start = start + begin + newline + 1;
+                            break;
+                        }
+                        stop = begin;
+                    }
+                    control.check()?;
+                    if span.start >= position.0 {
+                        *position = (span.start, line_start);
+                    }
+                    if line_start > start {
+                        return Ok(crate::confirmation::IndexedCaptures::from_position(
+                            regex,
+                            haystack,
+                            line_start - start,
+                        ));
+                    }
+                }
                 // Verify the window's first match agrees with the index before skipping
                 // earlier captures. EOF-sensitive alternatives can change selection
                 // even when the window starts at zero.
@@ -477,7 +586,7 @@ impl CandidateMatchIndex {
             // when the confirmation window ends earlier than the indexed input. Leave
             // four extra bytes for Unicode word-boundary assertions. Resynchronize the window's
             // leftmost iterator with an original match before jumping to that safe tail.
-            let safe_end = end.saturating_sub(maximum_len.saturating_add(4));
+            let safe_end = end.saturating_sub(maximum_len.saturating_add(MAX_UTF8_CHAR_LEN));
             let tail = self.spans.partition_point(|span| span.end <= safe_end);
             if let Some(first) =
                 regex.find(haystack).filter(|found| start + found.end() <= safe_end)
@@ -681,6 +790,140 @@ mod tests {
     use super::*;
 
     #[test]
+    fn bounded_failed_confirmation_does_not_widen_past_a_complete_window() {
+        use kingfisher_rules::{Rule, RuleSyntax, RulesDatabase};
+
+        let db = RulesDatabase::from_rules(vec![
+            Rule::new(RuleSyntax::new("acme.bounded", "Bounded", r"([a-z]{79})")),
+            Rule::new(RuleSyntax::new("acme.unbounded", "Unbounded", r"([a-z]+)")),
+        ])
+        .unwrap();
+        let haystack = vec![b' '; 4096];
+        assert!(!confirmation_needs_wider_window(&db, 0, false, 4096, &haystack, &mut None));
+        assert!(confirmation_needs_wider_window(&db, 0, false, 4096, &haystack[..79], &mut None));
+        assert!(confirmation_needs_wider_window(&db, 0, false, 4096, &haystack[..83], &mut None));
+        assert!(!confirmation_needs_wider_window(&db, 0, false, 4096, &haystack[..84], &mut None));
+        assert!(confirmation_needs_wider_window(&db, 1, false, 4096, &haystack, &mut None));
+        assert!(!confirmation_needs_wider_window(&db, 1, true, 4096, &haystack, &mut None));
+        assert!(!confirmation_needs_wider_window(&db, 1, false, 0, &haystack, &mut None));
+        let mut endpoint_match = Some(true);
+        assert!(!confirmation_needs_wider_window(
+            &db,
+            0,
+            true,
+            4096,
+            &haystack,
+            &mut endpoint_match
+        ));
+        assert!(!confirmation_needs_wider_window(&db, 0, false, 0, &haystack, &mut endpoint_match));
+    }
+
+    #[test]
+    fn bounded_endpoint_match_preserves_widening_for_shifted_iterators() {
+        use kingfisher_rules::{Rule, RuleSyntax, RulesDatabase};
+
+        let db = RulesDatabase::from_rules(vec![Rule::new(RuleSyntax::new(
+            "acme.fixed-width",
+            "Fixed-width run",
+            r"([a-z]{3})",
+        ))])
+        .unwrap();
+        let input = "abc".repeat(1380);
+        let start = input.len() - 4096;
+        let haystack = &input.as_bytes()[start..];
+        assert!(db.anchored_regexes()[0].find_iter(haystack).all(|m| m.end() != haystack.len()));
+        assert!(confirmation_needs_wider_window(&db, 0, false, start, haystack, &mut None));
+    }
+
+    #[test]
+    fn bounded_endpoint_search_checks_overlapping_starts() {
+        use kingfisher_rules::{Rule, RuleSyntax, RulesDatabase};
+
+        let db = RulesDatabase::from_rules(vec![Rule::new(RuleSyntax::new(
+            "acme.overlapping",
+            "Overlapping alternatives",
+            r"(abc|bcd|LONG_TOKEN)",
+        ))])
+        .unwrap();
+        let input = format!("{}abcd", " ".repeat(4096));
+        let tail = input.len() - db.confirmation_match_maximum_len(0).unwrap();
+        assert!(
+            db.anchored_regexes()[0].find_at(input.as_bytes(), tail).unwrap().end() < input.len()
+        );
+        // The first choice is `abc`; starting one byte later selects `bcd` at EOF.
+        assert!(confirmation_needs_wider_window(&db, 0, false, 4096, input.as_bytes(), &mut None));
+    }
+
+    #[test]
+    fn bounded_cutoff_preserves_original_alternative_and_lazy_choices() {
+        use kingfisher_rules::{Rule, RuleSyntax, RulesDatabase};
+
+        for pattern in [r"(abc|abcdef)", r"(abc[a-z]{0,3}?)"] {
+            let db = RulesDatabase::from_rules(vec![Rule::new(RuleSyntax::new(
+                "acme.short-choice",
+                "Earlier consuming choice",
+                pattern,
+            ))])
+            .unwrap();
+            let input = format!("{}abcdef", " ".repeat(4096));
+            // End anchoring can force a longer alternative or lazy match that the
+            // original regex would never select, regardless of the window's left edge.
+            assert!(db.endpoint_regex(0).unwrap().is_match(input.as_bytes()));
+            assert!(!confirmation_needs_wider_window(
+                &db,
+                0,
+                false,
+                4096,
+                input.as_bytes(),
+                &mut None
+            ));
+        }
+    }
+
+    #[test]
+    fn bounded_endpoint_cache_waits_for_complete_unicode_context() {
+        // Test the confirmation regex directly: Vectorscan does not accept Rust's
+        // inline Unicode flag, but the window helper must preserve its assertion context.
+        let regex = regex::bytes::Regex::new(r"(?u:\B)(abc)").unwrap();
+        let maximum = 3;
+        // Both preceding characters occupy four bytes, but only the Deseret letter
+        // is a word character. Cutting through it changes the Unicode assertion.
+        for (preceding, expected) in [('\u{10400}', true), ('🦀', false)] {
+            let input = format!("prefix x{preceding}abc");
+            let bytes = input.as_bytes();
+            let mut endpoint_match = None;
+            let short_start = bytes.len() - 7;
+            assert!(!regex.is_match(&bytes[short_start + 1..]));
+            assert_eq!(regex.is_match(&bytes[short_start..]), expected);
+            for start in [short_start + 1, short_start] {
+                assert!(bounded_endpoint_can_match(
+                    &regex,
+                    maximum,
+                    &bytes[start..],
+                    &mut endpoint_match,
+                ));
+                assert_eq!(endpoint_match, None);
+            }
+
+            let complete_start = short_start - 1;
+            assert_eq!(
+                bounded_endpoint_can_match(
+                    &regex,
+                    maximum,
+                    &bytes[complete_start..],
+                    &mut endpoint_match,
+                ),
+                expected
+            );
+            assert_eq!(endpoint_match, Some(expected));
+            assert_eq!(
+                bounded_endpoint_can_match(&regex, maximum, &bytes[1..], &mut endpoint_match),
+                expected
+            );
+        }
+    }
+
+    #[test]
     fn sparse_candidates_do_not_build_an_index() {
         for input_len in [32, 8 * 1024 * 1024, 256 * 1024 * 1024] {
             let mut cache = CandidateMatchCache::default();
@@ -848,6 +1091,7 @@ mod tests {
             db.confirmation_maximum_len(0),
             db.confirmation_match_maximum_len(0),
             db.confirmation_prefix_stable(0),
+            db.confirmation_line_restart_safe(0),
         );
         assert!(index.prefix_stable);
         // EOF shortens the greedy numeric suffix without altering any complete
@@ -900,25 +1144,35 @@ mod tests {
             (r"(?s)BEGIN(.*?)END", "BEGIN one END gap BEGIN two END\n".repeat(20)),
             (r"(?s)BEGIN(?P<TOKEN>.{1,32}?)END", "BEGIN one END gap BEGIN two END\n".repeat(20)),
             (r"(é+)\b", "éé aa ééé ".repeat(30)),
+            (
+                r#"(?i)\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+auth0\.com)(?:\\?['"\x60]|[\s;]|\\[nr]|$)"#,
+                "one.two.auth0.com\nthree.auth0.com;\n".repeat(8),
+            ),
+            (
+                r"\b([a-zA-Z0-9_-]+-[a-zA-Z0-9_-]+-PRD-[a-f0-9]{8,12}-[a-f0-9]{8,12})",
+                "Alpha-One-PRD-1234abcd-5678efab\nBeta-Two-PRD-abcdef12-12345678\n".repeat(8),
+            ),
+            (r"(?m)^([a-z.]+)(?:\n|$)", "one.token\ntwo.token\n".repeat(8)),
             (r"()|a", "a ".repeat(30)),
         ] {
             let rule = kingfisher_rules::RuleSyntax::new("acme.oracle", "Oracle", pattern);
             let regex = rule.as_regex().unwrap();
             let endpoint = rule.as_endpoint_regex().unwrap();
-            let (maximum_len, endpoint_maximum_len, prefix_stable) = if pattern == r"()|a" {
-                (None, None, false)
-            } else {
-                let db =
-                    kingfisher_rules::RulesDatabase::from_rules(vec![kingfisher_rules::Rule::new(
-                        rule,
-                    )])
+            let (maximum_len, endpoint_maximum_len, prefix_stable, line_restart_safe) =
+                if pattern == r"()|a" {
+                    (None, None, false, false)
+                } else {
+                    let db = kingfisher_rules::RulesDatabase::from_rules(vec![
+                        kingfisher_rules::Rule::new(rule),
+                    ])
                     .unwrap();
-                (
-                    db.confirmation_maximum_len(0),
-                    db.confirmation_match_maximum_len(0),
-                    db.confirmation_prefix_stable(0),
-                )
-            };
+                    (
+                        db.confirmation_maximum_len(0),
+                        db.confirmation_match_maximum_len(0),
+                        db.confirmation_prefix_stable(0),
+                        db.confirmation_line_restart_safe(0),
+                    )
+                };
             let bytes = input.as_bytes();
             let index = CandidateMatchIndex::new_in_range_with_maximum_len(
                 &regex,
@@ -927,6 +1181,7 @@ mod tests {
                 maximum_len,
                 endpoint_maximum_len,
                 prefix_stable,
+                line_restart_safe,
             );
             for start in (0..20).chain([bytes.len() / 3, bytes.len() / 2, bytes.len() - 1]) {
                 for end in (start + 1)..=bytes.len() {
@@ -962,6 +1217,136 @@ mod tests {
     }
 
     #[test]
+    fn dense_unbounded_asserted_endpoints_restart_after_the_last_line_boundary() {
+        for (pattern, line) in [
+            (
+                r#"(?i)\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+auth0\.com)(?:\\?['"\x60]|[\s;]|\\[nr]|$)"#,
+                "one.two.auth0.com\n",
+            ),
+            (
+                r"\b([a-zA-Z0-9_-]+-[a-zA-Z0-9_-]+-PRD-[a-f0-9]{8,12}-[a-f0-9]{8,12})",
+                "Alpha-One-PRD-1234abcd-5678efab\n",
+            ),
+        ] {
+            let rule = kingfisher_rules::RuleSyntax::new("acme.dense", "Dense", pattern);
+            let endpoint = rule.as_endpoint_regex().unwrap();
+            let db =
+                kingfisher_rules::RulesDatabase::from_rules(vec![kingfisher_rules::Rule::new(
+                    rule,
+                )])
+                .unwrap();
+            assert!(!db.confirmation_prefix_stable(0));
+            assert_eq!(db.confirmation_maximum_len(0), None);
+            assert_eq!(db.confirmation_match_maximum_len(0), None);
+            assert!(db.confirmation_line_restart_safe(0));
+            let regex = &db.anchored_regexes()[0];
+            let input = format!("ignored prefix\n{}", line.repeat(5_000));
+            let bytes = input.as_bytes();
+            let range_start = "ignored prefix\n".len();
+            let index = CandidateMatchIndex::new_in_range_with_maximum_len(
+                regex,
+                bytes,
+                range_start..bytes.len(),
+                None,
+                None,
+                false,
+                true,
+            );
+            let target = index.spans.len() - 1;
+            let end = index.spans[target].end;
+            let start = index.spans[target - 100].end;
+            let haystack = &bytes[start..end];
+            let captures = index
+                .captures_with_control(
+                    regex,
+                    Some(&endpoint),
+                    haystack,
+                    start,
+                    &crate::ScanControl::default(),
+                )
+                .unwrap();
+            let position = captures.search_position().expect("dense endpoint should resume");
+            assert!(position >= index.spans[target - 1].end - start, "pattern={pattern}");
+            assert!(haystack.len() - position <= line.len(), "pattern={pattern}");
+            let actual: Vec<_> =
+                captures.map(|captures| captures.get(0).unwrap().range()).collect();
+            let expected: Vec<_> = regex
+                .captures_iter(haystack)
+                .filter(|captures| captures.get(0).unwrap().end() == haystack.len())
+                .map(|captures| captures.get(0).unwrap().range())
+                .collect();
+            assert_eq!(actual, expected, "pattern={pattern}");
+        }
+    }
+
+    #[test]
+    fn line_restart_index_records_absent_newlines_once() {
+        let rule = kingfisher_rules::RuleSyntax::new(
+            "acme.dense",
+            "Dense",
+            r"\b([a-zA-Z0-9_-]+-[a-zA-Z0-9_-]+-PRD-[a-f0-9]{8,12}-[a-f0-9]{8,12})",
+        );
+        let regex = rule.as_regex().unwrap();
+        let endpoint = rule.as_endpoint_regex().unwrap();
+        let input = "Alpha-One-PRD-1234abcd-5678efab ".repeat(500);
+        let bytes = input.as_bytes();
+        let index = CandidateMatchIndex::new_in_range_with_maximum_len(
+            &regex,
+            bytes,
+            0..bytes.len(),
+            None,
+            None,
+            false,
+            true,
+        );
+        let target = index.spans.len() - 1;
+        let start = index.spans[target - 20].end;
+        let end = index.spans[target].end;
+        let haystack = &bytes[start..end];
+        let expected: Vec<_> = regex
+            .captures_iter(haystack)
+            .filter(|captures| captures.get(0).unwrap().end() == haystack.len())
+            .map(|captures| captures.get(0).unwrap().range())
+            .collect();
+        let actual: Vec<_> = index
+            .captures_with_control(
+                &regex,
+                Some(&endpoint),
+                haystack,
+                start,
+                &crate::ScanControl::default(),
+            )
+            .unwrap()
+            .map(|captures| captures.get(0).unwrap().range())
+            .collect();
+        assert_eq!(actual, expected);
+        // An earlier window after a later one must not mistake the previous
+        // window start for a newline in this newline-free input.
+        for start in [0, index.spans[target - 100].start + 1, 0] {
+            let haystack = &bytes[start..end];
+            let actual: Vec<_> = index
+                .captures_with_control(
+                    &regex,
+                    Some(&endpoint),
+                    haystack,
+                    start,
+                    &crate::ScanControl::default(),
+                )
+                .unwrap()
+                .filter(|captures| captures.get(0).unwrap().end() == haystack.len())
+                .map(|captures| captures.get(0).unwrap().range())
+                .collect();
+            let expected: Vec<_> = regex
+                .captures_iter(haystack)
+                .filter(|captures| captures.get(0).unwrap().end() == haystack.len())
+                .map(|captures| captures.get(0).unwrap().range())
+                .collect();
+            assert_eq!(actual, expected);
+            assert_eq!(index.line_restart_position.as_ref().unwrap().lock().1, 0);
+        }
+    }
+
+    #[test]
     fn shifted_dense_match_sequences_reuse_cached_jumps() {
         fn send_sync<T: Send + Sync>() {}
         send_sync::<CandidateMatchIndex>();
@@ -975,6 +1360,7 @@ mod tests {
             0..input.len(),
             Some(100),
             Some(100),
+            false,
             false,
         );
         for end in [input.len(), input.len() - 18, input.len() - 36] {
@@ -1016,6 +1402,7 @@ mod tests {
             0..input.len(),
             Some(8),
             Some(8),
+            false,
             false,
         );
         let haystack = &input.as_bytes()[..input.len() - 3];
@@ -1155,6 +1542,7 @@ mod control_regressions {
             0..input.len(),
             Some(2),
             Some(2),
+            false,
             false,
         );
         let checks = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));

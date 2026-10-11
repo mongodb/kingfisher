@@ -50,6 +50,45 @@ kingfisher revoke --rule aws-access-token \
   "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
 ```
 
+### AWS access keys
+
+By default, AWS revocation uses the supplied long-term access key to identify its IAM user and
+deactivate itself. Kingfisher resolves the caller with STS and sends the IAM username explicitly,
+making IAM resource evaluation unambiguous. AWS permits self-management requests to omit the user
+name, and supplying it does not grant permission: the target key still needs
+`iam:UpdateAccessKey`. Temporary `ASIA` credentials cannot be revoked through the IAM access-key
+APIs and are rejected before mutation.
+
+For an incident-response principal with permission to manage the target user's keys, opt in to a
+named profile and identify the target user:
+
+```bash
+kingfisher revoke --rule aws-access-token \
+  --var AKID=AKIAIOSFODNN7EXAMPLE \
+  --aws-profile incident-response \
+  --aws-user-name srv-example \
+  --aws-action deactivate \
+  "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
+```
+
+Use `--aws-use-default-credentials` instead of `--aws-profile` to opt in to the AWS SDK default
+credential chain, such as an instance, container, or workload role. Kingfisher never falls back to
+ambient AWS credentials implicitly. `--aws-action deactivate` is the default and is reversible;
+`--aws-action delete` is irreversible and must be selected explicitly.
+
+The responder configuration's resolved region is preserved. Use `--aws-region` to select a different
+region explicitly; this is required for self-revocation in AWS GovCloud or China partitions. The
+CLI timeout applies to each AWS request, while `--retries` applies only to configurable HTTP
+revocation. STS identity lookups have bounded read retries, but IAM mutations never retry.
+
+AWS permission failures are not repaired by retrying the same request. If the response is lost
+after IAM may have accepted a mutation, Kingfisher reports an unknown outcome rather than claiming
+failure or attempting a more destructive fallback. Verify the key state with separately authorized
+credentials before retrying. JSON and TOON output expose this as `revocation_status: unknown`.
+
+Deactivating or deleting a long-term key does not invalidate STS sessions already created from it;
+those sessions can remain usable until they expire or are revoked separately.
+
 Kingfisher custom rules may define these revocation types:
 
 - `Http` for a single provider API request

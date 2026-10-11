@@ -213,8 +213,13 @@ class ManifestTests(unittest.TestCase):
 class WorkflowTests(unittest.TestCase):
     def test_release_notes_skip_unreleased_section(self):
         root = Path(__file__).resolve().parents[2]
-        workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
-        self.assertIn(r"/^## \[Unreleased\]/ { next }", workflow)
+        spec = importlib.util.spec_from_file_location("release_notes", root / "scripts/release-notes.py")
+        notes = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(notes)
+        text = "# Changelog\n## [Unreleased]\nPending\n## [v2.12.0]\nCurrent\n## [v2.11.0]\nPrevious\n"
+        self.assertEqual(notes.release_notes(text, "v2.12.0"), "## [v2.12.0]\nCurrent\n")
+        with self.assertRaisesRegex(ValueError, "expected v2.12.1"):
+            notes.release_notes(text, "v2.12.1")
 
     def test_release_checks_headers_and_upgrades_for_both_architectures(self):
         root = Path(__file__).resolve().parents[2]

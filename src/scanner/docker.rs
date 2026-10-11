@@ -8,12 +8,15 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use base64::Engine;
+use bollard::Docker as DockerClient;
+use futures::TryStreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use oci_client::Reference;
 use oci_client::client::{Client, ClientConfig, linux_amd64_resolver};
 use oci_client::secrets::RegistryAuth;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncWriteExt;
 use tracing::debug;
 use walkdir::WalkDir;
 
@@ -24,6 +27,14 @@ use crate::decompress::{CompressedContent, decompress_file_with_single_stream_ca
 /// still bounding hostile compressed input.
 // nosemgrep: this is the defensive cap — do not flag for missing-limit rules.
 const MAX_DOCKER_SINGLE_STREAM_DECOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+
+#[derive(Debug, thiserror::Error)]
+#[error("image is absent from the local Docker daemon")]
+struct LocalImageAbsent;
+
+#[derive(Debug, thiserror::Error)]
+#[error("local Docker image was found but could not be exported")]
+struct LocalImageExportFailed;
 
 fn helper_get_creds(helper: &str, registry: &str) -> Option<(String, String)> {
     fn run(bin: &str, registry: &str) -> Option<(String, String)> {
@@ -248,19 +259,7 @@ fn collect_saved_archive_layers(out_dir: &Path) -> Result<Vec<PathBuf>> {
     let mut layer_paths = Vec::new();
     let mut seen = HashSet::new();
 
-    for entry in WalkDir::new(out_dir) {
-        let entry = entry?;
-        if entry.file_name() == "layer.tar" {
-            let path = entry.path().to_path_buf();
-            if seen.insert(path.clone()) {
-                layer_paths.push(path);
-            }
-        }
-    }
-
-    if layer_paths.is_empty() {
-        collect_docker_manifest_layers(out_dir, &mut layer_paths, &mut seen)?;
-    }
+    collect_docker_manifest_layers(out_dir, &mut layer_paths, &mut seen)?;
     if layer_paths.is_empty() {
         collect_oci_layout_layers(out_dir, &mut layer_paths, &mut seen)?;
     }
@@ -439,8 +438,22 @@ fn extract_saved_archive_layers(
 
     let layer_paths = collect_saved_archive_layers(out_dir)?;
 
+    // Move every manifest-selected layer out before extracting any filesystem
+    // members. A member named layer.tar may otherwise overwrite an archive or
+    // be deleted by its cleanup, and one layer can shadow a later layer's path.
+    let layers = tempfile::Builder::new()
+        .prefix(".kingfisher-layers-")
+        .tempdir_in(out_dir.parent().unwrap_or_else(|| Path::new(".")))?;
+    let mut staged = Vec::with_capacity(layer_paths.len());
+    for (index, path) in layer_paths.iter().enumerate() {
+        let directory = layers.path().join(index.to_string());
+        std::fs::create_dir(&directory)?;
+        let destination = directory.join(path.file_name().context("Layer path has no filename")?);
+        std::fs::rename(path, &destination)?;
+        staged.push(destination);
+    }
     pb.set_length(layer_paths.len() as u64);
-    for p in &layer_paths {
+    for p in &staged {
         extract_layer_archive(p, out_dir, resources)?;
         pb.inc(1);
     }
@@ -500,6 +513,117 @@ fn registry_auth(reference: &Reference) -> RegistryAuth {
     }
 }
 
+/// Resolve the endpoint before connecting: Bollard's defaults do not read Docker
+/// contexts, and probing the default socket could scan an entirely different image.
+fn docker_api_host(
+    host: Option<&str>,
+    context: Option<&str>,
+    config_dir: Option<&Path>,
+) -> Result<Option<String>> {
+    if let Some(host) = host.filter(|value| !value.is_empty()) {
+        return Ok(Some(host.to_owned()));
+    }
+    let context = context.filter(|value| !value.is_empty());
+
+    let configured_context;
+    let context = if let Some(context) = context {
+        context
+    } else if let Some(config_dir) = config_dir {
+        configured_context = match std::fs::read(config_dir.join("config.json")) {
+            Ok(bytes) => {
+                let config: Value =
+                    serde_json::from_slice(&bytes).context("reading Docker config")?;
+                config.get("currentContext").and_then(Value::as_str).unwrap_or("default").to_owned()
+            }
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => "default".to_owned(),
+            Err(error) => return Err(error).context("reading Docker config"),
+        };
+        &configured_context
+    } else {
+        "default"
+    };
+    if context.is_empty() || context == "default" {
+        return Ok(None);
+    }
+
+    let config_dir =
+        config_dir.ok_or_else(|| anyhow!("Docker context directory is unavailable"))?;
+    for entry in std::fs::read_dir(config_dir.join("contexts/meta"))? {
+        let entry = entry?;
+        let metadata = entry.path().join("meta.json");
+        if !metadata.is_file() {
+            continue;
+        }
+        let metadata: Value = serde_json::from_slice(&std::fs::read(metadata)?)?;
+        if metadata.get("Name").and_then(Value::as_str) != Some(context) {
+            continue;
+        }
+        let endpoint = metadata
+            .get("Endpoints")
+            .and_then(|endpoints| endpoints.get("docker"))
+            .ok_or_else(|| anyhow!("Docker context {context} has no Docker endpoint"))?;
+        let tls_dir = config_dir.join("contexts/tls").join(entry.file_name()).join("docker");
+        if endpoint.get("SkipTLSVerify").and_then(Value::as_bool) == Some(true) || tls_dir.exists()
+        {
+            // The CLI knows how to apply context-specific certificate material
+            // and verification settings; do not silently connect without them.
+            return Err(anyhow!("Docker context {context} requires CLI TLS configuration"));
+        }
+        return endpoint
+            .get("Host")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .map(|host| Some(host.to_owned()))
+            .ok_or_else(|| anyhow!("Docker context {context} has no Docker endpoint"));
+    }
+    Err(anyhow!("Docker context {context} was not found"))
+}
+
+fn docker_api_client() -> Result<DockerClient> {
+    if env::var_os("DOCKER_API_VERSION").is_some_and(|value| !value.is_empty())
+        || (env::var_os("DOCKER_TLS").is_some_and(|value| !value.is_empty())
+            && env::var_os("DOCKER_TLS_VERIFY").is_none())
+    {
+        return Err(anyhow!("Docker environment requires CLI connection configuration"));
+    }
+    let config_dir = env::var_os("DOCKER_CONFIG")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .or_else(|| env::home_dir().map(|home| home.join(".docker")));
+    let host = docker_api_host(
+        env::var("DOCKER_HOST").ok().as_deref(),
+        env::var("DOCKER_CONTEXT").ok().as_deref(),
+        config_dir.as_deref(),
+    )?;
+    let client = match host {
+        Some(host) => DockerClient::connect_with_host(&host),
+        None => DockerClient::connect_with_socket_defaults(),
+    }?;
+    Ok(client)
+}
+
+/// Publish only a completed local-image extraction. Failed attempts stay inside
+/// their temporary directories, including partial tar downloads and extracted layers.
+fn publish_local_image(staging: &Path, out_dir: &Path) -> Result<()> {
+    if out_dir.exists() {
+        std::fs::remove_dir_all(out_dir)?;
+    }
+    std::fs::create_dir_all(out_dir)?;
+    for entry in WalkDir::new(staging).min_depth(1) {
+        let entry = entry?;
+        let destination = out_dir.join(entry.path().strip_prefix(staging)?);
+        if entry.file_type().is_dir() {
+            std::fs::create_dir_all(destination)?;
+        } else {
+            if destination.exists() {
+                std::fs::remove_file(&destination)?;
+            }
+            std::fs::rename(entry.path(), destination)?;
+        }
+    }
+    Ok(())
+}
+
 pub struct Docker {
     resources: crate::limits::ResourceLimits,
 }
@@ -510,15 +634,124 @@ impl Docker {
         Docker { resources: crate::limits::ResourceLimits::default() }
     }
 
-    fn try_save_local_image(&self, image: &str, out_dir: &Path, use_progress: bool) -> Result<()> {
-        let docker = Command::new("docker")
-            .args(["image", "inspect", image])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+    async fn try_save_local_image_via_api(
+        &self,
+        client: DockerClient,
+        image: &str,
+        out_dir: &Path,
+        use_progress: bool,
+    ) -> Result<()> {
+        let client = client
+            .with_timeout(Duration::from_secs(10))
+            .negotiate_version()
+            .await
+            .context("negotiating Docker API version")?;
+        match client.inspect_image(image).await {
+            Ok(_) => {}
+            Err(bollard::errors::Error::DockerResponseServerError { status_code: 404, .. }) => {
+                return Err(LocalImageAbsent.into());
+            }
+            Err(error) => return Err(error).context("inspecting local Docker image"),
+        }
 
-        if !matches!(docker, Ok(s) if s.success()) {
-            return Err(anyhow!("image not local"));
+        let pb = progress_bar(use_progress);
+        pb.set_message(format!("saving local {image} via Docker API"));
+        let result = async {
+            let tar_path = out_dir.join("local_image.tar");
+            let mut file = tokio::fs::File::create(&tar_path).await?;
+            let client = client.with_timeout(Duration::from_secs(600));
+            let mut stream = client.export_image(image);
+            while let Some(bytes) =
+                stream.try_next().await.context("exporting local Docker image")?
+            {
+                file.write_all(&bytes).await?;
+            }
+            file.flush().await?;
+            // Close the archive before extraction/removal, including on Windows.
+            drop(file);
+            let count = extract_saved_archive_layers(&tar_path, out_dir, &pb, self.resources)?;
+            if count == 0 {
+                return Err(anyhow!("Docker API export did not contain image layers"));
+            }
+            Ok(())
+        }
+        .await;
+        pb.finish_with_message(if result.is_ok() {
+            format!("saved {image}")
+        } else {
+            "Docker API export failed".to_owned()
+        });
+        result.context(LocalImageExportFailed)
+    }
+
+    async fn try_save_local_image_with_fallback(
+        &self,
+        client: Result<DockerClient>,
+        image: &str,
+        out_dir: &Path,
+        use_progress: bool,
+        cli_save: impl FnOnce(&Path) -> Result<()>,
+    ) -> Result<()> {
+        let parent = out_dir.parent().unwrap_or_else(|| Path::new("."));
+        std::fs::create_dir_all(parent)?;
+        let staging = tempfile::Builder::new().prefix(".kingfisher-image-").tempdir_in(parent)?;
+        let api_result = match client {
+            Ok(client) => {
+                self.try_save_local_image_via_api(client, image, staging.path(), use_progress).await
+            }
+            Err(error) => Err(error),
+        };
+        let api_error = match api_result {
+            Err(error) if error.is::<LocalImageAbsent>() => return Err(error),
+            Ok(()) => return publish_local_image(staging.path(), out_dir),
+            Err(error) => {
+                debug!("Docker API lookup/export failed for {image}: {error:#}; trying CLI");
+                error
+            }
+        };
+        drop(staging);
+
+        let staging = tempfile::Builder::new().prefix(".kingfisher-image-").tempdir_in(parent)?;
+        if let Err(error) = cli_save(staging.path()) {
+            if api_error.is::<LocalImageExportFailed>() {
+                return Err(api_error)
+                    .context(format!("Docker CLI fallback also failed: {error:#}"));
+            }
+            // Registry-only scanning still works when neither Docker surface is installed.
+            let no_socket = matches!(
+                api_error.downcast_ref::<bollard::errors::Error>(),
+                Some(bollard::errors::Error::SocketNotFoundError(_))
+            );
+            let no_cli = error
+                .downcast_ref::<std::io::Error>()
+                .is_some_and(|error| error.kind() == std::io::ErrorKind::NotFound);
+            if no_socket && no_cli {
+                return Err(LocalImageAbsent.into());
+            }
+            return Err(error).context("Docker CLI lookup/export failed");
+        }
+        publish_local_image(staging.path(), out_dir)
+    }
+
+    fn try_save_local_image_via_cli(
+        &self,
+        image: &str,
+        out_dir: &Path,
+        use_progress: bool,
+    ) -> Result<()> {
+        let inspected = Command::new("docker")
+            .args(["image", "inspect", "--", image])
+            .output()
+            .context("running docker image inspect")?;
+        if !inspected.status.success() {
+            let stderr = String::from_utf8_lossy(&inspected.stderr);
+            if stderr
+                .lines()
+                .any(|line| line.starts_with("Error response from daemon: No such image:"))
+            {
+                return Err(LocalImageAbsent.into());
+            }
+            return Err(anyhow!("Docker image inspection failed: {}", stderr.trim()));
         }
 
         let pb = progress_bar(use_progress);
@@ -527,7 +760,9 @@ impl Docker {
         std::fs::create_dir_all(out_dir)?;
         let tar_path = out_dir.join("local_image.tar");
         let status = Command::new("docker")
-            .args(["image", "save", image, "-o", &tar_path.to_string_lossy()])
+            .args(["image", "save", "-o"])
+            .arg(&tar_path)
+            .args(["--", image])
             .status()
             .with_context(|| "running docker save")?;
         if !status.success() {
@@ -570,8 +805,21 @@ impl Docker {
         out_dir: &Path,
         use_progress: bool,
     ) -> Result<()> {
-        if self.try_save_local_image(image, out_dir, use_progress).is_ok() {
-            return Ok(());
+        match self
+            .try_save_local_image_with_fallback(
+                docker_api_client(),
+                image,
+                out_dir,
+                use_progress,
+                |staging| self.try_save_local_image_via_cli(image, staging, use_progress),
+            )
+            .await
+        {
+            Ok(()) => return Ok(()),
+            Err(error) if error.is::<LocalImageAbsent>() => {
+                debug!("Image {image} is absent locally; trying OCI")
+            }
+            Err(error) => return Err(error).context(format!("saving local image {image}")),
         }
         let reference: Reference =
             image.parse().with_context(|| format!("invalid image reference {image}"))?;
@@ -594,6 +842,9 @@ impl Docker {
         pb.set_length(pulled.layers.len() as u64);
         pb.set_message("extracting layers");
 
+        if out_dir.exists() {
+            std::fs::remove_dir_all(out_dir)?;
+        }
         std::fs::create_dir_all(out_dir)?;
         for layer in pulled.layers.into_iter() {
             let ext = match layer.media_type.as_str() {
@@ -654,9 +905,13 @@ pub fn save_docker_archives(
     for archive in archives {
         let dir_name = archive_dir_name(archive);
         let out_dir = clone_root.join(format!("docker_archive_{dir_name}"));
+        std::fs::create_dir_all(clone_root)?;
+        let staging =
+            tempfile::Builder::new().prefix(".kingfisher-image-").tempdir_in(clone_root)?;
         docker
-            .save_archive_to_dir(archive, &out_dir, use_progress)
+            .save_archive_to_dir(archive, staging.path(), use_progress)
             .with_context(|| format!("extracting docker archive {}", archive.display()))?;
+        publish_local_image(staging.path(), &out_dir)?;
         dirs.push((out_dir, archive.display().to_string()));
     }
 
@@ -668,6 +923,10 @@ mod tests {
     use super::*;
     use flate2::{Compression, write::GzEncoder};
     use tempfile::tempdir;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path_regex},
+    };
 
     #[test]
     fn docker_struct_new() {
@@ -714,6 +973,323 @@ mod tests {
             tar.finish()?;
         }
 
+        Ok(())
+    }
+
+    fn write_context(config_dir: &Path, name: &str, host: &str) -> Result<PathBuf> {
+        let context_id = hex::encode(Sha256::digest(name.as_bytes()));
+        let metadata_dir = config_dir.join("contexts/meta").join(&context_id);
+        std::fs::create_dir_all(&metadata_dir)?;
+        std::fs::write(
+            metadata_dir.join("meta.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "Name": name,
+                "Endpoints": {"docker": {"Host": host, "SkipTLSVerify": false}},
+            }))?,
+        )?;
+        Ok(config_dir.join("contexts/tls").join(context_id).join("docker"))
+    }
+
+    #[test]
+    fn docker_api_host_honors_context_and_host_precedence() -> Result<()> {
+        let dir = tempdir()?;
+        let configured_host = "tcp://configured.example:2375";
+        let explicit_host = "tcp://explicit.example:2375";
+        write_context(dir.path(), "desktop", configured_host)?;
+        std::fs::write(dir.path().join("config.json"), br#"{"currentContext":"desktop"}"#)?;
+
+        assert_eq!(
+            docker_api_host(None, None, Some(dir.path()))?,
+            Some(configured_host.to_owned()),
+        );
+        assert_eq!(
+            docker_api_host(Some(explicit_host), None, Some(dir.path()))?,
+            Some(explicit_host.to_owned()),
+        );
+        assert_eq!(
+            docker_api_host(Some(explicit_host), Some("desktop"), Some(dir.path()))?,
+            Some(explicit_host.to_owned()),
+        );
+        // A nonempty DOCKER_HOST selects the default context before DOCKER_CONTEXT.
+        assert_eq!(
+            docker_api_host(Some(explicit_host), Some("default"), Some(dir.path()))?,
+            Some(explicit_host.to_owned())
+        );
+        assert_eq!(docker_api_host(None, None, None)?, None);
+        assert_eq!(docker_api_host(Some(""), Some(""), None)?, None);
+        Ok(())
+    }
+
+    #[test]
+    fn docker_api_host_delegates_context_tls_to_cli() -> Result<()> {
+        let dir = tempdir()?;
+        let tls_dir = write_context(dir.path(), "remote", "tcp://remote.example:2376")?;
+        std::fs::create_dir_all(&tls_dir)?;
+        std::fs::write(tls_dir.join("ca.pem"), b"context CA certificate")?;
+        let error = docker_api_host(None, Some("remote"), Some(dir.path())).unwrap_err();
+        assert!(error.to_string().contains("CLI TLS configuration"));
+        Ok(())
+    }
+
+    #[test]
+    fn docker_api_host_does_not_ignore_missing_or_invalid_contexts() -> Result<()> {
+        let dir = tempdir()?;
+        std::fs::write(dir.path().join("config.json"), br#"{"currentContext":"missing"}"#)?;
+        assert!(docker_api_host(None, None, Some(dir.path())).is_err());
+        std::fs::write(dir.path().join("config.json"), b"invalid JSON")?;
+        assert!(docker_api_host(None, None, Some(dir.path())).is_err());
+        Ok(())
+    }
+
+    #[test]
+    fn docker_api_host_rejects_malformed_endpoints() -> Result<()> {
+        let dir = tempdir()?;
+        let metadata_dir = dir.path().join("contexts/meta/corrupt");
+        std::fs::create_dir_all(&metadata_dir)?;
+        let malformed = [
+            serde_json::json!(null),
+            serde_json::json!("corrupt"),
+            serde_json::json!(true),
+            serde_json::json!(42),
+            serde_json::json!([]),
+            serde_json::json!({}),
+            serde_json::json!({"Host": ""}),
+            serde_json::json!({"Host": 42}),
+        ];
+        for value in malformed {
+            for endpoints in [value.clone(), serde_json::json!({"docker": value})] {
+                std::fs::write(
+                    metadata_dir.join("meta.json"),
+                    serde_json::to_vec(&serde_json::json!({
+                        "Name": "corrupt", "Endpoints": endpoints,
+                    }))?,
+                )?;
+                let error = docker_api_host(None, Some("corrupt"), Some(dir.path())).unwrap_err();
+                assert!(
+                    error.to_string().contains("has no Docker endpoint"),
+                    "unexpected error for {endpoints}: {error:#}",
+                );
+            }
+        }
+        Ok(())
+    }
+
+    async fn mock_docker_api(
+        inspect_status: u16,
+        export: ResponseTemplate,
+    ) -> Result<(MockServer, DockerClient)> {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^(/v[0-9.]+)?/version$"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"ApiVersion": "1.40"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^(/v[0-9.]+)?/images/local-test:latest/json$"))
+            .respond_with(ResponseTemplate::new(inspect_status).set_body_json(serde_json::json!({
+                "Id": "sha256:local-test", "message": "image not found",
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex(r"^(/v[0-9.]+)?/images/local-test:latest/get$"))
+            .respond_with(export)
+            .expect(u64::from(inspect_status == 200))
+            .mount(&server)
+            .await;
+        let client =
+            DockerClient::connect_with_http(&server.uri(), 10, bollard::API_DEFAULT_VERSION)?;
+        Ok((server, client))
+    }
+
+    #[tokio::test]
+    async fn local_image_absence_is_distinct_from_export_failure() -> Result<()> {
+        let dir = tempdir()?;
+        let (_server, client) = mock_docker_api(404, ResponseTemplate::new(500)).await?;
+        let error = Docker::new()
+            .try_save_local_image_with_fallback(
+                Ok(client),
+                "local-test:latest",
+                &dir.path().join("out"),
+                false,
+                |_| panic!("confirmed absence needs no CLI export"),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.is::<LocalImageAbsent>());
+        let (_server, client) = mock_docker_api(200, ResponseTemplate::new(500)).await?;
+        let error = Docker::new()
+            .try_save_local_image_with_fallback(
+                Ok(client),
+                "local-test:latest",
+                &dir.path().join("out"),
+                false,
+                |_| Err(LocalImageAbsent.into()),
+            )
+            .await
+            .unwrap_err();
+        assert!(error.is::<LocalImageExportFailed>());
+        assert!(!error.is::<LocalImageAbsent>());
+        Ok(())
+    }
+
+    #[test]
+    fn publishing_local_image_removes_stale_files() -> Result<()> {
+        let dir = tempdir()?;
+        let out = dir.path().join("out");
+        let staging = dir.path().join("staging");
+        std::fs::create_dir_all(&out)?;
+        std::fs::create_dir_all(&staging)?;
+        std::fs::write(out.join("stale-secret.txt"), b"old")?;
+        std::fs::write(staging.join("current.txt"), b"new")?;
+        publish_local_image(&staging, &out)?;
+        assert!(!out.join("stale-secret.txt").exists());
+        assert_eq!(std::fs::read(out.join("current.txt"))?, b"new");
+        Ok(())
+    }
+
+    #[test]
+    fn layer_named_files_are_preserved_as_scan_inputs() -> Result<()> {
+        let dir = tempdir()?;
+        let archive = dir.path().join("image.tar");
+        let mut layer = tar::Builder::new(Vec::new());
+        append_bytes(&mut layer, "abc/layer.tar", b"token=inside-layer")?;
+        let mut outer = tar::Builder::new(File::create(&archive)?);
+        append_bytes(&mut outer, "manifest.json", br#"[{"Layers":["abc/layer.tar"]}]"#)?;
+        append_bytes(&mut outer, "abc/layer.tar", &layer.into_inner()?)?;
+        append_bytes(&mut outer, "unrelated/layer.tar", b"token=outer-file")?;
+        outer.finish()?;
+        drop(outer);
+        let out = dir.path().join("out");
+        Docker::new().save_archive_to_dir(&archive, &out, false)?;
+        assert_eq!(std::fs::read(out.join("abc/layer.tar"))?, b"token=inside-layer");
+        assert_eq!(std::fs::read(out.join("unrelated/layer.tar"))?, b"token=outer-file");
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_image_api_success_does_not_invoke_cli() -> Result<()> {
+        let dir = tempdir()?;
+        let archive = dir.path().join("image.tar");
+        build_docker_archive(&archive, false)?;
+        let (_server, client) = mock_docker_api(
+            200,
+            ResponseTemplate::new(200).set_body_bytes(std::fs::read(&archive)?),
+        )
+        .await?;
+        let out = dir.path().join("out");
+        Docker::new()
+            .try_save_local_image_with_fallback(
+                Ok(client),
+                "local-test:latest",
+                &out,
+                false,
+                |_| panic!("CLI must not be invoked after a successful API export"),
+            )
+            .await?;
+        assert!(out.join("app/secret.txt").is_file());
+        assert!(out.join("manifest.json").is_file());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_image_api_failures_fall_back_to_cli() -> Result<()> {
+        for inspect_status in [500, 200] {
+            let dir = tempdir()?;
+            let (_server, client) = mock_docker_api(
+                inspect_status,
+                ResponseTemplate::new(500)
+                    .set_body_json(serde_json::json!({"message": "export failed"})),
+            )
+            .await?;
+            let out = dir.path().join("out");
+            let docker = Docker::new();
+            let mut cli_called = false;
+            docker
+                .try_save_local_image_with_fallback(
+                    Ok(client),
+                    "local-test:latest",
+                    &out,
+                    false,
+                    |staging| {
+                        cli_called = true;
+                        let archive = staging.join("local_image.tar");
+                        build_docker_archive(&archive, false)?;
+                        docker.save_archive_to_dir(&archive, staging, false)
+                    },
+                )
+                .await?;
+            assert!(cli_called);
+            assert!(out.join("app/secret.txt").is_file());
+        }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_image_failed_api_extraction_does_not_contaminate_cli_result() -> Result<()> {
+        let dir = tempdir()?;
+        let mut broken_archive = tar::Builder::new(Vec::new());
+        append_bytes(&mut broken_archive, "api-only.txt", b"failed API attempt")?;
+        append_bytes(
+            &mut broken_archive,
+            "manifest.json",
+            br#"[{"Layers":["missing/layer.tar"]}]"#,
+        )?;
+        let (_server, client) = mock_docker_api(
+            200,
+            ResponseTemplate::new(200).set_body_bytes(broken_archive.into_inner()?),
+        )
+        .await?;
+        let out = dir.path().join("out");
+        let docker = Docker::new();
+        docker
+            .try_save_local_image_with_fallback(
+                Ok(client),
+                "local-test:latest",
+                &out,
+                false,
+                |staging| {
+                    assert_eq!(std::fs::read_dir(staging)?.count(), 0);
+                    let archive = staging.join("local_image.tar");
+                    build_docker_archive(&archive, false)?;
+                    docker.save_archive_to_dir(&archive, staging, false)
+                },
+            )
+            .await?;
+        assert!(out.join("app/secret.txt").is_file());
+        assert!(!out.join("api-only.txt").exists());
+        assert!(!std::fs::read_dir(dir.path())?.any(|entry| {
+            entry.is_ok_and(|entry| {
+                entry.file_name().to_string_lossy().starts_with(".kingfisher-image-")
+            })
+        }));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn local_image_without_api_or_cli_leaves_no_partial_output() -> Result<()> {
+        let dir = tempdir()?;
+        let out = dir.path().join("out");
+        let result = Docker::new()
+            .try_save_local_image_with_fallback(
+                Err(anyhow!("daemon unavailable")),
+                "local-test:latest",
+                &out,
+                false,
+                |staging| {
+                    std::fs::write(staging.join("partial.tar"), b"partial CLI output")?;
+                    Err(std::io::Error::new(std::io::ErrorKind::NotFound, "docker CLI unavailable")
+                        .into())
+                },
+            )
+            .await;
+        assert!(format!("{:#}", result.unwrap_err()).contains("docker CLI unavailable"));
+        assert!(!out.exists());
+        assert_eq!(std::fs::read_dir(dir.path())?.count(), 0);
         Ok(())
     }
 

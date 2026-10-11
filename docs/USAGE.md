@@ -481,6 +481,12 @@ This is useful for:
 - Containing credentials whose original owner is unavailable
 - Automating cleanup after rotation
 
+HTTP revocation defaults to `--retries 0`; an explicit retry count applies only to HTTP 429
+responses. Timeouts, transport errors and server failures may follow an applied mutation,
+so they are reported as unknown without retries. AWS IAM mutations retry only definitive
+throttling responses, with at most three attempts. A failing HTTP rule retains the outcomes
+of earlier rules and processing continues for the remaining selected rules.
+
 ```bash
 # Revoke a mapped Betterleaks GitHub PAT
 kingfisher revoke --rule github-pat "ghp_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
@@ -504,6 +510,10 @@ kingfisher revoke --rules-path ./custom-rules.yml --rule custom.provider.token "
 ```
 
 **Exit codes:** Returns `0` if any matching rule reports a successful revocation, `1` if all are failures or an error occurred.
+
+JSON and TOON output include `revocation_status`; use it to distinguish confirmed failure from
+an unknown AWS mutation outcome. See [revocation providers](REVOCATION_PROVIDERS.md#aws-access-keys)
+for responder credentials, regions, and AWS action selection.
 
 **Passing additional values (`--arg` and `--var`):** Works the same as `kingfisher validate` when a revocation request requires extra variables.
 
@@ -848,19 +858,39 @@ kingfisher scan gcs cloud-samples-data --prefix "storage/"
 
 ## Docker Images
 
-Kingfisher will first try to use any locally available image, then fall back to pulling via OCI.  
+Kingfisher first tries to export a locally available image through the Docker Engine API using
+Bollard. If the API fails, it tries the Docker CLI when available. Registry pulls via OCI
+are used when the image is absent locally or Docker is not installed. Inspection and export
+errors are surfaced instead of substituting a registry image with the same tag. Archive scans
+do not require Docker.
+Local image lookup honors `DOCKER_HOST`, `DOCKER_CONTEXT`, and the active Docker context.
+A non-empty `DOCKER_HOST` takes precedence over `DOCKER_CONTEXT`, matching the Docker CLI.
+Contexts requiring TLS certificate material or SSH use the Docker CLI fallback.
+TLS connections configured through `DOCKER_HOST` use `DOCKER_TLS_VERIFY` and
+`DOCKER_CERT_PATH`. Local images require daemon access; registry credentials apply only to pulls.
+A non-empty `DOCKER_API_VERSION` uses the Docker CLI fallback to honor the pinned API version.
+
+Docker API negotiation and inspection wait up to 10 seconds for response headers; export
+requests wait up to 600 seconds for response headers. Export streaming, extraction, and
+Docker CLI operations have no overall timeout. An API failure may cause the CLI to repeat
+the full export.
+
+To use Podman, point `DOCKER_HOST` at its running Docker-compatible API socket
+(for rootless Linux, `unix://$XDG_RUNTIME_DIR/podman/podman.sock`).
+Podman socket discovery and a `podman` CLI fallback are not enabled.
 
 To skip local image lookup, registry access, and `docker save`, scan a Docker or OCI image archive
 directly with `--archive`. Archive inputs include files produced by `docker save`. Supported archive
 formats are `.tar`, `.tar.gz`, `.tar.gzip`, `.tgz`, `.tar.bz2`, `.tar.bzip2`, and `.tar.xz`.
 
-Authentication happens *in this order*:
+Registry authentication happens *in this order*:
 
 1. **`KF_DOCKER_TOKEN`** env var  
    - If it contains `user:pass`, it's used as Basic auth
    - Otherwise it's sent as a Bearer token
-2. **Docker CLI credentials**  
-   - Checks `credHelpers` (per-registry) and `credsStore` in `~/.docker/config.json`.  
+2. **Docker registry credentials**
+   - Checks `credHelpers` (per-registry) and `credsStore` in `~/.docker/config.json`
+     or `DOCKER_CONFIG/config.json`.
    - Falls back to the legacy `auths` → `auth` (base64) entries.  
 3. **Anonymous** (no credentials)
 

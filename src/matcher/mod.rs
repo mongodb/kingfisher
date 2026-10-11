@@ -405,6 +405,7 @@ impl<'a> Matcher<'a> {
                     },
                 )
             };
+            let mut endpoint_match = None;
             loop {
                 let confirmed = filter_match(
                     rules_db,
@@ -431,12 +432,20 @@ impl<'a> Matcher<'a> {
                     candidate_index,
                     filter_line_cache,
                 );
-                if confirmed || scan_start == 0 {
+                if !kingfisher_scanner::__cli_internals::confirmation_needs_wider_window(
+                    rules_db,
+                    rule_id_usize,
+                    confirmed,
+                    scan_start,
+                    &blob.bytes()[scan_start..scan_end],
+                    &mut endpoint_match,
+                ) {
                     break;
                 }
 
                 // Ordinary candidates keep the bounded confirmation path. Only a failed exact
-                // scan widens toward the start of the blob, so matches have no lookback limit.
+                // scan that may exceed the window or recover a different iterator alignment
+                // widens toward the start of the blob.
                 let lookback = scan_end - scan_start;
                 scan_start = scan_end.saturating_sub(lookback.saturating_mul(2));
             }
@@ -2177,6 +2186,23 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
         let mut starts: Vec<_> = found.iter().map(|m| m.matching_input_offset_span.start).collect();
         starts.sort_unstable();
         assert_eq!(starts, vec![boundary_start, later_start]);
+        Ok(())
+    }
+
+    #[test]
+    fn bounded_fixed_width_run_retains_cli_tail() -> Result<()> {
+        let rule = compatibility_rule(
+            "acme.fixed-width",
+            r"([a-z]{3})",
+            Confidence::High,
+            None,
+            vec![],
+            true,
+        );
+        // The initial 4 KiB suffix shifts the non-overlapping capture sequence.
+        let input = "abc".repeat(1380);
+        let findings = scan_test_rules(vec![rule], input.as_bytes())?;
+        assert_eq!(findings.len(), 1380);
         Ok(())
     }
 

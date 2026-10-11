@@ -457,6 +457,14 @@ impl<'a> ValidationEngine<'a> {
             CredentialUriTarget::MySQL(uri) => self.database(&Validation::MySQL, &uri).await,
             CredentialUriTarget::Postgres(uri) => self.database(&Validation::Postgres, &uri).await,
             CredentialUriTarget::Jdbc(uri) => self.database(&Validation::Jdbc, &uri).await,
+            CredentialUriTarget::Smtp(uri) => {
+                match super::raw::validate_smtp_uri(&uri, self.use_lax_tls, self.allow_internal_ips)
+                    .await
+                {
+                    Ok(result) => classify_status(result.valid, result.status).body(result.body),
+                    Err(_) => ValidationResult::unavailable(ValidationReason::RequestFailed),
+                }
+            }
         }
     }
 

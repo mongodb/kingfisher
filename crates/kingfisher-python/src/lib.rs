@@ -13,7 +13,7 @@ use std::{
 use kingfisher_rules::{Confidence, RuleCacheConfig, Rules, RulesDatabase};
 use kingfisher_scanner::{
     CancellationToken, Finding, Revoker, ScanAborted, ScanControl, Scanner, ScannerConfig,
-    Validator,
+    ValidatedFinding, Validator,
 };
 use pyo3::{
     IntoPyObjectExt,
@@ -293,8 +293,8 @@ fn run_async<T: Send, F: Future<Output = T>>(
             let mut ticks = tokio::time::interval(Duration::from_millis(10));
             loop {
                 tokio::select! {
+                    biased;
                     result = &mut operation => {
-                        control.check().map_err(|err| scan_error(err.into()))?;
                         return Ok(result);
                     }
                     _ = ticks.tick() => {
@@ -325,6 +325,41 @@ struct PyScanner {
 }
 #[pymethods]
 impl PyScanner {
+    #[pyo3(signature = (data=None, *, file=None, path="", timeout=None, cancellation=None))]
+    #[allow(clippy::too_many_arguments)]
+    fn scan_preparation(
+        &self,
+        py: Python<'_>,
+        data: Option<PyBackedBytes>,
+        file: Option<PathBuf>,
+        path: &str,
+        timeout: Option<f64>,
+        cancellation: Option<PyRef<'_, PyCancellationToken>>,
+    ) -> PyResult<Vec<PyFinding>> {
+        if data.is_some() == file.is_some() {
+            return Err(PyValueError::new_err("supply data or file, exclusively"));
+        }
+        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
+        py.detach(|| {
+            control.check()?;
+            let blob = match (&data, &file) {
+                (Some(data), _) => kingfisher_scanner::Blob::from_borrowed(data),
+                (_, Some(file)) => kingfisher_scanner::Blob::from_file(file)?,
+                _ => unreachable!(),
+            };
+            let source_path = file.as_ref().map(|file| file.to_string_lossy());
+            let path = source_path.as_deref().unwrap_or(path);
+            let findings = match &self.detection {
+                Some(options) => self.scanner.scan_blob_for_preparation_with_options_and_control(
+                    &blob, path, options, &control,
+                ),
+                None => self.scanner.scan_blob_for_preparation_with_control(&blob, path, &control),
+            }?;
+            Ok(findings.into_iter().map(|finding| PyFinding { finding }).collect())
+        })
+        .map_err(scan_error)
+    }
+
     #[new]
     #[pyo3(signature = (rules, base64, dedup, redact, min_entropy, *, policy=None))]
     fn new(
@@ -424,6 +459,61 @@ impl PyScanner {
     }
 }
 
+// Retain the shared engine's immutable snapshot, including its original rule.
+// Python-facing credential dictionaries are copies and cannot retarget revocation.
+#[pyclass(module = "kingfisher_sdk._native", name = "ValidatedFinding", frozen)]
+struct PyValidatedFinding {
+    validated: ValidatedFinding,
+}
+#[pymethods]
+impl PyValidatedFinding {
+    fn same_revocation_as(&self, other: &PyValidatedFinding) -> bool {
+        self.validated.same_revocation_target(&other.validated)
+    }
+    #[getter]
+    fn input_diagnostics(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        json_to_python(py, serde_json::to_value(&self.validated.input_diagnostics).map_err(error)?)
+    }
+    #[getter]
+    fn revocation_supported(&self) -> bool {
+        self.validated.revocation_supported()
+    }
+    #[getter]
+    fn revocation_ready(&self) -> bool {
+        self.validated.outcome.is_verified_active()
+            && self.validated.credential.as_ref().is_some_and(|c| c.revocation.is_some())
+    }
+    #[getter]
+    fn revocation_reason(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let reason = self
+            .validated
+            .credential
+            .as_ref()
+            .and_then(|c| c.revocation_reason)
+            .or(self.validated.reason);
+        json_to_python(py, serde_json::to_value(reason).map_err(error)?)
+    }
+    #[getter]
+    fn credential(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
+        let Some(credential) = &self.validated.credential else {
+            return Ok(py.None());
+        };
+        let data = PyDict::new(py);
+        data.set_item("secret", &credential.secret)?;
+        data.set_item("variables", &credential.variables)?;
+        let components = PyList::empty(py);
+        for finding in &credential.components {
+            components.append(Py::new(py, PyFinding { finding: finding.clone() })?)?;
+        }
+        data.set_item("components", components)?;
+        data.set_item(
+            "revocation",
+            credential.revocation.as_ref().map(|inputs| (&inputs.secret, &inputs.variables)),
+        )?;
+        Ok(data.into_any().unbind())
+    }
+}
+
 #[pyclass(module = "kingfisher_sdk._native", name = "Validator", frozen)]
 struct PyValidator {
     validator: Validator,
@@ -431,6 +521,63 @@ struct PyValidator {
 }
 #[pymethods]
 impl PyValidator {
+    #[pyo3(signature = (findings, indices, *, timeout=None, cancellation=None))]
+    fn validate_prepared(
+        &self,
+        py: Python<'_>,
+        findings: Vec<PyFinding>,
+        indices: Vec<usize>,
+        timeout: Option<f64>,
+        cancellation: Option<PyRef<'_, PyCancellationToken>>,
+    ) -> PyResult<Py<PyAny>> {
+        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
+        let context: Vec<_> = findings.into_iter().map(|finding| finding.finding).collect();
+        let candidates = indices
+            .iter()
+            .map(|&index| {
+                context
+                    .get(index)
+                    .cloned()
+                    .ok_or_else(|| PyValueError::new_err("candidate index out of range"))
+            })
+            .collect::<PyResult<Vec<_>>>()?;
+        let results = run_async(py, self.runtime, control, || {
+            self.validator.validate_prepared_findings(candidates, &context)
+        })?;
+        validation_states(py, results)
+    }
+
+    fn with_variables(&self, variables: BTreeMap<String, String>) -> Self {
+        Self { validator: self.validator.with_variables(variables), runtime: self.runtime }
+    }
+
+    #[pyo3(signature = (findings, *, timeout=None, cancellation=None))]
+    fn inspect(
+        &self,
+        py: Python<'_>,
+        findings: Vec<PyFinding>,
+        timeout: Option<f64>,
+        cancellation: Option<PyRef<'_, PyCancellationToken>>,
+    ) -> PyResult<Py<PyAny>> {
+        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
+        let diagnostics = py
+            .detach(|| {
+                control.check()?;
+                let context: Vec<_> = findings.into_iter().map(|finding| finding.finding).collect();
+                context
+                    .iter()
+                    .map(|finding| {
+                        control.check()?;
+                        let diagnostics = self.validator.input_diagnostics(finding, &context);
+                        control.check()?;
+                        Ok(diagnostics)
+                    })
+                    .collect::<anyhow::Result<Vec<_>>>()
+            })
+            .map_err(scan_error)?;
+        json_to_python(py, serde_json::to_value(diagnostics).map_err(error)?)
+    }
+
     #[new]
     fn new(
         timeout: f64,
@@ -463,16 +610,27 @@ impl PyValidator {
         let results = run_async(py, self.runtime, control, || {
             self.validator.validate_findings(findings.into_iter().map(|v| v.finding).collect())
         })?;
-        let results: Vec<_> = results
-            .into_iter()
-            .map(|r| {
-                serde_json::json!({
-                    "outcome": r.outcome, "reason": r.reason, "http_status": r.http_status,
-                })
-            })
-            .collect();
-        json_to_python(py, serde_json::Value::Array(results))
+        validation_states(py, results)
     }
+}
+
+fn validation_states(py: Python<'_>, results: Vec<ValidatedFinding>) -> PyResult<Py<PyAny>> {
+    let states = PyList::empty(py);
+    for validated in results {
+        let state = PyDict::new(py);
+        state.set_item(
+            "outcome",
+            json_to_python(py, serde_json::to_value(validated.outcome).map_err(error)?)?,
+        )?;
+        state.set_item(
+            "reason",
+            json_to_python(py, serde_json::to_value(validated.reason).map_err(error)?)?,
+        )?;
+        state.set_item("http_status", validated.http_status)?;
+        state.set_item("_native", Py::new(py, PyValidatedFinding { validated })?)?;
+        states.append(state)?;
+    }
+    Ok(states.into_any().unbind())
 }
 
 #[pyclass(module = "kingfisher_sdk._native", name = "Revoker", frozen)]
@@ -490,6 +648,37 @@ impl PyRevoker {
             revoker: Revoker::new().map_err(error)?.timeout(duration(timeout)?).map_err(error)?,
             runtime: runtime()?,
         })
+    }
+    #[pyo3(signature = (validated, *, timeout=None, cancellation=None))]
+    fn revoke_validated(
+        &self,
+        py: Python<'_>,
+        validated: &PyValidatedFinding,
+        timeout: Option<f64>,
+        cancellation: Option<PyRef<'_, PyCancellationToken>>,
+    ) -> PyResult<Py<PyAny>> {
+        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
+        if !validated.revocation_ready() {
+            return Err(PyValueError::new_err(
+                "a verified_active result with resolved revocation inputs is required",
+            ));
+        }
+        let result = run_async(py, self.runtime, control, || {
+            self.revoker.revoke_validated(&validated.validated)
+        })?
+        .map_err(|err| {
+            error(format!(
+                "revocation request failed ({}); outcome may be unknown",
+                Revoker::error_category(&err),
+            ))
+        })?;
+        json_to_python(
+            py,
+            serde_json::json!({
+                "rule_id": result.rule_id, "revoked": result.revoked,
+                "http_status": result.status_code,
+            }),
+        )
     }
     #[pyo3(signature = (rule_id, secret, variables, *, timeout=None, cancellation=None))]
     fn revoke(
@@ -562,6 +751,7 @@ fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PyScanner>()?;
     m.add_class::<PyCancellationToken>()?;
     m.add_class::<PyFinding>()?;
+    m.add_class::<PyValidatedFinding>()?;
     m.add_class::<PyValidator>()?;
     m.add_class::<PyRevoker>()?;
     m.add_function(wrap_pyfunction!(shannon_entropy, m)?)?;

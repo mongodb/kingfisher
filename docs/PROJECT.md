@@ -14,6 +14,14 @@ These public references are not an exhaustive list:
   secret-scanning engine with optional live validation.
 - [MegaLinter](https://megalinter.io/latest/descriptors/repository_kingfisher/) distributes
   Kingfisher as the `REPOSITORY_KINGFISHER` linter in its standard and security flavors.
+- [Osmedeus](https://github.com/j3ssie/osmedeus/blob/main/platform/osmedeus-workflow/fragments/do-scan-repo.yaml)
+  runs Kingfisher in repository scans and imports its SARIF findings.
+- [DefectDojo](https://github.com/DefectDojo/django-DefectDojo/blob/master/docs/content/supported_tools/parsers/file/kingfisher.md)
+  imports Kingfisher JSON reports for vulnerability management.
+- [hk](https://github.com/jdx/hk/blob/main/pkl/builtins/kingfisher.pkl) includes a built-in
+  Kingfisher secret-scanning check.
+- [Weblate](https://github.com/WeblateOrg/weblate/blob/main/.pre-commit-config.yaml) configures
+  Kingfisher as a developer pre-commit hook.
 
 If your organization or project uses Kingfisher and would like to be included, open an
 [issue](https://github.com/mongodb/kingfisher/issues/new/choose) or

@@ -1,5 +1,10 @@
 //! Provider-specific raw validators for secret formats that need custom protocol logic.
 
+mod smtp;
+pub(crate) use smtp::{
+    is_parseable_uri as is_parseable_smtp_uri, validate_uri as validate_smtp_uri,
+};
+
 use super::limits::timeout;
 use std::{
     collections::BTreeSet,
@@ -98,6 +103,10 @@ pub fn required_vars(kind: &str) -> BTreeSet<String> {
         "kraken" => {
             vars.insert("KRAKEN_API_KEY".to_string());
         }
+        "smtp" => {
+            vars.insert("SMTP_HOST".to_string());
+            vars.insert("SMTP_USERNAME".to_string());
+        }
         _ => {}
     }
 
@@ -134,6 +143,7 @@ pub async fn validate_raw(
         "ldap" => validate_ldap(globals, use_lax_tls).await,
         "rabbitmq" => validate_rabbitmq(globals, use_lax_tls).await,
         "redis" => validate_redis(globals, use_lax_tls).await,
+        "smtp" => smtp::validate_components(globals, use_lax_tls, allow_internal_ips).await,
         other => Ok(RawValidationOutcome {
             valid: false,
             status: StatusCode::NOT_IMPLEMENTED,
@@ -205,8 +215,8 @@ fn lax_provider() -> Arc<CryptoProvider> {
 }
 
 fn tls_connector(use_lax_tls: bool) -> Result<TlsConnector> {
+    ensure_crypto_provider();
     let cfg = if use_lax_tls {
-        ensure_crypto_provider();
         ClientConfig::builder()
             .dangerous()
             .with_custom_certificate_verifier(Arc::new(LaxCertVerifier(lax_provider())))

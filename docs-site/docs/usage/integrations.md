@@ -101,19 +101,30 @@ kingfisher scan gcs cloud-samples-data --prefix "storage/"
 
 ## Docker
 
-Kingfisher will first try to use any locally available image, then fall back to pulling via OCI.  
+Kingfisher first tries to export a locally available image through the Docker Engine API using
+Bollard. If that fails, it tries the Docker CLI when available, then falls back to
+pulling from the registry via OCI. Registry pulls and archive scans do not require Docker.
+Local image lookup honors `DOCKER_HOST`, `DOCKER_CONTEXT`, and the active Docker context.
+Contexts requiring TLS certificate material or SSH use the Docker CLI fallback.
+TLS connections configured through `DOCKER_HOST` use `DOCKER_TLS_VERIFY` and
+`DOCKER_CERT_PATH`. Local images require daemon access; registry credentials apply only to pulls.
+
+To use Podman, point `DOCKER_HOST` at its running Docker-compatible API socket
+(for rootless Linux, `unix://$XDG_RUNTIME_DIR/podman/podman.sock`). Clear `DOCKER_CONTEXT`
+if it overrides that endpoint. Podman socket discovery and a `podman` CLI fallback are not enabled.
 
 To skip local image lookup, registry access, and `docker save`, scan a Docker or OCI image archive
 directly with `--archive`. Archive inputs include files produced by `docker save`. Supported archive
 formats are `.tar`, `.tar.gz`, `.tar.gzip`, `.tgz`, `.tar.bz2`, `.tar.bzip2`, and `.tar.xz`.
 
-Authentication happens *in this order*:
+Registry authentication happens *in this order*:
 
 1. **`KF_DOCKER_TOKEN`** env var  
    - If it contains `user:pass`, it's used as Basic auth
    - Otherwise it's sent as a Bearer token
-2. **Docker CLI credentials**  
-   - Checks `credHelpers` (per-registry) and `credsStore` in `~/.docker/config.json`.  
+2. **Docker registry credentials**
+   - Checks `credHelpers` (per-registry) and `credsStore` in `~/.docker/config.json`
+     or `DOCKER_CONFIG/config.json`.
    - Falls back to the legacy `auths` → `auth` (base64) entries.  
 3. **Anonymous** (no credentials)
 

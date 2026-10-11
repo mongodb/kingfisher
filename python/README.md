@@ -245,6 +245,12 @@ Use a separate process when a hard wall-clock execution limit is required.
 
 ## Validate explicitly
 
+SMTP URIs use the shared validator. For separate SMTP fields, the
+[SMTP example](https://github.com/mongodb/kingfisher/blob/main/python/examples/validate_smtp.py)
+loads custom rules and authenticates over TLS without sending email. See the
+[SMTP input contract](https://github.com/mongodb/kingfisher/blob/main/docs/RULES.md#smtp-authentication)
+for port fallback and outcome classification.
+
 ```python
 from kingfisher_sdk import Scanner, Validator
 
@@ -258,12 +264,133 @@ Scanning is offline. Validation may contact providers using detected credentials
 Keep the complete scan result, including invisible supporting findings, until
 validation finishes. Report redacted results; do not log `finding.secret`.
 
-Revocation is available through `Revoker.revoke()` and requires `confirm=True`.
-It can disable or delete real credentials. The
+Pass a validated result directly to revoke using its original rule and resolved
+credential pair. No credential environment variables or manual AWS association are
+needed:
+
+```python
+from kingfisher_sdk import Rules, Scanner, Validator, Revoker
+
+rules = Rules()
+findings = Scanner(rules).scan_file("application.conf")
+revoker = Revoker(rules)
+validated = [result for result in Validator().validate(findings) if result.finding.visible]
+for status in revoker.revoke_many(validated, confirm=True):
+    print(status.rule_id, status.outcome)
+```
+
+**This can disable or delete real credentials.** `confirm=True` remains mandatory;
+validation alone never revokes. Each validation result's `credential` exposes the selected supporting
+findings, validation variables and resolved revocation inputs. Secrets are hidden
+in `repr` and redacted by default in `credential.to_dict()`. Missing or ambiguous
+components, inactive credentials and unsupported rules cannot be revoked through
+this result-based API. Keep each input's complete findings until validation finishes.
+The existing `revoke(rule_id, secret, variables=..., confirm=True)` API still works.
+
+Custom YAML `revocation:` actions work with the same APIs. Supply files or
+directories through `Rules`; omit `builtins=False` to also load the bundled catalog:
+
+```python
+rules = Rules(["company-rules.yml"], builtins=False)
+revoker = Revoker(rules)
+plan = revoker.prepare_from_file("application.conf", provider="acme")
+# Optional live steps after inspecting the plan and selecting intended targets:
+# results = plan.validate(Validator())
+# statuses = revoker.revoke_many(results, confirm=True)
+```
+
+Single and batch result-based revocation retain the original custom action and
+resolved inputs. A rule needs a revocation definition; custom Betterleaks TOML
+alone does not supply one. The [custom-rule guide](../docs/PYPI.md#use-custom-revocation-rules)
+shows endpoint variables and YAML, and the [local lifecycle example](examples/local_workflow.py)
+runs [demo.yml](examples/demo.yml)'s action against a mock provider. The preparation
+and batch examples accept repeated `--rules-path` and `--no-builtins`.
+
+For a token obtained elsewhere, prepare candidates without knowing its rule ID:
+
+```python
+import os
+from kingfisher_sdk import Revoker
+
+revoker = Revoker()
+plan = revoker.prepare(os.environ["KINGFISHER_SECRET"], provider="github")
+print(plan.candidate_rule_ids)  # Offline identification; no provider requests.
+results = plan.validate()      # Explicit live checks; never revokes.
+# Inspect/disambiguate results before revoker.revoke(chosen_result, confirm=True).
+```
+
+`provider` accepts an exact loaded rule ID, an exact display name, or an ID family.
+Exact IDs take precedence; exact names and families are case-insensitive, and
+ambiguous display names require an ID. `github` selects every loaded ID in that
+family (`github-...`, `github....` or `github/...`), while
+`betterleaks.github-pat` selects just that exact rule. Family matching checks full
+IDs and IDs without the supported catalog namespace; it excludes substrings like
+`githubish` and does not classify compact IDs such as Veles's
+`slackappconfigaccesstoken` under `slack`. `Rules.resolve()` exposes this offline
+selection. Typos may get suggestions, but never select fuzzy matches; globs and
+CLI legacy aliases are not supported.
+
+Preparation scans the shared catalog and filters findings. Validation checks
+only detected revocation-capable candidates using supporting context, retaining
+compound credential associations; it does not try every selected provider API.
+Helpers aren't separately checked against providers. Preparation retains primary
+matches missing required companions for actionable diagnostics; normal scanner
+behavior stays unchanged.
+All overlapping candidates are returned without choosing a winner. Supply source
+text when a bare token lacks context/companions, or use file preparation for path-aware
+rules. Omit `provider` to consider the loaded catalog. Empty candidates do not prove
+inactivity. See the [selector reference](../docs/PYPI.md#prepare-revocation-without-knowing-the-rule-id)
+and [commented preparation example](examples/prepare_revocation.py).
+
+Source preparation and batch revocation compose with the same validated snapshots:
+
+```python
+from kingfisher_sdk import Revoker, Validator
+
+revoker = Revoker()
+plan = revoker.prepare_from_file("application.conf", provider="github")
+# For in-memory configuration: prepare_from_text(text, path="application.conf").
+for candidate in plan.candidates:
+    for issue in candidate.input_diagnostics:
+        print(candidate.rule_id, issue.variable, issue.rule_id, issue.message)
+
+results = plan.validate(Validator(timeout=10, concurrency=4))
+# After inspecting/disambiguating all targets; this performs real revocations:
+statuses = revoker.revoke_many(results, confirm=True, timeout=60)
+for status in statuses:
+    print(status.index, status.rule_id, status.outcome, status.duplicate_of)
+```
+
+Preparation stays offline and exposes capability flags and named missing,
+ambiguous, redacted or invalid inputs without values/endpoints/error bodies.
+`prepare(..., variables=...)` retains explicit supporting/endpoint overrides for
+inspection and validation; detected captures/components retain precedence.
+Required detected companions still need source context. `Validator.inspect()`
+inspects existing complete finding groups offline; `with_variables()` clones its
+execution policy and shared client with explicit overrides. Prepared validation
+skips known missing validation inputs before network work. Revocation-only missing
+inputs allow validation but block revocation readiness. These diagnostics do not
+prove activity or every provider/expression constraint.
+
+`revoke_many()` requires confirmation, checks the entire iterable's types before
+mutation, skips non-ready results and returns one safe status per original input.
+It deduplicates exact original action definitions and complete resolved inputs
+within the call, preserving different AWS pairs and endpoints. Different rule IDs
+remain distinct, so callers must resolve overlapping detector ambiguity first.
+Provider failures return `unknown` and continue without retries; response matcher
+failures return `not_confirmed`, without proving the mutation did not occur.
+Total deadline/cancellation/Ctrl-C stops pending actions and propagates an exception
+carrying `.completed` statuses and `.pending_indices`. Interrupted in-flight actions
+are unknown; inspect provider state before retrying. See the
+[batch reference](../docs/PYPI.md#revoke-a-batch-explicitly) and the
+[commented batch example](examples/batch_revoke.py), which stays offline by default.
+
+The [six-provider example](https://github.com/mongodb/kingfisher/blob/main/python/examples/scan_validate_revoke.py)
+scans, validates and optionally revokes AWS, GCP, Hugging Face, GitLab, Slack and
+GitHub credentials. The
 [local lifecycle example](https://github.com/mongodb/kingfisher/blob/main/python/examples/local_workflow.py)
-demonstrates detection, validation and revocation against a loopback mock with a
-synthetic credential. Blocking SDK operations release the GIL; use
-`asyncio.to_thread` in async applications.
+uses a loopback mock and synthetic credentials. Blocking SDK operations release the
+GIL; use `asyncio.to_thread` in async applications.
 
 ## Documentation and examples
 
@@ -297,8 +424,9 @@ rule by its location. Source archives include the examples and fixture together.
 Provider calls also accept an optional total deadline and `CancellationToken`:
 `validator.validate(findings, timeout=30, cancellation=token)` and
 `revoker.revoke(..., confirm=True, timeout=10, cancellation=token)`. They check
-Ctrl-C while waiting, raise errors without partial batch results, and add no
+Ctrl-C while waiting, propagate validation errors without partial results, and add no
 retries. Interruption cannot undo a revocation already applied by the provider.
+Batch revocation preserves completed statuses on interruption exceptions.
 
 Archive/content transforms validate depth and byte/entry options on call while
 consuming inputs lazily. Archive `max_bytes` caps cumulative extracted output;

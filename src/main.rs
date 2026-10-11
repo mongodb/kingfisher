@@ -705,11 +705,12 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
             }
         }
         Command::Revoke(revoke_args) => {
-            let results = direct_revoke::run_direct_revocation(&revoke_args, &global_args).await?;
+            let results =
+                direct_revoke::run_direct_revocation_detailed(&revoke_args, &global_args).await?;
             let use_color = global_args.use_color(std::io::stdout());
-            direct_revoke::print_results(&results, &revoke_args.format, use_color);
+            direct_revoke::print_detailed_results(&results, &revoke_args.format, use_color);
             // Exit with code 0 if any result revoked, 1 if all failed
-            if direct_revoke::any_revoked(&results) {
+            if direct_revoke::any_detailed_revoked(&results) {
                 Ok(AsyncMainOutcome::Done)
             } else {
                 std::process::exit(1);

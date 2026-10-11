@@ -431,8 +431,12 @@ Follow the [release verification steps](docs/INSTALLATION.md#verifying-release-a
 ## Project
 
 Kingfisher is used in MongoDB's production security workflows and is integrated by projects such
-as [Prowler](https://prowler.com/blog/whats-new-in-prowler-july-2026) and
-[MegaLinter](https://megalinter.io/latest/descriptors/repository_kingfisher/). Read more about its
+as [Prowler](https://prowler.com/blog/whats-new-in-prowler-july-2026),
+[MegaLinter](https://megalinter.io/latest/descriptors/repository_kingfisher/),
+[Osmedeus](https://github.com/j3ssie/osmedeus),
+[DefectDojo](https://github.com/DefectDojo/django-DefectDojo), and
+[hk](https://github.com/jdx/hk). [Weblate](https://github.com/WeblateOrg/weblate) uses its
+pre-commit hook. Read more about its
 [lineage, evolution, and public adoption](docs/PROJECT.md).
 
 Contributions are welcome. See [CONTRIBUTING.md](CONTRIBUTING.md), report vulnerabilities through

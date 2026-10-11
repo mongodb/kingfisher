@@ -222,6 +222,7 @@ impl Scanner {
             blob,
             path,
             control,
+            false,
             #[cfg(feature = "context")]
             None,
         )
@@ -259,7 +260,46 @@ impl Scanner {
         options: &crate::context::DetectionOptions,
         control: &ScanControl,
     ) -> Result<Vec<Finding>> {
-        self.scan_blob_impl(blob, path, control, Some(options))
+        self.scan_blob_impl(blob, path, control, false, Some(options))
+    }
+
+    /// Detect candidates for offline credential preparation, retaining primaries
+    /// with missing supporting components and overlapping catalog rules. Other detection filters still apply.
+    /// These are unvalidated candidates, not ordinary reportable scan findings.
+    /// Preparation neither reads nor writes the scanner's cross-call deduplication state.
+    ///
+    /// # Errors
+    /// Returns normal scan/filter errors or [`crate::ScanAborted`]; no partial findings.
+    #[cfg(feature = "validation")]
+    pub fn scan_blob_for_preparation_with_control(
+        &self,
+        blob: &Blob,
+        path: &str,
+        control: &ScanControl,
+    ) -> Result<Vec<Finding>> {
+        self.scan_blob_impl(
+            blob,
+            path,
+            control,
+            true,
+            #[cfg(feature = "context")]
+            None,
+        )
+    }
+
+    /// Prepare candidates with explicit detection policies, without changing dedup state.
+    ///
+    /// # Errors
+    /// Returns normal scan/filter errors or [`crate::ScanAborted`]; no partial findings.
+    #[cfg(all(feature = "validation", feature = "context"))]
+    pub fn scan_blob_for_preparation_with_options_and_control(
+        &self,
+        blob: &Blob,
+        path: &str,
+        options: &crate::context::DetectionOptions,
+        control: &ScanControl,
+    ) -> Result<Vec<Finding>> {
+        self.scan_blob_impl(blob, path, control, true, Some(options))
     }
 
     fn scan_blob_impl(
@@ -267,6 +307,7 @@ impl Scanner {
         blob: &Blob,
         path: &str,
         control: &ScanControl,
+        retain_unresolved: bool,
         #[cfg(feature = "context")] options: Option<&crate::context::DetectionOptions>,
     ) -> Result<Vec<Finding>> {
         #[cfg(feature = "context")]
@@ -276,7 +317,7 @@ impl Scanner {
         let lookback = if cli_match_semantics { 4 * 1024 } else { RAW_MATCH_LOOKBACK };
         control.check()?;
         // Check for dedup
-        if self.config.enable_dedup {
+        if self.config.enable_dedup && !retain_unresolved {
             let blob_id = blob.id();
             if self.seen_blobs.read().contains(&(blob_id, path.to_owned())) {
                 return Ok(Vec::new());
@@ -375,12 +416,14 @@ impl Scanner {
                             self.rules_db.confirmation_maximum_len(rule_id),
                             self.rules_db.confirmation_match_maximum_len(rule_id),
                             self.rules_db.confirmation_prefix_stable(rule_id),
+                            self.rules_db.confirmation_line_restart_safe(rule_id),
                         )
                     },
                 )?
             } else {
                 None
             };
+            let mut endpoint_match = None;
             loop {
                 control.check()?;
                 let haystack = &bytes[scan_start..scan_end];
@@ -404,6 +447,7 @@ impl Scanner {
                 while let Some(captures) = captures.next_with_control(control)? {
                     control.check()?;
                     let full_capture = captures.get(0).unwrap();
+                    // confirmation_needs_wider_window relies on rejecting interior matches.
                     if bounded_confirmation
                         && ((scan_start > 0 && full_capture.start() == 0)
                             || full_capture.end() != haystack.len())
@@ -549,12 +593,19 @@ impl Scanner {
                     });
                 }
 
-                if confirmed || scan_start == 0 {
+                if !primitives::confirmation_needs_wider_window(
+                    &self.rules_db,
+                    rule_id,
+                    confirmed,
+                    scan_start,
+                    haystack,
+                    &mut endpoint_match,
+                ) {
                     break;
                 }
 
                 // Keep the bounded fast path for ordinary candidates and widen only when exact
-                // confirmation fails, removing the match-length limit without routine blob scans.
+                // confirmation may exceed it or recover a different iterator alignment.
                 let lookback = scan_end - scan_start;
                 scan_start = scan_end.saturating_sub(lookback.saturating_mul(2));
             }
@@ -586,7 +637,9 @@ impl Scanner {
                 control,
             )?;
         }
-        enforce_betterleaks_components(&mut findings, bytes, cli_match_semantics, control)?;
+        if !retain_unresolved {
+            enforce_betterleaks_components(&mut findings, bytes, cli_match_semantics, control)?;
+        }
         if cli_match_semantics {
             let keep = crate::postprocess::credential_uri_keep(
                 findings.iter().map(|f| (f.rule.as_ref(), f.association_span, f.secret.as_bytes())),
@@ -600,7 +653,9 @@ impl Scanner {
             });
         }
         control.check()?;
-        deduplicate_imported_catalog_findings(&mut findings, cli_match_semantics, control)?;
+        if !retain_unresolved {
+            deduplicate_imported_catalog_findings(&mut findings, cli_match_semantics, control)?;
+        }
         control.check()?;
 
         // Redact only after dependency matching and fingerprint calculation.
@@ -615,7 +670,7 @@ impl Scanner {
         }
         control.check()?;
         // Mark blob as seen for dedup
-        if self.config.enable_dedup && !findings.is_empty() {
+        if self.config.enable_dedup && !retain_unresolved && !findings.is_empty() {
             self.seen_blobs.write().insert((blob.id(), path.to_owned()));
         }
 

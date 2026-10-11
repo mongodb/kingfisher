@@ -2,6 +2,26 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.12.0]
+
+- Avoided redundant regex confirmation widening in the CLI and SDK while preserving matches when iterator alignment shifts. [#545](https://github.com/mongodb/kingfisher/pull/545)
+- Fixed prepared validation outcome parity, preserved scan state during credential preparation, and retained completed revocation evidence across cancellation.
+- Preserved per-rule revocation results after failures; HTTP revocation now defaults to no retries and only explicit throttling responses can be retried. AWS IAM mutations retry definitive throttling without repeating ambiguous failures.
+- Fixed Docker host precedence, surfaced local image export failures, preserved files named `layer.tar`, and removed stale files from reused image output directories.
+- Enforced release tag ancestry, matching changelog notes and existing release commit identity; SDK publish retries now upload missing PyPI distributions.
+
+- Added local image scanning through the Docker Engine API via Bollard, with active-context support, Docker CLI/OCI fallbacks, and cleanup of failed local attempts.
+- Added SMTP credential validation through STARTTLS or implicit TLS without sending email, including credential URIs, a separate-field custom rule example, common-port fallback, and distinct accepted, rejected, and inconclusive outcomes. [#544](https://github.com/mongodb/kingfisher/issues/544)
+- Added offline Python revocation preparation with exact rule IDs/names or deterministic provider families, explicit candidate validation and advisory-only typo suggestions.
+- Added source-text/file revocation preparation, structured missing-input diagnostics, and explicit batch revocation with complete-input deduplication and retained interruption outcomes.
+- Documented custom YAML revocation actions in the Python SDK and added custom catalog options to the preparation and batch examples.
+- Added resolved credential inputs and result-based Python revocation, automatically reusing validated AWS pairs and other supporting values.
+- Fixed slow scans with dense newline-separated findings for eligible unbounded regex rules, including Auth0 domains and eBay client IDs, without changing findings. [#537](https://github.com/mongodb/kingfisher/issues/537)
+- Made AWS access-key revocation safer and more reliable by resolving the IAM username explicitly, rejecting temporary `ASIA` credentials, and reporting indeterminate mutation outcomes as unknown.
+- Added opt-in AWS responder credentials through a named profile or the default credential chain, explicit target usernames and regions, and explicit `deactivate` or `delete` actions; deletion is never an automatic fallback.
+- Released `kingfisher-scanner` 1.4.0 with the structured AWS revocation options and outcome API.
+- Bumped the Python SDK to 1.4.0 for the new validation and revocation workflows and SMTP support.
+
 ## [v2.11.1]
 
 - Fixed RPM upgrade file conflicts by restoring the `kingfisher` package name and replacing misnamed packages.

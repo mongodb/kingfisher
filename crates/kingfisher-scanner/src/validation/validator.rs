@@ -16,8 +16,58 @@ use tokio::sync::Semaphore;
 
 #[cfg(test)]
 use super::engine::text;
-use super::{ValidationEngine, ValidationReason, ValidationResult};
+use super::{CredentialInputDiagnostic, ValidationEngine, ValidationReason, ValidationResult};
 use crate::{Finding, ValidationOutcome, scanner::finding_is_within};
+
+/// Credential inputs resolved once from one scan input. Contains secrets.
+///
+/// Debug omits all values. Serialization is deliberately left to callers.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct ResolvedCredential {
+    pub secret: String,
+    /// Validation variables, including trusted endpoint overrides; excludes TOKEN.
+    pub variables: BTreeMap<String, String>,
+    /// One representative supporting finding per resolved dependency. Repeated
+    /// occurrences of the same value do not enlarge the retained snapshot.
+    /// Unrelated and out-of-window findings are excluded.
+    pub components: Vec<Finding>,
+    pub revocation: Option<RevocationInputs>,
+    /// Missing/redacted/invalid revocation bindings, independently of validation.
+    pub revocation_reason: Option<ValidationReason>,
+}
+
+/// Inputs to the rule's revocation action. Contains secrets.
+#[derive(Clone)]
+#[non_exhaustive]
+pub struct RevocationInputs {
+    pub secret: String,
+    /// Resolved captures, components, endpoint overrides and capability bindings.
+    pub variables: BTreeMap<String, String>,
+}
+
+impl fmt::Debug for ResolvedCredential {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ResolvedCredential")
+            .field("component_count", &self.components.len())
+            .field("revocation_reason", &self.revocation_reason)
+            .finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for RevocationInputs {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RevocationInputs").finish_non_exhaustive()
+    }
+}
+
+impl ResolvedCredential {
+    fn globals(&self) -> Object {
+        let mut values = self.variables.clone();
+        values.insert("TOKEN".into(), self.secret.clone());
+        values.into_iter().map(|(k, v)| (k.into(), Value::scalar(v))).collect()
+    }
+}
 
 /// A finding paired with its validation state. The finding still contains secrets.
 ///
@@ -30,6 +80,10 @@ pub struct ValidatedFinding {
     pub outcome: ValidationOutcome,
     pub reason: Option<ValidationReason>,
     pub http_status: Option<u16>,
+    /// Snapshot of the inputs used by validation, before any reporting filters.
+    pub credential: Option<ResolvedCredential>,
+    /// Offline names/categories from the exact input context and trusted variables.
+    pub input_diagnostics: Vec<CredentialInputDiagnostic>,
 }
 
 impl ValidatedFinding {
@@ -40,7 +94,29 @@ impl ValidatedFinding {
         for value in self.finding.captures.values_mut() {
             *value = "[REDACTED]".into();
         }
+        // Drop retained inputs rather than leave a second copy of raw secrets.
+        self.credential = None;
         self
+    }
+
+    /// Whether both snapshots identify the same rule, original revocation
+    /// definition and complete action inputs. Different endpoint/configuration
+    /// snapshots and different compound credential pairs remain distinct.
+    pub fn same_revocation_target(&self, other: &Self) -> bool {
+        self.finding.rule_id == other.finding.rule_id
+            && self.finding.rule().syntax().revocation == other.finding.rule().syntax().revocation
+            && match (
+                self.credential.as_ref().and_then(|c| c.revocation.as_ref()),
+                other.credential.as_ref().and_then(|c| c.revocation.as_ref()),
+            ) {
+                (Some(a), Some(b)) => a.secret == b.secret && a.variables == b.variables,
+                _ => false,
+            }
+    }
+
+    /// Whether the original rule defines a revocation action (not readiness).
+    pub fn revocation_supported(&self) -> bool {
+        self.finding.rule().syntax().revocation.is_some()
     }
 }
 
@@ -56,12 +132,19 @@ impl fmt::Debug for ValidatedFinding {
 }
 
 impl ValidationResult {
-    fn attach(self, finding: Finding) -> ValidatedFinding {
+    fn attach(
+        self,
+        finding: Finding,
+        credential: Option<ResolvedCredential>,
+        input_diagnostics: Vec<CredentialInputDiagnostic>,
+    ) -> ValidatedFinding {
         ValidatedFinding {
             finding,
             outcome: self.outcome,
             reason: self.reason,
             http_status: self.http_status,
+            credential,
+            input_diagnostics,
         }
     }
 }
@@ -213,31 +296,59 @@ impl Validator {
         finding: &Finding,
         context: &[Finding],
     ) -> ValidatedFinding {
-        self.check_finding(finding, context).await.attach(finding.clone())
+        let (result, credential, diagnostics) = self.check_finding(finding, context, false).await;
+        result.attach(finding.clone(), credential, diagnostics)
     }
 
-    async fn check_finding(&self, finding: &Finding, context: &[Finding]) -> ValidationResult {
+    async fn check_finding(
+        &self,
+        finding: &Finding,
+        context: &[Finding],
+        preflight: bool,
+    ) -> (ValidationResult, Option<ResolvedCredential>, Vec<CredentialInputDiagnostic>) {
+        // Missing inputs cannot change states that do not execute validation.
+        let syntax = finding.rule().syntax();
+        let cheap_result = if syntax.validation.is_none() {
+            Some(ValidationResult::outcome(ValidationOutcome::NotAttempted))
+        } else if !syntax.is_authoritative() {
+            Some(
+                ValidationResult::outcome(ValidationOutcome::NotAttempted)
+                    .reason(ValidationReason::NonAuthoritative),
+            )
+        } else if matches!(syntax.validation, Some(Validation::Assumed)) {
+            Some(ValidationResult::outcome(ValidationOutcome::Assumed))
+        } else {
+            None
+        };
+        if let Some(result) = cheap_result {
+            return (result, None, Vec::new());
+        }
+        let input_diagnostics = self.input_diagnostics(finding, context);
+        if preflight
+            && let Some(issue) = input_diagnostics.iter().find(|issue| issue.stage != "revocation")
+        {
+            return (ValidationResult::skipped(diagnostic_reason(issue)), None, input_diagnostics);
+        }
+        let mut credential = None;
         let work = async {
-            // Preserve cheap/non-network states even when other checks occupy all permits.
-            let Some(validation) = &finding.rule().syntax().validation else {
-                return ValidationResult::outcome(ValidationOutcome::NotAttempted);
-            };
-            if !finding.rule().syntax().is_authoritative() {
-                return ValidationResult::outcome(ValidationOutcome::NotAttempted)
-                    .reason(ValidationReason::NonAuthoritative);
-            }
-            if matches!(validation, Validation::Assumed) {
-                return ValidationResult::outcome(ValidationOutcome::Assumed);
-            }
             if finding.secret == "[REDACTED]"
                 || finding.captures.values().any(|v| v == "[REDACTED]")
             {
                 return ValidationResult::skipped(ValidationReason::RedactedInput);
             }
-            let globals = match self.bind(finding, context) {
-                Ok(globals) => globals,
+            let mut bound = match self.bind(finding, context) {
+                Ok(bound) => bound,
                 Err(reason) => return ValidationResult::skipped(reason),
             };
+            if let Some(issue) = input_diagnostics.iter().find(|issue| issue.stage == "revocation")
+            {
+                bound.revocation = None;
+                // Capability binding already supplied its precise failure category.
+                // Template inspection adds a reason only when binding succeeded.
+                bound.revocation_reason.get_or_insert(diagnostic_reason(issue));
+            }
+            let globals = bound.globals();
+            credential = Some(bound);
             let Ok(_permit) = self.permits.acquire().await else {
                 return ValidationResult::unavailable(ValidationReason::RequestFailed);
             };
@@ -249,9 +360,10 @@ impl Validator {
                 .validate(finding.rule(), &globals)
                 .await
         };
-        super::limits::timeout(self.timeout, work)
+        let result = super::limits::timeout(self.timeout, work)
             .await
-            .unwrap_or_else(|_| ValidationResult::unavailable(ValidationReason::DeadlineExceeded))
+            .unwrap_or_else(|_| ValidationResult::unavailable(ValidationReason::DeadlineExceeded));
+        (result, credential, input_diagnostics)
     }
 
     /// Validate a single scan's full result set, preserving input order.
@@ -260,19 +372,174 @@ impl Validator {
     /// filter reports. Work is bounded; no detached tasks are spawned. Separate
     /// unrelated inputs into separate calls even if their bytes are identical.
     pub async fn validate_findings(&self, findings: Vec<Finding>) -> Vec<ValidatedFinding> {
-        let checks: Vec<_> = stream::iter(findings.iter())
-            .map(|finding| self.check_finding(finding, &findings))
+        let checked: Vec<_> = stream::iter(findings.iter())
+            .map(|finding| self.check_finding(finding, &findings, false))
             .buffered(self.concurrency)
             .collect()
             .await;
-        findings.into_iter().zip(checks).map(|(finding, check)| check.attach(finding)).collect()
+        findings
+            .into_iter()
+            .zip(checked)
+            .map(|(finding, (result, credential, diagnostics))| {
+                result.attach(finding, credential, diagnostics)
+            })
+            .collect()
     }
 
-    fn bind(
+    /// Explicitly validate selected prepared candidates using complete context
+    /// from one input. Missing/ambiguous/redacted/template inputs skip provider
+    /// work; supporting context is associated but is not itself validated.
+    /// Preserves candidate order and the configured concurrency bound.
+    pub async fn validate_prepared_findings(
+        &self,
+        candidates: Vec<Finding>,
+        context: &[Finding],
+    ) -> Vec<ValidatedFinding> {
+        let checked: Vec<_> = stream::iter(candidates.iter())
+            .map(|finding| self.check_finding(finding, context, true))
+            .buffered(self.concurrency)
+            .collect()
+            .await;
+        candidates
+            .into_iter()
+            .zip(checked)
+            .map(|(finding, (result, credential, diagnostics))| {
+                result.attach(finding, credential, diagnostics)
+            })
+            .collect()
+    }
+
+    /// Clone execution policy/client and overlay explicit, case-insensitive variables.
+    /// Captures and associated components still take precedence during binding.
+    pub fn with_variables(&self, variables: BTreeMap<String, String>) -> Self {
+        let mut clone = self.clone();
+        clone
+            .variables
+            .extend(variables.into_iter().map(|(key, value)| (key.to_uppercase(), value)));
+        clone
+    }
+
+    /// Inspect one candidate and its complete same-input context without provider
+    /// requests. Uses the same defaults, capture precedence and component windows
+    /// as validation, plus real Liquid parsing/rendering of HTTP/gRPC templates.
+    /// Diagnostics omit values, source/endpoint URLs and parser/provider bodies.
+    /// Conditional templates may over-report lexical names after a render error;
+    /// Betterleaks expression branches and provider permissions aren't proven here.
+    pub fn input_diagnostics(
         &self,
         finding: &Finding,
         context: &[Finding],
-    ) -> std::result::Result<Object, ValidationReason> {
+    ) -> Vec<CredentialInputDiagnostic> {
+        let mut diagnostics = Vec::new();
+        let mut values = match self.binding_values(finding) {
+            Ok(values) => values,
+            Err(_) => {
+                return vec![CredentialInputDiagnostic::new(
+                    "dependency",
+                    "ambiguous_dependency",
+                    None,
+                )];
+            }
+        };
+        for (name, value) in &values {
+            if value == "[REDACTED]" {
+                diagnostics.push(CredentialInputDiagnostic::new(
+                    "dependency",
+                    "redacted_input",
+                    Some(name.clone()),
+                ));
+            }
+        }
+        for dependency in finding.rule().syntax().depends_on_rule.iter().flatten() {
+            if dependency.variable.eq_ignore_ascii_case("TOKEN") {
+                continue;
+            }
+            let matching = dependency_matches(finding, context, dependency);
+            let distinct: BTreeSet<_> =
+                matching.iter().map(|candidate| candidate.secret.as_str()).collect();
+            let code = if distinct.len() > 1 {
+                Some("ambiguous_dependency")
+            } else if let Some(value) = distinct.first() {
+                values.insert(dependency.variable.to_uppercase(), (*value).into());
+                (*value == "[REDACTED]").then_some("redacted_input")
+            } else {
+                (!dependency.optional).then_some("missing_dependency")
+            };
+            if let Some(code) = code {
+                let mut diagnostic = CredentialInputDiagnostic::new(
+                    "dependency",
+                    code,
+                    Some(dependency.variable.to_uppercase()),
+                );
+                diagnostic.rule_id = Some(dependency.rule_id.clone());
+                diagnostics.push(diagnostic);
+            }
+        }
+        super::preparation::validation(
+            &self.parser,
+            finding.rule().syntax().validation.as_ref(),
+            &values,
+            &mut diagnostics,
+        );
+        if let Some(action) = &finding.rule().syntax().revocation {
+            let mut credential = ResolvedCredential {
+                secret: finding.secret.clone(),
+                variables: values.clone(),
+                components: Vec::new(),
+                revocation: None,
+                revocation_reason: None,
+            };
+            credential.variables.remove("TOKEN");
+            match resolve_revocation(finding, &credential) {
+                Ok(inputs) => {
+                    let mut values = inputs.variables;
+                    values.insert("TOKEN".into(), inputs.secret);
+                    super::preparation::revocation(&self.parser, action, &values, &mut diagnostics);
+                }
+                Err(reason) => {
+                    let code = match reason {
+                        ValidationReason::RedactedInput => "redacted_input",
+                        ValidationReason::MissingDependency => "missing_dependency",
+                        _ => "invalid_configuration",
+                    };
+                    let mut named = false;
+                    if let Some(Validation::Betterleaks(validation)) =
+                        &finding.rule().syntax().validation
+                        && let Some(bindings) = &validation.capabilities.revocation_bindings
+                    {
+                        for source in
+                            std::iter::once(&bindings.secret).chain(bindings.variables.values())
+                        {
+                            if let Some(component) = source.strip_prefix("components.")
+                                && let Some(variable) = validation.components.get(component)
+                                && !values.contains_key(&variable.to_uppercase())
+                            {
+                                diagnostics.push(CredentialInputDiagnostic::new(
+                                    "revocation",
+                                    code,
+                                    Some(variable.to_uppercase()),
+                                ));
+                                named = true;
+                            }
+                        }
+                    }
+                    if !named {
+                        diagnostics.push(CredentialInputDiagnostic::new("revocation", code, None));
+                    }
+                }
+            }
+        }
+        let mut seen = BTreeSet::new();
+        diagnostics.retain(|issue| {
+            seen.insert((issue.stage, issue.code, issue.variable.clone(), issue.rule_id.clone()))
+        });
+        diagnostics
+    }
+
+    fn binding_values(
+        &self,
+        finding: &Finding,
+    ) -> std::result::Result<BTreeMap<String, String>, ValidationReason> {
         let mut values = self.variables.clone();
         // Betterleaks uses GITHUB_BASE_URL; YAML rules use GITHUB_API_BASE_URL.
         // Either trusted API override should apply to both unless both are supplied.
@@ -303,23 +570,22 @@ impl Validator {
         }
         values.extend(captures);
         values.insert("TOKEN".into(), finding.secret.clone());
+        Ok(values)
+    }
+
+    fn bind(
+        &self,
+        finding: &Finding,
+        context: &[Finding],
+    ) -> std::result::Result<ResolvedCredential, ValidationReason> {
+        let mut values = self.binding_values(finding)?;
+        let mut components = Vec::new();
         for dependency in finding.rule().syntax().depends_on_rule.iter().flatten() {
             if dependency.variable.eq_ignore_ascii_case("TOKEN") {
                 continue;
             }
-            let candidates: BTreeSet<&str> = context
-                .iter()
-                .filter(|candidate| {
-                    candidate.rule_id == dependency.rule_id
-                        && candidate.blob_id == finding.blob_id
-                        && candidate.is_base64_encoded == finding.is_base64_encoded
-                        && dependency
-                            .within
-                            .as_deref()
-                            .is_none_or(|within| finding_is_within(finding, candidate, within))
-                })
-                .map(|candidate| candidate.secret.as_str())
-                .collect();
+            let matching = dependency_matches(finding, context, dependency);
+            let candidates: BTreeSet<&str> = matching.iter().map(|f| f.secret.as_str()).collect();
             if candidates.len() > 1 {
                 return Err(ValidationReason::AmbiguousDependency);
             }
@@ -328,18 +594,181 @@ impl Validator {
                     return Err(ValidationReason::RedactedInput);
                 }
                 values.insert(dependency.variable.to_uppercase(), (*value).into());
+                // All candidates have the same value; retain one occurrence.
+                components.push(matching[0].clone());
             } else if !dependency.optional {
                 return Err(ValidationReason::MissingDependency);
             }
         }
-        Ok(values.into_iter().map(|(k, v)| (k.into(), Value::scalar(v))).collect())
+        values.remove("TOKEN");
+        let mut credential = ResolvedCredential {
+            secret: finding.secret.clone(),
+            variables: values,
+            components,
+            revocation: None,
+            revocation_reason: None,
+        };
+        if finding.rule().syntax().revocation.is_some() {
+            match resolve_revocation(finding, &credential) {
+                Ok(inputs) => credential.revocation = Some(inputs),
+                Err(reason) => credential.revocation_reason = Some(reason),
+            }
+        }
+        Ok(credential)
     }
+}
+
+fn dependency_matches<'a>(
+    finding: &Finding,
+    context: &'a [Finding],
+    dependency: &kingfisher_rules::DependsOnRule,
+) -> Vec<&'a Finding> {
+    context
+        .iter()
+        .filter(|candidate| {
+            candidate.rule_id == dependency.rule_id
+                && candidate.blob_id == finding.blob_id
+                && candidate.is_base64_encoded == finding.is_base64_encoded
+                && dependency
+                    .within
+                    .as_deref()
+                    .is_none_or(|within| finding_is_within(finding, candidate, within))
+        })
+        .collect()
+}
+
+fn diagnostic_reason(issue: &CredentialInputDiagnostic) -> ValidationReason {
+    match issue.code {
+        "ambiguous_dependency" => ValidationReason::AmbiguousDependency,
+        "redacted_input" => ValidationReason::RedactedInput,
+        "invalid_configuration" => ValidationReason::InvalidConfiguration,
+        _ => ValidationReason::MissingDependency,
+    }
+}
+
+// Resolve capability bindings from the exact variables already used to validate.
+// This deliberately does not re-associate findings or consult the environment.
+fn resolve_revocation(
+    finding: &Finding,
+    credential: &ResolvedCredential,
+) -> std::result::Result<RevocationInputs, ValidationReason> {
+    let mut inputs = RevocationInputs {
+        secret: credential.secret.clone(),
+        variables: credential.variables.clone(),
+    };
+    if let Some(Validation::Betterleaks(validation)) = &finding.rule().syntax().validation
+        && let Some(bindings) = &validation.capabilities.revocation_bindings
+    {
+        let resolve = |source: &str| {
+            if source == "finding.secret" {
+                return Ok(credential.secret.clone());
+            }
+            let component =
+                source.strip_prefix("components.").ok_or(ValidationReason::InvalidConfiguration)?;
+            let variable = validation
+                .components
+                .get(component)
+                .ok_or(ValidationReason::InvalidConfiguration)?;
+            credential
+                .variables
+                .get(&variable.to_uppercase())
+                .cloned()
+                .ok_or(ValidationReason::MissingDependency)
+        };
+        inputs.secret = resolve(&bindings.secret)?;
+        for (name, source) in &bindings.variables {
+            if name.eq_ignore_ascii_case("TOKEN") {
+                return Err(ValidationReason::InvalidConfiguration);
+            }
+            inputs.variables.insert(name.to_uppercase(), resolve(source)?);
+        }
+    }
+    if inputs.secret.is_empty()
+        || inputs.secret == "[REDACTED]"
+        || inputs.variables.values().any(|value| value == "[REDACTED]")
+    {
+        return Err(ValidationReason::RedactedInput);
+    }
+    Ok(inputs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{Rule, RuleSyntax, RulesDatabase, Scanner};
+
+    fn aws_findings() -> Vec<Finding> {
+        let mut rules = kingfisher_rules::get_builtin_rules(None).unwrap();
+        // Preserve the real AWS dependencies and capability bindings, but use
+        // synthetic detection patterns so these tests never contain live keys.
+        let mut aws = rules.rules.remove("betterleaks.aws-access-token").unwrap();
+        aws.pattern = "(AKIAABCDEFGHIJKLMNOP)".into();
+        aws.betterleaks_filter = None;
+        aws.min_entropy = 0.0;
+        for dependency in aws.depends_on_rule.iter_mut().flatten() {
+            dependency.verify_candidates = false;
+        }
+        let helper =
+            RuleSyntax::new("betterleaks.aws-secret-access-key", "Secret", "(secret_[a-z]{4})");
+        Scanner::new(Arc::new(
+            RulesDatabase::from_rules(vec![Rule::new(aws), Rule::new(helper)]).unwrap(),
+        ))
+        .scan_bytes(b"secret_efgh\n\n\n\n\n\nAKIAABCDEFGHIJKLMNOP\nsecret_abcd\nsecret_abcd")
+        .unwrap()
+    }
+
+    #[test]
+    fn aws_revocation_uses_the_exact_resolved_validation_pair() {
+        let findings = aws_findings();
+        let primary =
+            findings.iter().find(|f| f.rule_id == "betterleaks.aws-access-token").unwrap();
+        let validator =
+            Validator::builder().variable("AWS_SECRET_ACCESS_KEY", "wrong").build().unwrap();
+        let credential = validator.bind(primary, &findings).unwrap();
+        assert_eq!(credential.secret, "AKIAABCDEFGHIJKLMNOP");
+        assert_eq!(credential.variables["AWS_SECRET_ACCESS_KEY"], "secret_abcd");
+        assert_eq!(credential.components.len(), 1);
+        assert!(credential.components.iter().all(|f| f.secret == "secret_abcd"));
+        let action = credential.revocation.as_ref().unwrap();
+        assert_eq!(action.secret, "secret_abcd");
+        assert_eq!(action.variables["AKID"], primary.secret);
+        assert!(!action.variables.contains_key("TOKEN"));
+        assert!(!format!("{credential:?}").contains("secret_abcd"));
+        assert!(!format!("{action:?}").contains(&primary.secret));
+        let validated = ValidationResult::outcome(ValidationOutcome::VerifiedActive).attach(
+            primary.clone(),
+            Some(credential),
+            Vec::new(),
+        );
+        assert!(validated.revocation_supported());
+        let redacted = validated.into_redacted();
+        assert!(redacted.credential.is_none());
+        assert_eq!(redacted.finding.secret, "[REDACTED]");
+    }
+
+    #[test]
+    fn aws_components_reject_missing_ambiguous_and_redacted_values() {
+        let mut findings = aws_findings();
+        let primary =
+            findings.iter().find(|f| f.rule_id == "betterleaks.aws-access-token").unwrap().clone();
+        let validator = Validator::builder().build().unwrap();
+        assert_eq!(validator.bind(&primary, &[]).unwrap_err(), ValidationReason::MissingDependency);
+        let helper = findings.iter_mut().find(|f| f.secret == "secret_abcd").unwrap();
+        helper.secret = "different_secret".into();
+        assert_eq!(
+            validator.bind(&primary, &findings).unwrap_err(),
+            ValidationReason::AmbiguousDependency
+        );
+        for helper in &mut findings {
+            if helper.rule_id == "betterleaks.aws-secret-access-key" {
+                helper.secret = "[REDACTED]".into();
+            }
+        }
+        assert_eq!(
+            validator.bind(&primary, &findings).unwrap_err(),
+            ValidationReason::RedactedInput
+        );
+    }
 
     #[test]
     fn github_api_override_applies_to_both_template_conventions() {
@@ -357,7 +786,7 @@ mod tests {
                 .variable(name, "https://github.example/api/v3")
                 .build()
                 .unwrap();
-            let globals = validator.bind(&finding, &[]).unwrap();
+            let globals = validator.bind(&finding, &[]).unwrap().globals();
             assert_eq!(text(&globals, "GITHUB_BASE_URL"), "https://github.example/api/v3");
             assert_eq!(text(&globals, "GITHUB_API_BASE_URL"), "https://github.example/api/v3");
         }

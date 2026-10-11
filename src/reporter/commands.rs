@@ -278,6 +278,10 @@ pub(super) fn build_validate_command(
     if is_aws_session_token {
         required_vars.insert("AWS_SECRET_ACCESS_KEY".to_string());
     }
+    if matches!(validation, Validation::Raw(kind) if kind == "smtp") {
+        // Preserve a detected explicit endpoint instead of silently probing default ports.
+        required_vars.insert("SMTP_PORT".to_string());
+    }
 
     let var_args = build_var_args(
         dependent_captures,
@@ -353,6 +357,7 @@ pub(super) fn build_blast_radius_command(
                 | crate::validation::CredentialUriTarget::MongoDB(_)
                 | crate::validation::CredentialUriTarget::MySQL(_) => uri,
                 crate::validation::CredentialUriTarget::Http(_)
+                | crate::validation::CredentialUriTarget::Smtp(_)
                 | crate::validation::CredentialUriTarget::Jdbc(_)
                 | crate::validation::CredentialUriTarget::Unsupported(_) => return None,
             }
@@ -520,6 +525,39 @@ mod tests {
 
         assert!(command.contains(uri));
         assert!(!command.ends_with("'hunter2'"));
+    }
+
+    #[test]
+    fn smtp_validate_command_preserves_optional_explicit_port() {
+        let mut dependent = BTreeMap::from([
+            ("SMTP_HOST".into(), "smtp.example.com".into()),
+            ("SMTP_USERNAME".into(), "user@example.com".into()),
+            ("SMTP_PORT".into(), "2525".into()),
+        ]);
+        let validation = crate::rules::Validation::Raw("smtp".into());
+        let command = build_validate_command(
+            "custom.smtp.password",
+            &validation,
+            "fixture-password",
+            &dependent,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(command.contains("--var SMTP_HOST='smtp.example.com'"));
+        assert!(command.contains("--var SMTP_USERNAME='user@example.com'"));
+        assert!(command.contains("--var SMTP_PORT='2525'"));
+        dependent.remove("SMTP_PORT");
+        let command = build_validate_command(
+            "custom.smtp.password",
+            &validation,
+            "fixture-password",
+            &dependent,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!command.contains("--var SMTP_PORT"));
     }
 
     #[test]

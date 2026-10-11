@@ -1,4 +1,4 @@
-//! Credential URI normalization and HTTPS Basic authentication.
+//! Credential URI normalization, protocol routing, and HTTPS Basic authentication.
 use super::limits::ResourceTimeout;
 use super::{GLOBAL_USER_AGENT, http_validation as httpvalidation};
 
@@ -30,6 +30,7 @@ pub enum CredentialUriTarget {
     MySQL(String),
     Postgres(String),
     Jdbc(String),
+    Smtp(String),
     Unsupported(String),
 }
 
@@ -41,6 +42,13 @@ impl CredentialUriTarget {
             Self::MySQL(_) => "mysql",
             Self::Postgres(_) => "postgresql",
             Self::Jdbc(_) => "jdbc",
+            Self::Smtp(uri) => {
+                if uri.starts_with("smtps:") {
+                    "smtps"
+                } else {
+                    "smtp"
+                }
+            }
             Self::Unsupported(scheme) => scheme,
         }
     }
@@ -61,6 +69,7 @@ impl CredentialUriTarget {
             // The JDBC validator performs subprotocol-specific parsing. Treat the outer prefix as
             // structurally valid here so direct validation can return its precise diagnostic.
             Self::Jdbc(uri) => uri.len() > "jdbc:".len(),
+            Self::Smtp(uri) => super::raw::is_parseable_smtp_uri(uri),
             Self::Unsupported(_) => true,
         }
     }
@@ -111,11 +120,14 @@ pub fn classify_credential_uri(uri: &str, scheme_hint: Option<&str>) -> Credenti
             .map(CredentialUriTarget::Postgres)
             .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
         "jdbc" => CredentialUriTarget::Jdbc(uri.to_string()),
+        "smtp" | "smtps" => normalize_uri_scheme(uri, &scheme)
+            .map(CredentialUriTarget::Smtp)
+            .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
         _ => CredentialUriTarget::Unsupported(scheme),
     }
 }
 
-/// Return whether a supported credential URI can be parsed by its target database driver.
+/// Return whether a supported credential URI can be parsed by its target validator.
 /// Unsupported schemes remain reportable and are intentionally left unvalidated.
 pub fn is_parseable_credential_uri(uri: &str, scheme: Option<&str>) -> bool {
     classify_credential_uri(uri, scheme).is_parseable()

@@ -9,7 +9,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! kingfisher-scanner = { version = "1.2.0", features = ["validation"] }
+//! kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
 //! ```
 //!
 //! Prefer `Validator` for automatic rule dispatch, credential association,
@@ -26,6 +26,7 @@
 //! - **Databases**: MongoDB, MySQL, Postgres, JDBC
 //! - **JWT**: JWT token validation
 //! - **Raw**: provider/protocol-specific validators that need custom logic
+//! - **SMTP**: TLS-protected AUTH PLAIN/LOGIN without sending messages, via CredentialUri or Raw
 //! - **Ethereum**: network-free key parsing and address derivation
 
 pub mod limits;
@@ -81,9 +82,11 @@ pub use raw::{RawValidationOutcome, required_vars as raw_required_vars, validate
 pub use http_validation::check_url_resolvable_safe;
 
 pub use aws::{
-    aws_key_to_account_number, generate_aws_cache_key, revoke_aws_access_key,
-    set_aws_skip_account_ids, set_aws_validation_concurrency, should_skip_aws_validation,
-    validate_aws_credentials, validate_aws_credentials_input,
+    AwsRevocationAction, AwsRevocationActor, AwsRevocationCredentials, AwsRevocationOptions,
+    AwsRevocationResult, AwsRevocationStatus, aws_key_to_account_number, generate_aws_cache_key,
+    revoke_aws_access_key, revoke_aws_access_key_with_options, set_aws_skip_account_ids,
+    set_aws_validation_concurrency, should_skip_aws_validation, validate_aws_credentials,
+    validate_aws_credentials_input,
 };
 
 use std::sync::{LazyLock, OnceLock};
@@ -186,9 +189,15 @@ pub mod betterleaks;
 /// Unary gRPC transport and template helpers.
 pub mod grpc;
 
+mod preparation;
+pub(crate) mod template_vars;
 mod validator;
 
-pub use validator::{ValidatedFinding, Validator, ValidatorBuilder};
+pub use preparation::CredentialInputDiagnostic;
+
+pub use validator::{
+    ResolvedCredential, RevocationInputs, ValidatedFinding, Validator, ValidatorBuilder,
+};
 
 mod result;
 

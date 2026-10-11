@@ -1,0 +1,41 @@
+# Customize the namespace and dependency windows for your configuration layout.
+# Helper findings must remain available until validation has associated them.
+rules:
+  - name: SMTP password
+    id: custom.smtp.password
+    pattern: '(?im)^[\t ]*["\x27]?smtp[_-]?(?:password|pass)["\x27]?[\t ]*[:=][\t ]*["\x27]?([^\s"\x27]{1,256})(?:[\s"\x27]|$)'
+    examples:
+      - 'SMTP_PASSWORD=fixture-only-password'
+      - '"smtp_password": "fixture-only-password"'
+    depends_on_rule:
+      - rule_id: custom.smtp.host
+        variable: SMTP_HOST
+        within: 8L
+      - rule_id: custom.smtp.username
+        variable: SMTP_USERNAME
+        within: 8L
+      - rule_id: custom.smtp.port
+        variable: SMTP_PORT
+        within: 8L
+        optional: true
+    validation:
+      type: Raw
+      content: smtp
+  - name: SMTP host
+    id: custom.smtp.host
+    visible: false
+    pattern: '(?im)^[\t ]*["\x27]?smtp[_-]?(?:host|server)["\x27]?[\t ]*[:=][\t ]*["\x27]?([a-z0-9][a-z0-9._-]{0,252}|\[[0-9a-f:]+\])(?:[\s"\x27]|$)'
+    examples:
+      - 'SMTP_HOST=smtp.example.com'
+  - name: SMTP username
+    id: custom.smtp.username
+    visible: false
+    pattern: '(?im)^[\t ]*["\x27]?smtp[_-]?(?:username|user)["\x27]?[\t ]*[:=][\t ]*["\x27]?([^\s"\x27]{1,256})(?:[\s"\x27]|$)'
+    examples:
+      - 'SMTP_USERNAME=user@example.com'
+  - name: SMTP port
+    id: custom.smtp.port
+    visible: false
+    pattern: '(?im)^[\t ]*["\x27]?smtp[_-]?port["\x27]?[\t ]*[:=][\t ]*["\x27]?([0-9]{1,5})(?:[\s"\x27,]|$)'
+    examples:
+      - 'SMTP_PORT=587'

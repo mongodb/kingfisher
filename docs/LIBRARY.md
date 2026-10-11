@@ -5,9 +5,9 @@ For in-process Python detection, validation and revocation, see the [Python SDK]
 [← Back to README](../README.md)
 
 The prepared library releases are **kingfisher-core 1.0.3**,
-**kingfisher-rules 1.2.0**, and **kingfisher-scanner 1.3.0**.
+**kingfisher-rules 1.2.0**, and **kingfisher-scanner 1.4.0**.
 They require Rust **1.99** or newer and are versioned independently of the
-`kingfisher-bin` CLI, currently **2.11.1**. See [publishing](PUBLISHING.md).
+`kingfisher-bin` CLI, currently **2.12.0**. See [publishing](PUBLISHING.md).
 
 ## Crate Overview
 
@@ -48,7 +48,7 @@ Add the scanner crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-kingfisher-scanner = "1.3.0"
+kingfisher-scanner = "1.4.0"
 anyhow = "1"
 ```
 
@@ -105,12 +105,12 @@ additional validator features your project needs.
 To install the CLI from crates.io:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.11.1
+cargo install --locked kingfisher-bin --version 2.12.0
 kingfisher scan path/to/project --no-validate --format toon --no-update-check
 ```
 
 For the `kingfisher-bin` library example in your own application, use
-`kingfisher = { package = "kingfisher-bin", version = "2.11.1" }` and `anyhow = "1"`.
+`kingfisher = { package = "kingfisher-bin", version = "2.12.0" }` and `anyhow = "1"`.
 The focused library examples use the crate versions listed above;
 `kingfisher-rules` and `kingfisher-scanner` examples also use `anyhow = "1"`.
 
@@ -119,7 +119,7 @@ The focused library examples use the crate versions listed above;
 Start with a complete example above and copy it into `src/main.rs` in a small Rust
 application. These are public-API consumers; no CLI process or private Kingfisher
 module is required. Choose dependencies from this table in addition to
-`kingfisher-scanner = "1.3.0"` and `anyhow = "1"`:
+`kingfisher-scanner = "1.4.0"` and `anyhow = "1"`:
 
 | Recipe | Additional dependencies / features |
 | ------ | ---------------------------------- |
@@ -263,7 +263,7 @@ rust-version = "1.99"
 
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.3.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
 kingfisher-rules = "1.2.0"
 serde_json = "1"
 tokio = { version = "1.53", features = ["macros", "rt", "net", "io-util", "time"] }
@@ -287,6 +287,12 @@ For your own service, replace the mock and synthetic detector with the built-in
 catalog or your private rules. The [validate_file example](../crates/kingfisher-scanner/examples/validate_file.rs)
 shows a complete application using the built-ins. Provider requests happen only
 when you call the validator; scanning alone remains network-free.
+
+SMTP credential URIs use `CredentialUri`; separate fields can use
+[custom SMTP rules](RULES.md#smtp-authentication) with `Raw` content `smtp`.
+Both paths require TLS and authenticate without sending email. Keep invisible
+host, username, and optional port findings until validation resolves dependencies.
+Authentication rejection is distinct from inconclusive transport or TLS failures.
 
 ### Use the validation builder
 
@@ -553,7 +559,7 @@ No validator features are enabled by default:
 
 ```toml
 [dependencies]
-kingfisher-scanner = { version = "1.3.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
 ```
 
 `validation` enables all supported validators and revocation: HTTP, gRPC,
@@ -570,7 +576,7 @@ logging or serializing it:
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.3.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -608,14 +614,53 @@ Provider behavior and network availability are outside the Rust API contract.
 
 ## Revoke a credential
 
+For offline preparation with `validation`, use
+`scanner.scan_blob_for_preparation_with_control(&blob, logical_path, &control)`
+without reading or changing scan deduplication state. With the `context` feature,
+`scan_blob_for_preparation_with_options_and_control` also applies detection policies.
+It retains overlapping catalog candidates and primaries with missing components for
+input diagnostics; other detection filters and normal scans stay unchanged. `validator.input_diagnostics(&candidate, &same_input_findings)`
+returns `CredentialInputDiagnostic` values containing a stage, code, variable and
+optional supporting detector ID, without secrets, endpoint values or error bodies.
+It shares native component windows/defaults and request-template rendering.
+Conditional templates may over-report lexical names after a render error, and
+provider constraints/Betterleaks branches are not fully established offline.
+
+`validator.with_variables(mapping)` clones execution policy and the pooled client
+with explicit overrides. `validate_prepared_findings(candidates, &context).await`
+validates only selected candidates, skips known unresolved validation inputs before
+provider work and retains supporting context without checking helpers separately.
+Live results retain `input_diagnostics`; missing revocation-only template inputs
+prevent resolved action inputs even when validation proves activity.
+`ValidatedFinding::same_revocation_target(&other)` compares original rule/action
+definitions and complete resolved inputs for application-owned deduplication.
+Python adds text/file preparation and batch convenience methods over these shared
+primitives; see [the SDK workflow](PYPI.md#revoke-a-batch-explicitly).
+
 `kingfisher-scanner::Revoker` dispatches built-in or custom rules to HTTP,
 multi-step HTTP, AWS, and GCP revocation. Enable `validation` for all of them.
 No dependency on the CLI crate is needed.
 
+For scanned credentials, pass a verified active `ValidatedFinding` directly to
+`Revoker::revoke_validated(&result).await?`. The result's `credential` retains a
+`ResolvedCredential` with validation variables, one representative supporting
+finding per dependency and
+optional `RevocationInputs`. Revocation uses that original rule and snapshot; AWS
+catalog bindings automatically supply the secret-access key and `AKID` from the
+validated pair. No dependency-window logic or credential environment lookup is
+needed in the application. Missing/ambiguous components and non-active or redacted
+results are rejected before requests. `revocation_supported()` reports rule support;
+`credential.revocation_reason` reports missing or invalid action bindings. The
+low-level `revoke(rule, secret, variables)` method below remains available.
+
+These input types contain secrets and deliberately omit values from `Debug` and
+do not implement serialization. `ValidatedFinding::into_redacted()` also drops its
+retained credential inputs. Validation never calls revocation automatically.
+
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.3.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -649,7 +694,8 @@ or apply CLI endpoint defaults.
 The default client uses strict TLS and disables redirects. `Revoker::with_client`
 accepts an application-owned client for HTTP rules; AWS and GCP use their own
 transports. HTTP rules can reach internal addresses, so callers own endpoint policy.
-HTTP rule requests are not retried; AWS retains its provider-specific retry policy.
+HTTP rule requests are not retried. AWS STS identity lookup may retry transient
+failures, but IAM mutations retry only definitive throttling responses, with at most three attempts and SDK retries disabled.
 The default total deadline is 10 seconds;
 change it with `Revoker::timeout`. `Revoker::error_category` classifies failures without returning endpoint URLs or
 provider bodies, for applications that need safe operational logs. A timed-out
@@ -660,6 +706,18 @@ Missing revocation configuration, execution
 failures (including transient HTTP statuses such as 429 or 503) return errors;
 a response evaluated by the rule that fails its matcher returns
 `revoked: false`.
+
+For AWS-specific control and structured outcomes, call
+`validation::revoke_aws_access_key_with_options`. `AwsRevocationOptions::default()`
+self-deactivates the key. `AwsRevocationCredentials` selects self or responder signing;
+construct responder options with `AwsRevocationOptions::responder(&SdkConfig)` and
+optionally call `with_target_user_name`, `with_region`, or `with_attempt_timeout`.
+The name is used directly in responder mode and checked against the STS identity in self
+mode. Responder configurations retain their region unless overridden; self-revocation
+defaults to `us-east-1`. Deletion requires
+`AwsRevocationAction::Delete`. Inspect the returned `AwsRevocationResult`, and treat
+`AwsRevocationStatus::Unknown` as a mutation that may have succeeded: verify the key
+state before retrying.
 
 See the [runnable example](../crates/kingfisher-scanner/examples/revoke.rs).
 
@@ -682,7 +740,7 @@ input limits and bound worker counts for untrusted or large workloads.
 The full application's library is available separately:
 
 ```toml
-kingfisher = { package = "kingfisher-bin", version = "2.11.1" }
+kingfisher = { package = "kingfisher-bin", version = "2.12.0" }
 ```
 
 It carries CLI dependencies and all validator features. The stable embedding
@@ -690,6 +748,9 @@ contract described here applies to the three `1.x` library crates; prefer those
 for detection, validation, and revocation integration.
 
 ## API Stability
+
+Scanner 1.4.0 adds non-exhaustive AWS revocation options and structured outcomes while retaining
+the existing self-deactivation wrapper.
 
 Scanner and Python SDK 1.3.0 add opt-in CLI detection policies, shared
 SQLite/bytecode extraction and richer Python Git scopes/provenance. Existing
