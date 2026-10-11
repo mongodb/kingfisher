@@ -79,8 +79,8 @@ fn helper_get_creds(helper: &str, registry: &str) -> Option<(String, String)> {
 /// Turn `registry.example.com/foo/bar:latest` into something like
 /// `registry.example.com_foo_bar_latest_4d3c9e83`
 fn image_dir_name(reference: &str) -> String {
-    // keep it readable
-    let mut name = reference.replace(['/', ':'], "_");
+    // Keep archive paths readable without creating nested directories on Windows.
+    let mut name = reference.replace(['/', '\\', ':'], "_");
 
     // Distinguish references that sanitize to the same readable name.
     let hash = Sha256::digest(reference.as_bytes());
@@ -977,6 +977,20 @@ mod tests {
     #[test]
     fn docker_struct_new() {
         let _ = Docker::new();
+    }
+
+    #[test]
+    fn archive_directory_names_accept_windows_paths() -> Result<()> {
+        let root = tempdir()?;
+        for path in [r"C:\Users\runner\scan archives\image.tar", r"\\server\share\image.tar"] {
+            let name = archive_dir_name(Path::new(path));
+            assert!(!name.contains(['/', '\\', ':']));
+            let output = tempfile::Builder::new()
+                .prefix(&format!("docker_archive_{name}-"))
+                .tempdir_in(root.path())?;
+            assert_eq!(output.path().parent(), Some(root.path()));
+        }
+        Ok(())
     }
 
     #[tokio::test]
