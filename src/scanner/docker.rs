@@ -580,9 +580,12 @@ fn docker_api_host(
 }
 
 fn docker_api_client() -> Result<DockerClient> {
-    if env::var_os("DOCKER_API_VERSION").is_some_and(|value| !value.is_empty())
-        || (env::var_os("DOCKER_TLS").is_some_and(|value| !value.is_empty())
-            && env::var_os("DOCKER_TLS_VERIFY").is_none())
+    // Let the CLI apply Docker's TLS settings and certificate material. Bollard
+    // treats even an empty DOCKER_TLS_VERIFY as enabling verified TLS, unlike Docker.
+    if ["DOCKER_API_VERSION", "DOCKER_TLS", "DOCKER_CERT_PATH"]
+        .iter()
+        .any(|name| env::var_os(name).is_some_and(|value| !value.is_empty()))
+        || env::var_os("DOCKER_TLS_VERIFY").is_some()
     {
         return Err(anyhow!("Docker environment requires CLI connection configuration"));
     }

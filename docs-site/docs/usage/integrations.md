@@ -109,8 +109,10 @@ Registry pulls and archive scans do not require Docker.
 Local image lookup uses a nonempty `DOCKER_HOST` first, then `DOCKER_CONTEXT`, then the
 active Docker context.
 Contexts requiring TLS certificate material or SSH use the Docker CLI fallback.
-TLS connections configured through `DOCKER_HOST` use `DOCKER_TLS_VERIFY` and
-`DOCKER_CERT_PATH`. Local images require daemon access; registry credentials apply only to pulls.
+TLS environment settings (`DOCKER_TLS`, `DOCKER_TLS_VERIFY`, and `DOCKER_CERT_PATH`)
+also use the Docker CLI fallback, which applies Docker's certificate and verification settings.
+This requires the Docker CLI, including when `DOCKER_TLS_VERIFY` is present but empty.
+Local images require daemon access; registry credentials apply only to pulls.
 
 To use Podman, point `DOCKER_HOST` at its running Docker-compatible API socket
 (for rootless Linux, `unix://$XDG_RUNTIME_DIR/podman/podman.sock`). A nonempty `DOCKER_HOST`

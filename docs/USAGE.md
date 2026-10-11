@@ -866,8 +866,10 @@ do not require Docker.
 Local image lookup honors `DOCKER_HOST`, `DOCKER_CONTEXT`, and the active Docker context.
 A non-empty `DOCKER_HOST` takes precedence over `DOCKER_CONTEXT`, matching the Docker CLI.
 Contexts requiring TLS certificate material or SSH use the Docker CLI fallback.
-TLS connections configured through `DOCKER_HOST` use `DOCKER_TLS_VERIFY` and
-`DOCKER_CERT_PATH`. Local images require daemon access; registry credentials apply only to pulls.
+TLS environment settings (`DOCKER_TLS`, `DOCKER_TLS_VERIFY`, and `DOCKER_CERT_PATH`)
+also use the Docker CLI fallback, which applies Docker's certificate and verification settings.
+This requires the Docker CLI, including when `DOCKER_TLS_VERIFY` is present but empty.
+Local images require daemon access; registry credentials apply only to pulls.
 A non-empty `DOCKER_API_VERSION` uses the Docker CLI fallback to honor the pinned API version.
 
 Docker API negotiation and inspection wait up to 10 seconds for response headers; export

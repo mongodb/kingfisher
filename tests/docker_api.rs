@@ -193,6 +193,43 @@ async fn scan_through_compatible_api_without_docker_cli() -> Result<()> {
 }
 
 #[tokio::test]
+async fn docker_tls_settings_use_cli_without_probing_api() -> Result<()> {
+    let work = tempfile::tempdir()?;
+    let bin_dir = compile_docker_cli_fixture(work.path())?;
+    let archive = work.path().join("fixture.tar");
+    std::fs::write(&archive, image_archive()?)?;
+    let server = failing_api(0).await;
+    for (case, settings) in [
+        ("tls", &[("DOCKER_TLS", "1")][..]),
+        ("tls-verify", &[("DOCKER_TLS_VERIFY", "1")][..]),
+        ("cert-path", &[("DOCKER_CERT_PATH", "certs with spaces")][..]),
+        ("tls-empty-verify", &[("DOCKER_TLS", "1"), ("DOCKER_TLS_VERIFY", "")][..]),
+        ("empty-verify", &[("DOCKER_TLS_VERIFY", "")][..]),
+    ] {
+        let scan_dir = work.path().join(case);
+        std::fs::create_dir_all(&scan_dir)?;
+        let trace = scan_dir.join("cli-trace.txt");
+        let mut command = scan_command(&scan_dir, &server.uri(), IMAGE);
+        command
+            .envs(settings.iter().copied())
+            .env("PATH", &bin_dir)
+            .env("KF_TEST_DOCKER_ARCHIVE", &archive)
+            .env("KF_TEST_DOCKER_TRACE", &trace);
+        let output = run_scan(command).await?;
+        assert_completed_scan(&scan_dir, &output)?;
+        assert_eq!(std::fs::read_to_string(trace)?, "inspect\nsave\n", "{case}");
+        assert!(
+            String::from_utf8_lossy(&output.stderr)
+                .contains("Docker environment requires CLI connection configuration"),
+            "{case}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+    assert!(server.received_requests().await.unwrap().is_empty());
+    Ok(())
+}
+
+#[tokio::test]
 async fn scan_falls_back_to_docker_cli_and_cleans_failed_cli_exports() -> Result<()> {
     let work = tempfile::tempdir()?;
     let bin_dir = compile_docker_cli_fixture(work.path())?;
