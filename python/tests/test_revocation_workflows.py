@@ -158,6 +158,51 @@ def test_unknown_provider_failure_is_not_retried_for_duplicate(tmp_path, monkeyp
         assert calls == [("GET", "/identity")]
 
 
+@pytest.mark.parametrize("failure", ["invalid_url", "unsupported_scheme"])
+def test_native_preflight_failure_is_failed_not_unknown(tmp_path, failure):
+    with provider() as (endpoint, calls):
+        path = rules_file(tmp_path)
+        definitions = json.loads(path.read_text(encoding="utf-8"))
+        request = definitions["rules"][0]["revocation"]["content"]["request"]
+        if failure == "invalid_url":
+            request["url"] = "invalid URL"
+        else:
+            request["url"] = "ftp://unused.invalid"
+        path.write_text(json.dumps(definitions), encoding="utf-8")
+        revoker = Revoker(Rules([path], builtins=False))
+        result, = revoker.prepare(ACCOUNT + "\n" + TOKEN).validate(
+            Validator(variables={"ENDPOINT": endpoint}, allow_internal_ips=True))
+        assert result.revocation_ready
+        with pytest.raises(RuntimeError, match="before mutation") as caught:
+            revoker.revoke(result, confirm=True)
+        assert caught.value.outcome_unknown is False
+        assert TOKEN not in str(caught.value) and ACCOUNT not in str(caught.value)
+        batch = revoker.revoke_many([result, result], confirm=True)
+        assert [item.outcome for item in batch] == ["failed", "duplicate"]
+        assert batch[0].reason == "request_failed"
+        assert calls == [("GET", "/identity")]
+
+
+def test_native_lookup_extraction_failure_is_failed_not_unknown(tmp_path):
+    with provider() as (endpoint, calls):
+        path = rules_file(tmp_path)
+        definitions = json.loads(path.read_text(encoding="utf-8"))
+        final = definitions["rules"][0]["revocation"]["content"]["request"]
+        lookup = dict(definitions["rules"][0]["validation"]["content"]["request"])
+        definitions["rules"][0]["revocation"] = {"type": "HttpMultiStep", "content": {
+            "steps": [{"request": lookup, "extract": {"KEY_ID": {"type": "JsonPath", "path": "$.id"}}},
+                      {"request": final}]}}
+        path.write_text(json.dumps(definitions), encoding="utf-8")
+        revoker = Revoker(Rules([path], builtins=False))
+        result, = revoker.prepare(ACCOUNT + "\n" + TOKEN).validate(
+            Validator(variables={"ENDPOINT": endpoint}, allow_internal_ips=True))
+        assert result.revocation_ready
+        # The lookup returns non-JSON; extraction fails before the DELETE.
+        batch = revoker.revoke_many([result, result], confirm=True)
+        assert [item.outcome for item in batch] == ["failed", "duplicate"]
+        assert calls == [("GET", "/identity"), ("GET", "/identity")]
+
+
 def test_batch_distinguishes_compound_pairs_and_reports_nonconfirmation(tmp_path):
     with provider(remapped=True) as (endpoint, calls):
         revoker, validator = setup(tmp_path, endpoint, remapped=True)

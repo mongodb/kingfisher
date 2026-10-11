@@ -63,6 +63,8 @@ def main():
         print("Batch interrupted; pending actions stopped. Inspect unknown outcomes before retrying.")
         raise SystemExit(1) from None
     for status in statuses:
+        # "failed" means configuration/lookup failed before mutation; "unknown"
+        # requires inspecting provider state. Neither outcome is retried here.
         print(json.dumps(asdict(status)))
 
 

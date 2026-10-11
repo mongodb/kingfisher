@@ -12,7 +12,8 @@ All notable changes to this project will be documented in this file.
 - Avoided redundant regex confirmation widening in the CLI and SDK while preserving matches when iterator alignment shifts. [#545](https://github.com/mongodb/kingfisher/pull/545)
 - Fixed prepared validation outcome parity, preserved scan state during credential preparation, and retained completed revocation evidence across cancellation.
 - Preserved per-rule revocation results after failures; HTTP revocation now defaults to no retries and only explicit throttling responses can be retried. AWS IAM mutations retry definitive throttling without repeating ambiguous failures.
-- Fixed Docker host precedence, surfaced local image export failures, preserved files named `layer.tar`, and removed stale files from reused image output directories.
+- Fixed Docker host precedence, surfaced local image export failures, preserved files named `layer.tar`, and isolated image output directories without deleting existing caller files.
+- Fixed Python source-package fixtures and Windows Docker test executables, preserved the stable Rust credential URI API, and distinguished revocation failures before mutation from unknown submitted outcomes.
 - Enforced release tag ancestry, matching changelog notes and existing release commit identity; SDK publish retries now upload missing PyPI distributions.
 
 - Added local image scanning through the Docker Engine API via Bollard, with active-context support, Docker CLI/OCI fallbacks, and cleanup of failed local attempts.

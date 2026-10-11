@@ -29,7 +29,7 @@ python-source = "python"
 module-name = "kingfisher_sdk._native"
 profile = "python-release"
 exclude = ["**/__pycache__/**", "**/*.pyc"]
-include = [{ path = "python/examples/**/*", format = "sdist" }, { path = "python/tests/**/*", format = "sdist" }]
+include = [{ path = "python/examples/**/*", format = "sdist" }, { path = "python/tests/**/*", format = "sdist" }, { path = "examples/rules/smtp.yml", format = "sdist" }]
 
 [tool.pytest.ini_options]
 testpaths = ["python/tests"]

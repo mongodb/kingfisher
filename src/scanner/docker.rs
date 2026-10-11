@@ -605,10 +605,7 @@ fn docker_api_client() -> Result<DockerClient> {
 /// Publish only a completed local-image extraction. Failed attempts stay inside
 /// their temporary directories, including partial tar downloads and extracted layers.
 fn publish_local_image(staging: &Path, out_dir: &Path) -> Result<()> {
-    if out_dir.exists() {
-        std::fs::remove_dir_all(out_dir)?;
-    }
-    std::fs::create_dir_all(out_dir)?;
+    prepare_image_directory(out_dir)?;
     for entry in WalkDir::new(staging).min_depth(1) {
         let entry = entry?;
         let destination = out_dir.join(entry.path().strip_prefix(staging)?);
@@ -620,6 +617,14 @@ fn publish_local_image(staging: &Path, out_dir: &Path) -> Result<()> {
             }
             std::fs::rename(entry.path(), destination)?;
         }
+    }
+    Ok(())
+}
+
+fn prepare_image_directory(out_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(out_dir)?;
+    if std::fs::read_dir(out_dir)?.next().is_some() {
+        return Err(anyhow!("Image output directory is not empty: {}", out_dir.display()));
     }
     Ok(())
 }
@@ -842,10 +847,7 @@ impl Docker {
         pb.set_length(pulled.layers.len() as u64);
         pb.set_message("extracting layers");
 
-        if out_dir.exists() {
-            std::fs::remove_dir_all(out_dir)?;
-        }
-        std::fs::create_dir_all(out_dir)?;
+        prepare_image_directory(out_dir)?;
         for layer in pulled.layers.into_iter() {
             let ext = match layer.media_type.as_str() {
                 oci_client::manifest::IMAGE_LAYER_GZIP_MEDIA_TYPE
@@ -882,12 +884,15 @@ pub async fn save_docker_images(
 
     for image in images {
         let dir_name = image_dir_name(image);
-        let out_dir = clone_root.join(format!("docker_{dir_name}"));
+        std::fs::create_dir_all(clone_root)?;
+        let out_dir = tempfile::Builder::new()
+            .prefix(&format!("docker_{dir_name}-"))
+            .tempdir_in(clone_root)?;
         docker
-            .save_image_to_dir(image, &out_dir, use_progress)
+            .save_image_to_dir(image, out_dir.path(), use_progress)
             .await
             .with_context(|| format!("saving image {image}"))?;
-        dirs.push((out_dir, image.clone()));
+        dirs.push((out_dir.keep(), image.clone()));
     }
 
     Ok(dirs)
@@ -904,15 +909,17 @@ pub fn save_docker_archives(
 
     for archive in archives {
         let dir_name = archive_dir_name(archive);
-        let out_dir = clone_root.join(format!("docker_archive_{dir_name}"));
         std::fs::create_dir_all(clone_root)?;
+        let out_dir = tempfile::Builder::new()
+            .prefix(&format!("docker_archive_{dir_name}-"))
+            .tempdir_in(clone_root)?;
         let staging =
             tempfile::Builder::new().prefix(".kingfisher-image-").tempdir_in(clone_root)?;
         docker
             .save_archive_to_dir(archive, staging.path(), use_progress)
             .with_context(|| format!("extracting docker archive {}", archive.display()))?;
-        publish_local_image(staging.path(), &out_dir)?;
-        dirs.push((out_dir, archive.display().to_string()));
+        publish_local_image(staging.path(), out_dir.path())?;
+        dirs.push((out_dir.keep(), archive.display().to_string()));
     }
 
     Ok(dirs)
@@ -949,6 +956,7 @@ mod tests {
             append_bytes(
                 &mut tar,
                 "app/secret.txt",
+                // kingfisher:ignore (test fixture, not a real token)
                 b"token=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\n",
             )?;
             tar.finish()?;
@@ -1138,7 +1146,7 @@ mod tests {
     }
 
     #[test]
-    fn publishing_local_image_removes_stale_files() -> Result<()> {
+    fn publishing_local_image_preserves_existing_files() -> Result<()> {
         let dir = tempdir()?;
         let out = dir.path().join("out");
         let staging = dir.path().join("staging");
@@ -1146,9 +1154,10 @@ mod tests {
         std::fs::create_dir_all(&staging)?;
         std::fs::write(out.join("stale-secret.txt"), b"old")?;
         std::fs::write(staging.join("current.txt"), b"new")?;
-        publish_local_image(&staging, &out)?;
-        assert!(!out.join("stale-secret.txt").exists());
-        assert_eq!(std::fs::read(out.join("current.txt"))?, b"new");
+        assert!(publish_local_image(&staging, &out).is_err());
+        assert_eq!(std::fs::read(out.join("stale-secret.txt"))?, b"old");
+        assert!(!out.join("current.txt").exists());
+        assert_eq!(std::fs::read(staging.join("current.txt"))?, b"new");
         Ok(())
     }
 
@@ -1301,6 +1310,7 @@ mod tests {
         append_bytes(
             &mut layer_tar,
             "app/secret.txt",
+            // kingfisher:ignore (test fixture, not a real token)
             b"token=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\n",
         )?;
         let compressed_layer = layer_tar.into_inner()?.finish()?;
@@ -1323,11 +1333,9 @@ mod tests {
         let file = File::create(path)?;
         let gz = GzEncoder::new(Vec::new(), Compression::default());
         let mut layer_tar = tar::Builder::new(gz);
-        append_bytes(
-            &mut layer_tar,
-            "app/secret.txt",
-            b"token=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\n",
-        )?;
+        // The token is a scanner test fixture.
+        let secret = b"token=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\n"; // kingfisher:ignore
+        append_bytes(&mut layer_tar, "app/secret.txt", secret)?;
         let compressed_layer = layer_tar.into_inner()?.finish()?;
 
         let mut tar = tar::Builder::new(file);
@@ -1363,6 +1371,29 @@ mod tests {
         Docker::new().save_archive_to_dir(&archive, &out, false)?;
 
         assert!(out.join("app/secret.txt").exists());
+        Ok(())
+    }
+
+    #[test]
+    fn archive_scans_preserve_existing_and_previous_output_directories() -> Result<()> {
+        let dir = tempdir()?;
+        let archive = dir.path().join("image.tar");
+        build_docker_archive(&archive, false)?;
+        let clone_root = dir.path().join("scan output");
+        let existing = clone_root.join(format!("docker_archive_{}", archive_dir_name(&archive)));
+        std::fs::create_dir_all(&existing)?;
+        std::fs::write(existing.join("caller.txt"), b"caller data")?;
+        let resources = crate::limits::ResourceLimits::default();
+        let first =
+            save_docker_archives(std::slice::from_ref(&archive), &clone_root, false, resources)?;
+        let second =
+            save_docker_archives(std::slice::from_ref(&archive), &clone_root, false, resources)?;
+        assert_ne!(first[0].0, second[0].0);
+        for output in [first[0].0.as_path(), second[0].0.as_path()] {
+            assert_ne!(output, existing);
+            assert!(output.join("app/secret.txt").is_file());
+        }
+        assert_eq!(std::fs::read(existing.join("caller.txt"))?, b"caller data");
         Ok(())
     }
 

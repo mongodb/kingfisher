@@ -1,7 +1,7 @@
 //! Offline, credential-free input inspection using the execution template parser.
 use std::collections::{BTreeMap, BTreeSet};
 
-use kingfisher_rules::{HttpRequest, MultipartConfig, Revocation, Validation};
+use kingfisher_rules::{HttpRequest, MultipartConfig, ResponseExtractor, Revocation, Validation};
 use liquid::{Object, model::Value};
 use serde::Serialize;
 
@@ -189,10 +189,22 @@ pub(crate) fn revocation(
             for step in &multi.steps {
                 request(parser, &step.request, &globals, "revocation", diagnostics);
                 multipart(parser, step.multipart.as_ref(), &globals, "revocation", diagnostics);
+                for extractor in step.extract.iter().flat_map(|extract| extract.values()) {
+                    let text = match extractor {
+                        ResponseExtractor::JsonPath { path } => path,
+                        ResponseExtractor::Regex { pattern } => pattern,
+                        ResponseExtractor::Header { name } => name,
+                        ResponseExtractor::Body | ResponseExtractor::StatusCode => continue,
+                    };
+                    template(parser, text, &globals, "revocation", diagnostics);
+                }
                 // Response-derived values are not caller inputs. Only earlier
                 // steps supply them; a later extraction cannot satisfy step one.
                 for name in step.extract.iter().flat_map(|extract| extract.keys()) {
-                    globals.insert(name.clone().into(), Value::scalar("prepared-response-value"));
+                    globals.insert(
+                        name.to_uppercase().into(),
+                        Value::scalar("prepared-response-value"),
+                    );
                 }
             }
         }

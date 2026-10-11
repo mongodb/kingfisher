@@ -30,7 +30,6 @@ pub enum CredentialUriTarget {
     MySQL(String),
     Postgres(String),
     Jdbc(String),
-    Smtp(String),
     Unsupported(String),
 }
 
@@ -42,13 +41,6 @@ impl CredentialUriTarget {
             Self::MySQL(_) => "mysql",
             Self::Postgres(_) => "postgresql",
             Self::Jdbc(_) => "jdbc",
-            Self::Smtp(uri) => {
-                if uri.starts_with("smtps:") {
-                    "smtps"
-                } else {
-                    "smtp"
-                }
-            }
             Self::Unsupported(scheme) => scheme,
         }
     }
@@ -69,7 +61,6 @@ impl CredentialUriTarget {
             // The JDBC validator performs subprotocol-specific parsing. Treat the outer prefix as
             // structurally valid here so direct validation can return its precise diagnostic.
             Self::Jdbc(uri) => uri.len() > "jdbc:".len(),
-            Self::Smtp(uri) => super::raw::is_parseable_smtp_uri(uri),
             Self::Unsupported(_) => true,
         }
     }
@@ -87,18 +78,7 @@ fn normalize_uri_scheme(uri: &str, scheme: &str) -> Option<String> {
 /// `mysql_async`.
 pub fn classify_credential_uri(uri: &str, scheme_hint: Option<&str>) -> CredentialUriTarget {
     let uri = uri.trim();
-    let scheme = scheme_hint
-        .map(str::trim)
-        .filter(|scheme| !scheme.is_empty())
-        .map(str::to_ascii_lowercase)
-        .or_else(|| {
-            uri.split_once("://").map(|(scheme, _)| scheme.to_ascii_lowercase()).or_else(|| {
-                uri.get(..5)
-                    .filter(|prefix| prefix.eq_ignore_ascii_case("jdbc:"))
-                    .map(|_| "jdbc".to_string())
-            })
-        })
-        .unwrap_or_default();
+    let scheme = credential_uri_scheme(uri, scheme_hint);
 
     match scheme.as_str() {
         "http" | "https" => normalize_uri_scheme(uri, &scheme)
@@ -120,17 +100,43 @@ pub fn classify_credential_uri(uri: &str, scheme_hint: Option<&str>) -> Credenti
             .map(CredentialUriTarget::Postgres)
             .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
         "jdbc" => CredentialUriTarget::Jdbc(uri.to_string()),
-        "smtp" | "smtps" => normalize_uri_scheme(uri, &scheme)
-            .map(CredentialUriTarget::Smtp)
-            .unwrap_or_else(|| CredentialUriTarget::Unsupported(scheme)),
         _ => CredentialUriTarget::Unsupported(scheme),
     }
+}
+
+fn credential_uri_scheme(uri: &str, scheme_hint: Option<&str>) -> String {
+    scheme_hint
+        .map(str::trim)
+        .filter(|scheme| !scheme.is_empty())
+        .map(str::to_ascii_lowercase)
+        .or_else(|| {
+            uri.split_once("://").map(|(scheme, _)| scheme.to_ascii_lowercase()).or_else(|| {
+                uri.get(..5)
+                    .filter(|prefix| prefix.eq_ignore_ascii_case("jdbc:"))
+                    .map(|_| "jdbc".to_string())
+            })
+        })
+        .unwrap_or_default()
+}
+
+// Keep SMTP dispatch internal: adding a variant to the existing exhaustive public
+// CredentialUriTarget enum would break consumers' matches in a minor release.
+pub(crate) fn smtp_credential_uri(uri: &str, scheme_hint: Option<&str>) -> Option<String> {
+    let uri = uri.trim();
+    let scheme = credential_uri_scheme(uri, scheme_hint);
+    matches!(scheme.as_str(), "smtp" | "smtps")
+        .then(|| normalize_uri_scheme(uri, &scheme))
+        .flatten()
 }
 
 /// Return whether a supported credential URI can be parsed by its target validator.
 /// Unsupported schemes remain reportable and are intentionally left unvalidated.
 pub fn is_parseable_credential_uri(uri: &str, scheme: Option<&str>) -> bool {
-    classify_credential_uri(uri, scheme).is_parseable()
+    if let Some(uri) = smtp_credential_uri(uri, scheme) {
+        super::raw::is_parseable_smtp_uri(&uri)
+    } else {
+        classify_credential_uri(uri, scheme).is_parseable()
+    }
 }
 
 fn has_basic_auth_challenge(headers: &HeaderMap) -> bool {

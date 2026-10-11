@@ -271,8 +271,9 @@ class Revoker:
         unknown outcome. Different rule IDs remain distinct: callers must resolve
         overlapping detector ambiguity before authorizing a batch.
 
-        Outcomes: revoked, not_confirmed, skipped, duplicate, unknown. Provider
-        failures return unknown and processing continues without retries. A total
+        Outcomes: revoked, not_confirmed, skipped, duplicate, failed, unknown.
+        Failures before mutation return failed; ambiguous submitted actions return
+        unknown. Processing continues without retries. A total
         batch deadline/cancellation/Ctrl-C stops pending actions and propagates
         the normal exception, with .completed (safe statuses) and .pending_indices
         attached. An interrupted in-flight action is unknown, not rolled back.
@@ -319,10 +320,11 @@ class Revoker:
                                                           cancellation=cancellation)
                         except ValueError:
                             entry = BatchRevocationResult(index, rule_id, "skipped", reason="invalid_inputs")
-                        except RuntimeError:
+                        except RuntimeError as error:
                             if cancellation is not None and cancellation.is_cancelled:
                                 raise
-                            entry = BatchRevocationResult(index, rule_id, "unknown", reason="request_failed")
+                            outcome = "unknown" if getattr(error, "outcome_unknown", True) else "failed"
+                            entry = BatchRevocationResult(index, rule_id, outcome, reason="request_failed")
                         else:
                             outcome = "revoked" if provider_result.revoked else "not_confirmed"
                             entry = BatchRevocationResult(index, rule_id, outcome, result=provider_result)

@@ -357,7 +357,6 @@ pub(super) fn build_blast_radius_command(
                 | crate::validation::CredentialUriTarget::MongoDB(_)
                 | crate::validation::CredentialUriTarget::MySQL(_) => uri,
                 crate::validation::CredentialUriTarget::Http(_)
-                | crate::validation::CredentialUriTarget::Smtp(_)
                 | crate::validation::CredentialUriTarget::Jdbc(_)
                 | crate::validation::CredentialUriTarget::Unsupported(_) => return None,
             }
@@ -510,6 +509,7 @@ mod tests {
 
     #[test]
     fn credential_uri_validate_command_uses_uri_instead_of_reported_password() {
+        // kingfisher:ignore (test fixture, not a real credential)
         let uri = "postgresql://alice:hunter2@db.internal/app";
         let dependent = BTreeMap::from([("URI".to_string(), uri.to_string())]);
 
@@ -562,6 +562,7 @@ mod tests {
 
     #[test]
     fn credential_uri_blast_radius_command_requires_supported_database_target() {
+        // kingfisher:ignore (test fixture, not a real credential)
         let database_uri = "postgresql://alice:hunter2@db.internal/app";
         let database_captures = BTreeMap::from([
             ("URI".to_string(), database_uri.to_string()),

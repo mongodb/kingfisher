@@ -136,6 +136,90 @@ async fn multi_step_revocation_extracts_key_id() {
 }
 
 #[tokio::test]
+async fn preparatory_http_failures_do_not_imply_mutation() {
+    use kingfisher_scanner::validation::revocation::RevocationSubmitted;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    let mutations = Arc::new(AtomicUsize::new(0));
+    let observed = mutations.clone();
+    let server = serve(
+        Router::new()
+            .route("/lookup", axum::routing::any(|| async { StatusCode::SERVICE_UNAVAILABLE }))
+            .route(
+                "/mutate",
+                delete(move || {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    async { StatusCode::NO_CONTENT }
+                }),
+            ),
+    )
+    .await;
+    for method in ["GET", "HEAD", "OPTIONS", "POST"] {
+        let mut lookup = request(format!("{}/lookup", server.url));
+        lookup.method = method.into();
+        let action = rule(Some(Revocation::HttpMultiStep(HttpMultiStepRevocation {
+            steps: vec![
+                RevocationStep { name: None, request: lookup, multipart: None, extract: None },
+                RevocationStep {
+                    name: None,
+                    request: request(format!("{}/mutate", server.url)),
+                    multipart: None,
+                    extract: None,
+                },
+            ],
+        })));
+        let error =
+            Revoker::new().unwrap().revoke(&action, "secret", &BTreeMap::new()).await.unwrap_err();
+        assert_eq!(error.is::<RevocationSubmitted>(), method == "POST", "{method}: {error:#}");
+    }
+    assert_eq!(mutations.load(Ordering::SeqCst), 0);
+}
+
+#[tokio::test]
+async fn extraction_failure_preserves_whether_the_step_mutated() {
+    use kingfisher_scanner::validation::revocation::RevocationSubmitted;
+    let server = serve(
+        Router::new().route("/lookup", axum::routing::any(|| async { r#"{"other":"value"}"# })),
+    )
+    .await;
+    for method in ["GET", "POST"] {
+        let mut lookup = request(format!("{}/lookup", server.url));
+        lookup.method = method.into();
+        let action = rule(Some(Revocation::HttpMultiStep(HttpMultiStepRevocation {
+            steps: vec![
+                RevocationStep {
+                    name: None,
+                    request: lookup,
+                    multipart: None,
+                    extract: Some(BTreeMap::from([(
+                        "KEY_ID".into(),
+                        ResponseExtractor::JsonPath { path: "$.missing".into() },
+                    )])),
+                },
+                RevocationStep {
+                    name: None,
+                    request: request("http://unused.invalid".into()),
+                    multipart: None,
+                    extract: None,
+                },
+            ],
+        })));
+        let error =
+            Revoker::new().unwrap().revoke(&action, "secret", &BTreeMap::new()).await.unwrap_err();
+        assert_eq!(error.is::<RevocationSubmitted>(), method == "POST");
+    }
+}
+
+#[tokio::test]
+async fn unsupported_url_schemes_are_not_submission() {
+    use kingfisher_scanner::validation::revocation::RevocationSubmitted;
+    let invalid = request("ftp://unused.invalid".into());
+    let action = rule(Some(Revocation::Http(HttpValidation { request: invalid, multipart: None })));
+    let error =
+        Revoker::new().unwrap().revoke(&action, "secret", &BTreeMap::new()).await.unwrap_err();
+    assert!(!error.is::<RevocationSubmitted>());
+}
+
+#[tokio::test]
 async fn invalid_inputs_fail_before_network() {
     let revoker = Revoker::new().unwrap();
     assert!(

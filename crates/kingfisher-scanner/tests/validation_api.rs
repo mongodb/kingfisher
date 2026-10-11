@@ -193,6 +193,62 @@ fn multi_step_response_values_are_not_missing_caller_inputs() {
 }
 
 #[test]
+fn revocation_extractor_templates_require_resolved_inputs() {
+    for extractor in [
+        serde_json::json!({"type": "JsonPath", "path": "$.{{ FIELD }}"}),
+        serde_json::json!({"type": "Regex", "pattern": "{{ FIELD }}=(.*)"}),
+        serde_json::json!({"type": "Header", "name": "X-{{ FIELD }}"}),
+    ] {
+        let mut rule = syntax();
+        rule.revocation = Some(
+            serde_json::from_value(serde_json::json!({
+                "type": "HttpMultiStep", "content": {"steps": [
+                    {"request": {"method": "GET", "url": "{{ ENDPOINT }}/identity"},
+                     "extract": {"key_id": extractor}},
+                    {"request": {"method": "DELETE", "url": "{{ ENDPOINT }}/keys/{{ KEY_ID }}"}}
+                ]}
+            }))
+            .unwrap(),
+        );
+        let finding = finding(rule);
+        let validator =
+            Validator::builder().variable("ENDPOINT", "https://provider.invalid").build().unwrap();
+        let issues = validator.input_diagnostics(&finding, &[]);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].stage, "revocation");
+        assert_eq!(issues[0].code, "missing_variable");
+        assert_eq!(issues[0].variable.as_deref(), Some("FIELD"));
+        assert!(
+            validator
+                .with_variables(BTreeMap::from([("FIELD".into(), "id".into())]))
+                .input_diagnostics(&finding, &[])
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn smtp_credential_uri_dispatch_survives_public_api_compatibility() {
+    let mut rule = syntax();
+    rule.validation = Some(Validation::CredentialUri);
+    let finding = finding(rule);
+    for (uri, scheme) in [
+        ("SMTP://user:fixture-only-password@127.0.0.1:587", ""),
+        ("smtps://user:fixture-only-password@127.0.0.1:465", " SMTPS "),
+    ] {
+        let result = Validator::builder()
+            .variable("URI", uri)
+            .variable("SCHEME", scheme)
+            .build()
+            .unwrap()
+            .validate_finding(&finding)
+            .await;
+        assert_eq!(result.outcome, ValidationOutcome::Skipped);
+        assert_eq!(result.reason, Some(ValidationReason::TargetBlocked));
+    }
+}
+
+#[test]
 fn inspection_honors_typed_validator_aliases() {
     for (kind, name) in [
         (Validation::AWS, "ACCESS_KEY_ID"),

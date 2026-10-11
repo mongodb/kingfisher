@@ -1233,7 +1233,9 @@ pub async fn revoke_aws_access_key(
     )
     .await?;
     match result.status {
-        AwsRevocationStatus::Unknown => Err(anyhow!(result.message)),
+        AwsRevocationStatus::Unknown => {
+            Err(anyhow!(result.message).context(super::revocation::RevocationSubmitted))
+        }
         _ => Ok((result.succeeded(), result.message)),
     }
 }

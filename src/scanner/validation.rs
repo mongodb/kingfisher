@@ -1516,7 +1516,6 @@ fn maybe_record_access_map(om: &OwnedBlobMatch, collector: Option<&AccessMapColl
                 CredentialUriTarget::MongoDB(uri) => collector.record_mongodb(&uri, fp.clone()),
                 CredentialUriTarget::MySQL(uri) => collector.record_mysql(&uri, fp.clone()),
                 CredentialUriTarget::Http(_)
-                | CredentialUriTarget::Smtp(_)
                 | CredentialUriTarget::Jdbc(_)
                 | CredentialUriTarget::Unsupported(_) => {}
             }
@@ -2075,11 +2074,13 @@ mod tests {
                     match_number: 1,
                     start: 0,
                     end: 45,
+                    // kingfisher:ignore (test fixture, not a real credential)
                     value: "postgresql://alice:hunter2@one.internal/app".into(),
                 }
             ],
         };
         let mut second = first.clone();
+        // kingfisher:ignore (test fixture, not a real credential)
         second.captures.captures[1].value = "postgresql://alice:hunter2@two.internal/app".into();
 
         assert_ne!(build_cache_key(&first), build_cache_key(&second));
@@ -2127,6 +2128,7 @@ mod tests {
                     match_number: 1,
                     start: 0,
                     end: 45,
+                    // kingfisher:ignore (test fixture, not a real credential)
                     value: "POSTGRESQL://alice:hunter2@db.internal/app".into(),
                 },
                 SerializableCapture {
@@ -2146,6 +2148,7 @@ mod tests {
         assert_eq!(requests.len(), 1);
         match &requests[0].request {
             AccessMapRequest::Postgres { uri, .. } => {
+                // kingfisher:ignore (test fixture, not a real credential)
                 assert_eq!(uri, "postgresql://alice:hunter2@db.internal/app");
             }
             other => panic!("unexpected request: {other:?}"),

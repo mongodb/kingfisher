@@ -9,6 +9,11 @@ use flate2::{Compression, write::GzEncoder};
 const BUNDLE_MAGIC: &[u8] = b"KFVIEW\x01";
 
 fn main() {
+    println!("cargo:rustc-env=KINGFISHER_BUILD_TARGET={}", std::env::var("TARGET").unwrap());
+    println!(
+        "cargo:rustc-env=KINGFISHER_BUILD_RUSTFLAGS={}",
+        std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default()
+    );
     #[cfg(feature = "gui")]
     build_wizard_icons();
     let viewer_dir = Path::new("docs/viewer");

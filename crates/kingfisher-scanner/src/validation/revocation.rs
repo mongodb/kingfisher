@@ -18,14 +18,30 @@ use tracing::debug;
 #[doc(hidden)]
 pub struct RevocationSubmitted;
 
-async fn send_revocation_request(request: RequestBuilder, retries: u32) -> Result<Response> {
+fn submitted_error(error: anyhow::Error, may_mutate: bool) -> anyhow::Error {
+    if may_mutate { error.context(RevocationSubmitted) } else { error }
+}
+
+fn is_mutating_method(method: &str) -> bool {
+    !matches!(method.to_ascii_uppercase().as_str(), "GET" | "HEAD" | "OPTIONS")
+}
+
+async fn send_revocation_request(
+    request: RequestBuilder,
+    retries: u32,
+    may_mutate: bool,
+) -> Result<Response> {
+    // Resolve deferred builder errors before any request can be submitted.
+    let (client, request) = request.build_split();
+    let request = request.context("Cannot build revocation request")?;
     for attempt in 0..=retries {
-        let response = request
-            .try_clone()
-            .context("Cannot clone revocation request")?
-            .send()
+        let response = client
+            .execute(request.try_clone().context("Cannot clone revocation request")?)
             .await
-            .context(RevocationSubmitted)?;
+            .map_err(|error| {
+                let could_submit = may_mutate && !error.is_builder();
+                submitted_error(error.into(), could_submit)
+            })?;
         // A definitive rate-limit rejection is the only automatic retry. Lost
         // responses, 408 and 5xx can follow an already-applied mutation.
         if response.status() != StatusCode::TOO_MANY_REQUESTS || attempt == retries {
@@ -35,7 +51,9 @@ async fn send_revocation_request(request: RequestBuilder, retries: u32) -> Resul
             if response.status().is_server_error()
                 || response.status() == StatusCode::REQUEST_TIMEOUT
             {
-                return response.error_for_status().context(RevocationSubmitted);
+                return response
+                    .error_for_status()
+                    .map_err(|error| submitted_error(error.into(), may_mutate));
             }
             return Ok(response);
         }
@@ -208,7 +226,7 @@ pub async fn execute_http_revocation(
     .map_err(|e| anyhow!("Failed to build request: {e}"))?;
 
     let response =
-        send_revocation_request(request_builder, retries).await.context("Request failed")?;
+        send_revocation_request(request_builder, retries, true).await.context("Request failed")?;
 
     let status = response.status();
     let headers = response.headers().clone();
@@ -265,7 +283,8 @@ async fn execute_revocation_step(
     )
     .map_err(|e| anyhow!("Failed to build request for {step_name}: {e}"))?;
 
-    let response = send_revocation_request(request_builder, retries)
+    let may_mutate = is_mutating_method(&step.request.method);
+    let response = send_revocation_request(request_builder, retries, may_mutate)
         .await
         .with_context(|| format!("Request failed for {step_name}"))?;
 
@@ -275,7 +294,7 @@ async fn execute_revocation_step(
         .text()
         .await
         .with_context(|| format!("Failed to read response body for {}", step_name))
-        .context(RevocationSubmitted)?;
+        .map_err(|error| submitted_error(error, may_mutate))?;
 
     let display_body = truncate_with_ellipsis(&body, 500);
     let body_len = body.chars().count();
@@ -296,7 +315,7 @@ async fn execute_revocation_step(
                         var_name, step_number
                     )
                 })
-                .context(RevocationSubmitted)?;
+                .map_err(|error| submitted_error(error, may_mutate))?;
             debug!(
                 "Step {}: Rendered extractor for '{}': {:?}",
                 step_number, var_name, rendered_extractor
@@ -308,14 +327,17 @@ async fn execute_revocation_step(
                     globals.insert(var_name.to_uppercase().into(), Value::scalar(value));
                 }
                 Err(e) => {
-                    return Err(anyhow!(
-                        "Failed to extract variable '{}' in step {}: {}\nResponse status: {}\nResponse body: {}",
-                        var_name,
-                        step_number,
-                        e,
-                        status,
-                        display_body
-                    ).context(RevocationSubmitted));
+                    return Err(submitted_error(
+                        anyhow!(
+                            "Failed to extract variable '{}' in step {}: {}\nResponse status: {}\nResponse body: {}",
+                            var_name,
+                            step_number,
+                            e,
+                            status,
+                            display_body
+                        ),
+                        may_mutate,
+                    ));
                 }
             }
         }
@@ -376,10 +398,7 @@ pub async fn execute_multi_step_revocation(
             Err(error) if mutation_completed => return Err(error.context(RevocationSubmitted)),
             Err(error) => return Err(error),
         };
-        mutation_completed |= !matches!(
-            step.request.method.to_ascii_uppercase().as_str(),
-            "GET" | "HEAD" | "OPTIONS"
-        );
+        mutation_completed |= is_mutating_method(&step.request.method);
 
         if is_final_step {
             // Final step: validate response to determine success
@@ -665,9 +684,9 @@ mod tests {
                 .build()
                 .unwrap();
         let mut globals = Object::new();
-        // kingfisher:ignore (test fixture, not a real token)
         globals.insert(
             "TOKEN".into(),
+            // kingfisher:ignore (test fixture, not a real token)
             Value::scalar("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".to_string()),
         );
 
@@ -691,11 +710,8 @@ mod tests {
                 .build()
                 .unwrap();
         let mut globals = Object::new();
-        // kingfisher:ignore (test fixture, not a real token)
-        globals.insert(
-            "TOKEN".into(),
-            Value::scalar("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".to_string()),
-        );
+        let token = "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"; // kingfisher:ignore
+        globals.insert("TOKEN".into(), Value::scalar(token.to_string()));
 
         // Match both ends exposed by npm's truncated token response.
         let extractor = ResponseExtractor::Regex {

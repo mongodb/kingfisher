@@ -639,6 +639,26 @@ struct PyRevoker {
     revoker: Revoker,
     runtime: &'static Runtime,
 }
+
+fn revocation_error(py: Python<'_>, err: anyhow::Error) -> PyErr {
+    use kingfisher_scanner::validation::revocation::RevocationSubmitted;
+    // Total deadlines can interrupt an in-flight action before its transport
+    // returns an error. Preserve that ambiguity along with explicit submission.
+    let outcome_unknown =
+        err.is::<RevocationSubmitted>() || err.is::<tokio::time::error::Elapsed>();
+    let category = Revoker::error_category(&err);
+    let message = if outcome_unknown {
+        format!("revocation request failed ({category}); outcome may be unknown")
+    } else {
+        format!("revocation failed before mutation ({category})")
+    };
+    let exception = PyRuntimeError::new_err(message);
+    // Only safe categories/booleans cross the bridge; never provider error text.
+    if let Err(error) = exception.value(py).setattr("outcome_unknown", outcome_unknown) {
+        return error;
+    }
+    exception
+}
 #[pymethods]
 impl PyRevoker {
     #[new]
@@ -666,12 +686,7 @@ impl PyRevoker {
         let result = run_async(py, self.runtime, control, || {
             self.revoker.revoke_validated(&validated.validated)
         })?
-        .map_err(|err| {
-            error(format!(
-                "revocation request failed ({}); outcome may be unknown",
-                Revoker::error_category(&err),
-            ))
-        })?;
+        .map_err(|err| revocation_error(py, err))?;
         json_to_python(
             py,
             serde_json::json!({
@@ -718,12 +733,7 @@ impl PyRevoker {
         let result = run_async(py, self.runtime, control, || {
             self.revoker.revoke(&rule, &secret, &variables)
         })?
-        .map_err(|err| {
-            error(format!(
-                "revocation request failed ({}); outcome may be unknown",
-                kingfisher_scanner::validation::Revoker::error_category(&err),
-            ))
-        })?;
+        .map_err(|err| revocation_error(py, err))?;
         json_to_python(
             py,
             serde_json::json!({

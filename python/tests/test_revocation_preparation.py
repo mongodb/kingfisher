@@ -150,3 +150,31 @@ def test_bare_token_does_not_invent_missing_companion(tmp_path):
         assert not result.revocation_ready
         assert result.input_diagnostics[0].variable == "ACCOUNT"
         assert calls == []
+
+
+@pytest.mark.parametrize("extractor", [
+    {"type": "JsonPath", "path": "$.{{ FIELD }}"},
+    {"type": "Regex", "pattern": "{{ FIELD }}=(.*)"},
+    {"type": "Header", "name": "X-{{ FIELD }}"},
+])
+def test_extractor_only_missing_inputs_block_revocation(tmp_path, extractor):
+    path = rules_file(tmp_path)
+    definitions = json.loads(path.read_text(encoding="utf-8"))
+    final = definitions["rules"][0]["revocation"]["content"]["request"]
+    lookup = definitions["rules"][0]["validation"]["content"]["request"]
+    definitions["rules"][0]["revocation"] = {"type": "HttpMultiStep", "content": {
+        "steps": [{"request": lookup, "extract": {"KEY_ID": extractor}}, {"request": final}]}}
+    path.write_text(json.dumps(definitions), encoding="utf-8")
+    with provider() as (endpoint, calls):
+        revoker = Revoker(Rules([path], builtins=False))
+        plan = revoker.prepare(ACCOUNT + "\n" + TOKEN, variables={"ENDPOINT": endpoint})
+        assert calls == []
+        assert plan.candidates[0].ready_for_validation
+        issue, = plan.candidates[0].input_diagnostics
+        assert (issue.stage, issue.code, issue.variable) == ("revocation", "missing_variable", "FIELD")
+        result, = plan.validate(Validator(allow_internal_ips=True))
+        assert result.outcome == "verified_active"
+        assert not result.revocation_ready
+        status, = revoker.revoke_many([result], confirm=True)
+        assert status.outcome == "skipped"
+        assert calls == [("GET", "/identity")]

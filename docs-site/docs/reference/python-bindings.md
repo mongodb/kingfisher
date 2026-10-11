@@ -1092,11 +1092,13 @@ contains `rule_id`, `outcome`, optional `result` (`RevocationResult`), a safe
 | `not_confirmed` | A completed provider response did not satisfy that matcher; it is not proof that no mutation occurred. |
 | `skipped` | No request was submitted because the snapshot was not ready or its inputs were rejected before execution. |
 | `duplicate` | The same target was already attempted earlier in this batch, even if its result was unknown. |
+| `failed` | Configuration or a preparatory lookup failed before a mutating request was submitted. |
 | `unknown` | A submitted action failed/interrupted without a confirmed outcome; inspect provider state before retrying. |
 
-Ordinary provider failures yield safe `unknown` statuses and processing continues
-for other targets without retries. The constructor timeout still bounds each
-provider operation. The optional `timeout` bounds the entire batch, including
+Failures before mutation yield safe `failed` statuses; failures after submission
+yield `unknown`. Processing continues for other targets without retries. The
+constructor timeout still bounds each provider operation. The optional `timeout`
+bounds the entire batch, including
 input materialization and queued actions. Total-deadline expiry, cancellation and
 Ctrl-C stop pending actions and propagate `TimeoutError`, `RuntimeError` or
 `KeyboardInterrupt`. These interruption exceptions carry `.completed` (a tuple

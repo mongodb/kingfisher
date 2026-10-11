@@ -112,8 +112,26 @@ fn compile_docker_cli_fixture(work: &Path) -> Result<PathBuf> {
         .join("docker_cli_stub.rs");
     // Compile a portable executable rather than relying on shell scripts or Unix utilities.
     let compiler = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
-    let output =
-        Command::new(compiler).arg("--edition=2024").arg(source).arg("-o").arg(&binary).output()?;
+    let mut command = Command::new(compiler);
+    command.args(["--edition=2024", "--target", env!("KINGFISHER_BUILD_TARGET")]);
+    // Cargo's target and RUSTFLAGS do not automatically carry over to rustc.
+    // Match the scanner's Windows ABI and avoid DLL dependencies in the isolated PATH.
+    if cfg!(windows) {
+        command
+            .args(env!("KINGFISHER_BUILD_RUSTFLAGS").split('\u{1f}').filter(|arg| !arg.is_empty()));
+        command.args(["-C", "target-feature=+crt-static"]);
+        if cfg!(target_env = "gnu") {
+            command.args(["-C", "link-arg=-static"]);
+        }
+        let linker_name = format!(
+            "CARGO_TARGET_{}_LINKER",
+            env!("KINGFISHER_BUILD_TARGET").replace('-', "_").to_uppercase()
+        );
+        if let Some(linker) = std::env::var_os(linker_name) {
+            command.arg("-C").arg(format!("linker={}", linker.to_string_lossy()));
+        }
+    }
+    let output = command.arg(source).arg("-o").arg(&binary).output()?;
     assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
     Ok(bin_dir)
 }
