@@ -122,3 +122,22 @@ for (const [provider, expected] of [
   }
 }
 console.log("Viewer provider label rendering regressions passed.");
+
+// Per-model and per-region probe outcomes survive report merging.
+const probe = (region, resource, status = "accepted") => ({
+  service: "bedrock", method: "GetFoundationModelAvailability", region, resource, status,
+  attributes: { authorization_status: "AUTHORIZED", agreement_availability: "AVAILABLE" },
+});
+const entryWithProbes = probes => ({ provider_metadata: { authorization_evidence: { probes } } });
+const modelA = probe("us-west-2", "arn:aws:bedrock:us-west-2::foundation-model/amazon.model-a");
+const modelB = probe("us-west-2", "arn:aws:bedrock:us-west-2::foundation-model/amazon.model-b");
+const otherRegion = probe("us-east-1", "arn:aws:bedrock:us-east-1::foundation-model/amazon.model-a");
+const restricted = probe(modelA.region, modelA.resource, "restricted");
+const mergedProbes = ctx.mergeAccessMapEntries(
+  entryWithProbes([modelA, modelB]), entryWithProbes([modelA, otherRegion, restricted]),
+).provider_metadata.authorization_evidence.probes;
+assert.equal(mergedProbes.length, 4);
+assert.ok(mergedProbes.some(value => value.region === "us-east-1"));
+assert.ok(mergedProbes.some(value => value.resource === modelB.resource));
+assert.ok(mergedProbes.some(value => value.status === "restricted"));
+console.log("Viewer scoped probe evidence merging regressions passed.");

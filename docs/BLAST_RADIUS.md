@@ -104,7 +104,7 @@ AWS and GCP results may populate `provider_metadata.authorization_evidence` in s
 - `paths`: ordered identity hops with `outbound`/`inbound` direction and `potential`, `conditional`, or provider-specific status;
 - `role_impacts`: reachable roles with effective permission summaries and statement-level resource grants;
 - `hierarchy`: visible project, folder, or organization scopes;
-- `probes`: bounded, read-only API methods and their accepted, restricted, invalid, or inconclusive outcomes; and
+- `probes`: bounded, read-only API methods and their accepted, restricted, invalid, or inconclusive outcomes, with optional `region`, target `resource`, and allowlisted provider status `attributes`; and
 - `limitations`: incomplete reads, traversal caps, and policy-evaluation constraints.
 
 Structured JSON, JSONL, BSON, TOON, and SARIF reports preserve the complete evidence payload. Pretty output summarizes paths and API probes, scan HTML summarizes evidence counts, and the standalone HTML report and interactive report viewer expose policy, path, and probe details without storing condition values or response bodies.
@@ -202,9 +202,58 @@ EOF
 kingfisher blast-radius aws ./aws.env --format json > aws.blast-radius.json
 ```
 
-Kingfisher performs read-only enumeration for the IAM principal and, when allowed by the credential, visible resources in several common AWS services including S3, EC2, IAM, Lambda, DynamoDB, KMS, Secrets Manager, SQS, SNS, RDS, ECR, and SSM Parameter Store. Enumeration follows paginated API responses, and IAM users include permissions inherited from IAM groups.
+Kingfisher performs read-only enumeration for the IAM principal and, when allowed by the credential, visible resources in several common AWS services including S3, EC2, IAM, Lambda, DynamoDB, KMS, Secrets Manager, SQS, SNS, RDS, ECR, SSM Parameter Store, and Amazon Bedrock. Enumeration follows paginated API responses, and IAM users include permissions inherited from IAM groups.
 
-When IAM read access is available, the result also includes `provider_metadata.authorization_evidence`:
+#### Amazon Bedrock discovery
+
+Both `scan --blast-radius` and `blast-radius aws` inspect Bedrock in the region selected at runtime
+by the AWS SDK on the machine/container running Kingfisher. The SDK checks `AWS_REGION`, then
+`AWS_DEFAULT_REGION`, then the selected AWS profile's `region` (normally in `~/.aws/config`, with
+`AWS_PROFILE` selecting a profile), then EC2 instance metadata. The Bedrock region is not compiled
+into Kingfisher or inferred from a discovered access key; the credential file supplies credentials,
+not a region. Set `AWS_REGION` explicitly for reproducible results:
+
+```bash
+AWS_REGION=us-west-2 kingfisher blast-radius aws ./aws.json --format json
+```
+
+Kingfisher uses the AWS credential being mapped and SigV4 signing; an ambient
+`AWS_BEARER_TOKEN_BEDROCK` does not replace that credential. This discovery also runs when IAM
+policy reads are unavailable.
+
+- `ListFoundationModels` records up to 100 `bedrock_foundation_model` resources.
+- `ListInferenceProfiles` independently records up to 100 `bedrock_inference_profile` resources,
+  across at most two pages. A denied catalog read does not suppress profile discovery.
+- `GetFoundationModelAvailability` checks at most eight model IDs, drawn from the visible catalog
+  and same-region models referenced by visible profiles, independently of the catalog resource cap.
+  Sampling cycles through provider prefixes in sorted order, taking each provider's model IDs in
+  sorted order. This spreads checks across providers; models outside the sample remain untested.
+  It retains
+  `authorization_status`, `entitlement_availability`, `agreement_availability` (when returned), and
+  `region_availability` in `provider_metadata.authorization_evidence.probes[].attributes`.
+
+Each Bedrock request has a five-second deadline and one attempt, with at most 11 requests per
+mapping. Reports include the region and target model ARN on probes, list any coverage limits, and
+preserve useful results when a request is denied, throttled, or times out. The standalone HTML graph
+uses model IDs as probe labels and keeps the full ARN in the details. Cross-region profiles do
+not cause discovery requests in their destination regions. To inspect another region, configure
+that region and run the mapping again.
+
+An `accepted` probe means the specific read-only API call succeeded. A catalog entry, an `ACTIVE`
+profile, or an `AUTHORIZED` availability status does **not** prove the credential can invoke the
+model. A denied read likewise does not prove inference access is denied. Resources carry only
+observed discovery permissions; visible IAM policies may separately indicate potential inference
+permissions, subject to model scope, conditions, and other policy restrictions.
+
+Kingfisher does not call `Converse` or `InvokeModel`, enable models, submit use-case forms, create
+agreements, or inspect billing credits. First invocation of some third-party models can initiate a
+Marketplace subscription and constitutes EULA acceptance; see the
+[AWS model-access documentation](https://docs.aws.amazon.com/bedrock/latest/userguide/model-access.html).
+The existing long-lived and short-lived Bedrock bearer-token detectors remain detection-only;
+this mapping accepts AWS access-key credentials, including an optional session token.
+
+Bedrock probes populate `provider_metadata.authorization_evidence` even without IAM read access.
+When IAM read access is available, that evidence also includes:
 
 - canonical IAM identity metadata, user group membership, and principal tag-key presence;
 - managed and inline policy statements with attachment provenance, including group inheritance;

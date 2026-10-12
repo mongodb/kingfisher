@@ -715,6 +715,13 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
       return `https://cloud.google.com/iam/docs/permissions-reference?hl=en&permission=${encodeURIComponent(permission)}`;
     }
 
+    function probeDisplayName(probe) {
+      const modelId = probe.service === 'bedrock' && typeof probe.resource === 'string'
+        ? probe.resource.match(/^arn:[^:]+:bedrock:[^:]+:[^:]*:foundation-model\/(.+)$/)?.[1]
+        : null;
+      return modelId || probe.resource || probe.service || 'API probe';
+    }
+
     function buildTree(model) {
       const evidence = model.provider_metadata?.authorization_evidence || {};
       const roleNodes = (model.roles || []).map(role => ({
@@ -815,10 +822,10 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
         })),
       }));
       const probeNodes = (evidence.probes || []).map(probe => ({
-        name: probe.service || 'API probe',
+        name: probeDisplayName(probe),
         type: 'api_probe',
-        source: [probe.status, probe.http_status ? `HTTP ${probe.http_status}` : null].filter(Boolean).join(' · '),
-        reason: probe.reason || '',
+        source: [probe.service, probe.region, probe.status, probe.http_status ? `HTTP ${probe.http_status}` : null].filter(Boolean).join(' · '),
+        reason: [probe.resource ? `Resource: ${probe.resource}` : null, probe.reason, ...Object.entries(probe.attributes || {}).map(([key, value]) => `${key}: ${value}`)].filter(Boolean).join(' · '),
         permissions: probe.method ? [probe.method] : [],
       }));
 

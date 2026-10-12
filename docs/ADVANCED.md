@@ -784,7 +784,8 @@ Worker counts, bounded queues, request rate limits, finite retry counts, scan
 selectors/exclusions, `--no-base64`, `--no-extract-archives`, detection rules, and
 archive path checks and ancestor-cycle detection remain in effect. ZIP extraction still switches to disk for
 large inputs. Scan-time blast-radius network deadlines are also disabled, while
-its enumeration and evidence caps remain in effect. Report presentation limits,
+provider-specific probe deadlines (including Bedrock's five-second requests) and
+enumeration and evidence caps remain in effect. Report presentation limits,
 operating system limits, remote service limits, and format/protocol validity checks
 are outside this scan resource policy. A stalled scan can wait indefinitely; memory
 or disk exhaustion can still prevent completion.

@@ -174,15 +174,30 @@ impl DetailsReporter {
                         writer,
                         " |____probe",
                         format_args!(
-                            "[{}] {} {}{}",
+                            "[{}] {} {}{}{}{}{}",
                             probe.status,
                             probe.service,
                             probe.method,
                             probe
+                                .region
+                                .as_deref()
+                                .map(|region| format!(" in {region}"))
+                                .unwrap_or_default(),
+                            probe
+                                .resource
+                                .as_deref()
+                                .map(|resource| format!(" for {resource}"))
+                                .unwrap_or_default(),
+                            probe
                                 .reason
                                 .as_deref()
                                 .map(|reason| format!(" ({reason})"))
-                                .unwrap_or_default()
+                                .unwrap_or_default(),
+                            probe
+                                .attributes
+                                .iter()
+                                .map(|(key, value)| format!(" {key}={value}"))
+                                .collect::<String>()
                         ),
                     )?;
                 }

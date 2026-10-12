@@ -108,7 +108,7 @@ See the [binary-size comparison](docs/COMPARISON.md#binary-size-comparison-macos
 |---|---|---|
 | **Detect** | A blazingly fast, multithreaded Vectorscan regex engine combines SIMD-accelerated matching with language-aware verification across repositories, files, archives, cloud storage, containers, and developer platforms | [Scanning](docs/USAGE.md), [integrations](docs/INTEGRATIONS.md), [benchmarks](docs/COMPARISON.md) |
 | **Validate** | Live provider checks that distinguish active credentials from static candidates | [Validation and filtering](docs/USAGE.md#display-only-secrets-confirmed-active-by-third-party-apis) |
-| **Map** | Read-only blast-radius analysis for supported providers, including advanced AWS role and GCP service-account reachability plus bounded Google API-key probes | [Blast radius](docs/BLAST_RADIUS.md) |
+| **Map** | Read-only blast-radius analysis for supported providers, including AWS role and GCP service-account reachability, bounded Bedrock discovery, and Google API-key probes | [Blast radius](docs/BLAST_RADIUS.md) |
 | **Triage** | A local and hosted browser viewer for filtering, deduplication, prioritization, blast-radius inspection, and export | [Viewer usage](docs/USAGE.md#report-viewer-local-and-hosted), [hosted guide](https://mongodb.github.io/kingfisher/features/report-viewer/) |
 | **Revoke** | Conservative provider-specific containment workflows for supported credentials | [Revocation](docs/REVOCATION_PROVIDERS.md) |
 
@@ -143,7 +143,8 @@ the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md),
 For supported credentials, `--blast-radius` goes beyond a live/inactive verdict. It maps the
 effective identity, permissions, reachable roles or service accounts, and affected resource
 scopes. This includes advanced AWS role-assumption, GCP service-account impersonation analysis,
-and exact read methods accepted by a bounded Google API-key probe allowlist.
+bounded Bedrock model discovery and availability checks, and exact read methods accepted by a
+bounded Google API-key probe allowlist.
 
 The HTML viewer turns that evidence into an interactive access map for rapid investigation and
 prioritization:

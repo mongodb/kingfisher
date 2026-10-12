@@ -283,6 +283,7 @@ aws-sdk-sns = { version = "1.110.0", default-features = false, features = ["defa
 aws-sdk-rds = { version = "1.147.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-ecr = { version = "1.126.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-ssm = { version = "1.121.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-bedrock = { version = "1.161.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 gcloud-storage = { version = "1.3.0", default-features = false, features = [
     "rustls-tls",
     "auth",
@@ -398,7 +399,7 @@ opt-level = "z"
 [profile.release.package.webbrowser]
 opt-level = "z"
 
-# ── AWS SDK and Smithy (credential validation only) ──────────────────
+# ── AWS SDK and Smithy (credential validation and access mapping) ────
 # aws-lc-rs / aws-lc-sys are intentionally excluded — they are the
 # crypto/TLS backend for rustls and remain at the global `s` level.
 [profile.release.package.aws-config]
@@ -408,6 +409,9 @@ opt-level = "z"
 opt-level = "z"
 
 [profile.release.package.aws-runtime]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-bedrock]
 opt-level = "z"
 
 [profile.release.package.aws-sdk-dynamodb]
