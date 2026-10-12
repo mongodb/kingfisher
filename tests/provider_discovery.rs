@@ -18,6 +18,42 @@ use wiremock::{
 };
 
 #[test]
+fn github_users_accept_trailing_hyphens() {
+    let dir = tempfile::tempdir().unwrap();
+    let users = dir.path().join("users.txt");
+    std::fs::write(&users, "AlexRobinson-\n").unwrap();
+    for from_file in [false, true] {
+        for mode in ["scan", "list", "events"] {
+            let mut argv = vec!["kingfisher", "scan", "github"];
+            if from_file {
+                argv.extend(["--user-file", users.to_str().unwrap()]);
+            } else {
+                argv.extend(["--user", "AlexRobinson-"]);
+            }
+            match mode {
+                "list" => argv.push("--list-only"),
+                "events" => argv.push("--public-events"),
+                _ => {}
+            }
+            let args = CommandLineArgs::try_parse_from(argv).unwrap();
+            let Command::Scan(command) = args.command else { panic!() };
+            let actual = match command.into_operation().unwrap() {
+                ScanOperation::Scan(args) if mode == "events" => {
+                    args.input_specifier_args.github_event_user
+                }
+                ScanOperation::Scan(args) => args.input_specifier_args.github_user,
+                ScanOperation::ListRepositories(ListRepositoriesCommand::Github {
+                    specifiers,
+                    ..
+                }) => specifiers.user,
+                other => panic!("unexpected operation: {other:?}"),
+            };
+            assert_eq!(actual, ["AlexRobinson-"]);
+        }
+    }
+}
+
+#[test]
 fn gitlab_user_files_reject_invalid_username_boundaries() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("users.txt");

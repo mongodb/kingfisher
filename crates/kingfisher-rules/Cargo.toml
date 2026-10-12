@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-rules"
-version = "1.2.0"
+version = "1.2.1"
 description = "Rule definitions and database for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true

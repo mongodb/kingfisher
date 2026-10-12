@@ -7,6 +7,11 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
+## [v2.13.0]
+
+- Fixed crates.io publication by bumping `kingfisher-rules` to 1.2.1 for the regex confirmation changes shipped in v2.12.0 and updating the CLI and scanner dependency requirements. The unchanged core remains at 1.0.3, and the unpublished scanner release remains at 1.4.0.
+- Fixed rejection of GitHub usernames ending in `-` for `--user` and `--user-file`. [#547](https://github.com/mongodb/kingfisher/issues/547)
+
 ## [v2.12.0]
 
 - Avoided redundant regex confirmation widening in the CLI and SDK while preserving matches when iterator alignment shifts. [#545](https://github.com/mongodb/kingfisher/pull/545)
