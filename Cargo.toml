@@ -57,7 +57,7 @@ thread_local = "1.1.10"
 
 [package]
 name = "kingfisher-bin"
-version = "2.11.1"
+version = "2.12.0"
 description = "MongoDB's blazingly fast and accurate secret scanning, validation, blast radius mapping, and secret revocation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -119,7 +119,7 @@ image = { version = "0.25", default-features = false, features = ["png"], option
 # Library crates
 kingfisher-core = { version = "1.0.3", path = "crates/kingfisher-core" }
 kingfisher-rules = { version = "1.2.0", path = "crates/kingfisher-rules" }
-kingfisher-scanner = { version = "1.3.0", path = "crates/kingfisher-scanner", features = ["validation", "archives", "context", "extraction", "git", "__cli-internals"] }
+kingfisher-scanner = { version = "1.4.0", path = "crates/kingfisher-scanner", features = ["validation", "archives", "context", "extraction", "git", "__cli-internals"] }
 
 clap = { version = "4.6", default-features = false, features = [
     "derive",
@@ -267,6 +267,7 @@ globset = "0.4.20"
 ipnet = "2.12.1"
 gouqi = { version = "0.20.0", features = ["async"] }
 oci-client = { version = "0.17", default-features = false, features = ["rustls-tls"] }
+bollard = { version = "0.21.1", default-features = false, features = ["http", "pipe", "ssl"] }
 walkdir = "2.5.0"
 aws-sdk-s3 = { version = "1.144.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-iam = { version = "1.122.0", default-features = false, features = ["default-https-client", "rt-tokio"] }

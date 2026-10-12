@@ -53,44 +53,58 @@ class PythonSdkReleaseTests(unittest.TestCase):
         )
         self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", concurrency)
 
-    def test_existing_sdk_version_never_enters_upload_plan(self):
+    def test_plan_includes_only_missing_artifacts(self):
         names = ["kingfisher_secret_scanner-1.3.0-cp310-abi3-win_amd64.whl",
                  "kingfisher_secret_scanner-1.3.0.tar.gz"]
-        for existing in (False, True):
+        for existing in (set(), {names[0]}, set(names)):
             with self.subTest(existing=existing), tempfile.TemporaryDirectory() as temporary:
                 dist = Path(temporary)
                 for name in names:
                     (dist / name).write_bytes(b"built artifact")
-                with patch.object(publisher, "version_exists", return_value=existing) as query, \
+                with patch.object(publisher, "published_filenames", return_value=existing) as query, \
                      patch("builtins.print"):
                     pending = publisher.plan(dist, "1.3.0")
                 query.assert_called_once_with("1.3.0")
-                self.assertEqual({path.name for path in pending}, set() if existing else set(names))
+                self.assertEqual({path.name for path in pending}, set(names) - existing)
                 self.assertEqual({path.name for path in dist.iterdir()}, set(names))
+
+    def test_upload_staging_contains_only_missing_distributions(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dist = Path(temporary) / "dist"
+            staged = Path(temporary) / "pending"
+            dist.mkdir()
+            for name in ["existing.whl", "missing.whl", "sdk.tar.gz"]:
+                (dist / name).write_bytes(name.encode())
+            with patch.object(publisher, "published_filenames", return_value={"existing.whl"}), \
+                 patch("sys.argv", ["plan", "--dist", str(dist), "--pending-dir", str(staged)]), \
+                 patch.dict(publisher.os.environ, {}, clear=True), patch("builtins.print"):
+                self.assertEqual(publisher.main(), 0)
+            self.assertEqual({path.name for path in staged.iterdir()}, {"missing.whl", "sdk.tar.gz"})
+            self.assertEqual({path.name for path in dist.iterdir()}, {"existing.whl", "missing.whl", "sdk.tar.gz"})
 
     def test_registry_errors_preserve_artifacts_and_fail_plan(self):
         with tempfile.TemporaryDirectory() as temporary:
             dist = Path(temporary)
             artifact = dist / "sdk.whl"
             artifact.write_bytes(b"built artifact")
-            with patch.object(publisher, "version_exists", side_effect=urllib.error.URLError("offline")):
+            with patch.object(publisher, "published_filenames", side_effect=urllib.error.URLError("offline")):
                 with self.assertRaises(urllib.error.URLError):
                     publisher.plan(dist, "1.3.0")
             self.assertEqual(artifact.read_bytes(), b"built artifact")
 
     def test_empty_artifacts_are_not_a_successful_noop(self):
         with tempfile.TemporaryDirectory() as temporary, \
-             patch.object(publisher, "version_exists") as fetch:
+             patch.object(publisher, "published_filenames") as fetch:
             with self.assertRaisesRegex(ValueError, "No SDK distributions"):
                 publisher.plan(Path(temporary), "1.3.0")
             fetch.assert_not_called()
 
-    def test_existing_version_is_skipped_even_with_missing_files(self):
+    def test_registry_returns_published_filenames(self):
         for files in ([], [{"filename": "sdk.whl"}]):
             response = json.dumps({"urls": files}).encode()
             with self.subTest(files=files), \
                  patch.object(publisher.urllib.request, "urlopen", return_value=io.BytesIO(response)) as fetch:
-                self.assertTrue(publisher.version_exists("1.3.0"))
+                self.assertEqual(publisher.published_filenames("1.3.0"), {item["filename"] for item in files})
                 self.assertEqual(fetch.call_args.args[0].full_url,
                                  "https://pypi.org/pypi/kingfisher-secret-scanner/1.3.0/json")
 
@@ -101,16 +115,16 @@ class PythonSdkReleaseTests(unittest.TestCase):
                  patch.object(publisher.urllib.request, "urlopen", side_effect=error), \
                  patch.object(publisher.time, "sleep"):
                 if code == 404:
-                    self.assertFalse(publisher.version_exists("1.3.0"))
+                    self.assertEqual(publisher.published_filenames("1.3.0"), set())
                 else:
                     with self.assertRaises(urllib.error.HTTPError):
-                        publisher.version_exists("1.3.0")
+                        publisher.published_filenames("1.3.0")
 
     def test_transient_registry_failure_retries(self):
         with patch.object(publisher.urllib.request, "urlopen", side_effect=[
             urllib.error.URLError("offline"), io.BytesIO(b'{"urls": []}')
         ]), patch.object(publisher.time, "sleep") as sleep:
-            self.assertTrue(publisher.version_exists("1.3.0"))
+            self.assertEqual(publisher.published_filenames("1.3.0"), set())
             sleep.assert_called_once_with(1)
 
 

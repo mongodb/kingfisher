@@ -394,6 +394,36 @@ fn dense_dependencies_preserve_optional_required_windows_and_cascading_removal()
 }
 
 #[test]
+fn bounded_fixed_width_runs_preserve_matches_beyond_initial_window() {
+    let db = Arc::new(
+        RulesDatabase::from_rules(vec![Rule::new(RuleSyntax::new(
+            "acme.fixed-width",
+            "Three-byte fixed-width run",
+            r"([a-z]{3})",
+        ))])
+        .unwrap(),
+    );
+    assert_eq!(db.confirmation_match_maximum_len(0), Some(3));
+    let scanner = Scanner::with_config(
+        db,
+        ScannerConfig { enable_base64_decoding: false, ..Default::default() },
+    );
+    // Neither confirmation window is divisible by three. Widening must preserve
+    // the original iterator's alignment even though each match fits in the window.
+    let input = "abc".repeat(21_850);
+    let mut findings = scanner.scan_bytes(input.as_bytes()).unwrap();
+    findings.sort_by_key(|finding| finding.location.start_offset);
+    assert_eq!(findings.len(), 21_850);
+    for (i, finding) in findings.iter().enumerate() {
+        assert_eq!(
+            (finding.location.start_offset, finding.location.end_offset),
+            (i * 3, i * 3 + 3)
+        );
+        assert_eq!(finding.secret, "abc");
+    }
+}
+
+#[test]
 fn fixed_width_runs_preserve_sdk_offsets_and_fingerprints() {
     let scanner = Scanner::with_config(
         Arc::new(

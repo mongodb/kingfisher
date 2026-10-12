@@ -278,6 +278,10 @@ pub(super) fn build_validate_command(
     if is_aws_session_token {
         required_vars.insert("AWS_SECRET_ACCESS_KEY".to_string());
     }
+    if matches!(validation, Validation::Raw(kind) if kind == "smtp") {
+        // Preserve a detected explicit endpoint instead of silently probing default ports.
+        required_vars.insert("SMTP_PORT".to_string());
+    }
 
     let var_args = build_var_args(
         dependent_captures,
@@ -505,6 +509,7 @@ mod tests {
 
     #[test]
     fn credential_uri_validate_command_uses_uri_instead_of_reported_password() {
+        // kingfisher:ignore (test fixture, not a real credential)
         let uri = "postgresql://alice:hunter2@db.internal/app";
         let dependent = BTreeMap::from([("URI".to_string(), uri.to_string())]);
 
@@ -523,7 +528,41 @@ mod tests {
     }
 
     #[test]
+    fn smtp_validate_command_preserves_optional_explicit_port() {
+        let mut dependent = BTreeMap::from([
+            ("SMTP_HOST".into(), "smtp.example.com".into()),
+            ("SMTP_USERNAME".into(), "user@example.com".into()),
+            ("SMTP_PORT".into(), "2525".into()),
+        ]);
+        let validation = crate::rules::Validation::Raw("smtp".into());
+        let command = build_validate_command(
+            "custom.smtp.password",
+            &validation,
+            "fixture-password",
+            &dependent,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(command.contains("--var SMTP_HOST='smtp.example.com'"));
+        assert!(command.contains("--var SMTP_USERNAME='user@example.com'"));
+        assert!(command.contains("--var SMTP_PORT='2525'"));
+        dependent.remove("SMTP_PORT");
+        let command = build_validate_command(
+            "custom.smtp.password",
+            &validation,
+            "fixture-password",
+            &dependent,
+            None,
+            None,
+        )
+        .unwrap();
+        assert!(!command.contains("--var SMTP_PORT"));
+    }
+
+    #[test]
     fn credential_uri_blast_radius_command_requires_supported_database_target() {
+        // kingfisher:ignore (test fixture, not a real credential)
         let database_uri = "postgresql://alice:hunter2@db.internal/app";
         let database_captures = BTreeMap::from([
             ("URI".to_string(), database_uri.to_string()),

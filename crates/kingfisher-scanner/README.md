@@ -5,7 +5,7 @@ follows semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-scanner = "1.3.0"
+kingfisher-scanner = "1.4.0"
 anyhow = "1"
 ```
 
@@ -113,7 +113,7 @@ scratch allocation or reentrant borrowing errors; prefer `try_with`.
 Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "1.3.0", features = ["validation"] }
+kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
 ```
 
 `validation` enables every supported family and its dependencies. Legacy
@@ -276,13 +276,49 @@ Injected HTTP clients retain their own timeout settings; concurrency remains bou
 Disabled features, missing or ambiguous components, redacted inputs, and timeouts
 produce explicit outcomes and credential-free reasons.
 
+SMTP URIs dispatch through `CredentialUri`; separate host/username/password fields
+use `Raw` content `smtp` and associated helpers. Both authenticate with PLAIN or
+LOGIN over mandatory TLS without sending email. See the
+[SMTP rule example and input contract](https://github.com/mongodb/kingfisher/blob/main/docs/RULES.md#smtp-authentication).
+
 See the [integration recipes](https://github.com/mongodb/kingfisher/blob/main/docs/LIBRARY.md#integration-recipes-for-rust-projects-and-llm-agents)
 for copyable dependency manifests and instructions for adapting each example.
 
 ## Credential revocation
 
+Offline preparation is available with `validation`:
+`Scanner::scan_blob_for_preparation_with_control(&blob, path, &control)` retains
+primary candidates missing required components and overlapping catalog candidates.
+Preparation neither reads nor changes scan deduplication state. With `context`,
+`scan_blob_for_preparation_with_options_and_control` also applies detection policies.
+Other detection filters and normal scanning remain unchanged. `Validator::input_diagnostics(&candidate, &same_input_findings)` returns
+credential-free `CredentialInputDiagnostic` names/categories using native windows,
+defaults and request templates. Conditional templates can over-report names after
+render errors; Betterleaks branches and provider constraints are not fully proven.
+`Validator::with_variables(mapping)` clones policy and the pooled client with
+explicit overrides. `validate_prepared_findings(candidates, &context).await`
+checks only selected candidates, skips known missing/ambiguous validation inputs
+before network work and associates supporting context without validating helpers.
+`ValidatedFinding::input_diagnostics` retains the inspection snapshot; missing
+revocation-only variables prevent resolved action inputs even after active validation.
+`same_revocation_target(&other)` compares original rule/action definitions and
+complete resolved action inputs for application-owned deduplication.
+
+The Python SDK builds text/file preparation and batch convenience methods on
+these shared primitives; see the [SDK guide](../../docs/PYPI.md).
+
 With `validation`, `Revoker` provides explicit rule-driven revocation without
 CLI dependencies:
+
+For scan/validate workflows, call `Revoker::revoke_validated(&result).await?` on a
+verified active `ValidatedFinding`. Its `credential: Option<ResolvedCredential>`
+retains the exact validation variables and supporting findings plus resolved
+`RevocationInputs`; AWS secret-key/`AKID` remapping follows the catalog bindings.
+The original rule and inputs are reused without environment lookup or component
+re-association. Missing inputs and non-active results are rejected before requests.
+`revocation_supported()` reports rule support. `into_redacted()` drops the retained
+inputs; their `Debug` implementations omit credential values. Validation alone never
+revokes. The low-level API is also available:
 
 ```rust,no_run
 # #[cfg(feature = "validation")]
@@ -300,11 +336,24 @@ async fn revoke_selected(rule: &Rule, secret: &str) -> anyhow::Result<bool> {
 Pass required companion variables and endpoint overrides in the map; `TOKEN` is
 reserved for the secret argument. HTTP and multi-step rules are supported, with
 AWS and GCP included in `validation`. The default client uses
-strict TLS and disables redirects. Calls have a 10-second total deadline and no
-automatic HTTP retries; AWS retains its provider-specific retry policy. Customize with `Revoker::with_client` and `Revoker::timeout`.
+strict TLS and disables redirects. Calls have a 10-second total deadline. HTTP rule
+requests are not retried. AWS STS identity lookup may retry transient failures, but
+IAM mutations retry only definitive throttling responses, with at most three attempts and SDK retries disabled. Customize with
+`Revoker::with_client` and `Revoker::timeout`.
 Callers own authorization and endpoint policy; internal HTTP addresses are allowed.
 A timeout may occur after a credential was revoked. Scanning and validation never
 invoke revocation. Provider responses and errors may contain secrets.
+
+For structured AWS outcomes and explicit action or signer selection, use
+`validation::revoke_aws_access_key_with_options` with `AwsRevocationOptions` and
+inspect its `AwsRevocationResult`. `AwsRevocationCredentials` supports self or
+responder signing; use `AwsRevocationOptions::responder(&SdkConfig)` and optionally
+`with_target_user_name`, `with_region`, or `with_attempt_timeout`. The name is used
+directly for a responder and checked against the STS identity for self-revocation.
+Responder configurations retain their region unless overridden; self-revocation defaults
+to `us-east-1`. Deactivation is the default; deletion requires
+`AwsRevocationAction::Delete`. Verify the key state before retrying an
+`AwsRevocationStatus::Unknown` result.
 
 See [`examples/revoke.rs`](examples/revoke.rs) for a runnable example.
 

@@ -96,6 +96,181 @@ fn validator(server: &Server) -> Validator {
         .unwrap()
 }
 
+#[tokio::test]
+async fn preparation_retains_missing_components_and_inspects_without_provider_work() {
+    let mut primary = syntax();
+    primary.depends_on_rule = vec![Some(DependsOnRule {
+        rule_id: "acme.account".into(),
+        variable: "ACCOUNT".into(),
+        within: Some("2L".into()),
+        optional: false,
+        verify_candidates: false,
+    })];
+    let helper = RuleSyntax::new("acme.account", "Account", r"(account_[a-z]{4})");
+    let scanner = Scanner::new(Arc::new(
+        RulesDatabase::from_rules(vec![Rule::new(primary), Rule::new(helper)]).unwrap(),
+    ));
+    let blob = kingfisher_scanner::Blob::from_borrowed(b"demo_abcd1234efgh5678");
+    assert!(scanner.scan_blob(&blob).unwrap().is_empty());
+    let candidates = scanner
+        .scan_blob_for_preparation_with_control(
+            &blob,
+            "settings.conf",
+            &kingfisher_scanner::ScanControl::default(),
+        )
+        .unwrap();
+    let validator = Validator::builder().build().unwrap();
+    let diagnostics = validator.input_diagnostics(&candidates[0], &candidates);
+    assert!(diagnostics.iter().any(|issue| issue.variable.as_deref() == Some("ACCOUNT")
+        && issue.rule_id.as_deref() == Some("acme.account")
+        && issue.code == "missing_dependency"));
+    assert!(diagnostics.iter().any(|issue| issue.variable.as_deref() == Some("ENDPOINT")));
+    assert!(!format!("{diagnostics:?}").contains("demo_abcd"));
+    let validated = validator.validate_prepared_findings(candidates.clone(), &candidates).await;
+    assert_eq!(validated[0].outcome, ValidationOutcome::Skipped);
+    assert!(!validated[0].input_diagnostics.is_empty());
+}
+
+#[tokio::test]
+async fn missing_revocation_inputs_block_readiness_and_preserve_live_validation() {
+    let server = serve(Router::new().route("/identity", get(|| async { "authenticated" }))).await;
+    let mut rule = syntax();
+    rule.revocation = Some(kingfisher_rules::Revocation::Http(HttpValidation {
+        request: HttpRequest {
+            method: "DELETE".into(),
+            url: "{{ ENDPOINT }}/keys/{{ KEY_ID }}".into(),
+            response_matcher: Some(vec![ResponseMatcher::StatusMatch {
+                r#type: "StatusMatch".into(),
+                status: vec![204],
+                match_all_status: false,
+                negative: false,
+            }]),
+            headers: BTreeMap::new(),
+            body: None,
+            multipart: None,
+            response_is_html: false,
+        },
+        multipart: None,
+    }));
+    let finding = finding(rule);
+    let validator = validator(&server);
+    let issues = validator.input_diagnostics(&finding, &[]);
+    assert_eq!(issues.len(), 1);
+    assert_eq!(issues[0].stage, "revocation");
+    assert_eq!(issues[0].variable.as_deref(), Some("KEY_ID"));
+    let result = validator.validate_finding(&finding).await;
+    assert_eq!(result.outcome, ValidationOutcome::VerifiedActive);
+    assert!(result.credential.as_ref().unwrap().revocation.is_none());
+    assert_eq!(result.input_diagnostics, issues);
+    let result = validator
+        .with_variables(BTreeMap::from([("KEY_ID".into(), "key-example".into())]))
+        .validate_finding(&finding)
+        .await;
+    assert!(result.credential.as_ref().unwrap().revocation.is_some());
+    assert!(result.input_diagnostics.is_empty());
+}
+
+#[test]
+fn multi_step_response_values_are_not_missing_caller_inputs() {
+    let mut rule = syntax();
+    rule.revocation = Some(
+        serde_json::from_value(serde_json::json!({
+            "type": "HttpMultiStep", "content": {"steps": [
+                {"request": {"method": "GET", "url": "{{ ENDPOINT }}/identity"},
+                 "extract": {"KEY_ID": {"type": "JsonPath", "path": "$.id"}}},
+                {"request": {"method": "DELETE", "url": "{{ ENDPOINT }}/keys/{{ KEY_ID }}"}}
+            ]}
+        }))
+        .unwrap(),
+    );
+    let finding = finding(rule);
+    let validator =
+        Validator::builder().variable("ENDPOINT", "https://provider.invalid").build().unwrap();
+    assert!(validator.input_diagnostics(&finding, &[]).is_empty());
+    let issues = Validator::builder().build().unwrap().input_diagnostics(&finding, &[]);
+    assert!(issues.iter().any(|issue| issue.variable.as_deref() == Some("ENDPOINT")));
+    assert!(!issues.iter().any(|issue| issue.variable.as_deref() == Some("KEY_ID")));
+}
+
+#[test]
+fn revocation_extractor_templates_require_resolved_inputs() {
+    for extractor in [
+        serde_json::json!({"type": "JsonPath", "path": "$.{{ FIELD }}"}),
+        serde_json::json!({"type": "Regex", "pattern": "{{ FIELD }}=(.*)"}),
+        serde_json::json!({"type": "Header", "name": "X-{{ FIELD }}"}),
+    ] {
+        let mut rule = syntax();
+        rule.revocation = Some(
+            serde_json::from_value(serde_json::json!({
+                "type": "HttpMultiStep", "content": {"steps": [
+                    {"request": {"method": "GET", "url": "{{ ENDPOINT }}/identity"},
+                     "extract": {"key_id": extractor}},
+                    {"request": {"method": "DELETE", "url": "{{ ENDPOINT }}/keys/{{ KEY_ID }}"}}
+                ]}
+            }))
+            .unwrap(),
+        );
+        let finding = finding(rule);
+        let validator =
+            Validator::builder().variable("ENDPOINT", "https://provider.invalid").build().unwrap();
+        let issues = validator.input_diagnostics(&finding, &[]);
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0].stage, "revocation");
+        assert_eq!(issues[0].code, "missing_variable");
+        assert_eq!(issues[0].variable.as_deref(), Some("FIELD"));
+        assert!(
+            validator
+                .with_variables(BTreeMap::from([("FIELD".into(), "id".into())]))
+                .input_diagnostics(&finding, &[])
+                .is_empty()
+        );
+    }
+}
+
+#[tokio::test]
+async fn smtp_credential_uri_dispatch_survives_public_api_compatibility() {
+    let mut rule = syntax();
+    rule.validation = Some(Validation::CredentialUri);
+    let finding = finding(rule);
+    for (uri, scheme) in [
+        ("SMTP://user:fixture-only-password@127.0.0.1:587", ""),
+        ("smtps://user:fixture-only-password@127.0.0.1:465", " SMTPS "),
+    ] {
+        let result = Validator::builder()
+            .variable("URI", uri)
+            .variable("SCHEME", scheme)
+            .build()
+            .unwrap()
+            .validate_finding(&finding)
+            .await;
+        assert_eq!(result.outcome, ValidationOutcome::Skipped);
+        assert_eq!(result.reason, Some(ValidationReason::TargetBlocked));
+    }
+}
+
+#[test]
+fn inspection_honors_typed_validator_aliases() {
+    for (kind, name) in [
+        (Validation::AWS, "ACCESS_KEY_ID"),
+        (Validation::AzureStorage, "STORAGE_ACCOUNT"),
+        (Validation::Coinbase, "KEY_ID"),
+    ] {
+        let mut rule = syntax();
+        rule.validation = Some(kind);
+        let candidate = finding(rule);
+        let validator = Validator::builder().variable(name, "synthetic-value").build().unwrap();
+        assert!(validator.input_diagnostics(&candidate, &[]).is_empty());
+        assert!(
+            !Validator::builder()
+                .variable(name, "")
+                .build()
+                .unwrap()
+                .input_diagnostics(&candidate, &[])
+                .is_empty()
+        );
+    }
+}
+
 #[test]
 fn invalid_builder_settings_fail_and_validator_is_shareable() {
     fn send_sync<T: Send + Sync>() {}
@@ -157,6 +332,52 @@ async fn non_network_states_do_not_require_an_endpoint() {
     assert_eq!(
         validator.validate_finding(&redacted).await.reason,
         Some(ValidationReason::RedactedInput)
+    );
+}
+
+#[tokio::test]
+async fn preparation_preserves_non_network_outcomes_with_invalid_inputs() {
+    let validator = Validator::builder().build().unwrap();
+    for (validation, authoritative, expected, reason) in [
+        (None, true, ValidationOutcome::NotAttempted, None),
+        (Some(Validation::Assumed), true, ValidationOutcome::Assumed, None),
+        (
+            syntax().validation,
+            false,
+            ValidationOutcome::NotAttempted,
+            Some(ValidationReason::NonAuthoritative),
+        ),
+    ] {
+        let mut rule = syntax();
+        rule.validation = validation;
+        rule.authoritative = authoritative;
+        let mut candidate = finding(rule);
+        candidate.secret = "[REDACTED]".into();
+        let ordinary = validator.validate_findings(vec![candidate.clone()]).await;
+        let prepared = validator.validate_prepared_findings(vec![candidate], &[]).await;
+        assert_eq!(ordinary[0].outcome, expected);
+        assert_eq!(prepared[0].outcome, expected);
+        assert_eq!(prepared[0].reason, reason);
+    }
+}
+
+#[test]
+fn preparation_does_not_read_or_commit_scan_dedup_state() {
+    let scanner = Scanner::with_config(
+        Arc::new(RulesDatabase::from_rules(vec![Rule::new(syntax())]).unwrap()),
+        ScannerConfig { enable_dedup: true, ..Default::default() },
+    );
+    let blob = kingfisher_scanner::Blob::from_borrowed(b"demo_abcd1234efgh5678");
+    let control = kingfisher_scanner::ScanControl::default();
+    assert_eq!(
+        scanner.scan_blob_for_preparation_with_control(&blob, "", &control).unwrap().len(),
+        1
+    );
+    assert_eq!(scanner.scan_blob(&blob).unwrap().len(), 1);
+    assert!(scanner.scan_blob(&blob).unwrap().is_empty());
+    assert_eq!(
+        scanner.scan_blob_for_preparation_with_control(&blob, "", &control).unwrap().len(),
+        1
     );
 }
 
@@ -610,4 +831,67 @@ async fn unlimited_validation_reads_late_evidence_past_default_body_limit() {
         unlimited.validate_finding(&finding(syntax())).await.outcome,
         ValidationOutcome::VerifiedActive
     );
+}
+
+#[tokio::test]
+async fn resolved_components_and_endpoints_survive_until_explicit_revocation() {
+    use axum::routing::delete;
+    use kingfisher_rules::Revocation;
+    use kingfisher_scanner::Revoker;
+
+    let calls = Arc::new(AtomicUsize::new(0));
+    let seen = calls.clone();
+    let server = serve(
+        Router::new()
+            .route(
+                "/identity",
+                get(|headers: HeaderMap| async move {
+                    assert_eq!(headers["authorization"], "Bearer demo_abcd1234efgh5678");
+                    assert_eq!(headers["x-account"], "account_abcd");
+                    "authenticated"
+                }),
+            )
+            .route(
+                "/revoke",
+                delete(move |headers: HeaderMap| {
+                    seen.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        assert_eq!(headers["authorization"], "Bearer demo_abcd1234efgh5678");
+                        assert_eq!(headers["x-account"], "account_abcd");
+                        StatusCode::NO_CONTENT
+                    }
+                }),
+            ),
+    )
+    .await;
+    let mut rules = component_rules(Some("2L"));
+    let Some(Validation::Http(config)) = rules[0].validation.clone() else { unreachable!() };
+    let mut request = config.request;
+    request.method = "DELETE".into();
+    request.url = "{{ ENDPOINT }}/revoke".into();
+    request.response_matcher = Some(vec![ResponseMatcher::StatusMatch {
+        r#type: "StatusMatch".into(),
+        status: vec![204],
+        match_all_status: false,
+        negative: false,
+    }]);
+    rules[0].revocation = Some(Revocation::Http(HttpValidation { request, multipart: None }));
+    let findings = scan(rules, b"account_efgh\n\naccount_abcd\ndemo_abcd1234efgh5678", false);
+    let mut results = validator(&server).validate_findings(findings).await;
+    let result = results.remove(results.iter().position(|r| r.finding.rule().visible()).unwrap());
+    assert_eq!(result.outcome, ValidationOutcome::VerifiedActive);
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    let credential = result.credential.as_ref().unwrap();
+    assert_eq!(credential.components.len(), 1);
+    assert_eq!(credential.components[0].secret, "account_abcd");
+    assert_eq!(credential.variables["ENDPOINT"], server.url);
+    assert!(credential.revocation.is_some());
+    let revoker = Revoker::new().unwrap();
+    assert!(revoker.revoke_validated(&result).await.unwrap().revoked);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let mut inactive = result.clone();
+    inactive.outcome = ValidationOutcome::VerifiedInactive;
+    assert!(revoker.revoke_validated(&inactive).await.is_err());
+    assert!(revoker.revoke_validated(&result.into_redacted()).await.is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
 }

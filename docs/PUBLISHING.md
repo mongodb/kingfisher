@@ -22,11 +22,11 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | ------- | ------- | ----------------- |
 | `kingfisher-core` | `1.0.3` | `kingfisher_core` library |
 | `kingfisher-rules` | `1.2.0` | `kingfisher_rules` library |
-| `kingfisher-scanner` | `1.3.0` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.11.1` | `kingfisher` executable and library |
+| `kingfisher-scanner` | `1.4.0` | `kingfisher_scanner` library |
+| `kingfisher-bin` | `2.12.0` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
-`1.3.0` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
+`1.4.0` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
 
 The libraries establish their stable `1.x` API at `1.0.0`; they do not inherit the CLI
 version. See the [compatibility contract](LIBRARY.md#api-stability).
@@ -36,7 +36,7 @@ version. See the [compatibility contract](LIBRARY.md#api-stability).
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.11.1
+cargo install --locked kingfisher-bin --version 2.12.0
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)

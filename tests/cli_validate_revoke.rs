@@ -621,7 +621,7 @@ rules:
 
     #[test]
     fn validate_jwt_token() {
-        // A fake JWT token (will fail validation but tests the flow)
+        // kingfisher:ignore (synthetic JWT fixture used only to test the validation flow)
         let fake_jwt = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dozjgNryP4J3jVmNHl0w5N_XgL0n3I9PlFUP0THsR8U";
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
             .args(["validate", "--rule", "jwt", fake_jwt, "--no-update-check"])
@@ -654,6 +654,76 @@ rules:
 mod revoke {
     use super::*;
 
+    #[tokio::test]
+    async fn revoke_http_errors_do_not_expose_url_credentials() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        let server = MockServer::start().await;
+        Mock::given(method("DELETE"))
+            .respond_with(ResponseTemplate::new(429))
+            .expect(3)
+            .mount(&server)
+            .await;
+        let work = TempDir::new().unwrap();
+        let rules_path = work.path().join("redaction.yml");
+        for (url, outcome, category) in [
+            (
+                format!("{}/{{{{ TOKEN }}}}/{{{{ COMPANION }}}}", server.uri()),
+                "unknown",
+                "http_status",
+            ),
+            (
+                "invalid URL {{ TOKEN }} {{ COMPANION }}".into(),
+                "failed",
+                "configuration_or_provider",
+            ),
+        ] {
+            fs::write(
+                &rules_path,
+                serde_json::to_vec(&serde_json::json!({"rules": [{
+                    "id": "acme.redaction", "name": "Redaction regression", "pattern": "(fixture)",
+                    "revocation": {"type": "Http", "content": {"request": {
+                        "method": "DELETE", "url": url,
+                        "response_matcher": [{"type": "StatusMatch", "status": [204]}],
+                    }}},
+                }]}))
+                .unwrap(),
+            )
+            .unwrap();
+            for format in ["text", "json", "toon"] {
+                let mut command =
+                    std::process::Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
+                command
+                    .args(["revoke", "--rule", "acme.redaction", "redaction-secret-fixture"])
+                    .args(["--var", "COMPANION=redaction-companion-fixture", "--rules-path"])
+                    .arg(&rules_path)
+                    .args([
+                        "--no-builtins",
+                        "--no-update-check",
+                        "--retries",
+                        "2",
+                        "--format",
+                        format,
+                    ]);
+                let output =
+                    tokio::task::spawn_blocking(move || command.output()).await.unwrap().unwrap();
+                assert_eq!(output.status.code(), Some(1));
+                let stdout = String::from_utf8(output.stdout).unwrap();
+                let stderr = String::from_utf8(output.stderr).unwrap();
+                assert!(stdout.contains(category), "{format}: {stdout}");
+                for sensitive in
+                    ["redaction-secret-fixture", "redaction-companion-fixture", &server.uri()]
+                {
+                    assert!(!stdout.contains(sensitive), "{format}: {stdout}");
+                    assert!(!stderr.contains(sensitive), "{format}: {stderr}");
+                }
+                if format == "json" {
+                    let result: Value = serde_json::from_str(&stdout).unwrap();
+                    assert_eq!(result["revocation_status"], outcome);
+                }
+            }
+        }
+    }
+
     #[test]
     fn revoke_help() {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
@@ -679,6 +749,11 @@ mod revoke {
                     .and(contains("--var"))
                     .and(contains("--timeout"))
                     .and(contains("--retries"))
+                    .and(contains("--aws-profile"))
+                    .and(contains("--aws-use-default-credentials"))
+                    .and(contains("--aws-user-name"))
+                    .and(contains("--aws-region"))
+                    .and(contains("--aws-action"))
                     .and(contains("--rules-path"))
                     .and(contains("--no-builtins"))
                     .and(contains("--format")),
@@ -903,6 +978,173 @@ mod revoke {
             .assert()
             .failure()
             .stderr(contains("10").or(contains("invalid")).or(contains("range")));
+    }
+
+    #[test]
+    fn revoke_rejects_aws_options_for_non_aws_rules() {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "revoke",
+                "--rule",
+                "slack.custom",
+                "--aws-action",
+                "delete",
+                "xoxb-fake-token",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
+                "--no-update-check",
+            ])
+            .assert()
+            .failure()
+            .stderr(contains("AWS-specific revocation options"));
+    }
+
+    #[test]
+    fn revoke_rejects_temporary_aws_credentials_without_network() {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "revoke",
+                "--rule",
+                "aws.custom",
+                "--var",
+                "AKID=ASIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
+                "--no-update-check",
+            ])
+            .assert()
+            .failure()
+            .stdout(contains("UNSUPPORTED").and(contains("status=unsupported")));
+    }
+
+    #[test]
+    fn revoke_reports_temporary_aws_status_in_json() {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "revoke",
+                "--rule",
+                "aws.custom",
+                "--var",
+                "AKID=ASIAIOSFODNN7EXAMPLE",
+                "--format",
+                "json",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
+                "--no-update-check",
+            ])
+            .assert()
+            .failure()
+            .stdout(contains(r#""revocation_status": "unsupported""#));
+    }
+
+    #[test]
+    fn revoke_reports_temporary_aws_status_in_toon() {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "revoke",
+                "--rule",
+                "aws.custom",
+                "--var",
+                "AKID=ASIAIOSFODNN7EXAMPLE",
+                "--format",
+                "toon",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "--rules-path",
+                LEGACY_REVOCATION_RULES,
+                "--no-builtins",
+                "--no-update-check",
+            ])
+            .assert()
+            .failure()
+            .stdout(contains("revocation_status: unsupported"));
+    }
+
+    #[test]
+    fn revoke_requires_exact_rule_when_multiple_aws_rules_match() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("aws.yml"),
+            r#"
+rules:
+  - name: AWS One
+    id: aws.one
+    pattern: '(AKIA[0-9A-Z]{16})'
+    revocation:
+      type: AWS
+  - name: AWS Two
+    id: aws.two
+    pattern: '(AKIA[0-9A-Z]{16})'
+    revocation:
+      type: AWS
+"#,
+        )
+        .unwrap();
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "revoke",
+                "--rule",
+                "aws",
+                "--var",
+                "AKID=AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "--rules-path",
+            ])
+            .arg(tmp.path())
+            .args(["--no-builtins", "--no-update-check"])
+            .assert()
+            .failure()
+            .stderr(contains("matches multiple rules including an AWS revocation rule"));
+    }
+
+    #[test]
+    fn revoke_requires_exact_rule_when_aws_and_http_rules_match() {
+        let tmp = TempDir::new().unwrap();
+        fs::write(
+            tmp.path().join("mixed.yml"),
+            r#"
+rules:
+  - name: AWS Rule
+    id: mixed.aws
+    pattern: '(AKIA[0-9A-Z]{16})'
+    revocation:
+      type: AWS
+  - name: HTTP Rule
+    id: mixed.http
+    pattern: '(secret-[0-9]+)'
+    revocation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://example.invalid/revoke
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+"#,
+        )
+        .unwrap();
+
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args([
+                "revoke",
+                "--rule",
+                "mixed",
+                "--var",
+                "AKID=AKIAIOSFODNN7EXAMPLE",
+                "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                "--rules-path",
+            ])
+            .arg(tmp.path())
+            .args(["--no-builtins", "--no-update-check"])
+            .assert()
+            .failure()
+            .stderr(contains("matches multiple rules including an AWS revocation rule"));
     }
 
     #[test]
@@ -1299,4 +1541,49 @@ rules:
             .assert()
             .code(predicates::function::function(|code: &i32| *code == 0 || *code == 1));
     }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn revoke_prefix_preserves_completed_results_and_continues_after_http_failure() {
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+    let server = MockServer::start().await;
+    for (endpoint, status) in [("first", 200), ("failed", 503), ("last", 200)] {
+        Mock::given(method("POST"))
+            .and(path(format!("/{endpoint}")))
+            .respond_with(ResponseTemplate::new(status))
+            .expect(1)
+            .mount(&server)
+            .await;
+    }
+    let definitions: Vec<_> = ["first", "failed", "last"].into_iter().enumerate().map(|(index, endpoint)| {
+        serde_json::json!({"id": format!("acme.{index}"), "name": endpoint, "pattern": "(fixture)",
+            "revocation": {"type": "Http", "content": {"request": {"method": "POST",
+                "url": format!("{}/{endpoint}", server.uri()),
+                "response_matcher": [{"type": "StatusMatch", "status": [200]}]}}}})
+    }).collect();
+    let directory = TempDir::new().unwrap();
+    let file = directory.path().join("rules.yml");
+    fs::write(&file, serde_json::to_vec(&serde_json::json!({"rules": definitions})).unwrap())
+        .unwrap();
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args(["revoke", "--rule", "acme", "fixture", "--rules-path"])
+            .arg(file)
+            .args(["--no-builtins", "--no-update-check", "--format", "json", "--retries", "2"])
+            .assert()
+            .success()
+            .get_output()
+            .stdout
+            .clone()
+    })
+    .await
+    .unwrap();
+    let results: Value = serde_json::from_slice(&output).unwrap();
+    assert_eq!(results.as_array().unwrap().len(), 3);
+    assert_eq!(results[0]["revocation_status"], "succeeded");
+    assert_eq!(results[1]["revocation_status"], "unknown");
+    assert_eq!(results[2]["revocation_status"], "succeeded");
 }

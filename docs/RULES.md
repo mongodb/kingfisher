@@ -235,7 +235,7 @@ Kingfisher supports these validation types:
 
 1. `Assumed`: a rule-level marker for secret material accepted with high confidence without live validation. It produces the `Assumed Valid (Not Live-Validated)` finding status and is included by the `actionable` filter, but not by the strict `active` filter. In colorized pretty output it uses the same bright color as an active credential but with a locked icon. It counts as skipped validation by default and as successful validation with the `actionable` filter.
 2. `Http` and `Grpc`: YAML-native validation flows. Prefer these first.
-3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `CredentialUri`, `Ethereum`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`. `CredentialUri` dispatches a named `URI` capture (falling back to `TOKEN`) to HTTPS Basic Auth or a supported database validator while leaving other unsupported schemes unvalidated. `Ethereum` is deterministic and network-free; it validates key material and derives an address without claiming the address is active.
+3. Typed validators: schema-level validation families already modeled in the rule schema, such as `AWS`, `AzureStorage`, `Coinbase`, `CredentialUri`, `Ethereum`, `GCP`, `MongoDB`, `MySQL`, `Postgres`, `Jdbc`, and `JWT`. `CredentialUri` dispatches a named `URI` capture (falling back to `TOKEN`) to HTTPS Basic Auth, SMTP AUTH, or a supported database validator while leaving other unsupported schemes unvalidated. `Ethereum` is deterministic and network-free; it validates key material and derives an address without claiming the address is active.
 4. Raw validators: provider-specific or protocol-specific exception paths dispatched through `validation: type: Raw`.
 
 ### Overlapping rules and validation deduplication
@@ -278,6 +278,45 @@ The Ethereum family uses `content: private_key`, `public_key`, or `mnemonic`. Mn
 standard `m/44'/60'/0'/0/0` path and explicitly assume an empty BIP-39 passphrase, so the reported
 address is a candidate. Validation responses contain only allowlisted derivation metadata and never
 the private key or seed phrase.
+
+### SMTP authentication
+
+SMTP checks authenticate without sending a message. The built-in
+`betterleaks.generic-credential-uri` rule validates `smtp://user:password@host:587`
+and `smtps://user:password@host:465` through `CredentialUri`. Percent-encode reserved
+characters in URI usernames and passwords.
+
+For separate environment variables or configuration fields, load the
+[custom SMTP rule example](../examples/rules/smtp.yml):
+
+```sh
+kingfisher scan config.env --rules-path examples/rules/smtp.yml --format toon --no-update-check
+```
+
+The example associates `SMTP_PASSWORD` with nearby `SMTP_HOST`, `SMTP_USERNAME`, and
+optional `SMTP_PORT` fields using invisible helper rules. It also accepts lowercase
+configuration keys and `:` assignments. Customize its `custom.smtp` namespace,
+patterns, and eight-line dependency windows for your organization. Missing required
+fields within the window suppress the password finding; distinct competing hosts,
+usernames, or ports skip validation instead of guessing a credential pair. Separate
+fields are currently supported through custom rules, rather than a built-in detector.
+
+The Raw input contract is `validation: {type: Raw, content: smtp}` with the password
+in `TOKEN`, the host in `SMTP_HOST`, the username in `SMTP_USERNAME`, and an optional
+`SMTP_PORT`. Hosts must be bare hostnames/IPs; bracket IPv6 addresses. An explicit
+port selects one endpoint, using implicit TLS on port 465 and mandatory STARTTLS
+on other ports. `smtps` URIs use implicit TLS on any explicit port and default to
+465. Without a port, `smtp` URIs and separate fields try 587 with STARTTLS, 465 with
+implicit TLS, then 25 with STARTTLS. Each fallback probe has a three-second budget;
+an explicit port has a ten-second budget. The overall validation timeout also
+applies. Probing stops after the first definitive authentication result.
+
+Only advertised AUTH PLAIN or LOGIN mechanisms are used, after TLS succeeds.
+SMTP 235 means active; SMTP 535 means rejected credentials. Connection failures,
+TLS errors, timeouts, unsupported mechanisms, and other replies are inconclusive.
+Server reply text is omitted from reports. Internal targets require the existing
+`--allow-internal-ips` opt-in, and TLS follows the existing validation TLS policy.
+SMTP provides no portable credential-revocation operation.
 
 ## gRPC Validation (Grpc)
 

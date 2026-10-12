@@ -57,7 +57,10 @@ def mock_provider():
 
 
 def main():
-    # Compile only the synthetic catalog; this example never uses real credentials.
+    # Supply files or directories through Rules; builtins=False loads only ours.
+    # demo.yml defines the validation GET and revocation DELETE used below.
+    # Omit builtins=False to combine custom rules with the bundled catalog.
+    # This example never uses real credentials.
     rules = Rules([RULE_PATH], builtins=False)
     scanner = Scanner(rules)
     findings = scanner.scan(f"token={TOKEN}", timeout=2.0)
@@ -74,8 +77,8 @@ def main():
         # finding.visible, http_status, or finding.to_dict()["entropy"].
         # Report with before.to_dict() to redact credentials and captures.
         # This explicit action is safe here because the endpoint is our mock.
-        revoked = Revoker(rules).revoke(RULE_ID, findings[0].secret,
-                                       confirm=True, variables=variables)
+        # The validated result retains its original rule, endpoint and components.
+        revoked = Revoker(rules).revoke(before, confirm=True)
         assert revoked.revoked
         print("Revoked:", revoked.revoked)
         after = validator.validate(findings)[0]

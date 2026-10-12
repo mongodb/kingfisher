@@ -426,10 +426,25 @@ impl<'a> ValidationEngine<'a> {
     }
 
     async fn credential_uri(&self, globals: &Object) -> ValidationResult {
-        use super::credential_uri::{CredentialUriTarget, classify_credential_uri};
+        use super::credential_uri::{
+            CredentialUriTarget, classify_credential_uri, smtp_credential_uri,
+        };
         let uri = first_text(globals, &["URI", "TOKEN"]);
         let scheme = text(globals, "SCHEME");
-        let target = classify_credential_uri(&uri, (!scheme.is_empty()).then_some(scheme.as_str()));
+        let scheme_hint = (!scheme.is_empty()).then_some(scheme.as_str());
+        if let Some(uri) = smtp_credential_uri(&uri, scheme_hint) {
+            return match super::raw::validate_smtp_uri(
+                &uri,
+                self.use_lax_tls,
+                self.allow_internal_ips,
+            )
+            .await
+            {
+                Ok(result) => classify_status(result.valid, result.status).body(result.body),
+                Err(_) => ValidationResult::unavailable(ValidationReason::RequestFailed),
+            };
+        }
+        let target = classify_credential_uri(&uri, scheme_hint);
         match target {
             CredentialUriTarget::Http(uri) => {
                 if uri.starts_with("http:") {

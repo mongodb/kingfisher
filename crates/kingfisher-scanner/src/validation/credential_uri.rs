@@ -1,4 +1,4 @@
-//! Credential URI normalization and HTTPS Basic authentication.
+//! Credential URI normalization, protocol routing, and HTTPS Basic authentication.
 use super::limits::ResourceTimeout;
 use super::{GLOBAL_USER_AGENT, http_validation as httpvalidation};
 
@@ -78,18 +78,7 @@ fn normalize_uri_scheme(uri: &str, scheme: &str) -> Option<String> {
 /// `mysql_async`.
 pub fn classify_credential_uri(uri: &str, scheme_hint: Option<&str>) -> CredentialUriTarget {
     let uri = uri.trim();
-    let scheme = scheme_hint
-        .map(str::trim)
-        .filter(|scheme| !scheme.is_empty())
-        .map(str::to_ascii_lowercase)
-        .or_else(|| {
-            uri.split_once("://").map(|(scheme, _)| scheme.to_ascii_lowercase()).or_else(|| {
-                uri.get(..5)
-                    .filter(|prefix| prefix.eq_ignore_ascii_case("jdbc:"))
-                    .map(|_| "jdbc".to_string())
-            })
-        })
-        .unwrap_or_default();
+    let scheme = credential_uri_scheme(uri, scheme_hint);
 
     match scheme.as_str() {
         "http" | "https" => normalize_uri_scheme(uri, &scheme)
@@ -115,10 +104,39 @@ pub fn classify_credential_uri(uri: &str, scheme_hint: Option<&str>) -> Credenti
     }
 }
 
-/// Return whether a supported credential URI can be parsed by its target database driver.
+fn credential_uri_scheme(uri: &str, scheme_hint: Option<&str>) -> String {
+    scheme_hint
+        .map(str::trim)
+        .filter(|scheme| !scheme.is_empty())
+        .map(str::to_ascii_lowercase)
+        .or_else(|| {
+            uri.split_once("://").map(|(scheme, _)| scheme.to_ascii_lowercase()).or_else(|| {
+                uri.get(..5)
+                    .filter(|prefix| prefix.eq_ignore_ascii_case("jdbc:"))
+                    .map(|_| "jdbc".to_string())
+            })
+        })
+        .unwrap_or_default()
+}
+
+// Keep SMTP dispatch internal: adding a variant to the existing exhaustive public
+// CredentialUriTarget enum would break consumers' matches in a minor release.
+pub(crate) fn smtp_credential_uri(uri: &str, scheme_hint: Option<&str>) -> Option<String> {
+    let uri = uri.trim();
+    let scheme = credential_uri_scheme(uri, scheme_hint);
+    matches!(scheme.as_str(), "smtp" | "smtps")
+        .then(|| normalize_uri_scheme(uri, &scheme))
+        .flatten()
+}
+
+/// Return whether a supported credential URI can be parsed by its target validator.
 /// Unsupported schemes remain reportable and are intentionally left unvalidated.
 pub fn is_parseable_credential_uri(uri: &str, scheme: Option<&str>) -> bool {
-    classify_credential_uri(uri, scheme).is_parseable()
+    if let Some(uri) = smtp_credential_uri(uri, scheme) {
+        super::raw::is_parseable_smtp_uri(&uri)
+    } else {
+        classify_credential_uri(uri, scheme).is_parseable()
+    }
 }
 
 fn has_basic_auth_challenge(headers: &HeaderMap) -> bool {

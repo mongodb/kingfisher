@@ -44,6 +44,17 @@ def test_immutable_policy_and_compatibility_facade(rules):
         Scanner(rules, policy={})
 
 
+def test_native_preparation_preserves_dedup_state_and_detection_policy(rules):
+    scanner = Scanner(rules, dedup=True, policy=DetectionPolicy(ignore_comments=("acme:ignore",)))
+    native = scanner._native
+    data = mock.TOKEN.encode()
+    assert len(native.scan_preparation(data)) == 1
+    assert len(scanner.scan(data)) == 1
+    assert scanner.scan(data) == []
+    assert len(native.scan_preparation(data)) == 1
+    assert native.scan_preparation((mock.TOKEN + " # acme:ignore").encode()) == []
+
+
 def test_structured_results_are_copies_and_preserve_redaction(rules):
     finding, = Scanner(rules).scan(mock.TOKEN)
     raw = finding.to_dict(redact=False)

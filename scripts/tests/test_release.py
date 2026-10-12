@@ -140,5 +140,41 @@ class ReleaseTests(unittest.TestCase):
         self.assertEqual(self.git("rev-parse", "v2.11.0"), tag)
 
 
+class WorkflowReleaseGuardsTests(unittest.TestCase):
+    def test_tag_workflow_requires_main_ancestry_and_records_build_commit(self):
+        workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/release.yml").read_text()
+        preflight = workflow.split("  validate-release:\n", 1)[1].split("  tests:\n", 1)[0]
+        self.assertIn("fetch-depth: 0", preflight)
+        self.assertIn('git merge-base --is-ancestor "$GITHUB_SHA" origin/main', preflight)
+        self.assertIn("scripts/check-release-target.py", preflight)
+        self.assertIn("scripts/release-notes.py", preflight)
+        self.assertIn("commit: ${{ github.sha }}", workflow)
+
+    def test_existing_release_commit_must_match_and_lookup_errors_fail(self):
+        import io
+        import json
+        import urllib.error
+        root = Path(__file__).resolve().parents[2]
+        spec = importlib.util.spec_from_file_location("release_target", root / "scripts/check-release-target.py")
+        target = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(target)
+        for recorded in ("main", "other-commit", "build-commit"):
+            with self.subTest(recorded=recorded), patch.object(target.urllib.request, "urlopen",
+                    return_value=io.BytesIO(json.dumps({"target_commitish": recorded}).encode())):
+                if recorded == "build-commit":
+                    target.check_release_target("owner/repo", "v1.0.0", "build-commit", "fixture-token")
+                else:
+                    with self.assertRaises(ValueError):
+                        target.check_release_target("owner/repo", "v1.0.0", "build-commit", "fixture-token")
+        for status in (404, 403, 500):
+            with self.subTest(status=status), patch.object(target.urllib.request, "urlopen",
+                    side_effect=urllib.error.HTTPError("https://api.github.com", status, "error", {}, None)):
+                if status == 404:
+                    target.check_release_target("owner/repo", "v1.0.0", "build-commit", "fixture-token")
+                else:
+                    with self.assertRaises(urllib.error.HTTPError):
+                        target.check_release_target("owner/repo", "v1.0.0", "build-commit", "fixture-token")
+
+
 if __name__ == "__main__":
     unittest.main()

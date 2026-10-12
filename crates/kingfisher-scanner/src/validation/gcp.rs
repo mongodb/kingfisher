@@ -1,6 +1,6 @@
 use std::sync::{Arc, OnceLock};
 
-use anyhow::{Result, anyhow};
+use anyhow::{Context, Result, anyhow};
 use aws_lc_rs::signature::KeyPair;
 use aws_lc_rs::{rand, signature};
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -137,7 +137,13 @@ pub async fn revoke_gcp_service_account_key(
         encode(&key_id),
     );
 
-    let response = validator.client().delete(url).bearer_auth(&ctx.access_token).send().await?;
+    let response = validator
+        .client()
+        .delete(url)
+        .bearer_auth(&ctx.access_token)
+        .send()
+        .await
+        .context(super::revocation::RevocationSubmitted)?;
 
     let status = response.status();
     let body =

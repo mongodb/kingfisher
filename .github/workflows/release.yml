@@ -30,6 +30,11 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Require a commit merged into main
+        shell: bash
+        run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - name: Require a tag matching the root Cargo version
         id: version
         shell: bash
@@ -47,6 +52,15 @@ jobs:
           with open(os.environ["GITHUB_OUTPUT"], "a") as output:
               output.write(f"tag={os.environ['GITHUB_REF_NAME']}\n")
           PY
+      - name: Require changelog notes for the release tag
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: python3 scripts/release-notes.py --tag "$RELEASE_TAG" > /dev/null
+      - name: Reject releases recorded for another commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: python3 scripts/check-release-target.py
 
   # Tests save their own dependency caches, including Linux debug artifacts.
   # Build jobs run in parallel; publishing waits for both tests and builds.
@@ -394,17 +408,15 @@ jobs:
           mkdir -p target/release
           tar -czf target/release/kingfisher-rule-bundle.tgz -C crates/kingfisher-rules generated
 
-      - name: Extract latest changelog section
-        run: |
-          awk '
-            BEGIN            { grabbing = 0 }
-            /^## \[Unreleased\]/ { next }
-            /^## \[/         {
-                               if (grabbing) exit;  # already grabbed latest entry
-                               grabbing = 1
-                             }
-            grabbing         { print }
-          ' CHANGELOG.md > .latest_changelog.md
+      - name: Extract release changelog section
+        env:
+          RELEASE_TAG: ${{ needs.validate-release.outputs.tag }}
+        run: python3 scripts/release-notes.py --tag "$RELEASE_TAG" > .latest_changelog.md
+      - name: Recheck existing release commit before uploading
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.validate-release.outputs.tag }}
+        run: python3 scripts/check-release-target.py
 
       # ── Sign every release artifact with a SLSA v1 build-provenance attestation.
       #    actions/attest-build-provenance produces a multi-subject Sigstore Bundle
@@ -446,7 +458,8 @@ jobs:
         with:
           tag: ${{ needs.validate-release.outputs.tag }}
           name: "Kingfisher ${{ needs.validate-release.outputs.tag }}"
-          bodyFile: .latest_changelog.md # ← only the most-recent entry
+          commit: ${{ github.sha }}
+          bodyFile: .latest_changelog.md
           allowUpdates: true
           skipIfReleaseExists: true
           draft: true

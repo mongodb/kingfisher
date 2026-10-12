@@ -1,16 +1,68 @@
 //! Shared HTTP revocation execution used by the CLI and language bindings.
 //! Callers must explicitly authorize revocation and configure transport policy.
-use super::{build_request_builder, retry_request, validate_response};
+use super::{build_request_builder, validate_response};
 use anyhow::{Context, Result, anyhow, bail};
 use kingfisher_rules::{
     HttpMultiStepRevocation, HttpValidation, ResponseExtractor, RevocationStep,
 };
 use liquid::{Object, model::Value};
 use regex::Regex;
-use reqwest::Client;
+use reqwest::{Client, RequestBuilder, Response, StatusCode};
 use serde::Serialize;
 use std::time::Duration;
 use tracing::debug;
+
+/// An error after submission cannot prove that a remote mutation did not happen.
+#[derive(Debug, thiserror::Error)]
+#[error("revocation request may have been sent; verify provider state before retrying")]
+#[doc(hidden)]
+pub struct RevocationSubmitted;
+
+fn submitted_error(error: anyhow::Error, may_mutate: bool) -> anyhow::Error {
+    if may_mutate { error.context(RevocationSubmitted) } else { error }
+}
+
+fn is_mutating_method(method: &str) -> bool {
+    !matches!(method.to_ascii_uppercase().as_str(), "GET" | "HEAD" | "OPTIONS")
+}
+
+async fn send_revocation_request(
+    request: RequestBuilder,
+    retries: u32,
+    may_mutate: bool,
+) -> Result<Response> {
+    // Resolve deferred builder errors before any request can be submitted.
+    let (client, request) = request.build_split();
+    let request = request.context("Cannot build revocation request")?;
+    for attempt in 0..=retries {
+        let response = client
+            .execute(request.try_clone().context("Cannot clone revocation request")?)
+            .await
+            .map_err(|error| {
+                let could_submit = may_mutate && !error.is_builder();
+                submitted_error(error.into(), could_submit)
+            })?;
+        // A custom endpoint can return 429 after applying a mutation. Only
+        // read-only lookup steps can safely retry rate-limited requests.
+        if response.status() != StatusCode::TOO_MANY_REQUESTS || may_mutate || attempt == retries {
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                return response
+                    .error_for_status()
+                    .map_err(|error| submitted_error(error.into(), may_mutate));
+            }
+            if response.status().is_server_error()
+                || response.status() == StatusCode::REQUEST_TIMEOUT
+            {
+                return response
+                    .error_for_status()
+                    .map_err(|error| submitted_error(error.into(), may_mutate));
+            }
+            return Ok(response);
+        }
+        tokio::time::sleep(Duration::from_millis(100 * (1u64 << attempt.min(4)))).await;
+    }
+    unreachable!("bounded HTTP retry loop always returns")
+}
 
 /// Result of a direct revocation attempt.
 #[derive(Debug, Clone, Serialize)]
@@ -153,9 +205,15 @@ pub async fn execute_http_revocation(
     timeout: Duration,
     retries: u32,
 ) -> Result<DirectRevocationResult> {
+    let matchers = http_revocation
+        .request
+        .response_matcher
+        .as_deref()
+        .filter(|matchers| !matchers.is_empty())
+        .context("Revocation response_matcher is required")?;
     let url = render_and_parse_url(parser, globals, &http_revocation.request.url).await?;
 
-    debug!("Revoking against URL: {}", url);
+    debug!("Submitting HTTP revocation");
 
     let request_builder = build_request_builder(
         client,
@@ -169,16 +227,16 @@ pub async fn execute_http_revocation(
     )
     .map_err(|e| anyhow!("Failed to build request: {e}"))?;
 
-    let backoff_min = Duration::from_millis(100);
-    let backoff_max = Duration::from_secs(2);
-
-    let response = retry_request(request_builder, retries, backoff_min, backoff_max)
-        .await
-        .context("Request failed")?;
+    let response =
+        send_revocation_request(request_builder, retries, true).await.context("Request failed")?;
 
     let status = response.status();
     let headers = response.headers().clone();
-    let body = response.text().await.context("Failed to read response body")?;
+    let body = response
+        .text()
+        .await
+        .context("Failed to read response body")
+        .context(RevocationSubmitted)?;
 
     let display_body = truncate_with_ellipsis(&body, 500);
     let body_len = body.chars().count();
@@ -186,11 +244,6 @@ pub async fn execute_http_revocation(
     debug!("Revocation response status: {}", status);
     debug!("Revocation response body (len={}): {}", body_len, display_body);
 
-    let matchers = http_revocation
-        .request
-        .response_matcher
-        .as_deref()
-        .ok_or_else(|| anyhow!("Revocation response_matcher is required"))?;
     let html_allowed = http_revocation.request.response_is_html;
     let revoked = validate_response(matchers, &body, &status, &headers, html_allowed);
 
@@ -204,6 +257,7 @@ pub async fn execute_http_revocation(
 }
 
 /// Execute a single revocation step and extract variables from the response.
+#[allow(clippy::too_many_arguments)]
 async fn execute_revocation_step(
     step: &RevocationStep,
     globals: &mut Object,
@@ -212,6 +266,7 @@ async fn execute_revocation_step(
     timeout: Duration,
     retries: u32,
     step_number: usize,
+    is_final_step: bool,
 ) -> Result<(reqwest::StatusCode, reqwest::header::HeaderMap, String)> {
     let default_step_name = format!("step_{}", step_number);
     let step_name = step.name.as_deref().unwrap_or(&default_step_name);
@@ -219,7 +274,6 @@ async fn execute_revocation_step(
     debug!("Executing revocation step {}: {}", step_number, step_name);
 
     let url = render_and_parse_url(parser, globals, &step.request.url).await?;
-    debug!("Step {} URL: {}", step_number, url);
 
     let request_builder = build_request_builder(
         client,
@@ -233,10 +287,9 @@ async fn execute_revocation_step(
     )
     .map_err(|e| anyhow!("Failed to build request for {step_name}: {e}"))?;
 
-    let backoff_min = Duration::from_millis(100);
-    let backoff_max = Duration::from_secs(2);
-
-    let response = retry_request(request_builder, retries, backoff_min, backoff_max)
+    // The final step is the revocation action, even for a custom GET endpoint.
+    let may_mutate = is_final_step || is_mutating_method(&step.request.method);
+    let response = send_revocation_request(request_builder, retries, may_mutate)
         .await
         .with_context(|| format!("Request failed for {step_name}"))?;
 
@@ -245,7 +298,8 @@ async fn execute_revocation_step(
     let body = response
         .text()
         .await
-        .with_context(|| format!("Failed to read response body for {}", step_name))?;
+        .with_context(|| format!("Failed to read response body for {}", step_name))
+        .map_err(|error| submitted_error(error, may_mutate))?;
 
     let display_body = truncate_with_ellipsis(&body, 500);
     let body_len = body.chars().count();
@@ -259,13 +313,14 @@ async fn execute_revocation_step(
 
         for (var_name, extractor) in extractors {
             // Render any Liquid templates in the extractor (e.g., {{ TOKEN | prefix: 8 }})
-            let rendered_extractor =
-                render_extractor(extractor, parser, globals).with_context(|| {
+            let rendered_extractor = render_extractor(extractor, parser, globals)
+                .with_context(|| {
                     format!(
                         "Failed to render extractor template for '{}' in step {}",
                         var_name, step_number
                     )
-                })?;
+                })
+                .map_err(|error| submitted_error(error, may_mutate))?;
             debug!(
                 "Step {}: Rendered extractor for '{}': {:?}",
                 step_number, var_name, rendered_extractor
@@ -273,17 +328,20 @@ async fn execute_revocation_step(
 
             match extract_value_from_response(&rendered_extractor, &body, &headers, &status) {
                 Ok(value) => {
-                    debug!("Step {}: Extracted variable {} = '{}'", step_number, var_name, value);
+                    debug!("Step {}: Extracted variable {}", step_number, var_name);
                     globals.insert(var_name.to_uppercase().into(), Value::scalar(value));
                 }
                 Err(e) => {
-                    return Err(anyhow!(
-                        "Failed to extract variable '{}' in step {}: {}\nResponse status: {}\nResponse body: {}",
-                        var_name,
-                        step_number,
-                        e,
-                        status,
-                        display_body
+                    return Err(submitted_error(
+                        anyhow!(
+                            "Failed to extract variable '{}' in step {}: {}\nResponse status: {}\nResponse body: {}",
+                            var_name,
+                            step_number,
+                            e,
+                            status,
+                            display_body
+                        ),
+                        may_mutate,
                     ));
                 }
             }
@@ -313,17 +371,40 @@ pub async fn execute_multi_step_revocation(
         );
     }
 
+    if multi_step
+        .steps
+        .last()
+        .and_then(|step| step.request.response_matcher.as_ref())
+        .is_none_or(|matchers| matchers.is_empty())
+    {
+        bail!("Final revocation step must have response_matcher");
+    }
     let num_steps = multi_step.steps.len();
     debug!("Executing {}-step revocation", num_steps);
 
-    // Execute each step sequentially
+    // Preserve ambiguity if a later configuration failure follows a mutating step.
+    let mut mutation_completed = false;
     for (i, step) in multi_step.steps.iter().enumerate() {
         let step_number = i + 1;
         let is_final_step = step_number == num_steps;
 
-        let (status, headers, body) =
-            execute_revocation_step(step, globals, client, parser, timeout, retries, step_number)
-                .await?;
+        let (status, headers, body) = match execute_revocation_step(
+            step,
+            globals,
+            client,
+            parser,
+            timeout,
+            retries,
+            step_number,
+            is_final_step,
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(error) if mutation_completed => return Err(error.context(RevocationSubmitted)),
+            Err(error) => return Err(error),
+        };
+        mutation_completed |= is_mutating_method(&step.request.method);
 
         if is_final_step {
             // Final step: validate response to determine success
@@ -609,9 +690,9 @@ mod tests {
                 .build()
                 .unwrap();
         let mut globals = Object::new();
-        // kingfisher:ignore (test fixture, not a real token)
         globals.insert(
             "TOKEN".into(),
+            // kingfisher:ignore (test fixture, not a real token)
             Value::scalar("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".to_string()),
         );
 
@@ -635,11 +716,8 @@ mod tests {
                 .build()
                 .unwrap();
         let mut globals = Object::new();
-        // kingfisher:ignore (test fixture, not a real token)
-        globals.insert(
-            "TOKEN".into(),
-            Value::scalar("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".to_string()),
-        );
+        let token = "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"; // kingfisher:ignore
+        globals.insert("TOKEN".into(), Value::scalar(token.to_string()));
 
         // Match both ends exposed by npm's truncated token response.
         let extractor = ResponseExtractor::Regex {

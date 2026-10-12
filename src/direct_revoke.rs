@@ -10,19 +10,32 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow, bail};
+use aws_config::{
+    BehaviorVersion, SdkConfig,
+    meta::region::ProvideRegion,
+    profile::{ProfileFileCredentialsProvider, ProfileFileRegionProvider},
+    provider_config::ProviderConfig,
+};
+use aws_types::region::Region;
 use liquid::Object;
 use liquid_core::{Value, ValueView};
 use reqwest::Client;
 use tracing::debug;
 
 use crate::{
-    cli::{commands::revoke::RevokeArgs, global::GlobalArgs},
+    cli::{
+        commands::revoke::{AwsRevocationActionArg, RevokeArgs},
+        global::GlobalArgs,
+    },
     liquid_filters::register_all,
     provider_endpoints::{ProviderEndpointOverrides, hydrate_endpoint_globals_for_rule},
     rule_loader::RuleLoader,
     template_vars::extract_template_vars,
     validation::GLOBAL_USER_AGENT,
-    validation::aws::{revoke_aws_access_key, validate_aws_credentials_input},
+    validation::aws::{
+        AwsRevocationAction, AwsRevocationOptions, AwsRevocationResult, AwsRevocationStatus,
+        revoke_aws_access_key_with_options, validate_aws_credentials_input,
+    },
     validation::gcp::revoke_gcp_service_account_key,
 };
 
@@ -30,8 +43,171 @@ use kingfisher_rules::{Revocation, Rule};
 
 pub use kingfisher_scanner::validation::revocation::DirectRevocationResult;
 use kingfisher_scanner::validation::revocation::{
-    execute_http_revocation, execute_multi_step_revocation,
+    RevocationSubmitted, execute_http_revocation, execute_multi_step_revocation,
 };
+
+fn has_non_default_aws_options(args: &RevokeArgs) -> bool {
+    args.aws_profile.is_some()
+        || args.aws_use_default_credentials
+        || args.aws_user_name.is_some()
+        || args.aws_region.is_some()
+        || args.aws_action.is_some()
+}
+
+async fn load_aws_responder_config(args: &RevokeArgs) -> Option<SdkConfig> {
+    if let Some(profile) = args.aws_profile.as_deref() {
+        let region = match args.aws_region.as_deref() {
+            Some(region) => Region::new(region.to_owned()),
+            None => ProfileFileRegionProvider::builder()
+                .profile_name(profile)
+                .build()
+                .region()
+                .await
+                .unwrap_or_else(|| Region::new("us-east-1")),
+        };
+        let provider_config = ProviderConfig::without_region().with_region(Some(region.clone()));
+        let credentials = ProfileFileCredentialsProvider::builder()
+            .configure(&provider_config)
+            .profile_name(profile)
+            .build();
+        Some(
+            aws_config::defaults(BehaviorVersion::latest())
+                .profile_name(profile)
+                .region(region)
+                .credentials_provider(credentials)
+                .load()
+                .await,
+        )
+    } else if args.aws_use_default_credentials {
+        let loader = aws_config::defaults(BehaviorVersion::latest());
+        let loader = match args.aws_region.as_deref() {
+            Some(region) => loader.region(Region::new(region.to_owned())),
+            None => loader,
+        };
+        let config = loader.load().await;
+        Some(match config.region() {
+            Some(_) => config,
+            None => config.to_builder().region(Region::new("us-east-1")).build(),
+        })
+    } else {
+        None
+    }
+}
+
+fn format_aws_revocation_result(result: &AwsRevocationResult) -> String {
+    let mut details = vec![
+        format!("status={}", result.status),
+        format!("action={}", result.action),
+        format!("actor={}", result.actor),
+    ];
+
+    if let Some(account_id) = result.account_id.as_deref() {
+        details.push(format!("account_id={account_id}"));
+    }
+    if let Some(user_name) = result.user_name.as_deref() {
+        details.push(format!("user_name={user_name}"));
+    }
+    if let Some(error_code) = result.error_code.as_deref() {
+        details.push(format!("error_code={error_code}"));
+    }
+    if let Some(request_id) = result.request_id.as_deref() {
+        details.push(format!("request_id={request_id}"));
+    }
+
+    format!("AWS revocation {}: {}", details.join(", "), result.message)
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum CliRevocationStatus {
+    Succeeded,
+    NotAuthorized,
+    NotFound,
+    Unsupported,
+    Failed,
+    Unknown,
+}
+
+impl CliRevocationStatus {
+    fn from_revoked(revoked: bool) -> Self {
+        if revoked { Self::Succeeded } else { Self::Failed }
+    }
+
+    fn from_aws(status: AwsRevocationStatus) -> Self {
+        match status {
+            AwsRevocationStatus::Succeeded => Self::Succeeded,
+            AwsRevocationStatus::NotAuthorized => Self::NotAuthorized,
+            AwsRevocationStatus::NotFound => Self::NotFound,
+            AwsRevocationStatus::Unsupported => Self::Unsupported,
+            AwsRevocationStatus::Failed => Self::Failed,
+            AwsRevocationStatus::Unknown => Self::Unknown,
+            _ => Self::Failed,
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Succeeded => "succeeded",
+            Self::NotAuthorized => "not_authorized",
+            Self::NotFound => "not_found",
+            Self::Unsupported => "unsupported",
+            Self::Failed => "failed",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Self::Succeeded => "REVOKED",
+            Self::NotAuthorized => "NOT AUTHORIZED",
+            Self::NotFound => "NOT FOUND",
+            Self::Unsupported => "UNSUPPORTED",
+            Self::Failed => "FAILED",
+            Self::Unknown => "UNKNOWN",
+        }
+    }
+}
+
+/// CLI revocation result with an outcome kept separate from provider-controlled messages.
+#[derive(Debug, Clone)]
+pub struct DetailedDirectRevocationResult {
+    result: DirectRevocationResult,
+    status: CliRevocationStatus,
+}
+
+fn http_revocation_outcome(
+    result: Result<DirectRevocationResult>,
+) -> (DirectRevocationResult, CliRevocationStatus) {
+    match result {
+        Ok(result) => {
+            let status = CliRevocationStatus::from_revoked(result.revoked);
+            (result, status)
+        }
+        Err(error) => {
+            let category = kingfisher_scanner::Revoker::error_category(&error);
+            let status = if error.is::<RevocationSubmitted>() {
+                CliRevocationStatus::Unknown
+            } else {
+                CliRevocationStatus::Failed
+            };
+            (
+                DirectRevocationResult {
+                    rule_id: String::new(),
+                    rule_name: String::new(),
+                    revoked: false,
+                    status_code: None,
+                    message: if status == CliRevocationStatus::Unknown {
+                        format!(
+                            "HTTP revocation error ({category}); outcome is unknown; verify provider state before retrying"
+                        )
+                    } else {
+                        format!("HTTP revocation error ({category}); failed before mutation")
+                    },
+                },
+                status,
+            )
+        }
+    }
+}
 
 /// Find all rules matching an ID or prefix.
 ///
@@ -141,7 +317,7 @@ fn build_globals(
     for (i, arg_value) in args.iter().enumerate() {
         if i < auto_assign_vars.len() {
             let var_name = auto_assign_vars[i];
-            debug!("Auto-assigning --arg '{}' to variable '{}'", arg_value, var_name);
+            debug!("Auto-assigning --arg to variable '{}'", var_name);
             globals.insert(var_name.clone().into(), Value::scalar(arg_value.clone()));
         }
     }
@@ -181,11 +357,11 @@ fn read_secret(secret_arg: Option<&str>) -> Result<String> {
     }
 }
 
-/// Run direct revocation of a secret against one or more rules.
-pub async fn run_direct_revocation(
+/// Run direct revocation while retaining a provider-independent structured outcome for CLI output.
+pub async fn run_direct_revocation_detailed(
     args: &RevokeArgs,
     global_args: &GlobalArgs,
-) -> Result<Vec<DirectRevocationResult>> {
+) -> Result<Vec<DetailedDirectRevocationResult>> {
     let secret = read_secret(args.secret.as_deref())?;
 
     if secret.is_empty() {
@@ -201,6 +377,26 @@ pub async fn run_direct_revocation(
 
     let matching_rules = find_rules_by_selector(&args.rule, loaded.id_to_rule())?;
     let num_matching_rules = matching_rules.len();
+    let aws_revocation_count = matching_rules
+        .iter()
+        .filter(|rule| matches!(rule.syntax().revocation.as_ref(), Some(Revocation::AWS)))
+        .count();
+    let has_aws_revocation = aws_revocation_count > 0;
+
+    if has_non_default_aws_options(args) && !has_aws_revocation {
+        bail!(
+            "AWS-specific revocation options can only be used with a rule whose revocation type is AWS"
+        );
+    }
+    if has_aws_revocation && num_matching_rules > 1 {
+        bail!(
+            "Rule selector '{}' matches multiple rules including an AWS revocation rule; use an exact rule ID to avoid issuing multiple mutations",
+            args.rule
+        );
+    }
+
+    let aws_responder_config =
+        if has_aws_revocation { load_aws_responder_config(args).await } else { None };
 
     if num_matching_rules > 1 {
         debug!("Rule selector '{}' matches {} rules, trying all", args.rule, num_matching_rules);
@@ -220,7 +416,7 @@ pub async fn run_direct_revocation(
     let timeout = Duration::from_secs(args.timeout);
     let endpoint_overrides = ProviderEndpointOverrides::from_global_args(global_args)?;
 
-    let mut results = Vec::new();
+    let mut prepared = Vec::new();
 
     for rule in matching_rules {
         let rule_id = rule.id().to_string();
@@ -274,12 +470,17 @@ pub async fn run_direct_revocation(
 
         if !non_token_vars.is_empty() && !args.args.is_empty() {
             debug!(
-                "Rule '{}' uses variables: {:?}, auto-assigned from --arg: {:?}",
-                rule_id, non_token_vars, args.args
+                "Rule '{}' uses variables: {:?}, auto-assigned from --arg",
+                rule_id, non_token_vars
             );
         }
 
-        let mut result = match revocation {
+        prepared.push((rule_id, rule_name, revocation, globals));
+    }
+
+    let mut results = Vec::new();
+    for (rule_id, rule_name, revocation, globals) in prepared {
+        let (mut result, status) = match revocation {
             Revocation::AWS => {
                 let akid = get_global_var(&globals, "AKID")
                     .or_else(|| get_global_var(&globals, "ACCESS_KEY_ID"))
@@ -290,54 +491,88 @@ pub async fn run_direct_revocation(
                     })?;
 
                 if let Err(err) = validate_aws_credentials_input(&akid, &secret) {
-                    DirectRevocationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        revoked: false,
-                        status_code: None,
-                        message: format!("Invalid AWS credentials: {}", err),
-                    }
-                } else {
-                    match revoke_aws_access_key(&akid, &secret).await {
-                        Ok((revoked, message)) => DirectRevocationResult {
-                            rule_id: String::new(),
-                            rule_name: String::new(),
-                            revoked,
-                            status_code: None,
-                            message,
-                        },
-                        Err(e) => DirectRevocationResult {
+                    (
+                        DirectRevocationResult {
                             rule_id: String::new(),
                             rule_name: String::new(),
                             revoked: false,
                             status_code: None,
-                            message: format!("AWS revocation error: {}", e),
+                            message: format!("Invalid AWS credentials: {}", err),
                         },
+                        CliRevocationStatus::Failed,
+                    )
+                } else {
+                    let action = match args.aws_action.unwrap_or(AwsRevocationActionArg::Deactivate)
+                    {
+                        AwsRevocationActionArg::Deactivate => AwsRevocationAction::Deactivate,
+                        AwsRevocationActionArg::Delete => AwsRevocationAction::Delete,
+                    };
+                    let mut options = match aws_responder_config.as_ref() {
+                        Some(config) => AwsRevocationOptions::responder(config),
+                        None => AwsRevocationOptions::default(),
+                    }
+                    .with_action(action)
+                    .with_attempt_timeout(timeout);
+                    if let Some(user_name) = args.aws_user_name.as_deref() {
+                        options = options.with_target_user_name(user_name);
+                    }
+                    if let Some(region) = args.aws_region.as_deref() {
+                        options = options.with_region(region);
+                    }
+
+                    match revoke_aws_access_key_with_options(&akid, &secret, options).await {
+                        Ok(outcome) => {
+                            let status = CliRevocationStatus::from_aws(outcome.status);
+                            (
+                                DirectRevocationResult {
+                                    rule_id: String::new(),
+                                    rule_name: String::new(),
+                                    revoked: outcome.succeeded(),
+                                    status_code: None,
+                                    message: format_aws_revocation_result(&outcome),
+                                },
+                                status,
+                            )
+                        }
+                        Err(e) => (
+                            DirectRevocationResult {
+                                rule_id: String::new(),
+                                rule_name: String::new(),
+                                revoked: false,
+                                status_code: None,
+                                message: format!("AWS revocation error: {}", e),
+                            },
+                            CliRevocationStatus::Failed,
+                        ),
                     }
                 }
             }
             Revocation::GCP => {
                 let key_id_override = get_global_var(&globals, "KEY_ID")
                     .or_else(|| get_global_var(&globals, "PRIVATE_KEY_ID"));
-                match revoke_gcp_service_account_key(&secret, key_id_override.as_deref()).await {
-                    Ok(outcome) => DirectRevocationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        revoked: outcome.revoked,
-                        status_code: outcome.status_code,
-                        message: outcome.message,
-                    },
-                    Err(e) => DirectRevocationResult {
-                        rule_id: String::new(),
-                        rule_name: String::new(),
-                        revoked: false,
-                        status_code: None,
-                        message: format!("GCP revocation error: {}", e),
-                    },
-                }
+                let result =
+                    match revoke_gcp_service_account_key(&secret, key_id_override.as_deref()).await
+                    {
+                        Ok(outcome) => DirectRevocationResult {
+                            rule_id: String::new(),
+                            rule_name: String::new(),
+                            revoked: outcome.revoked,
+                            status_code: outcome.status_code,
+                            message: outcome.message,
+                        },
+                        Err(e) => DirectRevocationResult {
+                            rule_id: String::new(),
+                            rule_name: String::new(),
+                            revoked: false,
+                            status_code: None,
+                            message: format!("GCP revocation error: {}", e),
+                        },
+                    };
+                let status = CliRevocationStatus::from_revoked(result.revoked);
+                (result, status)
             }
             Revocation::Http(http_revocation) => {
-                execute_http_revocation(
+                let result = execute_http_revocation(
                     http_revocation,
                     &globals,
                     &client,
@@ -345,11 +580,12 @@ pub async fn run_direct_revocation(
                     timeout,
                     args.retries,
                 )
-                .await?
+                .await;
+                http_revocation_outcome(result)
             }
             Revocation::HttpMultiStep(multi_step) => {
                 let mut globals_mut = globals.clone();
-                execute_multi_step_revocation(
+                let result = execute_multi_step_revocation(
                     multi_step,
                     &mut globals_mut,
                     &client,
@@ -357,13 +593,14 @@ pub async fn run_direct_revocation(
                     timeout,
                     args.retries,
                 )
-                .await?
+                .await;
+                http_revocation_outcome(result)
             }
         };
 
         result.rule_id = rule_id;
         result.rule_name = rule_name;
-        results.push(result);
+        results.push(DetailedDirectRevocationResult { result, status });
     }
 
     if results.is_empty() {
@@ -377,40 +614,80 @@ pub async fn run_direct_revocation(
     Ok(results)
 }
 
-/// Print revocation results to stdout.
-pub fn print_results(results: &[DirectRevocationResult], format: &str, use_color: bool) {
+/// Run direct revocation and return the long-standing provider result shape.
+pub async fn run_direct_revocation(
+    args: &RevokeArgs,
+    global_args: &GlobalArgs,
+) -> Result<Vec<DirectRevocationResult>> {
+    Ok(run_direct_revocation_detailed(args, global_args)
+        .await?
+        .into_iter()
+        .map(|detailed| detailed.result)
+        .collect())
+}
+
+fn result_output_value(
+    result: &DirectRevocationResult,
+    status: CliRevocationStatus,
+) -> serde_json::Value {
+    let mut value = serde_json::to_value(result).expect("revocation result is serializable");
+    let object = value.as_object_mut().expect("revocation result serializes as an object");
+    object.insert(
+        "revocation_status".to_string(),
+        serde_json::Value::String(status.as_str().to_string()),
+    );
+    value
+}
+
+fn results_output_value(results: &[DetailedDirectRevocationResult]) -> serde_json::Value {
+    if results.len() == 1 {
+        result_output_value(&results[0].result, results[0].status)
+    } else {
+        serde_json::Value::Array(
+            results
+                .iter()
+                .map(|detailed| result_output_value(&detailed.result, detailed.status))
+                .collect(),
+        )
+    }
+}
+
+/// Print CLI revocation results with a structured outcome independent of provider response text.
+pub fn print_detailed_results(
+    results: &[DetailedDirectRevocationResult],
+    format: &str,
+    use_color: bool,
+) {
     match format {
         "json" => {
-            if results.len() == 1 {
-                println!("{}", serde_json::to_string_pretty(&results[0]).unwrap());
-            } else {
-                println!("{}", serde_json::to_string_pretty(results).unwrap());
-            }
+            println!("{}", serde_json::to_string_pretty(&results_output_value(results)).unwrap());
         }
         "toon" => {
-            let value = if results.len() == 1 {
-                serde_json::to_value(&results[0]).unwrap()
-            } else {
-                serde_json::to_value(results).unwrap()
-            };
+            let value = results_output_value(results);
             println!("{}", crate::toon::encode_llm_friendly(&value).unwrap());
         }
         _ => {
-            for (i, result) in results.iter().enumerate() {
+            for (i, detailed) in results.iter().enumerate() {
                 if i > 0 {
                     println!();
                 }
 
-                let revoked_str = if result.revoked {
-                    if use_color { "\x1b[32m✓ REVOKED\x1b[0m" } else { "REVOKED" }
-                } else if use_color {
-                    "\x1b[31m✗ FAILED\x1b[0m"
+                let result = &detailed.result;
+                let label = detailed.status.label();
+                let result_text = if use_color {
+                    match label {
+                        "REVOKED" => "\x1b[32m✓ REVOKED\x1b[0m".to_string(),
+                        "UNKNOWN" | "UNSUPPORTED" => {
+                            format!("\x1b[33m? {label}\x1b[0m")
+                        }
+                        _ => format!("\x1b[31m✗ {label}\x1b[0m"),
+                    }
                 } else {
-                    "FAILED"
+                    label.to_string()
                 };
 
                 println!("Rule:     {} ({})", result.rule_name, result.rule_id);
-                println!("Result:   {}", revoked_str);
+                println!("Result:   {}", result_text);
                 if let Some(status) = result.status_code {
                     println!("Status:   {}", status);
                 }
@@ -420,6 +697,24 @@ pub fn print_results(results: &[DirectRevocationResult], format: &str, use_color
             }
         }
     }
+}
+
+/// Print the long-standing provider result shape using only confirmed success/failure status.
+pub fn print_results(results: &[DirectRevocationResult], format: &str, use_color: bool) {
+    let detailed: Vec<_> = results
+        .iter()
+        .cloned()
+        .map(|result| DetailedDirectRevocationResult {
+            status: CliRevocationStatus::from_revoked(result.revoked),
+            result,
+        })
+        .collect();
+    print_detailed_results(&detailed, format, use_color);
+}
+
+/// Check if any detailed CLI result was revoked.
+pub fn any_detailed_revoked(results: &[DetailedDirectRevocationResult]) -> bool {
+    results.iter().any(|detailed| detailed.result.revoked)
 }
 
 /// Check if any result was revoked.
@@ -729,6 +1024,49 @@ mod tests {
 
         let result = find_rules_by_selector("custom.git", &rules);
         assert!(result.is_err(), "Prefix 'custom.git' should not match 'custom.github.1'");
+    }
+
+    #[test]
+    fn revocation_result_label_preserves_detailed_aws_status() {
+        assert_eq!(CliRevocationStatus::Unknown.label(), "UNKNOWN");
+        assert_eq!(CliRevocationStatus::Unsupported.label(), "UNSUPPORTED");
+        assert_eq!(CliRevocationStatus::NotAuthorized.label(), "NOT AUTHORIZED");
+        assert_eq!(CliRevocationStatus::NotFound.label(), "NOT FOUND");
+    }
+
+    #[test]
+    fn revocation_result_label_keeps_legacy_success_and_failure() {
+        assert_eq!(CliRevocationStatus::from_revoked(true).label(), "REVOKED");
+        assert_eq!(CliRevocationStatus::from_revoked(false).label(), "FAILED");
+    }
+
+    #[test]
+    fn structured_output_has_explicit_revocation_status() {
+        let result = DirectRevocationResult {
+            rule_id: "aws.test".to_string(),
+            rule_name: "AWS Test".to_string(),
+            revoked: false,
+            status_code: None,
+            message: "AWS revocation status=unknown, action=delete: verify state".to_string(),
+        };
+
+        let value = result_output_value(&result, CliRevocationStatus::Unknown);
+        assert_eq!(value["revocation_status"], "unknown");
+        assert_eq!(value["revoked"], false);
+    }
+
+    #[test]
+    fn provider_message_cannot_spoof_structured_status() {
+        let result = DirectRevocationResult {
+            rule_id: "http.test".to_string(),
+            rule_name: "HTTP Test".to_string(),
+            revoked: false,
+            status_code: Some(403),
+            message: "AWS revocation status=unknown, forged provider response".to_string(),
+        };
+
+        let value = result_output_value(&result, CliRevocationStatus::Failed);
+        assert_eq!(value["revocation_status"], "failed");
     }
 
     // ---- render_extractor ----

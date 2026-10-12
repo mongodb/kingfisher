@@ -672,6 +672,21 @@ impl RulesDatabase {
             })
     }
 
+    /// Return whether confirmation may restart immediately after a newline.
+    ///
+    /// The certificate guarantees that no match can consume a newline and then
+    /// consume another byte, so matches ending later cannot cross that boundary.
+    #[cfg(feature = "__scanner-internals")]
+    #[doc(hidden)]
+    pub fn confirmation_line_restart_safe(&self, index: usize) -> bool {
+        self.anchored_regexes
+            .get(index)
+            .zip(self.confirmation_maximum_lengths.get(index))
+            .is_some_and(|(regex, metadata)| {
+                metadata.get_or_init(|| confirmation_maximum_lengths(regex)).line_restart_safe
+            })
+    }
+
     /// Cached maximum consuming match length for endpoint searches, excluding unbounded runs.
     #[cfg(feature = "__scanner-internals")]
     #[doc(hidden)]
@@ -1354,6 +1369,8 @@ fn has_self_identifying_shape(normalized_pattern: &str) -> bool {
 #[derive(Clone, Copy, Default)]
 struct ConfirmationLengths {
     prefix_stable: bool,
+    /// When true, no match consumes a newline and then any further byte.
+    line_restart_safe: bool,
     safe_tail: Option<usize>,
     full_match: Option<usize>,
 }
@@ -1367,6 +1384,72 @@ fn confirmation_maximum_lengths(regex: &Regex) -> ConfirmationLengths {
             .build()
             .parse(regex.as_str())
             .ok()?;
+        #[derive(Clone, Copy, Default)]
+        struct NewlineShape {
+            consumes_newline: bool,
+            newline_has_suffix: bool,
+        }
+        fn can_consume_nonempty(hir: &regex_syntax::hir::Hir) -> bool {
+            hir.properties().maximum_len().is_none_or(|length| length > 0)
+        }
+        fn newline_shape(hir: &regex_syntax::hir::Hir) -> NewlineShape {
+            use regex_syntax::hir::{Class, HirKind};
+            match hir.kind() {
+                HirKind::Empty | HirKind::Look(_) => NewlineShape::default(),
+                HirKind::Literal(literal) => {
+                    let newline = literal.0.iter().position(|byte| *byte == b'\n');
+                    NewlineShape {
+                        consumes_newline: newline.is_some(),
+                        newline_has_suffix: newline
+                            .is_some_and(|index| index + 1 < literal.0.len()),
+                    }
+                }
+                HirKind::Class(class) => {
+                    let consumes_newline = match class {
+                        Class::Bytes(class) => {
+                            class.iter().any(|range| range.start() <= b'\n' && b'\n' <= range.end())
+                        }
+                        Class::Unicode(class) => {
+                            class.iter().any(|range| range.start() <= '\n' && '\n' <= range.end())
+                        }
+                    };
+                    NewlineShape { consumes_newline, newline_has_suffix: false }
+                }
+                HirKind::Capture(capture) => newline_shape(&capture.sub),
+                HirKind::Alternation(parts) => {
+                    parts.iter().fold(NewlineShape::default(), |shape, part| {
+                        let part = newline_shape(part);
+                        NewlineShape {
+                            consumes_newline: shape.consumes_newline || part.consumes_newline,
+                            newline_has_suffix: shape.newline_has_suffix || part.newline_has_suffix,
+                        }
+                    })
+                }
+                HirKind::Concat(parts) => {
+                    let mut shape = NewlineShape::default();
+                    let mut suffix_can_consume = false;
+                    for part in parts.iter().rev() {
+                        let part_shape = newline_shape(part);
+                        shape.newline_has_suffix |= part_shape.newline_has_suffix
+                            || (part_shape.consumes_newline && suffix_can_consume);
+                        shape.consumes_newline |= part_shape.consumes_newline;
+                        suffix_can_consume |= can_consume_nonempty(part);
+                    }
+                    shape
+                }
+                HirKind::Repetition(repetition) => {
+                    let sub = newline_shape(&repetition.sub);
+                    let repeats = repetition.max.is_none_or(|maximum| maximum > 1);
+                    NewlineShape {
+                        consumes_newline: repetition.max != Some(0) && sub.consumes_newline,
+                        newline_has_suffix: sub.newline_has_suffix
+                            || (sub.consumes_newline
+                                && repeats
+                                && can_consume_nonempty(&repetition.sub)),
+                    }
+                }
+            }
+        }
         // SearchFrom only handles consuming matches; empty-match iteration keeps the
         // regex crate's own handling of UTF-8 boundaries and repeated empty matches.
         if !hir.properties().minimum_len().is_some_and(|length| length > 0) {
@@ -1377,9 +1460,11 @@ fn confirmation_maximum_lengths(regex: &Regex) -> ConfirmationLengths {
         // with the same Unicode default as RuleSyntax::build_regex; inline flags
         // remain in regex.as_str() and are interpreted by this parser.
         let prefix_stable = hir.properties().look_set().is_empty();
+        let line_restart_safe = !newline_shape(&hir).newline_has_suffix;
         if let Some(maximum_len) = hir.properties().maximum_len() {
             return Some(ConfirmationLengths {
                 prefix_stable,
+                line_restart_safe,
                 safe_tail: Some(maximum_len),
                 full_match: Some(maximum_len),
             });
@@ -1430,12 +1515,13 @@ fn confirmation_maximum_lengths(regex: &Regex) -> ConfirmationLengths {
                 }
                 return Some(ConfirmationLengths {
                     prefix_stable,
+                    line_restart_safe,
                     safe_tail: Some(maximum_len),
                     full_match: None,
                 });
             }
         }
-        Some(ConfirmationLengths { prefix_stable, ..Default::default() })
+        Some(ConfirmationLengths { prefix_stable, line_restart_safe, ..Default::default() })
     }
     compute(regex).unwrap_or_default()
 }
@@ -2212,6 +2298,31 @@ mod confirmation_bounds {
             assert_eq!(bounds.safe_tail, expected, "{pattern}");
             let full = if pattern == r"([a-z]+\.example\.com)" { None } else { expected };
             assert_eq!(bounds.full_match, full, "{pattern}");
+        }
+    }
+
+    #[test]
+    fn line_restart_certificates_allow_only_terminal_newlines() {
+        for (pattern, expected) in [
+            (r"token", true),
+            ("token\\n", true),
+            ("token\\nend", false),
+            ("(?:token\\n)?", false),
+            ("(?:token\\n)+", false),
+            (r"(?s).*", false),
+            (
+                r#"(?i)\b((?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+auth0\.com)(?:\\?['"\x60]|[\s;]|\\[nr]|$)"#,
+                true,
+            ),
+            (r"\b([a-zA-Z0-9_-]+-[a-zA-Z0-9_-]+-PRD-[a-f0-9]{8,12}-[a-f0-9]{8,12})", true),
+        ] {
+            let rule = RuleSyntax::new("acme.lines", "Line restart", pattern);
+            let regex = rule.as_regex().unwrap();
+            assert_eq!(
+                confirmation_maximum_lengths(&regex).line_restart_safe,
+                expected,
+                "{pattern}"
+            );
         }
     }
 }

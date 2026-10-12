@@ -31,6 +31,27 @@ jobs:
       - run: python3 scripts/check-linux-packages.py --manifest-only
       - run: python3 -m unittest discover -s scripts/tests -p test_linux_packages.py -v
       - run: python3 -m unittest discover -s scripts/tests -p test_rpm_upgrades.py -v
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+        with:
+          shared-key: kingfisher-packaging-${{ runner.os }}-${{ runner.arch }}
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends rpm
+          cargo install --locked cargo-deb cargo-generate-rpm
+      - name: Build and verify real Linux packages
+        env:
+          CARGO_BUILD_JOBS: 2
+        run: |
+          make linux-x64 SKIP_TESTS=1
+          sudo chown -R "$(id -u):$(id -g)" target
+          cargo deb --no-build --target x86_64-unknown-linux-musl --output target/release/kingfisher-linux-x64.deb
+          cargo generate-rpm --target x86_64-unknown-linux-musl --output target/release/kingfisher-linux-x64.rpm
+          python3 scripts/check-linux-packages.py --arch x64
+          python3 scripts/test-rpm-upgrades.py --arch x64
 
   lint:
     name: Rust Clippy and API documentation

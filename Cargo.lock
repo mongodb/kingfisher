@@ -7695,7 +7695,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kingfisher-bin"
-version = "2.11.1"
+version = "2.12.0"
 dependencies = [
  "anyhow",
  "asar",
@@ -7723,6 +7723,7 @@ dependencies = [
  "axum",
  "base64 0.23.1",
  "blake3",
+ "bollard",
  "bstr",
  "bytes",
  "bzip2-rs",
@@ -7866,7 +7867,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-python"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "ignore",
@@ -7943,7 +7944,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-scanner"
-version = "1.3.0"
+version = "1.4.0"
 dependencies = [
  "anyhow",
  "asar",

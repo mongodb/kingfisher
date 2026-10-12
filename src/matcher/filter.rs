@@ -257,6 +257,7 @@ pub(crate) fn filter_match<'b>(
     };
     for captures in captures {
         let full_capture = captures.get(0).unwrap();
+        // confirmation_needs_wider_window relies on rejecting interior matches.
         if bounded_confirmation
             && ((start > 0 && full_capture.start() == 0) || full_capture.end() != haystack.len())
         {

@@ -23,7 +23,9 @@ requires CPython 3.10+ with the standard GIL build. Wheels target Linux x64/ARM6
 (glibc 2.28+), macOS x64/ARM64 (11+), and native Windows x64/ARM64. PyPy,
 free-threaded Python and musl wheels are not currently part of the release matrix.
 
-The prepared SDK release is **1.3.0**, including opt-in CLI detection policies,
+The prepared SDK release is **1.4.0**, adding offline revocation preparation,
+structured input diagnostics, result-based and batch revocation, validation
+variables and SMTP support. It also includes opt-in CLI detection policies,
 SQLite/bytecode extraction, richer Git scopes and metadata, composable input
 enumeration, per-call controls, a reusable compiled rule cache and `Rules.detail()` inspection. Its version is independent of the CLI and Rust library packages; Python modules share the SDK version.
 
@@ -58,8 +60,8 @@ cloud sources; supply their content from Python or use the CLI.
 | `kingfisher_sdk.scanner` | `Scanner(rules=None, base64=True, dedup=False, redact=False, min_entropy=None, policy=None)`, `DetectionPolicy`, `DetectionScanner`, `CancellationToken`, `ScanResult` |
 | `kingfisher_sdk.inputs` | `ScanInput`, `filesystem`, `git_history`, `expand_archives`, `expand_content` |
 | `kingfisher_sdk.git` | `GitScope`, `GitInput`, `GitCommit`, `GitSignature`, `GitInputWarning`, `git_inputs` |
-| `kingfisher_sdk.validation` | `Validator`, `ValidationResult` |
-| `kingfisher_sdk.revocation` | `Revoker`, `RevocationResult` |
+| `kingfisher_sdk.validation` | `Validator`, `ValidationResult`, `ResolvedCredential`, `RevocationInputs`, `InputDiagnostic` |
+| `kingfisher_sdk.revocation` | `Revoker`, `RevocationResult`, `RevocationPlan`, `RevocationCandidate`, `BatchRevocationResult` |
 
 These names are also exported from `kingfisher_sdk`. `GitInputWarning` supports
 standard Python warning policies for explicitly skipped Git blobs. Python modules wrap one
@@ -337,6 +339,10 @@ are different. A recursive Python scan is not automatically equivalent to
   nested Base64 decoding, inline-ignore directives and HTML/CSS parser checks. Existing `Scanner` defaults stay unchanged.
 - SDK scanning is offline. CLI scanning normally also validates credentials;
   use `--no-validate` when comparing detection alone.
+- SDK `Revoker.prepare()` accepts an exact rule ID/name or a deterministic ID
+  family through `Rules.resolve()`. This is separate from CLI selector/legacy-alias
+  resolution; preparation is offline, validation is explicit, and revocation
+  still requires `confirm=True`.
 - The SDK returns invisible component helpers and defaults to deduplication off.
   Compare only visible findings, and use CLI `--no-dedup` to compare occurrences.
 
@@ -706,6 +712,12 @@ Use a separate process when a hard wall-clock execution limit is required.
 
 ## Validate explicitly
 
+SMTP credential URIs are supported through the shared validator. Separate SMTP
+fields use the [custom rule example](https://github.com/mongodb/kingfisher/blob/main/examples/rules/smtp.yml); see the
+[SMTP validation contract](../rules/overview.md#smtp-authentication) for TLS, port fallback,
+and result classification. The [Python SMTP example](https://github.com/mongodb/kingfisher/blob/main/python/examples/validate_smtp.py)
+loads those rules, retains supporting findings, and reports redacted outcomes.
+
 ```python
 from kingfisher_sdk import Scanner, Validator
 
@@ -744,41 +756,363 @@ An unavailable check is inconclusive; assumed validity and locally derived
 cryptographic material are not proof of live account access. Provider responses
 are intentionally omitted from the Python result.
 
-## Revoke explicitly
+## Prepare revocation without knowing the rule ID
+
+For a credential obtained outside Kingfisher, pass the token or its original
+source text to `Revoker.prepare()`. An optional `provider` selects an exact rule
+ID, exact display name, or family. Omit it to consider the loaded catalog.
 
 ```python
 import os
-from kingfisher_sdk import Revoker
+from kingfisher_sdk import Revoker, Validator
 
-result = Revoker().revoke(
-    "betterleaks.aws-access-token",  # Select an exact ID with revocation support.
-    os.environ["AWS_SECRET_ACCESS_KEY"],
-    variables={"AKID": os.environ["AWS_ACCESS_KEY_ID"]},
-    confirm=True,
-)
-print(result.revoked, result.http_status)
+revoker = Revoker()
+plan = revoker.prepare(os.environ["KINGFISHER_SECRET"], provider="github")
+print(plan.rule_ids)            # All selected loaded GitHub rule IDs.
+print(plan.candidate_rule_ids)  # Detected rules with revocation support.
+
+# Explicit live checks; no revocation occurs here.
+results = plan.validate(Validator(timeout=10, concurrency=4))
+for result in results:
+    print(result.finding.rule_id, result.outcome, result.revocation_ready)
+
+# After inspecting/disambiguating the results, revoke a chosen ready result:
+# revoked = revoker.revoke(chosen_result, confirm=True)
 ```
 
-Check `Rules.metadata()` for the exact supported ID before calling. Revocation
-can disable or delete real credentials. `confirm=True` is mandatory, rules are
-matched exactly, and requests are not automatically retried. HTTP, multi-step
-HTTP, AWS deactivation and GCP service-account key deletion run in-process through
-`kingfisher-scanner::Revoker`, using the same execution helpers as the CLI. Only load trusted rules: revocation sends credentials to the
-configured URLs, including private addresses. Pass supporting credentials and
-endpoint variables explicitly; revocation does not infer them from scan results
-or read the CLI configuration/environment. Variable names are uppercased; avoid
-keys that differ only by case, since they resolve to the same variable. `TOKEN`
-is always the explicit secret.
+`Rules.resolve(provider)` and `prepare(..., provider=provider)` use this precedence:
+
+| Selector | Behavior |
+| --- | --- |
+| Exact loaded ID, e.g. `betterleaks.github-pat` | Selects only that rule, even when other IDs extend it. IDs are case-sensitive at this precedence step. |
+| Exact display name from `Rules.metadata()` | Case-insensitive exact match; duplicate names raise `ValueError` and require an exact ID. |
+| Family, e.g. `github` or `betterleaks.github` | Case-insensitive ID prefix followed by `.`, `-`, `/`, or the end of the ID. `github` matches `github-pat` and `github-oauth`, but excludes `githubish-token`. |
+
+Family matching checks both full IDs and IDs with the `betterleaks.`, `custom.`,
+`kingfisher.` or `veles.secrets/` namespace removed. It is based on ID structure,
+not semantic provider classification or arbitrary substrings: a compact Veles ID
+such as `slackappconfigaccesstoken` requires that selector or its full ID, rather
+than `slack`. Unqualified IDs can also select descendants, so use a full exact ID
+to guarantee one rule. Only loaded rules participate, including the configured
+confidence level. `Rules.resolve()` returns sorted IDs and performs no scanning
+or network work. Unknown selectors raise `ValueError`; fuzzy suggestions are
+advisory only. There is no fuzzy execution, glob matching, or CLI legacy-alias
+resolution. Empty selectors and surrounding whitespace are rejected.
+
+A family considers **every selected detector**, not every provider API. Preparation
+uses a reusable shared native scanner over the loaded catalog, then filters
+findings. `rule_ids` includes selected rules without revocation support;
+`candidate_rule_ids` includes only detected visible rules defining revocation.
+Unsupported rules and nonmatching token formats are not revocation candidates.
+`plan.validate()` checks detected candidates using their complete transitive
+supporting context, preserving native association of captures, companion values
+and windows. Supporting rules may be outside the selected family; helpers are
+not separately checked against provider APIs. Unrelated findings are excluded
+from the validation batch. It returns candidate `ValidationResult`s in
+scan order, including inactive/inconclusive results. Multiple matches remain
+separate results; it never selects the first match or automatically revokes one.
+
+Bare tokens can lack provider context, required companions or a source path
+needed for detection. Use `prepare_from_text(text, path=...)` for logical paths,
+or `prepare_from_file(path)` to read one real source file. Unlike normal scanning,
+preparation retains primary matches missing required companions so it can explain
+which supporting values are needed. It never fabricates context or companion
+findings. Preparation preserves overlapping catalog candidates and neither reads nor
+changes the scanner's cross-call deduplication state; other detection filters still apply. Empty candidates mean no revocable
+match, not proof that the credential is inactive. Empty plans make no provider
+requests. `prepare(data, provider=None, variables=None, timeout=None, cancellation=None)`
+accepts UTF-8 text or bytes and delegates to text preparation. All three methods
+accept the same selector, explicit variables, deadline and cancellation controls.
+The total preparation deadline covers native file reading (when applicable),
+scanning and offline inspection. File reads cannot be preempted; file handles
+close before return. File preparation reads just one file and does not enumerate
+directories or extract archives. The logical `path` argument is not read.
+
+`variables` supplied to preparation are copied and retained for later validation;
+they overlay a supplied validator's variables. Captures and associated components
+retain native precedence, and required detected companions still require source
+context. A supplied `Validator(variables=...)` can configure supporting values and enterprise endpoints;
+`plan.validate(validator=None, timeout=None, cancellation=None)` uses the normal
+validator batch deadline and cancellation behavior. The default validator has
+its own default request limits, independent of the revoker's request timeout.
+
+Plans retain credential and companion findings, omit them from `repr`, and do
+not retain original source text. Release plans/results when finished and avoid
+`dataclasses.asdict()` for reporting. The commented
+[preparation example](https://github.com/mongodb/kingfisher/blob/main/python/examples/prepare_revocation.py) stays offline by
+default; `--validate` contacts providers and `--confirm` authorizes revocation
+only when there is exactly one ready candidate.
+
+## Inspect missing inputs and prepare compound credentials
+
+```python
+from kingfisher_sdk import Revoker, Validator
+
+revoker = Revoker()
+# Preserve paths and nearby AWS access-key IDs/secret keys or other companions.
+plan = revoker.prepare_from_file("application.conf", provider="aws")
+# For in-memory configuration: revoker.prepare_from_text(text, path="application.conf")
+for candidate in plan.candidates:
+    print(candidate.rule_id, candidate.validation_supported, candidate.revocation_supported)
+    for issue in candidate.input_diagnostics:
+        print(issue.stage, issue.code, issue.variable, issue.rule_id, issue.message)
+
+results = plan.validate(Validator(timeout=10, concurrency=4))  # Explicit network work.
+```
+
+`plan.candidates` contains selected visible detections, including rules without
+revocation. Each `RevocationCandidate` exposes its `finding`, capability flags,
+`input_diagnostics`, `missing_inputs`, and `ready_for_validation`. This readiness
+means known validation inputs are present; it does not establish live activity,
+provider permissions, or successful revocation. `candidate_rule_ids` includes
+revocation-capable matches even when they need additional inputs. Plans expose
+`source_path` and `to_dict(redact=True)` for reporting.
+
+Each `InputDiagnostic` has `stage` (`dependency`, `validation`, `revocation`),
+`code`, `variable`, supporting `rule_id` when applicable, and a safe `message`.
+Codes include `missing_dependency`, `ambiguous_dependency`, `missing_variable`,
+`redacted_input`, and `invalid_configuration`. Applications can use the names to
+request an AWS access-key ID, supporting secret, key ID, or endpoint override.
+Diagnostics never contain credential values, actual endpoints, template source,
+or parser/provider response bodies. `candidate.to_dict()` and `plan.to_dict()`
+redact finding secrets by default; raw serialization requires `redact=False`.
+
+`Validator.inspect(findings, timeout=None, cancellation=None)` provides the same
+offline diagnostics for an existing complete same-input finding group, preserving
+order. `Validator.with_variables(mapping)` clones execution policy and the shared
+client with explicit variable overrides, leaving the original unchanged. Inspection
+uses native association windows/defaults and the execution Liquid parser for
+HTTP/gRPC, multipart and multi-step requests; response-derived variables from
+earlier steps are not missing caller inputs. Names are advisory lexical diagnostics
+after a real template-render failure: conditional/fallback expressions can report
+extra names, and Liquid control-flow tags may lack a specific name. Inspection
+does not prove every Betterleaks expression branch or provider-specific constraint.
+
+Prepared validation re-inspects with its actual execution variables. Known missing,
+ambiguous, redacted or invalid validation inputs yield skipped results before
+provider requests. A missing revocation-only input still allows live validation,
+but keeps `revocation_ready` false. Validation results expose snapshot
+`input_diagnostics`; existing `ValidationResult.to_dict()` fields stay unchanged.
+
+## Use custom revocation rules
+
+Custom Kingfisher YAML rules can define `validation:` and `revocation:` using the
+same schema and engine as built-in rules. Supply the rule files or directories
+to `Rules`, then pass that catalog to `Revoker`. The default `builtins=True`
+combines custom and bundled rules; `builtins=False` loads only your custom catalog.
+The SDK does not discover custom rules from CLI configuration or environment variables.
+
+The [complete synthetic rule](https://github.com/mongodb/kingfisher/blob/main/python/examples/demo.yml) defines an authenticated
+`GET /identity` validation and a `DELETE /token` revocation with a 204 status matcher.
+Its revocation block is:
+
+```yaml
+revocation:
+  type: Http
+  content:
+    request:
+      method: DELETE
+      url: '{{ ENDPOINT }}/token'
+      headers: {Authorization: 'Bearer {{ TOKEN }}'}
+      response_matcher:
+        - type: StatusMatch
+          status: [204]
+```
+
+From a checkout, prepare that custom rule offline:
+
+```python
+from kingfisher_sdk import Rules, Revoker, Validator
+
+rules = Rules(["python/examples/demo.yml"], builtins=False)
+revoker = Revoker(rules)
+plan = revoker.prepare("demo_abcd1234efgh5678", provider="acme.python-demo",
+                       variables={"ENDPOINT": "https://credentials.example.com"})
+for candidate in plan.candidates:
+    print(candidate.rule_id, candidate.revocation_supported, candidate.missing_inputs)
+
+# Optional live steps: configure a trusted service implementing the rule's routes,
+# inspect validation results, and explicitly authorize the selected credentials.
+# results = plan.validate(Validator())
+# statuses = revoker.revoke_many(results, confirm=True)
+# Single-result equivalent: revoker.revoke(results[0], confirm=True).
+```
+
+Replace the example rule and endpoint with your service's definitions. The
+[local lifecycle example](https://github.com/mongodb/kingfisher/blob/main/python/examples/local_workflow.py) runs this complete
+custom-rule flow against a loopback mock, including validation and revocation.
+As with built-ins, `provider` accepts a full custom ID, exact display name, or a
+deterministic ID family: `"acme"` selects loaded `acme.*` rules. Preparation and
+scanning use the supplied catalog; result-based single/batch revocation execute
+the original custom action and resolved endpoint/companion values retained by
+validation. The low-level `revoker.revoke("acme.python-demo", secret,
+variables=..., confirm=True)` instead looks up that exact ID in the revoker's catalog.
+
+A custom rule must actually define a revocation action; detection alone does not
+make a credential revocable. Custom Betterleaks TOML can supply detection and
+validation but does not import a revocation action. Use Kingfisher YAML for custom
+revocation flows, and inspect `Rules.metadata()` for each loaded rule's capabilities.
+See [rule authoring](../rules/overview.md) and the [revocation schema guide](../features/token-revocation-support.md).
+
+Both preparation examples accept repeated `--rules-path` and optional `--no-builtins`:
+
+```bash
+uv run --no-sync python python/examples/prepare_revocation.py acme.python-demo --file application.conf --rules-path python/examples/demo.yml --no-builtins
+uv run --no-sync python python/examples/batch_revoke.py application.conf --provider acme --rules-path python/examples/demo.yml --no-builtins
+```
+
+These commands remain offline unless `--validate` or `--confirm` is supplied.
+Pass any required endpoint/companion values through `KINGFISHER_VARIABLES` JSON.
+
+## Revoke explicitly
+
+```python
+from kingfisher_sdk import Rules, Scanner, Validator, Revoker
+
+rules = Rules()
+findings = Scanner(rules).scan_file("application.conf")
+validator = Validator(timeout=10, concurrency=4)
+revoker = Revoker(rules)
+
+# Validate this input's complete findings, including invisible helpers.
+for result in validator.validate(findings):
+    if result.finding.visible and result.revocation_ready:
+        revoked = revoker.revoke(result, confirm=True)
+        print(result.finding.rule_id, revoked.revoked, revoked.http_status)
+```
+
+**This performs real revocations.** Validation alone never revokes. Result-based
+revocation requires a verified active result with resolved revocation inputs and
+`confirm=True`. It uses the original rule and the exact input snapshot retained
+by validation, including captures, companion credentials and explicitly supplied
+endpoint overrides. It does not re-associate components, read credential environment
+variables, or use a different rule from the revoker's catalog. Secret/variable
+overrides are rejected for result-based calls. A manually constructed
+`ValidationResult` cannot be used for this workflow.
+
+For AWS, the access-key finding's matched secret is the access-key ID. Kingfisher
+retains its selected invisible secret-key component and applies the catalog's
+revocation bindings: the secret-access key becomes the revocation secret and the
+access-key ID becomes `AKID`. Callers do not implement dependency windows or
+provider-specific branches. A GCP service-account finding supplies its JSON key;
+not every GCP or other provider credential type supports revocation.
+
+The [scan/validate/revoke example](https://github.com/mongodb/kingfisher/blob/main/python/examples/scan_validate_revoke.py)
+targets AWS, GCP, Hugging Face, GitLab, Slack and GitHub, deduplicates complete
+credential inputs, and requires `--confirm` to revoke. Without that flag it still
+contacts providers for validation, then reports readiness. GitHub's accepted
+revocation request may complete asynchronously.
+
+Each validation result exposes:
+
+- `credential`: a `ResolvedCredential` snapshot, or `None` when input binding was
+  not reached or failed (for example, missing/ambiguous/redacted dependencies).
+- `credential.secret`, `credential.variables`, and `credential.components`: the
+  primary secret, validation variables excluding `TOKEN`, and selected supporting
+  findings (one representative occurrence per dependency), preserving their
+  location/blob/encoding metadata. Variables are read-only;
+  component findings and dictionaries returned by inspection are independent copies.
+- `credential.revocation`: `RevocationInputs(secret, variables)`, or `None` for
+  unsupported or unresolved revocation. Variables include trusted endpoint overrides,
+  captures, dependencies and catalog binding overrides.
+- `revocation_supported`: whether the original rule defines an action;
+  `revocation_ready`: verified active with resolved action inputs;
+  `revocation_reason`: a credential-free validation/binding diagnostic when present.
+  Readiness does not guarantee provider permissions or a successful mutation.
+
+Secret-bearing fields are omitted from `repr`. Both input objects provide
+`to_dict(redact=True)`; raw serialization requires `redact=False`. The existing
+`ValidationResult.to_dict()` shape is unchanged and does not include retained inputs.
+Provider bodies are not retained. Holding results now also retains supporting secrets;
+release the result when finished. `dataclasses.asdict()` is not a reporting API.
+
+The low-level API remains supported:
+`revoker.revoke(rule_id, secret, variables=..., confirm=True)`. It accepts an exact
+rule ID and explicit companion values; it does not infer them from scan results.
+Use `Rules.metadata()` to inspect rule capabilities. Variable names are uppercased;
+avoid keys differing only by case. `TOKEN` always comes from the explicit secret.
+Only load trusted rules: revocation sends credentials to their configured URLs,
+including private addresses. HTTP/multi-step execution, AWS deactivation and GCP
+service-account key deletion run in-process through the shared Rust engine. HTTP
+revocation requests are not retried; AWS retries only definitive IAM throttling responses
+(up to three attempts), never an ambiguous mutation failure.
 
 A `RevocationResult` contains `rule_id`, `revoked`, `http_status`; it never contains
 provider bodies. Missing/unsupported rules and invalid configuration raise
 `ValueError` or `RuntimeError`. A timeout or transport failure may occur after the
-provider applied revocation: inspect provider state before retrying.
+provider applied revocation: inspect provider state before retrying. A mutating HTTP 429
+also has an unknown outcome and is never retried; rate limiting does not prove the action
+was rejected before it was applied.
 `revoke(..., timeout=None, cancellation=None)` also accepts an application
 deadline/cancellation signal and responds to Ctrl-C. Interruption has the same
 unknown-outcome risk and never triggers retries. Failure messages preserve safe
 categories such as timeout, connection, HTTP status, response and I/O without
 including credentials, endpoint URLs or provider bodies.
+
+Exact-ID calls to `Revoker.revoke()` still require a secret and raise `TypeError` when
+it is omitted. Hand-built `ValidationResult`s have no retained native inputs and are skipped
+as `unresolved_inputs` in a batch. A completed provider response is retained when
+interruption arrives during result bookkeeping.
+
+## Revoke a batch explicitly
+
+```python
+from kingfisher_sdk import Revoker, Validator
+
+revoker = Revoker()
+plan = revoker.prepare_from_file("application.conf", provider="github")
+results = plan.validate(Validator(timeout=10, concurrency=4))
+# Inspect/disambiguate overlapping detector candidates before authorizing all.
+statuses = revoker.revoke_many(results, confirm=True, timeout=60)
+for status in statuses:
+    print(status.index, status.rule_id, status.outcome, status.reason, status.duplicate_of)
+```
+
+**This performs real revocations.** `revoke_many(results, confirm=False,
+timeout=None, cancellation=None)` requires `confirm=True`, eagerly materializes
+and type-checks the iterable before mutations, and runs sequentially in input
+order. It accepts native-backed validated snapshots and skips unsupported,
+inactive, unresolved or manually constructed results. No scanning or validation
+occurs inside the batch method. Batch scopes can include results from separately
+validated input groups because each retains its own resolved snapshot.
+
+Deduplication is scoped to this call and compares the original rule ID, exact
+revocation definition, secret and complete action variables. Different AWS pairs,
+endpoint overrides and original action definitions stay distinct. Attempts are
+recorded before submission, so duplicate entries are not retried even after a
+failed or unknown action. Different rule IDs remain distinct: batch authorization
+does not resolve overlapping detector/provider ambiguity. No dedup state persists
+between calls. Caller-owned generator iteration cannot be preempted.
+
+Every returned `BatchRevocationResult` corresponds to an original input index and
+contains `rule_id`, `outcome`, optional `result` (`RevocationResult`), a safe
+`reason` and `duplicate_of` (the earlier input index). Outcomes are:
+
+| Outcome | Meaning |
+| --- | --- |
+| `revoked` | The provider result satisfied the existing revocation matcher; asynchronous provider acceptance has the same semantics as single revocation. |
+| `not_confirmed` | A completed provider response did not satisfy that matcher; it is not proof that no mutation occurred. |
+| `skipped` | No request was submitted because the snapshot was not ready or its inputs were rejected before execution. |
+| `duplicate` | The same target was already attempted earlier in this batch, even if its result was unknown. |
+| `failed` | Configuration or a preparatory lookup failed before a mutating request was submitted. |
+| `unknown` | A submitted action failed/interrupted without a confirmed outcome; inspect provider state before retrying. |
+
+Failures before mutation yield safe `failed` statuses; failures after submission
+yield `unknown`. Processing continues for other targets without retries. The
+constructor timeout still bounds each provider operation. The optional `timeout`
+bounds the entire batch, including
+input materialization and queued actions. Total-deadline expiry, cancellation and
+Ctrl-C stop pending actions and propagate `TimeoutError`, `RuntimeError` or
+`KeyboardInterrupt`. These interruption exceptions carry `.completed` (a tuple
+of credential-free statuses already produced) and `.pending_indices` (unattempted
+input indices). An interrupted in-flight request is recorded as `unknown` in
+`.completed`; cancellation cannot roll back a provider mutation. Do not retry
+unknown actions automatically. Batch statuses are safe to serialize with
+`dataclasses.asdict()`; plans and credential snapshots are not.
+
+The [batch example](https://github.com/mongodb/kingfisher/blob/main/python/examples/batch_revoke.py) prepares files and reports
+diagnostics offline by default. `--validate` checks live and `--confirm` authorizes
+all ready, unambiguous snapshots while preserving interruption outcomes.
 
 ## Runnable examples
 
@@ -811,9 +1145,19 @@ program, and the example files are also included in the source distribution.
   supports custom rules, trusted JSON supporting variables, YAML HTTP response
   limits, request timeout/concurrency/retries and report filters.
   Scan controls do not cancel validation or revocation.
+- [Scan, validate and revoke six providers](https://github.com/mongodb/kingfisher/blob/main/python/examples/scan_validate_revoke.py):
+  `uv run --no-sync python python/examples/scan_validate_revoke.py path/to/file --confirm`
+  uses only scanned credentials and retained validation inputs; omit `--confirm`
+  to report validation and readiness without revoking.
 - [Explicit live revocation](https://github.com/mongodb/kingfisher/blob/main/python/examples/revoke.py):
   `uv run --no-sync python python/examples/revoke.py EXACT_RULE_ID --confirm`
   reads `KINGFISHER_SECRET` and optional JSON `KINGFISHER_VARIABLES` from the environment.
+- [Prepare using an exact rule or provider family](https://github.com/mongodb/kingfisher/blob/main/python/examples/prepare_revocation.py):
+  `uv run --no-sync python python/examples/prepare_revocation.py github`
+  reads `KINGFISHER_SECRET` or `--file`; accepts custom `--rules-path`/`--no-builtins`.
+- [Prepare a file, inspect inputs and revoke a batch](https://github.com/mongodb/kingfisher/blob/main/python/examples/batch_revoke.py):
+  `uv run --no-sync python python/examples/batch_revoke.py application.conf --provider github`
+  accepts custom `--rules-path`/`--no-builtins` and optional JSON `KINGFISHER_VARIABLES`.
 - [Complete local lifecycle](https://github.com/mongodb/kingfisher/blob/main/python/examples/local_workflow.py), using a
   [synthetic rule](https://github.com/mongodb/kingfisher/blob/main/python/examples/demo.yml):
   `uv run --no-sync python python/examples/local_workflow.py`.

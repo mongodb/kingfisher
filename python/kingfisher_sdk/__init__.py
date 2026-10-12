@@ -10,10 +10,10 @@ from .rules import Rules
 from .scanner import CancellationToken, Scanner, ScanResult, DetectionScanner, DetectionPolicy
 from .inputs import ScanInput, filesystem, git_history, expand_archives, expand_content
 from .git import GitScope, GitInput, GitCommit, GitSignature, GitInputWarning, git_inputs
-from .validation import Validator, ValidationResult
-from .revocation import Revoker, RevocationResult
+from .validation import Validator, ValidationResult, ResolvedCredential, RevocationInputs, InputDiagnostic
+from .revocation import Revoker, RevocationResult, RevocationPlan, RevocationCandidate, BatchRevocationResult
 
 __all__ = ["__version__", "Finding", "shannon_entropy", "Rules", "Scanner", "CancellationToken",
            "ScanInput", "ScanResult", "filesystem", "git_history", "expand_archives",
            "DetectionScanner", "DetectionPolicy", "expand_content", "GitScope", "GitInput", "GitCommit", "GitSignature", "GitInputWarning", "git_inputs",
-           "Validator", "ValidationResult", "Revoker", "RevocationResult"]
+           "Validator", "ValidationResult", "ResolvedCredential", "RevocationInputs", "InputDiagnostic", "Revoker", "RevocationResult", "RevocationPlan", "RevocationCandidate", "BatchRevocationResult"]
