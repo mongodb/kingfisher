@@ -488,42 +488,93 @@ rules:
 
     #[test]
     fn validate_no_builtins_with_custom_rule() {
+        use std::sync::Arc;
+
+        use rcgen::{CertifiedKey, generate_simple_self_signed};
+        use rustls::{ServerConfig, ServerConnection, StreamOwned, pki_types::PrivatePkcs8KeyDer};
+
         let tmp = TempDir::new().unwrap();
+        let CertifiedKey { cert, signing_key } =
+            generate_simple_self_signed(vec!["localhost".into()]).unwrap();
+        let config = ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::aws_lc_rs::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![cert.der().clone()],
+            PrivatePkcs8KeyDer::from(signing_key.serialize_der()).into(),
+        )
+        .unwrap();
+        let config = Arc::new(config);
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        // A hostname also exercises Tokio's blocking DNS worker before shutdown.
+        let address = format!("localhost:{}", listener.local_addr().unwrap().port());
+        const ATTEMPTS: usize = 8;
+        let server = thread::spawn(move || {
+            for _ in 0..ATTEMPTS {
+                let (socket, _) = listener.accept().unwrap();
+                socket.set_read_timeout(Some(std::time::Duration::from_secs(10))).unwrap();
+                let mut stream =
+                    StreamOwned::new(ServerConnection::new(config.clone()).unwrap(), socket);
+                let mut request = [0_u8; 4096];
+                assert!(stream.read(&mut request).unwrap() > 0);
+                stream
+                    .write_all(
+                        b"HTTP/1.1 401 Unauthorized\r\nContent-Length: 0\r\nConnection: close\r\n\r\n",
+                    )
+                    .unwrap();
+            }
+        });
         fs::write(
             tmp.path().join("custom_rule.yml"),
-            r#"
+            format!(
+                r#"
 rules:
   - name: Custom HTTP Rule
     id: test.custom.http
-    pattern: "custom_[a-z0-9]{8}"
+    pattern: "custom_[a-z0-9]{{8}}"
     validation:
       type: Http
       content:
         request:
           method: GET
-          url: "https://httpbin.org/status/401"
+          url: "https://{address}/validate"
           response_matcher:
             - status:
                 - 200
               type: StatusMatch
-"#,
+"#
+            ),
         )
         .unwrap();
 
-        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
-            .args([
-                "validate",
-                "--rule",
-                "test.custom.http",
-                "custom_12345678",
-                "--rules-path",
-                tmp.path().to_str().unwrap(),
-                "--no-builtins",
-                "--no-update-check",
-            ])
-            .assert()
-            .code(predicates::function::function(|code: &i32| *code == 0 || *code == 1))
-            .stdout(contains("Custom HTTP Rule"));
+        // Exercise repeated nonzero exits after HTTP work. Exiting directly from
+        // the runtime thread could crash during Windows allocator teardown.
+        for _ in 0..ATTEMPTS {
+            Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+                .args([
+                    "validate",
+                    "--rule",
+                    "test.custom.http",
+                    "custom_12345678",
+                    "--allow-internal-ips",
+                    "--tls-mode",
+                    "lax",
+                    "--retries",
+                    "0",
+                    "--timeout",
+                    "10",
+                    "--rules-path",
+                ])
+                .arg(tmp.path())
+                .args(["--no-builtins", "--no-update-check"])
+                .assert()
+                .code(1)
+                .stdout(contains("Custom HTTP Rule").and(contains("INVALID")).and(contains("401")));
+        }
+        server.join().unwrap();
     }
 
     #[test]

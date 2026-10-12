@@ -255,6 +255,7 @@ endif
 
 # Keep CMake/Python for other native dependencies (including AWS-LC).
 # Install Vectorscan source dependencies only when explicitly requested.
+# Scope MinGW compilers to the target; host build dependencies can use MSVC.
 # Windows x64 build path for MSYS2/MinGW (GNU toolchain + published Vectorscan archive)
 windows-x64: require-windows-host prepare-release-notices
 	@bash -eu -o pipefail -c '\
@@ -315,7 +316,7 @@ windows-x64: require-windows-host prepare-release-notices
 	    exit 1; \
 	  fi; \
 	  cd "$$repo_root"; \
-	  export CC=gcc CXX=g++; \
+	  export CC_x86_64_pc_windows_gnu=gcc CXX_x86_64_pc_windows_gnu=g++; \
 	  export CMAKE_GENERATOR="MinGW Makefiles"; \
 	  export LIBRARY_PATH="/mingw64/lib:$${LIBRARY_PATH:-}"; \
 	  export CPATH="/mingw64/include:$${CPATH:-}"; \
@@ -407,7 +408,7 @@ windows-arm64: require-windows-host prepare-release-notices
 	    exit 1; \
 	  fi; \
 	  cd "$$repo_root"; \
-	  export CC=clang CXX=clang++; \
+	  export CC_aarch64_pc_windows_gnullvm=clang CXX_aarch64_pc_windows_gnullvm=clang++; \
 	  export CMAKE_GENERATOR="MinGW Makefiles"; \
 	  export LIBRARY_PATH="/clangarm64/lib:$${LIBRARY_PATH:-}"; \
 	  export CPATH="/clangarm64/include:$${CPATH:-}"; \
@@ -440,7 +441,7 @@ windows-test-x64: require-windows-host
 	    *) echo "Run this target from an MSYS2 MinGW64 shell."; exit 1 ;; \
 	  esac; \
 	  if [ "$$target_triple" = "x86_64-pc-windows-gnu" ]; then \
-	    export CC=gcc CXX=g++; \
+	    export CC_x86_64_pc_windows_gnu=gcc CXX_x86_64_pc_windows_gnu=g++; \
 	  fi; \
 	  if ! command -v cargo >/dev/null 2>&1 && [ -n "$${USERPROFILE:-}" ]; then \
 	    cargo_home_candidate="$$(cygpath -u "$${USERPROFILE}")/.cargo/bin"; \
@@ -474,7 +475,7 @@ windows-test-arm64: require-windows-host
 	    MINGW64|MSYS) export PATH=/clangarm64/bin:$$PATH; toolchain_root=/clangarm64; target_triple=aarch64-pc-windows-gnullvm ;; \
 	    *) echo "Run this target from an MSYS2 CLANGARM64 shell."; exit 1 ;; \
 	  esac; \
-	  export CC=clang CXX=clang++; \
+	  export CC_aarch64_pc_windows_gnullvm=clang CXX_aarch64_pc_windows_gnullvm=clang++; \
 	  if ! command -v cargo >/dev/null 2>&1 && [ -n "$${USERPROFILE:-}" ]; then \
 	    cargo_home_candidate="$$(cygpath -u "$${USERPROFILE}")/.cargo/bin"; \
 	    if [ -d "$$cargo_home_candidate" ]; then \
