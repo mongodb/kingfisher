@@ -49,6 +49,31 @@ use std::alloc::System;
 #[global_allocator]
 static GLOBAL: System = System;
 
+#[cfg(all(test, target_os = "linux"))]
+mod allocator_startup_tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static PREINIT_COMPLETED: AtomicBool = AtomicBool::new(false);
+
+    unsafe extern "C" fn free_null_before_initializers() {
+        // glibc can call free(NULL) before mimalloc's constructor runs (#549).
+        // Keep the call from being optimized away, even in release tests.
+        unsafe { libc::free(std::hint::black_box(std::ptr::null_mut())) };
+        PREINIT_COMPLETED.store(true, Ordering::Relaxed);
+    }
+
+    // ELF preinit runs before executable and shared-library constructors. This
+    // exercises the binary's real global allocator even with an older glibc.
+    #[used]
+    #[unsafe(link_section = ".preinit_array")]
+    static PREINIT: unsafe extern "C" fn() = free_null_before_initializers;
+
+    #[test]
+    fn libc_free_null_is_safe_before_process_initializers() {
+        assert!(PREINIT_COMPLETED.load(Ordering::Relaxed));
+    }
+}
+
 use std::{
     io::{IsTerminal, Read, Write},
     path::PathBuf,

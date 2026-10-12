@@ -18,7 +18,7 @@
   "bundle_format": "gzip / KFRULES v1 / converted YAML",
   "generator_input_sha256": {
     "Cargo.lock": "6de2af4220448f37d845d6cc3c1a1da40c3d7b0b43cde9a691ca3d166e90c963",
-    "Cargo.toml": "628f8697b266ae3a723681c77b3b33ae2a03717b105602ca391636413d866541",
+    "Cargo.toml": "8726362132910699220f493bce23ceada6e24badfbb4d583ea974426a228273a",
     "LICENSE": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
     "crates/kingfisher-rules/build_support/betterleaks.rs": "16757d74726e5e829007269fdfc158632f11db02a586a31279ca1356b20b9d8b",
     "crates/kingfisher-rules/build_support/builtin_docs.rs": "3edb2b444acfb2a7ade1ba7f6e1a3cbac14e6a743e01156293683fcdb4a77225",

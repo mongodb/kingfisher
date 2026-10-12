@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 
 - Fixed crates.io publication by bumping `kingfisher-rules` to 1.2.1 for the regex confirmation changes shipped in v2.12.0 and updating the CLI and scanner dependency requirements. The unchanged core remains at 1.0.3, and the unpublished scanner release remains at 1.4.0.
 - Fixed rejection of GitHub usernames ending in `-` for `--user` and `--user-file`. [#547](https://github.com/mongodb/kingfisher/issues/547)
+- Fixed startup segfaults in dynamically linked Linux builds, including nixpkgs with glibc 2.44, by disabling mimalloc's native allocator overrides while retaining it for Rust allocations. Added a regression test for `free(NULL)` before process initialization. [#549](https://github.com/mongodb/kingfisher/issues/549)
 
 ## [v2.12.0]
 

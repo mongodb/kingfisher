@@ -256,7 +256,9 @@ quick-xml = { version = "0.41.0", features = ["serde", "serialize"] }
 rustls = "0.23.43"
 tokio-postgres-rustls = "0.14.0"
 rustls-native-certs = "0.8.4"
-mimalloc = { version = "0.1.52", features = ["override"] }
+# Keep native libraries on their allocator: interposing malloc/free can run mimalloc
+# before initialization (for example, glibc's free(NULL) during C++ startup).
+mimalloc = "0.1.52"
 thread_local = "1.1.10"
 uuid = "1.26.0"
 rand = "0.10.2"
