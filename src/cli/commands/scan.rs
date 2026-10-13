@@ -542,7 +542,6 @@ fn load_provider_users(
     fn is_valid_github_username(user: &str) -> bool {
         user.len() <= 39
             && !user.starts_with('-')
-            && !user.ends_with('-')
             // Enterprise Managed Users include an underscore before their shortcode.
             && user.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_'))
     }

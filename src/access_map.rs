@@ -500,6 +500,15 @@ pub struct AccessProbeEvidence {
     /// Stable provider reason code or a redacted transport classification.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Region in which the method was exercised, when the API is regional.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub region: Option<String>,
+    /// Resource ARN or identifier targeted by this method, when applicable.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resource: Option<String>,
+    /// Allowlisted provider status fields; never response bodies or error messages.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub attributes: BTreeMap<String, String>,
 }
 
 /// Permissions and resource scopes added by a role reachable through an identity transition.
@@ -1443,6 +1452,7 @@ mod tests {
                     status: "restricted".into(),
                     http_status: Some(403),
                     reason: Some("API_KEY_SERVICE_BLOCKED".into()),
+                    ..AccessProbeEvidence::default()
                 }],
                 ..AuthorizationEvidence::default()
             }),
@@ -1454,5 +1464,8 @@ mod tests {
         assert_eq!(probe["service"], "translate.googleapis.com");
         assert_eq!(probe["status"], "restricted");
         assert_eq!(probe["http_status"], 403);
+        assert!(probe.get("region").is_none());
+        assert!(probe.get("resource").is_none());
+        assert!(probe.get("attributes").is_none());
     }
 }

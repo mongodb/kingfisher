@@ -5974,7 +5974,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         evidence.paths = mergeUnique(firstEvidence && firstEvidence.paths, secondEvidence && secondEvidence.paths, (path) => JSON.stringify(path));
         evidence.role_impacts = mergeUnique(firstEvidence && firstEvidence.role_impacts, secondEvidence && secondEvidence.role_impacts, (impact) => JSON.stringify(impact));
         evidence.hierarchy = mergeUnique(firstEvidence && firstEvidence.hierarchy, secondEvidence && secondEvidence.hierarchy, (scope) => (scope.kind || "") + ":" + (scope.id || ""));
-        evidence.probes = mergeUnique(firstEvidence && firstEvidence.probes, secondEvidence && secondEvidence.probes, (probe) => (probe.service || "") + ":" + (probe.method || ""));
+        evidence.probes = mergeUnique(firstEvidence && firstEvidence.probes, secondEvidence && secondEvidence.probes, (probe) => JSON.stringify([probe.service, probe.method, probe.region, probe.resource, probe.status, probe.http_status, probe.reason, probe.attributes]));
         evidence.limitations = mergeUnique(firstEvidence && firstEvidence.limitations, secondEvidence && secondEvidence.limitations, (value) => String(value));
         merged.provider_metadata.authorization_evidence = evidence;
       }
@@ -9922,7 +9922,9 @@ function createFindingFilters(container, fields, onChange, onClear) {
           row.className = "token-field";
           const httpStatus = probe.http_status ? " · HTTP " + probe.http_status : "";
           const reason = probe.reason ? " · " + probe.reason : "";
-          row.textContent = "Probe [" + (probe.status || "inconclusive") + "]: " + (probe.service || "unknown service") + " · " + (probe.method || "unknown method") + httpStatus + reason;
+          const scope = [probe.region, probe.resource].filter(Boolean).map((value) => " · " + value).join("");
+          const attributes = Object.entries(probe.attributes || {}).map(([key, value]) => " · " + key + ": " + value).join("");
+          row.textContent = "Probe [" + (probe.status || "inconclusive") + "]: " + (probe.service || "unknown service") + " · " + (probe.method || "unknown method") + scope + httpStatus + reason + attributes;
           evidenceSection.appendChild(row);
         });
 

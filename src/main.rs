@@ -49,6 +49,31 @@ use std::alloc::System;
 #[global_allocator]
 static GLOBAL: System = System;
 
+#[cfg(all(test, target_os = "linux"))]
+mod allocator_startup_tests {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static PREINIT_COMPLETED: AtomicBool = AtomicBool::new(false);
+
+    unsafe extern "C" fn free_null_before_initializers() {
+        // glibc can call free(NULL) before mimalloc's constructor runs (#549).
+        // Keep the call from being optimized away, even in release tests.
+        unsafe { libc::free(std::hint::black_box(std::ptr::null_mut())) };
+        PREINIT_COMPLETED.store(true, Ordering::Relaxed);
+    }
+
+    // ELF preinit runs before executable and shared-library constructors. This
+    // exercises the binary's real global allocator even with an older glibc.
+    #[used]
+    #[unsafe(link_section = ".preinit_array")]
+    static PREINIT: unsafe extern "C" fn() = free_null_before_initializers;
+
+    #[test]
+    fn libc_free_null_is_safe_before_process_initializers() {
+        assert!(PREINIT_COMPLETED.load(Ordering::Relaxed));
+    }
+}
+
 use std::{
     io::{IsTerminal, Read, Write},
     path::PathBuf,
@@ -108,7 +133,7 @@ fn scan_tempdir() -> std::io::Result<TempDir> {
     builder.tempdir()
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> anyhow::Result<std::process::ExitCode> {
     raise_nproc_soft_limit();
     const STACK_SIZE: usize = 32 * 1024 * 1024; // 32 MiB
     // Clap's derived parser can overflow Windows' main-thread stack in debug builds.
@@ -132,7 +157,8 @@ fn main() -> anyhow::Result<()> {
             wizard.target.clone(),
             wizard.report.clone(),
             kingfisher::wizard::global_values(&matches),
-        );
+        )
+        .map(|()| std::process::ExitCode::SUCCESS);
         #[cfg(not(feature = "gui"))]
         {
             let _ = wizard;
@@ -153,15 +179,16 @@ fn main() -> anyhow::Result<()> {
         && error.is::<kingfisher::scanner::NoScanInputsError>()
     {
         eprintln!("Error: {error:?}");
-        std::process::exit(3);
+        return Ok(std::process::ExitCode::from(3));
     }
     result
 }
 
-/// Outcome of `async_main`. Used to signal that the runtime should be torn down
-/// and the process should re-exec into a freshly self-updated binary.
+/// Outcome of `async_main`. Command exit codes must reach the OS main thread
+/// after the runtime and worker threads have shut down, before allocator teardown.
 enum AsyncMainOutcome {
     Done,
+    Exit(u8),
     Reexec,
 }
 
@@ -191,7 +218,7 @@ fn raise_nproc_soft_limit() {
 #[cfg(not(unix))]
 fn raise_nproc_soft_limit() {}
 
-fn run(args: CommandLineArgs, matches: clap::ArgMatches) -> anyhow::Result<()> {
+fn run(args: CommandLineArgs, matches: clap::ArgMatches) -> anyhow::Result<std::process::ExitCode> {
     // Install the AWS-LC Rustls provider before initializing any TLS clients.
     match rustls::crypto::aws_lc_rs::default_provider().install_default() {
         Ok(()) => {}
@@ -230,14 +257,13 @@ fn run(args: CommandLineArgs, matches: clap::ArgMatches) -> anyhow::Result<()> {
         .build()
         .context("Failed to create Tokio runtime")?;
     let outcome = runtime.block_on(async_main(args, matches))?;
-    // Drop the Tokio runtime before re-exec so background tasks, file descriptors,
-    // and signal handlers are torn down cleanly. On Unix `exec()` replaces the process
-    // image regardless, but draining the runtime first avoids surprising shutdown
-    // ordering when the re-exec happens to fail.
+    // Drain the runtime before exiting or re-execing. Calling process::exit from
+    // a worker leaves other threads running during Windows CRT/allocator teardown.
     drop(runtime);
 
     match outcome {
-        AsyncMainOutcome::Done => Ok(()),
+        AsyncMainOutcome::Done => Ok(std::process::ExitCode::SUCCESS),
+        AsyncMainOutcome::Exit(code) => Ok(std::process::ExitCode::from(code)),
         AsyncMainOutcome::Reexec => {
             // On Unix, a successful exec() never returns; on Windows, reexec_with_new_binary
             // calls process::exit. We only reach here if the re-exec failed before transferring
@@ -251,7 +277,7 @@ fn run(args: CommandLineArgs, matches: clap::ArgMatches) -> anyhow::Result<()> {
                 );
                 std::process::exit(1);
             }
-            Ok(())
+            Ok(std::process::ExitCode::SUCCESS)
         }
     }
 }
@@ -701,7 +727,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
             if direct_validate::any_actionable(&results) {
                 Ok(AsyncMainOutcome::Done)
             } else {
-                std::process::exit(1);
+                Ok(AsyncMainOutcome::Exit(1))
             }
         }
         Command::Revoke(revoke_args) => {
@@ -713,7 +739,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
             if direct_revoke::any_detailed_revoked(&results) {
                 Ok(AsyncMainOutcome::Done)
             } else {
-                std::process::exit(1);
+                Ok(AsyncMainOutcome::Exit(1))
             }
         }
         command => {
@@ -906,7 +932,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                             eprintln!("Failed to close temporary directory: {}", e);
                         }
 
-                        std::process::exit(exit_code);
+                        return Ok(AsyncMainOutcome::Exit(exit_code as u8));
                     }
                     ScanOperation::ListRepositories(list_command) => match list_command {
                         ListRepositoriesCommand::Github { api_url, specifiers } => {

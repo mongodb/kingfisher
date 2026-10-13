@@ -106,11 +106,14 @@ jobs:
           # Keep rustc and native CMake builds within hosted-runner memory limits.
           CARGO_BUILD_JOBS: '2'
           CMAKE_BUILD_PARALLEL_LEVEL: '2'
-          CC: ${{ matrix.cc }}
-          CXX: ${{ matrix.cxx }}
+          SDK_CC: ${{ matrix.cc }}
+          SDK_CXX: ${{ matrix.cxx }}
           CMAKE_GENERATOR: MinGW Makefiles
           SDK_TARGET: ${{ matrix.target }}
         run: |
+          # Host build dependencies use Rust's MSVC host toolchain.
+          native_target="${SDK_TARGET//-/_}"
+          export "CC_$native_target=$SDK_CC" "CXX_$native_target=$SDK_CXX"
           # Vectorscan adds the MSYS2 runtime library directory to rustc's
           # search path. Its Python import libraries shadow PyO3's generated
           # python3.dll import library and link the wheel to libpython3.dll.

@@ -2,6 +2,15 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.13.0]
+
+- Refreshed workspace Cargo dependencies to compatible releases and applied the AWS SDK's size-focused release setting to Bedrock.
+- Added bounded, read-only Amazon Bedrock discovery to AWS blast-radius mapping: regional foundation-model and inference-profile visibility, per-model authorization/entitlement/agreement/region availability sampled across providers, and explicit partial-permission, timeout, and coverage limits. JSON and both HTML viewers retain region/model context without invoking or enabling models; the standalone graph uses model IDs as labels with full ARNs in the details.
+
+- Fixed crates.io publication by bumping `kingfisher-rules` to 1.2.1 for the regex confirmation changes shipped in v2.12.0 and updating the CLI and scanner dependency requirements. The unchanged core remains at 1.0.3, and the unpublished scanner release remains at 1.4.0.
+- Fixed rejection of GitHub usernames ending in `-` for `--user` and `--user-file`. [#547](https://github.com/mongodb/kingfisher/issues/547)
+- Fixed startup segfaults in dynamically linked Linux builds, including nixpkgs with glibc 2.44, by disabling mimalloc's native allocator overrides while retaining it for Rust allocations. Added a regression test for `free(NULL)` before process initialization. [#549](https://github.com/mongodb/kingfisher/issues/549)
+
 ## [v2.12.0]
 
 - Avoided redundant regex confirmation widening in the CLI and SDK while preserving matches when iterator alignment shifts. [#545](https://github.com/mongodb/kingfisher/pull/545)

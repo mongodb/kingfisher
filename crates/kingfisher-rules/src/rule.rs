@@ -10,11 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, anyhow};
-use liquid::{
-    ParserBuilder,
-    model::{KString, Value},
-    object,
-};
+use liquid::{ParserBuilder, model::Value, object};
 use regex::Regex;
 use schemars::{JsonSchema, Schema, SchemaGenerator};
 use serde::{Deserialize, Serialize};
@@ -511,11 +507,8 @@ impl PatternRequirements {
             for name in ctx.regex.capture_names().flatten() {
                 if let Some(capture) = ctx.captures.name(name) {
                     let value = String::from_utf8_lossy(capture.as_bytes()).to_string();
-                    globals.insert(KString::from_ref(name), Value::scalar(value.clone()));
-                    globals.insert(
-                        KString::from_string(name.to_ascii_uppercase()),
-                        Value::scalar(value),
-                    );
+                    globals.insert(name.to_owned().into(), Value::scalar(value.clone()));
+                    globals.insert(name.to_ascii_uppercase().into(), Value::scalar(value));
                 }
             }
 

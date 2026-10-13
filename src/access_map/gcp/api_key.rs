@@ -333,6 +333,7 @@ fn build_access_map(results: Vec<ProbeResult>) -> Result<AccessMapResult> {
             status: result.status.as_str().into(),
             http_status: result.http_status.map(|status| status.as_u16()),
             reason: result.reason.clone(),
+            ..AccessProbeEvidence::default()
         })
         .collect();
     let mut limitations = vec![

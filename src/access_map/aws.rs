@@ -1,9 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::future::Future;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use aws_config::{BehaviorVersion, SdkConfig};
 use aws_credential_types::Credentials;
+use aws_sdk_bedrock::Client as BedrockClient;
 use aws_sdk_dynamodb::Client as DynamoClient;
 use aws_sdk_ec2::Client as Ec2Client;
 use aws_sdk_ecr::Client as EcrClient;
@@ -21,6 +24,7 @@ use aws_sdk_sns::Client as SnsClient;
 use aws_sdk_sqs::Client as SqsClient;
 use aws_sdk_ssm::Client as SsmClient;
 use aws_sdk_sts::Client as StsClient;
+use aws_smithy_types::retry::RetryConfig;
 use percent_encoding::percent_decode_str;
 use serde_json::Value;
 use tracing::warn;
@@ -28,10 +32,11 @@ use tracing::warn;
 use crate::cli::commands::access_map::AccessMapArgs;
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, AuthorizationEvidence, AuthorizationGrant,
-    AuthorizationHop, AuthorizationPath, AuthorizationStatement, HierarchyScope, PermissionSummary,
-    PolicyEvidence, PrincipalEvidence, ProviderMetadata, ResourceExposure, RoleBinding, RoleImpact,
-    Severity, build_default_account_resource, build_recommendations,
+    AccessMapResult, AccessProbeEvidence, AccessSummary, AccessTokenDetails, AuthorizationEvidence,
+    AuthorizationGrant, AuthorizationHop, AuthorizationPath, AuthorizationStatement,
+    HierarchyScope, PermissionSummary, PolicyEvidence, PrincipalEvidence, ProviderMetadata,
+    ResourceExposure, RoleBinding, RoleImpact, Severity, build_default_account_resource,
+    build_recommendations,
 };
 
 const MAX_DISCOVERED_ROLES: usize = 2_000;
@@ -41,6 +46,11 @@ const MAX_PATH_ROLE_POLICY_EXPANSIONS: usize = 64;
 const MAX_ROLE_RESOURCE_GRANTS: usize = 512;
 const MAX_POLICY_EVIDENCE: usize = 512;
 const MAX_POLICY_STATEMENTS: usize = 2_000;
+const MAX_BEDROCK_MODELS: usize = 100;
+const MAX_BEDROCK_PROFILES: usize = 100;
+const MAX_BEDROCK_PROFILE_PAGES: usize = 2;
+const MAX_BEDROCK_AVAILABILITY_CHECKS: usize = 8;
+const BEDROCK_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
     let config = load_config_from_path(args.credential_path.as_deref()).await?;
@@ -150,6 +160,15 @@ async fn map_access_with_config(config: SdkConfig) -> Result<AccessMapResult> {
         risk_notes.push(format!("AWS enumeration failed: {err}"));
         Vec::new()
     });
+    resources.extend(
+        enumerate_bedrock(
+            &config,
+            &direct_permissions,
+            &mut authorization_evidence,
+            &mut risk_notes,
+        )
+        .await,
+    );
     resources.extend(role_resource_exposures(&role_discovery.role_impacts));
     roles.extend(role_discovery.role_impacts.iter().map(|impact| RoleBinding {
         name: impact.role.clone(),
@@ -2805,6 +2824,345 @@ async fn enumerate_resources(
     Ok(resources)
 }
 
+/// Bedrock also supports bearer tokens. Resolve only SigV4 so ambient tokens cannot
+/// change which credential is being mapped, even when the SDK credentials provider fails.
+#[derive(Debug)]
+struct BedrockSigV4;
+
+impl aws_sdk_bedrock::config::auth::ResolveAuthScheme for BedrockSigV4 {
+    fn resolve_auth_scheme<'a>(
+        &'a self,
+        _params: &'a aws_sdk_bedrock::config::auth::Params,
+        _cfg: &'a aws_smithy_types::config_bag::ConfigBag,
+        _runtime_components: &'a aws_smithy_runtime_api::client::runtime_components::RuntimeComponents,
+    ) -> aws_smithy_runtime_api::client::auth::AuthSchemeOptionsFuture<'a> {
+        use aws_smithy_runtime_api::client::auth::{AuthSchemeOption, AuthSchemeOptionsFuture};
+
+        AuthSchemeOptionsFuture::ready(Ok(vec![
+            AuthSchemeOption::builder()
+                .scheme_id("sigv4".into())
+                .build()
+                .expect("SigV4 scheme ID is set"),
+        ]))
+    }
+}
+
+async fn enumerate_bedrock(
+    config: &SdkConfig,
+    permissions: &PermissionSummary,
+    evidence: &mut AuthorizationEvidence,
+    risk_notes: &mut Vec<String>,
+) -> Vec<ResourceExposure> {
+    let Some(region) = config.region() else {
+        push_unique_note(
+            &mut evidence.limitations,
+            "Bedrock discovery skipped because no AWS region is configured.".into(),
+        );
+        return Vec::new();
+    };
+    let client = BedrockClient::from_conf(
+        aws_sdk_bedrock::config::Builder::from(config)
+            .auth_scheme_resolver(BedrockSigV4)
+            .retry_config(RetryConfig::disabled())
+            .build(),
+    );
+    let resources =
+        discover_bedrock(&client, region.as_ref(), BEDROCK_REQUEST_TIMEOUT, evidence).await;
+
+    if permissions_for_prefix(permissions, "bedrock.").iter().any(|permission| {
+        wildcard_matches(permission, "bedrock.invokemodel")
+            || wildcard_matches(permission, "bedrock.invokemodelwithresponsestream")
+    }) {
+        push_unique_note(
+            risk_notes,
+            "Visible IAM policy summaries include potential Bedrock inference permissions; model/resource scope, conditions, and other policy restrictions still apply. Invocation was not tested.".into(),
+        );
+    }
+    resources
+}
+
+/// Only control-plane GET methods are used. Each request gets one attempt and a
+/// deadline; catalog visibility and availability never become an invocation grant.
+async fn discover_bedrock(
+    client: &BedrockClient,
+    region: &str,
+    request_timeout: Duration,
+    evidence: &mut AuthorizationEvidence,
+) -> Vec<ResourceExposure> {
+    let mut resources = Vec::new();
+    let mut models = BTreeMap::new();
+    push_unique_note(
+        &mut evidence.limitations,
+        format!(
+            "Bedrock discovery covers only {region}. Catalog visibility and provider-reported availability do not prove inference access; no models are invoked or enabled."
+        ),
+    );
+
+    let (catalog, mut probe) = bedrock_probe(
+        client.list_foundation_models().send(),
+        "ListFoundationModels",
+        region,
+        None,
+        request_timeout,
+    )
+    .await;
+    if let Some(catalog) = catalog {
+        let mut summaries: Vec<_> = catalog.model_summaries().iter().collect();
+        summaries.sort_by_key(|model| model.model_id());
+        probe.attributes.insert("model_count".into(), summaries.len().to_string());
+        if summaries.len() > MAX_BEDROCK_MODELS {
+            push_unique_note(
+                &mut evidence.limitations,
+                format!(
+                    "Bedrock foundation-model resources in {region} were limited to {MAX_BEDROCK_MODELS}."
+                ),
+            );
+        }
+        // Availability sampling is independent of the resource display cap.
+        for model in &summaries {
+            models.insert(model.model_id().to_string(), model.model_arn().to_string());
+        }
+        for model in summaries.into_iter().take(MAX_BEDROCK_MODELS) {
+            resources.push(ResourceExposure {
+                resource_type: "bedrock_foundation_model".into(),
+                name: model.model_arn().to_string(),
+                permissions: vec!["bedrock.listfoundationmodels".into()],
+                risk: "medium".into(),
+                reason: format!(
+                    "Foundation model visible in the {region} catalog; inference access unverified"
+                ),
+            });
+        }
+    }
+    record_bedrock_probe(probe, evidence);
+
+    // A denied catalog read must not suppress independent profile discovery.
+    let mut next_token = None;
+    let mut profile_arns = BTreeSet::new();
+    for page in 0..MAX_BEDROCK_PROFILE_PAGES {
+        let remaining = MAX_BEDROCK_PROFILES - profile_arns.len();
+        let (profiles, mut probe) = bedrock_probe(
+            client
+                .list_inference_profiles()
+                .max_results(remaining as i32)
+                .set_next_token(next_token)
+                .send(),
+            "ListInferenceProfiles",
+            region,
+            None,
+            request_timeout,
+        )
+        .await;
+        let Some(profiles) = profiles else {
+            record_bedrock_probe(probe, evidence);
+            break;
+        };
+        probe.attributes.insert(
+            "profile_count".into(),
+            profiles.inference_profile_summaries().len().to_string(),
+        );
+        if profiles.inference_profile_summaries().len() > remaining {
+            push_unique_note(
+                &mut evidence.limitations,
+                format!(
+                    "Bedrock inference-profile resources in {region} were limited to {MAX_BEDROCK_PROFILES}."
+                ),
+            );
+        }
+        record_bedrock_probe(probe, evidence);
+        for profile in profiles.inference_profile_summaries() {
+            if profile_arns.len() >= MAX_BEDROCK_PROFILES {
+                break;
+            }
+            if !profile_arns.insert(profile.inference_profile_arn().to_string()) {
+                continue;
+            }
+            resources.push(ResourceExposure {
+                resource_type: "bedrock_inference_profile".into(),
+                name: profile.inference_profile_arn().to_string(),
+                permissions: vec!["bedrock.listinferenceprofiles".into()],
+                risk: "medium".into(),
+                reason: format!("Inference profile visible in {region} (status: {}); inference access unverified", profile.status().as_str()),
+            });
+            // Profiles may reveal model IDs even when ListFoundationModels is denied.
+            // Do not issue requests in any destination regions of a cross-region profile.
+            for model in profile.models() {
+                if let Some(arn) = model.model_arn()
+                    && arn.split(':').nth(3) == Some(region)
+                    && let Some((_, id)) = arn.split_once(":foundation-model/")
+                {
+                    models.entry(id.to_string()).or_insert_with(|| arn.to_string());
+                }
+            }
+        }
+        next_token = profiles.next_token().map(str::to_string);
+        if next_token.is_none() {
+            break;
+        }
+        if profile_arns.len() >= MAX_BEDROCK_PROFILES || page + 1 == MAX_BEDROCK_PROFILE_PAGES {
+            push_unique_note(
+                &mut evidence.limitations,
+                format!(
+                    "Bedrock inference-profile discovery in {region} was limited to {MAX_BEDROCK_PROFILES} profiles and {MAX_BEDROCK_PROFILE_PAGES} pages."
+                ),
+            );
+            break;
+        }
+    }
+
+    if models.len() > MAX_BEDROCK_AVAILABILITY_CHECKS {
+        push_unique_note(
+            &mut evidence.limitations,
+            format!(
+                "Bedrock model availability in {region} was checked for only {MAX_BEDROCK_AVAILABILITY_CHECKS} of {} discovered model IDs, sampled across provider prefixes; other models may still be usable.",
+                models.len()
+            ),
+        );
+    }
+    for (model_id, arn) in sample_bedrock_models(models) {
+        let (availability, mut probe) = bedrock_probe(
+            client.get_foundation_model_availability().model_id(model_id).send(),
+            "GetFoundationModelAvailability",
+            region,
+            Some(&arn),
+            request_timeout,
+        )
+        .await;
+        if let Some(availability) = availability {
+            // Retain only status fields, never agreement error messages or response bodies.
+            probe.attributes.insert(
+                "authorization_status".into(),
+                availability.authorization_status().as_str().to_string(),
+            );
+            probe.attributes.insert(
+                "entitlement_availability".into(),
+                availability.entitlement_availability().as_str().to_string(),
+            );
+            probe.attributes.insert(
+                "region_availability".into(),
+                availability.region_availability().as_str().to_string(),
+            );
+            if let Some(agreement) = availability.agreement_availability() {
+                probe.attributes.insert(
+                    "agreement_availability".into(),
+                    agreement.status().as_str().to_string(),
+                );
+            }
+        }
+        record_bedrock_probe(probe, evidence);
+    }
+    resources
+}
+
+/// Round-robin across provider prefixes so a large catalog from one provider does
+/// not consume the entire request budget. Both providers and their IDs are sorted.
+fn sample_bedrock_models(models: BTreeMap<String, String>) -> Vec<(String, String)> {
+    let mut providers: BTreeMap<String, Vec<_>> = BTreeMap::new();
+    for (id, arn) in models {
+        let provider = id.split('.').next().unwrap_or(&id).to_string();
+        providers.entry(provider).or_default().push((id, arn));
+    }
+    let mut providers: Vec<_> = providers.into_values().map(Vec::into_iter).collect();
+    let mut sample = Vec::new();
+    while sample.len() < MAX_BEDROCK_AVAILABILITY_CHECKS {
+        let previous_count = sample.len();
+        for provider in &mut providers {
+            if let Some(model) = provider.next() {
+                sample.push(model);
+            }
+            if sample.len() == MAX_BEDROCK_AVAILABILITY_CHECKS {
+                break;
+            }
+        }
+        if sample.len() == previous_count {
+            break;
+        }
+    }
+    sample
+}
+
+async fn bedrock_probe<T, E>(
+    request: impl Future<Output = Result<T, SdkError<E>>>,
+    method: &str,
+    region: &str,
+    resource: Option<&str>,
+    request_timeout: Duration,
+) -> (Option<T>, AccessProbeEvidence)
+where
+    E: ProvideErrorMetadata,
+{
+    let mut probe = AccessProbeEvidence {
+        service: "bedrock".into(),
+        method: method.into(),
+        region: Some(region.into()),
+        resource: resource.map(str::to_string),
+        status: "inconclusive".into(),
+        ..AccessProbeEvidence::default()
+    };
+    match tokio::time::timeout(request_timeout, request).await {
+        Ok(Ok(response)) => {
+            probe.status = "accepted".into();
+            probe.http_status = Some(200);
+            (Some(response), probe)
+        }
+        Ok(Err(error)) => {
+            probe.http_status = error.raw_response().map(|response| response.status().as_u16());
+            let code = error.as_service_error().and_then(ProvideErrorMetadata::code);
+            let (status, reason) = match code {
+                Some("AccessDeniedException" | "AccessDenied" | "UnauthorizedOperation") => {
+                    ("restricted", "AccessDenied")
+                }
+                Some("ExpiredTokenException" | "ExpiredToken") => ("invalid", "ExpiredToken"),
+                Some("InvalidClientTokenId" | "UnrecognizedClientException") => {
+                    ("invalid", "InvalidClientTokenId")
+                }
+                Some("ThrottlingException" | "Throttling" | "TooManyRequestsException") => {
+                    ("inconclusive", "Throttling")
+                }
+                Some("ResourceNotFoundException") => ("inconclusive", "ResourceNotFound"),
+                Some("ValidationException") => ("inconclusive", "ValidationError"),
+                _ if probe.http_status == Some(403) => ("restricted", "AccessDenied"),
+                _ => match error {
+                    SdkError::TimeoutError(_) => ("inconclusive", "Timeout"),
+                    SdkError::DispatchFailure(_) => ("inconclusive", "TransportError"),
+                    SdkError::ConstructionFailure(_) => {
+                        ("inconclusive", "RequestConstructionError")
+                    }
+                    _ => ("inconclusive", "ServiceOrResponseError"),
+                },
+            };
+            probe.status = status.into();
+            probe.reason = Some(reason.into());
+            (None, probe)
+        }
+        Err(_) => {
+            probe.reason = Some("Timeout".into());
+            (None, probe)
+        }
+    }
+}
+
+fn record_bedrock_probe(probe: AccessProbeEvidence, evidence: &mut AuthorizationEvidence) {
+    if probe.status != "accepted" {
+        push_unique_note(
+            &mut evidence.limitations,
+            format!(
+                "Bedrock {} in {}{} was {} ({}); this does not establish whether other Bedrock methods or models are usable.",
+                probe.method,
+                probe.region.as_deref().unwrap_or("unknown-region"),
+                probe
+                    .resource
+                    .as_deref()
+                    .map(|resource| format!(" for {resource}"))
+                    .unwrap_or_default(),
+                probe.status,
+                probe.reason.as_deref().unwrap_or("Unknown"),
+            ),
+        );
+    }
+    evidence.probes.push(probe);
+}
+
 fn aws_resource_arn(
     config: &SdkConfig,
     account_id: Option<&str>,
@@ -3019,6 +3377,461 @@ fn push_unique_note(risk_notes: &mut Vec<String>, note: String) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{body_string_contains, method, path, path_regex, query_param},
+    };
+
+    fn bedrock_test_client(server: &MockServer) -> BedrockClient {
+        BedrockClient::from_conf(
+            aws_sdk_bedrock::Config::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .region(aws_sdk_bedrock::config::Region::new("us-west-2"))
+                .credentials_provider(Credentials::new(
+                    "AKIAEXAMPLE",
+                    "test-secret",
+                    Some("test-session".into()),
+                    None,
+                    "test",
+                ))
+                .bearer_token(aws_sdk_bedrock::config::Token::new("unrelated-token", None))
+                .auth_scheme_resolver(BedrockSigV4)
+                .retry_config(RetryConfig::disabled())
+                .endpoint_url(server.uri())
+                .build(),
+        )
+    }
+
+    fn bedrock_model(id: &str, region: &str) -> Value {
+        json!({"modelId": id, "modelArn": format!("arn:aws:bedrock:{region}::foundation-model/{id}")})
+    }
+
+    fn bedrock_profile(id: &str, models: Vec<Value>) -> Value {
+        json!({
+            "inferenceProfileId": id,
+            "inferenceProfileName": id,
+            "inferenceProfileArn": format!("arn:aws:bedrock:us-west-2:123456789012:inference-profile/{id}"),
+            "status": "ACTIVE",
+            "type": "SYSTEM_DEFINED",
+            "models": models,
+        })
+    }
+
+    fn bedrock_availability(id: &str, authorized: bool) -> Value {
+        json!({
+            "modelId": id,
+            "authorizationStatus": if authorized { "AUTHORIZED" } else { "NOT_AUTHORIZED" },
+            "entitlementAvailability": "AVAILABLE",
+            "regionAvailability": "AVAILABLE",
+            "agreementAvailability": {"status": "AVAILABLE", "errorMessage": "do not retain provider messages"},
+        })
+    }
+
+    #[tokio::test]
+    async fn bedrock_discovery_records_availability_without_inference_grants() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/foundation-models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"modelSummaries": [
+                bedrock_model("amazon.model-b", "us-west-2"), bedrock_model("amazon.model-a", "us-west-2")
+            ]}))).expect(1).mount(&server).await;
+        Mock::given(method("GET")).and(path("/inference-profiles"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"inferenceProfileSummaries": [bedrock_profile("us.amazon.model-a", vec![])]})))
+            .expect(1).mount(&server).await;
+        for (id, authorized) in [("amazon.model-a", true), ("amazon.model-b", false)] {
+            Mock::given(method("GET"))
+                .and(path(format!("/foundation-model-availability/{id}")))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(bedrock_availability(id, authorized)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let mut evidence = AuthorizationEvidence::default();
+        let resources = discover_bedrock(
+            &bedrock_test_client(&server),
+            "us-west-2",
+            BEDROCK_REQUEST_TIMEOUT,
+            &mut evidence,
+        )
+        .await;
+        assert_eq!(resources.len(), 3);
+        assert!(resources.iter().all(|resource| resource.risk == "medium"
+            && resource.permissions.iter().all(|permission| !permission.contains("invoke"))));
+        assert_eq!(evidence.probes.len(), 4);
+        assert!(evidence.probes.iter().all(
+            |probe| probe.status == "accepted" && probe.region.as_deref() == Some("us-west-2")
+        ));
+        assert_eq!(evidence.probes[2].attributes["authorization_status"], "AUTHORIZED");
+        assert_eq!(evidence.probes[3].attributes["authorization_status"], "NOT_AUTHORIZED");
+        assert_eq!(
+            evidence.probes[2].resource.as_deref(),
+            Some("arn:aws:bedrock:us-west-2::foundation-model/amazon.model-a")
+        );
+        let json = serde_json::to_string(&evidence).unwrap();
+        assert!(!json.contains("do not retain"));
+        for request in server.received_requests().await.unwrap() {
+            assert_eq!(request.method, "GET");
+            assert!(
+                request.headers["authorization"]
+                    .to_str()
+                    .unwrap()
+                    .starts_with("AWS4-HMAC-SHA256 Credential=AKIAEXAMPLE/")
+            );
+            assert_eq!(request.headers["x-amz-security-token"], "test-session");
+        }
+    }
+
+    #[tokio::test]
+    async fn bedrock_denied_catalog_preserves_profiles_and_same_region_availability() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/foundation-models"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("x-amzn-errortype", "AccessDeniedException")
+                    .set_body_json(json!({"message": "sensitive provider message"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET")).and(path("/inference-profiles"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"inferenceProfileSummaries": [bedrock_profile("us.amazon.model-a", vec![
+                bedrock_model("amazon.model-a", "us-west-2"), bedrock_model("amazon.model-b", "us-east-1")
+            ])]}))).expect(1).mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/foundation-model-availability/amazon.model-a"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(bedrock_availability("amazon.model-a", true)),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut evidence = AuthorizationEvidence::default();
+        let resources = discover_bedrock(
+            &bedrock_test_client(&server),
+            "us-west-2",
+            BEDROCK_REQUEST_TIMEOUT,
+            &mut evidence,
+        )
+        .await;
+        assert_eq!(resources.len(), 1);
+        assert_eq!(resources[0].resource_type, "bedrock_inference_profile");
+        assert_eq!(evidence.probes[0].status, "restricted");
+        assert_eq!(evidence.probes[0].reason.as_deref(), Some("AccessDenied"));
+        assert_eq!(evidence.probes[2].attributes["authorization_status"], "AUTHORIZED");
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+        assert!(!serde_json::to_string(&evidence).unwrap().contains("sensitive provider message"));
+    }
+
+    #[tokio::test]
+    async fn bedrock_throttling_and_denial_are_partial_outcomes_without_retries() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/foundation-models"))
+            .respond_with(
+                ResponseTemplate::new(429)
+                    .insert_header("x-amzn-errortype", "ThrottlingException")
+                    .set_body_json(json!({"message": "slow down"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/inference-profiles"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("x-amzn-errortype", "AccessDeniedException")
+                    .set_body_json(json!({"message": "denied"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut evidence = AuthorizationEvidence::default();
+        let resources = discover_bedrock(
+            &bedrock_test_client(&server),
+            "us-west-2",
+            BEDROCK_REQUEST_TIMEOUT,
+            &mut evidence,
+        )
+        .await;
+        assert!(resources.is_empty());
+        assert_eq!(evidence.probes.len(), 2);
+        assert_eq!(evidence.probes[0].status, "inconclusive");
+        assert_eq!(evidence.probes[0].http_status, Some(429));
+        assert_eq!(evidence.probes[0].reason.as_deref(), Some("Throttling"));
+        assert_eq!(evidence.probes[1].status, "restricted");
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bedrock_timeout_preserves_independent_discovery() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/foundation-models"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_delay(Duration::from_secs(3))
+                    .set_body_json(json!({"modelSummaries": []})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET")).and(path("/inference-profiles"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"inferenceProfileSummaries": [bedrock_profile("us.amazon.model-a", vec![])]})))
+            .expect(1).mount(&server).await;
+        let mut evidence = AuthorizationEvidence::default();
+        let resources = discover_bedrock(
+            &bedrock_test_client(&server),
+            "us-west-2",
+            Duration::from_secs(1),
+            &mut evidence,
+        )
+        .await;
+        assert_eq!(resources.len(), 1);
+        assert_eq!(evidence.probes[0].status, "inconclusive");
+        assert_eq!(evidence.probes[0].reason.as_deref(), Some("Timeout"));
+        assert_eq!(evidence.probes[1].status, "accepted");
+    }
+
+    #[tokio::test]
+    async fn bedrock_caps_catalog_availability_and_profile_pages() {
+        let server = MockServer::start().await;
+        let models: Vec<_> = (0..MAX_BEDROCK_MODELS + 1)
+            .rev()
+            .map(|i| bedrock_model(&format!("amazon.model-{i:03}"), "us-west-2"))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/foundation-models"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"modelSummaries": models})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/inference-profiles"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    json!({"inferenceProfileSummaries": [], "nextToken": "next-page"}),
+                ),
+            )
+            .expect(MAX_BEDROCK_PROFILE_PAGES as u64)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path_regex("^/foundation-model-availability/amazon.model-00[0-7]$"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(bedrock_availability("amazon.model-000", true)),
+            )
+            .expect(MAX_BEDROCK_AVAILABILITY_CHECKS as u64)
+            .mount(&server)
+            .await;
+        let mut evidence = AuthorizationEvidence::default();
+        let resources = discover_bedrock(
+            &bedrock_test_client(&server),
+            "us-west-2",
+            BEDROCK_REQUEST_TIMEOUT,
+            &mut evidence,
+        )
+        .await;
+        assert_eq!(resources.len(), MAX_BEDROCK_MODELS);
+        assert_eq!(
+            resources[0].name,
+            "arn:aws:bedrock:us-west-2::foundation-model/amazon.model-000"
+        );
+        assert_eq!(
+            evidence.probes.len(),
+            1 + MAX_BEDROCK_PROFILE_PAGES + MAX_BEDROCK_AVAILABILITY_CHECKS
+        );
+        assert!(evidence.limitations.iter().any(|note| note.contains("limited to 100")));
+        assert!(evidence.limitations.iter().any(|note| note.contains("2 pages")));
+        assert!(
+            evidence.limitations.iter().any(|note| note.contains("8 of 101 discovered model IDs"))
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert!(requests.iter().any(|request| {
+            request.url.query_pairs().any(|(key, value)| key == "nextToken" && value == "next-page")
+        }));
+    }
+
+    #[tokio::test]
+    async fn bedrock_samples_providers_and_profile_models_beyond_catalog_resource_cap() {
+        let server = MockServer::start().await;
+        let mut models: Vec<_> = (0..MAX_BEDROCK_MODELS + 1)
+            .rev()
+            .map(|i| bedrock_model(&format!("amazon.model-{i:03}"), "us-west-2"))
+            .collect();
+        models.insert(0, bedrock_model("anthropic.catalog-model", "us-west-2"));
+        Mock::given(method("GET"))
+            .and(path("/foundation-models"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(json!({"modelSummaries": models})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/inference-profiles"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"inferenceProfileSummaries": [bedrock_profile("mixed-models", vec![
+                    bedrock_model("meta.profile-model", "us-west-2"),
+                    bedrock_model("anthropic.profile-model", "us-west-2"),
+                    bedrock_model("zeta.remote-model", "us-east-1"),
+                ])]}),
+            ))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let expected = [
+            "amazon.model-000",
+            "anthropic.catalog-model",
+            "meta.profile-model",
+            "amazon.model-001",
+            "anthropic.profile-model",
+            "amazon.model-002",
+            "amazon.model-003",
+            "amazon.model-004",
+        ];
+        for id in expected {
+            Mock::given(method("GET"))
+                .and(path(format!("/foundation-model-availability/{id}")))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(bedrock_availability(id, true)),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let mut evidence = AuthorizationEvidence::default();
+        let resources = discover_bedrock(
+            &bedrock_test_client(&server),
+            "us-west-2",
+            BEDROCK_REQUEST_TIMEOUT,
+            &mut evidence,
+        )
+        .await;
+        assert_eq!(resources.len(), MAX_BEDROCK_MODELS + 1);
+        assert!(
+            resources
+                .iter()
+                .filter(|resource| resource.resource_type == "bedrock_foundation_model")
+                .all(|resource| resource.name.contains("/amazon."))
+        );
+        let sampled: Vec<_> = evidence
+            .probes
+            .iter()
+            .filter(|probe| probe.method == "GetFoundationModelAvailability")
+            .map(|probe| {
+                assert_eq!(probe.status, "accepted");
+                probe.resource.as_deref().unwrap().rsplit('/').next().unwrap()
+            })
+            .collect();
+        assert_eq!(sampled, expected);
+        assert_eq!(server.received_requests().await.unwrap().len(), 10);
+        assert!(evidence.limitations.iter().any(|note| {
+            note.contains("8 of 104 discovered model IDs, sampled across provider prefixes")
+        }));
+    }
+
+    #[tokio::test]
+    async fn bedrock_caps_profile_resources_before_following_next_page() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/foundation-models"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"modelSummaries": []})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let profiles: Vec<_> = (0..MAX_BEDROCK_PROFILES)
+            .map(|i| bedrock_profile(&format!("us.amazon.model-{i}"), vec![]))
+            .collect();
+        Mock::given(method("GET"))
+            .and(path("/inference-profiles"))
+            .and(query_param("maxResults", "100"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(
+                    json!({"inferenceProfileSummaries": profiles, "nextToken": "more"}),
+                ),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut evidence = AuthorizationEvidence::default();
+        let resources = discover_bedrock(
+            &bedrock_test_client(&server),
+            "us-west-2",
+            BEDROCK_REQUEST_TIMEOUT,
+            &mut evidence,
+        )
+        .await;
+        assert_eq!(resources.len(), MAX_BEDROCK_PROFILES);
+        assert_eq!(evidence.probes.len(), 2);
+        assert!(evidence.limitations.iter().any(|note| note.contains("100 profiles")));
+    }
+
+    #[tokio::test]
+    async fn bedrock_missing_region_reports_skipped_discovery() {
+        let mut evidence = AuthorizationEvidence::default();
+        let resources = enumerate_bedrock(
+            &SdkConfig::builder().build(),
+            &PermissionSummary::default(),
+            &mut evidence,
+            &mut Vec::new(),
+        )
+        .await;
+        assert!(resources.is_empty());
+        assert!(evidence.probes.is_empty());
+        assert!(evidence.limitations.iter().any(|note| note.contains("no AWS region")));
+    }
+
+    #[tokio::test]
+    async fn bedrock_failures_preserve_the_aws_identity_and_mapping() {
+        let server = MockServer::start().await;
+        let arn = "arn:aws:iam::123456789012:user/example";
+        Mock::given(method("POST"))
+            .and(body_string_contains("Action=GetCallerIdentity"))
+            .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/xml").set_body_string(format!(
+                "<GetCallerIdentityResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\"><GetCallerIdentityResult><Arn>{arn}</Arn><Account>123456789012</Account><UserId>AIDAEXAMPLE</UserId></GetCallerIdentityResult></GetCallerIdentityResponse>"
+            )))
+            .expect(1).with_priority(1).mount(&server).await;
+        for endpoint in ["/foundation-models", "/inference-profiles"] {
+            Mock::given(method("GET"))
+                .and(path(endpoint))
+                .respond_with(
+                    ResponseTemplate::new(403)
+                        .insert_header("x-amzn-errortype", "AccessDeniedException")
+                        .set_body_json(json!({"message": "denied"})),
+                )
+                .expect(1)
+                .with_priority(1)
+                .mount(&server)
+                .await;
+        }
+        Mock::given(|_: &wiremock::Request| true)
+            .respond_with(ResponseTemplate::new(403).insert_header("content-type", "text/xml").set_body_string(
+                "<ErrorResponse><Error><Code>AccessDenied</Code><Message>denied</Message></Error></ErrorResponse>"
+            )).with_priority(10).mount(&server).await;
+        let config = SdkConfig::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(aws_config::Region::new("us-west-2"))
+            .credentials_provider(aws_credential_types::provider::SharedCredentialsProvider::new(
+                Credentials::new("AKIAEXAMPLE", "test-secret", None, None, "test"),
+            ))
+            .endpoint_url(server.uri())
+            .retry_config(RetryConfig::disabled())
+            .build();
+        let mapped = map_access_with_config(config).await.unwrap();
+        assert_eq!(mapped.identity.id, arn);
+        assert_eq!(mapped.identity.account_id.as_deref(), Some("123456789012"));
+        let evidence = mapped.provider_metadata.unwrap().authorization_evidence.unwrap();
+        assert_eq!(evidence.probes.len(), 2);
+        assert!(evidence.probes.iter().all(|probe| probe.status == "restricted"));
+        assert!(!mapped.resources.is_empty());
+    }
 
     #[test]
     fn extracts_principal_names_from_iam_and_sts_arns() {

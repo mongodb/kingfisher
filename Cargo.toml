@@ -57,7 +57,7 @@ thread_local = "1.1.10"
 
 [package]
 name = "kingfisher-bin"
-version = "2.12.0"
+version = "2.13.0"
 description = "MongoDB's blazingly fast and accurate secret scanning, validation, blast radius mapping, and secret revocation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -118,7 +118,7 @@ command-group = { version = "5.0.1", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Library crates
 kingfisher-core = { version = "1.0.3", path = "crates/kingfisher-core" }
-kingfisher-rules = { version = "1.2.0", path = "crates/kingfisher-rules" }
+kingfisher-rules = { version = "1.2.1", path = "crates/kingfisher-rules" }
 kingfisher-scanner = { version = "1.4.0", path = "crates/kingfisher-scanner", features = ["validation", "archives", "context", "extraction", "git", "__cli-internals"] }
 
 clap = { version = "4.6", default-features = false, features = [
@@ -256,7 +256,9 @@ quick-xml = { version = "0.41.0", features = ["serde", "serialize"] }
 rustls = "0.23.43"
 tokio-postgres-rustls = "0.14.0"
 rustls-native-certs = "0.8.4"
-mimalloc = { version = "0.1.52", features = ["override"] }
+# Keep native libraries on their allocator: interposing malloc/free can run mimalloc
+# before initialization (for example, glibc's free(NULL) during C++ startup).
+mimalloc = "0.1.52"
 thread_local = "1.1.10"
 uuid = "1.26.0"
 rand = "0.10.2"
@@ -281,6 +283,7 @@ aws-sdk-sns = { version = "1.110.0", default-features = false, features = ["defa
 aws-sdk-rds = { version = "1.147.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-ecr = { version = "1.126.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-ssm = { version = "1.121.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
+aws-sdk-bedrock = { version = "1.161.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 gcloud-storage = { version = "1.3.0", default-features = false, features = [
     "rustls-tls",
     "auth",
@@ -396,7 +399,7 @@ opt-level = "z"
 [profile.release.package.webbrowser]
 opt-level = "z"
 
-# ── AWS SDK and Smithy (credential validation only) ──────────────────
+# ── AWS SDK and Smithy (credential validation and access mapping) ────
 # aws-lc-rs / aws-lc-sys are intentionally excluded — they are the
 # crypto/TLS backend for rustls and remain at the global `s` level.
 [profile.release.package.aws-config]
@@ -406,6 +409,9 @@ opt-level = "z"
 opt-level = "z"
 
 [profile.release.package.aws-runtime]
+opt-level = "z"
+
+[profile.release.package.aws-sdk-bedrock]
 opt-level = "z"
 
 [profile.release.package.aws-sdk-dynamodb]
