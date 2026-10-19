@@ -1521,7 +1521,7 @@ pub struct GcsScanArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct AzureBlobScanArgs {
-    /// Container URL, e.g. https://account.blob.core.windows.net/container (no SAS query)
+    /// Container URL, e.g. `https://account.blob.core.windows.net/container` (no SAS query)
     #[arg(value_name = "CONTAINER_URL", value_hint = ValueHint::Url)]
     pub container: Url,
 
