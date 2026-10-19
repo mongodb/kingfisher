@@ -143,6 +143,13 @@ impl PyRules {
         // Inspect the already-loaded definition and confirmation regex without
         // recompilation, provider requests, or modifying the shared database.
         let mut detail = serde_json::to_value(rule.syntax()).map_err(error)?;
+        detail["validation"] = serde_json::to_value(
+            rule.syntax()
+                .validation
+                .as_ref()
+                .map(kingfisher_rules::Validation::redacted_for_inspection),
+        )
+        .map_err(error)?;
         detail["detection_regex"] = serde_json::json!(self.db.anchored_regexes()[index].as_str());
         json_to_python(py, detail)
     }
@@ -164,6 +171,7 @@ impl PyRules {
 #[derive(Clone)]
 struct PyFinding {
     finding: Finding,
+    context: Option<Arc<kingfisher_scanner::ScanContext>>,
 }
 #[pymethods]
 impl PyFinding {
@@ -349,13 +357,18 @@ impl PyScanner {
             };
             let source_path = file.as_ref().map(|file| file.to_string_lossy());
             let path = source_path.as_deref().unwrap_or(path);
-            let findings = match &self.detection {
-                Some(options) => self.scanner.scan_blob_for_preparation_with_options_and_control(
-                    &blob, path, options, &control,
-                ),
-                None => self.scanner.scan_blob_for_preparation_with_control(&blob, path, &control),
-            }?;
-            Ok(findings.into_iter().map(|finding| PyFinding { finding }).collect())
+            let output = self.scanner.scan_blob_with_context_and_control(
+                &blob,
+                path,
+                &control,
+                true,
+                self.detection.as_ref(),
+            )?;
+            Ok(output
+                .findings
+                .into_iter()
+                .map(|finding| PyFinding { finding, context: Some(output.context.clone()) })
+                .collect())
         })
         .map_err(scan_error)
     }
@@ -449,13 +462,18 @@ impl PyScanner {
         path: &str,
         control: &ScanControl,
     ) -> anyhow::Result<Vec<PyFinding>> {
-        let findings = match self.detection.as_ref() {
-            Some(options) => self
-                .scanner
-                .scan_blob_at_path_with_options_and_control(blob, path, options, control),
-            None => self.scanner.scan_blob_at_path_with_control(blob, path, control),
-        }?;
-        Ok(findings.into_iter().map(|finding| PyFinding { finding }).collect())
+        let output = self.scanner.scan_blob_with_context_and_control(
+            blob,
+            path,
+            control,
+            false,
+            self.detection.as_ref(),
+        )?;
+        Ok(output
+            .findings
+            .into_iter()
+            .map(|finding| PyFinding { finding, context: Some(output.context.clone()) })
+            .collect())
     }
 }
 
@@ -503,7 +521,8 @@ impl PyValidatedFinding {
         data.set_item("variables", &credential.variables)?;
         let components = PyList::empty(py);
         for finding in &credential.components {
-            components.append(Py::new(py, PyFinding { finding: finding.clone() })?)?;
+            components
+                .append(Py::new(py, PyFinding { finding: finding.clone(), context: None })?)?;
         }
         data.set_item("components", components)?;
         data.set_item(
@@ -531,6 +550,12 @@ impl PyValidator {
         cancellation: Option<PyRef<'_, PyCancellationToken>>,
     ) -> PyResult<Py<PyAny>> {
         let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
+        let validator = findings
+            .iter()
+            .filter_map(|finding| finding.context.clone())
+            .fold(self.validator.clone(), |validator, context| {
+                validator.with_scan_context(context)
+            });
         let context: Vec<_> = findings.into_iter().map(|finding| finding.finding).collect();
         let candidates = indices
             .iter()
@@ -542,7 +567,7 @@ impl PyValidator {
             })
             .collect::<PyResult<Vec<_>>>()?;
         let results = run_async(py, self.runtime, control, || {
-            self.validator.validate_prepared_findings(candidates, &context)
+            validator.validate_prepared_findings(candidates, &context)
         })?;
         validation_states(py, results)
     }
@@ -563,12 +588,18 @@ impl PyValidator {
         let diagnostics = py
             .detach(|| {
                 control.check()?;
+                let validator = findings
+                    .iter()
+                    .filter_map(|finding| finding.context.clone())
+                    .fold(self.validator.clone(), |validator, context| {
+                        validator.with_scan_context(context)
+                    });
                 let context: Vec<_> = findings.into_iter().map(|finding| finding.finding).collect();
                 context
                     .iter()
                     .map(|finding| {
                         control.check()?;
-                        let diagnostics = self.validator.input_diagnostics(finding, &context);
+                        let diagnostics = validator.input_diagnostics(finding, &context);
                         control.check()?;
                         Ok(diagnostics)
                     })
@@ -607,8 +638,14 @@ impl PyValidator {
         cancellation: Option<PyRef<'_, PyCancellationToken>>,
     ) -> PyResult<Py<PyAny>> {
         let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
+        let validator = findings
+            .iter()
+            .filter_map(|finding| finding.context.clone())
+            .fold(self.validator.clone(), |validator, context| {
+                validator.with_scan_context(context)
+            });
         let results = run_async(py, self.runtime, control, || {
-            self.validator.validate_findings(findings.into_iter().map(|v| v.finding).collect())
+            validator.validate_findings(findings.into_iter().map(|v| v.finding).collect())
         })?;
         validation_states(py, results)
     }

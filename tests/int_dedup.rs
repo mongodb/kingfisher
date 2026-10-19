@@ -147,11 +147,13 @@ rules:
             // s3
             s3_bucket: None,
             s3_prefix: None,
+            object_cache_dir: None,
             role_arn: None,
             aws_local_profile: None,
             gcs_bucket: None,
             gcs_prefix: None,
             gcs_service_account: None,
+            azure_blob: None,
             // Docker image scanning
             docker_image: Vec::new(),
             docker_archive: Vec::new(),
@@ -170,6 +172,7 @@ rules:
             staged: false,
         },
         content_filtering_args: ContentFilteringArgs {
+            path_selection: Default::default(),
             no_limits: false,
             max_file_size_mb: 5.0,
             extraction_depth: 1,
@@ -180,6 +183,7 @@ rules:
         confidence: ConfidenceLevel::Low,
         disk_offload: false,
         no_validate: true,
+        no_timeouts: false,
         access_map: false,
         rule_stats: false,
         only_valid: false,

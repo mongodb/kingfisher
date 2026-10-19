@@ -365,6 +365,10 @@ pub struct InputSpecifierArgs {
     #[arg(long, requires = "s3_bucket", hide = true)]
     pub s3_prefix: Option<String>,
 
+    /// Optional bucket listing checkpoints and content cache
+    #[arg(skip)]
+    pub object_cache_dir: Option<PathBuf>,
+
     /// AWS IAM role ARN to assume for S3 access
     #[arg(long, requires = "s3_bucket", hide = true)]
     pub role_arn: Option<String>,
@@ -385,6 +389,10 @@ pub struct InputSpecifierArgs {
     #[arg(long, value_hint = ValueHint::FilePath, requires = "gcs_bucket", hide = true)]
     pub gcs_service_account: Option<PathBuf>,
 
+    /// Azure Blob Storage container URL
+    #[arg(skip)]
+    pub azure_blob: Option<Url>,
+
     /// Docker/OCI images to scan (no local Docker required)
     #[arg(long = "docker-image", hide = true)]
     pub docker_image: Vec<String>,
@@ -403,8 +411,8 @@ pub struct InputSpecifierArgs {
     #[arg(long, default_value_t=GitHistoryMode::Full)]
     pub git_history: GitHistoryMode,
 
-    /// Include detailed Git commit context (author, date, commit hash) for findings.
-    /// Set to 'false' to disable.
+    /// Include detailed Git commit context (author, committer and date) for findings.
+    /// Set to 'false' to omit those details; repository links, commit IDs and file paths remain.
     #[arg(long, default_value_t = true, action = clap::ArgAction::Set, help_heading = "Git Options")]
     pub commit_metadata: bool,
 
@@ -537,6 +545,7 @@ impl InputSpecifierArgs {
             || self.postman_all
             || self.s3_bucket.is_some()
             || self.gcs_bucket.is_some()
+            || self.azure_blob.is_some()
             || !self.docker_image.is_empty()
             || !self.docker_archive.is_empty()
     }
@@ -743,6 +752,8 @@ fn warn_deprecated_provider(provider: &str, guidance: &str) {
 // -----------------------------------------------------------------------------
 #[derive(Args, Debug, Clone)]
 pub struct ContentFilteringArgs {
+    #[command(flatten)]
+    pub path_selection: crate::path_selection::PathSelection,
     /// Ignore files larger than the given size in MB (0 = unlimited)
     #[arg(
         global = true,
@@ -754,8 +765,9 @@ pub struct ContentFilteringArgs {
     )]
     pub max_file_size_mb: f64,
 
-    /// Disable scan resource budgets and timeouts. Overrides individual limits.
-    /// Concurrency, rate limits, exclusions, and extraction path checks remain enabled.
+    /// Disable scan content-size, depth, and count limits. Overrides individual content limits.
+    /// Network, subprocess, and repository timeouts remain enabled, along with concurrency,
+    /// rate limits, exclusions, and extraction path checks.
     #[arg(global = true, long, default_value_t = false)]
     pub no_limits: bool,
 

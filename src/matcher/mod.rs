@@ -10,6 +10,7 @@ mod fingerprint;
 pub use base64_decode::{DecodedData, get_base64_strings};
 pub use captures::{Group, Groups, SerializableCapture, SerializableCaptures};
 pub use conversion::{Match, MatcherStats, OwnedBlobMatch};
+pub use filter::{rule_matches_example, rule_matches_example_ignoring_substrings};
 pub use fingerprint::compute_finding_fingerprint;
 
 use std::sync::{Arc, Mutex};
@@ -37,8 +38,9 @@ use kingfisher_scanner::primitives::{MatchSpans, find_secret_capture_with_group}
 
 use self::{base64_decode::get_base64_strings as get_b64_strings, filter::filter_match};
 
-const MAX_CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8 MiB per scan segment
-const CHUNK_OVERLAP: usize = 64 * 1024; // 64 KiB overlap to catch boundary matches
+// The Git content gate must scan exactly the same segments to avoid false negatives.
+pub(crate) const MAX_CHUNK_SIZE: usize = 8 * 1024 * 1024; // 8 MiB per scan segment
+pub(crate) const CHUNK_OVERLAP: usize = 64 * 1024; // 64 KiB overlap to catch boundary matches
 const RAW_MATCH_LOOKBACK: usize = 4 * 1024; // Initial exact-confirmation suffix.
 const BASE64_SCAN_LIMIT: usize = 64 * 1024 * 1024; // skip expensive Base64 pass on huge blobs
 // Bound structural context checks on large generated/minified content.
@@ -1698,6 +1700,7 @@ mod test {
             negative_examples: vec![],
             references: vec![],
             validation: Some(Validation::Http(HttpValidation {
+                auth: None,
                 request: HttpRequest {
                     method: "GET".to_string(),
                     url: "https://example.com".to_string(),

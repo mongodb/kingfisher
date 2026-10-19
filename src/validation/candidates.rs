@@ -1,169 +1,13 @@
 //! Bounded, opt-in credential combination verification. Context only orders
 //! attempts; only an authoritative successful validator selects a combination.
-use std::{
-    cmp::Reverse,
-    collections::{BTreeSet, BinaryHeap},
-    future::Future,
-    sync::LazyLock,
-    time::Duration,
-};
+use std::{future::Future, time::Duration};
 
+pub(crate) use candidate_verification::{MAX_COMBINATIONS, eligible_dependency, supported};
 use http::StatusCode;
 use kingfisher_core::ValidationOutcome;
-use tokio::{sync::Semaphore, time::Instant};
+use kingfisher_scanner::__cli_internals::candidate_verification::{self, CandidateCheck};
 
-use crate::{
-    matcher::OwnedBlobMatch,
-    rules::rule::{DependsOnRule, RuleSyntax, Validation},
-    validation_body,
-};
-
-pub(crate) const MAX_COMBINATIONS: usize = 16;
-const MAX_SEARCH_TIME: Duration = Duration::from_secs(30);
-// Searches run sequentially per finding. Across all repositories at most four
-// searches can issue requests, in addition to the existing provider rate limits.
-static SEARCHES: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(4));
-
-/// Only fixed-destination validators may opt into candidate verification.
-/// Betterleaks HTTP calls must have a provably fixed origin and literal header names.
-/// Do not trust a rule ID to establish that its expression is safe.
-pub(crate) fn supported(rule: &RuleSyntax) -> bool {
-    if !rule.is_authoritative() {
-        return false;
-    }
-    match &rule.validation {
-        Some(Validation::AWS) => true,
-        Some(Validation::Http(http)) => {
-            let url = &http.request.url;
-            !url.contains(['{', '}'])
-                && reqwest::Url::parse(url).is_ok_and(|url| {
-                    matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
-                })
-                && http.multipart.is_none()
-                && http.request.multipart.is_none()
-                && !http.request.headers.keys().any(|name| name.eq_ignore_ascii_case("host"))
-        }
-        Some(Validation::Betterleaks(validation)) => {
-            fn function_name(value: &serde_json::Value) -> Option<String> {
-                match value["kind"].as_str()? {
-                    "identifier" => Some(value["value"].as_str()?.to_owned()),
-                    "member" => Some(format!(
-                        "{}.{}",
-                        function_name(&value["node"])?,
-                        value["property"]["value"].as_str()?
-                    )),
-                    _ => None,
-                }
-            }
-            // Only concatenation with a literal prefix ending beyond the authority
-            // can contain dynamic URL data. Never infer destinations from rule IDs.
-            fn fixed_origin(value: &serde_json::Value) -> bool {
-                let mut prefix = value;
-                let mut dynamic = false;
-                while prefix["kind"] == "binary" && prefix["operator"] == "+" {
-                    dynamic = true;
-                    prefix = &prefix["left"];
-                }
-                let Some(raw) = prefix["value"].as_str().filter(|_| prefix["kind"] == "string")
-                else {
-                    return false;
-                };
-                if raw.chars().any(|c| c.is_control() || c == '\\') {
-                    return false;
-                }
-                let Ok(url) = reqwest::Url::parse(raw) else { return false };
-                if !matches!(url.scheme(), "http" | "https")
-                    || url.host_str().is_none()
-                    || !url.username().is_empty()
-                    || url.password().is_some()
-                {
-                    return false;
-                }
-                !dynamic || raw.split_once("://").is_some_and(|(_, rest)| rest.contains('/'))
-            }
-            fn safe_headers(value: Option<&serde_json::Value>) -> bool {
-                let Some(value) = value else { return true };
-                value["kind"] == "map"
-                    && value["pairs"].as_array().is_some_and(|pairs| {
-                        pairs.iter().all(|pair| {
-                            pair["kind"] == "pair"
-                                && pair["key"]["kind"] == "string"
-                                && pair["key"]["value"]
-                                    .as_str()
-                                    .is_some_and(|key| !key.trim().eq_ignore_ascii_case("host"))
-                        })
-                    })
-            }
-            fn inspect(value: &serde_json::Value, found: &mut bool) -> bool {
-                match value {
-                    serde_json::Value::Object(map) => {
-                        if map.get("kind").and_then(|v| v.as_str()) == Some("call") {
-                            match function_name(&value["callee"]).as_deref() {
-                                Some("aws.validate") => *found = true,
-                                Some("http.get" | "http.post") => {
-                                    let Some(args) = value["arguments"].as_array() else {
-                                        return false;
-                                    };
-                                    if !args.first().is_some_and(fixed_origin)
-                                        || !safe_headers(args.get(1))
-                                    {
-                                        return false;
-                                    }
-                                    *found = true;
-                                }
-                                // Explicitly allow only pure helpers needed by reviewed rules.
-                                Some(
-                                    "validate.unknown"
-                                    | "bytes"
-                                    | "base64.encode"
-                                    | "strings.urlQueryEscape",
-                                ) => {}
-                                _ => return false,
-                            }
-                        }
-                        map.values().all(|v| inspect(v, found))
-                    }
-                    serde_json::Value::Array(values) => values.iter().all(|v| inspect(v, found)),
-                    _ => true,
-                }
-            }
-            let mut found = false;
-            serde_json::to_value(&validation.expression)
-                .is_ok_and(|value| inspect(&value, &mut found) && found)
-        }
-        _ => false,
-    }
-}
-
-/// An opt-in cannot turn an endpoint into an authenticated credential component.
-/// Check both the variable and helper ID, including legacy concatenated names
-/// such as BASEURL and JIRADCDOMAIN. Typed validators additionally restrict inputs
-/// to the credential variables they actually consume.
-pub(crate) fn eligible_dependency(rule: &RuleSyntax, dep: &DependsOnRule) -> bool {
-    fn names_endpoint(name: &str) -> bool {
-        let name = name.to_ascii_lowercase();
-        let endpoint_word = name.split(|c: char| !c.is_ascii_alphabetic()).any(|part| {
-            ["url", "uri", "host", "hostname", "domain", "endpoint", "address", "port", "server"]
-                .contains(&part)
-        });
-        let name = name.trim_end_matches(|c: char| !c.is_ascii_alphabetic());
-        endpoint_word
-            || ["url", "uri", "hostname", "domain", "endpoint"]
-                .iter()
-                .any(|suffix| name.ends_with(suffix))
-    }
-
-    dep.verify_candidates
-        && !names_endpoint(&dep.variable)
-        && !names_endpoint(&dep.rule_id)
-        && match &rule.validation {
-            Some(Validation::AWS) => {
-                dep.variable.eq_ignore_ascii_case("AKID")
-                    || dep.variable.eq_ignore_ascii_case("AWS_SECRET_ACCESS_KEY")
-            }
-            _ => true,
-        }
-}
+use crate::{matcher::OwnedBlobMatch, validation_body};
 
 pub(crate) fn ready(m: &OwnedBlobMatch) -> bool {
     !m.dependency_candidates.is_empty()
@@ -200,33 +44,13 @@ where
     F: FnMut(OwnedBlobMatch, Duration) -> Fut,
     Fut: Future<Output = OwnedBlobMatch>,
 {
-    let deadline = (!timeout.is_zero()).then(|| Instant::now() + timeout.min(MAX_SEARCH_TIME));
-    let permit = match deadline {
-        Some(deadline) => tokio::time::timeout_at(deadline, SEARCHES.acquire()).await,
-        None => Ok(SEARCHES.acquire().await),
-    };
-    let Ok(Ok(_permit)) = permit else {
-        unresolved(m, 0, "time budget exhausted while waiting for a verification slot", true);
-        return;
-    };
     let variables: Vec<_> = m.dependency_candidates.keys().cloned().collect();
     let values: Vec<_> = variables.iter().map(|key| m.dependency_candidates[key].clone()).collect();
-    let total =
-        variables.iter().fold(1usize, |n, key| n.saturating_mul(m.ambiguous_dependencies[key]));
-    // Best-first enumeration interleaves alternatives across components rather
-    // than exhausting one dimension. Never materialize the Cartesian product.
-    let initial = vec![0usize; variables.len()];
-    let mut seen = BTreeSet::from([initial.clone()]);
-    let mut queue = BinaryHeap::from([Reverse((0usize, initial))]);
-    let mut attempted = 0;
-    while let Some(Reverse((score, indices))) = queue.pop() {
-        let remaining = deadline
-            .map(|deadline| deadline.saturating_duration_since(Instant::now()))
-            .unwrap_or_default();
-        if deadline.is_some() && remaining.is_zero() {
-            unresolved(m, attempted, "time budget exhausted", true);
-            return;
-        }
+    let lengths: Vec<_> = values.iter().map(Vec::len).collect();
+    let truncated = variables.iter().zip(&lengths).any(|(variable, length)| {
+        m.ambiguous_dependencies.get(variable).is_some_and(|count| count > length)
+    });
+    let result = candidate_verification::search(&lengths, timeout, |indices, remaining| {
         let mut attempt = m.clone();
         attempt.dependency_candidates.clear();
         for (dimension, variable) in variables.iter().enumerate() {
@@ -235,63 +59,66 @@ where
                 .dependent_captures
                 .insert(variable.clone(), values[dimension][indices[dimension]].clone());
         }
-        // Retain the selected inputs even when validation returns from a cache.
         let mut selected_captures = attempt.dependent_captures.clone();
         for (name, value, ..) in super::utils::process_captures(&attempt.captures) {
             if name != "TOKEN" {
                 selected_captures.entry(name).or_insert(value);
             }
         }
-        attempted += 1;
-        let mut result = validate(attempt, remaining).await;
-        if result.validation_response_status.is_redirection() {
-            unresolved(m, attempted, "verification returned a redirect", true);
-            return;
-        }
-        if result.validation_outcome.is_verified_active() {
-            result.dependent_captures.extend(selected_captures);
-            *m = result;
-            return;
-        }
-        // An outage or throttling is not evidence against a candidate. Stop
-        // without labelling the primary credential inactive or hammering the API.
-        if result.validation_outcome != ValidationOutcome::VerifiedInactive {
-            let skipped = matches!(
-                result.validation_outcome,
-                ValidationOutcome::Skipped | ValidationOutcome::NotAttempted
-            );
-            let reason = if skipped {
-                "verification was skipped"
+        let future = validate(attempt, remaining);
+        async move {
+            let mut result = future.await;
+            if result.validation_response_status.is_redirection() {
+                return CandidateCheck::Unresolved {
+                    reason: "verification returned a redirect",
+                    unavailable: true,
+                };
+            }
+            if result.validation_outcome.is_verified_active() {
+                result.dependent_captures.extend(selected_captures);
+                return CandidateCheck::Accepted(result);
+            }
+            if result.validation_outcome == ValidationOutcome::VerifiedInactive {
+                CandidateCheck::Rejected
             } else {
-                "verification was unavailable or timed out"
-            };
-            unresolved(m, attempted, reason, !skipped);
-            return;
-        }
-        if !kingfisher_scanner::validation::limits::NetworkLimits::current().unlimited_results
-            && attempted == MAX_COMBINATIONS
-        {
-            break;
-        }
-        for dimension in 0..variables.len() {
-            let mut next = indices.clone();
-            next[dimension] += 1;
-            if next[dimension] < values[dimension].len() && seen.insert(next.clone()) {
-                queue.push(Reverse((score + 1, next)));
+                let skipped = matches!(
+                    result.validation_outcome,
+                    ValidationOutcome::Skipped | ValidationOutcome::NotAttempted
+                );
+                CandidateCheck::Unresolved {
+                    reason: if skipped {
+                        "verification was skipped"
+                    } else {
+                        "verification was unavailable or timed out"
+                    },
+                    unavailable: !skipped,
+                }
             }
         }
+    })
+    .await;
+    match result {
+        Ok(result) => *m = result,
+        Err(failure) => {
+            // The matcher may retain only the bounded top-ranked candidates.
+            // Rejecting that retained set does not exhaust the original set.
+            let reason = if truncated
+                && !failure.unavailable
+                && failure.reason == "no candidate combination verified"
+            {
+                "combination budget exhausted"
+            } else {
+                failure.reason
+            };
+            unresolved(m, failure.attempted, reason, failure.unavailable);
+        }
     }
-    let reason = if attempted < total {
-        "combination budget exhausted"
-    } else {
-        "no candidate combination verified"
-    };
-    unresolved(m, attempted, reason, false);
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::rules::rule::{RuleSyntax, Validation};
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -457,6 +284,55 @@ depends_on_rule:
             .await;
             assert_eq!(attempts, if unlimited_results { count } else { MAX_COMBINATIONS });
         }
+    }
+
+    #[tokio::test]
+    async fn rejected_retained_candidates_preserve_the_original_budget_status() {
+        for (original, expected) in [
+            (MAX_COMBINATIONS, "no candidate combination verified"),
+            (MAX_COMBINATIONS + 4, "combination budget exhausted"),
+        ] {
+            let mut m = finding();
+            m.ambiguous_dependencies.insert("SECRET".into(), original);
+            m.dependency_candidates.insert(
+                "SECRET".into(),
+                (0..MAX_COMBINATIONS).map(|index| format!("candidate-{index}")).collect(),
+            );
+            let mut attempts = 0;
+            run(&mut m, Duration::ZERO, |mut attempt, _| {
+                attempts += 1;
+                async move {
+                    attempt.validation_outcome = ValidationOutcome::VerifiedInactive;
+                    attempt
+                }
+            })
+            .await;
+            assert_eq!(attempts, MAX_COMBINATIONS);
+            assert_eq!(m.validation_outcome, ValidationOutcome::Skipped);
+            assert!(validation_body::as_str(&m.validation_response_body).contains(expected));
+            assert_eq!(m.ambiguous_dependencies["SECRET"], original);
+            assert!(m.dependent_captures.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn truncated_candidates_do_not_override_provider_unavailability() {
+        let mut m = finding();
+        m.ambiguous_dependencies.insert("SECRET".into(), MAX_COMBINATIONS + 4);
+        let mut attempts = 0;
+        run(&mut m, Duration::ZERO, |mut attempt, _| {
+            attempts += 1;
+            async move {
+                attempt.validation_outcome = ValidationOutcome::Unavailable;
+                attempt
+            }
+        })
+        .await;
+        assert_eq!(attempts, 1);
+        assert_eq!(m.validation_outcome, ValidationOutcome::Unavailable);
+        let response = validation_body::as_str(&m.validation_response_body);
+        assert!(response.contains("verification was unavailable or timed out"));
+        assert!(!response.contains("combination budget exhausted"));
     }
 
     #[tokio::test]

@@ -79,6 +79,7 @@ async fn http_revocation_matches_response_and_resolves_variables() {
     )
     .await;
     let rule = rule(Some(Revocation::Http(HttpValidation {
+        auth: None,
         request: request(format!("{}/keys/{{{{ KEY_ID }}}}", server.url)),
         multipart: None,
     })));
@@ -213,7 +214,11 @@ async fn extraction_failure_preserves_whether_the_step_mutated() {
 async fn unsupported_url_schemes_are_not_submission() {
     use kingfisher_scanner::validation::revocation::RevocationSubmitted;
     let invalid = request("ftp://unused.invalid".into());
-    let action = rule(Some(Revocation::Http(HttpValidation { request: invalid, multipart: None })));
+    let action = rule(Some(Revocation::Http(HttpValidation {
+        auth: None,
+        request: invalid,
+        multipart: None,
+    })));
     let error =
         Revoker::new().unwrap().revoke(&action, "secret", &BTreeMap::new()).await.unwrap_err();
     assert!(!error.is::<RevocationSubmitted>());
@@ -231,6 +236,7 @@ async fn invalid_inputs_fail_before_network() {
             .contains("no revocation")
     );
     let http = rule(Some(Revocation::Http(HttpValidation {
+        auth: None,
         request: request("http://unused.invalid".into()),
         multipart: None,
     })));
@@ -247,6 +253,7 @@ async fn invalid_inputs_fail_before_network() {
         revoker
             .revoke(
                 &rule(Some(Revocation::Http(HttpValidation {
+                    auth: None,
                     request: no_matcher,
                     multipart: None
                 }))),
@@ -271,6 +278,7 @@ async fn total_deadline_bounds_revocation() {
     ))
     .await;
     let rule = rule(Some(Revocation::Http(HttpValidation {
+        auth: None,
         request: request(format!("{}/slow", server.url)),
         multipart: None,
     })));
@@ -313,6 +321,7 @@ async fn default_client_does_not_retry_or_follow_redirects() {
     let revoker = Revoker::new().unwrap();
     for (path, status) in [("failed", 503), ("redirect", 307)] {
         let rule = rule(Some(Revocation::Http(HttpValidation {
+            auth: None,
             request: request(format!("{}/{path}", server.url)),
             multipart: None,
         })));
@@ -522,7 +531,7 @@ async fn explicit_http_retries_never_repeat_mutations() {
         request.method = "POST".into();
         let parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
         let result = execute_http_revocation(
-            &HttpValidation { request, multipart: None },
+            &HttpValidation { auth: None, request, multipart: None },
             &liquid::Object::from_iter([(
                 "TOKEN".into(),
                 liquid::model::Value::scalar("fixture-token"),

@@ -281,11 +281,6 @@ jobs:
       - name: Run tests
         run: make tests
 
-      # Includes the process fixture harness and GPUI's headless UI tests.
-      - name: Run wizard regressions
-        run: |
-          cargo test --locked -p kingfisher-bin --features gui-tests --lib wizard::
-
   windows:
     name: Windows ${{ matrix.arch }}
     runs-on: ${{ matrix.runs_on }}

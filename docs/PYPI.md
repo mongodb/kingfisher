@@ -317,6 +317,40 @@ one input. `ValidationResult` additionally supports predicates on `.outcome`,
 The runnable validation example supports repeated `--outcome` and `--rule`
 report selectors; these do not prevent provider requests for other findings.
 
+## Custom rule requirements and component validation
+
+`Scanner` and `DetectionScanner` enforce YAML `pattern_requirements` during offline
+detection, including character minimums, custom special characters, case-insensitive
+`ignore_if_contains`, and Liquid checksums. This includes Base64 matches. Named
+captures, `MATCH`/`FULL_MATCH`, and `skip_if_missing` use the CLI semantics described
+in [the rule guide](RULES.md#character-requirements).
+
+Use `luhn_valid` and `iban_valid` for offline structured-data checksums. These check
+formats/checksums, not card issuers, registered IBAN countries, country-specific
+lengths, or whether an account exists. The commented
+[example](../python/examples/pattern_requirements.py) loads a custom-only catalog,
+discards invalid checksums, and prints redacted findings:
+
+```bash
+uv run --no-sync python python/examples/pattern_requirements.py
+```
+
+Native findings retain compact full-match spans and assignment/object context for
+component windows and ranking, without retaining the source payload. Keep complete
+per-input findings, including invisible helpers, through `Validator.validate()`.
+Distinct component values normally skip validation. Rules explicitly setting
+`verify_candidates: true` use the same fixed-origin eligibility and bounded search
+as the CLI: at most 16 combinations, four concurrent searches, and the shorter of
+30 seconds or the validator timeout. Setting timeout to zero disables the deadline.
+Only a verified active result selects a component. Rejection of every combination
+leaves the primary unresolved, not verified inactive. Offline input inspection still
+reports ambiguity until explicit validation resolves it.
+
+Each validation batch groups repeated identical rule/resolved-input checks into one
+request, including candidate attempts. Different rules and resolved components stay
+independent; a later batch checks again. Validation is explicit, and revocation
+continues to require `confirm=True`.
+
 ## Comparing SDK and CLI results
 
 The SDK and CLI share native detection primitives, but their surrounding pipelines
@@ -344,7 +378,7 @@ are different. A recursive Python scan is not automatically equivalent to
 For a closer CLI comparison of working-tree detection, start with:
 
 ```bash
-kingfisher scan ~/example-repo --git-history none --no-extract-archives --no-validate --no-dedup --no-update-check --format toon
+kingfisher scan ~/example-repo --git-history none --no-extract-archives --no-validate --no-dedup --no-update-check --format json
 ```
 
 Then align the exact file list, rules/catalog version, confidence and Base64
@@ -582,6 +616,8 @@ Its VM progress handler checks deadlines/cancellation; bytecode parsing checks
 controls too. `timeout` applies per input. Native reads and individual operations
 remain cooperative; members are prepared completely before yielding.
 
+SQLite lock waits remain bounded independently of content-size limits.
+
 Bytecode and small ZIP extraction operate in memory. SQLite uses temporary
 storage under `temp_dir` (the system temporary directory by default). Choose a
 protected `temp_dir` parent on every platform. SDK staging directories use
@@ -707,6 +743,17 @@ Use a separate process when a hard wall-clock execution limit is required.
 
 ## Validate explicitly
 
+Custom YAML HTTP rules also support [OAuth2 authentication](RULES.md#oauth2-authentication-for-http-verification-services)
+for a configured verification service. Load the rule through `Rules`, set its
+credential environment variables, and reuse a `Validator` to share token refresh
+and failure cooldowns. Scanning remains offline; explicit validation obtains and
+uses the access token. `Rules.detail()` redacts literal OAuth2 usernames, passwords
+and client secrets without changing executable credentials; environment-variable
+names remain visible and are not resolved during inspection. Prefer `username_env`,
+`password_env` and `client_secret_env` so credentials stay outside rule files.
+Explicitly allowed loopback plain-HTTP token/verifier requests connect directly,
+without proxies; HTTPS retains strict TLS and environment proxy/`NO_PROXY` settings.
+
 SMTP credential URIs are supported through the shared validator. Separate SMTP
 fields use the [custom rule example](../examples/rules/smtp.yml); see the
 [SMTP validation contract](RULES.md#smtp-authentication) for TLS, port fallback,
@@ -735,6 +782,9 @@ false) and `variables` (trusted template variables/endpoints). Response-size
 limits for other validator families remain provider-specific. TLS verification
 is enabled and the shared HTTP client disables redirects. The internal-address
 check is not a network sandbox or DNS-pinning guarantee.
+
+SMTP session cleanup has a short independent timeout so stalled cleanup writes
+finish promptly after an authentication result is established.
 
 `validate(findings, timeout=None, cancellation=None)` adds a total batch deadline,
 including queued checks, independently of the constructor's per-check timeout.
@@ -884,7 +934,7 @@ extra names, and Liquid control-flow tags may lack a specific name. Inspection
 does not prove every Betterleaks expression branch or provider-specific constraint.
 
 Prepared validation re-inspects with its actual execution variables. Known missing,
-ambiguous, redacted or invalid validation inputs yield skipped results before
+ambiguous inputs without supported candidate-verification opt-ins, redacted inputs or invalid validation inputs yield skipped results before
 provider requests. A missing revocation-only input still allows live validation,
 but keeps `revocation_ready` false. Validation results expose snapshot
 `input_diagnostics`; existing `ValidationResult.to_dict()` fields stay unchanged.

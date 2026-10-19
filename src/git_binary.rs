@@ -1185,6 +1185,9 @@ mod tests {
         temp_env::with_var("KF_GIT_FAKE_TIMEOUT", Some("7"), || {
             assert_eq!(timeout_from_env("KF_GIT_FAKE_TIMEOUT", 42).as_secs(), 7);
         });
+        temp_env::with_var("KF_GIT_FAKE_TIMEOUT", Some("0"), || {
+            assert!(timeout_from_env("KF_GIT_FAKE_TIMEOUT", 42).is_zero());
+        });
         // Garbage falls back to default rather than blowing up.
         temp_env::with_var("KF_GIT_FAKE_TIMEOUT", Some("not a number"), || {
             assert_eq!(timeout_from_env("KF_GIT_FAKE_TIMEOUT", 42).as_secs(), 42);

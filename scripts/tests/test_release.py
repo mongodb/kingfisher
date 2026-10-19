@@ -141,6 +141,20 @@ class ReleaseTests(unittest.TestCase):
 
 
 class WorkflowReleaseGuardsTests(unittest.TestCase):
+    def test_linux_x64_release_checks_static_pie_and_packed_relocations(self):
+        root = Path(__file__).resolve().parents[2]
+        workflow = (root / ".github/workflows/release.yml").read_text(encoding="utf-8")
+        job = workflow.split("  linux-x64:\n", 1)[1].split("  linux-arm64:\n", 1)[0]
+        self.assertIn('"$binary" --version', job)
+        self.assertIn('"$binary" rules check --no-update-check', job)
+        self.assertIn("INTERP|NEEDED", job)
+        self.assertIn("grep -Eq 'Type:.*DYN'", job)
+        self.assertIn("grep -q '(RELR)'", job)
+        # The build-script helper must survive crates.io packaging too.
+        import tomllib
+        manifest = tomllib.loads((root / "Cargo.toml").read_text(encoding="utf-8"))
+        self.assertIn("build_support.rs", manifest["package"]["include"])
+
     def test_tag_workflow_requires_main_ancestry_and_records_build_commit(self):
         workflow = (Path(__file__).resolve().parents[2] / ".github/workflows/release.yml").read_text()
         preflight = workflow.split("  validate-release:\n", 1)[1].split("  tests:\n", 1)[0]

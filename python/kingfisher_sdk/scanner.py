@@ -12,7 +12,7 @@ from .inputs import ScanInput
 
 @dataclass(frozen=True)
 class ScanResult:
-    """Findings grouped with their input; helpers remain available for validation."""
+    """Findings grouped with their input; helpers retain native component context."""
     input: ScanInput
     findings: list[Finding] = field(repr=False)
 

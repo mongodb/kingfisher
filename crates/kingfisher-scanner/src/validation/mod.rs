@@ -9,7 +9,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
+//! kingfisher-scanner = { version = "2.0.0", features = ["validation"] }
 //! ```
 //!
 //! Prefer `Validator` for automatic rule dispatch, credential association,
@@ -31,12 +31,15 @@
 
 pub mod limits;
 
+pub(crate) mod candidates;
 mod utils;
 mod validation_body;
 
 use kingfisher_core::ValidationOutcome;
 
 pub mod http_validation;
+mod oauth2;
+pub use oauth2::OAuth2TokenCache;
 
 pub mod revocation;
 

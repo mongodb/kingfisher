@@ -263,9 +263,9 @@ where
     let progress = Arc::new(std::sync::OnceLock::<ProgressBar>::new());
     let progress_enabled = global_args.use_progress();
 
-    let no_limits = args.content_filtering_args.no_limits;
     let network_limits = kingfisher_scanner::validation::limits::NetworkLimits::current();
     let clone_concurrency = std::cmp::max(1, args.num_jobs);
+    let no_timeouts = args.no_timeouts;
     let ignore_certs = global_args.ignore_certs;
     let provider_hosts = provider_hosts(args, global_args);
     let github_auth =
@@ -324,7 +324,7 @@ where
                     &scoped_provider_hosts(&provider_hosts, &repo_url, github_token.is_some()),
                     github_token,
                 )
-                .without_timeouts(no_limits))
+                .without_timeouts(no_timeouts))
             };
             let output_dir = {
                 let datastore = datastore.lock().unwrap();
@@ -1393,7 +1393,13 @@ pub async fn fetch_s3_objects(
     let Some(bucket) = args.input_specifier_args.s3_bucket.as_deref() else {
         return Ok(());
     };
-    let prefix = args.input_specifier_args.s3_prefix.as_deref();
+    let Some(filters) = args
+        .content_filtering_args
+        .path_selection
+        .within_prefix(args.input_specifier_args.s3_prefix.as_deref())
+    else {
+        return Ok(());
+    };
     let role_arn = args.input_specifier_args.role_arn.as_deref();
     let profile = args.input_specifier_args.aws_local_profile.as_deref();
 
@@ -1428,32 +1434,45 @@ pub async fn fetch_s3_objects(
 
     let bucket_name = bucket.to_string();
 
-    s3::visit_bucket_objects(bucket, prefix, role_arn, profile, move |key, bytes| {
-        let origin = OriginSet::new(
-            Origin::from_extended(serde_json::json!({
-                "path": format!("s3://{}/{}", bucket_name, key)
-            })),
-            Vec::new(),
-        );
-        let blob = crate::blob::Blob::from_bytes(bytes);
+    s3::visit_bucket_objects_cached(
+        bucket,
+        &filters,
+        role_arn,
+        profile,
+        args.input_specifier_args.object_cache_dir.as_deref(),
+        args.content_filtering_args.max_file_size_bytes(),
+        move |key, bytes| {
+            let origin = OriginSet::new(
+                Origin::from_extended(serde_json::json!({
+                    "path": format!("s3://{}/{}", bucket_name, key)
+                })),
+                Vec::new(),
+            );
+            let blob = crate::blob::Blob::from_bytes(bytes);
 
-        if let Some((origin, blob_md, scored_matches)) =
-            processor.run(origin, blob, args.no_dedup, args.redact, args.no_base64, args.turbo)?
-        {
-            let origin_arc = Arc::new(origin);
-            let blob_arc = Arc::new(blob_md);
+            if let Some((origin, blob_md, scored_matches)) = processor.run(
+                origin,
+                blob,
+                args.no_dedup,
+                args.redact,
+                args.no_base64,
+                args.turbo,
+            )? {
+                let origin_arc = Arc::new(origin);
+                let blob_arc = Arc::new(blob_md);
 
-            let mut batch = Vec::with_capacity(scored_matches.len());
-            for (_score, m) in scored_matches {
-                batch.push((origin_arc.clone(), blob_arc.clone(), m));
+                let mut batch = Vec::with_capacity(scored_matches.len());
+                for (_score, m) in scored_matches {
+                    batch.push((origin_arc.clone(), blob_arc.clone(), m));
+                }
+
+                let added = datastore.lock().unwrap().record(batch, !args.no_dedup);
+                debug!("Added {} new S3 blobs", added);
             }
-
-            let added = datastore.lock().unwrap().record(batch, !args.no_dedup);
-            debug!("Added {} new S3 blobs", added);
-        }
-        pb.inc(1);
-        Ok(())
-    })
+            pb.inc(1);
+            Ok(())
+        },
+    )
     .await?;
 
     let total = progress.position();
@@ -1509,12 +1528,14 @@ pub async fn fetch_huggingface_objects(
     let pb = progress.clone();
     let auth = huggingface::AuthConfig::from_env();
 
-    huggingface::visit_bucket_objects(
+    huggingface::visit_bucket_objects_selected(
         buckets,
         &auth,
         global_args.ignore_certs,
         args.content_filtering_args.max_file_size_bytes(),
         &args.content_filtering_args.exclude,
+        &args.content_filtering_args.path_selection,
+        args.input_specifier_args.object_cache_dir.as_deref(),
         move |bucket, key, bytes| {
             pb.inc(1);
             if args.content_filtering_args.no_binary && is_binary(&bytes) {
@@ -1604,36 +1625,146 @@ pub async fn fetch_gcs_objects(
 
     let bucket_name = bucket.to_string();
 
-    gcs::visit_bucket_objects(bucket, prefix, service_account, move |key, bytes| {
-        let origin = OriginSet::new(
-            Origin::from_extended(serde_json::json!({
-                "path": format!("gs://{}/{}", bucket_name, key)
-            })),
-            Vec::new(),
-        );
-        let blob = crate::blob::Blob::from_bytes(bytes);
+    gcs::visit_bucket_objects_selected(
+        bucket,
+        prefix,
+        service_account,
+        &args.content_filtering_args.path_selection,
+        args.input_specifier_args.object_cache_dir.as_deref(),
+        args.content_filtering_args.max_file_size_bytes(),
+        move |key, bytes| {
+            let origin = OriginSet::new(
+                Origin::from_extended(serde_json::json!({
+                    "path": format!("gs://{}/{}", bucket_name, key)
+                })),
+                Vec::new(),
+            );
+            let blob = crate::blob::Blob::from_bytes(bytes);
 
-        if let Some((origin, blob_md, scored_matches)) =
-            processor.run(origin, blob, args.no_dedup, args.redact, args.no_base64, args.turbo)?
-        {
-            let origin_arc = Arc::new(origin);
-            let blob_arc = Arc::new(blob_md);
+            if let Some((origin, blob_md, scored_matches)) = processor.run(
+                origin,
+                blob,
+                args.no_dedup,
+                args.redact,
+                args.no_base64,
+                args.turbo,
+            )? {
+                let origin_arc = Arc::new(origin);
+                let blob_arc = Arc::new(blob_md);
 
-            let mut batch = Vec::with_capacity(scored_matches.len());
-            for (_score, m) in scored_matches {
-                batch.push((origin_arc.clone(), blob_arc.clone(), m));
+                let mut batch = Vec::with_capacity(scored_matches.len());
+                for (_score, m) in scored_matches {
+                    batch.push((origin_arc.clone(), blob_arc.clone(), m));
+                }
+
+                let added = datastore.lock().unwrap().record(batch, !args.no_dedup);
+                debug!("Added {} new GCS blobs", added);
             }
-
-            let added = datastore.lock().unwrap().record(batch, !args.no_dedup);
-            debug!("Added {} new GCS blobs", added);
-        }
-        pb.inc(1);
-        Ok(())
-    })
+            pb.inc(1);
+            Ok(())
+        },
+    )
     .await?;
 
     let total = progress.position();
     progress.finish_with_message(format!("Fetched {} GCS objects", total));
+
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn fetch_azure_blobs(
+    args: &scan::ScanArgs,
+    global_args: &global::GlobalArgs,
+    datastore: &Arc<Mutex<findings_store::FindingsStore>>,
+    rules_db: &RulesDatabase,
+    matcher_stats: &Mutex<MatcherStats>,
+    enable_profiling: bool,
+    shared_profiler: Arc<crate::rule_profiling::ConcurrentRuleProfiler>,
+    progress_enabled: bool,
+) -> Result<()> {
+    let Some(container) = args.input_specifier_args.azure_blob.as_ref() else {
+        return Ok(());
+    };
+
+    let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+    let seen_blobs = BlobIdMap::new();
+    let matcher = Matcher::new(
+        rules_db,
+        scanner_pool,
+        &seen_blobs,
+        Some(matcher_stats),
+        enable_profiling,
+        if enable_profiling { Some(shared_profiler.clone()) } else { None },
+        &args.extra_ignore_comments,
+        args.no_inline_ignore,
+        !args.no_ignore_if_contains,
+    )?
+    .with_resource_limits(args.content_filtering_args.resource_limits());
+    let mut processor = BlobProcessor { matcher };
+
+    let progress = if progress_enabled {
+        let style =
+            ProgressStyle::with_template("{spinner} {msg} ({pos} objects) [{elapsed_precise}]")
+                .expect("progress bar style template should compile");
+        let pb = ProgressBar::new_spinner()
+            .with_style(style)
+            .with_message("Fetching Azure Blob objects");
+        pb.enable_steady_tick(Duration::from_millis(500));
+        pb
+    } else {
+        ProgressBar::hidden()
+    };
+
+    let pb = progress.clone();
+
+    let container_url = container.clone();
+
+    crate::azure_blob::visit_container_blobs(
+        container,
+        crate::azure_blob::AzureBlobOptions {
+            selection: &args.content_filtering_args.path_selection,
+            cache_dir: args.input_specifier_args.object_cache_dir.as_deref(),
+            max_object_bytes: args.content_filtering_args.max_file_size_bytes(),
+            ignore_certs: global_args.ignore_certs,
+            no_timeouts: args.no_timeouts,
+        },
+        move |key, bytes| {
+            let origin = OriginSet::new(
+                Origin::from_extended(serde_json::json!({
+                    "path": crate::azure_blob::blob_url(&container_url, &key)?.as_str()
+                })),
+                Vec::new(),
+            );
+            let blob = crate::blob::Blob::from_bytes(bytes);
+
+            if let Some((origin, blob_md, scored_matches)) = processor.run(
+                origin,
+                blob,
+                args.no_dedup,
+                args.redact,
+                args.no_base64,
+                args.turbo,
+            )? {
+                let origin_arc = Arc::new(origin);
+                let blob_arc = Arc::new(blob_md);
+
+                let mut batch = Vec::with_capacity(scored_matches.len());
+                for (_score, m) in scored_matches {
+                    batch.push((origin_arc.clone(), blob_arc.clone(), m));
+                }
+
+                let added = datastore.lock().unwrap().record(batch, !args.no_dedup);
+                debug!("Added {} new Azure Blob findings", added);
+            }
+            pb.inc(1);
+            Ok(())
+        },
+    )
+    .await?;
+
+    let total = progress.position();
+    progress.finish_with_message(format!("Fetched {} Azure Blob objects", total));
 
     Ok(())
 }

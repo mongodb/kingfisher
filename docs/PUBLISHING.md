@@ -21,22 +21,26 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
 | `kingfisher-core` | `1.0.3` | `kingfisher_core` library |
-| `kingfisher-rules` | `1.2.1` | `kingfisher_rules` library |
-| `kingfisher-scanner` | `1.4.0` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.13.0` | `kingfisher` executable and library |
+| `kingfisher-rules` | `2.0.0` | `kingfisher_rules` library |
+| `kingfisher-scanner` | `2.0.0` | `kingfisher_scanner` library |
+| `kingfisher-bin` | `2.14.0` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
 `1.4.0` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
 
-The libraries establish their stable `1.x` API at `1.0.0`; they do not inherit the CLI
-version. See the [compatibility contract](LIBRARY.md#api-stability).
+The libraries follow semantic versioning within each stable major and do not inherit
+the CLI version. Rules and scanner 2.0.0 account for the new exhaustive
+`HttpValidation.auth` field and the scanner's public rules-crate types/re-exports.
+Downstream scanner users must use rules 2.x types rather than rules 1.x types.
+Core 1.0.3, CLI 2.14.0 and Python SDK 1.4.0 remain unchanged; the Rust break does
+not change the Python API. See the [migration and compatibility contract](LIBRARY.md#api-stability).
 `kingfisher-rule-bundle` is `0.1.0` with `publish = false`. The external
 `kingfisher-vectorscan` dependency is versioned separately.
 
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.13.0
+cargo install --locked kingfisher-bin --version 2.14.0
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
@@ -136,18 +140,23 @@ cargo test --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner
 cargo test --locked -p kingfisher-scanner --all-features
 ```
 
-Before subsequent `1.x` releases, compare each library against its last published
-compatible version, both without optional features and with all features. For example,
-after `1.0.0` is published:
+Before compatible releases, compare each library against its last published version
+in the same major, both without optional features and with all features. Baselines
+are independent: after the releases above are published, for example:
 
 ```sh
-cargo semver-checks -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner --baseline-version 1.0.0 --only-explicit-features
-cargo semver-checks -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner --baseline-version 1.0.0 --all-features
+for feature_set in --only-explicit-features --all-features; do
+  cargo semver-checks -p kingfisher-core --baseline-version 1.0.3 "$feature_set"
+  cargo semver-checks -p kingfisher-rules --baseline-version 2.0.0 "$feature_set"
+  cargo semver-checks -p kingfisher-scanner --baseline-version 2.0.0 "$feature_set"
+done
 ```
 
 Use an installed `cargo-semver-checks` release compatible with the Rust toolchain.
-The first stable release deliberately changes the pre-1.0 scanner API; review the
-[migration notes](LIBRARY.md#migrating-from-the-01-api) before publishing.
+For the initial rules/scanner 2.0.0 release, review the intentional break against
+the preceding 1.x releases and the [2.0 migration notes](LIBRARY.md#migrating-to-rules-and-scanner-20);
+do not treat a major bump as permission for unrelated breaks. The historical
+[pre-1.0 migration](LIBRARY.md#migrating-from-the-01-api) remains documented.
 CI compares PRs against their base revision so later changes cannot silently break
 unchanged major versions. A passing static check does not replace behavior tests,
 Windows x64/arm64 verification, or review of public dependency types and MSRV.
@@ -259,7 +268,7 @@ publishing, first create fresh archives:
 
 ```sh
 cargo package --locked --workspace --exclude kingfisher-rule-bundle
-python3 scripts/publish-crates.py --tag v2.9.0
+python3 scripts/publish-crates.py --tag v2.14.0
 python3 -m unittest discover -s scripts/tests -v
 ```
 

@@ -6,7 +6,7 @@ use std::{
     io::{BufWriter, Write},
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex},
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use anyhow::{Context, Result};
@@ -466,13 +466,9 @@ fn sanitize_error(error: &str) -> String {
 ///
 /// This reads repository metadata and must be called *outside* any lock
 /// shared with other scan workers (see [`ScanAuditCollector::scan_started_with_snapshot`]).
-/// Operations share the repository timeout from `args`; zero or `--no-limits` disables it.
+/// Operations share the repository timeout from `args`; zero or `--no-timeouts` disables it.
 pub fn git_snapshot(root: &Path, args: &scan::ScanArgs, fetched: bool) -> GitAuditSnapshot {
-    let deadline = if args.content_filtering_args.no_limits || args.git_repo_timeout == 0 {
-        None
-    } else {
-        Instant::now().checked_add(Duration::from_secs(args.git_repo_timeout))
-    };
+    let deadline = args.repository_timeout().and_then(|budget| Instant::now().checked_add(budget));
     // Open once for all metadata queries. Isolated options match the scanner and
     // avoid consulting unrelated user/system configuration or executing helpers.
     let pack_cache_bytes =
@@ -748,6 +744,7 @@ fn git_commit_count(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::Duration;
     use tempfile::tempdir;
 
     #[test]
@@ -782,7 +779,7 @@ mod tests {
     }
 
     #[test]
-    fn unlimited_repository_timeouts_preserve_audit_boundaries() {
+    fn content_limits_and_repository_timeouts_preserve_audit_boundaries() {
         use clap::Parser;
 
         let temp = tempdir().unwrap();
@@ -799,6 +796,8 @@ mod tests {
             vec!["--git-repo-timeout=0"],
             vec!["--git-repo-timeout=1", "--no-limits"],
             vec!["--git-repo-timeout=0", "--no-limits"],
+            vec!["--git-repo-timeout=1", "--no-timeouts"],
+            vec!["--git-repo-timeout=1", "--no-limits", "--no-timeouts"],
         ] {
             let command = crate::cli::CommandLineArgs::try_parse_from(
                 ["kingfisher", "scan", "."].into_iter().chain(options.iter().copied()),

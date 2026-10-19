@@ -103,6 +103,81 @@ mod test {
             );
     }
 
+    #[cfg(debug_assertions)]
+    #[test]
+    fn cli_rules_list_redacts_oauth2_credentials() {
+        let temp = tempdir().expect("tempdir should be created");
+        let path = temp.path().join("oauth2 inspection.yml");
+        fs::write(
+            &path,
+            r#"
+ rules:
+   - id: acme.oauth2-inspection
+     name: OAuth2 inspection fixture
+     pattern: '(synthetic-secret)'
+     validation:
+       type: Http
+       content:
+         auth:
+           oauth2:
+             token_endpoint: https://idp.example.com/token
+             ropc:
+               username: operator-user-secret
+               password: operator-password-secret
+               client_id: scanner
+               client_secret: operator-client-secret
+         request:
+           method: GET
+           url: https://verifier.example.com/verify
+           response_matcher:
+             - type: StatusMatch
+               status: [200]
+"#,
+        )
+        .expect("rule fixture should be written");
+        for format in ["json", "pretty"] {
+            let output = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+                .args([
+                    "rules",
+                    "list",
+                    "--show-validation",
+                    "--format",
+                    format,
+                    "--load-builtins=false",
+                    "--no-update-check",
+                    "--rules-path",
+                ])
+                .arg(&path)
+                .timeout(std::time::Duration::from_secs(30))
+                .assert()
+                .success()
+                .get_output()
+                .clone();
+            for bytes in [&output.stdout, &output.stderr] {
+                let text = String::from_utf8_lossy(bytes);
+                for secret in
+                    ["operator-user-secret", "operator-password-secret", "operator-client-secret"]
+                {
+                    assert!(
+                        !text.contains(secret),
+                        "inspection must not expose operator credentials"
+                    );
+                }
+            }
+            if format == "json" {
+                let rules: Value =
+                    serde_json::from_slice(&output.stdout).expect("valid rules JSON");
+                assert_eq!(rules[0]["id"], "acme.oauth2-inspection");
+                let auth = &rules[0]["validation"]["content"]["auth"]["oauth2"];
+                assert_eq!(auth["token_header"], "Authorization");
+                for field in ["username", "password", "client_secret"] {
+                    assert_eq!(auth["ropc"][field], "[REDACTED]");
+                }
+                assert_eq!(auth["ropc"]["client_id"], "scanner");
+            }
+        }
+    }
+
     #[test]
     fn cli_version_flag() {
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))

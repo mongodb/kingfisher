@@ -108,7 +108,14 @@ pub struct ScanArgs {
     #[arg(global = true, long, short = 'n', default_value_t = false)]
     pub no_validate: bool,
 
-    /// Timeout for validation requests in seconds (0 = unlimited)
+    /// Disable scan network, Git subprocess, repository, and validation deadlines.
+    /// Overrides individual timeout settings; stalled operations can wait indefinitely.
+    /// Content limits remain enabled unless --no-limits is also supplied.
+    /// Cleanup waits and provider-specific probe deadlines remain bounded.
+    #[arg(global = true, long, default_value_t = false)]
+    pub no_timeouts: bool,
+
+    /// Timeout for validation requests in seconds, including with --no-limits (0 = unlimited)
     #[arg(
         global = true,
         long = "validation-timeout",
@@ -383,6 +390,15 @@ pub enum ValidationFilter {
 }
 
 impl ScanArgs {
+    /// Effective budget for repository enumeration, scanning, and audit metadata.
+    pub fn repository_timeout(&self) -> Option<std::time::Duration> {
+        if self.no_timeouts || self.git_repo_timeout == 0 {
+            None
+        } else {
+            Some(std::time::Duration::from_secs(self.git_repo_timeout))
+        }
+    }
+
     /// Rejects `--audit-log` aliasing a path the scan reads or rewrites.
     ///
     /// The audit log is opened with truncation at scan startup, before the
@@ -625,6 +641,7 @@ impl ScanCommandArgs {
 
     /// Convert CLI arguments into a scan or repository-listing operation.
     pub fn into_operation(mut self) -> anyhow::Result<ScanOperation> {
+        self.scan_args.content_filtering_args.path_selection.check()?;
         let mut used_provider_subcommand = false;
 
         self.scan_args.view_report = self.view_report;
@@ -831,6 +848,7 @@ impl ScanCommandArgs {
                     }
                 }
                 ScanInputCommand::Huggingface(args) => {
+                    scan_args.input_specifier_args.object_cache_dir = args.object_cache_dir;
                     if args.specifiers.is_empty() {
                         bail!(
                             "You must specify at least one --user, --org, --model, --dataset, --space, or --bucket when scanning Hugging Face"
@@ -866,7 +884,8 @@ impl ScanCommandArgs {
                 }
                 ScanInputCommand::Jira(args) => {
                     scan_args.input_specifier_args.jira_url = Some(args.url);
-                    scan_args.input_specifier_args.jql = Some(args.jql);
+                    scan_args.input_specifier_args.jql =
+                        Some(crate::jira::excluding_projects(&args.jql, &args.exclude_projects)?);
                     scan_args.input_specifier_args.max_results =
                         if args.all { UNLIMITED_RESULTS } else { args.max_results };
                     scan_args.input_specifier_args.jira_include_comments = args.include_comments;
@@ -903,14 +922,22 @@ impl ScanCommandArgs {
                 ScanInputCommand::S3(args) => {
                     scan_args.input_specifier_args.s3_bucket = Some(args.bucket);
                     scan_args.input_specifier_args.s3_prefix = args.prefix;
+                    scan_args.input_specifier_args.object_cache_dir = args.object_cache_dir;
                     scan_args.input_specifier_args.role_arn = args.role_arn;
                     scan_args.input_specifier_args.aws_local_profile = args.profile;
                     None
                 }
                 ScanInputCommand::Gcs(args) => {
+                    scan_args.input_specifier_args.object_cache_dir = args.object_cache_dir;
                     scan_args.input_specifier_args.gcs_bucket = Some(args.bucket);
                     scan_args.input_specifier_args.gcs_prefix = args.prefix;
                     scan_args.input_specifier_args.gcs_service_account = args.service_account;
+                    None
+                }
+                ScanInputCommand::AzureBlob(args) => {
+                    crate::azure_blob::check_container_url(&args.container)?;
+                    scan_args.input_specifier_args.azure_blob = Some(args.container);
+                    scan_args.input_specifier_args.object_cache_dir = args.object_cache_dir;
                     None
                 }
                 ScanInputCommand::Docker(args) => {
@@ -1156,6 +1183,9 @@ pub enum ScanInputCommand {
     /// Scan a Google Cloud Storage bucket
     Gcs(GcsScanArgs),
 
+    /// Scan an Azure Blob Storage container
+    AzureBlob(AzureBlobScanArgs),
+
     /// Scan Docker or OCI images
     Docker(DockerScanArgs),
 }
@@ -1305,6 +1335,10 @@ pub struct AzureScanArgs {
 
 #[derive(Args, Debug, Clone, Default)]
 pub struct HuggingfaceScanArgs {
+    /// Persist bucket listing checkpoints and content to reuse downloads
+    #[arg(long = "object-cache-dir", value_hint = ValueHint::DirPath)]
+    pub object_cache_dir: Option<PathBuf>,
+
     #[command(flatten)]
     pub specifiers: HuggingFaceRepoSpecifiers,
 
@@ -1362,6 +1396,10 @@ pub struct JiraScanArgs {
     /// JQL query to select Jira issues
     #[arg(long, alias = "jql")]
     pub jql: String,
+
+    /// Project key to exclude, regardless of case (repeatable)
+    #[arg(long = "skip-project")]
+    pub exclude_projects: Vec<String>,
 
     /// Maximum number of Jira issues to fetch
     #[arg(long = "max-results", default_value_t = 100)]
@@ -1445,6 +1483,10 @@ pub struct S3ScanArgs {
     #[arg(value_name = "BUCKET")]
     pub bucket: String,
 
+    /// Persist listing checkpoints and object content to reuse downloads
+    #[arg(long = "object-cache-dir", value_hint = ValueHint::DirPath)]
+    pub object_cache_dir: Option<PathBuf>,
+
     /// Optional prefix within the bucket
     #[arg(long = "prefix", alias = "s3-prefix")]
     pub prefix: Option<String>,
@@ -1460,6 +1502,10 @@ pub struct S3ScanArgs {
 
 #[derive(Args, Debug, Clone)]
 pub struct GcsScanArgs {
+    /// Persist listing checkpoints and object content to reuse downloads
+    #[arg(long = "object-cache-dir", value_hint = ValueHint::DirPath)]
+    pub object_cache_dir: Option<PathBuf>,
+
     /// Google Cloud Storage bucket to scan
     #[arg(value_name = "BUCKET")]
     pub bucket: String,
@@ -1471,6 +1517,17 @@ pub struct GcsScanArgs {
     /// Service account JSON file for authentication
     #[arg(long = "service-account", alias = "gcs-service-account", value_hint = ValueHint::FilePath)]
     pub service_account: Option<PathBuf>,
+}
+
+#[derive(Args, Debug, Clone)]
+pub struct AzureBlobScanArgs {
+    /// Container URL, e.g. `https://account.blob.core.windows.net/container` (no SAS query)
+    #[arg(value_name = "CONTAINER_URL", value_hint = ValueHint::Url)]
+    pub container: Url,
+
+    /// Persist listing checkpoints and object content to reuse downloads
+    #[arg(long = "object-cache-dir", value_hint = ValueHint::DirPath)]
+    pub object_cache_dir: Option<PathBuf>,
 }
 
 #[derive(Args, Debug, Clone)]
@@ -1487,6 +1544,149 @@ pub struct DockerScanArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn azure_blob_options_reach_the_fetcher() {
+        use crate::cli::global::{Command, CommandLineArgs};
+        use clap::Parser;
+        let parsed = CommandLineArgs::try_parse_from([
+            "kingfisher",
+            "scan",
+            "azure-blob",
+            "https://account.blob.core.windows.net/container",
+            "--path-prefix",
+            "configs/",
+            "--skip-path-prefix",
+            "configs/generated/",
+            "--file-extension",
+            "env",
+            "--object-cache-dir",
+            "blob-cache",
+            "--format",
+            "toon",
+        ])
+        .unwrap();
+        let Command::Scan(command) = parsed.command else { panic!("expected scan") };
+        let ScanOperation::Scan(scan) = command.into_operation().unwrap() else {
+            panic!("expected scanning")
+        };
+        assert_eq!(
+            scan.input_specifier_args.azure_blob.unwrap().as_str(),
+            "https://account.blob.core.windows.net/container"
+        );
+        assert_eq!(scan.input_specifier_args.object_cache_dir, Some(PathBuf::from("blob-cache")));
+        assert_eq!(scan.content_filtering_args.path_selection.include_prefixes, ["configs/"]);
+        assert_eq!(
+            scan.content_filtering_args.path_selection.exclude_prefixes,
+            ["configs/generated/"]
+        );
+        assert_eq!(scan.content_filtering_args.path_selection.include_extensions, ["env"]);
+        let parsed = CommandLineArgs::try_parse_from([
+            "kingfisher",
+            "scan",
+            "azure-blob",
+            "https://account.blob.core.windows.net/container?sig=secret",
+        ])
+        .unwrap();
+        let Command::Scan(command) = parsed.command else { panic!("expected scan") };
+        let error = command.into_operation().unwrap_err().to_string();
+        assert!(error.contains("KF_AZURE_STORAGE_SAS"));
+        assert!(!error.contains("secret"));
+    }
+
+    #[test]
+    fn focused_s3_options_reach_the_fetcher_and_legacy_prefix_is_unambiguous() {
+        use crate::cli::global::{Command, CommandLineArgs};
+        use clap::Parser;
+        let parsed = CommandLineArgs::try_parse_from([
+            "kingfisher",
+            "scan",
+            "s3",
+            "bucket",
+            "--path-prefix",
+            "configs/",
+            "--path-prefix",
+            "deploy/",
+            "--skip-path-prefix",
+            "configs/generated/",
+            "--file-extension",
+            "json",
+            "--file-extension",
+            ".env",
+            "--skip-file-extension",
+            "bak",
+            "--object-cache-dir",
+            "s3-state",
+            "--format",
+            "toon",
+        ])
+        .unwrap();
+        let Command::Scan(command) = parsed.command else { panic!("expected scan") };
+        let ScanOperation::Scan(scan) = command.into_operation().unwrap() else {
+            panic!("expected scanning")
+        };
+        let input = scan.input_specifier_args;
+        assert_eq!(input.s3_bucket.as_deref(), Some("bucket"));
+        assert_eq!(
+            scan.content_filtering_args.path_selection.include_prefixes,
+            ["configs/", "deploy/"]
+        );
+        assert_eq!(
+            scan.content_filtering_args.path_selection.exclude_prefixes,
+            ["configs/generated/"]
+        );
+        assert_eq!(scan.content_filtering_args.path_selection.include_extensions, ["json", ".env"]);
+        assert_eq!(scan.content_filtering_args.path_selection.exclude_extensions, ["bak"]);
+        assert_eq!(input.object_cache_dir, Some(PathBuf::from("s3-state")));
+        // This spelling did not exist in Kingfisher before these changes.
+        for spelling in
+            ["include-prefix", "exclude-prefix", "include-extension", "exclude-extension"]
+        {
+            let flag = format!("--{spelling}");
+            assert!(
+                CommandLineArgs::try_parse_from([
+                    "kingfisher",
+                    "scan",
+                    "s3",
+                    "bucket",
+                    &flag,
+                    "value"
+                ])
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn jira_excluded_projects_are_combined_with_the_search_query() {
+        use crate::cli::global::{Command, CommandLineArgs};
+        use clap::Parser;
+        let parsed = CommandLineArgs::try_parse_from([
+            "kingfisher",
+            "scan",
+            "jira",
+            "--url",
+            "https://example.atlassian.net",
+            "--jql",
+            "updated >= -30d ORDER BY updated DESC",
+            "--skip-project",
+            "archive",
+            "--skip-project",
+            "Sandbox",
+            "--all",
+        ])
+        .unwrap();
+        let Command::Scan(command) = parsed.command else { panic!("expected scan") };
+        let ScanOperation::Scan(scan) = command.into_operation().unwrap() else {
+            panic!("expected scanning")
+        };
+        assert_eq!(
+            scan.input_specifier_args.jql.as_deref(),
+            Some(
+                "(updated >= -30d) AND project NOT IN (\"ARCHIVE\", \"SANDBOX\") ORDER BY updated DESC"
+            )
+        );
+    }
 
     #[test]
     fn equivalent_output_paths_are_detected() {

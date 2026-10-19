@@ -133,11 +133,13 @@ fn test_github_remote_scan() -> Result<()> {
             // s3
             s3_bucket: None,
             s3_prefix: None,
+            object_cache_dir: None,
             role_arn: None,
             aws_local_profile: None,
             gcs_bucket: None,
             gcs_prefix: None,
             gcs_service_account: None,
+            azure_blob: None,
             // Docker image scanning
             docker_image: Vec::new(),
             docker_archive: Vec::new(),
@@ -156,6 +158,7 @@ fn test_github_remote_scan() -> Result<()> {
             staged: false,
         },
         content_filtering_args: ContentFilteringArgs {
+            path_selection: Default::default(),
             no_limits: false,
             max_file_size_mb: 25.0,
             no_extract_archives: false,
@@ -166,6 +169,7 @@ fn test_github_remote_scan() -> Result<()> {
         confidence: ConfidenceLevel::Medium,
         disk_offload: false,
         no_validate: false,
+        no_timeouts: false,
         access_map: false,
         rule_stats: false,
         only_valid: false,

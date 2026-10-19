@@ -121,7 +121,7 @@ kingfisher scan github --organization my-org --format json --output findings.jso
 # SARIF for GitHub code scanning, GitLab, or any SARIF-aware UI
 kingfisher scan github --organization my-org --format sarif --output findings.sarif
 
-# TOON for piping to an LLM or agent
+# Optional TOON for token-efficient LLM or agent input
 kingfisher scan github --organization my-org --format toon
 ```
 

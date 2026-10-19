@@ -32,7 +32,6 @@ pub(crate) struct ScanFinding {
     pub rule_index: usize,
     // Secret spans from different decoded buffers use unrelated synthetic coordinates.
     // Zero identifies raw input; every decoded buffer receives its own scope.
-    #[cfg(feature = "context")]
     pub buffer_id: usize,
 }
 
@@ -225,6 +224,7 @@ impl Scanner {
             false,
             #[cfg(feature = "context")]
             None,
+            None,
         )
     }
 
@@ -260,7 +260,7 @@ impl Scanner {
         options: &crate::context::DetectionOptions,
         control: &ScanControl,
     ) -> Result<Vec<Finding>> {
-        self.scan_blob_impl(blob, path, control, false, Some(options))
+        self.scan_blob_impl(blob, path, control, false, Some(options), None)
     }
 
     /// Detect candidates for offline credential preparation, retaining primaries
@@ -284,6 +284,7 @@ impl Scanner {
             true,
             #[cfg(feature = "context")]
             None,
+            None,
         )
     }
 
@@ -299,7 +300,48 @@ impl Scanner {
         options: &crate::context::DetectionOptions,
         control: &ScanControl,
     ) -> Result<Vec<Finding>> {
-        self.scan_blob_impl(blob, path, control, true, Some(options))
+        self.scan_blob_impl(blob, path, control, true, Some(options), None)
+    }
+
+    /// Scan while retaining compact full-match context for precise dependency windows
+    /// and candidate ranking. No input payload or credential values are retained in context.
+    ///
+    /// # Errors
+    /// Returns the same errors as [`Self::scan_blob_at_path`].
+    pub fn scan_blob_with_context(&self, blob: &Blob, path: &str) -> Result<crate::ScanOutput> {
+        self.scan_blob_with_context_and_control(
+            blob,
+            path,
+            &ScanControl::default(),
+            false,
+            #[cfg(feature = "context")]
+            None,
+        )
+    }
+
+    /// Native integration entrypoint; prefer `scan_blob_with_context` for normal scans.
+    /// Explicit detection options use the same component policy as ordinary scans.
+    /// Without options, component windows use full matches isolated by decoded buffer.
+    #[doc(hidden)]
+    pub fn scan_blob_with_context_and_control(
+        &self,
+        blob: &Blob,
+        path: &str,
+        control: &ScanControl,
+        retain_unresolved: bool,
+        #[cfg(feature = "context")] options: Option<&crate::context::DetectionOptions>,
+    ) -> Result<crate::ScanOutput> {
+        let mut context = crate::ScanContext::new(&self.rules_db);
+        let findings = self.scan_blob_impl(
+            blob,
+            path,
+            control,
+            retain_unresolved,
+            #[cfg(feature = "context")]
+            options,
+            Some(&mut context),
+        )?;
+        Ok(crate::ScanOutput { findings, context: Arc::new(context) })
     }
 
     fn scan_blob_impl(
@@ -309,6 +351,7 @@ impl Scanner {
         control: &ScanControl,
         retain_unresolved: bool,
         #[cfg(feature = "context")] options: Option<&crate::context::DetectionOptions>,
+        mut match_context: Option<&mut crate::ScanContext>,
     ) -> Result<Vec<Finding>> {
         #[cfg(feature = "context")]
         let cli_match_semantics = options.is_some_and(|options| options.cli_match_semantics);
@@ -483,6 +526,27 @@ impl Scanner {
                         continue;
                     }
 
+                    if !primitives::check_pattern_requirements(
+                        &rule,
+                        confirmation_regex,
+                        &captures,
+                        full_capture.as_bytes(),
+                        secret_bytes,
+                        true,
+                    ) {
+                        continue;
+                    }
+
+                    #[cfg(feature = "validation")]
+                    if !primitives::check_uri_validation(
+                        &rule,
+                        confirmation_regex,
+                        &captures,
+                        secret_bytes,
+                    ) {
+                        continue;
+                    }
+
                     let capture_map = named_captures(confirmation_regex, &captures);
                     let filter_outcome = if let Some(expression) = rule.betterleaks_filter() {
                         let full_match = String::from_utf8_lossy(full_capture.as_bytes());
@@ -588,7 +652,6 @@ impl Scanner {
                         secret_span: offset_span,
                         #[cfg(feature = "context")]
                         rule_index: rule_id,
-                        #[cfg(feature = "context")]
                         buffer_id: 0,
                     });
                 }
@@ -611,6 +674,10 @@ impl Scanner {
             }
         }
 
+        if let Some(context) = match_context.as_deref_mut() {
+            context.record(bytes, &mut findings, 0, control)?;
+        }
+
         // Scan Base64-encoded content
         if self.config.enable_base64_decoding {
             let b64_findings = self.scan_base64_content(
@@ -622,6 +689,7 @@ impl Scanner {
                 control,
                 #[cfg(feature = "context")]
                 options,
+                match_context.as_deref_mut(),
             )?;
             findings.extend(b64_findings);
         }
@@ -638,7 +706,16 @@ impl Scanner {
             )?;
         }
         if !retain_unresolved {
-            enforce_betterleaks_components(&mut findings, bytes, cli_match_semantics, control)?;
+            let component_context = match_context.as_deref();
+            // Retaining metadata must not override an explicit detection policy.
+            // Keep the no-options context API's full-match/buffer-local contract.
+            #[cfg(feature = "context")]
+            let component_context = component_context.filter(|_| options.is_none());
+            if let Some(context) = component_context {
+                enforce_context_components(&mut findings, context, control)?;
+            } else {
+                enforce_betterleaks_components(&mut findings, bytes, cli_match_semantics, control)?;
+            }
         }
         if cli_match_semantics {
             let keep = crate::postprocess::credential_uri_keep(
@@ -696,6 +773,7 @@ impl Scanner {
         seen_matches: &mut FxHashSet<u64>,
         control: &ScanControl,
         #[cfg(feature = "context")] options: Option<&crate::context::DetectionOptions>,
+        mut match_context: Option<&mut crate::ScanContext>,
     ) -> Result<Vec<ScanFinding>> {
         let mut findings = Vec::new();
         let bytes = blob.bytes();
@@ -720,14 +798,11 @@ impl Scanner {
         if max_depth == 1 {
             b64_items.reverse();
         }
-        #[cfg(feature = "context")]
         let mut buffer_id = 0;
         while let Some((item, depth)) = b64_items.pop() {
             control.check()?;
-            #[cfg(feature = "context")]
-            {
-                buffer_id += 1;
-            }
+            buffer_id += 1;
+            let buffer_start = findings.len();
             // CLI spans belong to this decoded buffer. Legacy scans retain their
             // historical source-span deduplication across first-layer buffers.
             let mut decoded_seen_matches = FxHashSet::default();
@@ -780,6 +855,22 @@ impl Scanner {
                         self.config.min_entropy_override.unwrap_or(rule.min_entropy());
                     let entropy = calculate_shannon_entropy(secret_bytes);
                     if entropy <= min_entropy {
+                        continue;
+                    }
+
+                    if !primitives::check_pattern_requirements(
+                        &rule,
+                        regex,
+                        &captures,
+                        full_capture.as_bytes(),
+                        secret_bytes,
+                        true,
+                    ) {
+                        continue;
+                    }
+
+                    #[cfg(feature = "validation")]
+                    if !primitives::check_uri_validation(&rule, regex, &captures, secret_bytes) {
                         continue;
                     }
 
@@ -900,10 +991,17 @@ impl Scanner {
                         ),
                         #[cfg(feature = "context")]
                         rule_index: rule_id,
-                        #[cfg(feature = "context")]
                         buffer_id,
                     });
                 }
+            }
+            if let Some(context) = match_context.as_deref_mut() {
+                context.record(
+                    &item.decoded,
+                    &mut findings[buffer_start..],
+                    item.pos_start,
+                    control,
+                )?;
             }
             if depth < max_depth {
                 for nested in primitives::get_base64_strings_with_control(&item.decoded, control)? {
@@ -967,6 +1065,98 @@ fn finding_rule(rule: &Arc<Rule>, confidence: Confidence) -> Arc<Rule> {
     Arc::new(effective_rule)
 }
 
+fn enforce_context_components(
+    findings: &mut Vec<ScanFinding>,
+    context: &crate::ScanContext,
+    control: &ScanControl,
+) -> Result<()> {
+    let dependencies = |primary: &ScanFinding| {
+        primary
+            .rule
+            .syntax()
+            .depends_on_rule
+            .iter()
+            .flatten()
+            .filter(|dep| !dep.optional && dep.within.is_some())
+            .count()
+    };
+    let counts: Vec<_> = findings.iter().map(dependencies).collect();
+    if counts.iter().all(|&count| count == 0) {
+        return Ok(());
+    }
+    type Entries<'a> = Vec<(&'a str, usize, usize)>;
+    let mut buffers: BTreeMap<usize, (Entries<'_>, Entries<'_>)> = BTreeMap::new();
+    for (index, finding) in findings.iter().enumerate() {
+        control.check()?;
+        let Some(metadata) = context.get(finding) else {
+            continue;
+        };
+        let (offsets, lines) = buffers.entry(metadata.buffer).or_default();
+        offsets.push((&finding.rule_id, metadata.location.start_offset, index));
+        lines.push((&finding.rule_id, metadata.location.line, index));
+    }
+    let mut buffers: BTreeMap<_, _> = buffers
+        .into_iter()
+        .map(|(buffer, (offsets, lines))| {
+            (
+                buffer,
+                (
+                    crate::postprocess::RuleMatchIndex::new(offsets),
+                    crate::postprocess::RuleMatchIndex::new(lines),
+                ),
+            )
+        })
+        .collect();
+    let keep = crate::components::dependency_keep(
+        &counts,
+        &mut buffers,
+        |buffers, primary_index, dependency_index| {
+            let primary = &findings[primary_index];
+            let dependency = primary
+                .rule
+                .syntax()
+                .depends_on_rule
+                .iter()
+                .flatten()
+                .filter(|dep| !dep.optional && dep.within.is_some())
+                .nth(dependency_index)
+                .unwrap();
+            let metadata = context.get(primary).unwrap();
+            let window =
+                FindingWindow::parse(&metadata.location, dependency.within.as_deref().unwrap());
+            let (offsets, lines) = &buffers[&metadata.buffer];
+            let (index, range) = match &window {
+                FindingWindow::Offsets(range) => (offsets, range.clone()),
+                FindingWindow::Lines(range, _) => (lines, range.clone()),
+                FindingWindow::Any => (offsets, 0..usize::MAX),
+                FindingWindow::Invalid => return Ok(None),
+            };
+            for &(_, candidate) in index.candidates(&dependency.rule_id, range) {
+                control.check()?;
+                if window.contains_location(&context.get(&findings[candidate]).unwrap().location) {
+                    return Ok(Some(candidate));
+                }
+            }
+            Ok(None)
+        },
+        |buffers, index| {
+            let finding = &findings[index];
+            let metadata = context.get(finding).unwrap();
+            let (offsets, lines) = buffers.get_mut(&metadata.buffer).unwrap();
+            offsets.remove(&finding.rule_id, metadata.location.start_offset, index);
+            lines.remove(&finding.rule_id, metadata.location.line, index);
+        },
+        control,
+    )?;
+    let mut index = 0;
+    findings.retain(|_| {
+        let retained = keep[index];
+        index += 1;
+        retained
+    });
+    Ok(())
+}
+
 fn enforce_betterleaks_components(
     findings: &mut Vec<ScanFinding>,
     bytes: &[u8],
@@ -1024,7 +1214,7 @@ fn enforce_betterleaks_components(
             let primary = &findings[primary_index];
             let dependency = dependencies(primary).nth(dependency_index).unwrap();
             let within = dependency.within.as_deref().unwrap();
-            let window = FindingWindow::parse(primary, within);
+            let window = FindingWindow::parse(&primary.location, within);
             let component_window = crate::postprocess::parse_component_window(within);
             let (index, range) = if cli_match_semantics {
                 (
@@ -1102,7 +1292,7 @@ enum FindingWindow {
 }
 
 impl FindingWindow {
-    fn parse(primary: &Finding, within: &str) -> Self {
+    fn parse(primary: &FindingLocation, within: &str) -> Self {
         let within = within.trim();
         if within.is_empty() || within == "0" {
             return Self::Any;
@@ -1143,20 +1333,18 @@ impl FindingWindow {
 
         if lines_before.is_none() && lines_after.is_none() {
             return Self::Offsets(
-                primary.location.start_offset.saturating_sub(cols_before)
-                    ..primary.location.end_offset.saturating_add(cols_after),
+                primary.start_offset.saturating_sub(cols_before)
+                    ..primary.end_offset.saturating_add(cols_after),
             );
         }
-        let columns = (primary.location.line == primary.location.end_line
-            && (cols_before > 0 || cols_after > 0))
+        let columns = (primary.line == primary.end_line && (cols_before > 0 || cols_after > 0))
             .then(|| {
-                primary.location.column.saturating_sub(cols_before)
-                    ..primary.location.end_column.saturating_add(cols_after)
+                primary.column.saturating_sub(cols_before)
+                    ..primary.end_column.saturating_add(cols_after)
             });
         Self::Lines(
-            primary.location.line.saturating_sub(lines_before.unwrap_or_default())
+            primary.line.saturating_sub(lines_before.unwrap_or_default())
                 ..primary
-                    .location
                     .end_line
                     .saturating_add(lines_after.unwrap_or_default())
                     .saturating_add(1),
@@ -1165,15 +1353,17 @@ impl FindingWindow {
     }
 
     fn contains(&self, component: &Finding) -> bool {
+        self.contains_location(&component.location)
+    }
+
+    fn contains_location(&self, component: &FindingLocation) -> bool {
         match self {
             Self::Any => true,
             Self::Invalid => false,
-            Self::Offsets(range) => range.contains(&component.location.start_offset),
+            Self::Offsets(range) => range.contains(&component.start_offset),
             Self::Lines(lines, columns) => {
-                lines.contains(&component.location.line)
-                    && columns
-                        .as_ref()
-                        .is_none_or(|range| range.contains(&component.location.column))
+                lines.contains(&component.line)
+                    && columns.as_ref().is_none_or(|range| range.contains(&component.column))
             }
         }
     }
@@ -1181,7 +1371,17 @@ impl FindingWindow {
 
 #[cfg(feature = "validation")]
 pub(crate) fn finding_is_within(primary: &Finding, component: &Finding, within: &str) -> bool {
-    FindingWindow::parse(primary, within).contains(component)
+    locations_are_within(&primary.location, &component.location, within)
+}
+
+#[cfg(feature = "validation")]
+pub(crate) fn locations_are_within(
+    primary: &FindingLocation,
+    component: &FindingLocation,
+    within: &str,
+) -> bool {
+    let window = FindingWindow::parse(primary, within);
+    window.contains_location(component)
 }
 
 fn named_captures(

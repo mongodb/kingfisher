@@ -11,10 +11,11 @@ use std::{
 use anyhow::{Context, Result, anyhow, bail};
 use kingfisher_vectorscan::{BlockDatabase, Flag, Pattern, Scan};
 use regex::Regex;
-use tiktoken_rs::cl100k_base_singleton;
 use xxhash_rust::xxh3::Xxh3;
 
-use crate::{BetterleaksExpr, Confidence, scanner_pool::ScannerPool};
+use crate::{
+    BetterleaksExpr, Confidence, scanner_pool::ScannerPool, tokenizer::cl100k_base_singleton,
+};
 
 /// Candidate data exposed to a Betterleaks filter expression.
 #[derive(Debug)]

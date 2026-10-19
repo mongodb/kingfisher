@@ -233,6 +233,7 @@ pub(super) fn start_discovery_and_artifact_fetching(
                     && input.path_inputs.is_empty()
                     && input.s3_bucket.is_none()
                     && input.gcs_bucket.is_none()
+                    && input.azure_blob.is_none()
                     && !has_huggingface_buckets
                     && !input.has_artifact_sources()
                 {

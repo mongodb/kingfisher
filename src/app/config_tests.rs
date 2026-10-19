@@ -124,6 +124,47 @@ fn no_limits_round_trips_and_overrides_individual_budgets() {
 }
 
 #[test]
+fn content_and_timeout_options_round_trip_independently() {
+    for (content, timeouts) in [(false, false), (true, false), (false, true), (true, true)] {
+        let mut options = vec!["kingfisher", "scan", ".", "--git-repo-timeout=1"];
+        if content {
+            options.push("--no-limits");
+        }
+        if timeouts {
+            options.push("--no-timeouts");
+        }
+        let (args, matches) = parse(&options);
+        let global = args.global_args.clone();
+        let scan = into_scan(args);
+        let yaml =
+            super::build_config_yaml(&scan, &global, matches.subcommand_matches("scan").unwrap())
+                .unwrap();
+        let config = parse_str(&yaml).unwrap();
+        assert_eq!(config.scan.no_limits, content.then_some(true));
+        assert_eq!(config.scan.no_timeouts, timeouts.then_some(true));
+        let (args, matches) = parse(&["kingfisher", "scan", "."]);
+        let mut global = args.global_args.clone();
+        let mut scan = into_scan(args);
+        super::apply_config(&mut scan, &mut global, &config, matches.subcommand_matches("scan"));
+        assert_eq!(scan.content_filtering_args.max_file_size_bytes().is_none(), content);
+        assert_eq!(scan.content_filtering_args.archive_depth().is_none(), content);
+        assert_eq!(
+            scan.repository_timeout(),
+            (!timeouts).then_some(std::time::Duration::from_secs(1))
+        );
+        assert_eq!(scan.no_timeouts, timeouts);
+        assert_eq!(scan.validation_timeout, 10);
+    }
+
+    let config = parse_str("scan:\n  no_timeouts: false\n").unwrap();
+    let (args, matches) = parse(&["kingfisher", "scan", ".", "--no-timeouts"]);
+    let mut global = args.global_args.clone();
+    let mut scan = into_scan(args);
+    super::apply_config(&mut scan, &mut global, &config, matches.subcommand_matches("scan"));
+    assert!(scan.no_timeouts, "an explicit CLI option must override configuration");
+}
+
+#[test]
 fn config_wins_when_cli_uses_default() {
     let yaml = r#"
 scan:
@@ -566,6 +607,42 @@ fn config_init_round_trips_supplied_flags_only() {
     assert_eq!(cfg.alerts.webhooks[0].url, "https://hooks.slack.com/services/T0/B0/AAA");
 
     assert!(matches!(cfg.global.tls_mode, Some(kingfisher::cli::config::ConfigTlsMode::Lax)));
+}
+
+#[test]
+fn path_selection_policy_round_trips_and_merges_with_cli_selection() {
+    let (args, matches) = parse(&[
+        "kingfisher",
+        "scan",
+        ".",
+        "--path-prefix",
+        "configs/",
+        "--skip-path-prefix",
+        "configs/generated/",
+        "--file-extension",
+        "env",
+        "--skip-file-extension",
+        "bak",
+    ]);
+    let global = args.global_args.clone();
+    let mut scan = into_scan(args);
+    let yaml =
+        super::build_config_yaml(&scan, &global, matches.subcommand_matches("scan").unwrap())
+            .unwrap();
+    let config = parse_str(&yaml).unwrap();
+    assert_eq!(config.filters.path_prefixes, ["configs/"]);
+    assert_eq!(config.filters.skip_path_prefixes, ["configs/generated/"]);
+    assert_eq!(config.filters.file_extensions, ["env"]);
+    assert_eq!(config.filters.skip_file_extensions, ["bak"]);
+    let config =
+        parse_str("filters:\n  path_prefixes: [deploy/]\n  file_extensions: [json]\n").unwrap();
+    let mut global = global;
+    super::apply_config(&mut scan, &mut global, &config, matches.subcommand_matches("scan"));
+    assert_eq!(
+        scan.content_filtering_args.path_selection.include_prefixes,
+        ["configs/", "deploy/"]
+    );
+    assert_eq!(scan.content_filtering_args.path_selection.include_extensions, ["env", "json"]);
 }
 
 /// Regression: `config init --github-api-url ... --gitlab-api-url ...`

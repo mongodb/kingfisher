@@ -15,11 +15,23 @@ use rsa::rand_core::OsRng;
 /// are committed to the repository.
 #[tokio::test]
 async fn validate_jwt_with_fallback_key_handles_rs256_without_panicking() {
+    assert_fallback_rsa_verification(2048).await;
+}
+
+/// Scanning existing weak credentials is not a recommendation to create them.
+/// AWS-LC's JWT backend rejects 1024-bit RSA signatures that the current backend
+/// accepts; retain this coverage before changing the default crypto provider.
+#[tokio::test]
+async fn validate_jwt_with_fallback_key_preserves_legacy_rsa_verification() {
+    assert_fallback_rsa_verification(1024).await;
+}
+
+async fn assert_fallback_rsa_verification(bits: usize) {
     ensure_crypto_provider();
 
     // Generate an ephemeral RSA keypair for this test run only.
     let mut rng = OsRng;
-    let private_key = RsaPrivateKey::new(&mut rng, 2048).expect("generate RSA key");
+    let private_key = RsaPrivateKey::new(&mut rng, bits).expect("generate RSA key");
     let private_pem = private_key.to_pkcs1_pem(LineEnding::LF).expect("encode private key");
     let public_pem =
         private_key.to_public_key().to_public_key_pem(LineEnding::LF).expect("encode public key");

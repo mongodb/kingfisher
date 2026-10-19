@@ -56,6 +56,23 @@ The CLI equivalents are repeated `--rule` and `--exclude-rule` flags, for
 example `kingfisher scan ./repo --rule betterleaks.github-pat --rule
 betterleaks.github-fine-grained-pat --exclude-rule betterleaks.openai-api-key`.
 
+## Path-selection policy
+
+The shared selection options can be saved with `kingfisher config init`:
+
+```bash
+kingfisher config init --path-prefix configs/ --skip-path-prefix configs/generated/ \
+  --file-extension env --skip-file-extension bak --out kingfisher.yaml
+```
+
+They map to `filters.path_prefixes`, `filters.skip_path_prefixes`,
+`filters.file_extensions`, and `filters.skip_file_extensions`. All four lists
+merge additively with CLI values and apply across supported named inputs,
+including cloud buckets and Azure/Git repositories. Prefixes use `/` separators
+for repository and filesystem paths on every platform. The per-source
+`--object-cache-dir` destination is an acquisition setting, supplied on storage
+scan subcommands rather than saved as shared scan policy.
+
 ## End-to-end: create a config and scan with it
 
 ### Step 1 — generate the config
@@ -87,7 +104,7 @@ kingfisher config init [...flags...] --out kingfisher.yaml
 
 Only flags you actually supply appear in the output; clap defaults are
 omitted to keep the file minimal. Scan-target inputs (paths, `--git-url`,
-GitHub/GitLab/etc. user/org/group flags, S3/GCS buckets) are stripped —
+GitHub/GitLab/etc. user/org/group flags, S3/GCS buckets, Azure Blob containers) are stripped —
 they describe *what* this run scans and don't belong in shared project
 policy.
 
@@ -159,7 +176,8 @@ checked-in config files.
 scan:
   confidence: medium            # low | medium | high           (--confidence)
   min_entropy: 3.5              # float                          (--min-entropy)
-  no_limits: false             # disable scan resource budgets  (--no-limits)
+  no_limits: false             # lift content limits; keep timeouts  (--no-limits)
+  no_timeouts: false           # disable scan operation deadlines   (--no-timeouts)
   no_validate: false            # bool                           (--no-validate)
   only_valid: false             # bool                           (--only-valid)
   validation_filter: actionable # all | active | actionable      (--validation-filter)

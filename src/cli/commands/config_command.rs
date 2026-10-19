@@ -8,7 +8,7 @@
 //! to stdout (or to `--out FILE`).
 //!
 //! Scan-target inputs (positional paths, `--git-url`, GitHub/GitLab/etc.
-//! flags, S3/GCS buckets, Docker images, Slack/Teams queries) are
+//! flags, S3/GCS buckets, Azure Blob containers, Docker images, Slack/Teams queries) are
 //! deliberately omitted — the config file is project-default policy, not a
 //! frozen target list.
 

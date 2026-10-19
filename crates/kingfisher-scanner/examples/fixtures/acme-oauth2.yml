@@ -1,0 +1,29 @@
+rules:
+  - id: acme.internal-api-key
+    name: Acme internal API key
+    pattern: '\b(acme_[A-Za-z0-9]{32})\b'
+    examples:
+      - acme_A1b2C3d4E5f6G7h8I9j0K1l2M3n4O5p6
+    validation:
+      type: Http
+      content:
+        auth:
+          oauth2:
+            token_endpoint: https://idp.example.com/oauth2/token
+            token_header: X-Proxy-Authorization
+            ropc:
+              username_env: KF_VERIFIER_USERNAME
+              password_env: KF_VERIFIER_PASSWORD
+              client_id: kingfisher
+              client_secret_env: KF_VERIFIER_CLIENT_SECRET
+              scope: verify
+        request:
+          method: GET
+          url: https://verifier.example.com/verify
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+            - type: WordMatch
+              words: ['"valid":true']

@@ -66,7 +66,7 @@ authoritative Kingfisher documentation for each task.
 - [Architecture](ARCHITECTURE.md) — crates, CLI paths, scanner pipeline, validation, and reporters.
 - [Rust library API](LIBRARY.md) — embedding the scanner and selecting validation features.
 - [Python/PyPI](PYPI.md) — Native Python detection, validation, revocation, runnable uv examples, wheels, and publishing.
-- [Benchmarks](COMPARISON.md) — methodology, performance, network requests, and binary size.
+- [Benchmarks](COMPARISON.md) — methodology, performance, and network requests.
 - [Project background](PROJECT.md) — production use, lineage, evolution, and roadmap.
 - [Changelog](../CHANGELOG.md) — release history.
 - [Contributing](../CONTRIBUTING.md) — development workflow and contribution expectations.

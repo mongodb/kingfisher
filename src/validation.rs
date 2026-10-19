@@ -1,4 +1,4 @@
-use kingfisher_scanner::validation::limits::ResourceTimeout;
+use kingfisher_scanner::validation::limits::{NetworkLimits, ResourceTimeout};
 use std::{
     panic::AssertUnwindSafe,
     sync::Arc,
@@ -119,6 +119,7 @@ pub fn set_user_agent_suffix<S: Into<String>>(suffix: Option<S>) {
 /// declared `tls_mode` setting.
 #[derive(Clone)]
 pub struct ValidationClients {
+    oauth2_tokens: kingfisher_scanner::validation::OAuth2TokenCache,
     /// Client with full TLS certificate validation (WebPKI chain, hostname, expiry).
     strict: Client,
     /// Strict-TLS client that never follows redirects, used when sending URI credentials.
@@ -149,33 +150,40 @@ impl ValidationClients {
         timeout: Duration,
         unlimited_response: bool,
     ) -> anyhow::Result<Self> {
-        let strict = Client::builder()
-            .user_agent(GLOBAL_USER_AGENT.as_str())
-            .danger_accept_invalid_certs(false)
-            .redirect(reqwest::redirect::Policy::none())
-            .resource_timeout(timeout)
-            .build()?;
+        // Acquisition may be unlimited, but validation has its own explicit
+        // deadline. Configure its clients under that policy as well.
+        NetworkLimits { no_timeouts: timeout.is_zero(), ..NetworkLimits::current() }.sync_scope(
+            || {
+                let strict = Client::builder()
+                    .user_agent(GLOBAL_USER_AGENT.as_str())
+                    .danger_accept_invalid_certs(false)
+                    .redirect(reqwest::redirect::Policy::none())
+                    .resource_timeout(timeout)
+                    .build()?;
 
-        let lax = Client::builder()
-            .user_agent(GLOBAL_USER_AGENT.as_str())
-            .danger_accept_invalid_certs(true)
-            .redirect(reqwest::redirect::Policy::none())
-            .resource_timeout(timeout)
-            .build()?;
+                let lax = Client::builder()
+                    .user_agent(GLOBAL_USER_AGENT.as_str())
+                    .danger_accept_invalid_certs(true)
+                    .redirect(reqwest::redirect::Policy::none())
+                    .resource_timeout(timeout)
+                    .build()?;
 
-        let credential_uri = build_credential_uri_client(timeout, false)?;
+                let credential_uri = build_credential_uri_client(timeout, false)?;
 
-        let credential_uri_lax = build_credential_uri_client(timeout, true)?;
-        Ok(Self {
-            strict,
-            credential_uri,
-            credential_uri_lax,
-            lax,
-            global_mode,
-            allow_internal_ips,
-            unlimited_response,
-            unlimited_results: false,
-        })
+                let credential_uri_lax = build_credential_uri_client(timeout, true)?;
+                Ok(Self {
+                    oauth2_tokens: Default::default(),
+                    strict,
+                    credential_uri,
+                    credential_uri_lax,
+                    lax,
+                    global_mode,
+                    allow_internal_ips,
+                    unlimited_response,
+                    unlimited_results: false,
+                })
+            },
+        )
     }
 
     /// Explicitly configure candidate budgets independently of HTTP response caps.
@@ -392,14 +400,14 @@ where
 use kingfisher_scanner::validation::aws::validate_aws_credential_pair;
 
 pub(crate) use kingfisher_scanner::validation::credential_uri::{
-    CredentialUriTarget, classify_credential_uri, is_parseable_credential_uri,
-};
-pub use kingfisher_scanner::validation::credential_uri::{
-    is_parseable_mongodb_uri, is_parseable_mysql_uri, is_parseable_postgres_uri,
+    CredentialUriTarget, classify_credential_uri,
 };
 #[cfg(test)]
 use kingfisher_scanner::validation::credential_uri::{
-    received_basic_auth_challenge, validate_http_credential_uri,
+    is_parseable_credential_uri, received_basic_auth_challenge, validate_http_credential_uri,
+};
+pub use kingfisher_scanner::validation::credential_uri::{
+    is_parseable_mongodb_uri, is_parseable_mysql_uri, is_parseable_postgres_uri,
 };
 /// Collect dependent variables and missing dependencies from the provided matches.
 #[allow(clippy::type_complexity)]
@@ -475,71 +483,76 @@ pub async fn validate_single_match(
     provider_endpoints: &ProviderEndpointOverrides,
     max_body_len: usize,
 ) {
-    if candidates::ready(m) {
-        kingfisher_scanner::validation::limits::NetworkLimits {
-            no_timeouts: validation_timeout.is_zero(),
-            unlimited_response: clients.unlimited_response,
-            unlimited_results: clients.unlimited_results,
-        }
-        .scope(candidates::run(m, validation_timeout, |mut attempt, remaining| async move {
-            // Preserve endpoint inputs for generated commands on cache hits as well
-            // as misses. Fixed validation URLs may still use these in headers/body.
-            let mut globals = Object::new();
-            populate_globals_from_captures(
-                &mut globals,
-                &utils::process_captures(&attempt.captures),
-            );
-            for dep in attempt.rule.syntax().depends_on_rule.iter().flatten() {
-                let name = dep.variable.to_uppercase();
-                if name != "TOKEN"
-                    && let Some(value) = attempt.dependent_captures.get(&name)
-                {
-                    globals.insert(name.into(), Value::scalar(value.clone()));
+    // Cover ordinary checks and candidate searches alike, including cache and
+    // rate-limit waits before the shared engine starts the provider request.
+    NetworkLimits {
+        no_timeouts: validation_timeout.is_zero(),
+        unlimited_response: clients.unlimited_response,
+        unlimited_results: clients.unlimited_results,
+    }
+    .scope(async {
+        if candidates::ready(m) {
+            candidates::run(m, validation_timeout, |mut attempt, remaining| async move {
+                // Preserve endpoint inputs for generated commands on cache hits as well
+                // as misses. Fixed validation URLs may still use these in headers/body.
+                let mut globals = Object::new();
+                populate_globals_from_captures(
+                    &mut globals,
+                    &utils::process_captures(&attempt.captures),
+                );
+                for dep in attempt.rule.syntax().depends_on_rule.iter().flatten() {
+                    let name = dep.variable.to_uppercase();
+                    if name != "TOKEN"
+                        && let Some(value) = attempt.dependent_captures.get(&name)
+                    {
+                        globals.insert(name.into(), Value::scalar(value.clone()));
+                    }
                 }
-            }
-            hydrate_endpoint_globals_for_rule(attempt.rule.id(), &mut globals);
-            provider_endpoints.apply_scan_overrides(&mut globals);
-            for name in endpoint_var_names() {
-                if let Some(value) = globals.get(*name).and_then(|v| v.as_scalar()) {
-                    attempt
-                        .dependent_captures
-                        .entry((*name).to_string())
-                        .or_insert_with(|| value.to_kstr().to_string());
+                hydrate_endpoint_globals_for_rule(attempt.rule.id(), &mut globals);
+                provider_endpoints.apply_scan_overrides(&mut globals);
+                for name in endpoint_var_names() {
+                    if let Some(value) = globals.get(*name).and_then(|v| v.as_scalar()) {
+                        attempt
+                            .dependent_captures
+                            .entry((*name).to_string())
+                            .or_insert_with(|| value.to_kstr().to_string());
+                    }
                 }
-            }
+                validate_resolved_match(
+                    &mut attempt,
+                    parser,
+                    clients,
+                    dependent_variables,
+                    missing_dependencies,
+                    cache,
+                    remaining,
+                    validation_retries,
+                    rate_limiter,
+                    provider_endpoints,
+                    max_body_len,
+                )
+                .await;
+                attempt
+            })
+            .await;
+        } else {
             validate_resolved_match(
-                &mut attempt,
+                m,
                 parser,
                 clients,
                 dependent_variables,
                 missing_dependencies,
                 cache,
-                remaining,
+                validation_timeout,
                 validation_retries,
                 rate_limiter,
                 provider_endpoints,
                 max_body_len,
             )
             .await;
-            attempt
-        }))
-        .await;
-    } else {
-        validate_resolved_match(
-            m,
-            parser,
-            clients,
-            dependent_variables,
-            missing_dependencies,
-            cache,
-            validation_timeout,
-            validation_retries,
-            rate_limiter,
-            provider_endpoints,
-            max_body_len,
-        )
-        .await;
-    }
+        }
+    })
+    .await;
 }
 
 /// Validate a single match with a configurable timeout.
@@ -800,6 +813,7 @@ async fn timed_validate_single_match(
     }
 
     let result = kingfisher_scanner::validation::ValidationEngine::new(client, parser)
+        .oauth2_token_cache(clients.oauth2_tokens.clone())
         .credential_uri_client(clients.credential_uri_client(rule_tls_mode))
         .timeout(validation_timeout)
         .retries(validation_retries)
@@ -1176,6 +1190,32 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn validation_clients_keep_explicit_timeouts_inside_unlimited_acquisition() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(5)))
+            .mount(&server)
+            .await;
+        let clients = NetworkLimits { no_timeouts: true, ..Default::default() }.sync_scope(|| {
+            ValidationClients::with_timeout(TlsMode::Strict, true, Duration::from_millis(100), true)
+                .unwrap()
+        });
+        for client in
+            [&clients.strict, &clients.lax, &clients.credential_uri, &clients.credential_uri_lax]
+        {
+            let response =
+                tokio::time::timeout(Duration::from_secs(2), client.get(server.uri()).send())
+                    .await
+                    .expect("the HTTP client's own validation timeout must remain finite");
+            assert!(response.unwrap_err().is_timeout());
+        }
+        assert!(clients.unlimited_response);
+        assert!(!NetworkLimits::current().no_timeouts);
+    }
+
+    #[tokio::test]
     async fn waiter_timeout_preserves_owner_and_cached_result() {
         let mut matched = OwnedBlobMatch {
             rule: Arc::new(aws_rule("test.waiter-timeout", false)),
@@ -1202,20 +1242,24 @@ mod tests {
         IN_FLIGHT.get_or_init(DashMap::new).insert(fp, owner.clone());
         let parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
         let clients = ValidationClients::new(TlsMode::Strict, true).unwrap();
-        validate_single_match(
-            &mut matched,
-            &parser,
-            &clients,
-            &variables,
-            &FxHashMap::default(),
-            &Cache::default(),
-            Duration::from_millis(10),
-            0,
-            None,
-            &ProviderEndpointOverrides::default(),
-            1024,
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            NetworkLimits { no_timeouts: true, ..Default::default() }.scope(validate_single_match(
+                &mut matched,
+                &parser,
+                &clients,
+                &variables,
+                &FxHashMap::default(),
+                &Cache::default(),
+                Duration::from_millis(10),
+                0,
+                None,
+                &ProviderEndpointOverrides::default(),
+                1024,
+            )),
         )
-        .await;
+        .await
+        .expect("a validation cache waiter must keep its own deadline");
         assert_eq!(matched.validation_response_status, StatusCode::REQUEST_TIMEOUT);
         assert!(Arc::ptr_eq(IN_FLIGHT.get().unwrap().get(&fp).unwrap().value(), &owner));
         assert!(!owner.completed.load(Ordering::Acquire));

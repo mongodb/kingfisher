@@ -6,10 +6,20 @@ use std::{
 
 use flate2::{Compression, write::GzEncoder};
 
+mod build_support;
+
 const BUNDLE_MAGIC: &[u8] = b"KFVIEW\x01";
 
 fn main() {
     println!("cargo:rustc-env=KINGFISHER_BUILD_TARGET={}", std::env::var("TARGET").unwrap());
+    if build_support::pack_relative_relocations(
+        &std::env::var("TARGET").unwrap(),
+        &std::env::var("PROFILE").unwrap(),
+        &std::env::var("CARGO_CFG_TARGET_FEATURE").unwrap_or_default(),
+    ) {
+        // Restrict the linker option to the CLI, not dependencies or the SDK.
+        println!("cargo:rustc-link-arg-bin=kingfisher=-Wl,-z,pack-relative-relocs");
+    }
     println!(
         "cargo:rustc-env=KINGFISHER_BUILD_RUSTFLAGS={}",
         std::env::var("CARGO_ENCODED_RUSTFLAGS").unwrap_or_default()

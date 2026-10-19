@@ -254,6 +254,7 @@ else
 endif
 
 # Keep CMake/Python for other native dependencies (including AWS-LC).
+# AWS-LC consumers without prebuilt-nasm also need NASM on Windows x64.
 # Install Vectorscan source dependencies only when explicitly requested.
 # Scope MinGW compilers to the target; host build dependencies can use MSVC.
 # Windows x64 build path for MSYS2/MinGW (GNU toolchain + published Vectorscan archive)
@@ -278,6 +279,7 @@ windows-x64: require-windows-host prepare-release-notices
 	  pacman --noconfirm --needed -S \
 	    mingw-w64-x86_64-toolchain \
 	    mingw-w64-x86_64-cmake \
+	    mingw-w64-x86_64-nasm \
 	    mingw-w64-x86_64-pkgconf \
 	    mingw-w64-x86_64-zlib \
 	    mingw-w64-x86_64-python \

@@ -2,13 +2,13 @@
 
 Rule definitions and compiled rule database support for Kingfisher.
 
-The `1.x` public Rust API follows semantic versioning and requires Rust 1.99+.
+The public Rust API follows semantic versioning and requires Rust 1.99+.
 Breaking API changes require a new major version; catalog updates may change which
 secrets are detected without changing the Rust API.
 
 ```toml
 [dependencies]
-kingfisher-rules = "1.2.1"
+kingfisher-rules = "2.0.0"
 anyhow = "1"
 ```
 
@@ -95,6 +95,25 @@ compressed JSON map from immutable source URLs to exact UTF-8 file contents (inc
 and source headers); null records an absent upstream NOTICE. `generated/NOTICES.txt` contains
 readable attribution and license text preserved in the repository.
 These records document what was imported; they do not establish upstream authorship.
+
+## Migrating to 2.0
+
+This is a **Rust source/type migration, not a rule-file migration**. Existing
+Kingfisher YAML and Betterleaks TOML rule files need no changes. HTTP service
+authentication (`validation.content.auth`) is optional: omitting it preserves
+existing HTTP requests, candidate-token headers, body and response matchers,
+without requiring OAuth2 credentials or a token exchange.
+
+`HttpValidation` has a new public `auth: Option<Box<HttpValidationAuth>>` field.
+Add `auth: None` to existing Rust struct literals, or use
+`auth: Some(Box::new(HttpValidationAuth { oauth2: config }))` for service authentication.
+The new `OAuth2Config` contains `OAuth2PasswordCredentials` in its `ropc` field;
+all three auth types are exported by this crate.
+
+Use `kingfisher-scanner = "2.0.0"` with rules 2.x: its public `Rule`, `RuleSyntax`
+and `RulesDatabase` types/re-exports cannot be mixed with rules 1.x types. Core
+remains at 1.0.3; this Rust migration does not break the Python SDK API.
+See the [library migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-scanner-20).
 
 ## Readable rule catalogs
 

@@ -469,6 +469,7 @@ mod tests {
     #[test]
     fn build_validate_command_omits_body_checksum_vars_for_vercel_like_http_rule() {
         let validation = crate::rules::Validation::Http(crate::rules::HttpValidation {
+            auth: None,
             request: crate::rules::HttpRequest {
                 method: "GET".to_string(),
                 url: "https://api.vercel.com/v2/user".to_string(),
@@ -777,7 +778,7 @@ mod tests {
     #[test]
     fn build_revoke_command_is_emitted_when_required_vars_missing() {
         // Revocation template requires ACCOUNTIDENTIFIER, but the finding doesn't have it.
-        let revocation = Revocation::Http(crate::rules::HttpValidation {
+        let revocation = Revocation::Http(crate::rules::HttpValidation { auth: None,
             request: crate::rules::HttpRequest {
                 method: "DELETE".to_string(),
                 url: "https://example.com/revoke?accountIdentifier={{ ACCOUNTIDENTIFIER }}&token={{ TOKEN }}"

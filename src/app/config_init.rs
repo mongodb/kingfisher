@@ -112,6 +112,9 @@ pub(crate) fn build_config_yaml(
     if user_set(sub_matches, "no_limits") {
         scan.no_limits = Some(scan_args.content_filtering_args.no_limits);
     }
+    if user_set(sub_matches, "no_timeouts") {
+        scan.no_timeouts = Some(scan_args.no_timeouts);
+    }
     if user_set(sub_matches, "git_repo_timeout") {
         scan.git_repo_timeout = Some(scan_args.git_repo_timeout);
     }
@@ -176,6 +179,11 @@ pub(crate) fn build_config_yaml(
 
     // ---------- filters --------------------------------------------------
     let mut filters = FiltersConfig::default();
+    let selection = &scan_args.content_filtering_args.path_selection;
+    filters.path_prefixes = selection.include_prefixes.clone();
+    filters.skip_path_prefixes = selection.exclude_prefixes.clone();
+    filters.file_extensions = selection.include_extensions.clone();
+    filters.skip_file_extensions = selection.exclude_extensions.clone();
     if !scan_args.skip_word.is_empty() {
         filters.skip_words = scan_args.skip_word.clone();
     }

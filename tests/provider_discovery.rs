@@ -223,9 +223,9 @@ async fn github_streams_users_and_organizations_before_later_page_failure() {
                     observed.load(Ordering::SeqCst),
                     "page one was buffered until discovery ended"
                 );
-                ResponseTemplate::new(503)
+                ResponseTemplate::new(503).insert_header("retry-after", "0")
             })
-            .expect(1)
+            .expect(4)
             .mount(&server)
             .await;
         let specs = github::RepoSpecifiers {

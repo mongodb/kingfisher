@@ -73,12 +73,8 @@ fn extract_sqlite(
         // A staged SDK snapshot should never be locked. Do not let SQLite's busy
         // wait outlive a caller deadline; return the locking error immediately.
         conn.busy_timeout(std::time::Duration::ZERO)?;
-    } else if resources.unlimited {
-        conn.busy_handler(Some(|_| {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            true
-        }))?;
     } else {
+        // Unlimited content extraction must not wait forever for a database lock.
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
     }
 
@@ -589,6 +585,31 @@ mod tests {
 #[cfg(test)]
 mod unlimited_tests {
     use super::*;
+
+    #[test]
+    fn unlimited_content_does_not_wait_forever_for_database_locks() -> Result<()> {
+        let temp = tempfile::tempdir()?;
+        let path = temp.path().join("locked.db");
+        let locked = Connection::open(&path)?;
+        locked.execute_batch("CREATE TABLE secrets (token TEXT); BEGIN EXCLUSIVE;")?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::spawn(move || {
+            sender
+                .send(extract_sqlite_contents_with_limits(
+                    &path,
+                    ResourceLimits { unlimited: true },
+                ))
+                .unwrap();
+        });
+        let observed = receiver.recv_timeout(std::time::Duration::from_secs(10));
+        // Release the lock and join even on a regression, keeping the fixture
+        // portable and avoiding a stranded thread or an open Windows file handle.
+        drop(locked);
+        worker.join().unwrap();
+        assert!(observed.is_ok(), "unlimited extraction must retain the finite lock wait");
+        assert!(observed.unwrap().is_err());
+        Ok(())
+    }
 
     #[test]
     fn unlimited_sqlite_dump_keeps_rows_beyond_byte_budget() -> Result<()> {

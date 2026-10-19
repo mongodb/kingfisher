@@ -26,6 +26,11 @@ for finding in scanner.scan_file("application.conf"):
 
 ## Inspect rules, regexes and configured actions
 
+Custom YAML HTTP verification services can use
+[OAuth2 authentication](../docs/RULES.md#oauth2-authentication-for-http-verification-services).
+Reuse a `Validator` for token reuse, expiry refresh and failure cooldowns; set
+credential environment variables through the rule's `*_env` fields.
+
 ```python
 import json
 from kingfisher_sdk import Rules
@@ -44,8 +49,10 @@ dependencies, examples and references. It returns a copy; edits do not change
 scanning. Absent actions are `None`. HTTP/gRPC configurations show requests and
 matchers; Betterleaks logic is a serialized expression tree. Typed/raw handlers
 identify Rust implementations rather than exposing their source code. Inspection
-makes no provider requests and does not execute revocation. Custom rule literals
-are returned as configured.
+makes no provider requests and does not execute revocation. Literal OAuth2 usernames,
+passwords and client secrets are redacted; their `*_env` names remain visible without
+resolving environment variables. Other custom rule literals are returned as configured.
+Inspection never changes the credentials used by later explicit validation.
 
 The [rule example](https://github.com/mongodb/kingfisher/blob/main/python/examples/rules.py)
 supports catalog capability filters and detailed field selection:
@@ -84,6 +91,19 @@ Use `Rules(confidence="high")` to load only high-confidence rules, or
 `Rules(["company.yml"], builtins=False)` for a custom-only YAML/TOML catalog.
 `Scanner(base64=False)` disables Base64 detection. Leave native entropy thresholds
 at their defaults unless you intend to override every rule's threshold.
+
+`Scanner` and `DetectionScanner` enforce custom YAML `pattern_requirements`
+(character minimums, ignored substrings and Liquid checksums) for raw and Base64
+matches. The `luhn_valid` and `iban_valid` boolean filters simplify offline
+structured-data checksums. Run the commented [example](examples/pattern_requirements.py)
+with `uv run --no-sync python python/examples/pattern_requirements.py`; output stays redacted.
+See the [rule guide](../docs/RULES.md#character-requirements) for capture semantics and filter limits.
+
+Findings retain compact full-match component context automatically. Validation
+honors `within` and explicitly supported `verify_candidates` opt-ins with the
+CLI's ranking and bounded search. Identical rule/resolved inputs share one request
+per validation batch; different rules and components remain independent.
+Scanning stays offline and revocation requires explicit confirmation.
 
 For report filtering, serialize once and inspect the redacted fields:
 
@@ -156,7 +176,8 @@ separately encoded sibling secrets even when they share those outer offsets.
 Set `cli_match_semantics=False`, `base64_max_depth=1`, and
 `base64_max_input_bytes=None` to retain legacy SDK matching/decoding while choosing
 context filters. Each policy can be configured independently. `expand_content` extracts SQLite SQL and `.pyc` strings without
-executing bytecode. `GitScope` supports history ranges, inclusive branch roots,
+executing bytecode. SQLite lock waits remain bounded independently of content limits.
+`GitScope` supports history ranges, inclusive branch roots,
 time bounds, snapshots, net diffs, staged index content and unreachable objects.
 `since_hours` must be positive and fit in signed 64-bit seconds; scope bounds are
 validated when constructing `GitScope`.
@@ -250,6 +271,9 @@ SMTP URIs use the shared validator. For separate SMTP fields, the
 loads custom rules and authenticates over TLS without sending email. See the
 [SMTP input contract](https://github.com/mongodb/kingfisher/blob/main/docs/RULES.md#smtp-authentication)
 for port fallback and outcome classification.
+
+SMTP session cleanup has a short independent timeout so stalled cleanup writes
+finish promptly after an authentication result is established.
 
 ```python
 from kingfisher_sdk import Scanner, Validator

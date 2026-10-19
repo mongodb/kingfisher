@@ -26,6 +26,7 @@ pub struct ValidationEngine<'a> {
     max_response_bytes: usize,
     allow_internal_ips: bool,
     use_lax_tls: bool,
+    oauth2_tokens: super::OAuth2TokenCache,
 }
 impl<'a> ValidationEngine<'a> {
     pub fn new(client: &'a Client, parser: &'a liquid::Parser) -> Self {
@@ -38,6 +39,7 @@ impl<'a> ValidationEngine<'a> {
             max_response_bytes: 1 << 20,
             allow_internal_ips: false,
             use_lax_tls: false,
+            oauth2_tokens: Default::default(),
         }
     }
     /// Set a separate client for credential-bearing URI challenges.
@@ -68,6 +70,12 @@ impl<'a> ValidationEngine<'a> {
     /// TLS policy for typed database, JWT and Raw validators. HTTP follows the supplied client.
     pub fn use_lax_tls(mut self, allow: bool) -> Self {
         self.use_lax_tls = allow;
+        self
+    }
+
+    /// Share OAuth2 token reuse and failure backoff across executions in one session.
+    pub fn oauth2_token_cache(mut self, cache: super::OAuth2TokenCache) -> Self {
+        self.oauth2_tokens = cache;
         self
     }
 
@@ -299,13 +307,45 @@ impl<'a> ValidationEngine<'a> {
         if !has_evidence_matcher(matchers) {
             return ValidationResult::unavailable(ValidationReason::InvalidConfiguration);
         }
+        // Reject finding-controlled origins before rendering or resolving their DNS.
+        if config.auth.is_some()
+            && let Err(reason) = super::oauth2::fixed_url(&request.url, self.allow_internal_ips)
+        {
+            return ValidationResult::unavailable(reason);
+        }
         let globals = with_request_template_globals(globals);
         let url = match self.url(&request.url, &globals).await {
             Ok(url) => url,
             Err(check) => return check,
         };
+        if let Some(auth) = &config.auth
+            && request.headers.keys().any(|key| {
+                key.trim().eq_ignore_ascii_case(&auth.oauth2.token_header)
+                    || key.trim().eq_ignore_ascii_case("host")
+            })
+        {
+            return ValidationResult::unavailable(ValidationReason::InvalidConfiguration);
+        }
+        let oauth2 = if let Some(auth) = &config.auth {
+            match self
+                .oauth2_tokens
+                .header(
+                    &auth.oauth2,
+                    &request.url,
+                    &url,
+                    self.timeout.unwrap_or_default(),
+                    self.allow_internal_ips,
+                )
+                .await
+            {
+                Ok(header) => Some(header),
+                Err(reason) => return ValidationResult::unavailable(reason),
+            }
+        } else {
+            None
+        };
         let mut builder = match build_request_builder(
-            self.client,
+            oauth2.as_ref().map(|(_, _, client)| client).unwrap_or(self.client),
             &request.method,
             &url,
             &request.headers,
@@ -317,6 +357,9 @@ impl<'a> ValidationEngine<'a> {
             Ok(builder) => builder,
             Err(_) => return ValidationResult::unavailable(ValidationReason::InvalidConfiguration),
         };
+        if let Some((name, value, _)) = &oauth2 {
+            builder = builder.header(name.clone(), value.clone());
+        }
         if let Some(multipart) = request.multipart.as_ref().or(config.multipart.as_ref()) {
             let mut form = reqwest::multipart::Form::new();
             for part in &multipart.parts {
@@ -387,7 +430,16 @@ impl<'a> ValidationEngine<'a> {
             &headers,
             request.response_is_html,
         );
-        classify_status(valid, status).body(String::from_utf8_lossy(&body).into_owned())
+        let mut body = String::from_utf8_lossy(&body).into_owned();
+        if let Some((_, value, _)) = &oauth2
+            && let Ok(value) = value.to_str()
+        {
+            body = body.replace(value, "[REDACTED]");
+            if let Some(token) = value.strip_prefix("Bearer ") {
+                body = body.replace(token, "[REDACTED]");
+            }
+        }
+        classify_status(valid, status).body(body)
     }
 
     async fn database(&self, validation: &Validation, uri: &str) -> ValidationResult {

@@ -52,7 +52,7 @@ DOC_MAP = {
     "INTEGRATIONS.md": (
         "usage/integrations.md",
         "Platform Integrations",
-        "Scan GitHub, GitLab, Azure Repos, Bitbucket, Gitea, Hugging Face, Docker, S3, Jira, Confluence, Slack, and Teams for leaked secrets.",
+        "Scan GitHub, GitLab, Azure Repos, Bitbucket, Gitea, Hugging Face, Docker, S3, GCS, Azure Blob Storage, Jira, Confluence, Slack, and Teams for leaked secrets.",
     ),
     "ALERTS.md": (
         "usage/alerts.md",
@@ -147,7 +147,7 @@ DOC_MAP = {
     "COMPARISON.md": (
         "reference/comparison.md",
         "Benchmarks & Comparison",
-        "Open-source capabilities and published secret-scanning runtime, network-request, and binary-size benchmarks.",
+        "Open-source capabilities and published secret-scanning runtime and network-request benchmarks.",
     ),
     "PROJECT.md": (
         "reference/project.md",
@@ -226,11 +226,6 @@ def rewrite_links(content: str) -> str:
     # Rewrite image references from docs/ relative paths (markdown and HTML src=)
     content = content.replace("](./runtime-comparison.png", "](../assets/images/runtime-comparison.png")
     content = content.replace('src="./runtime-comparison.png"', 'src="../assets/images/runtime-comparison.png"')
-    content = content.replace("](./binary-size-comparison.svg", "](../assets/images/binary-size-comparison.svg")
-    content = content.replace(
-        'src="./binary-size-comparison.svg"',
-        'src="../assets/images/binary-size-comparison.svg"',
-    )
     content = content.replace("](./assets/icons/", "](../assets/icons/")
     content = content.replace(
         "](../docs-site/docs/rules/builtin-rules.md)",
