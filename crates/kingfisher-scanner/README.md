@@ -1,11 +1,11 @@
 # kingfisher-scanner
 
-Embeddable, synchronous secret detection for Rust 1.99+. The `1.x` public Rust API
+Embeddable, synchronous secret detection for Rust 1.99+. The public Rust API
 follows semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-scanner = "1.4.0"
+kingfisher-scanner = "2.0.0"
 anyhow = "1"
 ```
 
@@ -27,6 +27,26 @@ fn main() -> anyhow::Result<()> {
 }
 ```
 
+Custom YAML HTTP validators can authenticate to a configured verifier with
+OAuth2. Reuse a `Validator` to share token refresh and failure cooldowns across
+checks; scanning itself remains offline. See the
+[auth configuration](../../docs/RULES.md#oauth2-authentication-for-http-verification-services)
+and [runnable example](examples/oauth2_validation.rs). OAuth2 HTTPS token/verifier
+requests retain strict TLS and environment proxy/`NO_PROXY` behavior. Only explicitly
+allowed loopback plain-HTTP token/verifier requests bypass proxies; redirects stay
+disabled for both transports.
+
+## Migrating to 2.0
+
+Upgrade direct `kingfisher-rules` dependencies to `"2.0.0"` alongside this crate.
+The scanner's public `Rule`, `RuleSyntax` and `RulesDatabase` types/re-exports now
+come from rules 2.x and cannot be mixed with rules 1.x types. Existing
+`HttpValidation` literals need `auth: None`, or
+`auth: Some(Box::new(HttpValidationAuth { oauth2: config }))` with the new
+`kingfisher_rules::{HttpValidationAuth, OAuth2Config, OAuth2PasswordCredentials}` types.
+YAML rules without `auth` remain valid. Core 1.0.3 and the Python SDK 1.4.0 API
+are unchanged. See the [library migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-scanner-20).
+
 ## Custom rules and configuration
 
 ```rust
@@ -46,6 +66,30 @@ assert_eq!(findings.len(), 1);
 assert_eq!(findings[0].secret, "[REDACTED]");
 # Ok::<(), anyhow::Error>(())
 ```
+
+Raw and Base64 matches enforce `pattern_requirements` before component resolution:
+character minimums, ignored substrings and Liquid checksum templates, including
+`luhn_valid` and `iban_valid`. See the [rule guide](../../docs/RULES.md#character-requirements).
+
+For exact full-match component windows and candidate ranking, use
+`scan_blob_with_context(&blob, path)?`, then pass its context to
+`validator.clone().with_scan_context(output.context)` before validating
+`output.findings`. Without detection options, component matching uses full-match
+windows and isolates raw input and each decoded buffer, preventing sibling Base64
+values from satisfying one another's required components. Explicit
+`DetectionOptions` retain their chosen `cli_match_semantics` policy even when
+context is collected; collecting metadata does not override that flag.
+Context retains compact spans and assignment/scope metadata, not source payloads.
+Existing finding fields and serialization are unchanged; vector-only APIs retain
+their historical finding-location association. See the
+[runnable HTTP example](examples/http_validation.rs).
+
+With `validation`, typed credential URI syntax checks run offline during detection.
+Explicit `verify_candidates` opt-ins use shared fixed-origin eligibility and bounded
+credential pairing; unresolved searches never establish inactivity. Identical rules
+and resolved inputs reuse definitive active/inactive results within each validation
+batch, preserving all occurrences even when remaining attempt budgets differ. Inconclusive failures and
+cancellations are not memoized; later occurrences can retry and separate batches recheck.
 
 Use `scan_file(path)?`, `scan_blob(&blob)?`, or `scan_blob_at_path(&blob, source_path)?`
 when scanning files or applying path-aware rules. Errors propagate; an empty successful
@@ -113,7 +157,7 @@ scratch allocation or reentrant borrowing errors; prefer `try_with`.
 Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
+kingfisher-scanner = { version = "2.0.0", features = ["validation"] }
 ```
 
 `validation` enables every supported family and its dependencies. Legacy
@@ -297,9 +341,10 @@ defaults and request templates. Conditional templates can over-report names afte
 render errors; Betterleaks branches and provider constraints are not fully proven.
 `Validator::with_variables(mapping)` clones policy and the pooled client with
 explicit overrides. `validate_prepared_findings(candidates, &context).await`
-checks only selected candidates, skips known missing/ambiguous validation inputs
+checks only selected candidates, skips missing inputs and ambiguities without supported verification opt-ins
 before network work and associates supporting context without validating helpers.
-`ValidatedFinding::input_diagnostics` retains the inspection snapshot; missing
+`ValidatedFinding::input_diagnostics` retains unresolved input diagnostics; verified
+candidate selection clears dependency ambiguity. Missing
 revocation-only variables prevent resolved action inputs even after active validation.
 `same_revocation_target(&other)` compares original rule/action definitions and
 complete resolved action inputs for application-owned deduplication.

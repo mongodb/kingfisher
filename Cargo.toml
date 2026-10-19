@@ -57,7 +57,7 @@ thread_local = "1.1.10"
 
 [package]
 name = "kingfisher-bin"
-version = "2.13.0"
+version = "2.14.0"
 description = "MongoDB's blazingly fast and accurate secret scanning, validation, blast radius mapping, and secret revocation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -66,7 +66,7 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 publish.workspace = true
-include = ["src/**", "examples/**", "build.rs", "docs/viewer/**", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES", "third-party/**", "README.md", "Cargo.lock"]
+include = ["src/**", "examples/**", "build.rs", "build_support.rs", "docs/viewer/**", "LICENSE", "NOTICE", "THIRD_PARTY_NOTICES", "third-party/**", "README.md", "Cargo.lock"]
 
 [lib]
 name = "kingfisher"
@@ -118,8 +118,8 @@ command-group = { version = "5.0.1", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Library crates
 kingfisher-core = { version = "1.0.3", path = "crates/kingfisher-core" }
-kingfisher-rules = { version = "1.2.1", path = "crates/kingfisher-rules" }
-kingfisher-scanner = { version = "1.4.0", path = "crates/kingfisher-scanner", features = ["validation", "archives", "context", "extraction", "git", "__cli-internals"] }
+kingfisher-rules = { version = "2.0.0", path = "crates/kingfisher-rules" }
+kingfisher-scanner = { version = "2.0.0", path = "crates/kingfisher-scanner", features = ["validation", "archives", "context", "extraction", "git", "__cli-internals"] }
 
 clap = { version = "4.6", default-features = false, features = [
     "derive",
@@ -157,7 +157,7 @@ url = "2.5.8"
 strum = { version = "0.28", features = ["derive"] }
 sysinfo = "0.39.6"
 webbrowser = "1.2.4"
-reqwest = { version = "0.13", default-features = false, features = [
+reqwest = { version = "0.13.5", default-features = false, features = [
     "json",
     "gzip",
     "brotli",
@@ -181,13 +181,6 @@ async-openai = { version = "0.41.3", default-features = false, features = [
     "rustls",
 ] }
 gitlab = { version = "0.1902.0", default-features = false, features = ["client_api"] }
-# gouqi 0.20 exposes reqwest 0.12's Client in its public async constructor.
-reqwest_0_12 = { package = "reqwest", version = "0.12.28", default-features = false, features = [
-    "json",
-    "rustls-tls",
-    "blocking",
-    "multipart",
-] }
 axum = { version = "0.8", default-features = false, features = ["tokio", "http1"] }
 
 
@@ -254,6 +247,7 @@ humantime = "2.4.0"
 path-dedot = "4.0.1"
 quick-xml = { version = "0.41.0", features = ["serde", "serialize"] }
 rustls = "0.23.43"
+webpki-roots = "1.0"
 tokio-postgres-rustls = "0.14.0"
 rustls-native-certs = "0.8.4"
 # Keep native libraries on their allocator: interposing malloc/free can run mimalloc
@@ -269,7 +263,7 @@ globset = "0.4.20"
 ipnet = "2.12.1"
 gouqi = { version = "0.20.0", features = ["async"] }
 oci-client = { version = "0.17", default-features = false, features = ["rustls-tls"] }
-bollard = { version = "0.21.1", default-features = false, features = ["http", "pipe", "ssl"] }
+bollard = { version = "0.21.1", default-features = false, features = ["http", "pipe", "aws-lc-rs"] }
 walkdir = "2.5.0"
 aws-sdk-s3 = { version = "1.144.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-sdk-iam = { version = "1.122.0", default-features = false, features = ["default-https-client", "rt-tokio"] }
@@ -343,20 +337,20 @@ rsa = { version = "0.9.10", features = ["getrandom"] }
 [profile.release]
 debug = false
 strip = true
-opt-level = "s"          # Optimize for smaller binary size over speed
+opt-level = 3            # Optimize scanning throughput; cold crates stay size-focused below
 lto = true              # Enable Link Time Optimization
-codegen-units = 1       # Optimize for size but slower compilation
-panic = "abort"          # Remove unwind tables for panics
+codegen-units = 1       # Enable whole-crate optimization at the cost of compile time
+panic = "abort"          # Remove Rust panic unwinding; native unwind metadata may remain
 rpath = false           # Don't embed path dependencies
 incremental = false
 
 
 
 # Keep throughput-sensitive scanner, matcher, crypto, and transport crates at
-# the global `s` level.  The crates below are cold or infrequently used in the
+# the global `3` level. The crates below are cold or infrequently used in the
 # common local-repository scan path, so `z` is a safer size trade-off.
 #
-# Hot-path crates kept at `s` include: kingfisher-vectorscan, regex, bstr, memmap2,
+# Hot-path crates kept at `3` include: kingfisher-vectorscan, regex, bstr, memmap2,
 # memchr, ignore, walkdir, rayon, xxhash-rust, rustc-hash, crossbeam-*, smallvec,
 # dashmap, globset, rusqlite, tree-magic-mini, content_inspector,
 # cssparser, tl, gix, petgraph, roaring, fixedbitset, path-dedot, serde_json,
@@ -401,7 +395,7 @@ opt-level = "z"
 
 # ── AWS SDK and Smithy (credential validation and access mapping) ────
 # aws-lc-rs / aws-lc-sys are intentionally excluded — they are the
-# crypto/TLS backend for rustls and remain at the global `s` level.
+# crypto/TLS backend for rustls and remain at the global `3` level.
 [profile.release.package.aws-config]
 opt-level = "z"
 

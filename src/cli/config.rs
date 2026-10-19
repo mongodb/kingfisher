@@ -102,6 +102,7 @@ pub struct ScanConfig {
     pub min_entropy: Option<f32>,
     pub no_validate: Option<bool>,
     pub no_limits: Option<bool>,
+    pub no_timeouts: Option<bool>,
     pub only_valid: Option<bool>,
     pub validation_filter: Option<ValidationFilter>,
     pub redact: Option<bool>,
@@ -157,6 +158,14 @@ pub struct ValidationConfig {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FiltersConfig {
+    #[serde(default)]
+    pub path_prefixes: Vec<String>,
+    #[serde(default)]
+    pub skip_path_prefixes: Vec<String>,
+    #[serde(default)]
+    pub file_extensions: Vec<String>,
+    #[serde(default)]
+    pub skip_file_extensions: Vec<String>,
     // v1 fields — additive with CLI.
     #[serde(default)]
     pub skip_words: Vec<String>,

@@ -24,6 +24,7 @@ use kingfisher_scanner::{
 fn syntax() -> RuleSyntax {
     let mut syntax = RuleSyntax::new("acme.demo", "Demo", r"\b(demo_[a-z0-9]{16})\b");
     syntax.validation = Some(Validation::Http(HttpValidation {
+        auth: None,
         request: HttpRequest {
             method: "GET".into(),
             url: "{{ ENDPOINT }}/identity".into(),
@@ -81,6 +82,227 @@ async fn serve(app: Router) -> Server {
     });
     Server { url, task }
 }
+
+#[tokio::test]
+async fn batch_validation_groups_identical_inputs_but_keeps_rules_separate() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let server = serve(Router::new().route(
+        "/identity",
+        get(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            async { "authenticated" }
+        }),
+    ))
+    .await;
+    let first = syntax();
+    let mut second = first.clone();
+    second.id = "acme.other".into();
+    let findings = scan(vec![first, second], b"demo_abcd1234efgh5678 demo_abcd1234efgh5678", false);
+    let results = validator(&server).validate_findings(findings).await;
+    assert_eq!(results.len(), 4);
+    assert!(results.iter().all(|result| result.outcome == ValidationOutcome::VerifiedActive));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn explicit_candidate_verification_selects_only_a_verified_component() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let server = serve(Router::new().route(
+        "/identity",
+        get(move |headers: HeaderMap| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if headers.get("X-Secret").is_some_and(|value| value == "secret_good1234") {
+                    (StatusCode::OK, "authenticated")
+                } else {
+                    (StatusCode::UNAUTHORIZED, "rejected")
+                }
+            }
+        }),
+    ))
+    .await;
+    let helper = RuleSyntax::new("acme.component", "Component", r"(secret_[a-z0-9]{8})");
+    let mut primary = syntax();
+    let Some(Validation::Http(http)) = primary.validation.as_mut() else { unreachable!() };
+    http.request.url = format!("{}/identity", server.url);
+    http.request.headers.insert("X-Secret".into(), "{{ SECRET }}".into());
+    primary.depends_on_rule = vec![Some(DependsOnRule {
+        rule_id: helper.id.clone(),
+        variable: "SECRET".into(),
+        within: Some("2L".into()),
+        optional: false,
+        verify_candidates: true,
+    })];
+    let findings = scan(
+        vec![primary.clone(), helper.clone()],
+        b"secret_bad12345 demo_abcd1234efgh5678\nsecret_good1234",
+        false,
+    );
+    let primary_finding = findings.iter().find(|f| f.rule_id == primary.id).unwrap().clone();
+    let result =
+        validator(&server).validate_finding_with_context(&primary_finding, &findings).await;
+    assert_eq!(result.outcome, ValidationOutcome::VerifiedActive);
+    assert_eq!(result.credential.unwrap().variables["SECRET"], "secret_good1234");
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+
+    primary.depends_on_rule[0].as_mut().unwrap().verify_candidates = false;
+    let mut strict = primary_finding;
+    strict.rule = Arc::new(Rule::new(primary));
+    let result = validator(&server).validate_finding_with_context(&strict, &findings).await;
+    assert_eq!(result.reason, Some(ValidationReason::AmbiguousDependency));
+    assert_eq!(calls.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
+async fn scan_context_preserves_full_match_windows_and_reported_secret_locations() {
+    let server = serve(Router::new().route("/identity", get(|| async { "authenticated" }))).await;
+    let mut primary = syntax();
+    primary.pattern = r"PREFIX_x{48}(demo_[a-z0-9]{16})".into();
+    primary.depends_on_rule = vec![Some(DependsOnRule {
+        rule_id: "acme.helper".into(),
+        variable: "HELP".into(),
+        within: Some("16C".into()),
+        optional: false,
+        verify_candidates: false,
+    })];
+    let helper = RuleSyntax::new("acme.helper", "Helper", r"(HELP_[a-z0-9]{8})");
+    let scanner = Scanner::new(Arc::new(
+        RulesDatabase::from_rules(vec![Rule::new(primary), Rule::new(helper)]).unwrap(),
+    ));
+    let input = format!("HELP_efgh5678 PREFIX_{}demo_abcd1234efgh5678", "x".repeat(48));
+    let blob = kingfisher_scanner::Blob::from_bytes(input.as_bytes().to_vec());
+    let output = scanner.scan_blob_with_context(&blob, "config.env").unwrap();
+    let primary = output.findings.iter().find(|f| f.rule_id == "acme.demo").unwrap();
+    assert_eq!(&input[primary.location.start_offset..primary.location.end_offset], primary.secret);
+    let result = validator(&server)
+        .with_scan_context(output.context)
+        .validate_finding_with_context(primary, &output.findings)
+        .await;
+    assert_eq!(result.outcome, ValidationOutcome::VerifiedActive);
+}
+
+#[test]
+fn scan_context_never_pairs_components_from_separate_decoded_buffers() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let rules = component_rules(Some("0"));
+    let scanner = Scanner::new(Arc::new(
+        RulesDatabase::from_rules(rules.into_iter().map(Rule::new).collect()).unwrap(),
+    ));
+    let input = format!(
+        "{} {}",
+        STANDARD.encode("padding: account_abcd end padding"),
+        STANDARD.encode("padding: demo_abcd1234efgh5678 end padding")
+    );
+    let output = scanner
+        .scan_blob_with_context(&kingfisher_scanner::Blob::from_bytes(input.into_bytes()), "")
+        .unwrap();
+    assert!(output.findings.iter().all(|finding| finding.rule_id != "acme.demo"));
+    assert!(output.findings.iter().any(|finding| finding.rule_id == "acme.account"));
+
+    // Positive control: decoding and component pairing must still work when both
+    // values belong to the same decoded buffer.
+    let paired = STANDARD.encode("padding: account_abcd demo_abcd1234efgh5678 end padding");
+    let output = scanner
+        .scan_blob_with_context(&kingfisher_scanner::Blob::from_bytes(paired.into_bytes()), "")
+        .unwrap();
+    let primary = output.findings.iter().find(|finding| finding.rule_id == "acme.demo").unwrap();
+    assert_eq!(primary.secret, "demo_abcd1234efgh5678");
+    assert!(primary.is_base64_encoded);
+    assert!(output.findings.iter().any(|finding| {
+        finding.rule_id == "acme.account"
+            && finding.secret == "account_abcd"
+            && finding.is_base64_encoded
+    }));
+}
+
+#[cfg(feature = "context")]
+#[tokio::test]
+async fn scan_context_keeps_nested_occurrences_with_identical_fingerprints_separate() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let server = serve(Router::new().route("/identity", get(|| async { "authenticated" }))).await;
+    let rules = component_rules(Some("1L"));
+    let scanner = Scanner::new(Arc::new(
+        RulesDatabase::from_rules(rules.into_iter().map(Rule::new).collect()).unwrap(),
+    ));
+    let payload = format!(
+        "{} {}",
+        STANDARD.encode("demo_abcd1234efgh5678 account_abcd"),
+        STANDARD.encode("demo_abcd1234efgh5678 account_efgh")
+    );
+    let blob = kingfisher_scanner::Blob::from_bytes(STANDARD.encode(payload).into_bytes());
+    let output = scanner
+        .scan_blob_with_context_and_control(
+            &blob,
+            "",
+            &Default::default(),
+            false,
+            Some(&Default::default()),
+        )
+        .unwrap();
+    let primary: Vec<_> = output.findings.iter().filter(|f| f.rule_id == "acme.demo").collect();
+    assert_eq!(primary.len(), 2);
+    assert_eq!(primary[0].fingerprint, primary[1].fingerprint);
+    let validator = validator(&server).with_scan_context(output.context);
+    let mut accounts = std::collections::BTreeSet::new();
+    for finding in primary {
+        let result = validator.validate_finding_with_context(finding, &output.findings).await;
+        assert_eq!(result.outcome, ValidationOutcome::VerifiedActive);
+        accounts.insert(result.credential.unwrap().variables["ACCOUNT"].clone());
+    }
+    assert_eq!(accounts, ["account_abcd".to_string(), "account_efgh".to_string()].into());
+}
+
+#[tokio::test]
+async fn scan_context_ranks_matching_assignment_names_before_nearby_components() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let counter = calls.clone();
+    let server = serve(Router::new().route(
+        "/identity",
+        get(move |headers: HeaderMap| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            async move {
+                if headers.get("X-Secret").is_some_and(|value| value == "secret_good1234") {
+                    (StatusCode::OK, "authenticated")
+                } else {
+                    (StatusCode::UNAUTHORIZED, "rejected")
+                }
+            }
+        }),
+    ))
+    .await;
+    let mut primary = syntax();
+    let Some(Validation::Http(http)) = primary.validation.as_mut() else { unreachable!() };
+    http.request.url = format!("{}/identity", server.url);
+    http.request.headers.insert("X-Secret".into(), "{{ SECRET }}".into());
+    primary.depends_on_rule = vec![Some(DependsOnRule {
+        rule_id: "acme.component".into(),
+        variable: "SECRET".into(),
+        within: None,
+        optional: false,
+        verify_candidates: true,
+    })];
+    let helper = RuleSyntax::new("acme.component", "Component", r"(secret_[a-z0-9]{8})");
+    let scanner = Scanner::new(Arc::new(
+        RulesDatabase::from_rules(vec![Rule::new(primary), Rule::new(helper)]).unwrap(),
+    ));
+    let mut input = "production_client_id=demo_abcd1234efgh5678\n".to_string();
+    for index in 0..17 {
+        input.push_str(&format!("other_client_secret=secret_{index:08}\n"));
+    }
+    input.push_str("production_client_secret=secret_good1234");
+    let output = scanner
+        .scan_blob_with_context(&kingfisher_scanner::Blob::from_bytes(input.into_bytes()), "")
+        .unwrap();
+    let primary = output.findings.iter().find(|f| f.rule_id == "acme.demo").unwrap();
+    let result = validator(&server)
+        .with_scan_context(output.context)
+        .validate_finding_with_context(primary, &output.findings)
+        .await;
+    assert_eq!(result.outcome, ValidationOutcome::VerifiedActive);
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
+}
 fn validator(server: &Server) -> Validator {
     Validator::builder()
         .allow_internal_ips(true)
@@ -136,6 +358,7 @@ async fn missing_revocation_inputs_block_readiness_and_preserve_live_validation(
     let server = serve(Router::new().route("/identity", get(|| async { "authenticated" }))).await;
     let mut rule = syntax();
     rule.revocation = Some(kingfisher_rules::Revocation::Http(HttpValidation {
+        auth: None,
         request: HttpRequest {
             method: "DELETE".into(),
             url: "{{ ENDPOINT }}/keys/{{ KEY_ID }}".into(),
@@ -586,9 +809,16 @@ async fn cloned_validators_share_concurrency_and_release_permits() {
         .unwrap();
     let other = validator.clone();
     let f = finding(syntax());
+    let distinct: Vec<_> = (0..5)
+        .map(|index| {
+            let mut finding = f.clone();
+            finding.secret = format!("demo_abcd1234efgh567{index}");
+            finding
+        })
+        .collect();
     let (a, b) = tokio::join!(
-        validator.validate_findings(vec![f.clone(); 5]),
-        other.validate_findings(vec![f; 5])
+        validator.validate_findings(distinct.clone()),
+        other.validate_findings(distinct)
     );
     assert!(a.iter().chain(&b).all(|r| r.outcome == ValidationOutcome::VerifiedActive));
     assert_eq!(calls.load(Ordering::SeqCst), 10);
@@ -875,7 +1105,8 @@ async fn resolved_components_and_endpoints_survive_until_explicit_revocation() {
         match_all_status: false,
         negative: false,
     }]);
-    rules[0].revocation = Some(Revocation::Http(HttpValidation { request, multipart: None }));
+    rules[0].revocation =
+        Some(Revocation::Http(HttpValidation { auth: None, request, multipart: None }));
     let findings = scan(rules, b"account_efgh\n\naccount_abcd\ndemo_abcd1234efgh5678", false);
     let mut results = validator(&server).validate_findings(findings).await;
     let result = results.remove(results.iter().position(|r| r.finding.rule().visible()).unwrap());

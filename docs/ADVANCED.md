@@ -79,6 +79,40 @@ kingfisher scan /path/to/code --confidence low
 
 ## Filtering and Suppression
 
+### Select paths and filename extensions
+
+`--path-prefix PATH`, `--skip-path-prefix PATH`, `--file-extension EXT`, and
+`--skip-file-extension EXT` are repeatable scan options. Prefixes are literal
+and case sensitive: `configs` also matches `configs2/`; use `configs/` for a
+directory boundary. Extensions match the final filename suffix, ignore case,
+and accept a leading dot. Skip options take precedence.
+
+```bash
+kingfisher scan ./repo --path-prefix configs/ --path-prefix deploy/ \
+  --skip-path-prefix configs/generated/ --file-extension env \
+  --file-extension json --format json
+```
+
+For local files, prefixes are relative to the selected input root. For Git
+sources, they are relative to each repository root; filtering preserves only
+selected appearances of a shared blob. Path filtering traverses Git path metadata
+even when detailed commit reporting is disabled. `--commit-metadata=false` hides
+author, committer and date details while retaining repository links, commit IDs
+and file paths. Ordinary files and Git blobs are selected before reading their content. Recognized archives remain traversable
+so their logical member paths can be selected, including nested archives and
+exported container images. Custom enumerator inputs use their `origin.path`.
+
+S3, GCS, Azure Blob containers and Hugging Face buckets apply these controls before
+object downloads and push selected prefixes into their listing requests. Existing
+source-prefix options intersect with these controls. Remote object keys are matched literally,
+including any backslashes or exclamation marks in a key. Other remote sources
+apply selection to the named files produced by their existing acquisition path.
+Git cloning and container-image export still acquire the repository or image.
+
+These storage scans additionally accept `--object-cache-dir DIR` for resumable listings
+and incremental downloads. Cached content is scanned under the current rules so
+reports remain complete. See [platform examples and cache behavior](INTEGRATIONS.md#focus-a-scan-and-reuse-downloaded-objects).
+
 ### Skip Known False Positives
 
 Use `--skip-regex` and `--skip-word` to suppress findings you know are benign. Both flags may be provided multiple times and are tested against the secret value **and** the full match context.
@@ -223,10 +257,10 @@ Use `--since-hours <HOURS>` to scan recent Git changes without choosing a baseli
 git clone --no-checkout --no-single-branch "$REPO_URL" ./repo
 
 # Scan commits from the last 24 hours across all available refs.
-kingfisher scan ./repo --since-hours 24 --git-history full --format toon
+kingfisher scan ./repo --since-hours 24 --git-history full --format json
 
 # Restrict the same window to one branch.
-kingfisher scan ./repo --since-hours 24 --branch origin/main --format toon
+kingfisher scan ./repo --since-hours 24 --branch origin/main --format json
 ```
 
 `--git-history full` is the default, so it may be omitted. `--since-commit` is not needed.
@@ -264,7 +298,7 @@ With the default `--git-history full`, `--since-commit <baseline>` scans changes
 For example, after cloning all branches, scan their available history with:
 
 ```bash
-kingfisher scan ./repo --since-commit "$BASE_COMMIT" --git-history full --format toon
+kingfisher scan ./repo --since-commit "$BASE_COMMIT" --git-history full --format json
 ```
 
 Only refs and history present in the local clone can be scanned. Shallow boundaries limit traversal; a boundary commit whose parent is unavailable is scanned as a full tree. The baseline must resolve locally. `--since-commit` is an ancestry boundary, not a time filter: divergent branches may include older commits outside the baseline’s ancestry.
@@ -595,6 +629,22 @@ _(prefix matching: `--rule betterleaks.aws` loads the Betterleaks AWS family)_
 kingfisher scan /path/to/repo --rule betterleaks.aws
 ```
 
+## Faster Git history scans
+
+Large default full-history scans with commit metadata automatically use a
+conservative content prepass and candidate-aware tree summaries. Smaller histories
+and path-filtered scans retain eager metadata enumeration. Commit/path attribution
+is preserved in either mode. Candidate sets, tree summaries and Git object caches
+exist only in memory for the current scan; no scan contents or classifications
+are persisted for reuse by later runs.
+
+The pre-existing compiled-rule database cache is independent of scan data. To
+disable that disk cache as well, use `--no-rule-cache`:
+
+```bash
+kingfisher scan ./repo --no-validate --no-rule-cache --format toon
+```
+
 ## Rule Performance Profiling
 
 Use `--rule-stats` to collect timing information for every rule. After scanning, the summary prints a **Rule Performance Stats** section showing how many matches each rule produced along with its slowest and average match times. Useful when creating rules or debugging rules.
@@ -626,7 +676,7 @@ commit metadata, dependency helpers, validation results, and global deduplicatio
 changing worker count or Git history coverage.
 
 ```bash
-kingfisher scan /path/to/repos --scan-nested-repos --disk-offload --format toon
+kingfisher scan /path/to/repos --scan-nested-repos --disk-offload --format json
 ```
 
 ### When to use it
@@ -643,7 +693,7 @@ perform final processing. All findings are restored to RAM before the final cons
 it cannot prevent an out-of-memory failure if that final working set is too large. Digest
 and blob-ID indexes also remain in memory throughout the scan.
 
-For example, when `kingfisher scan ~/example-repo --disk-offload --format toon` scans `~/example-repo`
+For example, when `kingfisher scan ~/example-repo --disk-offload --format json` scans `~/example-repo`
 as a single repository, all of that repository's findings accumulate in RAM until its scan
 finishes. They are then written to disk and loaded back into RAM for final processing.
 **Similar memory usage with and without the flag is expected for this workload**, including
@@ -724,7 +774,7 @@ directory, for example on a protected local disk with enough free space:
 
 ```bash
 TMPDIR=/path/to/private-temp kingfisher scan /path/to/repos \
-  --scan-nested-repos --disk-offload --format toon
+  --scan-nested-repos --disk-offload --format json
 ```
 
 ### Cleanup and crashes
@@ -761,34 +811,56 @@ is not secure erasure; use encrypted or memory-backed storage when needed.
 
 ## Unlimited scans
 
-Use `--no-limits` when scan completeness takes priority over bounded time, memory,
-and temporary disk usage:
+Use `--no-limits` to lift content-size, depth, and count limits while preserving
+network, subprocess, and repository timeouts:
 
 ```bash
-kingfisher scan /path/to/code --no-limits --format toon
+kingfisher scan /path/to/code --no-limits --format json
 ```
 
-The flag overrides individual resource limits, including values supplied in a
+Starting in **2.14.0**, `--no-limits` no longer disables timeouts. The original
+[#524](https://github.com/mongodb/kingfisher/issues/524) request included both
+content limits and timeouts; these are now separate choices. Add `--no-timeouts`
+to disable scan network, Git clone/update, repository, and validation deadlines:
+
+```bash
+kingfisher scan /path/to/code --no-limits --no-timeouts --format json
+```
+
+`--no-timeouts` overrides positive timeout settings, including configuration
+values and Git timeout environment variables. Used alone, it retains content
+limits. Stalled operations can wait indefinitely when their deadlines are disabled.
+
+`--no-limits` overrides individual content limits, including values supplied in a
 configuration file. Defaults are unchanged when it is absent. It removes:
 
 - File-size limits, archive entry/count/output budgets, and nested archive depth limits,
   including archives in Git history and Docker layers.
-- SQLite row/output budgets and lock waits, Python bytecode extraction budgets,
+- SQLite row/output budgets, Python bytecode extraction budgets,
   Base64 size/depth limits, and credential candidate-count budgets.
-- Repository scan and Git clone/update deadlines, source-provider request timeouts,
-  validation deadlines, and validation response body/storage caps.
+- Validation response body/storage caps.
 - Repository clone counts and provider search result counts. API page sizes remain
   bounded, and pagination continues until the provider reports completion.
 
 Worker counts, bounded queues, request rate limits, finite retry counts, scan
 selectors/exclusions, `--no-base64`, `--no-extract-archives`, detection rules, and
 archive path checks and ancestor-cycle detection remain in effect. ZIP extraction still switches to disk for
-large inputs. Scan-time blast-radius network deadlines are also disabled, while
-provider-specific probe deadlines (including Bedrock's five-second requests) and
-enumeration and evidence caps remain in effect. Report presentation limits,
+large inputs. Network request, Git clone/update, repository scan, validation,
+and policy-managed scan-time blast-radius deadlines remain enabled unless
+`--no-timeouts` is supplied. SQLite lock waits and SMTP cleanup remain bounded
+with either option. Provider-specific probe deadlines (including Bedrock's
+five-second requests), Docker API deadlines, and blast-radius enumeration and
+evidence caps remain in effect. Report presentation limits,
 operating system limits, remote service limits, and format/protocol validity checks
-are outside this scan resource policy. A stalled scan can wait indefinitely; memory
-or disk exhaustion can still prevent completion.
+are outside this scan content policy. Unlimited content can use substantial time,
+memory, and disk; individual operation timeouts do not impose an overall scan deadline.
+
+Validation retains its ten-second default deadline and honors
+`--validation-timeout` and `validation.timeout` in configuration files, including
+with `--no-limits`. This keeps silent SMTP servers and other stalled credential
+checks from holding up a scan indefinitely. To disable validation deadlines
+explicitly, pass `--validation-timeout 0` or `--no-timeouts`. SMTP session cleanup
+remains bounded even with validation deadlines disabled.
 
 For selective control, `--max-file-size 0`, `--extraction-depth 0`,
 `--git-repo-timeout 0`, and `--validation-timeout 0` disable their respective limits.
@@ -802,6 +874,7 @@ To enable the preset in an explicitly loaded configuration file:
 ```yaml
 scan:
   no_limits: true
+  no_timeouts: false  # true opts out of scan operation deadlines
 ```
 
 ## Notable Scan Options
@@ -873,7 +946,7 @@ kingfisher scan ./my-project \
 
 ### Limit maximum file size scanned
 
-By default, Kingfisher skips files larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**. Use `--max-file-size 0` for unlimited file size, or `--no-limits` to disable scan resource budgets and timeouts.
+By default, Kingfisher skips files larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**. Use `--max-file-size 0` for unlimited file size, or `--no-limits` to lift content-size, depth, and count limits while retaining timeouts.
 
 ```bash
 # Scan files up to 500 mb in size

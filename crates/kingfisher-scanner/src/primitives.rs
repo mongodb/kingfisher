@@ -9,10 +9,157 @@ use std::{
     hash::{Hash, Hasher},
 };
 
+#[cfg(feature = "validation")]
+use crate::validation::credential_uri::{
+    is_parseable_credential_uri, is_parseable_mongodb_uri, is_parseable_mysql_uri,
+    is_parseable_postgres_uri,
+};
 use base64::{Engine, engine::general_purpose};
 use kingfisher_core::OffsetSpan;
+#[cfg(feature = "validation")]
+use kingfisher_rules::Validation;
+use kingfisher_rules::rule::{PatternRequirementContext, PatternValidationResult, Rule};
 use rustc_hash::{FxHashMap, FxHasher};
+use tracing::debug;
 use xxhash_rust::xxh3::xxh3_64;
+
+// -------------------------------------------------------------------------------------------------
+// Pattern requirements check
+// -------------------------------------------------------------------------------------------------
+
+/// Check character minimums, ignored substrings, and offline checksums for a confirmed match.
+///
+/// A single unnamed capture uses the selected secret; named or multiple captures use
+/// the full match. Checksum templates also receive the full match and named captures.
+/// Set `respect_ignore_if_contains` to false to bypass only substring exclusions.
+pub fn check_pattern_requirements(
+    rule: &Rule,
+    re: &regex::bytes::Regex,
+    captures: &regex::bytes::Captures,
+    full_bytes: &[u8],
+    secret_bytes: &[u8],
+    respect_ignore_if_contains: bool,
+) -> bool {
+    let Some(char_reqs) = rule.pattern_requirements() else {
+        return true;
+    };
+
+    let context = PatternRequirementContext { regex: re, captures, full_match: full_bytes };
+
+    // Decide which bytes to validate:
+    // - If there are multiple capture groups OR any named captures -> use full match
+    // - Otherwise -> use secret_bytes (the actual secret)
+    let use_full_match = {
+        let has_named_captures = re.capture_names().any(|n| n.is_some());
+        let capture_count = captures.len(); // includes group 0
+        has_named_captures || capture_count > 2
+    };
+
+    let validation_bytes = if use_full_match { full_bytes } else { secret_bytes };
+
+    match char_reqs.validate(validation_bytes, Some(context), respect_ignore_if_contains) {
+        PatternValidationResult::Passed => true,
+        PatternValidationResult::Failed => {
+            debug!(
+                "Skipping match that does not meet character requirements for rule {}",
+                rule.id()
+            );
+            false
+        }
+        PatternValidationResult::FailedChecksum { actual_len, expected_len } => {
+            debug!(
+                "Skipping match for rule {} due to checksum mismatch (actual_len={}, expected_len={})",
+                rule.id(),
+                actual_len,
+                expected_len
+            );
+            false
+        }
+        PatternValidationResult::IgnoredBySubstring { matched_term } => {
+            debug!(
+                "Skipping match for rule {} because it contains ignored term {matched_term}",
+                rule.id()
+            );
+            false
+        }
+    }
+}
+
+// -------------------------------------------------------------------------------------------------
+// URI validation
+// -------------------------------------------------------------------------------------------------
+
+/// Returns `true` if the match passes URI validation (for database rules), `false` if it should
+/// be skipped.
+#[cfg(feature = "validation")]
+pub fn check_uri_validation(
+    rule: &Rule,
+    re: &regex::bytes::Regex,
+    captures: &regex::bytes::Captures,
+    matching_input_bytes: &[u8],
+) -> bool {
+    let Some(validation) = rule.syntax.validation.as_ref() else {
+        return true;
+    };
+
+    match validation {
+        Validation::MongoDB => {
+            let Ok(uri) = std::str::from_utf8(matching_input_bytes) else {
+                debug!("Skipping match for rule {} due to non-UTF8 MongoDB URI", rule.id());
+                return false;
+            };
+            if !is_parseable_mongodb_uri(uri) {
+                debug!("Skipping match for rule {} due to invalid MongoDB URI", rule.id());
+                return false;
+            }
+        }
+        Validation::Postgres => {
+            let Ok(uri) = std::str::from_utf8(matching_input_bytes) else {
+                debug!("Skipping match for rule {} due to non-UTF8 Postgres URI", rule.id());
+                return false;
+            };
+            if !is_parseable_postgres_uri(uri) {
+                debug!("Skipping match for rule {} due to invalid Postgres URI", rule.id());
+                return false;
+            }
+        }
+        Validation::MySQL => {
+            let Ok(uri) = std::str::from_utf8(matching_input_bytes) else {
+                debug!("Skipping match for rule {} due to non-UTF8 MySQL URI", rule.id());
+                return false;
+            };
+            if !is_parseable_mysql_uri(uri) {
+                debug!("Skipping match for rule {} due to invalid MySQL URI", rule.id());
+                return false;
+            }
+        }
+        Validation::CredentialUri => {
+            let named_capture = |expected: &str| {
+                re.capture_names().enumerate().find_map(|(index, name)| {
+                    name.filter(|name| name.eq_ignore_ascii_case(expected))
+                        .and_then(|_| captures.get(index))
+                })
+            };
+            let uri_bytes = named_capture("URI")
+                .map(|capture| capture.as_bytes())
+                .unwrap_or(matching_input_bytes);
+            let (Ok(uri), scheme) = (
+                std::str::from_utf8(uri_bytes),
+                named_capture("SCHEME")
+                    .and_then(|capture| std::str::from_utf8(capture.as_bytes()).ok()),
+            ) else {
+                debug!("Skipping match for rule {} due to a non-UTF8 credential URI", rule.id());
+                return false;
+            };
+            if !is_parseable_credential_uri(uri, scheme) {
+                debug!("Skipping match for rule {} due to an invalid credential URI", rule.id());
+                return false;
+            }
+        }
+        _ => {}
+    }
+    true
+}
 
 // -------------------------------------------------------------------------------------------------
 // Base64 detection

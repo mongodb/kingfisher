@@ -542,6 +542,72 @@ static_filter!(
     }
 );
 
+static_filter!(
+    /// Check the Luhn checksum of at least two ASCII digits, ignoring spaces and hyphens.
+    LuhnValidFilter, "luhn_valid",
+    |input: &dyn ValueView| -> bool {
+        let input = input.to_kstr();
+        let mut count = 0usize;
+        let mut sum = 0u32;
+        for byte in input.bytes().rev() {
+            if matches!(byte, b' ' | b'-') {
+                continue;
+            }
+            if !byte.is_ascii_digit() {
+                return false;
+            }
+            let mut digit = u32::from(byte - b'0');
+            if count % 2 == 1 {
+                digit *= 2;
+                if digit > 9 {
+                    digit -= 9;
+                }
+            }
+            sum = (sum + digit) % 10;
+            count += 1;
+        }
+        count >= 2 && sum == 0
+    }
+);
+
+static_filter!(
+    /// Check generic IBAN structure and MOD-97 checksum, ignoring ASCII spaces and case.
+    /// Country registration, country-specific lengths, and account existence are not checked.
+    IbanValidFilter, "iban_valid",
+    |input: &dyn ValueView| -> bool {
+        // Normalize into a bounded stack buffer, without building a large decimal integer.
+        let input = input.to_kstr();
+        let mut normalized = [0u8; 34];
+        let mut len = 0;
+        for byte in input.bytes().filter(|&byte| byte != b' ') {
+            if len == normalized.len() || !byte.is_ascii_alphanumeric() {
+                return false;
+            }
+            normalized[len] = byte.to_ascii_uppercase();
+            len += 1;
+        }
+        if len < 5
+            || !normalized[..2].iter().all(u8::is_ascii_uppercase)
+            || !normalized[2..4].iter().all(u8::is_ascii_digit)
+        {
+            return false;
+        }
+        let check_digits = (normalized[2] - b'0') * 10 + normalized[3] - b'0';
+        if !(2..=98).contains(&check_digits) {
+            return false;
+        }
+        let mut remainder = 0u32;
+        for &byte in normalized[4..len].iter().chain(&normalized[..4]) {
+            remainder = if byte.is_ascii_digit() {
+                (remainder * 10 + u32::from(byte - b'0')) % 97
+            } else {
+                (remainder * 100 + u32::from(byte - b'A' + 10)) % 97
+            };
+        }
+        remainder == 1
+    }
+);
+
 // -----------------------------------------------------------------------------
 // Authentication & Security
 // -----------------------------------------------------------------------------
@@ -1007,6 +1073,67 @@ static_filter!(
     }
 );
 
+#[derive(Debug, FilterParameters)]
+struct RsaSha256Args {
+    #[parameter(
+        description = "Unencrypted PKCS#1 or PKCS#8 RSA private key PEM",
+        arg_type = "str"
+    )]
+    key: Expression,
+}
+
+#[derive(Clone, ParseFilter, FilterReflection, Default)]
+#[filter(
+    name = "rsa_sha256",
+    description = "RSA PKCS#1 v1.5 with SHA-256 (RS256) – returns unpadded Base64URL.",
+    parameters(RsaSha256Args),
+    parsed(RsaSha256Filter)
+)]
+pub struct RsaSha256;
+
+#[derive(Debug, FromFilterParameters, Display_filter)]
+#[name = "rsa_sha256"]
+struct RsaSha256Filter {
+    #[parameters]
+    args: RsaSha256Args,
+}
+
+impl Filter for RsaSha256Filter {
+    fn evaluate(&self, input: &dyn ValueView, runtime: &dyn Runtime) -> Result<Value> {
+        use aws_lc_rs::{rand::SystemRandom, signature, signature::KeyPair};
+
+        let args = self.args.evaluate(runtime)?;
+        // Never include parser errors or key material in template diagnostics.
+        let pem = pem::parse(args.key.as_bytes())
+            .map_err(|_| LiquidError::with_msg("rsa_sha256: invalid private key PEM"))?;
+        let pkcs8 = match pem.tag() {
+            "PRIVATE KEY" => true,
+            "RSA PRIVATE KEY" => false,
+            _ => {
+                return Err(LiquidError::with_msg(
+                    "rsa_sha256: expected an unencrypted PKCS#1 or PKCS#8 RSA private key",
+                ));
+            }
+        };
+        let der = Zeroizing::new(pem.into_contents());
+        let key = if pkcs8 {
+            signature::RsaKeyPair::from_pkcs8(&der)
+        } else {
+            signature::RsaKeyPair::from_der(&der)
+        }
+        .map_err(|_| LiquidError::with_msg("rsa_sha256: invalid RSA private key"))?;
+        let mut signature = vec![0; key.public_key().modulus_len()];
+        key.sign(
+            &signature::RSA_PKCS1_SHA256,
+            &SystemRandom::new(),
+            input.to_kstr().as_bytes(),
+            &mut signature,
+        )
+        .map_err(|_| LiquidError::with_msg("rsa_sha256: signing failed"))?;
+        Ok(Value::scalar(general_purpose::URL_SAFE_NO_PAD.encode(signature)))
+    }
+}
+
 // -----------------------------------------------------------------------------
 // Data Formatting
 // -----------------------------------------------------------------------------
@@ -1120,7 +1247,10 @@ pub fn register_all(builder: liquid::ParserBuilder) -> liquid::ParserBuilder {
         .filter(Rfc1123DateFilter)
         .filter(UuidFilter)
         .filter(Bip39ValidFilter)
+        .filter(LuhnValidFilter)
+        .filter(IbanValidFilter)
         .filter(JwtHeaderFilter)
+        .filter(RsaSha256)
         .filter(B64EncFilter)
         .filter(B64DecFilter)
         .filter(NewlineFilter)
@@ -1161,6 +1291,67 @@ mod tests {
 
     fn render(src: &str) -> String {
         parser().parse(src).unwrap().render(&object!({})).unwrap()
+    }
+
+    #[test]
+    fn luhn_valid_checks_digits_and_separator_handling() {
+        for input in ["4111111111111111", "4111 1111-1111 1111", "79927398713", "18"] {
+            assert_eq!(render(&format!("{{{{ {input:?} | luhn_valid }}}}")), "true");
+        }
+        for input in [
+            "",
+            " - ",
+            "0",
+            "4111111111111112",
+            "79927398714",
+            "4a11111111111111",
+            "４１１１１１１１１１１１１１１１",
+            "4111\t111111111111",
+        ] {
+            // Pass control characters as globals rather than interpolating string literals.
+            let template = parser().parse("{{ input | luhn_valid }}").unwrap();
+            assert_eq!(template.render(&object!({"input": input})).unwrap(), "false");
+        }
+        assert_eq!(
+            render(
+                r#"{% assign valid = "4111111111111112" | luhn_valid %}{% if valid %}yes{% else %}no{% endif %}"#
+            ),
+            "no"
+        );
+    }
+
+    #[test]
+    fn iban_valid_checks_structure_case_spaces_and_mod97() {
+        for input in [
+            "GB82WEST12345698765432",
+            "gb82 west 1234 5698 7654 32",
+            "DE89370400440532013000",
+            "NO9386011117947",
+            "FR1420041010050500013M02606",
+        ] {
+            assert_eq!(render(&format!("{{{{ {input:?} | iban_valid }}}}")), "true");
+        }
+        for input in [
+            "",
+            "GB82",
+            "GB82WEST12345698765433",
+            "G182WEST12345698765432",
+            "GBXXWEST12345698765432",
+            "GB82-WEST12345698765432",
+            "GB82WÉST12345698765432",
+            "GB82\tWEST12345698765432",
+            "GB82WEST12345698765432000000000000000",
+        ] {
+            let template = parser().parse("{{ input | iban_valid }}").unwrap();
+            assert_eq!(template.render(&object!({"input": input})).unwrap(), "false");
+        }
+        // The filter checks generic structure/checksum, without a country registry.
+        assert_eq!(
+            render(
+                r#"{% assign valid = "GB82WEST12345698765432" | iban_valid %}{% if valid %}yes{% else %}no{% endif %}"#
+            ),
+            "yes"
+        );
     }
 
     // -------------------------------------------------------------------------
@@ -1291,6 +1482,95 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&decoded).unwrap();
         assert_eq!(json["typ"], "JWT");
         assert_eq!(json["alg"], "HS256");
+    }
+
+    fn rsa_test_key() -> &'static rsa::RsaPrivateKey {
+        static KEY: std::sync::OnceLock<rsa::RsaPrivateKey> = std::sync::OnceLock::new();
+        KEY.get_or_init(|| rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap())
+    }
+
+    #[test]
+    fn rsa_sha256_signs_rs256_jwt_with_pkcs1_and_pkcs8_pem() {
+        use rsa::{
+            pkcs1::{EncodeRsaPrivateKey, LineEnding},
+            pkcs8::EncodePrivateKey,
+            signature::Verifier,
+        };
+
+        let key = rsa_test_key();
+        let verifier = rsa::pkcs1v15::VerifyingKey::<rsa::sha2::Sha256>::new(key.to_public_key());
+        let template = parser()
+            .parse(
+                r#"{%- assign now = "" | unix_timestamp -%}
+                {%- assign iat = now | minus: 60 -%}
+                {%- assign exp = now | plus: 540 -%}
+                {%- capture payload -%}{"iss":{{ APP_ID | json_escape }},"iat":{{ iat }},"exp":{{ exp }}}{%- endcapture -%}
+                {%- assign header = "RS256" | jwt_header -%}
+                {%- assign payload = payload | b64url_enc -%}
+                {%- assign signing_input = header | append: "." | append: payload -%}
+                Bearer {{ signing_input }}.{{ signing_input | rsa_sha256: TOKEN }}"#,
+            )
+            .unwrap();
+
+        for line_ending in [LineEnding::LF, LineEnding::CRLF] {
+            for pem in
+                [key.to_pkcs1_pem(line_ending).unwrap(), key.to_pkcs8_pem(line_ending).unwrap()]
+            {
+                let globals = object!({ "TOKEN": pem.as_str(), "APP_ID": "12345" });
+                let before = OffsetDateTime::now_utc().unix_timestamp();
+                let rendered = template.render(&globals).unwrap();
+                let token = rendered.strip_prefix("Bearer ").unwrap();
+                let (message, signature) = token.rsplit_once('.').unwrap();
+                assert!(signature.bytes().all(|b| b.is_ascii_alphanumeric() || b"-_".contains(&b)));
+                let signature = general_purpose::URL_SAFE_NO_PAD.decode(signature).unwrap();
+                assert_eq!(signature.len(), 256);
+                let signature = rsa::pkcs1v15::Signature::try_from(signature.as_slice()).unwrap();
+                // Verify with a separate crypto implementation and reject changed claims.
+                verifier.verify(message.as_bytes(), &signature).unwrap();
+                assert!(verifier.verify(b"changed.payload", &signature).is_err());
+
+                let (header, payload) = message.split_once('.').unwrap();
+                let decode = |value: &str| -> serde_json::Value {
+                    serde_json::from_slice(&general_purpose::URL_SAFE_NO_PAD.decode(value).unwrap())
+                        .unwrap()
+                };
+                assert_eq!(decode(header), serde_json::json!({"typ": "JWT", "alg": "RS256"}));
+                let claims = decode(payload);
+                assert_eq!(claims["iss"], "12345");
+                let iat = claims["iat"].as_i64().unwrap();
+                assert!(iat >= before - 60);
+                assert!(iat <= OffsetDateTime::now_utc().unix_timestamp() - 60);
+                assert_eq!(claims["exp"].as_i64().unwrap() - iat, 600);
+            }
+        }
+    }
+
+    #[test]
+    fn rsa_sha256_rejects_invalid_keys_without_disclosing_key_material() {
+        let template = parser().parse(r#"{{ "header.payload" | rsa_sha256: TOKEN }}"#).unwrap();
+        let marker = "sensitive-key-marker";
+        for key in [
+            String::new(),
+            marker.to_string(),
+            format!("-----BEGIN PRIVATE KEY-----\n{marker}\n-----END PRIVATE KEY-----"),
+            pem::encode(&pem::Pem::new("PRIVATE KEY", marker)),
+            pem::encode(&pem::Pem::new("RSA PRIVATE KEY", marker)),
+            pem::encode(&pem::Pem::new("ENCRYPTED PRIVATE KEY", marker)),
+            pem::encode(&pem::Pem::new("PUBLIC KEY", marker)),
+        ] {
+            let error = template.render(&object!({ "TOKEN": key })).unwrap_err().to_string();
+            assert!(error.contains("rsa_sha256:"));
+            assert!(!error.contains(marker));
+            assert!(!error.contains(&general_purpose::STANDARD.encode(marker)));
+        }
+
+        // A well-formed non-RSA PKCS#8 key is also rejected.
+        use aws_lc_rs::signature::Ed25519KeyPair;
+        let ed25519 =
+            Ed25519KeyPair::generate_pkcs8(&aws_lc_rs::rand::SystemRandom::new()).unwrap();
+        let pem = pem::encode(&pem::Pem::new("PRIVATE KEY", ed25519.as_ref()));
+        let error = template.render(&object!({ "TOKEN": pem })).unwrap_err().to_string();
+        assert!(error.contains("rsa_sha256: invalid RSA private key"));
     }
 
     // -------------------------------------------------------------------------

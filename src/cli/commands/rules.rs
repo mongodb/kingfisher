@@ -155,7 +155,7 @@ pub struct RulesArgs {
 
 #[derive(Subcommand, Debug)]
 pub enum RulesCommand {
-    /// Check rules for problems
+    /// Check rules and verify positive and negative examples with scan-time content filters
     Check(RulesCheckArgs),
 
     /// Compile and store the Vectorscan rule cache

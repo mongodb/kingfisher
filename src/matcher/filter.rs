@@ -12,12 +12,8 @@ use crate::{
     location::OffsetSpan,
     origin::OriginSet,
     rule_profiling::{ConcurrentRuleProfiler, RuleTimer},
-    rules::rule::{PatternRequirementContext, PatternValidationResult, Rule, Validation},
+    rules::rule::{Rule, Validation},
     safe_list::{is_safe_match_reason, is_user_match},
-    validation::{
-        is_parseable_credential_uri, is_parseable_mongodb_uri, is_parseable_mysql_uri,
-        is_parseable_postgres_uri,
-    },
 };
 
 use super::{
@@ -31,7 +27,72 @@ use kingfisher_rules::{
     RulesDatabase,
     betterleaks_filter::{BetterleaksFilterContext, BetterleaksFilterLineCache},
 };
-use kingfisher_scanner::primitives::{MatchSpans, find_secret_capture_with_group};
+use kingfisher_scanner::primitives::{
+    MatchSpans, check_pattern_requirements, check_uri_validation, find_secret_capture_with_group,
+};
+
+/// Check an example with the same capture selection and content filters used during scanning.
+///
+/// Examples have no source path or companion findings, so path restrictions, source prefilters,
+/// inline ignore directives, and dependency resolution are intentionally not applied. No live
+/// validation is performed. Any surviving match is enough, even if earlier matches are filtered.
+pub fn rule_matches_example(rules_db: &RulesDatabase, rule_index: usize, example: &[u8]) -> bool {
+    rule_matches_example_with_substring_filter(rules_db, rule_index, example, true)
+}
+
+/// Recheck a rejected example with only `ignore_if_contains` disabled.
+///
+/// The rules-check compatibility warning must not bypass entropy, safe-list,
+/// checksum, URI, or rule filters. All other example-check semantics are unchanged.
+#[doc(hidden)]
+pub fn rule_matches_example_ignoring_substrings(
+    rules_db: &RulesDatabase,
+    rule_index: usize,
+    example: &[u8],
+) -> bool {
+    rule_matches_example_with_substring_filter(rules_db, rule_index, example, false)
+}
+
+fn rule_matches_example_with_substring_filter(
+    rules_db: &RulesDatabase,
+    rule_index: usize,
+    example: &[u8],
+    respect_ignore_if_contains: bool,
+) -> bool {
+    let mut rule = Arc::clone(&rules_db.rules()[rule_index]);
+    if rule.syntax().path.is_some() {
+        Arc::make_mut(&mut rule).syntax.path = None;
+    }
+    let blob = Blob::from_bytes(example.to_vec());
+    let origin = OriginSet::from(crate::origin::Origin::from_file("rule-example".into()));
+    let mut matches = Vec::new();
+    filter_match(
+        rules_db,
+        &blob,
+        rule,
+        &rules_db.anchored_regexes()[rule_index],
+        0,
+        example.len(),
+        &mut matches,
+        None,
+        &mut FxHashMap::default(),
+        rule_index,
+        &mut FxHashSet::default(),
+        &origin,
+        None,
+        false,
+        false,
+        "",
+        None,
+        respect_ignore_if_contains,
+        &InlineIgnoreConfig::disabled(),
+        &std::sync::OnceLock::new(),
+        false,
+        None,
+        &mut BetterleaksFilterLineCache::default(),
+    );
+    !matches.is_empty()
+}
 
 // -------------------------------------------------------------------------------------------------
 // Entropy and safe-list check
@@ -57,139 +118,6 @@ fn check_entropy_and_safelist(
     } else {
         Some(calculated_entropy)
     }
-}
-
-// -------------------------------------------------------------------------------------------------
-// Pattern requirements check
-// -------------------------------------------------------------------------------------------------
-
-/// Returns `true` if the match passes pattern requirements, `false` if it should be skipped.
-fn check_pattern_requirements(
-    rule: &Rule,
-    re: &Regex,
-    captures: &regex::bytes::Captures,
-    full_bytes: &[u8],
-    entropy_bytes: &[u8],
-    respect_ignore_if_contains: bool,
-) -> bool {
-    let Some(char_reqs) = rule.pattern_requirements() else {
-        return true;
-    };
-
-    let context = PatternRequirementContext { regex: re, captures, full_match: full_bytes };
-
-    // Decide which bytes to validate:
-    // - If there are multiple capture groups OR any named captures -> use full match
-    // - Otherwise -> use entropy_bytes (the actual secret)
-    let use_full_match = {
-        let has_named_captures = re.capture_names().any(|n| n.is_some());
-        let capture_count = captures.len(); // includes group 0
-        has_named_captures || capture_count > 2
-    };
-
-    let validation_bytes = if use_full_match { full_bytes } else { entropy_bytes };
-
-    match char_reqs.validate(validation_bytes, Some(context), respect_ignore_if_contains) {
-        PatternValidationResult::Passed => true,
-        PatternValidationResult::Failed => {
-            debug!(
-                "Skipping match that does not meet character requirements for rule {}",
-                rule.id()
-            );
-            false
-        }
-        PatternValidationResult::FailedChecksum { actual_len, expected_len } => {
-            debug!(
-                "Skipping match for rule {} due to checksum mismatch (actual_len={}, expected_len={})",
-                rule.id(),
-                actual_len,
-                expected_len
-            );
-            false
-        }
-        PatternValidationResult::IgnoredBySubstring { matched_term } => {
-            debug!(
-                "Skipping match for rule {} because it contains ignored term {matched_term}",
-                rule.id()
-            );
-            false
-        }
-    }
-}
-
-// -------------------------------------------------------------------------------------------------
-// URI validation
-// -------------------------------------------------------------------------------------------------
-
-/// Returns `true` if the match passes URI validation (for database rules), `false` if it should
-/// be skipped.
-fn check_uri_validation(
-    rule: &Rule,
-    re: &Regex,
-    captures: &regex::bytes::Captures,
-    matching_input_bytes: &[u8],
-) -> bool {
-    let Some(validation) = rule.syntax.validation.as_ref() else {
-        return true;
-    };
-
-    match validation {
-        Validation::MongoDB => {
-            let Ok(uri) = std::str::from_utf8(matching_input_bytes) else {
-                debug!("Skipping match for rule {} due to non-UTF8 MongoDB URI", rule.id());
-                return false;
-            };
-            if !is_parseable_mongodb_uri(uri) {
-                debug!("Skipping match for rule {} due to invalid MongoDB URI", rule.id());
-                return false;
-            }
-        }
-        Validation::Postgres => {
-            let Ok(uri) = std::str::from_utf8(matching_input_bytes) else {
-                debug!("Skipping match for rule {} due to non-UTF8 Postgres URI", rule.id());
-                return false;
-            };
-            if !is_parseable_postgres_uri(uri) {
-                debug!("Skipping match for rule {} due to invalid Postgres URI", rule.id());
-                return false;
-            }
-        }
-        Validation::MySQL => {
-            let Ok(uri) = std::str::from_utf8(matching_input_bytes) else {
-                debug!("Skipping match for rule {} due to non-UTF8 MySQL URI", rule.id());
-                return false;
-            };
-            if !is_parseable_mysql_uri(uri) {
-                debug!("Skipping match for rule {} due to invalid MySQL URI", rule.id());
-                return false;
-            }
-        }
-        Validation::CredentialUri => {
-            let named_capture = |expected: &str| {
-                re.capture_names().enumerate().find_map(|(index, name)| {
-                    name.filter(|name| name.eq_ignore_ascii_case(expected))
-                        .and_then(|_| captures.get(index))
-                })
-            };
-            let uri_bytes = named_capture("URI")
-                .map(|capture| capture.as_bytes())
-                .unwrap_or(matching_input_bytes);
-            let (Ok(uri), scheme) = (
-                std::str::from_utf8(uri_bytes),
-                named_capture("SCHEME")
-                    .and_then(|capture| std::str::from_utf8(capture.as_bytes()).ok()),
-            ) else {
-                debug!("Skipping match for rule {} due to a non-UTF8 credential URI", rule.id());
-                return false;
-            };
-            if !is_parseable_credential_uri(uri, scheme) {
-                debug!("Skipping match for rule {} due to an invalid credential URI", rule.id());
-                return false;
-            }
-        }
-        _ => {}
-    }
-    true
 }
 
 // -------------------------------------------------------------------------------------------------

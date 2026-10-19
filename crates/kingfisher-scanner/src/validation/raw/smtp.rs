@@ -272,13 +272,18 @@ async fn authenticate(
         .flat_map(str::split_ascii_whitespace)
         .collect();
     let code = authenticate_mechanisms(&mut stream, &mechanisms, credentials).await?;
-    // Best effort, with no read: a slow/closed QUIT response cannot erase AUTH evidence.
-    let _ = timeout(Duration::from_millis(100), async {
+    quit(&mut stream).await;
+    Ok(code)
+}
+
+async fn quit(stream: &mut BufStream<DynStream>) {
+    // Cleanup must remain bounded even when the validation deadline is disabled.
+    // Do not read the reply: slow/closed QUIT handling cannot erase AUTH evidence.
+    let _ = tokio::time::timeout(Duration::from_millis(100), async {
         stream.write_all(b"QUIT\r\n").await?;
         stream.flush().await
     })
     .await;
-    Ok(code)
 }
 
 async fn authenticate_mechanisms(
@@ -317,6 +322,19 @@ async fn authenticate_mechanisms(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn smtp_quit_stalled_write_is_bounded_without_validation_timeouts() {
+        let (client, _peer) = tokio::io::duplex(1);
+        let mut stream = BufStream::new(Box::new(client) as DynStream);
+        // The peer never reads, so flushing QUIT blocks after its first byte.
+        let cleanup =
+            crate::validation::limits::NetworkLimits { no_timeouts: true, ..Default::default() }
+                .scope(quit(&mut stream));
+        tokio::time::timeout(Duration::from_secs(5), cleanup)
+            .await
+            .expect("SMTP cleanup must not inherit an unlimited validation deadline");
+    }
 
     #[tokio::test]
     async fn plain_mechanism_rejection_falls_back_to_advertised_login() {

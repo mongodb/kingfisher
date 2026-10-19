@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-scanner"
-version = "1.4.0"
+version = "2.0.0"
 description = "High-level scanning API for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -109,7 +109,7 @@ validation-all = ["validation"]
 [dependencies]
 # Internal dependencies
 kingfisher-core = { version = "1.0.3", path = "../kingfisher-core" }
-kingfisher-rules = { version = "1.2.1", path = "../kingfisher-rules", features = ["__scanner-internals"] }
+kingfisher-rules = { version = "2.0.0", path = "../kingfisher-rules", features = ["__scanner-internals"] }
 
 # Error handling
 anyhow.workspace = true
@@ -248,6 +248,10 @@ required-features = ["validation"]
 
 [[example]]
 name = "http_validation"
+required-features = ["validation"]
+
+[[example]]
+name = "oauth2_validation"
 required-features = ["validation"]
 
 [[example]]

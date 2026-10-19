@@ -19,6 +19,44 @@ use super::engine::text;
 use super::{CredentialInputDiagnostic, ValidationEngine, ValidationReason, ValidationResult};
 use crate::{Finding, ValidationOutcome, scanner::finding_is_within};
 
+// Per-call cache: keys hash the complete rule and resolved inputs. Completed
+// provider results, including transient failures, are shared within this batch.
+// A deadline permits one retry with a larger budget; capping retries avoids
+// repeated attempts for nearly equal candidate-search budgets. Cancellation
+// commits nothing; the next validation call always gets a fresh cache.
+type ValidationCacheCell = tokio::sync::Mutex<Option<CachedValidationResult>>;
+type ValidationCache =
+    parking_lot::Mutex<std::collections::HashMap<[u8; 32], Arc<ValidationCacheCell>>>;
+
+struct CachedValidationResult {
+    result: ValidationResult,
+    timeout: Duration,
+    deadline_retry_used: bool,
+}
+
+impl CachedValidationResult {
+    fn reusable_with(&self, timeout: Duration) -> bool {
+        self.result.reason != Some(ValidationReason::DeadlineExceeded)
+            || self.deadline_retry_used
+            || self.timeout.is_zero()
+            || (!timeout.is_zero() && timeout <= self.timeout)
+    }
+}
+
+fn validation_cache_cell(
+    cache: &ValidationCache,
+    inputs: &impl serde::Serialize,
+) -> Arc<ValidationCacheCell> {
+    use sha2::{Digest, Sha256};
+    let Ok(inputs) = serde_json::to_vec(inputs) else {
+        // Memoization is optional: an unsupported future rule representation
+        // must not panic or share a result under an incomplete cache key.
+        return Arc::default();
+    };
+    let key: [u8; 32] = Sha256::digest(inputs).into();
+    cache.lock().entry(key).or_default().clone()
+}
+
 /// Credential inputs resolved once from one scan input. Contains secrets.
 ///
 /// Debug omits all values. Serialization is deliberately left to callers.
@@ -157,6 +195,7 @@ impl ValidationResult {
 #[derive(Clone)]
 pub struct Validator {
     client: Client,
+    oauth2_tokens: super::OAuth2TokenCache,
     parser: Arc<liquid::Parser>,
     permits: Arc<Semaphore>,
     concurrency: usize,
@@ -165,6 +204,7 @@ pub struct Validator {
     max_response_bytes: usize,
     allow_internal_ips: bool,
     variables: BTreeMap<String, String>,
+    scan_contexts: Vec<Arc<crate::ScanContext>>,
 }
 
 /// Configuration for [`Validator`]. Build once and reuse across requests.
@@ -199,7 +239,9 @@ impl Default for ValidatorBuilder {
 impl ValidatorBuilder {
     /// Supply a pooled client for HTTP, Betterleaks HTTP, Raw HTTP, and Coinbase.
     /// Configure it with redirects disabled and suitable TLS/proxy policy.
-    /// SDK/database/gRPC validators manage their own transports; the outer
+    /// OAuth2-authenticated HTTP validators use a separate strict-TLS transport
+    /// for both token and verifier requests; this client does not apply to them.
+    /// SDK/database/gRPC validators also manage their own transports; the outer
     /// deadline and concurrency limit still apply to every validator.
     pub fn client(mut self, client: Client) -> Self {
         self.client = Some(client);
@@ -262,7 +304,9 @@ impl ValidatorBuilder {
             kingfisher_rules::register_liquid_filters(liquid::ParserBuilder::with_stdlib())
                 .build()?;
         Ok(Validator {
+            scan_contexts: Vec::new(),
             client,
+            oauth2_tokens: Default::default(),
             parser: Arc::new(parser),
             permits: Arc::new(Semaphore::new(self.concurrency)),
             concurrency: self.concurrency,
@@ -289,14 +333,16 @@ impl Validator {
     /// Validate using supporting findings from the same scan input.
     ///
     /// Association requires the same blob and encoding and honors `within`.
-    /// Distinct competing values are skipped instead of guessing or trying all
-    /// credentials. Pass raw findings including invisible helpers.
+    /// Distinct values are skipped unless every ambiguous dependency explicitly
+    /// opts into supported, bounded candidate verification. Pass invisible helpers too.
     pub async fn validate_finding_with_context(
         &self,
         finding: &Finding,
         context: &[Finding],
     ) -> ValidatedFinding {
-        let (result, credential, diagnostics) = self.check_finding(finding, context, false).await;
+        let cache = ValidationCache::default();
+        let (result, credential, diagnostics) =
+            self.check_finding(finding, context, false, &cache).await;
         result.attach(finding.clone(), credential, diagnostics)
     }
 
@@ -305,6 +351,7 @@ impl Validator {
         finding: &Finding,
         context: &[Finding],
         preflight: bool,
+        cache: &ValidationCache,
     ) -> (ValidationResult, Option<ResolvedCredential>, Vec<CredentialInputDiagnostic>) {
         // Missing inputs cannot change states that do not execute validation.
         let syntax = finding.rule().syntax();
@@ -323,9 +370,12 @@ impl Validator {
         if let Some(result) = cheap_result {
             return (result, None, Vec::new());
         }
-        let input_diagnostics = self.input_diagnostics(finding, context);
+        let mut input_diagnostics = self.input_diagnostics(finding, context);
+        let can_verify = self.can_verify_candidates(finding, context);
         if preflight
-            && let Some(issue) = input_diagnostics.iter().find(|issue| issue.stage != "revocation")
+            && let Some(issue) = input_diagnostics.iter().find(|issue| {
+                issue.stage != "revocation" && !(can_verify && issue.code == "ambiguous_dependency")
+            })
         {
             return (ValidationResult::skipped(diagnostic_reason(issue)), None, input_diagnostics);
         }
@@ -338,31 +388,29 @@ impl Validator {
             }
             let mut bound = match self.bind(finding, context) {
                 Ok(bound) => bound,
+                Err(ValidationReason::AmbiguousDependency) if can_verify => {
+                    let (result, mut selected) =
+                        self.verify_candidates(finding, context, cache).await;
+                    if let Some(bound) = selected.as_mut() {
+                        apply_revocation_diagnostics(bound, &input_diagnostics);
+                    }
+                    credential = selected;
+                    return result;
+                }
                 Err(reason) => return ValidationResult::skipped(reason),
             };
-            if let Some(issue) = input_diagnostics.iter().find(|issue| issue.stage == "revocation")
-            {
-                bound.revocation = None;
-                // Capability binding already supplied its precise failure category.
-                // Template inspection adds a reason only when binding succeeded.
-                bound.revocation_reason.get_or_insert(diagnostic_reason(issue));
-            }
-            let globals = bound.globals();
+            apply_revocation_diagnostics(&mut bound, &input_diagnostics);
+            let result = self.validate_bound(finding, &bound, self.timeout, cache).await;
             credential = Some(bound);
-            let Ok(_permit) = self.permits.acquire().await else {
-                return ValidationResult::unavailable(ValidationReason::RequestFailed);
-            };
-            ValidationEngine::new(&self.client, &self.parser)
-                .timeout(self.timeout)
-                .retries(self.retries)
-                .max_response_bytes(self.max_response_bytes)
-                .allow_internal_ips(self.allow_internal_ips)
-                .validate(finding.rule(), &globals)
-                .await
+            result
         };
-        let result = super::limits::timeout(self.timeout, work)
-            .await
-            .unwrap_or_else(|_| ValidationResult::unavailable(ValidationReason::DeadlineExceeded));
+        // Each bound check owns its deadline so a timeout can be shared with
+        // duplicates before cancellation drops the in-flight cache initializer.
+        // Candidate searches separately account for their total remaining budget.
+        let result = work.await;
+        if credential.is_some() {
+            input_diagnostics.retain(|issue| issue.code != "ambiguous_dependency");
+        }
         (result, credential, input_diagnostics)
     }
 
@@ -372,8 +420,9 @@ impl Validator {
     /// filter reports. Work is bounded; no detached tasks are spawned. Separate
     /// unrelated inputs into separate calls even if their bytes are identical.
     pub async fn validate_findings(&self, findings: Vec<Finding>) -> Vec<ValidatedFinding> {
+        let cache = ValidationCache::default();
         let checked: Vec<_> = stream::iter(findings.iter())
-            .map(|finding| self.check_finding(finding, &findings, false))
+            .map(|finding| self.check_finding(finding, &findings, false, &cache))
             .buffered(self.concurrency)
             .collect()
             .await;
@@ -395,8 +444,9 @@ impl Validator {
         candidates: Vec<Finding>,
         context: &[Finding],
     ) -> Vec<ValidatedFinding> {
+        let cache = ValidationCache::default();
         let checked: Vec<_> = stream::iter(candidates.iter())
-            .map(|finding| self.check_finding(finding, context, true))
+            .map(|finding| self.check_finding(finding, context, true, &cache))
             .buffered(self.concurrency)
             .collect()
             .await;
@@ -454,10 +504,16 @@ impl Validator {
             if dependency.variable.eq_ignore_ascii_case("TOKEN") {
                 continue;
             }
-            let matching = dependency_matches(finding, context, dependency);
+            let matching = self.dependency_matches(finding, context, dependency);
             let distinct: BTreeSet<_> =
                 matching.iter().map(|candidate| candidate.secret.as_str()).collect();
             let code = if distinct.len() > 1 {
+                // Render only to inspect template syntax/other inputs. Ambiguity
+                // still blocks requests unless explicit verification resolves it.
+                values.insert(
+                    dependency.variable.to_uppercase(),
+                    (*distinct.first().unwrap()).into(),
+                );
                 Some("ambiguous_dependency")
             } else if let Some(value) = distinct.first() {
                 values.insert(dependency.variable.to_uppercase(), (*value).into());
@@ -573,10 +629,267 @@ impl Validator {
         Ok(values)
     }
 
+    /// Use compact metadata returned by `Scanner::scan_blob_with_context` for
+    /// full-match dependency windows, decoded-buffer isolation and candidate ranking.
+    /// Add each input's context once; clones share immutable metadata.
+    pub fn with_scan_context(mut self, context: Arc<crate::ScanContext>) -> Self {
+        if !self.scan_contexts.iter().any(|existing| Arc::ptr_eq(existing, &context)) {
+            self.scan_contexts.push(context);
+        }
+        self
+    }
+
+    fn match_context(&self, finding: &Finding) -> Option<&crate::scan_context::MatchContext> {
+        self.scan_contexts.iter().find_map(|context| context.get(finding))
+    }
+
+    fn dependency_matches<'a>(
+        &self,
+        finding: &Finding,
+        context: &'a [Finding],
+        dependency: &kingfisher_rules::DependsOnRule,
+    ) -> Vec<&'a Finding> {
+        let metadata = self
+            .scan_contexts
+            .iter()
+            .find_map(|source| source.get(finding).map(|primary| (source, primary)));
+        context
+            .iter()
+            .filter(|candidate| {
+                if candidate.rule_id != dependency.rule_id
+                    || candidate.blob_id != finding.blob_id
+                    || candidate.is_base64_encoded != finding.is_base64_encoded
+                {
+                    return false;
+                }
+                if let Some((source, primary)) = metadata {
+                    source.get(candidate).is_some_and(|candidate| {
+                        primary.buffer == candidate.buffer
+                            && dependency.within.as_deref().is_none_or(|within| {
+                                crate::scanner::locations_are_within(
+                                    &primary.location,
+                                    &candidate.location,
+                                    within,
+                                )
+                            })
+                    })
+                } else {
+                    dependency
+                        .within
+                        .as_deref()
+                        .is_none_or(|within| finding_is_within(finding, candidate, within))
+                }
+            })
+            .collect()
+    }
+
+    async fn validate_bound(
+        &self,
+        finding: &Finding,
+        bound: &ResolvedCredential,
+        timeout: Duration,
+        cache: &ValidationCache,
+    ) -> ValidationResult {
+        let cell = validation_cache_cell(
+            cache,
+            &(finding.rule().syntax(), &bound.secret, &bound.variables),
+        );
+        let timeout = if super::limits::NetworkLimits::current().no_timeouts {
+            Duration::ZERO
+        } else {
+            timeout
+        };
+        let started = tokio::time::Instant::now();
+        let (mut cached, attempt_timeout) = match cell.try_lock() {
+            // Keep equal configured budgets equal on the uncontended path.
+            Ok(cached) => (cached, timeout),
+            Err(_) => {
+                let Ok(cached) = super::limits::timeout(timeout, cell.lock()).await else {
+                    return ValidationResult::unavailable(ValidationReason::DeadlineExceeded);
+                };
+                let remaining = if timeout.is_zero() {
+                    Duration::ZERO
+                } else {
+                    timeout.saturating_sub(started.elapsed())
+                };
+                if !timeout.is_zero() && remaining.is_zero() {
+                    return ValidationResult::unavailable(ValidationReason::DeadlineExceeded);
+                }
+                (cached, remaining)
+            }
+        };
+        if let Some(cached) = cached.as_ref()
+            && cached.reusable_with(attempt_timeout)
+        {
+            return cached.result.clone();
+        }
+        let deadline_retry_used = cached.as_ref().is_some_and(|cached| {
+            cached.deadline_retry_used
+                || cached.result.reason == Some(ValidationReason::DeadlineExceeded)
+        });
+        let result = super::limits::timeout(attempt_timeout, async {
+            let Ok(_permit) = self.permits.acquire().await else {
+                return ValidationResult::unavailable(ValidationReason::RequestFailed);
+            };
+            ValidationEngine::new(&self.client, &self.parser)
+                .oauth2_token_cache(self.oauth2_tokens.clone())
+                .timeout(attempt_timeout)
+                .retries(self.retries)
+                .max_response_bytes(self.max_response_bytes)
+                .allow_internal_ips(self.allow_internal_ips)
+                .validate(finding.rule(), &bound.globals())
+                .await
+        })
+        .await
+        .unwrap_or_else(|_| ValidationResult::unavailable(ValidationReason::DeadlineExceeded));
+        // Holding this key's lock coalesces concurrent attempts. External
+        // cancellation drops the guard without committing an incomplete result.
+        // Record only the budget available after any per-key lock wait.
+        *cached = Some(CachedValidationResult {
+            result: result.clone(),
+            timeout: attempt_timeout,
+            deadline_retry_used,
+        });
+        result
+    }
+
+    fn can_verify_candidates(&self, finding: &Finding, context: &[Finding]) -> bool {
+        let rule = finding.rule().syntax();
+        if !rule.depends_on_rule.iter().flatten().any(|dep| dep.verify_candidates)
+            || !super::candidates::supported(rule)
+        {
+            return false;
+        }
+        let mut ambiguous = false;
+        for dep in rule.depends_on_rule.iter().flatten() {
+            let matching = self.dependency_matches(finding, context, dep);
+            let distinct: BTreeSet<_> = matching.iter().map(|f| f.secret.as_str()).collect();
+            if distinct.len() > 1 {
+                if !super::candidates::eligible_dependency(rule, dep) {
+                    return false;
+                }
+                ambiguous = true;
+            } else if distinct.is_empty() && !dep.optional {
+                return false;
+            }
+        }
+        ambiguous
+    }
+
+    async fn verify_candidates(
+        &self,
+        finding: &Finding,
+        context: &[Finding],
+        cache: &ValidationCache,
+    ) -> (ValidationResult, Option<ResolvedCredential>) {
+        use super::candidates::CandidateCheck;
+        let mut choices = BTreeMap::new();
+        for dep in finding.rule().syntax().depends_on_rule.iter().flatten() {
+            let mut matching = self.dependency_matches(finding, context, dep);
+            matching.sort_by_key(|candidate| {
+                let (matching_name, same_scope, distance) =
+                    match (self.match_context(finding), self.match_context(candidate)) {
+                        (Some(primary), Some(candidate)) => (
+                            primary.family.is_some() && primary.family == candidate.family,
+                            primary.scope != 0 && primary.scope == candidate.scope,
+                            primary.secret_start.abs_diff(candidate.secret_start),
+                        ),
+                        _ => (
+                            false,
+                            false,
+                            candidate.location.start_offset.abs_diff(finding.location.start_offset),
+                        ),
+                    };
+                (!matching_name, !same_scope, distance, candidate.secret.as_str())
+            });
+            let mut seen = BTreeSet::new();
+            matching.retain(|candidate| seen.insert(candidate.secret.as_str()));
+            if matching.iter().any(|candidate| {
+                candidate.secret == "[REDACTED]"
+                    || candidate.captures.values().any(|value| value == "[REDACTED]")
+            }) {
+                return (ValidationResult::skipped(ValidationReason::RedactedInput), None);
+            }
+            if matching.len() > 1 {
+                choices.insert(dep.variable.to_uppercase(), matching);
+            }
+        }
+        let variables: Vec<_> = choices.keys().cloned().collect();
+        let lengths: Vec<_> = choices.values().map(Vec::len).collect();
+        let result = super::candidates::search(&lengths, self.timeout, |indices, remaining| {
+            let selected = variables
+                .iter()
+                .enumerate()
+                .map(|(i, key)| (key.clone(), choices[key][indices[i]]))
+                .collect();
+            let bound = self.bind_selected(finding, context, &selected);
+            async move {
+                let Ok(bound) = bound else {
+                    return CandidateCheck::Unresolved {
+                        reason: "verification was skipped",
+                        unavailable: false,
+                    };
+                };
+                let result = self.validate_bound(finding, &bound, remaining, cache).await;
+                if result.http_status.is_some_and(|status| (300..400).contains(&status)) {
+                    CandidateCheck::Unresolved {
+                        reason: "verification returned a redirect",
+                        unavailable: true,
+                    }
+                } else if result.outcome.is_verified_active() {
+                    CandidateCheck::Accepted((result, bound))
+                } else if result.outcome == ValidationOutcome::VerifiedInactive {
+                    CandidateCheck::Rejected
+                } else {
+                    let skipped = matches!(
+                        result.outcome,
+                        ValidationOutcome::Skipped | ValidationOutcome::NotAttempted
+                    );
+                    CandidateCheck::Unresolved {
+                        reason: if skipped {
+                            "verification was skipped"
+                        } else {
+                            "verification was unavailable or timed out"
+                        },
+                        unavailable: !skipped,
+                    }
+                }
+            }
+        })
+        .await;
+        match result {
+            Ok((result, bound)) => (result, Some(bound)),
+            Err(failure) => {
+                tracing::debug!(
+                    attempted = failure.attempted,
+                    reason = failure.reason,
+                    "Credential pairing unresolved"
+                );
+                (
+                    if failure.unavailable {
+                        ValidationResult::unavailable(ValidationReason::RequestFailed)
+                    } else {
+                        ValidationResult::skipped(ValidationReason::AmbiguousDependency)
+                    },
+                    None,
+                )
+            }
+        }
+    }
+
     fn bind(
         &self,
         finding: &Finding,
         context: &[Finding],
+    ) -> std::result::Result<ResolvedCredential, ValidationReason> {
+        self.bind_selected(finding, context, &BTreeMap::new())
+    }
+
+    fn bind_selected(
+        &self,
+        finding: &Finding,
+        context: &[Finding],
+        selected: &BTreeMap<String, &Finding>,
     ) -> std::result::Result<ResolvedCredential, ValidationReason> {
         let mut values = self.binding_values(finding)?;
         let mut components = Vec::new();
@@ -584,7 +897,12 @@ impl Validator {
             if dependency.variable.eq_ignore_ascii_case("TOKEN") {
                 continue;
             }
-            let matching = dependency_matches(finding, context, dependency);
+            let matching =
+                if let Some(&candidate) = selected.get(&dependency.variable.to_uppercase()) {
+                    vec![candidate]
+                } else {
+                    self.dependency_matches(finding, context, dependency)
+                };
             let candidates: BTreeSet<&str> = matching.iter().map(|f| f.secret.as_str()).collect();
             if candidates.len() > 1 {
                 return Err(ValidationReason::AmbiguousDependency);
@@ -618,23 +936,15 @@ impl Validator {
     }
 }
 
-fn dependency_matches<'a>(
-    finding: &Finding,
-    context: &'a [Finding],
-    dependency: &kingfisher_rules::DependsOnRule,
-) -> Vec<&'a Finding> {
-    context
-        .iter()
-        .filter(|candidate| {
-            candidate.rule_id == dependency.rule_id
-                && candidate.blob_id == finding.blob_id
-                && candidate.is_base64_encoded == finding.is_base64_encoded
-                && dependency
-                    .within
-                    .as_deref()
-                    .is_none_or(|within| finding_is_within(finding, candidate, within))
-        })
-        .collect()
+fn apply_revocation_diagnostics(
+    bound: &mut ResolvedCredential,
+    diagnostics: &[CredentialInputDiagnostic],
+) {
+    if let Some(issue) = diagnostics.iter().find(|issue| issue.stage == "revocation") {
+        bound.revocation = None;
+        // Preserve the more precise capability-binding failure when present.
+        bound.revocation_reason.get_or_insert(diagnostic_reason(issue));
+    }
 }
 
 fn diagnostic_reason(issue: &CredentialInputDiagnostic) -> ValidationReason {
@@ -696,6 +1006,511 @@ fn resolve_revocation(
 mod tests {
     use super::*;
     use crate::{Rule, RuleSyntax, RulesDatabase, Scanner};
+
+    #[tokio::test]
+    async fn cache_key_serialization_failure_executes_without_memoizing() {
+        struct Unserializable;
+        impl serde::Serialize for Unserializable {
+            fn serialize<S: serde::Serializer>(
+                &self,
+                _: S,
+            ) -> std::result::Result<S::Ok, S::Error> {
+                Err(serde::ser::Error::custom("unsupported cache-key representation"))
+            }
+        }
+        let cache = ValidationCache::default();
+        let calls = std::cell::Cell::new(0);
+        for _ in 0..2 {
+            let cell = validation_cache_cell(&cache, &Unserializable);
+            let mut cached = cell.lock().await;
+            let result = cached.get_or_insert_with(|| {
+                calls.set(calls.get() + 1);
+                CachedValidationResult {
+                    result: ValidationResult::outcome(ValidationOutcome::VerifiedActive),
+                    timeout: Duration::from_secs(1),
+                    deadline_retry_used: false,
+                }
+            });
+            assert_eq!(result.result.outcome, ValidationOutcome::VerifiedActive);
+        }
+        assert_eq!(calls.get(), 2);
+        assert!(cache.lock().is_empty());
+        let first = validation_cache_cell(&cache, &"supported");
+        let second = validation_cache_cell(&cache, &"supported");
+        assert!(Arc::ptr_eq(&first, &second));
+        assert_eq!(cache.lock().len(), 1);
+    }
+
+    fn cache_test_inputs(url: &str, concurrency: usize) -> (Validator, Finding) {
+        let mut syntax = RuleSyntax::new("acme.cache", "Cache fixture", "(secret)");
+        syntax.validation = Some(
+            serde_json::from_value(serde_json::json!({
+                "type": "Http", "content": {"request": {
+                    "method": "GET", "url": url,
+                    "response_matcher": [{"type": "StatusMatch", "status": [200]}]
+                }}
+            }))
+            .unwrap(),
+        );
+        let scanner =
+            Scanner::new(Arc::new(RulesDatabase::from_rules(vec![Rule::new(syntax)]).unwrap()));
+        let finding = scanner.scan_bytes(b"secret").unwrap().remove(0);
+        let validator = Validator::builder()
+            .allow_internal_ips(true)
+            .client(Client::builder().no_proxy().build().unwrap())
+            .concurrency(concurrency)
+            .build()
+            .unwrap();
+        (validator, finding)
+    }
+
+    struct CacheTestServer(tokio::task::JoinHandle<()>);
+
+    impl Drop for CacheTestServer {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn transient_provider_results_are_shared_only_within_each_validation_call() {
+        use std::sync::atomic::{AtomicU16, AtomicUsize, Ordering};
+
+        for status in [429, 503] {
+            // Exercise both queued duplicates and simultaneous per-key waiters.
+            for concurrency in [1, 4] {
+                let requests = Arc::new(AtomicUsize::new(0));
+                let response_status = Arc::new(AtomicU16::new(status));
+                let app = axum::Router::new().route(
+                    "/verify",
+                    axum::routing::get({
+                        let requests = requests.clone();
+                        let response_status = response_status.clone();
+                        move || {
+                            requests.fetch_add(1, Ordering::SeqCst);
+                            let status = reqwest::StatusCode::from_u16(
+                                response_status.load(Ordering::SeqCst),
+                            )
+                            .unwrap();
+                            async move { (status, "authenticated") }
+                        }
+                    }),
+                );
+                let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+                    .await
+                    .unwrap();
+                let url = format!("http://{}/verify", listener.local_addr().unwrap());
+                let _server = CacheTestServer(tokio::spawn(async move {
+                    axum::serve(listener, app).await.unwrap();
+                }));
+                let (validator, finding) = cache_test_inputs(&url, concurrency);
+                let duplicates = vec![finding.clone(); 12];
+                // Resolved credentials must still be separate cache keys.
+                let mut distinct = finding.clone();
+                distinct.secret = "different-secret".into();
+                let mut batch = duplicates.clone();
+                batch.push(distinct);
+                let results = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    validator.validate_findings(batch),
+                )
+                .await
+                .expect("duplicate provider checks must finish");
+                assert_eq!(results.len(), 13);
+                assert!(results.iter().all(|result| {
+                    result.outcome == ValidationOutcome::Unavailable
+                        && result.reason == Some(ValidationReason::RequestFailed)
+                        && result.http_status == Some(status)
+                }));
+                assert_eq!(requests.load(Ordering::SeqCst), 2);
+
+                let prepared =
+                    validator.validate_prepared_findings(duplicates.clone(), &duplicates).await;
+                assert_eq!(prepared.len(), 12);
+                assert!(prepared.iter().all(|result| {
+                    result.outcome == ValidationOutcome::Unavailable
+                        && result.http_status == Some(status)
+                }));
+                assert_eq!(requests.load(Ordering::SeqCst), 3);
+                // Standalone calls must not inherit a previous batch failure.
+                for _ in 0..2 {
+                    assert_eq!(
+                        validator.validate_finding(&finding).await.outcome,
+                        ValidationOutcome::Unavailable
+                    );
+                }
+                assert_eq!(requests.load(Ordering::SeqCst), 5);
+
+                response_status.store(200, Ordering::SeqCst);
+                let recovered = validator.validate_findings(duplicates.clone()).await;
+                assert!(recovered.iter().all(|result| {
+                    result.outcome == ValidationOutcome::VerifiedActive
+                        && result.http_status == Some(200)
+                }));
+                assert_eq!(requests.load(Ordering::SeqCst), 6);
+                let prepared =
+                    validator.validate_prepared_findings(duplicates.clone(), &duplicates).await;
+                assert!(
+                    prepared
+                        .iter()
+                        .all(|result| { result.outcome == ValidationOutcome::VerifiedActive })
+                );
+                assert_eq!(requests.load(Ordering::SeqCst), 7);
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn hung_provider_attempts_are_bounded_per_batch_even_with_growing_budgets() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        for concurrency in [1, 4] {
+            let blocked = Arc::new(AtomicBool::new(true));
+            let requests = Arc::new(AtomicUsize::new(0));
+            let app = axum::Router::new().route(
+                "/verify",
+                axum::routing::get({
+                    let blocked = blocked.clone();
+                    let requests = requests.clone();
+                    move || {
+                        let blocked = blocked.clone();
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        async move {
+                            if blocked.load(Ordering::SeqCst) {
+                                std::future::pending::<()>().await;
+                            }
+                            "authenticated"
+                        }
+                    }
+                }),
+            );
+            let listener =
+                tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let url = format!("http://{}/verify", listener.local_addr().unwrap());
+            let _server = CacheTestServer(tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            }));
+            let (mut validator, finding) = cache_test_inputs(&url, concurrency);
+            validator.timeout = Duration::from_millis(500);
+            let duplicates = vec![finding.clone(); 12];
+            let results = tokio::time::timeout(
+                Duration::from_secs(5),
+                validator.validate_findings(duplicates.clone()),
+            )
+            .await
+            .expect("hung duplicates must share a single deadline, not time out sequentially");
+            assert!(results.iter().all(|result| {
+                result.outcome == ValidationOutcome::Unavailable
+                    && result.reason == Some(ValidationReason::DeadlineExceeded)
+            }));
+            assert_eq!(requests.load(Ordering::SeqCst), 1);
+            let prepared = tokio::time::timeout(
+                Duration::from_secs(5),
+                validator.validate_prepared_findings(duplicates.clone(), &duplicates),
+            )
+            .await
+            .expect("prepared duplicates must also share a single deadline");
+            assert!(
+                prepared
+                    .iter()
+                    .all(|result| { result.reason == Some(ValidationReason::DeadlineExceeded) })
+            );
+            assert_eq!(requests.load(Ordering::SeqCst), 2);
+
+            let bound = validator.bind(&finding, &[]).unwrap();
+            let cache = ValidationCache::default();
+            let before = requests.load(Ordering::SeqCst);
+            for millis in 20..30 {
+                let result = validator
+                    .validate_bound(&finding, &bound, Duration::from_millis(millis), &cache)
+                    .await;
+                assert_eq!(result.reason, Some(ValidationReason::DeadlineExceeded));
+            }
+            // Slightly increasing candidate budgets cannot trigger unbounded
+            // attempts. One genuinely larger-budget retry is permitted.
+            assert!(requests.load(Ordering::SeqCst) - before <= 2);
+            let cell = validation_cache_cell(
+                &cache,
+                &(finding.rule().syntax(), &bound.secret, &bound.variables),
+            );
+            assert!(cell.lock().await.as_ref().unwrap().deadline_retry_used);
+
+            blocked.store(false, Ordering::SeqCst);
+            let recovered = validator.validate_findings(duplicates).await;
+            assert!(
+                recovered
+                    .iter()
+                    .all(|result| { result.outcome == ValidationOutcome::VerifiedActive })
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn candidate_deadline_remains_retryable_with_a_larger_budget() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let blocked = Arc::new(AtomicBool::new(true));
+        let app = axum::Router::new().route(
+            "/verify",
+            axum::routing::get({
+                let blocked = blocked.clone();
+                move || {
+                    let blocked = blocked.clone();
+                    async move {
+                        if blocked.load(Ordering::SeqCst) {
+                            std::future::pending::<()>().await;
+                        }
+                        "authenticated"
+                    }
+                }
+            }),
+        );
+        let listener =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let url = format!("http://{}/verify", listener.local_addr().unwrap());
+        let _server = CacheTestServer(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let (validator, finding) = cache_test_inputs(&url, 1);
+        let bound = validator.bind(&finding, &[]).unwrap();
+        let cache = ValidationCache::default();
+        let expired =
+            validator.validate_bound(&finding, &bound, Duration::from_millis(20), &cache).await;
+        assert_eq!(expired.reason, Some(ValidationReason::DeadlineExceeded));
+        let cell = validation_cache_cell(
+            &cache,
+            &(finding.rule().syntax(), &bound.secret, &bound.variables),
+        );
+        assert_eq!(
+            cell.lock().await.as_ref().unwrap().result.reason,
+            Some(ValidationReason::DeadlineExceeded)
+        );
+        // Equal/smaller budgets share the timed-out attempt even after recovery.
+        blocked.store(false, Ordering::SeqCst);
+        for timeout in [Duration::from_millis(20), Duration::from_millis(10)] {
+            let result = validator.validate_bound(&finding, &bound, timeout, &cache).await;
+            assert_eq!(result.reason, Some(ValidationReason::DeadlineExceeded));
+        }
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            validator.validate_bound(&finding, &bound, Duration::from_secs(2), &cache),
+        )
+        .await
+        .expect("a larger candidate budget must retry the expired check");
+        assert_eq!(result.outcome, ValidationOutcome::VerifiedActive);
+    }
+
+    #[tokio::test]
+    async fn cancelled_batch_initializer_leaves_the_same_credential_retryable() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+
+        let blocked = Arc::new(AtomicBool::new(true));
+        let requests = Arc::new(AtomicUsize::new(0));
+        let received = Arc::new(tokio::sync::Notify::new());
+        let app = axum::Router::new().route(
+            "/verify",
+            axum::routing::get({
+                let blocked = blocked.clone();
+                let requests = requests.clone();
+                let received = received.clone();
+                move || {
+                    let blocked = blocked.clone();
+                    let received = received.clone();
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if blocked.load(Ordering::SeqCst) {
+                            received.notify_one();
+                            std::future::pending::<()>().await;
+                        }
+                        "authenticated"
+                    }
+                }
+            }),
+        );
+        let listener =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let url = format!("http://{}/verify", listener.local_addr().unwrap());
+        let _server = CacheTestServer(tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        }));
+        let (validator, finding) = cache_test_inputs(&url, 1);
+        let bound = validator.bind(&finding, &[]).unwrap();
+        let cache = ValidationCache::default();
+        {
+            let pending =
+                validator.validate_bound(&finding, &bound, Duration::from_secs(10), &cache);
+            tokio::pin!(pending);
+            tokio::select! {
+                received = tokio::time::timeout(Duration::from_secs(5), received.notified()) => {
+                    received.expect("the initializing request must reach the provider");
+                }
+                result = &mut pending => panic!("check must remain pending: {result:?}"),
+            }
+            // Drop the initializing future while retaining this batch's cache.
+        }
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        blocked.store(false, Ordering::SeqCst);
+        let result = tokio::time::timeout(
+            Duration::from_secs(5),
+            validator.validate_bound(&finding, &bound, Duration::from_secs(2), &cache),
+        )
+        .await
+        .expect("cancellation must release the cell and shared permit");
+        assert_eq!(result.outcome, ValidationOutcome::VerifiedActive);
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn definitive_batch_cache_entries_are_reused_across_timeout_budgets() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Server(tokio::task::JoinHandle<()>);
+        impl Drop for Server {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+
+        for (status, expected) in [
+            (reqwest::StatusCode::OK, ValidationOutcome::VerifiedActive),
+            (reqwest::StatusCode::UNAUTHORIZED, ValidationOutcome::VerifiedInactive),
+        ] {
+            let requests = Arc::new(AtomicUsize::new(0));
+            let app = axum::Router::new().route(
+                "/verify",
+                axum::routing::get({
+                    let requests = requests.clone();
+                    move || {
+                        requests.fetch_add(1, Ordering::SeqCst);
+                        async move { (status, "authenticated") }
+                    }
+                }),
+            );
+            let listener =
+                tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let url = format!("http://{}/verify", listener.local_addr().unwrap());
+            let _server = Server(tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            }));
+            let mut syntax = RuleSyntax::new("acme.cache", "Cache fixture", "(secret)");
+            syntax.validation = Some(
+                serde_json::from_value(serde_json::json!({
+                    "type": "Http", "content": {"request": {
+                        "method": "GET", "url": url,
+                        "response_matcher": [{"type": "StatusMatch", "status": [200]}]
+                    }}
+                }))
+                .unwrap(),
+            );
+            let scanner =
+                Scanner::new(Arc::new(RulesDatabase::from_rules(vec![Rule::new(syntax)]).unwrap()));
+            let finding = scanner.scan_bytes(b"secret").unwrap().remove(0);
+            let validator = Validator::builder()
+                .allow_internal_ips(true)
+                .client(Client::builder().no_proxy().build().unwrap())
+                .build()
+                .unwrap();
+            let bound = validator.bind(&finding, &[]).unwrap();
+            let cache = ValidationCache::default();
+            for seconds in [1, 1, 2, 2] {
+                let result = tokio::time::timeout(
+                    Duration::from_secs(5),
+                    validator.validate_bound(
+                        &finding,
+                        &bound,
+                        Duration::from_secs(seconds),
+                        &cache,
+                    ),
+                )
+                .await
+                .expect("cache probe must finish");
+                assert_eq!(result.outcome, expected);
+            }
+            // Definitive outcomes remain evidence for these inputs even when
+            // later occurrences have a different remaining candidate budget.
+            assert_eq!(requests.load(Ordering::SeqCst), 1);
+        }
+    }
+
+    #[tokio::test]
+    async fn repeated_candidate_searches_share_definitive_component_checks() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct Server(tokio::task::JoinHandle<()>);
+        impl Drop for Server {
+            fn drop(&mut self) {
+                self.0.abort();
+            }
+        }
+        let requests = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new().route(
+            "/verify",
+            axum::routing::get({
+                let requests = requests.clone();
+                move |headers: reqwest::header::HeaderMap| {
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if headers.get("X-Secret").is_some_and(|value| value == "secret_good1234") {
+                            (reqwest::StatusCode::OK, "authenticated")
+                        } else {
+                            (reqwest::StatusCode::UNAUTHORIZED, "rejected")
+                        }
+                    }
+                }
+            }),
+        );
+        let listener =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let url = format!("http://{}/verify", listener.local_addr().unwrap());
+        let _server =
+            Server(tokio::spawn(async move { axum::serve(listener, app).await.unwrap() }));
+        let mut primary = RuleSyntax::new("acme.primary", "Primary", "(primary_[a-z]{8})");
+        primary.validation = Some(
+            serde_json::from_value(serde_json::json!({
+                "type": "Http", "content": {"request": {
+                    "method": "GET", "url": url,
+                    "headers": {"X-Secret": "{{ SECRET }}"},
+                    "response_matcher": [{"type": "StatusMatch", "status": [200]}]
+                }}
+            }))
+            .unwrap(),
+        );
+        primary.depends_on_rule = vec![Some(kingfisher_rules::DependsOnRule {
+            rule_id: "acme.component".into(),
+            variable: "SECRET".into(),
+            optional: false,
+            within: None,
+            verify_candidates: true,
+        })];
+        let mut component = RuleSyntax::new("acme.component", "Component", "(secret_[a-z0-9]{8})");
+        component.visible = false;
+        let scanner = Scanner::new(Arc::new(
+            RulesDatabase::from_rules(vec![Rule::new(primary), Rule::new(component)]).unwrap(),
+        ));
+        let findings = scanner.scan_bytes(
+            b"secret_bad12345 primary_abcdefgh primary_abcdefgh\npadding padding padding secret_good1234",
+        ).unwrap();
+        let validator = Validator::builder()
+            .allow_internal_ips(true)
+            .client(Client::builder().no_proxy().build().unwrap())
+            .concurrency(1)
+            .build()
+            .unwrap();
+        let results =
+            tokio::time::timeout(Duration::from_secs(5), validator.validate_findings(findings))
+                .await
+                .expect("candidate searches must finish");
+        let primary: Vec<_> =
+            results.iter().filter(|result| result.finding.rule_id == "acme.primary").collect();
+        assert_eq!(primary.len(), 2);
+        assert!(primary.iter().all(|result| result.outcome == ValidationOutcome::VerifiedActive));
+        assert!(primary.iter().all(|result| {
+            result.credential.as_ref().unwrap().variables["SECRET"] == "secret_good1234"
+        }));
+        // Both occurrences must share the rejected and accepted component checks,
+        // even though each candidate search has its own remaining timeout budget.
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
+    }
 
     fn aws_findings() -> Vec<Finding> {
         let mut rules = kingfisher_rules::get_builtin_rules(None).unwrap();

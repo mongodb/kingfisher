@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-rules"
-version = "1.2.1"
+version = "2.0.0"
 description = "Rule definitions and database for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -9,7 +9,7 @@ authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 publish.workspace = true
-include = ["src/**", "examples/**", "build_support/**", "generated/**", "data/*.yml", "data/*.md", "LICENSE", "README.md"]
+include = ["src/**", "examples/**", "build.rs", "build_support/**", "generated/**", "data/*.yml", "data/*.md", "LICENSE", "README.md"]
 
 # docs.rs blocks network access, so compile the vendored native source there.
 [package.metadata.docs.rs]
@@ -47,6 +47,7 @@ liquid = "0.26"
 liquid-core = "0.26"
 
 # Crypto for liquid filters
+aws-lc-rs = "1.18"
 base32.workspace = true
 base64.workspace = true
 bip39.workspace = true
@@ -56,6 +57,7 @@ sha1.workspace = true
 sha2.workspace = true
 hex.workspace = true
 percent-encoding.workspace = true
+pem = "4.0.0"
 time.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 rand.workspace = true
@@ -71,6 +73,7 @@ thread_local.workspace = true
 # Logging
 tracing.workspace = true
 tiktoken-rs.workspace = true
+rustc-hash.workspace = true
 
 # File walking
 walkdir.workspace = true
@@ -78,6 +81,10 @@ ignore.workspace = true
 
 # Embedded rule bundle
 flate2 = "1.1"
+
+[build-dependencies]
+flate2 = "1.1"
+tiktoken-rs.workspace = true
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
@@ -88,3 +95,4 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 [dev-dependencies]
 pretty_assertions = "1.4"
 proptest = "1.11"
+rsa = { version = "0.9.10", features = ["getrandom", "sha2"] }

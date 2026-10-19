@@ -35,7 +35,7 @@ flowchart LR
         Git[Git repos and history]
         Hosts[Git hosts]
         Docs[Jira Confluence Slack Teams]
-        Remote[S3 GCS Docker]
+        Remote[S3 GCS Azure Blob HF buckets Docker]
     end
 
     subgraph Pipeline[Scan pipeline]
@@ -159,6 +159,18 @@ revocation remain separate operations. Python keeps findings grouped with their
 logical input path and provenance; invisible component helpers remain available
 until dependent operations finish. See the [Python SDK guide](PYPI.md).
 
+`pattern_requirements` are enforced by a shared primitive in raw and Base64
+matching, including character counts, substring exclusions and Liquid checksums.
+With `validation` enabled, typed credential URI syntax checks also share the CLI
+primitive and remain offline. `ScanOutput`/`ScanContext` preserve compact full-match
+spans and assignment/scope metadata for exact component windows and candidate
+ranking without retaining input payloads. Python carries this metadata with its
+native findings automatically; Rust callers can use `scan_blob_with_context`
+and `Validator::with_scan_context` without changing existing finding fields.
+Explicit component-verification opt-ins share fixed-origin eligibility and bounded
+scheduling with the CLI. Per-batch resolved-input caching coalesces repeated SDK
+checks while preserving per-occurrence results and separate rule identities.
+
 ### Detection Settings And Compatibility
 
 Detection settings are ordinary options controlling matching, decoding, and
@@ -173,7 +185,7 @@ enabling a Cargo feature alone does not opt a scan into different behavior.
 | Behavior | Existing `Scanner` defaults | Default detection options / `DetectionScanner` |
 | --- | --- | --- |
 | Initial raw confirmation window | 64 KiB | 4 KiB, matching the CLI |
-| Component proximity anchor | Selected secret span | Full regex-match span |
+| Component proximity anchor | Selected secret span for vector-only Rust; full match with `ScanContext` or Python | Full regex-match span |
 | Per-rule secret containment suppression | Disabled | Enabled |
 | Overlapping Betterleaks credential-URI fallback suppression | Disabled | Enabled |
 | Base64 decoding depth | One layer | Two layers |

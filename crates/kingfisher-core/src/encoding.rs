@@ -69,6 +69,15 @@ fn guess(input: &[u8]) -> Option<(Encoding, usize)> {
     if input.len() < 8 || !input.len().is_multiple_of(2) || memchr::memchr(0, input).is_none() {
         return None;
     }
+    // A few NULs in compressed/binary data are not Unicode padding. Every UTF-16
+    // guess needs >=60% zeros in one of two equal lanes; UTF-32 needs even more.
+    // Reject impossible inputs with a SIMD count instead of repeatedly scoring
+    // the entire binary blob's byte lanes. Keep the no-NUL text fast path above.
+    let units = input.len() / 2;
+    let minimum_zeros = units / 5 * 3 + (units % 5 * 3).div_ceil(5);
+    if memchr::memchr_iter(0, input).count() < minimum_zeros {
+        return None;
+    }
     let score = |offset: usize, stride: usize| {
         let bytes = input[offset..].iter().step_by(stride).take(input.len() / stride);
         let (total, zeros) =
@@ -194,6 +203,61 @@ mod tests {
                 )
                 .collect();
             assert_eq!(decode(&input).unwrap(), "\u{fffd}A\u{fffd}B\u{fffd}".as_bytes());
+        }
+    }
+
+    #[test]
+    fn zero_density_gate_preserves_the_original_lane_heuristics() {
+        use super::Encoding;
+
+        fn original_guess(input: &[u8]) -> Option<(Encoding, usize)> {
+            if input.len() < 8 || !input.len().is_multiple_of(2) {
+                return None;
+            }
+            let score = |offset: usize, stride: usize| {
+                let bytes = input[offset..].iter().step_by(stride).take(input.len() / stride);
+                let (total, zeros) = bytes.fold((0, 0), |(total, zeros), &byte| {
+                    (total + 1, zeros + usize::from(byte == 0))
+                });
+                total > 1 && zeros * 100 / total >= 60
+            };
+            if input.len().is_multiple_of(4) {
+                if !score(0, 4) && score(1, 4) && score(2, 4) && score(3, 4) {
+                    return Some((Encoding::Utf32Le, 0));
+                }
+                if score(0, 4) && score(1, 4) && score(2, 4) && !score(3, 4) {
+                    return Some((Encoding::Utf32Be, 0));
+                }
+            }
+            if !score(0, 2) && score(1, 2) {
+                return Some((Encoding::Utf16Le, 0));
+            }
+            if score(0, 2) && !score(1, 2) {
+                return Some((Encoding::Utf16Be, 0));
+            }
+            None
+        }
+
+        for len in 0..=16 {
+            for mask in 0..1 << len {
+                let bytes: Vec<_> =
+                    (0..len).map(|bit| if mask & (1 << bit) == 0 { b'A' } else { 0 }).collect();
+                assert!(super::guess(&bytes) == original_guess(&bytes), "len={len}, mask={mask}");
+            }
+        }
+        let mut state = 0x1234_5678_u64;
+        for len in [18, 20, 22, 24, 30, 32, 64, 100, 128] {
+            for _ in 0..256 {
+                let bytes: Vec<_> = (0..len)
+                    .map(|_| {
+                        state ^= state << 13;
+                        state ^= state >> 7;
+                        state ^= state << 17;
+                        if state.is_multiple_of(3) { 0 } else { b'A' }
+                    })
+                    .collect();
+                assert!(super::guess(&bytes) == original_guess(&bytes), "len={len}");
+            }
         }
     }
 }

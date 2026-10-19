@@ -19,6 +19,7 @@ pub mod rules;
 pub mod rules_database;
 #[doc(hidden)]
 pub mod scanner_pool;
+mod tokenizer;
 #[cfg(test)]
 #[allow(dead_code)]
 #[path = "../build_support/veles.rs"]
@@ -28,10 +29,11 @@ pub use rule::{
     BetterleaksAccessMap, BetterleaksAccessMapHandler, BetterleaksCapabilities, BetterleaksExpr,
     BetterleaksRevocationBindings, BetterleaksValidation, ChecksumActual, ChecksumRequirement,
     Confidence, DependsOnRule, EthereumValidation, GrpcRequest, GrpcValidation,
-    HttpMultiStepRevocation, HttpRequest, HttpValidation, MultipartConfig, MultipartPart,
-    PatternRequirementContext, PatternRequirements, PatternValidationResult, RULE_COMMENTS_PATTERN,
-    ReportResponseData, ResponseExtractor, ResponseMatcher, Revocation, RevocationStep, Rule,
-    RuleSyntax, TlsMode, Validation,
+    HttpMultiStepRevocation, HttpRequest, HttpValidation, HttpValidationAuth, MultipartConfig,
+    MultipartPart, OAuth2Config, OAuth2PasswordCredentials, PatternRequirementContext,
+    PatternRequirements, PatternValidationResult, RULE_COMMENTS_PATTERN, ReportResponseData,
+    ResponseExtractor, ResponseMatcher, Revocation, RevocationStep, Rule, RuleSyntax, TlsMode,
+    Validation,
 };
 
 pub use rules::{Rules, RulesError};

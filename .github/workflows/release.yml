@@ -115,12 +115,15 @@ jobs:
         run: |
           binary=target/x86_64-unknown-linux-musl/release/kingfisher
           "$binary" --version
+          "$binary" rules check --no-update-check
           readelf --program-headers --dynamic "$binary" > target/elf-check.txt
           if grep -Eq 'INTERP|NEEDED' target/elf-check.txt; then
             cat target/elf-check.txt
             echo "Expected a static musl executable without shared-library dependencies" >&2
             exit 1
           fi
+          readelf --file-header "$binary" | grep -Eq 'Type:.*DYN'
+          grep -q '(RELR)' target/elf-check.txt
 
       - name: Build Debian package
         run: |

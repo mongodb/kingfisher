@@ -20,6 +20,17 @@ fn text(value: OsString) -> anyhow::Result<String> {
     value.into_string().map_err(|_| anyhow::anyhow!("rule IDs/options must be valid Unicode"))
 }
 
+fn inspection_detail(
+    syntax: &kingfisher_rules::RuleSyntax,
+    detection_regex: &str,
+) -> anyhow::Result<serde_json::Value> {
+    let mut inspected = syntax.clone();
+    inspected.validation = inspected.validation.as_ref().map(|v| v.redacted_for_inspection());
+    let mut detail = serde_json::to_value(inspected)?;
+    detail["detection_regex"] = json!(detection_regex);
+    Ok(detail)
+}
+
 fn main() -> anyhow::Result<()> {
     let mut args = std::env::args_os().skip(1);
     let mut rule_id = None;
@@ -91,12 +102,12 @@ fn main() -> anyhow::Result<()> {
             .enumerate()
             .find(|(_, rule)| rule.id() == id)
             .with_context(|| format!("unknown exact rule ID: {id}"))?;
-        // RuleSyntax is serializable: inspect all loaded configuration directly.
+        // Inspect a copy with literal OAuth2 operator credentials redacted.
         // pattern retains source comments; detection_regex is the already-compiled
         // Rust confirmation pattern, excluding the internal endpoint wrapper.
         // The historical anchored_regexes() name does not imply end anchoring.
-        let mut detail = serde_json::to_value(rule.syntax())?;
-        detail["detection_regex"] = json!(database.anchored_regexes()[index].as_str());
+        let mut detail =
+            inspection_detail(rule.syntax(), database.anchored_regexes()[index].as_str())?;
         // Http/Grpc expose requests/matchers; Betterleaks exposes a portable AST.
         // Typed/raw handlers expose dispatch type/name, not their Rust source.
         // Missing actions are null. None of this executes validation/revocation.
@@ -130,4 +141,67 @@ fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn inspection_redacts_oauth2_literals_and_preserves_metadata() {
+        for credentials in [
+            json!({
+                "username": "operator-user-secret", "password": "operator-password-secret",
+                "client_id": "scanner", "client_secret": "operator-client-secret"
+            }),
+            json!({
+                "username_env": "KF_OPERATOR_USERNAME", "password_env": "KF_OPERATOR_PASSWORD",
+                "client_id": "scanner", "client_secret_env": "KF_OPERATOR_CLIENT_SECRET"
+            }),
+        ] {
+            let mut syntax = kingfisher_rules::RuleSyntax::new(
+                "acme.inspection",
+                "Inspection fixture",
+                "(synthetic-secret)",
+            );
+            syntax.validation = Some(
+                serde_json::from_value(json!({
+                    "type": "Http", "content": {
+                        "auth": {"oauth2": {
+                            "token_endpoint": "https://idp.example.com/token", "ropc": credentials
+                        }},
+                        "request": {"method": "GET", "url": "https://verifier.example.com/verify"}
+                    }
+                }))
+                .unwrap(),
+            );
+            let original = serde_json::to_value(&syntax).unwrap();
+            let detail = inspection_detail(&syntax, "synthetic-secret").unwrap();
+            let output = serde_json::to_string(&detail).unwrap();
+            for secret in
+                ["operator-user-secret", "operator-password-secret", "operator-client-secret"]
+            {
+                assert!(!output.contains(secret));
+            }
+            let inspected = &detail["validation"]["content"]["auth"]["oauth2"]["ropc"];
+            for field in ["username", "password", "client_secret"] {
+                let expected = if credentials[field].is_null() {
+                    serde_json::Value::Null
+                } else {
+                    json!("[REDACTED]")
+                };
+                assert_eq!(inspected[field], expected);
+            }
+            for field in ["username_env", "password_env", "client_secret_env", "client_id"] {
+                assert_eq!(inspected[field], credentials[field]);
+            }
+            assert_eq!(detail["detection_regex"], "synthetic-secret");
+            assert_eq!(detail["pattern"], original["pattern"]);
+            assert_eq!(
+                detail["validation"]["content"]["request"],
+                original["validation"]["content"]["request"]
+            );
+            assert_eq!(serde_json::to_value(&syntax).unwrap(), original);
+        }
+    }
 }

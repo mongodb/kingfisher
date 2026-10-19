@@ -1,5 +1,10 @@
 use kingfisher_scanner::validation::limits::ResourceTimeout;
-use std::{collections::HashSet, env, time::Duration};
+use std::{
+    collections::{BTreeMap, HashSet},
+    env,
+    path::Path,
+    time::Duration,
+};
 
 use anyhow::{Context, Result, anyhow};
 use globset::{Glob, GlobSet, GlobSetBuilder};
@@ -11,6 +16,10 @@ use serde_json::Value;
 use tracing::{debug, warn};
 
 use crate::{git_url::GitUrl, validation::GLOBAL_USER_AGENT};
+use crate::{
+    object_cache::{ObjectCache, ObjectVersion},
+    path_selection::PathSelection,
+};
 
 const HUGGINGFACE_ENDPOINT: &str = "https://huggingface.co/";
 const HUGGINGFACE_API: &str = "https://huggingface.co/api/";
@@ -190,6 +199,12 @@ struct BucketTreeEntry {
     path: String,
     #[serde(default)]
     size: u64,
+    #[serde(default, rename = "xetHash", alias = "xet_hash")]
+    xet_hash: Option<String>,
+    #[serde(default)]
+    oid: Option<String>,
+    #[serde(default)]
+    etag: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -446,64 +461,26 @@ where
     T: DeserializeOwned,
 {
     let mut items = Vec::new();
+    let initial_url = current_url.clone();
+    let mut visited = HashSet::new();
     loop {
+        check_pagination_origin(&initial_url, &current_url)?;
+        anyhow::ensure!(
+            visited.insert(current_url.as_str().to_owned()),
+            "Hugging Face API repeated a pagination link"
+        );
         let mut request =
             client.get(current_url.clone()).header("User-Agent", GLOBAL_USER_AGENT.as_str());
         request = auth.apply(request);
         let response = request.send().await?;
-        let status = response.status();
+        let response = check_api_status(response, auth, context).await?;
         let link_header = response
             .headers()
             .get(LINK)
             .and_then(|value| value.to_str().ok())
             .map(|value| value.to_string());
-        if !status.is_success() {
-            let body = response.text().await.unwrap_or_default();
-            let mut message = format!(
-                "Hugging Face API request failed while enumerating {context} ({status}): {body}"
-            );
-            if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
-                && !auth.has_token()
-            {
-                message.push_str(
-                    "\nProvide a Hugging Face access token via the KF_HUGGINGFACE_TOKEN environment variable.",
-                );
-            }
-            return Err(anyhow!(message));
-        }
         let body = response.bytes().await?;
-        let value: Value = serde_json::from_slice(&body).map_err(|err| {
-            let snippet = body_snippet(&body);
-            anyhow!(
-                "Failed to parse Hugging Face response while enumerating {context}: {err}. Body snippet: {snippet}",
-                context = context,
-                err = err,
-                snippet = snippet
-            )
-        })?;
-
-        let array = value.as_array().ok_or_else(|| {
-            let snippet = body_snippet(&body);
-            anyhow!(
-                "Unexpected Hugging Face response format while enumerating {context} (expected array). Body snippet: {snippet}",
-                context = context,
-                snippet = snippet
-            )
-        })?;
-
-        let mut page = Vec::new();
-        for (index, element) in array.iter().enumerate() {
-            match serde_json::from_value::<T>(element.clone()) {
-                Ok(item) => page.push(item),
-                Err(err) => {
-                    let snippet = value_snippet(element);
-                    warn!(
-                        "Skipping Hugging Face item at index {index} while enumerating {context}: {err}. Item snippet: {snippet}"
-                    );
-                }
-            }
-        }
-        items.append(&mut page);
+        items.extend(parse_response_items::<T>(&body, context)?);
         if let Some(link_value) = link_header
             && let Some(next_url) = parse_next_link(&link_value)
         {
@@ -511,6 +488,56 @@ where
             continue;
         }
         break;
+    }
+    Ok(items)
+}
+
+fn check_pagination_origin(initial: &Url, next: &Url) -> Result<()> {
+    anyhow::ensure!(
+        next.origin() == initial.origin()
+            && next.username().is_empty()
+            && next.password().is_none(),
+        "Hugging Face pagination left its configured origin"
+    );
+    Ok(())
+}
+
+async fn check_api_status(
+    mut response: reqwest::Response,
+    auth: &AuthConfig,
+    context: &str,
+) -> Result<reqwest::Response> {
+    let status = response.status();
+    if status.is_success() {
+        return Ok(response);
+    }
+    // Error diagnostics need only a small prefix, even for unlimited-content scans.
+    let body = crate::github::retry::read_body_prefix(&mut response, 512).await.unwrap_or_default();
+    let body = String::from_utf8_lossy(&body);
+    let mut message =
+        format!("Hugging Face API request failed while enumerating {context} ({status}): {body}");
+    if matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN) && !auth.has_token() {
+        message.push_str("\nProvide a Hugging Face access token via the KF_HUGGINGFACE_TOKEN environment variable.");
+    }
+    Err(anyhow!(message))
+}
+
+fn parse_response_items<T: DeserializeOwned>(body: &[u8], context: &str) -> Result<Vec<T>> {
+    let value: Value = serde_json::from_slice(body).map_err(|err| {
+        anyhow!("Failed to parse Hugging Face response while enumerating {context}: {err}. Body snippet: {}", body_snippet(body))
+    })?;
+    let array = value.as_array().ok_or_else(|| {
+        anyhow!("Unexpected Hugging Face response format while enumerating {context} (expected array). Body snippet: {}", body_snippet(body))
+    })?;
+    let mut items = Vec::new();
+    for (index, element) in array.iter().enumerate() {
+        match serde_json::from_value::<T>(element.clone()) {
+            Ok(item) => items.push(item),
+            Err(err) => warn!(
+                "Skipping Hugging Face item at index {index} while enumerating {context}: {err}. Item snippet: {}",
+                value_snippet(element)
+            ),
+        }
     }
     Ok(items)
 }
@@ -783,7 +810,34 @@ pub async fn visit_bucket_objects<F>(
     ignore_certs: bool,
     max_file_size: Option<u64>,
     exclude_patterns: &[String],
-    mut visitor: F,
+    visitor: F,
+) -> Result<u64>
+where
+    F: FnMut(&BucketTarget, String, Vec<u8>) -> Result<()>,
+{
+    visit_bucket_objects_selected(
+        targets,
+        auth,
+        ignore_certs,
+        max_file_size,
+        exclude_patterns,
+        &PathSelection::default(),
+        None,
+        visitor,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+pub async fn visit_bucket_objects_selected<F>(
+    targets: &[BucketTarget],
+    auth: &AuthConfig,
+    ignore_certs: bool,
+    max_file_size: Option<u64>,
+    exclude_patterns: &[String],
+    selection: &PathSelection,
+    cache_dir: Option<&Path>,
+    visitor: F,
 ) -> Result<u64>
 where
     F: FnMut(&BucketTarget, String, Vec<u8>) -> Result<()>,
@@ -793,61 +847,170 @@ where
         .danger_accept_invalid_certs(ignore_certs)
         .user_agent(GLOBAL_USER_AGENT.as_str())
         .build()?;
-    let api_base = Url::parse(HUGGINGFACE_API)?;
-    let endpoint = Url::parse(HUGGINGFACE_ENDPOINT)?;
+    visit_bucket_objects_at(
+        &client,
+        &Url::parse(HUGGINGFACE_API)?,
+        &Url::parse(HUGGINGFACE_ENDPOINT)?,
+        targets,
+        auth,
+        max_file_size,
+        exclude_patterns,
+        selection,
+        cache_dir,
+        visitor,
+    )
+    .await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn visit_bucket_objects_at<F>(
+    client: &reqwest::Client,
+    api_base: &Url,
+    endpoint: &Url,
+    targets: &[BucketTarget],
+    auth: &AuthConfig,
+    max_file_size: Option<u64>,
+    exclude_patterns: &[String],
+    selection: &PathSelection,
+    cache_dir: Option<&Path>,
+    mut visitor: F,
+) -> Result<u64>
+where
+    F: FnMut(&BucketTarget, String, Vec<u8>) -> Result<()>,
+{
+    selection.check()?;
     let exclude_globset = build_exclude_globset(exclude_patterns)?;
+    // Combine overlapping explicit bucket targets before enumerating any content.
+    let mut grouped: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for target in targets {
+        grouped
+            .entry(target.bucket_id.clone())
+            .or_default()
+            .extend(selection.listing_prefixes(target.prefix()));
+    }
     let mut visited = 0;
-
-    for bucket in targets {
-        let tree_url = bucket_tree_url(&api_base, bucket)?;
-        let context = format!("files in bucket {}", bucket.bucket_id());
-        let entries = fetch_paginated::<BucketTreeEntry>(&client, tree_url, auth, &context).await?;
-
-        for entry in entries {
-            if entry.entry_type != "file" {
+    for (bucket_id, prefixes) in grouped {
+        if prefixes.is_empty() {
+            continue;
+        }
+        let selected = PathSelection { include_prefixes: prefixes, ..selection.clone() };
+        let selected = selected.within_prefix(None).expect("nonempty bucket selection");
+        let bucket = BucketTarget::new(bucket_id, None);
+        let policy = (&selected, max_file_size, exclude_patterns);
+        let mut cache =
+            cache_dir.map(|dir| ObjectCache::open(dir, &bucket.uri(), &policy)).transpose()?;
+        let mut seen_objects = HashSet::new();
+        if let Some(cache) = &cache {
+            for key in cache.completed_objects() {
+                visitor(&bucket, key.clone(), cache.read(&key)?)?;
+                seen_objects.insert(key);
+                visited += 1;
+            }
+        }
+        let scopes = selected.listing_prefixes(None);
+        for scope in scopes {
+            if cache.as_ref().is_some_and(|cache| cache.scope_complete(&scope)) {
                 continue;
             }
-            if exclude_globset.as_ref().is_some_and(|set| set.is_match(&entry.path)) {
-                debug!("Skipping excluded Hugging Face bucket object {}", entry.path);
-                continue;
-            }
-            if max_file_size.is_some_and(|limit| entry.size > limit) {
-                debug!(
-                    "Skipping Hugging Face bucket object {} ({} bytes exceeds configured limit)",
-                    entry.path, entry.size
+            let target = BucketTarget::new(
+                bucket.bucket_id.clone(),
+                (!scope.is_empty()).then(|| scope.trim_end_matches('/').to_owned()),
+            );
+            let initial = bucket_tree_url(api_base, &target)?;
+            let mut current = cache
+                .as_ref()
+                .and_then(|cache| cache.continuation_token(&scope))
+                .map(|token| Url::parse(&token))
+                .transpose()?
+                .unwrap_or_else(|| initial.clone());
+            let mut seen_pages = HashSet::new();
+            loop {
+                check_pagination_origin(&initial, &current)?;
+                anyhow::ensure!(
+                    current.path() == initial.path(),
+                    "Hugging Face pagination left its configured listing scope"
                 );
-                continue;
-            }
-
-            let bytes = if entry.size == 0 {
-                Vec::new()
-            } else {
-                let url = bucket_download_url(&endpoint, bucket.bucket_id(), &entry.path)?;
-                let response = auth.apply(client.get(url)).send().await.with_context(|| {
-                    format!(
-                        "Failed to fetch Hugging Face bucket object {}/{}",
-                        bucket.bucket_id(),
-                        entry.path
-                    )
-                })?;
-                let status = response.status();
-                if !status.is_success() {
-                    let body = response.text().await.unwrap_or_default();
-                    return Err(anyhow!(
-                        "Hugging Face bucket object download failed for {}/{} ({status}): {}",
-                        bucket.bucket_id(),
-                        entry.path,
-                        truncate_for_display(&body, BODY_SNIPPET_LIMIT)
-                    ));
+                anyhow::ensure!(
+                    seen_pages.insert(current.as_str().to_owned()),
+                    "Hugging Face listing repeated a page link"
+                );
+                let response = auth
+                    .apply(client.get(current.clone()))
+                    .send()
+                    .await
+                    .context("Cannot list Hugging Face bucket objects")?;
+                let context = format!("objects in bucket {}", bucket.bucket_id());
+                let response = check_api_status(response, auth, &context).await?;
+                let next = response
+                    .headers()
+                    .get(LINK)
+                    .and_then(|value| value.to_str().ok())
+                    .and_then(parse_next_link);
+                if let Some(next) = &next {
+                    check_pagination_origin(&initial, next)?;
+                    anyhow::ensure!(
+                        next.path() == initial.path(),
+                        "Hugging Face pagination left its configured listing scope"
+                    );
                 }
-                response.bytes().await?.to_vec()
-            };
-
-            visitor(bucket, entry.path, bytes)?;
-            visited += 1;
+                let body = response.bytes().await?;
+                let entries = parse_response_items::<BucketTreeEntry>(&body, &context)?;
+                for entry in entries {
+                    if entry.entry_type != "file"
+                        || !selected.matches(&entry.path)
+                        || exclude_globset.as_ref().is_some_and(|set| set.is_match(&entry.path))
+                        || max_file_size.is_some_and(|limit| entry.size > limit)
+                        || seen_objects.contains(&entry.path)
+                    {
+                        continue;
+                    }
+                    let version = ObjectVersion {
+                        identity: entry.xet_hash.or(entry.oid).or(entry.etag),
+                        modified: None,
+                        size: Some(entry.size),
+                    };
+                    let cached = cache
+                        .as_ref()
+                        .map(|cache| cache.cached(&entry.path, &version))
+                        .transpose()?
+                        .flatten();
+                    let bytes = if let Some(bytes) = cached {
+                        bytes
+                    } else if entry.size == 0 {
+                        Vec::new()
+                    } else {
+                        let url = bucket_download_url(endpoint, bucket.bucket_id(), &entry.path)?;
+                        let response = auth
+                            .apply(client.get(url))
+                            .send()
+                            .await
+                            .context("Cannot download Hugging Face bucket object")?;
+                        check_api_status(response, auth, "bucket object download")
+                            .await?
+                            .bytes()
+                            .await?
+                            .to_vec()
+                    };
+                    if let Some(cache) = &mut cache {
+                        cache.store(&entry.path, version, &bytes)?;
+                    }
+                    visitor(&bucket, entry.path.clone(), bytes)?;
+                    seen_objects.insert(entry.path);
+                    visited += 1;
+                }
+                if let Some(cache) = &mut cache {
+                    cache.finish_page(&scope, next.as_ref().map(ToString::to_string))?;
+                }
+                match next {
+                    Some(next) => current = next,
+                    None => break,
+                }
+            }
+        }
+        if let Some(cache) = &mut cache {
+            cache.finish()?;
         }
     }
-
     Ok(visited)
 }
 
@@ -892,6 +1055,451 @@ pub fn wiki_url(_repo_url: &GitUrl) -> Option<GitUrl> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn api_error_reads_only_a_bounded_prefix_without_waiting_for_eof() {
+        use futures::StreamExt;
+        use kingfisher_scanner::validation::limits::NetworkLimits;
+
+        for unlimited_response in [false, true] {
+            // The stream never ends, and bytes beyond the diagnostic prefix must not appear.
+            let mut prefix = vec![b'x'; 512];
+            prefix.extend_from_slice(b"must-not-appear");
+            let stream = futures::stream::once(std::future::ready(Ok::<_, std::io::Error>(prefix)))
+                .chain(futures::stream::pending());
+            let response = http::Response::builder()
+                .status(StatusCode::UNAUTHORIZED)
+                .body(reqwest::Body::wrap_stream(stream))
+                .unwrap()
+                .into();
+            let error =
+                tokio::time::timeout(
+                    Duration::from_secs(10),
+                    NetworkLimits { unlimited_response, ..Default::default() }
+                        .scope(check_api_status(response, &AuthConfig::default(), "buckets")),
+                )
+                .await
+                .expect("diagnostic reading must stop at its prefix limit")
+                .unwrap_err();
+            let message = error.to_string();
+            assert!(message.contains(&"x".repeat(512)));
+            assert!(!message.contains("must-not-appear"));
+            assert!(message.contains("401"));
+            assert!(message.contains("KF_HUGGINGFACE_TOKEN"));
+        }
+    }
+
+    #[tokio::test]
+    async fn api_status_check_preserves_success_bodies_and_short_error_details() {
+        let response = http::Response::builder().status(200).body("untouched").unwrap().into();
+        let response = check_api_status(response, &AuthConfig::default(), "models").await.unwrap();
+        assert_eq!(response.text().await.unwrap(), "untouched");
+
+        let response =
+            http::Response::builder().status(403).body("permission denied").unwrap().into();
+        let error =
+            check_api_status(response, &AuthConfig { token: Some("configured".into()) }, "models")
+                .await
+                .unwrap_err()
+                .to_string();
+        assert!(error.contains("permission denied"));
+        assert!(!error.contains("KF_HUGGINGFACE_TOKEN"));
+    }
+
+    #[tokio::test]
+    async fn bucket_listing_skips_malformed_entries_without_losing_valid_files() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::path};
+        let server = MockServer::start().await;
+        let api = Url::parse(&format!("{}/api/", server.uri())).unwrap();
+        let endpoint = Url::parse(&format!("{}/", server.uri())).unwrap();
+        Mock::given(path("/api/buckets/owner/data/tree"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"type":"directory","path":"folder","size":null},
+                {"type":"file","path":"invalid.env","size":null},
+                {"type":"file","path":"valid.env","size":6},
+                {"type":"file","path":"empty.env","size":0},
+                {"path":"missing-type.env","size":6}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/buckets/owner/data/resolve/valid%2Eenv"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("secret"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut objects = Vec::new();
+        let visited = visit_bucket_objects_at(
+            &reqwest::Client::new(),
+            &api,
+            &endpoint,
+            &[BucketTarget::new("owner/data".into(), None)],
+            &AuthConfig::default(),
+            None,
+            &[],
+            &PathSelection::default(),
+            None,
+            |_, key, bytes| {
+                objects.push((key, bytes));
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(visited, 2);
+        assert_eq!(
+            objects,
+            [("valid.env".into(), b"secret".to_vec()), ("empty.env".into(), vec![])]
+        );
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bucket_auth_failures_explain_how_to_supply_a_missing_token() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        let server = MockServer::start().await;
+        let api = Url::parse(&format!("{}/api/", server.uri())).unwrap();
+        let endpoint = Url::parse(&format!("{}/", server.uri())).unwrap();
+        for status in [401, 403] {
+            for token in [None, Some("configured-token".to_string())] {
+                server.reset().await;
+                Mock::given(method("GET"))
+                    .respond_with(ResponseTemplate::new(status))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                let auth = AuthConfig { token };
+                let error = visit_bucket_objects_at(
+                    &reqwest::Client::new(),
+                    &api,
+                    &endpoint,
+                    &[BucketTarget::new("owner/data".into(), None)],
+                    &auth,
+                    None,
+                    &[],
+                    &PathSelection::default(),
+                    None,
+                    |_, _, _| Ok(()),
+                )
+                .await
+                .unwrap_err();
+                assert_eq!(error.to_string().contains("KF_HUGGINGFACE_TOKEN"), !auth.has_token());
+                assert!(error.to_string().contains(&status.to_string()));
+                server.verify().await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn resource_pagination_never_sends_tokens_to_another_origin() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        let server = MockServer::start().await;
+        let other = MockServer::start().await;
+        let next = format!("<{}/api/models?cursor=next>; rel=\"next\"", other.uri());
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("link", next.as_str())
+                    .set_body_json(serde_json::json!([])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([])))
+            .expect(0)
+            .mount(&other)
+            .await;
+        let error = fetch_paginated::<HuggingFaceItem>(
+            &reqwest::Client::new(),
+            Url::parse(&format!("{}/api/models", server.uri())).unwrap(),
+            &AuthConfig { token: Some("must-not-leak".into()) },
+            "models",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("configured origin"), "{error}");
+        assert!(other.received_requests().await.unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn resource_pagination_follows_same_origin_links_and_rejects_cycles() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{path, query_param, query_param_is_missing},
+        };
+        let server = MockServer::start().await;
+        let initial = Url::parse(&format!("{}/api/models", server.uri())).unwrap();
+        let next = format!("<{initial}?cursor=next>; rel=\"next\"");
+        Mock::given(path("/api/models"))
+            .and(query_param_is_missing("cursor"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("link", next.as_str())
+                    .set_body_json(serde_json::json!([{"id":"owner/first"}])),
+            )
+            .mount(&server)
+            .await;
+        Mock::given(query_param("cursor", "next"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_json(serde_json::json!([{"id":"owner/second"}])),
+            )
+            .mount(&server)
+            .await;
+        let items = fetch_paginated::<HuggingFaceItem>(
+            &reqwest::Client::new(),
+            initial.clone(),
+            &AuthConfig::default(),
+            "models",
+        )
+        .await
+        .unwrap();
+        assert_eq!(items.len(), 2);
+        server.reset().await;
+        let cycle = format!("<{initial}>; rel=\"next\"");
+        Mock::given(path("/api/models"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("link", cycle.as_str())
+                    .set_body_json(serde_json::json!([])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let error = fetch_paginated::<HuggingFaceItem>(
+            &reqwest::Client::new(),
+            initial,
+            &AuthConfig::default(),
+            "models",
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("repeated a pagination link"));
+    }
+
+    #[test]
+    fn pagination_origin_rejects_scheme_changes_and_embedded_credentials() {
+        let initial = Url::parse("https://huggingface.co/api/models").unwrap();
+        for next in [
+            "http://huggingface.co/api/models",
+            "https://huggingface.co:444/api/models",
+            "https://user:password@huggingface.co/api/models",
+            "https://untrusted.example/api/models",
+        ] {
+            assert!(check_pagination_origin(&initial, &Url::parse(next).unwrap()).is_err());
+        }
+    }
+
+    #[tokio::test]
+    async fn bucket_filters_scope_listing_and_skip_downloads_for_every_exclusion() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+        let server = MockServer::start().await;
+        let api = url::Url::parse(&format!("{}/api/", server.uri())).unwrap();
+        let endpoint = url::Url::parse(&format!("{}/", server.uri())).unwrap();
+        Mock::given(method("GET"))
+            .and(path("/api/buckets/owner/data/tree/configs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"type":"file","path":"configs/key.env","size":6,"xetHash":"v1"},
+                {"type":"file","path":"configs/generated/key.env","size":6},
+                {"type":"file","path":"configs/photo.png","size":6},
+                {"type":"file","path":"configs/large.env","size":1000},
+                {"type":"file","path":"configs/glob.env","size":6},
+                {"type":"file","path":"outside/key.env","size":6}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/buckets/owner/data/resolve/configs/key%2Eenv"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("secret"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let selection = super::PathSelection {
+            include_prefixes: vec!["configs/".into(), "configs/nested/".into(), "outside/".into()],
+            exclude_prefixes: vec!["configs/generated/".into()],
+            include_extensions: vec!["env".into()],
+            ..Default::default()
+        };
+        let targets = [
+            super::BucketTarget::new("owner/data".into(), Some("configs/".into())),
+            super::BucketTarget::new("owner/data".into(), Some("configs/nested/".into())),
+        ];
+        let mut keys = Vec::new();
+        super::visit_bucket_objects_at(
+            &reqwest::Client::new(),
+            &api,
+            &endpoint,
+            &targets,
+            &super::AuthConfig::default(),
+            Some(100),
+            &["**/glob.env".into()],
+            &selection,
+            None,
+            |_, key, _| {
+                keys.push(key);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(keys, ["configs/key.env"]);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bucket_checkpoint_replays_completed_pages_and_reuses_unchanged_hashes() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path, query_param, query_param_is_missing},
+        };
+        let server = MockServer::start().await;
+        let root = tempfile::tempdir().unwrap();
+        let api = url::Url::parse(&format!("{}/api/", server.uri())).unwrap();
+        let endpoint = url::Url::parse(&format!("{}/", server.uri())).unwrap();
+        let next = format!(
+            "<{}/api/buckets/owner/data/tree/configs?recursive=true&cursor=next>; rel=\"next\"",
+            server.uri()
+        );
+        let targets = [super::BucketTarget::new("owner/data".into(), Some("configs/".into()))];
+        let selection = super::PathSelection::default();
+        Mock::given(path("/api/buckets/owner/data/tree/configs")).and(query_param_is_missing("cursor"))
+            .respond_with(ResponseTemplate::new(200).insert_header("link",next.as_str()).set_body_json(serde_json::json!([{"type":"file","path":"configs/first.env","size":6,"xetHash":"v1"}]))).expect(1).mount(&server).await;
+        Mock::given(path("/buckets/owner/data/resolve/configs/first%2Eenv"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("secret"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(query_param("cursor", "next"))
+            .respond_with(ResponseTemplate::new(403))
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(
+            super::visit_bucket_objects_at(
+                &reqwest::Client::new(),
+                &api,
+                &endpoint,
+                &targets,
+                &super::AuthConfig::default(),
+                None,
+                &[],
+                &selection,
+                Some(root.path()),
+                |_, _, _| Ok(())
+            )
+            .await
+            .is_err()
+        );
+        server.verify().await;
+        server.reset().await;
+        Mock::given(query_param("cursor","next")).respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([{"type":"file","path":"configs/second.env","size":6,"xetHash":"v1"}]))).expect(1).mount(&server).await;
+        Mock::given(path("/buckets/owner/data/resolve/configs/second%2Eenv"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("secret"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut keys = Vec::new();
+        super::visit_bucket_objects_at(
+            &reqwest::Client::new(),
+            &api,
+            &endpoint,
+            &targets,
+            &super::AuthConfig::default(),
+            None,
+            &[],
+            &selection,
+            Some(root.path()),
+            |_, key, _| {
+                keys.push(key);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(keys, ["configs/first.env", "configs/second.env"]);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+        server.verify().await;
+        server.reset().await;
+        Mock::given(method("GET"))
+            .and(path("/api/buckets/owner/data/tree/configs"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                {"type":"file","path":"configs/first.env","size":6,"xetHash":"v1"},
+                {"type":"file","path":"configs/second.env","size":6,"xetHash":"v2"}
+            ])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/buckets/owner/data/resolve/configs/second%2Eenv"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("changed"))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut bodies = Vec::new();
+        super::visit_bucket_objects_at(
+            &reqwest::Client::new(),
+            &api,
+            &endpoint,
+            &targets,
+            &super::AuthConfig::default(),
+            None,
+            &[],
+            &selection,
+            Some(root.path()),
+            |_, _, bytes| {
+                bodies.push(bytes);
+                Ok(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(bodies, [b"secret".to_vec(), b"changed".to_vec()]);
+        assert_eq!(server.received_requests().await.unwrap().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn bucket_pagination_cannot_repeat_or_leave_the_configured_origin() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        let server = MockServer::start().await;
+        let api = url::Url::parse(&format!("{}/api/", server.uri())).unwrap();
+        let endpoint = url::Url::parse(&format!("{}/", server.uri())).unwrap();
+        for target in [
+            format!("{}/api/buckets/owner/data/tree?recursive=true", server.uri()),
+            "https://untrusted.example/api/buckets/owner/data/tree".into(),
+        ] {
+            server.reset().await;
+            let link = format!("<{target}>; rel=\"next\"");
+            Mock::given(method("GET"))
+                .respond_with(
+                    ResponseTemplate::new(200)
+                        .insert_header("link", link.as_str())
+                        .set_body_json(serde_json::json!([])),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+            let error = super::visit_bucket_objects_at(
+                &reqwest::Client::new(),
+                &api,
+                &endpoint,
+                &[super::BucketTarget::new("owner/data".into(), None)],
+                &super::AuthConfig::default(),
+                None,
+                &[],
+                &super::PathSelection::default(),
+                None,
+                |_, _, _| Ok(()),
+            )
+            .await
+            .unwrap_err();
+            assert!(
+                error.to_string().contains("pagination") || error.to_string().contains("repeated")
+            );
+            server.verify().await;
+        }
+    }
     use super::*;
 
     #[test]

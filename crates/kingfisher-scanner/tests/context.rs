@@ -258,6 +258,131 @@ fn cli_policy_uses_full_match_component_anchors_without_changing_reported_locati
     );
 }
 
+fn component_scanner(pattern: &str, within: &str) -> Scanner {
+    use kingfisher_rules::DependsOnRule;
+    let mut primary = RuleSyntax::new("acme.primary", "Primary", pattern);
+    primary.depends_on_rule = vec![Some(DependsOnRule {
+        rule_id: "acme.helper".into(),
+        variable: "HELP".into(),
+        within: Some(within.into()),
+        optional: false,
+        verify_candidates: false,
+    })];
+    let mut helper = RuleSyntax::new("acme.helper", "Helper", r"(HELP_[a-z0-9]{8})");
+    helper.visible = false;
+    Scanner::new(Arc::new(
+        RulesDatabase::from_rules(vec![Rule::new(primary), Rule::new(helper)]).unwrap(),
+    ))
+}
+
+fn assert_component_policy_parity(
+    scanner: &Scanner,
+    input: &[u8],
+    cli_match_semantics: bool,
+    expected_primary: bool,
+) {
+    let blob = Blob::from_borrowed(input);
+    let options = DetectionOptions {
+        cli_match_semantics,
+        inline_ignores: false,
+        markup_context: false,
+        ..Default::default()
+    };
+    let ordinary = scanner.scan_blob_at_path_with_options(&blob, "config.env", &options).unwrap();
+    let output = scanner
+        .scan_blob_with_context_and_control(
+            &blob,
+            "config.env",
+            &ScanControl::default(),
+            false,
+            Some(&options),
+        )
+        .unwrap();
+    assert!(ordinary.iter().any(|finding| finding.rule_id == "acme.helper"));
+    assert_eq!(
+        ordinary.iter().any(|finding| finding.rule_id == "acme.primary"),
+        expected_primary,
+        "cli_match_semantics={cli_match_semantics}, input={input:?}"
+    );
+    // Compare every public field, including offsets, fingerprints, captures, and
+    // encoding markers, rather than only the number of retained primaries.
+    assert_eq!(
+        serde_json::to_value(&output.findings).unwrap(),
+        serde_json::to_value(&ordinary).unwrap(),
+        "cli_match_semantics={cli_match_semantics}, input={input:?}"
+    );
+}
+
+#[test]
+fn scan_context_explicit_component_policy_parity_for_raw_and_base64_anchors() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let scanner = component_scanner(r"PREFIX_x{48}(PRIMARY_[a-z0-9]{8})", "16C");
+    let input = format!("HELP_efgh5678 PREFIX_{}PRIMARY_abcd1234", "x".repeat(48));
+    for (bytes, encoded) in
+        [(input.as_bytes().to_vec(), false), (STANDARD.encode(&input).into_bytes(), true)]
+    {
+        for cli_match_semantics in [false, true] {
+            assert_component_policy_parity(
+                &scanner,
+                &bytes,
+                cli_match_semantics,
+                // Legacy Base64 locations cover the entire outer encoded span,
+                // while raw legacy locations anchor at the selected secret.
+                cli_match_semantics || encoded,
+            );
+        }
+    }
+}
+
+#[test]
+fn scan_context_explicit_component_policy_parity_for_decoded_line_windows() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let scanner = component_scanner(r"(PRIMARY_[a-z0-9]{8})", "1L");
+    let input = b"PRIMARY_abcd1234\nHELP_efgh5678";
+    for (bytes, encoded) in [(input.to_vec(), false), (STANDARD.encode(input).into_bytes(), true)] {
+        for cli_match_semantics in [true, false] {
+            // Explicit policies preserve source/synthetic association coordinates:
+            // the encoded input is one source line, even if its payload is not.
+            assert_component_policy_parity(&scanner, &bytes, cli_match_semantics, encoded);
+        }
+    }
+}
+
+#[test]
+fn scan_context_explicit_component_policy_parity_for_separate_decoded_buffers() {
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    let scanner = component_scanner(r"(PRIMARY_[a-z0-9]{8})", "0");
+    let input = format!(
+        "{} {}",
+        STANDARD.encode("padding PRIMARY_abcd1234 padding"),
+        STANDARD.encode("padding HELP_efgh5678 padding"),
+    );
+    for cli_match_semantics in [false, true] {
+        assert_component_policy_parity(&scanner, input.as_bytes(), cli_match_semantics, true);
+    }
+    // Without explicit options, the context API retains its stronger documented
+    // decoded-buffer isolation instead of inheriting the ordinary scan policy.
+    let output = scanner
+        .scan_blob_with_context(&Blob::from_borrowed(input.as_bytes()), "config.env")
+        .unwrap();
+    assert!(output.findings.iter().all(|finding| finding.rule_id != "acme.primary"));
+    assert!(output.findings.iter().any(|finding| finding.rule_id == "acme.helper"));
+}
+
+#[test]
+fn scan_context_without_options_preserves_full_match_component_windows() {
+    let scanner = component_scanner(r"PREFIX_x{48}(PRIMARY_[a-z0-9]{8})", "16C");
+    let input = format!("HELP_efgh5678 PREFIX_{}PRIMARY_abcd1234", "x".repeat(48));
+    let blob = Blob::from_borrowed(input.as_bytes());
+    assert!(
+        scanner.scan_blob(&blob).unwrap().iter().all(|finding| finding.rule_id != "acme.primary")
+    );
+    let output = scanner.scan_blob_with_context(&blob, "config.env").unwrap();
+    let primary = output.findings.iter().find(|finding| finding.rule_id == "acme.primary").unwrap();
+    assert_eq!(primary.secret, "PRIMARY_abcd1234");
+    assert_eq!(&input[primary.location.start_offset..primary.location.end_offset], primary.secret);
+}
+
 #[test]
 fn nested_base64_siblings_have_separate_containment_scopes() {
     use base64::{Engine, engine::general_purpose::STANDARD};

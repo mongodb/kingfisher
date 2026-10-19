@@ -126,6 +126,11 @@ class ValidationResult:
 
 
 class Validator:
+    """Explicit validation with full-match component context and per-batch grouping.
+
+    Distinct components skip validation unless the rule explicitly enables supported,
+    bounded candidate verification. Retain complete per-input findings and helpers.
+    """
     def __init__(self, *, timeout: float = 10, concurrency: int = 8,
                  retries: int = 0, max_response_bytes: int = 1 << 20,
                  allow_internal_ips: bool = False,

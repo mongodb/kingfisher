@@ -4,7 +4,7 @@ mod support;
 use std::{path::Path, sync::Arc, time::Duration};
 
 use kingfisher_rules::{Confidence, Rules};
-use kingfisher_scanner::{RulesDatabase, Scanner, ValidationOutcome, Validator};
+use kingfisher_scanner::{Blob, RulesDatabase, Scanner, ValidationOutcome, Validator};
 use serde_json::json;
 
 #[tokio::main(flavor = "current_thread")]
@@ -30,8 +30,12 @@ async fn main() -> anyhow::Result<()> {
     ] {
         // Keep raw captures until validation finishes; pass the entire scan result
         // so the validator can bind supporting credentials, including hidden rules.
-        let findings = scanner.scan_bytes(b"token=demo_abcd1234efgh5678")?;
-        for result in validator.validate_findings(findings).await {
+        let blob = Blob::from_borrowed(b"token=demo_abcd1234efgh5678");
+        let output = scanner.scan_blob_with_context(&blob, "config.env")?;
+        // Compact context preserves full-match windows and candidate ranking;
+        // returned finding locations still identify the secret itself.
+        let validation = validator.clone().with_scan_context(output.context);
+        for result in validation.validate_findings(output.findings).await {
             assert_eq!(result.outcome, expected);
             let result = result.into_redacted();
             println!("{}", json!({"rule_id": result.finding.rule_id, "outcome": result.outcome}));

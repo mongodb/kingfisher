@@ -1,4 +1,6 @@
-use std::{collections::BinaryHeap, hash::BuildHasher, path::Path, time::Instant};
+use std::{
+    cell::RefCell, collections::BinaryHeap, hash::BuildHasher, path::Path, sync::Arc, time::Instant,
+};
 
 use anyhow::{Context, Result, bail};
 use bstr::{BString, ByteSlice};
@@ -15,7 +17,7 @@ use gix::{
 };
 use globset::GlobSet;
 
-use crate::git_repo_enumerator::MIN_SCANNABLE_BLOB_SIZE;
+use crate::{git_candidates::GitContentFilter, git_repo_enumerator::MIN_SCANNABLE_BLOB_SIZE};
 use petgraph::{
     graph::{DiGraph, EdgeIndex, IndexType, NodeIndex},
     prelude::*,
@@ -69,21 +71,28 @@ pub(crate) struct CommitMetadata {
 
 #[derive(Clone, Debug, Default)]
 struct SeenObjectSet {
-    seen_trees: RoaringBitmap,
-    seen_blobs: RoaringBitmap,
+    seen_trees: Arc<RoaringBitmap>,
+    seen_blobs: Arc<RoaringBitmap>,
 }
 impl SeenObjectSet {
     pub(crate) fn new() -> Self {
-        Self { seen_trees: RoaringBitmap::new(), seen_blobs: RoaringBitmap::new() }
+        Self::default()
     }
-    fn insert(set: &mut RoaringBitmap, idx: ObjectIdx) -> Result<bool> {
-        Ok(set.insert(idx.as_usize().try_into()?))
+    fn insert(set: &mut Arc<RoaringBitmap>, idx: ObjectIdx) -> Result<bool> {
+        let idx = idx.as_usize().try_into()?;
+        if set.contains(idx) {
+            return Ok(false);
+        }
+        Ok(Arc::make_mut(set).insert(idx))
     }
     fn contains(set: &RoaringBitmap, idx: ObjectIdx) -> Result<bool> {
         Ok(set.contains(idx.as_usize().try_into()?))
     }
     pub(crate) fn insert_tree(&mut self, idx: ObjectIdx) -> Result<bool> {
         Self::insert(&mut self.seen_trees, idx)
+    }
+    pub(crate) fn contains_tree(&self, idx: ObjectIdx) -> Result<bool> {
+        Self::contains(&self.seen_trees, idx)
     }
     pub(crate) fn insert_blob(&mut self, idx: ObjectIdx) -> Result<bool> {
         Self::insert(&mut self.seen_blobs, idx)
@@ -92,8 +101,15 @@ impl SeenObjectSet {
         Self::contains(&self.seen_blobs, idx)
     }
     pub(crate) fn union_update(&mut self, other: &Self) {
-        self.seen_blobs |= &other.seen_blobs;
-        self.seen_trees |= &other.seen_trees;
+        // A fork shares its large ancestor bitmaps until a child actually changes
+        // them. Keep trees and blobs separate so clean commits can continue sharing
+        // the blob bitmap even while their root trees change.
+        if !Arc::ptr_eq(&self.seen_blobs, &other.seen_blobs) {
+            *Arc::make_mut(&mut self.seen_blobs) |= other.seen_blobs.as_ref();
+        }
+        if !Arc::ptr_eq(&self.seen_trees, &other.seen_trees) {
+            *Arc::make_mut(&mut self.seen_trees) |= other.seen_trees.as_ref();
+        }
     }
 }
 
@@ -149,6 +165,9 @@ pub(crate) struct RepositoryIndex {
     commits: ObjectIdBimap,
     blobs: ObjectIdBimap,
     tags: ObjectIdBimap,
+    candidate_trees: Option<FixedBitSet>,
+    content_filtered: bool,
+    candidate_summaries: Option<crate::git_candidate_summaries::CandidateSummaries>,
 }
 impl RepositoryIndex {
     pub(crate) fn new_with_deadline(
@@ -220,7 +239,15 @@ impl RepositoryIndex {
                 }
             }
         }
-        Ok(Self { trees, commits, blobs, tags })
+        Ok(Self {
+            trees,
+            commits,
+            blobs,
+            tags,
+            candidate_trees: None,
+            content_filtered: false,
+            candidate_summaries: None,
+        })
     }
     pub(crate) fn num_commits(&self) -> usize {
         self.commits.len()
@@ -243,6 +270,9 @@ impl RepositoryIndex {
     pub(crate) fn get_tree_index(&self, oid: &gix::oid) -> Option<ObjectIdx> {
         self.trees.get_idx(oid)
     }
+    pub(crate) fn is_candidate_tree(&self, idx: ObjectIdx) -> bool {
+        self.candidate_trees.as_ref().is_none_or(|trees| trees.contains(idx.as_usize()))
+    }
     pub(crate) fn get_blob_index(&self, oid: &gix::oid) -> Option<ObjectIdx> {
         self.blobs.get_idx(oid)
     }
@@ -251,6 +281,151 @@ impl RepositoryIndex {
     }
     pub(crate) fn commits(&self) -> &[ObjectId] {
         &self.commits.idx_to_oid
+    }
+
+    pub(crate) fn retain_content_candidates(
+        &mut self,
+        repo: &gix::ThreadSafeRepository,
+        filter: &GitContentFilter,
+        deadline: Option<Instant>,
+        repo_path: &Path,
+    ) -> Result<()> {
+        const BATCH_SIZE: usize = 1024;
+        const MAX_RETAINED_BUFFER: usize = 8 * 1024 * 1024;
+        const MAX_PREPASS_BLOB_BYTES: u64 = 4 * 1024 * 1024;
+        let started = Instant::now();
+        let num_blobs = self.blobs.len();
+        // Keep pack lookup state and a reusable, bounded scratch buffer per worker,
+        // not per Rayon job. Only membership bits survive this pass, never contents.
+        let workers = thread_local::ThreadLocal::new();
+        let batches: Result<Vec<FixedBitSet>> = self
+            .blobs
+            .idx_to_oid
+            .par_chunks(BATCH_SIZE)
+            .map(|ids| {
+                let worker = workers.get_or(|| RefCell::new((repo.to_thread_local(), Vec::new())));
+                let mut worker = worker.borrow_mut();
+                let (repo, buffer) = &mut *worker;
+                let mut selected = FixedBitSet::with_capacity(ids.len());
+                let (mut clean_blobs, mut clean_bytes) = (0, 0);
+                for (i, oid) in ids.iter().enumerate() {
+                    check_deadline(deadline, "Git content candidate prepass", repo_path)?;
+                    // Large blobs are few but expensive to inflate twice. Retain them
+                    // conservatively and let the normal pipeline read them just once.
+                    if repo
+                        .objects
+                        .header(oid)
+                        .is_ok_and(|header| header.size() > MAX_PREPASS_BLOB_BYTES)
+                    {
+                        selected.insert(i);
+                        continue;
+                    }
+                    let keep = match repo.objects.find_blob(oid, buffer) {
+                        Ok(blob) => filter.may_match(blob.data)?,
+                        // Let normal loading report unreadable candidate objects rather
+                        // than classifying an I/O/decode failure as a clean blob.
+                        Err(_) => true,
+                    };
+                    if keep {
+                        selected.insert(i);
+                    } else {
+                        clean_blobs += 1;
+                        clean_bytes += buffer.len() as u64;
+                    }
+                    if buffer.capacity() > MAX_RETAINED_BUFFER {
+                        *buffer = Vec::new();
+                    }
+                }
+                filter.record_clean(clean_blobs, clean_bytes);
+                Ok(selected)
+            })
+            .collect();
+        let batches = batches?;
+        // Release worker delta caches before the serial metadata phase starts.
+        drop(workers);
+        let selected = batches.iter().map(|batch| batch.count_ones(..)).sum();
+        self.retain_blob_indexes(selected, |i| batches[i / BATCH_SIZE].contains(i % BATCH_SIZE));
+        debug!(
+            "Git content prepass retained {selected}/{num_blobs} blobs in {:.6}s",
+            started.elapsed().as_secs_f64()
+        );
+        Ok(())
+    }
+
+    fn retain_blob_indexes(&mut self, selected: usize, keep: impl Fn(usize) -> bool) {
+        let old = std::mem::replace(&mut self.blobs, ObjectIdBimap::with_capacity(0));
+        drop(old.oid_to_idx);
+        let mut candidates = ObjectIdBimap::with_capacity(selected);
+        for (i, oid) in old.idx_to_oid.into_iter().enumerate() {
+            if keep(i) {
+                candidates.insert(oid);
+            }
+        }
+        self.blobs = candidates;
+        self.content_filtered = true;
+    }
+
+    pub(crate) fn prepare_candidate_trees(
+        &mut self,
+        repo: &gix::ThreadSafeRepository,
+        deadline: Option<Instant>,
+        repo_path: &Path,
+    ) -> Result<()> {
+        let started = Instant::now();
+        let summaries = crate::git_candidate_summaries::CandidateSummaries::build(
+            self, repo, deadline, repo_path,
+        )?;
+        self.candidate_trees = Some(summaries.relevant());
+        self.candidate_summaries = Some(summaries);
+        debug!("Prepared bounded candidate summaries in {:.6}s", started.elapsed().as_secs_f64());
+        Ok(())
+    }
+
+    fn tree_is_covered(&self, idx: ObjectIdx, seen: &SeenObjectSet) -> bool {
+        self.candidate_summaries.as_ref().is_some_and(|s| s.covered(idx, &seen.seen_blobs))
+    }
+
+    pub(crate) fn compact_candidate_trees(&mut self, graph: &mut GitMetadataGraph) {
+        let Some(selected) = self.candidate_trees.take() else { return };
+        let original_count = self.trees.len();
+        let selected_count = selected.count_ones(..);
+        if selected_count == original_count {
+            return;
+        }
+        // Reserve u32::MAX as a temporary "not selected" sentinel. Keep the
+        // bitmap-based pruning path for repositories too large for that sentinel.
+        if u32::try_from(original_count).is_err() {
+            self.candidate_trees = Some(selected);
+            return;
+        }
+        let started = Instant::now();
+        if let Some(summaries) = &mut self.candidate_summaries {
+            summaries.retain(&selected);
+        }
+        let old = std::mem::replace(&mut self.trees, ObjectIdBimap::with_capacity(0));
+        drop(old.oid_to_idx);
+        let mut remap = vec![u32::MAX; original_count];
+        let mut trees = ObjectIdBimap::with_capacity(selected_count);
+        for (i, oid) in old.idx_to_oid.into_iter().enumerate() {
+            if selected.contains(i) {
+                remap[i] = ObjectIdx::new(trees.len()).0;
+                trees.insert(oid);
+            }
+        }
+        self.trees = trees;
+        // Build the commit graph against the complete index first, preserving
+        // missing-tree behavior and every parent edge. Irrelevant snapshots lose
+        // only their tree lookup; they must still propagate ancestor blob state.
+        for commit in graph.commits.node_weights_mut() {
+            commit.tree_idx = commit.tree_idx.and_then(|old| {
+                let new = remap[old.as_usize()];
+                (new != u32::MAX).then_some(ObjectIdx(new))
+            });
+        }
+        debug!(
+            "Compacted historical tree index from {original_count} to {selected_count} entries in {:.6}s",
+            started.elapsed().as_secs_f64()
+        );
     }
 }
 
@@ -357,7 +532,10 @@ impl GitMetadataGraph {
             max_frontier_size = max_frontier_size.max(commit_worklist.len() + 1);
             max_live_seen_sets = max_live_seen_sets.max(num_live_seen_sets);
             if let Some(tree_idx) = self.get_commit_metadata(commit_idx).tree_idx {
-                if seen.insert_tree(tree_idx)? {
+                if repo_index.is_candidate_tree(tree_idx)
+                    && !repo_index.tree_is_covered(tree_idx, &seen)
+                    && seen.insert_tree(tree_idx)?
+                {
                     tree_worklist.push((
                         SmallVec::new(),
                         repo_index.get_tree_oid(tree_idx).unwrap().to_owned(),
@@ -377,12 +555,15 @@ impl GitMetadataGraph {
                         deadline,
                     )?;
                 }
-            } else {
+            } else if !repo_index.content_filtered {
                 debug!(
                     "No tree index for {}; blob metadata may be incomplete",
                     self.get_commit_metadata(commit_idx).oid
                 );
             }
+            // Move the state into the last child without constructing replacement
+            // Arc bitmaps on every linear-history commit.
+            let mut seen = Some(seen);
             let mut edges = cg.edges_directed(commit_idx, Outgoing).peekable();
             while let Some(edge) = edges.next() {
                 let edge_index = edge.id().index();
@@ -393,13 +574,13 @@ impl GitMetadataGraph {
                 let child_idx = edge.target();
                 let child_seen = &mut seen_sets[child_idx.index()];
                 if let Some(child_seen) = child_seen {
-                    child_seen.union_update(&seen);
+                    child_seen.union_update(seen.as_ref().unwrap());
                 } else {
                     num_live_seen_sets += 1;
                     if edges.peek().is_none() {
-                        *child_seen = Some(std::mem::take(&mut seen));
+                        *child_seen = seen.take();
                     } else {
-                        *child_seen = Some(seen.clone());
+                        *child_seen = seen.clone();
                     }
                 }
                 let has_unvisited_parents = cg
@@ -417,9 +598,9 @@ impl GitMetadataGraph {
         let result: Vec<CommitBlobMetadata> = cg
             .node_weights()
             .zip(blobs_introduced)
-            .map(|(md, introduced_blobs)| CommitBlobMetadata {
-                commit_oid: md.oid,
-                introduced_blobs,
+            .filter_map(|(md, introduced_blobs)| {
+                (!introduced_blobs.is_empty())
+                    .then_some(CommitBlobMetadata { commit_oid: md.oid, introduced_blobs })
             })
             .collect();
         debug!(
@@ -432,6 +613,13 @@ impl GitMetadataGraph {
             num_blobs_introduced,
             t1.elapsed().as_secs_f64()
         );
+        if repo_index.content_filtered {
+            debug!(
+                "Resolved candidate metadata across {num_commits_visited} commits and \
+                 {num_trees_introduced} tree visits in {:.6}s",
+                t1.elapsed().as_secs_f64()
+            );
+        }
         Ok(result)
     }
 }
@@ -515,9 +703,26 @@ fn visit_tree(
                 EntryKind::Link | EntryKind::Commit => {}
                 EntryKind::Tree => {
                     let Some(child_idx) = repo_index.get_tree_index(child.oid) else {
-                        debug!("No index for {} in tree {tree_oid}", child.oid);
+                        if !repo_index.content_filtered {
+                            debug!("No index for {} in tree {tree_oid}", child.oid);
+                        }
                         continue;
                     };
+                    if !repo_index.is_candidate_tree(child_idx)
+                        || repo_index.tree_is_covered(child_idx, seen)
+                    {
+                        continue;
+                    }
+                    // Most child trees in a changed root were already visited in its
+                    // ancestry. Do not allocate/intern their paths just to discard them.
+                    // Excluded trees must still not be marked seen before path filtering.
+                    if exclude_globset.is_none() {
+                        if !seen.insert_tree(child_idx)? {
+                            continue;
+                        }
+                    } else if seen.contains_tree(child_idx)? {
+                        continue;
+                    }
                     let mut new_path = name_path.clone();
                     new_path.push(symbols.get_or_intern(child.filename.into()));
                     if exclude_globset.is_some() {
@@ -525,14 +730,15 @@ fn visit_tree(
                         if tree_path_is_excluded(&path, exclude_globset) {
                             continue;
                         }
+                        seen.insert_tree(child_idx)?;
                     }
-                    if seen.insert_tree(child_idx)? {
-                        tree_worklist.push((new_path, child.oid.to_owned()));
-                    }
+                    tree_worklist.push((new_path, child.oid.to_owned()));
                 }
                 EntryKind::Blob | EntryKind::BlobExecutable => {
                     let Some(child_idx) = repo_index.get_blob_index(child.oid) else {
-                        debug!("No blob index for {} in tree {tree_oid}", child.oid);
+                        if !repo_index.content_filtered {
+                            debug!("No blob index for {} in tree {tree_oid}", child.oid);
+                        }
                         continue;
                     };
                     if !seen.contains_blob(child_idx)? {
@@ -576,6 +782,40 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::git_repo_enumerator::{GitBlobSource, GitRepoWithMetadataEnumerator};
+
+    #[test]
+    fn ancestry_bitmaps_share_forks_until_their_contents_change() -> Result<()> {
+        use super::{ObjectIdx, SeenObjectSet};
+
+        let mut parent = SeenObjectSet::new();
+        parent.insert_tree(ObjectIdx::new(1))?;
+        parent.insert_blob(ObjectIdx::new(4))?;
+        let mut child = parent.clone();
+        assert!(Arc::ptr_eq(&parent.seen_trees, &child.seen_trees));
+        assert!(Arc::ptr_eq(&parent.seen_blobs, &child.seen_blobs));
+        assert!(!child.insert_tree(ObjectIdx::new(1))?);
+        assert!(!child.insert_blob(ObjectIdx::new(4))?);
+        assert!(Arc::ptr_eq(&parent.seen_trees, &child.seen_trees));
+        assert!(Arc::ptr_eq(&parent.seen_blobs, &child.seen_blobs));
+
+        child.insert_tree(ObjectIdx::new(2))?;
+        assert!(!Arc::ptr_eq(&parent.seen_trees, &child.seen_trees));
+        assert!(Arc::ptr_eq(&parent.seen_blobs, &child.seen_blobs));
+        assert!(!parent.contains_tree(ObjectIdx::new(2))?);
+        child.insert_blob(ObjectIdx::new(5))?;
+        assert!(!parent.contains_blob(ObjectIdx::new(5))?);
+
+        let mut merged = parent.clone();
+        merged.union_update(&parent);
+        assert!(Arc::ptr_eq(&parent.seen_trees, &merged.seen_trees));
+        assert!(Arc::ptr_eq(&parent.seen_blobs, &merged.seen_blobs));
+        merged.union_update(&child);
+        assert!(merged.contains_tree(ObjectIdx::new(2))?);
+        assert!(merged.contains_blob(ObjectIdx::new(5))?);
+        assert!(!parent.contains_tree(ObjectIdx::new(2))?);
+        assert!(!parent.contains_blob(ObjectIdx::new(5))?);
+        Ok(())
+    }
 
     #[test]
     fn parallel_object_index_matches_serial_pack_and_loose_order() -> Result<()> {
@@ -809,6 +1049,169 @@ mod tests {
                 .all(|appearance| appearance.path.to_str_lossy() != "excluded/secret.txt")
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn content_prepass_compacts_in_order_across_batches_and_keeps_large_blobs() -> Result<()> {
+        use kingfisher_vectorscan::{BlockDatabase, Flag, Pattern};
+
+        use super::RepositoryIndex;
+        use crate::{
+            git_candidates::GitContentFilter, limits::ResourceLimits, scanner_pool::ScannerPool,
+        };
+
+        let temp = tempdir()?;
+        let repo = Git2Repository::init_bare(temp.path())?;
+        let mut expected_ids = std::collections::HashSet::new();
+        for i in 0..2300 {
+            let candidate = i % 17 == 0;
+            let contents = if candidate {
+                format!("candidate_secret_{i:016x}")
+            } else {
+                format!("ordinary source file number {i} with no token")
+            };
+            let oid = repo.blob(contents.as_bytes())?;
+            if candidate {
+                expected_ids.insert(oid.to_string());
+            }
+        }
+        let large = repo.blob(&vec![b' '; 4 * 1024 * 1024 + 1])?;
+        expected_ids.insert(large.to_string());
+        let repo = open_opts(temp.path(), Options::isolated())?.into_sync();
+        let filter = GitContentFilter::new(
+            Arc::new(ScannerPool::new(Arc::new(BlockDatabase::new(vec![Pattern::new(
+                b"candidate_secret_[a-z0-9]{16}".to_vec(),
+                Flag::default(),
+                Some(0),
+            )])?))),
+            1,
+            false,
+            true,
+            ResourceLimits::default(),
+        );
+        let pool = rayon::ThreadPoolBuilder::new().num_threads(4).build()?;
+        pool.install(|| -> Result<()> {
+            let mut index = RepositoryIndex::new_with_deadline(&repo, None, temp.path())?;
+            let expected: Vec<_> = index
+                .blobs
+                .idx_to_oid
+                .iter()
+                .filter(|oid| expected_ids.contains(&oid.to_string()))
+                .copied()
+                .collect();
+            index.retain_content_candidates(&repo, &filter, None, temp.path())?;
+            assert_eq!(index.blobs.idx_to_oid, expected);
+            assert_eq!(index.blobs.len(), expected_ids.len());
+            assert_eq!(filter.clean_stats().blobs_scanned, 2300 - (expected_ids.len() - 1) as u64);
+
+            let mut index = RepositoryIndex::new_with_deadline(&repo, None, temp.path())?;
+            assert!(
+                index
+                    .retain_content_candidates(
+                        &repo,
+                        &filter,
+                        Some(std::time::Instant::now()),
+                        temp.path(),
+                    )
+                    .is_err()
+            );
+            assert_eq!(index.blobs.len(), 2301);
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn candidate_tree_summary_is_transitive_path_independent_and_bounded() -> Result<()> {
+        use kingfisher_vectorscan::{BlockDatabase, Flag, Pattern};
+
+        use super::RepositoryIndex;
+        use crate::{
+            git_candidates::GitContentFilter, limits::ResourceLimits, scanner_pool::ScannerPool,
+        };
+
+        let temp = tempdir()?;
+        let repo = Git2Repository::init_bare(temp.path())?;
+        let candidate = repo.blob(b"candidate_secret_0123456789abcdef")?;
+        let clean = repo.blob(b"ordinary source file without matching credentials")?;
+        let mut builder = repo.treebuilder(None)?;
+        builder.insert("secret.txt", candidate, 0o100644)?;
+        let relevant_leaf = builder.write()?;
+        let mut builder = repo.treebuilder(None)?;
+        builder.insert("clean.txt", clean, 0o100644)?;
+        let clean_leaf = builder.write()?;
+        let mut builder = repo.treebuilder(None)?;
+        builder.insert("link", candidate, 0o120000)?;
+        let links_only = builder.write()?;
+        let mut parent = relevant_leaf;
+        let mut relevant = vec![relevant_leaf];
+        for _ in 0..80 {
+            let mut builder = repo.treebuilder(None)?;
+            builder.insert("child", parent, 0o040000)?;
+            builder.insert("clean", clean_leaf, 0o040000)?;
+            parent = builder.write()?;
+            relevant.push(parent);
+        }
+        let repo = open_opts(temp.path(), Options::isolated())?.into_sync();
+        for threads in [1, 4] {
+            let pool = rayon::ThreadPoolBuilder::new().num_threads(threads).build()?;
+            pool.install(|| -> Result<()> {
+                let filter = GitContentFilter::new(
+                    Arc::new(ScannerPool::new(Arc::new(BlockDatabase::new(vec![Pattern::new(
+                        b"candidate_secret_[a-z0-9]{16}".to_vec(),
+                        Flag::default(),
+                        Some(0),
+                    )])?))),
+                    1,
+                    false,
+                    false,
+                    ResourceLimits::default(),
+                );
+                let mut index = RepositoryIndex::new_with_deadline(&repo, None, temp.path())?;
+                index.retain_content_candidates(&repo, &filter, None, temp.path())?;
+                index.prepare_candidate_trees(&repo, None, temp.path())?;
+                for oid in &relevant {
+                    let oid = gix::ObjectId::from_hex(oid.to_string().as_bytes())?;
+                    assert!(index.is_candidate_tree(index.get_tree_index(&oid).unwrap()));
+                }
+                for oid in [clean_leaf, links_only] {
+                    let oid = gix::ObjectId::from_hex(oid.to_string().as_bytes())?;
+                    assert!(!index.is_candidate_tree(index.get_tree_index(&oid).unwrap()));
+                }
+                let mut graph = super::GitMetadataGraph::with_capacity(relevant.len() + 2);
+                let mut relevant_nodes = Vec::new();
+                // Synthetic graph IDs suffice here: only tree-index remapping is tested.
+                for oid in &relevant {
+                    let oid = gix::ObjectId::from_hex(oid.to_string().as_bytes())?;
+                    let node = graph.get_commit_idx(oid, index.get_tree_index(&oid));
+                    relevant_nodes.push((node, oid));
+                }
+                let mut clean_nodes = Vec::new();
+                for oid in [clean_leaf, links_only] {
+                    let oid = gix::ObjectId::from_hex(oid.to_string().as_bytes())?;
+                    clean_nodes.push(graph.get_commit_idx(oid, index.get_tree_index(&oid)));
+                }
+                index.compact_candidate_trees(&mut graph);
+                assert_eq!(index.num_trees(), relevant.len());
+                for (node, oid) in relevant_nodes {
+                    let tree = graph.get_commit_metadata(node).tree_idx.unwrap();
+                    assert_eq!(index.get_tree_oid(tree), Some(oid.as_ref()));
+                }
+                for node in clean_nodes {
+                    assert!(graph.get_commit_metadata(node).tree_idx.is_none());
+                }
+                assert!(
+                    index
+                        .prepare_candidate_trees(
+                            &repo,
+                            Some(std::time::Instant::now()),
+                            temp.path()
+                        )
+                        .is_err()
+                );
+                Ok(())
+            })?;
+        }
         Ok(())
     }
 }

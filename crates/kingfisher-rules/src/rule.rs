@@ -83,6 +83,33 @@ pub enum Validation {
     Grpc(GrpcValidation),
 }
 
+impl Validation {
+    /// Return an inspection copy with literal OAuth2 operator credentials redacted.
+    ///
+    /// Environment variable names, client IDs and other validation metadata are
+    /// preserved. This does not resolve environment variables or mutate the
+    /// executable configuration; ordinary `Serialize` remains lossless.
+    pub fn redacted_for_inspection(&self) -> Self {
+        let mut inspected = self.clone();
+        if let Self::Http(http) = &mut inspected
+            && let Some(auth) = &mut http.auth
+        {
+            let credentials = &mut auth.oauth2.ropc;
+            for value in [
+                &mut credentials.username,
+                &mut credentials.password,
+                &mut credentials.client_secret,
+            ]
+            .into_iter()
+            .flatten()
+            {
+                *value = "[REDACTED]".into();
+            }
+        }
+        inspected
+    }
+}
+
 /// A Betterleaks validation expression parsed at snapshot-generation time.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 pub struct BetterleaksValidation {
@@ -275,10 +302,32 @@ pub enum EthereumValidation {
 pub enum Revocation {
     AWS,
     GCP,
-    Http(HttpValidation),
+    Http(#[serde(deserialize_with = "deserialize_http_revocation")] HttpValidation),
     /// Multi-step HTTP revocation (up to 2 steps).
     /// Some services require looking up an ID before deletion.
     HttpMultiStep(HttpMultiStepRevocation),
+}
+
+fn deserialize_http_revocation<'de, D>(
+    deserializer: D,
+) -> std::result::Result<HttpValidation, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Ignore auth's contents rather than parse operator credentials for an
+    // unsupported action. Even malformed auth must produce a credential-free error.
+    #[derive(Deserialize)]
+    struct HttpRevocation {
+        request: HttpRequest,
+        multipart: Option<MultipartConfig>,
+        #[serde(default)]
+        auth: Option<serde::de::IgnoredAny>,
+    }
+    let http = HttpRevocation::deserialize(deserializer)?;
+    if http.auth.is_some() {
+        return Err(serde::de::Error::custom("OAuth2 auth is supported for validation only"));
+    }
+    Ok(HttpValidation { request: http.request, multipart: http.multipart, auth: None })
 }
 
 /// Configuration for multi-step HTTP revocation.
@@ -574,6 +623,62 @@ pub enum PatternValidationResult {
 pub struct HttpValidation {
     pub request: HttpRequest,
     pub multipart: Option<MultipartConfig>,
+    /// Authentication for a configured verification service, separate from the candidate secret.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auth: Option<Box<HttpValidationAuth>>,
+}
+
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct HttpValidationAuth {
+    pub oauth2: OAuth2Config,
+}
+
+/// OAuth2 password-grant authentication for an explicitly configured verifier.
+/// Values are operator configuration, never templates populated from findings.
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct OAuth2Config {
+    pub token_endpoint: String,
+    #[serde(default = "default_token_header")]
+    pub token_header: String,
+    pub ropc: OAuth2PasswordCredentials,
+}
+
+fn default_token_header() -> String {
+    "Authorization".into()
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct OAuth2PasswordCredentials {
+    #[serde(default)]
+    pub username: Option<String>,
+    #[serde(default)]
+    pub username_env: Option<String>,
+    #[serde(default)]
+    pub password: Option<String>,
+    #[serde(default)]
+    pub password_env: Option<String>,
+    pub client_id: String,
+    #[serde(default)]
+    pub client_secret: Option<String>,
+    #[serde(default)]
+    pub client_secret_env: Option<String>,
+    #[serde(default)]
+    pub scope: Option<String>,
+}
+
+impl fmt::Debug for OAuth2Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuth2Config").finish_non_exhaustive()
+    }
+}
+
+impl fmt::Debug for OAuth2PasswordCredentials {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuth2PasswordCredentials").finish_non_exhaustive()
+    }
 }
 
 /// Configuration for gRPC validation.
@@ -1161,6 +1266,119 @@ impl Rule {
 mod tests {
     use super::*;
     use regex::bytes::Regex as BytesRegex;
+
+    #[test]
+    fn http_revocation_rejects_oauth2_auth_during_deserialization() {
+        let password = "operator-password-secret";
+        let client_secret = "operator-client-secret";
+        for auth in [
+            serde_json::json!({"oauth2": {
+                "token_endpoint": "https://idp.example.com/token",
+                "ropc": {"username": "operator", "password": password,
+                         "client_id": "scanner", "client_secret": client_secret}
+            }}),
+            // Malformed auth must be rejected without reporting any of its values.
+            serde_json::json!({"oauth2": {"ropc": {
+                "password": [password], "client_secret": {"secret": client_secret}
+            }}}),
+        ] {
+            let definition = serde_json::json!({"type": "Http", "content": {
+                "auth": auth,
+                "request": {"method": "DELETE", "url": "https://api.example.com/token",
+                    "response_matcher": [{"type": "StatusMatch", "status": [204]}]}
+            }});
+            let json_error = serde_json::from_value::<Revocation>(definition.clone()).unwrap_err();
+            let yaml = serde_yaml::to_string(&definition).unwrap();
+            let yaml_error = serde_yaml::from_str::<Revocation>(&yaml).unwrap_err();
+            for error in [json_error.to_string(), yaml_error.to_string()] {
+                assert!(error.contains("OAuth2 auth is supported for validation only"));
+                assert!(!error.contains(password));
+                assert!(!error.contains(client_secret));
+            }
+            let document = serde_json::json!({"rules": [{
+                "id": "acme.revocation-auth", "name": "Revocation auth fixture",
+                "pattern": "(synthetic-secret)", "revocation": definition
+            }]});
+            let yaml = serde_yaml::to_string(&document).unwrap();
+            let error = crate::Rules::from_paths_and_contents(
+                [(Path::new("revocation-auth.yml"), yaml.as_bytes())],
+                Confidence::Low,
+            )
+            .err()
+            .expect("unsupported auth must fail during rule loading");
+            assert!(!error.to_string().contains(password));
+            assert!(!error.to_string().contains(client_secret));
+        }
+    }
+
+    #[test]
+    fn supported_revocation_definitions_preserve_defaults_and_round_trip() {
+        for definition in [
+            serde_json::json!({"type": "AWS"}),
+            serde_json::json!({"type": "GCP"}),
+            serde_json::json!({"type": "Http", "content": {
+                "request": {"method": "DELETE", "url": "https://api.example.com/token"}
+            }}),
+            serde_json::json!({"type": "Http", "content": {
+                "auth": null,
+                "request": {"method": "DELETE", "url": "https://api.example.com/token"}
+            }}),
+            serde_json::json!({"type": "HttpMultiStep", "content": {"steps": [{
+                "request": {"method": "DELETE", "url": "https://api.example.com/token"}
+            }]}}),
+        ] {
+            let revocation: Revocation = serde_json::from_value(definition).unwrap();
+            let serialized = serde_json::to_value(&revocation).unwrap();
+            assert_eq!(serde_json::from_value::<Revocation>(serialized).unwrap(), revocation);
+            let yaml = serde_yaml::to_string(&revocation).unwrap();
+            assert_eq!(serde_yaml::from_str::<Revocation>(&yaml).unwrap(), revocation);
+            if let Revocation::Http(http) = revocation {
+                assert!(http.auth.is_none());
+                assert!(http.multipart.is_none());
+                assert!(http.request.headers.is_empty());
+                assert!(!http.request.response_is_html);
+            }
+        }
+    }
+
+    #[test]
+    fn oauth2_inspection_redacts_literals_without_changing_lossless_serialization() {
+        for credentials in [
+            serde_json::json!({"username": "operator-user-secret", "password": "operator-password-secret",
+                "client_id": "scanner", "client_secret": "operator-client-secret"}),
+            serde_json::json!({"username_env": "KF_OPERATOR_USERNAME", "password_env": "KF_OPERATOR_PASSWORD",
+                "client_id": "scanner", "client_secret_env": "KF_OPERATOR_CLIENT_SECRET"}),
+        ] {
+            let validation: Validation = serde_json::from_value(serde_json::json!({
+                "type": "Http", "content": {
+                    "auth": {"oauth2": {"token_endpoint": "https://idp.example.com/token", "ropc": credentials}},
+                    "request": {"method": "GET", "url": "https://verifier.example.com/verify"}
+                }
+            })).unwrap();
+            let original = serde_json::to_value(&validation).unwrap();
+            let inspected = validation.redacted_for_inspection();
+            let redacted = serde_json::to_value(&inspected).unwrap();
+            let credentials = &redacted["content"]["auth"]["oauth2"]["ropc"];
+            for field in ["username", "password", "client_secret"] {
+                let expected = if original["content"]["auth"]["oauth2"]["ropc"][field].is_null() {
+                    serde_json::Value::Null
+                } else {
+                    serde_json::json!("[REDACTED]")
+                };
+                assert_eq!(credentials[field], expected);
+            }
+            for field in ["username_env", "password_env", "client_secret_env", "client_id", "scope"]
+            {
+                assert_eq!(
+                    credentials[field],
+                    original["content"]["auth"]["oauth2"]["ropc"][field]
+                );
+            }
+            assert_eq!(redacted["content"]["auth"]["oauth2"]["token_header"], "Authorization");
+            assert_eq!(serde_json::to_value(&validation).unwrap(), original);
+            assert_eq!(serde_json::from_value::<Validation>(original).unwrap(), validation);
+        }
+    }
 
     #[test]
     fn test_pattern_requirements_digits() {

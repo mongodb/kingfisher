@@ -8,6 +8,7 @@ This guide covers all scan targets and usage patterns for Kingfisher.
 - [Scanning Platform-Specific Targets](#scanning-platform-specific-targets)
   - [AWS S3](#aws-s3)
   - [Google Cloud Storage](#google-cloud-storage)
+  - [Azure Blob Storage](#azure-blob-storage)
   - [Docker Images](#docker-images)
   - [GitHub](#github)
   - [GitLab](#gitlab)
@@ -519,7 +520,12 @@ for responder credentials, regions, and AWS action selection.
 
 ### Limit maximum file size scanned (`--max-file-size`)
 
-By default, Kingfisher skips files larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**. Use `--max-file-size 0` for unlimited file size, or `--no-limits` to disable scan resource budgets and timeouts.
+By default, Kingfisher skips files larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**. Use `--max-file-size 0` for unlimited file size, or `--no-limits` to lift content-size, depth, and count limits while retaining timeouts.
+
+Since 2.14.0, disabling scan operation deadlines requires `--no-timeouts` explicitly.
+Combine it with `--no-limits` to opt out of both policies; stalled operations can
+then wait indefinitely. See [unlimited scans](ADVANCED.md#unlimited-scans) for the
+scope and retained safeguards.
 
 ```bash
 # Scan files up to 500 mb in size
@@ -633,10 +639,10 @@ Use `--since-hours <HOURS>` to scan recent Git changes without choosing a baseli
 git clone --no-checkout --no-single-branch "$REPO_URL" ./repo
 
 # Scan commits from the last 24 hours across all available refs.
-kingfisher scan ./repo --since-hours 24 --git-history full --format toon
+kingfisher scan ./repo --since-hours 24 --git-history full --format json
 
 # Restrict the same window to one branch.
-kingfisher scan ./repo --since-hours 24 --branch origin/main --format toon
+kingfisher scan ./repo --since-hours 24 --branch origin/main --format json
 ```
 
 `--git-history full` is the default, so it may be omitted. `--since-commit` is not needed.
@@ -674,7 +680,7 @@ With the default `--git-history full`, `--since-commit <baseline>` scans changes
 For example, after cloning all branches, scan their available history with:
 
 ```bash
-kingfisher scan ./repo --since-commit "$BASE_COMMIT" --git-history full --format toon
+kingfisher scan ./repo --since-commit "$BASE_COMMIT" --git-history full --format json
 ```
 
 Only refs and history present in the local clone can be scanned. Shallow boundaries limit traversal; a boundary commit whose parent is unavailable is scanned as a full tree. The baseline must resolve locally. `--since-commit` is an ancestry boundary, not a time filter: divergent branches may include older commits outside the baseline’s ancestry.
@@ -788,6 +794,62 @@ You can scan S3 objects directly:
 kingfisher scan s3 bucket-name [--prefix path/]
 ```
 
+### Focus a scan and reuse downloaded objects
+
+Repeat the four object filters to select multiple prefixes and extensions:
+
+```bash
+kingfisher scan s3 shared-bucket \
+  --path-prefix configs/ --path-prefix deployments/ \
+  --skip-path-prefix configs/generated/ \
+  --file-extension json --file-extension yaml --file-extension env \
+  --skip-file-extension bak --format json
+```
+
+Prefix comparisons are literal and case sensitive: `configs` also matches
+`configs2/`. Use a trailing slash (`configs/`) to select a directory. Extensions
+match the final filename suffix, ignore case, and accept a leading dot; `env` includes `.env`.
+Exclusions take precedence. Folder-marker objects are skipped. Filters are
+applied before `GetObject`, so excluded objects are never downloaded.
+`--prefix` keeps its existing single-scope meaning. When combined with
+`--path-prefix`, the scan uses their intersection and never expands that scope.
+
+Included prefixes are pushed into `ListObjectsV2` requests. Duplicate and nested
+prefixes collapse into disjoint listing scopes, and each scope paginates
+independently. An identity restricted by an IAM `s3:prefix` condition can scan
+its permitted scopes without listing the bucket root. Grant `s3:ListBucket` for
+those prefixes and `s3:GetObject` for the selected objects. The scoped listing
+itself checks access; no unscoped bucket-list probe is required.
+
+Add `--object-cache-dir ./s3-state` to save page checkpoints and downloaded content:
+
+```bash
+kingfisher scan s3 shared-bucket --path-prefix configs/ \
+  --object-cache-dir ./s3-state --profile security --format json
+```
+
+Repeat the command after interruption to resume each scoped listing from its
+last completed page. Completed pages are replayed from local content, so the
+new report includes those findings too. After a completed run, the next run
+lists afresh and downloads only new or changed objects, comparing ETag,
+last-modified time and size. Cached objects are scanned again under the current
+rules and deleted objects disappear from the report. Objects without an ETag
+are always downloaded. The cache root stores each source in a separate hashed
+subdirectory. S3, GCS, Azure Blob containers and Hugging Face buckets can share a
+root. Each source entry is bound to its exact selection policy; use a different
+root when changing that policy. Concurrent use of the same source entry is rejected. Page checkpoints
+append only that page’s metadata; a successful scan compacts the full manifest once,
+avoiding repeated rewrites of all earlier objects. An interrupted final append is
+discarded on resume, and its unfinished page is listed again.
+
+The state directory contains source object content, which may include secrets;
+store it with the same access controls as the source. Object keys are hashed
+into local filenames, and cached content is checked against saved digests. Keep
+the complete directory to resume; deleting it starts
+a fresh scan. Resumption covers the interrupted listing, rather than an atomic
+snapshot of a bucket changing during the scan. If S3 expires a saved listing
+token, use a fresh state directory to list again.
+
 Credential resolution happens in this order:
 
 1. `KF_AWS_KEY` and `KF_AWS_SECRET` environment variables (optionally `KF_AWS_SESSION_TOKEN` for temporary credentials)
@@ -855,6 +917,92 @@ kingfisher scan gcs cloud-samples-data --prefix "storage/"
 ```
 
 ---
+
+GCS supports the same shared path and extension selection as S3, with prefixes
+sent directly to the object-list API. Repeat the flags to choose multiple scopes:
+
+```bash
+kingfisher scan gcs bucket-name \
+  --path-prefix configs/ --path-prefix deployments/ \
+  --skip-path-prefix configs/generated/ --file-extension env \
+  --object-cache-dir ./object-cache --format json
+```
+
+`--prefix` intersects with `--path-prefix`. Exclusions are checked before object
+downloads. Cache checkpoints resume each scope independently; completed pages
+are replayed into the new report. Fresh runs list again and use object generation,
+modification time and size to reuse unchanged content. Downloads request the
+listed generation. If that generation disappears, Kingfisher refreshes the object
+metadata and retries once with the current generation. Deleted or repeatedly changing
+objects are skipped with a warning and reconsidered on the next scan; permission
+errors still fail the scan. Cached content always retains the generation actually
+downloaded. Objects without a generation or ETag are downloaded again.
+
+## Azure Blob Storage
+
+Scan the current blobs in one container by passing its HTTPS URL. Use a URL without
+credentials or query parameters; keep SAS tokens in the environment. Sovereign-cloud
+and custom Blob endpoints work with the same syntax. For Azure DevOps repositories,
+use [Azure Repos](#azure-repos).
+
+```bash
+# Container-level SAS with read (r) and list (l) permissions
+KF_AZURE_STORAGE_SAS="sv=...&sp=rl&sig=..." kingfisher scan azure-blob \
+  https://myaccount.blob.core.windows.net/my-container --format json
+
+# Apply shared selection before downloading and save resumable checkpoints/content
+KF_AZURE_STORAGE_SAS="sv=...&sp=rl&sig=..." kingfisher scan azure-blob \
+  https://myaccount.blob.core.windows.net/my-container \
+  --path-prefix configs/ --path-prefix deploy/ --skip-path-prefix configs/generated/ \
+  --file-extension env --file-extension json --skip-file-extension bak \
+  --object-cache-dir ./object-cache --format json
+
+# Account key; signing account is inferred from standard *.blob.core.* endpoints
+KF_AZURE_STORAGE_KEY="..." kingfisher scan azure-blob \
+  https://myaccount.blob.core.windows.net/my-container --format json
+
+# Existing Microsoft Entra token for the Storage resource
+KF_AZURE_STORAGE_TOKEN="..." kingfisher scan azure-blob \
+  https://myaccount.blob.core.windows.net/my-container --format json
+
+# Public container with anonymous list/read access: omit all storage credentials
+kingfisher scan azure-blob https://myaccount.blob.core.windows.net/public --format json
+
+# Azurite or a custom endpoint: specify the signing account explicitly
+KF_AZURE_STORAGE_ACCOUNT="devstoreaccount1" KF_AZURE_STORAGE_KEY="..." \
+  kingfisher scan azure-blob http://127.0.0.1:10000/devstoreaccount1/my-container --format json
+```
+
+Set exactly one authentication variable: `KF_AZURE_STORAGE_SAS`,
+`KF_AZURE_STORAGE_KEY` (base64 account key), or `KF_AZURE_STORAGE_TOKEN`
+(bearer access token). Set `KF_AZURE_STORAGE_ACCOUNT` with a key when using a custom
+hostname or emulator. These variables are separate from Azure Repos PATs.
+Entra tokens need Storage data-plane access, such as the **Storage Blob Data Reader**
+role; acquire a token for `https://storage.azure.com/` that stays valid for the scan.
+Kingfisher uses the supplied token directly and does not acquire or refresh it.
+Anonymous scans require container-level public listing as well as blob reading.
+
+Prefixes are container-relative and literal; repeat `--path-prefix` to scan several
+scopes. Nested scopes are collapsed, skip selectors win, and extensions are matched
+case-insensitively. Listing follows continuation markers even through empty pages
+and rejects cycles. Downloads first use the listed ETag as an `If-Match` condition.
+If a concurrent replacement returns HTTP 412, Kingfisher fetches the current blob
+once and caches it with its response ETag, never the stale listing identity. A blob
+deleted after listing is skipped with a warning and reconsidered on the next scan.
+Other download errors still fail the scan.
+`--max-file-size` is applied before downloads where sizes are available and while
+reading response bodies. Requests have a 30-second deadline unless `--no-timeouts`
+is set; throttling and service-unavailable responses have bounded retries.
+
+`--object-cache-dir` shares the [object cache behavior](#focus-a-scan-and-reuse-downloaded-objects)
+used by the other storage sources: resume completed pages after interruption,
+rescan cached content for complete reports, and download only changed blobs on a
+subsequent completed run. Protect the directory as sensitive scan input. The cache
+identity includes the endpoint and container, excludes credentials, and binds the
+selection and size policy. Start a different cache directory after changing that
+policy. Listings cover current blobs, excluding snapshots and deleted versions;
+archive-tier blobs must already be readable. HTTP is accepted only for loopback
+emulators, and redirects are rejected.
 
 ## Docker Images
 
@@ -925,6 +1073,14 @@ kingfisher scan docker --archive image.tar.gz
 
 ## GitHub
 
+GitHub API reads during discovery and repository-artifact fetching retry HTTP
+`5xx`, `429`, and rate-limited `403` responses automatically. Each request allows
+up to three retries and two minutes of total retry waiting. Kingfisher honors
+`Retry-After` and exhausted-quota `X-RateLimit-Reset` headers; a cooldown beyond
+the remaining wait budget is reported immediately. Without a cooldown header,
+server errors use exponential backoff with jitter, and rate limits wait at least
+one minute. Authentication and permission errors are not retried.
+
 ### Scan a GitHub organization
 
 ```bash
@@ -946,10 +1102,12 @@ export KF_GITHUB_APP_PRIVATE_KEY_PATH='~/.config/kingfisher/app.pem'
 kingfisher scan github --organization my-org
 ```
 
-The App installation needs read access to repository contents. Kingfisher uses
-an installation token for API enumeration and mints a new installation token
-immediately before every repository clone or update, so scans can run longer
-than the one-hour installation-token lifetime. Set the private key directly in
+The App installation needs read access to repository contents. Kingfisher caches
+installation tokens in memory and shares them across API and clone workers. Before
+a clone or update, workers reuse the token or coordinate a single refresh within
+one minute of expiry. Token exchanges retry transient errors and rate limits with
+bounded backoff; failed refreshes share a cooldown to avoid request bursts.
+Set the private key directly in
 `KF_GITHUB_APP_PRIVATE_KEY` when a secret manager supplies PEM content instead
 of a file. Set only one of the private-key variables.
 
@@ -969,7 +1127,7 @@ precedence over `KF_GITHUB_TOKEN`; an incomplete configuration is rejected.
 ### Scan many GitHub users
 
 ```bash
-kingfisher scan github --user-file github-users.txt --user additional-user --format toon
+kingfisher scan github --user-file github-users.txt --user additional-user --format json
 ```
 
 Use one username per line. Blank lines and lines beginning with `#` are ignored;
@@ -1025,7 +1183,7 @@ public gists with full Git history. Gists also appear in `--list-only` output an
 count toward `--repo-clone-limit`.
 
 ```bash
-kingfisher scan github --user alice --include-gists --format toon
+kingfisher scan github --user alice --include-gists --format json
 kingfisher scan github --user alice --include-gists --list-only
 ```
 
@@ -1161,7 +1319,7 @@ kingfisher scan gitlab --user johndoe
 ### Scan many GitLab users
 
 ```bash
-kingfisher scan gitlab --user-file gitlab-users.txt --user additional-user --format toon
+kingfisher scan gitlab --user-file gitlab-users.txt --user additional-user --format json
 ```
 
 The file uses the same format and deduplication as GitHub user files, including
@@ -1180,7 +1338,7 @@ are cloned and scanned with full Git history by default, and are included in
 `--list-only` output. Snippets count toward `--repo-clone-limit`.
 
 ```bash
-kingfisher scan gitlab --user alice --include-snippets --format toon
+kingfisher scan gitlab --user alice --include-snippets --format json
 kingfisher scan gitlab --group my-group --include-subgroups --include-snippets
 kingfisher scan gitlab --user alice --include-snippets --list-only
 ```
@@ -1337,6 +1495,20 @@ kingfisher scan gitlab --group my-group --gitlab-exclude my-group/**/legacy-* --
 
 ## Azure Repos
 
+Azure Repos uses shared Git path selection. The same options work for GitHub,
+GitLab, Bitbucket, Gitea and Hugging Face repositories:
+
+```bash
+kingfisher scan azure --organization my-org --path-prefix configs/ \
+  --skip-path-prefix configs/generated/ --file-extension env --format json
+```
+
+Selection uses repository-relative paths before reading Git blobs. Only selected
+appearances of shared blobs enter the report. Repository cloning still transfers
+Git objects; path selection does not make the clone a partial file download.
+Use [`azure-blob`](#azure-blob-storage) for Azure Blob Storage containers.
+`--object-cache-dir` applies to S3, GCS, Azure Blob and Hugging Face storage scans.
+
 ### Scan Azure Repos organization or collection (requires `KF_AZURE_TOKEN` or `KF_AZURE_PAT`)
 
 ```bash
@@ -1452,7 +1624,7 @@ access, including private snippets permitted by their credentials. Snippets are
 scanned with full Git history and appear in `--list-only` output.
 
 ```bash
-kingfisher scan bitbucket --workspace my-team --include-snippets --format toon
+kingfisher scan bitbucket --workspace my-team --include-snippets --format json
 kingfisher scan bitbucket --user alice --include-snippets --list-only
 kingfisher scan bitbucket --all-workspaces --include-snippets
 ```
@@ -1569,6 +1741,25 @@ Use `--huggingface-exclude` to omit results returned by user or organization
 enumeration. Prefix values with `model:`, `dataset:`, `space:`, or `bucket:`
 when you only want to skip a specific resource type.
 
+### Focus Hugging Face buckets and reuse downloaded objects
+
+```bash
+kingfisher scan huggingface --bucket owner/data \
+  --path-prefix configs/ --path-prefix deployments/ \
+  --skip-path-prefix configs/generated/ --file-extension json \
+  --object-cache-dir ./object-cache --format json
+```
+
+The selection intersects any prefix in the bucket URI. Overlapping targets and
+prefixes are combined before listing, and object filters run before downloads.
+The existing `--exclude` globs and file-size limit still apply. Page checkpoints
+resume an interrupted listing and replay completed pages into a complete report.
+Later runs list again and use content hashes, or an available ETag, to reuse
+unchanged files. Files without a version identifier are downloaded again.
+Pagination links must stay on the configured listing origin and path; cycles
+fail clearly. Path and extension selection also applies to models, datasets and
+Spaces through their shared Git scanner.
+
 ### List Hugging Face scan targets
 
 ```bash
@@ -1587,6 +1778,28 @@ also honours `KF_HUGGINGFACE_USERNAME` (default `hf_user`).
 ---
 
 ## Jira
+
+Kingfisher checks API reachability and credentials before downloading issue
+artifacts. Requests use a 30-second timeout unless `--no-timeouts` is set.
+Rate-limited requests retry at most three times, honoring numeric `Retry-After`
+values up to 30 seconds per retry, then fail with an explicit error.
+
+Use repeatable `--skip-project KEY` flags to omit projects regardless of key
+casing. Exclusions are combined with your JQL through the same paginated search;
+`ORDER BY` is preserved. For example:
+
+```bash
+kingfisher scan jira --url https://example.atlassian.net \
+  --jql 'updated >= -30d ORDER BY updated DESC' \
+  --skip-project archive --skip-project SANDBOX --all --format json
+```
+
+Site URLs may include a reverse-proxy context such as `/jira`, or an explicit
+API root such as `/jira/rest/api/2` or `/rest/api/3`. URLs must not contain query
+parameters or fragments; use `--jql` for search expressions. Standard Cloud sites use the
+Cloud cursor search API; for Cloud on a custom domain, pass its `/rest/api/3`
+root explicitly. Server/Data Center uses offset pagination and makes no
+Cloud-only per-project status requests.
 
 ### Scan Jira issues matching a JQL query
 
@@ -1640,6 +1853,14 @@ Pass `--all` instead of `--max-results` to keep paging for as long as Jira retur
 ---
 
 ## Confluence
+
+Pagination follows the server's cursor or offset links, including through empty
+permission-filtered pages; repeated links fail clearly. Pagination stays on the
+configured API origin and context path. URLs may include `/wiki`, another
+self-hosted context, or an explicit `/rest/api` root. On a custom domain serving
+Cloud under `/wiki`, include that path explicitly. Rate limits retry at most
+three times with bounded delays, and requests time out after 30 seconds unless
+`--no-timeouts` is set.
 
 ### Scan Confluence pages matching a CQL query
 
@@ -1886,6 +2107,10 @@ not be attempted and may need additional context.
 | `KF_GITEA_USERNAME` | Username for private Gitea clones (used with `KF_GITEA_TOKEN`) |
 | `KF_AZURE_TOKEN` / `KF_AZURE_PAT` | Azure Repos Personal Access Token |
 | `KF_AZURE_USERNAME` | Username to use with Azure Repos PATs (defaults to `pat` when unset) |
+| `KF_AZURE_STORAGE_SAS` | Azure Blob SAS query string with read/list permission |
+| `KF_AZURE_STORAGE_KEY` | Azure Storage base64 account key |
+| `KF_AZURE_STORAGE_ACCOUNT` | Signing account for Blob account keys on custom endpoints or emulators |
+| `KF_AZURE_STORAGE_TOKEN` | Microsoft Entra bearer access token for the Storage resource |
 | `KF_BITBUCKET_TOKEN` | Bitbucket Cloud workspace API token or Bitbucket Server PAT |
 | `KF_BITBUCKET_USERNAME` | Optional Bitbucket username for legacy app passwords or server tokens |
 | `KF_BITBUCKET_APP_PASSWORD` | Legacy Bitbucket app password (deprecated September 9, 2025; disabled June 9, 2026) |

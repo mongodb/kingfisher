@@ -13,13 +13,68 @@ use kingfisher::{
             RulesListOutputFormat,
         },
     },
+    matcher::{rule_matches_example, rule_matches_example_ignoring_substrings},
     rule_loader::RuleLoader,
     rules_database::{
         RuleCacheConfig, RuleCachePruneConfig, RuleCacheStatus, RulesDatabase, prune_rule_cache,
     },
 };
 use serde_json::json;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
+
+/// Explain rejected examples and preserve the legacy warning for ignored substrings.
+/// The matcher is authoritative; this is called only after all matches in an example are rejected.
+/// Returns true when every regex match reaches substring rejection; the caller must still
+/// check the other scan-time filters before treating the example as a warning.
+fn print_pattern_requirement_failures(
+    rule: &kingfisher::rules::rule::Rule,
+    re: &regex::bytes::Regex,
+    example: &str,
+) -> bool {
+    use kingfisher_rules::{PatternRequirementContext, PatternValidationResult};
+    use kingfisher_scanner::primitives::find_secret_capture_with_group;
+
+    let Some(requirements) = rule.pattern_requirements() else {
+        return false;
+    };
+    // Mirror the shared primitive's input choice for diagnostics: named/multiple captures use
+    // the full match, while a single unnamed capture uses the selected secret.
+    let use_full_match = re.capture_names().any(|name| name.is_some()) || re.captures_len() > 2;
+    let mut saw_ignored_match = false;
+    let mut only_ignored_matches = true;
+    for captures in re.captures_iter(example.as_bytes()) {
+        let full_match = captures.get(0).expect("a regex match has group 0").as_bytes();
+        let secret = find_secret_capture_with_group(re, &captures, rule.betterleaks_secret_group());
+        let input = if use_full_match { full_match } else { secret.as_bytes() };
+        let context = PatternRequirementContext { regex: re, captures: &captures, full_match };
+        match requirements.validate(input, Some(context), true) {
+            PatternValidationResult::Passed => only_ignored_matches = false,
+            PatternValidationResult::Failed => {
+                only_ignored_matches = false;
+                println!("    [!] Pattern requirements not met for example: {}", example);
+                println!(
+                    "    The match does not satisfy the character requirements (min_digits, min_uppercase, etc.)"
+                );
+            }
+            PatternValidationResult::FailedChecksum { actual_len, expected_len } => {
+                only_ignored_matches = false;
+                println!("    [!] Checksum validation failed for example: {}", example);
+                println!(
+                    "    Actual checksum length: {}, Expected checksum length: {}",
+                    actual_len, expected_len
+                );
+            }
+            PatternValidationResult::IgnoredBySubstring { matched_term } => {
+                saw_ignored_match = true;
+                println!(
+                    "    [!] Example would be ignored due to containing term: {}",
+                    matched_term
+                );
+            }
+        }
+    }
+    saw_ignored_match && only_ignored_matches
+}
 
 /// Use the scan CLI defaults so rule commands stay in sync with scans.
 fn create_default_scan_args() -> Result<cli::commands::scan::ScanArgs> {
@@ -126,121 +181,48 @@ pub(crate) fn run_rules_check(args: &RulesCheckArgs) -> Result<()> {
                 warn!("Rule '{}' has no examples", rule.name());
                 num_warnings += 1;
             }
-            continue;
         }
-        // Check regex compilation
-        if let Err(e) = rule.syntax().as_regex() {
-            error!("Rule '{}' has invalid regex: {}", rule.name(), e);
-            num_errors += 1;
-            continue;
-        }
-        // Test each example against regex and pattern_requirements
-        for (example_index, example) in rule_syntax.examples.iter().enumerate() {
-            // Get the regex using the public method
-            let re =
-                rules_db.get_regex_by_rule_id(rule.id()).expect("Failed to get regex for rule");
-
-            // Check if the example matches the pattern
-            let example_bytes = example.as_bytes();
-            let regex_matched = re.is_match(example_bytes);
-
-            if !regex_matched {
-                println!("\nTesting rule {} - {}", rule_index + 1, rule_syntax.name);
-                println!("  Processing example {}", example_index + 1);
-                println!("    [!] Pattern mismatch detected for example: {}", example);
-                println!("    Regex match: {}", regex_matched);
-                num_errors += 1;
-                continue;
-            }
-
-            // If the rule has pattern_requirements, validate them against the match
-            if let Some(pattern_reqs) = rule.pattern_requirements() {
-                // Get the captures from the match
-                if let Some(captures) = re.captures(example_bytes) {
-                    // Get the full match (group 0)
-                    let full_capture = captures.get(0).expect("Group 0 should always exist");
-                    let full_bytes = full_capture.as_bytes();
-
-                    // Determine which bytes to validate (same logic as in matcher.rs)
-                    // Find the primary capture group for validation
-                    let matching_input_for_validation = 'block: {
-                        // 1. Look for a named capture "secret" (case-insensitive).
-                        if let Some(secret_cap) =
-                            captures.name("secret").or_else(|| captures.name("SECRET"))
-                        {
-                            break 'block secret_cap;
-                        }
-
-                        // 2. Look for any other named capture.
-                        if let Some(named_cap) = (1..captures.len()).find_map(|i| {
-                            let name_opt = re.capture_names().nth(i).and_then(|n| n);
-                            name_opt.and_then(|_| captures.get(i))
-                        }) {
-                            break 'block named_cap;
-                        }
-
-                        // 3. Fall back to first positional capture (group 1) if it exists.
-                        if let Some(pos_cap) = captures.get(1) {
-                            break 'block pos_cap;
-                        }
-
-                        // 4. Finally, fall back to the full match (group 0).
-                        break 'block full_capture;
-                    };
-
-                    let validation_bytes = matching_input_for_validation.as_bytes();
-
-                    // Create context for pattern requirements validation
-                    use kingfisher_rules::PatternRequirementContext;
-                    let context = PatternRequirementContext {
-                        regex: re,
-                        captures: &captures,
-                        full_match: full_bytes,
-                    };
-
-                    // Validate pattern requirements (without respect_ignore_if_contains for examples)
-                    use kingfisher_rules::PatternValidationResult;
-                    match pattern_reqs.validate(validation_bytes, Some(context), false) {
-                        PatternValidationResult::Passed => {
-                            // All requirements met
-                        }
-                        PatternValidationResult::Failed => {
-                            println!("\nTesting rule {} - {}", rule_index + 1, rule_syntax.name);
-                            println!("  Processing example {}", example_index + 1);
-                            println!(
-                                "    [!] Pattern requirements not met for example: {}",
-                                example
-                            );
-                            println!(
-                                "    The match does not satisfy the character requirements (min_digits, min_uppercase, etc.)"
-                            );
-                            num_errors += 1;
-                        }
-                        PatternValidationResult::FailedChecksum { actual_len, expected_len } => {
-                            println!("\nTesting rule {} - {}", rule_index + 1, rule_syntax.name);
-                            println!("  Processing example {}", example_index + 1);
-                            println!("    [!] Checksum validation failed for example: {}", example);
-                            println!(
-                                "    Actual checksum length: {}, Expected checksum length: {}",
-                                actual_len, expected_len
-                            );
-                            num_errors += 1;
-                        }
-                        PatternValidationResult::IgnoredBySubstring { matched_term } => {
-                            // For examples, we don't want to treat this as an error in check mode
-                            // since ignore_if_contains is meant for runtime filtering
-                            // But we can warn about it
-                            println!("\nTesting rule {} - {}", rule_index + 1, rule_syntax.name);
-                            println!("  Processing example {}", example_index + 1);
-                            println!(
-                                "    [!] Example would be ignored due to containing term: {}",
-                                matched_term
-                            );
-                            println!("    Example: {}", example);
-                            num_warnings += 1;
-                        }
-                    }
+        // The database has already compiled every regex. Test both kinds of examples against
+        // the scan-time content filters instead of duplicating capture and requirement logic.
+        let re = &rules_db.anchored_regexes()[rule_index];
+        for (negative, examples) in
+            [(false, &rule_syntax.examples), (true, &rule_syntax.negative_examples)]
+        {
+            for (example_index, example) in examples.iter().enumerate() {
+                let matched = rule_matches_example(&rules_db, rule_index, example.as_bytes());
+                if matched != negative {
+                    continue;
                 }
+                let kind = if negative { "negative example" } else { "example" };
+                println!(
+                    "\nTesting rule {} - {} ({})",
+                    rule_index + 1,
+                    rule_syntax.name,
+                    rule.id()
+                );
+                println!("  Processing {} {}", kind, example_index + 1);
+                if negative {
+                    println!("    [!] Negative example unexpectedly matched: {}", example);
+                } else if !re.is_match(example.as_bytes()) {
+                    println!("    [!] Pattern mismatch detected for example: {}", example);
+                    println!("    Regex match: false");
+                } else {
+                    if print_pattern_requirement_failures(rule, re, example)
+                        && rule_matches_example_ignoring_substrings(
+                            &rules_db,
+                            rule_index,
+                            example.as_bytes(),
+                        )
+                    {
+                        num_warnings += 1;
+                        continue;
+                    }
+                    println!("    [!] Example rejected by scan-time filters: {}", example);
+                    println!(
+                        "    Check entropy, safe-list, pattern requirements, and rule filters; use --verbose for details"
+                    );
+                }
+                num_errors += 1;
             }
         }
     }
@@ -252,10 +234,13 @@ pub(crate) fn run_rules_check(args: &RulesCheckArgs) -> Result<()> {
         println!("\nError types include:");
         println!("  - Invalid regex patterns");
         println!("  - Examples that don't match their patterns");
+        println!("  - Examples rejected by scan-time filters");
+        println!("  - Negative examples that match after scan-time filtering");
         println!("\nWarning types include:");
         println!("  - Rules with very short names");
         println!("  - Rules with very short patterns");
         println!("  - Rules without examples");
+        println!("  - Examples ignored by ignore_if_contains");
     } else {
         println!("\nAll rules passed validation successfully!");
     }
@@ -367,8 +352,13 @@ pub(crate) fn run_rules_list(args: &RulesListArgs) -> Result<()> {
                         "visible": rule.visible(),
                     });
                     if show_validation {
-                        value["validation"] = serde_json::to_value(&rule.syntax().validation)
-                            .expect("validation serialization should succeed");
+                        value["validation"] = serde_json::to_value(
+                            rule.syntax()
+                                .validation
+                                .as_ref()
+                                .map(kingfisher::rules::Validation::redacted_for_inspection),
+                        )
+                        .expect("validation serialization should succeed");
                     }
                     value
                 })

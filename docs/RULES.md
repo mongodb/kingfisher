@@ -59,6 +59,23 @@ kingfisher scan --rules-path ./company.yml --rules-path ./team.toml ./src/
 kingfisher rules check --rules-path ./custom-rules/ --load-builtins=false --no-update-check
 ```
 
+`rules check` verifies that each `examples` entry has at least one match that survives
+the scan-time content filters, and that each `negative_examples` entry has none.
+Both checks use the scanner's secret capture selection, entropy threshold, built-in
+safe-list, pattern requirements (including checksums), and rule filters. A filtered
+positive example or a surviving negative example is an error, even without
+`--warnings-as-errors`, with one compatibility exception: a positive example rejected
+only by `ignore_if_contains` produces a warning because that option is intended for
+runtime filtering. The example is rechecked with only substring filtering disabled;
+entropy, safe-list, checksum, and rule-filter failures still produce errors. Use
+`--warnings-as-errors` to make the substring warnings fail the check. Negative
+examples still apply `ignore_if_contains`.
+
+Examples contain only content, so these checks do not apply source-path restrictions,
+source prefilters, inline ignore comments, or dependency resolution. They do not make
+live validation requests. Include realistic, non-placeholder positive examples and
+negative examples for inputs that the pattern or content filters should reject.
+
 Kingfisher's `imported-rules-capabilities.yml` is not another rule format. Its source-specific
 sections may bind existing imported detectors to operational validation, access-map, revocation,
 confidence, authority, narrow filter behavior, or derive bare token patterns with `bare: true`,
@@ -67,6 +84,33 @@ but must not contain detector regexes. See the [overlay reference](../crates/kin
 Veles support is built-in-only. `crates/kingfisher-rules/data/veles-rules.yml` pins an
 OSV-SCALIBR commit and selects upstream Veles plugin IDs that have explicit import adapters;
 `--rules-path` does not accept Veles source or configuration.
+
+## Using rules from Rust and Python
+
+The CLI, `kingfisher-scanner`, and `kingfisher_sdk` share rule loading, capture
+selection, entropy checks, `pattern_requirements`, and Liquid filters. Requirements
+run during detection for raw and decoded Base64 matches, before component resolution,
+redaction, or live validation. A parsed requirement is enforced, not just inspection metadata.
+
+| Rule behavior | Rust crates and Python SDK |
+| --- | --- |
+| YAML/TOML loading, confidence, path restrictions and Betterleaks expressions | Shared rule loader and compiled database; supply the logical path for path-aware scans |
+| Character minimums, custom special characters, ignored substrings and checksums | Enforced by default, including named-capture checksum context and missing-capture policy |
+| Required/optional components and `within` | Python retains full-match context automatically. Rust callers needing exact full-match windows use `Scanner::scan_blob_with_context` and `Validator::with_scan_context`; existing vector-only methods retain their historical location-based association |
+| `verify_candidates: true` | Shared fixed-origin eligibility, ranking, 16-combination budget, deadline and four-search concurrency limit; only explicit validation sends requests |
+| Validation types, HTTP/gRPC matchers, OAuth2 and Liquid signing | Shared validation engine; enable Rust's `validation` feature and call `Validator` explicitly |
+| HTTP/AWS/GCP and multi-step revocation | Shared revocation engine; Python requires `confirm=True` |
+| `visible: false` | Helpers remain in SDK results for association; filter `finding.visible` only when reporting |
+| Examples, negative examples and references | Rule metadata for inspection/checking; examples are not scan-time allowlists |
+
+Within each SDK validation batch, identical rules and resolved credential inputs
+reuse definitive active/inactive results even with different remaining attempt budgets. Inconclusive failures
+and cancellations are not memoized, so a later occurrence can retry. Different
+rules and component values remain independent; separate batches recheck.
+Scanning stays offline. CLI report switches, configuration files,
+source enumeration, endpoint/TLS overrides and rate limits are application policy;
+configure embedding APIs explicitly as described in the [Rust guide](LIBRARY.md)
+and [Python guide](PYPI.md).
 
 ## 1. Rule Schema
 
@@ -88,6 +132,9 @@ rules:
 
     examples:                       # (list) strings that must match
       - AWS_SECRET="AKIA…"
+
+    negative_examples:              # (optional list) strings that must not survive detection
+      - AWS_SECRET="not-a-secret"
 
     references:                     # (optional list) context URLs
       - https://docs.aws.amazon.com/general/latest/gr/aws-sec-cred-types.html
@@ -223,6 +270,7 @@ revocation:
 | min_entropy             | Threshold to guard against low‑complexity false positives            |
 | confidence              | Suggests severity: low → high                                        |
 | examples                | Good matches; used for testing                                       |
+| negative_examples       | Inputs that must not match after content filtering; used for testing |
 | visible                 | false to hide non‑secret captures (e.g. IDs)                         |
 | depends_on_rule         | Chain rules: use captures from one rule in another's validation      |
 | pattern_requirements  | Require character types and/or exclude placeholder words from matches |
@@ -279,6 +327,92 @@ standard `m/44'/60'/0'/0/0` path and explicitly assume an empty BIP-39 passphras
 address is a candidate. Validation responses contain only allowlisted derivation metadata and never
 the private key or seed phrase.
 
+### OAuth2 authentication for HTTP verification services
+
+Use `validation.content.auth.oauth2` when an internal verifier requires its own
+access token. The resource-owner password grant authenticates the scanner to
+that service; `{{ TOKEN }}` remains the candidate secret being checked.
+
+```yaml
+validation:
+  type: Http
+  content:
+    auth:
+      oauth2:
+        token_endpoint: https://idp.example.com/oauth2/token
+        token_header: X-Proxy-Authorization # Optional; defaults to Authorization
+        ropc:
+          username_env: KF_VERIFIER_USERNAME
+          password_env: KF_VERIFIER_PASSWORD
+          client_id: kingfisher
+          client_secret_env: KF_VERIFIER_CLIENT_SECRET # Optional
+          scope: verify                              # Optional
+    request:
+      method: GET
+      url: https://verifier.example.com/verify
+      headers:
+        Authorization: "Bearer {{ TOKEN }}"
+      response_matcher:
+        - type: StatusMatch
+          status: [200]
+        - type: WordMatch
+          words: ['"valid":true']
+```
+
+The [complete example rule](../crates/kingfisher-scanner/examples/fixtures/acme-oauth2.yml) can be loaded with
+`--rules-path`. Replace the endpoints and response matchers with your service's
+contract. Set the named environment variables before running:
+
+```bash
+kingfisher rules check --rules-path crates/kingfisher-scanner/examples/fixtures/acme-oauth2.yml --load-builtins=false --no-update-check
+kingfisher scan ./src --rules-path company-rules.yml --load-builtins=false --format json
+```
+
+`username` and `password` may be configured directly instead of `username_env`
+and `password_env`; choose exactly one form for each. `client_secret` and
+`client_secret_env` are optional alternatives. Prefer environment references over
+stored literal credentials. CLI JSON inspection and Python `Rules.detail()` redact
+literal OAuth2 `username`, `password` and `client_secret` values as `[REDACTED]`,
+while retaining environment references. Direct Rust configuration serialization
+remains lossless and can expose literals; treat it as sensitive. Credentials are
+form encoded in the token request; a client secret, when supplied, is sent as
+`client_secret` in that form.
+
+Tokens are shared across concurrent checks within one validation session and
+reused until shortly before `expires_in`. Without an expiry, they are refreshed
+after 54 seconds (a 60-second lifetime with an early-refresh margin). Failed
+exchanges use exponential cooldowns from 1 to 64 seconds, including after
+cancellation. Token responses are capped at 64 KiB. Authentication failures are
+inconclusive validation results, never proof that the candidate secret is invalid.
+
+Both endpoints use HTTPS with strict certificate verification, even with
+`--ignore-certs` or Rust's `ValidationEngine::use_lax_tls` option. OAuth2 uses separate
+transports so those options and custom validator HTTP clients cannot weaken
+protection of the scanner's password-grant credentials or service access token.
+HTTPS requests retain environment proxy and `NO_PROXY` behavior; use a trusted
+certificate for internal services. The only plain-HTTP exception is loopback with
+`--allow-internal-ips` (Rust: `allow_internal_ips(true)`) for local development.
+Those loopback HTTP token and verifier requests connect directly, bypassing all
+proxies so plaintext credentials cannot be sent through an ambient proxy.
+This exception does not disable proxies for HTTPS or other validator traffic.
+Verifier origins and token endpoints must be literal operator configuration;
+finding templates cannot choose their hosts. Redirects are disabled for both
+exchanges, and the access token is sent only to the configured verifier origin.
+Internal HTTPS services also require the internal-IP opt-in. Token responses are
+never reported, and access tokens echoed by a verifier are redacted.
+
+The token header must not collide with a configured request header, standard
+`User-Agent`/`Accept` headers, or reserved transport headers. Use
+`X-Proxy-Authorization` when the candidate already occupies `Authorization`.
+This auth block is supported for HTTP validation, not revocation.
+
+For Rust struct literals, rules 2.0.0 adds
+`HttpValidation.auth: Option<Box<HttpValidationAuth>>`: specify `auth: None` when
+unused, or `auth: Some(Box::new(HttpValidationAuth { oauth2: config }))` with
+`OAuth2Config` and its `ropc: OAuth2PasswordCredentials`. YAML without `auth` remains
+valid. Scanner 2.0.0 consumers must also use rules 2.x types; see the
+[Rust migration guide](LIBRARY.md#migrating-to-rules-and-scanner-20).
+
 ### SMTP authentication
 
 SMTP checks authenticate without sending a message. The built-in
@@ -290,7 +424,7 @@ For separate environment variables or configuration fields, load the
 [custom SMTP rule example](../examples/rules/smtp.yml):
 
 ```sh
-kingfisher scan config.env --rules-path examples/rules/smtp.yml --format toon --no-update-check
+kingfisher scan config.env --rules-path examples/rules/smtp.yml --format json --no-update-check
 ```
 
 The example associates `SMTP_PASSWORD` with nearby `SMTP_HOST`, `SMTP_USERNAME`, and
@@ -610,6 +744,8 @@ Below is the complete list of Liquid filters available in Kingfisher, along with
 | `b64url_dec`          | –                                            | Decodes a URL-safe Base64 string (with or without padding).                                                     | `{{ "Kys_Pw" \| b64url_dec }}`                                       |
 | `sha256`              | –                                            | Computes the SHA-256 hex digest of the input.                                                                  | `{{ TOKEN \| sha256 }}`                                              |
 | `bip39_valid`         | –                                            | Returns `true` only for a checksum-valid English BIP-39 mnemonic; the temporary normalized phrase is wiped on drop. | `{{ MNEMONIC \| bip39_valid }}`                                  |
+| `luhn_valid`          | – | Returns a boolean Luhn checksum result for at least two ASCII digits; ignores ASCII spaces and hyphens. No card issuer, length or account-existence check. | `{{ MATCH \| luhn_valid }}` |
+| `iban_valid`          | – | Returns a boolean for generic IBAN structure (5–34 ASCII alphanumeric characters, two letters then two digits) and MOD-97 checksum; ignores ASCII spaces and case. No country registry, country-specific length or account-existence check. | `{{ MATCH \| iban_valid }}` |
 | `crc32`               | –                                            | Computes the CRC32 checksum of the input and returns a decimal value. | `{{ TOKEN \| crc32 }}` |
 | `crc32_dec`           | `digits` (integer, optional)                 | Computes the CRC32 checksum and returns the last `digits` decimal characters (zero-padded). Defaults to the full value when omitted. | `{{ TOKEN \| crc32_dec: 6 }}` |
 | `crc32_hex`           | `digits` (integer, optional)                 | Computes the CRC32 checksum and returns the last `digits` hexadecimal characters (zero-padded). Defaults to the full value when omitted. | `{{ TOKEN \| crc32_hex: 8 }}` |
@@ -632,6 +768,7 @@ Below is the complete list of Liquid filters available in Kingfisher, along with
 | `rfc1123_date`        | –                                            | Returns the current RFC-1123 timestamp in GMT.                                                                 | `{{ "" \| rfc1123_date }}`                                           |
 | `uuid`                | –                                            | Generates a random UUIDv4 string.                                                                              | `{{ "" \| uuid }}`                                                   |
 | `jwt_header`          | –                                            | Builds a minimal JWT header JSON (`{"typ":"JWT","alg":…}`) and Base64URL-encodes it.                           | `{{ "HS256" \| jwt_header }}`                                        |
+| `rsa_sha256`          | `key` (string, PEM)                          | Signs the input with RSA PKCS#1 v1.5 and SHA-256 (RS256); returns unpadded Base64URL. Accepts unencrypted PKCS#1/PKCS#8 RSA private keys. | `{{ signing_input \| rsa_sha256: TOKEN }}` |
 | `replace`             | `from` (string), `to` (string)               | Replaces every occurrence of `from` with `to` in the input string.                                             | `{{ "hello world" \| replace: "world", "mars" }}`                    |
 | `newline`             | –                                            | Returns a single newline character (`\n`). Useful inside YAML block scalars where a literal newline would break indentation. | `{{ "" \| newline }}`                                                |
 | `base36`              | `width` (integer, optional)                  | Encodes the input number as Base36, left-padding with zeros as needed.                                         | `{{ TOKEN \| crc32 \| base36: 6 }}`                                  |
@@ -648,6 +785,32 @@ Authorization: Basic {{ "api:" | append: TOKEN | b64enc }}
 **Stable Request Values:** HTTP and gRPC validation requests also expose stable per-request template variables. Use these when the same generated value must appear in multiple places within one request. Currently:
 - `REQUEST_RFC1123_DATE`
 - `REQUEST_UNIX_MILLIS`
+
+### Signing RS256 JWTs
+
+Use `jwt_header`, `b64url_enc`, and `rsa_sha256` to build a signed JWT in a validation
+header. Pass the complete PEM text as the signing key; invalid, encrypted, and non-RSA
+keys produce a template error. The signature is already Base64URL-encoded.
+
+For a GitHub App custom rule, capture the PEM as `TOKEN` and associate a nearby
+numeric `APP_ID` using `depends_on_rule`. This header creates a short-lived JWT:
+
+```yaml
+Authorization: >-
+  {%- assign now = "" | unix_timestamp -%}
+  {%- assign iat = now | minus: 60 -%}
+  {%- assign exp = now | plus: 540 -%}
+  {%- capture payload -%}{"iss":{{ APP_ID | json_escape }},"iat":{{ iat }},"exp":{{ exp }}}{%- endcapture -%}
+  {%- assign header = "RS256" | jwt_header -%}
+  {%- assign payload = payload | b64url_enc -%}
+  {%- assign signing_input = header | append: "." | append: payload -%}
+  Bearer {{ signing_input }}.{{ signing_input | rsa_sha256: TOKEN }}
+```
+
+Use it with HTTP `GET https://api.github.com/app`, `Accept: application/vnd.github+json`,
+and response matchers `StatusMatch` (`status: [200]`) and `JsonValid`. GitHub uses `iss` to select
+the App's public key when verifying the signature; see its [JWT authentication guide](https://docs.github.com/en/apps/creating-github-apps/authenticating-with-a-github-app/generating-a-json-web-token-jwt-for-a-github-app).
+This is a custom-rule pattern; built-in private-key detection does not perform this check.
 
 ### How depends_on_rule Works
 
@@ -785,7 +948,7 @@ depends_on_rule:
     variable: APPID                     # captured as {{ APPID }}
 ```
 
-- **Capture flow**: First rule captures `APPID` → second rule injects `{{ APPID }}` into validation HTTP request or pattern
+- **Capture flow**: First rule captures `APPID` → second rule injects `{{ APPID }}` into the validation HTTP request
 - **Visible control:** set `visible: false` on the supporting rule so it doesn’t clutter your report for non-secret matches
 - **Primary secret rule:** leave the secret rule visible unless it is also only a helper; helper rules should usually be the ones marked `visible: false`
 ## Algolia Example
@@ -955,6 +1118,13 @@ The `pattern_requirements` field allows you to specify data type requirements fo
 
 Kingfisher's regex engine (Hyperscan) does not support lookahead assertions like `(?=.*\d)` to require specific character types. Instead, use the `pattern_requirements` field to filter matches post-detection.
 
+Requirements validate the selected secret when there is one unnamed capture (or
+no captures). Named captures or multiple capture groups select the full regex match
+instead. `MATCH` is this selected requirement input; `FULL_MATCH` is always capture
+zero. Named checksum captures are available under their original names and uppercase
+aliases. Failed or unrenderable checksums discard the candidate; `skip_if_missing`
+only allows missing context/captures, not template errors or mismatches.
+
 ### Available Requirements
 
 ```yaml
@@ -981,7 +1151,34 @@ All fields are optional. If `special_chars` is not specified, the default set in
 
 The optional `checksum` block renders Liquid templates against the match to determine whether the captured checksum matches your expectation. Both templates gain access to `{{ MATCH }}`, `{{ FULL_MATCH }}`, and every named capture in two forms: the original capture name and its uppercase alias (e.g. `{{ body }}` and `{{ BODY }}`). Use helper filters like `suffix`, `crc32`, and `base62` to mirror provider-specific checksum pipelines. If a required capture is missing or the rendered values differ, Kingfisher skips the finding—logging the reason, including checksum lengths, at the `DEBUG` level. Set `skip_if_missing` to `true` to treat absent captures as legacy matches.
 
-When any of these filters remove a match it is logged at the `DEBUG` level so you can see exactly why the skip occurred. If you need to keep every match even when one of these substrings appears, pass `--no-ignore-if-contains` to `kingfisher scan`. The flag disables this post-processing step without changing the rule definitions.
+When any of these filters remove a match it is logged at the `DEBUG` level so you can see exactly why the skip occurred. If you need to keep every match even when one of these substrings appears, pass `--no-ignore-if-contains` to `kingfisher scan`. The flag disables only substring exclusions; character minimums and checksums still run.
+
+### Example: Luhn and IBAN checksums
+
+Use a boolean filter result as the observed checksum and compare it with the
+quoted string `'true'`. These are offline format checks. Add organization-specific
+context and length constraints to the regex.
+
+```yaml
+rules:
+  - name: Example payment card
+    id: acme.structured.card
+    pattern: '\bcard[=: ]+([0-9](?:[ -]?[0-9]){12,18})\b'
+    confidence: medium
+    pattern_requirements:
+      checksum:
+        actual:
+          template: '{{ MATCH | luhn_valid }}'
+        expected: 'true'
+```
+
+For IBANs, use `iban_valid` in the same block. It performs the MOD-97 check described
+by [Swift](https://www.swift.com/sites/default/files/documents/swift_solutions_faq_ibanplus.pdf)
+with [generic IBAN structure](https://docs.developer.swift.com/docs/api-guides/swiftref-api/swiftref-api-reference),
+not country-specific account validation. Both filters reject other punctuation and
+non-ASCII digits; IBAN also rejects hyphens. See the complete
+[custom rule fixture](../python/examples/structured-data.yml) and
+[runnable Python example](../python/examples/pattern_requirements.py).
 
 ### Are `requires_capture` and `skip_if_missing` equivalent?
 

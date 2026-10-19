@@ -736,6 +736,18 @@ impl DetailsReporter {
                     None
                 }
             })
+            .map(|mut metadata| {
+                if !args.input_specifier_args.commit_metadata
+                    && let Some(commit) = metadata.get_mut("commit").and_then(|v| v.as_object_mut())
+                {
+                    // Path selection may require full traversal metadata internally. Preserve
+                    // repository/file links and IDs, while respecting the reporting opt-out.
+                    for field in ["date", "committer", "author"] {
+                        commit.remove(field);
+                    }
+                }
+                metadata
+            })
             .next();
 
         let file_path = rm
@@ -1693,11 +1705,13 @@ mod tests {
                 max_results: 100,
                 s3_bucket: None,
                 s3_prefix: None,
+                object_cache_dir: None,
                 role_arn: None,
                 aws_local_profile: None,
                 gcs_bucket: None,
                 gcs_prefix: None,
                 gcs_service_account: None,
+                azure_blob: None,
                 docker_image: Vec::new(),
                 docker_archive: Vec::new(),
                 git_clone: GitCloneMode::Bare,
@@ -1715,6 +1729,7 @@ mod tests {
             },
             extra_ignore_comments: Vec::new(),
             content_filtering_args: ContentFilteringArgs {
+                path_selection: Default::default(),
                 no_limits: false,
                 max_file_size_mb: 256.0,
                 exclude: Vec::new(),
@@ -1725,6 +1740,7 @@ mod tests {
             confidence: ConfidenceLevel::Medium,
             disk_offload: false,
             no_validate: false,
+            no_timeouts: false,
             access_map: false,
             only_valid: false,
             validation_filter: None,
@@ -2020,6 +2036,33 @@ mod tests {
             .and_then(|path| path.as_str())
             .unwrap();
         assert_eq!(git_file_path, "path/in/history.txt");
+    }
+
+    #[test]
+    fn disabling_commit_details_keeps_repository_links_and_file_identity() {
+        let temp = tempdir().unwrap();
+        let reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
+                temp.path().to_path_buf(),
+            ))),
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+        let (report_match, _) = sample_report_match("", StatusCode::OK.as_u16(), false);
+        let mut args = sample_scan_args();
+        let before =
+            reporter.build_finding_record(&report_match, &args).finding.git_metadata.unwrap();
+        args.input_specifier_args.commit_metadata = false;
+        let after =
+            reporter.build_finding_record(&report_match, &args).finding.git_metadata.unwrap();
+        assert_eq!(after["repository_url"], before["repository_url"]);
+        assert_eq!(after["file"], before["file"]);
+        assert_eq!(after["commit"]["id"], before["commit"]["id"]);
+        assert_eq!(after["commit"]["url"], before["commit"]["url"]);
+        for field in ["date", "committer", "author"] {
+            assert!(after["commit"].get(field).is_none());
+        }
     }
 
     #[test]

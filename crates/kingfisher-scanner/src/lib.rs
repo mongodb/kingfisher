@@ -1,6 +1,10 @@
 #![doc = include_str!("../README.md")]
 
+#[cfg(any(test, feature = "validation", feature = "__cli-internals"))]
+mod candidate_context;
 mod components;
+mod scan_context;
+pub use scan_context::{ScanContext, ScanOutput};
 mod confirmation;
 mod finding;
 mod line_index;
@@ -50,11 +54,18 @@ pub mod extraction;
 #[doc(hidden)]
 pub mod __cli_internals {
     pub use crate::components::dependency_keep;
+    pub mod candidate_context {
+        pub use crate::candidate_context::{assignment_family, scopes};
+    }
     pub use crate::confirmation::IndexedCaptures;
     pub use crate::line_index::LineIndex;
     pub use crate::postprocess::*;
     #[cfg(feature = "validation")]
     pub use crate::validation::template_vars::extract_template_vars;
+    #[cfg(feature = "validation")]
+    pub mod candidate_verification {
+        pub use crate::validation::candidates::*;
+    }
 
     /// Internal CLI tree-diff adapter; no blob reads or rename detection.
     #[cfg(feature = "git")]

@@ -34,8 +34,8 @@ use crate::{
     scanner::{
         AccessMapCollector, enumerate_filesystem_inputs, enumerate_github_event_targets,
         repos::{
-            enumerate_huggingface_buckets, fetch_gcs_objects, fetch_huggingface_objects,
-            fetch_s3_objects,
+            enumerate_huggingface_buckets, fetch_azure_blobs, fetch_gcs_objects,
+            fetch_huggingface_objects, fetch_s3_objects,
         },
         run_secret_validation,
         summary::{compute_scan_totals, print_scan_summary},
@@ -147,20 +147,27 @@ pub async fn run_async_scan(
     update_status: &crate::update::UpdateStatus,
     auto_cleanup_clones: bool,
 ) -> Result<()> {
+    scan_network_limits(args.content_filtering_args.no_limits, args.no_timeouts)
+        .scope(run_async_scan_inner(
+            global_args,
+            args,
+            datastore,
+            rules_db,
+            update_status,
+            auto_cleanup_clones,
+        ))
+        .await
+}
+
+fn scan_network_limits(
+    no_limits: bool,
+    no_timeouts: bool,
+) -> kingfisher_scanner::validation::limits::NetworkLimits {
     kingfisher_scanner::validation::limits::NetworkLimits {
-        no_timeouts: args.content_filtering_args.no_limits,
-        unlimited_response: args.content_filtering_args.no_limits,
-        unlimited_results: args.content_filtering_args.no_limits,
+        no_timeouts,
+        unlimited_response: no_limits,
+        unlimited_results: no_limits,
     }
-    .scope(run_async_scan_inner(
-        global_args,
-        args,
-        datastore,
-        rules_db,
-        update_status,
-        auto_cleanup_clones,
-    ))
-    .await
 }
 
 async fn run_async_scan_inner(
@@ -171,6 +178,7 @@ async fn run_async_scan_inner(
     update_status: &crate::update::UpdateStatus,
     auto_cleanup_clones: bool,
 ) -> Result<()> {
+    args.content_filtering_args.path_selection.check()?;
     let scan_started_at = chrono::Local::now();
     let mut timed_args = args.clone();
     timed_args.input_specifier_args.history_time_range =
@@ -182,8 +190,10 @@ async fn run_async_scan_inner(
         });
     if timed_args.content_filtering_args.no_limits {
         timed_args.input_specifier_args.repo_clone_limit = None;
-        timed_args.validation_timeout = 0;
         timed_args.max_validation_response_length = 0;
+    }
+    if timed_args.no_timeouts {
+        timed_args.validation_timeout = 0;
     }
     let args = &timed_args;
     let _validation_cache_lifetime =
@@ -286,6 +296,18 @@ async fn run_async_scan_inner(
 
     fetch_gcs_objects(
         args,
+        &datastore,
+        rules_db,
+        matcher_stats.as_ref(),
+        enable_profiling,
+        Arc::clone(&shared_profiler),
+        progress_enabled,
+    )
+    .await?;
+
+    fetch_azure_blobs(
+        args,
+        global_args,
         &datastore,
         rules_db,
         matcher_stats.as_ref(),
@@ -1608,6 +1630,66 @@ fn initialize_environment(use_progress: bool, num_jobs: usize) -> Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn unlimited_content_keeps_network_request_timeouts() {
+        use kingfisher_scanner::validation::limits::ResourceTimeout;
+        use std::time::Duration;
+
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        for no_limits in [false, true] {
+            let request = super::scan_network_limits(no_limits, false).scope(async {
+                reqwest::Client::builder()
+                    .no_proxy()
+                    .resource_timeout(Duration::from_millis(100))
+                    .build()
+                    .unwrap()
+                    .get(&url)
+                    .send()
+                    .await
+            });
+            let response = tokio::time::timeout(Duration::from_secs(5), request)
+                .await
+                .expect("unlimited content must not disable the HTTP request timeout");
+            assert!(response.unwrap_err().is_timeout());
+        }
+    }
+
+    #[tokio::test]
+    async fn explicit_timeout_opt_out_waits_for_late_network_response() {
+        use kingfisher_scanner::validation::limits::ResourceTimeout;
+        use std::time::Duration;
+
+        let app = axum::Router::new().route(
+            "/",
+            axum::routing::get(|| async {
+                tokio::time::sleep(Duration::from_millis(200)).await;
+                "complete"
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
+        let url = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        for no_limits in [false, true] {
+            let request = super::scan_network_limits(no_limits, true).scope(async {
+                reqwest::Client::builder()
+                    .no_proxy()
+                    .resource_timeout(Duration::from_millis(50))
+                    .build()
+                    .unwrap()
+                    .get(&url)
+                    .send()
+                    .await
+            });
+            let response = tokio::time::timeout(Duration::from_secs(5), request)
+                .await
+                .expect("the fixture must complete even with its request timeout disabled")
+                .unwrap();
+            assert_eq!(response.text().await.unwrap(), "complete");
+        }
+        server.abort();
+    }
+
     use clap::Parser;
 
     #[tokio::test]

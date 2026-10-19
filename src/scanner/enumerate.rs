@@ -37,6 +37,7 @@ use crate::{
         looks_like_zip,
     },
     findings_store,
+    git_candidates::GitContentFilter,
     git_commit_metadata::{CommitMetadata, intern_git_identity},
     git_repo_enumerator::{GitBlobMetadata, GitBlobSource, MIN_SCANNABLE_BLOB_SIZE},
     matcher::{Matcher, MatcherStats},
@@ -54,10 +55,33 @@ use crate::{
     sqlite::extract_sqlite_contents_with_limits,
 };
 
-type OwnedBlob = Blob<'static>;
-type LoadedGitBlobs<'a> = Box<dyn Iterator<Item = (OriginSet, Blob<'a>)> + Send + 'a>;
+// The optional selection path is set only while actually extracting an archive member.
+// Literal `!` characters in ordinary source paths are never archive delimiters.
+type LoadedBlob<'a> = (OriginSet, Blob<'a>, Option<String>);
+type LoadedGitBlobs<'a> = Box<dyn Iterator<Item = LoadedBlob<'a>> + Send + 'a>;
+
+fn matches_selected_file(
+    selection: &crate::path_selection::PathSelection,
+    path: &Path,
+    roots: &[PathBuf],
+    base: &Path,
+) -> bool {
+    let absolute = if path.is_absolute() { path.to_owned() } else { base.join(path) };
+    let relative = roots
+        .iter()
+        .filter_map(|root| {
+            absolute.strip_prefix(root).ok().map(|relative| (root.components().count(), relative))
+        })
+        .max_by_key(|(depth, _)| *depth)
+        .map(|(_, relative)| relative)
+        .unwrap_or_else(|| absolute.strip_prefix(base).unwrap_or(path));
+    selection.matches(&relative.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
+}
 
 struct EnumeratorConfig {
+    path_selection: crate::path_selection::PathSelection,
+    selection_roots: Vec<PathBuf>,
+    selection_base: PathBuf,
     enumerate_git_history: bool,
     collect_git_metadata: bool,
     repo_scan_timeout: Option<Duration>,
@@ -72,6 +96,7 @@ struct EnumeratorConfig {
     /// Maximum number of archive layers to extract while scanning git blobs.
     extraction_depth: Option<usize>,
     resources: ResourceLimits,
+    git_content_filter: GitContentFilter,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -86,10 +111,12 @@ pub fn enumerate_filesystem_inputs(
     shared_profiler: Arc<ConcurrentRuleProfiler>,
     matcher_stats: &Mutex<MatcherStats>,
 ) -> Result<bool> {
-    let repo_scan_timeout = if args.content_filtering_args.no_limits || args.git_repo_timeout == 0 {
-        None
+    let repo_scan_timeout = args.repository_timeout();
+    let selection_base = if args.content_filtering_args.path_selection.is_empty() {
+        PathBuf::new()
     } else {
-        Some(Duration::from_secs(args.git_repo_timeout))
+        std::env::current_dir()
+            .context("Cannot resolve the working directory for path selection")?
     };
 
     let branch_root_enabled = args.input_specifier_args.branch_root
@@ -182,12 +209,23 @@ pub fn enumerate_filesystem_inputs(
         (input_enumerator_thread, input_recv, exclude_globset)
     };
 
+    let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
     let enum_cfg = EnumeratorConfig {
+        path_selection: args.content_filtering_args.path_selection.clone(),
+        selection_roots: input_roots
+            .iter()
+            .chain(discovered_repos)
+            .map(|path| if path.is_absolute() { path.clone() } else { selection_base.join(path) })
+            // Explicit file inputs are selected by their cwd-relative path, not just their leaf.
+            .filter(|path| !path.is_file())
+            .collect(),
+        selection_base,
         enumerate_git_history: match args.input_specifier_args.git_history {
             GitHistoryMode::Full => true,
             GitHistoryMode::None => false,
         },
-        collect_git_metadata: args.input_specifier_args.commit_metadata,
+        collect_git_metadata: args.input_specifier_args.commit_metadata
+            || !args.content_filtering_args.path_selection.is_empty(),
         repo_scan_timeout,
         exclude_globset: exclude_globset.clone(),
         git_diff: diff_config.clone(),
@@ -198,6 +236,14 @@ pub fn enumerate_filesystem_inputs(
         extract_archives: !args.content_filtering_args.no_extract_archives,
         extraction_depth: args.content_filtering_args.archive_depth(),
         resources: args.content_filtering_args.resource_limits(),
+        git_content_filter: GitContentFilter::new(
+            Arc::clone(&scanner_pool),
+            rules_db.num_rules(),
+            !args.no_base64,
+            !args.content_filtering_args.no_extract_archives
+                && args.content_filtering_args.archive_depth() != Some(0),
+            args.content_filtering_args.resource_limits(),
+        ),
     };
     let (send_ds, recv_ds) = create_datastore_channel(args.num_jobs);
     let datastore_writer_thread =
@@ -207,7 +253,6 @@ pub fn enumerate_filesystem_inputs(
     let had_errors = Arc::new(AtomicBool::new(false));
     let num_blob_processors = Mutex::new(0u64);
     let seen_blobs = BlobIdMap::new();
-    let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
 
     let matcher = Matcher::new(
         rules_db,
@@ -233,6 +278,8 @@ pub fn enumerate_filesystem_inputs(
     };
     let had_errors_for_enumeration = Arc::clone(&had_errors);
     let had_errors_for_processing = Arc::clone(&had_errors);
+    let selection_roots = enum_cfg.selection_roots.clone();
+    let selection_base = enum_cfg.selection_base.clone();
     let scan_res: Result<()> = input_recv
         .into_iter()
         .par_bridge()
@@ -248,7 +295,7 @@ pub fn enumerate_filesystem_inputs(
         .try_for_each_init(
             || (make_blob_processor.clone()(), progress.clone()),
             move |(processor, progress), entry| {
-                let (origin, blob) = match entry {
+                let (mut origin, blob, archive_member) = match entry {
                     Err(e) => {
                         had_errors_for_processing.store(true, Ordering::Relaxed);
                         error!("Error loading input: {e:#}");
@@ -256,6 +303,33 @@ pub fn enumerate_filesystem_inputs(
                     }
                     Ok(entry) => entry,
                 };
+                if !args.content_filtering_args.path_selection.is_empty() {
+                    let selection = &args.content_filtering_args.path_selection;
+                    let selected = origin
+                        .iter()
+                        .filter(|source| {
+                            if let Some(member) = &archive_member {
+                                return selection.matches(member);
+                            }
+                            match source {
+                                Origin::File(file) => matches_selected_file(
+                                    selection,
+                                    &file.path,
+                                    &selection_roots,
+                                    &selection_base,
+                                ),
+                                _ => selection.matches(
+                                    &source
+                                        .blob_path()
+                                        .map(|path| path.to_string_lossy())
+                                        .unwrap_or_default(),
+                                ),
+                            }
+                        })
+                        .cloned();
+                    let Some(selected) = OriginSet::try_from_iter(selected) else { return Ok(()) };
+                    origin = selected;
+                }
                 // Check if this is an archive file. `blob_path()` covers both filesystem and git
                 // origins, so archive/binary filtering stays consistent across input modes.
                 // Byte sniffing also catches ZIP containers with no archive extension (e.g. a
@@ -328,6 +402,9 @@ pub fn enumerate_filesystem_inputs(
         .unwrap()
         .context("Failed to save results to the datastore")?;
     scan_res.context("Failed to scan inputs")?;
+    // Clear negatives were scanned by the content prepass instead of the matcher.
+    // Include them in coverage statistics without counting retained candidates twice.
+    matcher_stats.lock().unwrap().update(&enum_cfg.git_content_filter.clean_stats());
     progress.finish();
     Ok(had_errors.load(Ordering::Relaxed))
 }
@@ -389,7 +466,7 @@ struct FileResultIter<'a> {
 }
 
 impl<'a> ParallelIterator for FileResultIter<'a> {
-    type Item = Result<(OriginSet, Blob<'a>)>;
+    type Item = Result<LoadedBlob<'a>>;
 
     fn drive_unindexed<C>(self, consumer: C) -> C::Result
     where
@@ -398,8 +475,8 @@ impl<'a> ParallelIterator for FileResultIter<'a> {
         match self.iter_kind {
             FileResultIterKind::Single(maybe_one) => {
                 let mut folder = consumer.into_folder();
-                if let Some(one) = maybe_one {
-                    folder = folder.consume(Ok(one));
+                if let Some((origin, blob)) = maybe_one {
+                    folder = folder.consume(Ok((origin, blob, None)));
                 }
                 folder.complete()
             }
@@ -450,7 +527,7 @@ impl ParallelBlobIterator for FileResult {
                         .map(|(logical_name, data)| {
                             let full_path = self.path.join(logical_name);
                             let origin = OriginSet::new(Origin::from_file(full_path), vec![]);
-                            (origin, Blob::from_bytes(data))
+                            (origin, Blob::from_bytes(data), None)
                         })
                         .collect();
                     Ok(Some(FileResultIter {
@@ -521,12 +598,13 @@ impl ParallelBlobIterator for FileResult {
                             files,
                             max_extraction_depth.map(|depth| depth.saturating_sub(1)),
                             resources,
+                            Some(self.path.to_string_lossy().into_owned()),
                         )?
                         .into_iter()
-                        .map(|(filename, data)| {
+                        .map(|(filename, data, member)| {
                             let origin =
                                 OriginSet::new(Origin::from_file(PathBuf::from(filename)), vec![]);
-                            (origin, Blob::from_bytes(data))
+                            (origin, Blob::from_bytes(data), member)
                         })
                         .collect();
                         Ok(Some(FileResultIter {
@@ -558,17 +636,18 @@ impl ParallelBlobIterator for FileResult {
                                     vec![(filename.clone(), data)],
                                     max_extraction_depth.map(|depth| depth - 1),
                                     resources,
+                                    Some(self.path.to_string_lossy().into_owned()),
                                 )?;
                                 // A successful nested extraction replaces the archive entry
                                 // with its contents. Invalid or empty archives are returned as
                                 // the original entry by the helper and remain scanable below.
                                 if nested.len() != 1 || nested[0].0 != filename {
-                                    for (logical, data) in nested {
+                                    for (logical, data, member) in nested {
                                         let origin = OriginSet::new(
                                             Origin::from_file(PathBuf::from(logical)),
                                             vec![],
                                         );
-                                        items.push((origin, Blob::from_bytes(data)));
+                                        items.push((origin, Blob::from_bytes(data), member));
                                     }
                                     continue;
                                 }
@@ -584,11 +663,12 @@ impl ParallelBlobIterator for FileResult {
                                     continue; // skip unreadable / unmappable file
                                 }
                             };
+                            let member = member_path(&filename, &self.path.to_string_lossy());
                             let full_path = PathBuf::from(filename);
                             let nested_origin =
                                 OriginSet::new(Origin::from_file(full_path), vec![]);
 
-                            items.push((nested_origin, blob));
+                            items.push((nested_origin, blob, member));
                         }
                         Ok(Some(FileResultIter {
                             iter_kind: FileResultIterKind::Archive(items),
@@ -640,13 +720,23 @@ impl AsRef<[u8]> for SharedArchive {
 }
 
 type ArchiveEntries = Box<dyn Iterator<Item = OwnedArchiveEntry> + Send>;
+type ProvenancedArchiveEntry = (String, Vec<u8>, Option<String>);
+type ProvenancedArchiveEntries = Box<dyn Iterator<Item = ProvenancedArchiveEntry> + Send>;
+
+fn member_path(logical: &str, parent: &str) -> Option<String> {
+    logical
+        .strip_prefix(parent)?
+        .strip_prefix('!')
+        .map(|member| member.trim_start_matches('/').to_owned())
+}
 
 fn lazy_expand_entries(
     entries: ArchiveEntries,
     remaining_depth: Option<usize>,
     resources: ResourceLimits,
-) -> ArchiveEntries {
-    expand_entries(entries, remaining_depth, resources, true)
+    parent: Option<String>,
+) -> ProvenancedArchiveEntries {
+    expand_entries(entries, remaining_depth, resources, true, parent)
 }
 
 fn expand_entries(
@@ -654,12 +744,14 @@ fn expand_entries(
     remaining_depth: Option<usize>,
     resources: ResourceLimits,
     apply_budget: bool,
-) -> ArchiveEntries {
+    parent: Option<String>,
+) -> ProvenancedArchiveEntries {
     expand_entries_with(
         entries,
         remaining_depth,
         resources,
         apply_budget,
+        parent,
         move |logical, shared| {
             if looks_like_zip(&shared) && shared.len() <= MAX_INMEM_ZIP_ARCHIVE_BYTES {
                 crate::decompress::zip_entries(
@@ -682,23 +774,25 @@ fn expand_entries_with(
     remaining_depth: Option<usize>,
     resources: ResourceLimits,
     mut apply_budget: bool,
+    parent: Option<String>,
     mut extract: impl FnMut(&str, Arc<Vec<u8>>) -> Result<ArchiveEntries> + Send + 'static,
-) -> ArchiveEntries {
+) -> ProvenancedArchiveEntries {
     // Track only active ancestors: identical sibling archives must still be
     // scanned at each logical path. Cycles are not additional nesting depth.
     let mut ancestors = std::collections::HashSet::new();
-    let mut stack = vec![(entries, remaining_depth, None)];
+    let mut stack = vec![(entries, remaining_depth, None, parent)];
     let mut total = 0u64;
     Box::new(std::iter::from_fn(move || {
         while !apply_budget || !resources.reached(total, MAX_RECURSIVE_ARCHIVE_BYTES) {
-            let (entries, depth, _) = stack.last_mut()?;
+            let (entries, depth, _, parent) = stack.last_mut()?;
             let Some((logical, mut data)) = entries.next() else {
-                if let Some((_, _, Some(hash))) = stack.pop() {
+                if let Some((_, _, Some(hash), _)) = stack.pop() {
                     ancestors.remove(&hash);
                 }
                 continue;
             };
             let depth = *depth;
+            let member = parent.as_deref().and_then(|parent| member_path(&logical, parent));
             if depth != Some(0) {
                 let hash = blake3::hash(&data);
                 if !ancestors.contains(&hash) {
@@ -712,6 +806,7 @@ fn expand_entries_with(
                                     Box::new(std::iter::once(first).chain(nested)),
                                     depth.map(|d| d - 1),
                                     Some(hash),
+                                    Some(logical),
                                 ));
                                 continue;
                             }
@@ -728,7 +823,7 @@ fn expand_entries_with(
                 data.truncate(resources.cap(data.len() as u64, remaining) as usize);
             }
             total = total.saturating_add(data.len() as u64);
-            return Some((logical, data));
+            return Some((logical, data, member));
         }
         None
     }))
@@ -739,9 +834,15 @@ fn lazy_expand_entry(
     data: Vec<u8>,
     remaining_depth: Option<usize>,
     resources: ResourceLimits,
-) -> ArchiveEntries {
+) -> ProvenancedArchiveEntries {
     // Failed extraction preserves the entire raw input, as in bounded mode.
-    expand_entries(Box::new(std::iter::once((logical, data))), remaining_depth, resources, false)
+    expand_entries(
+        Box::new(std::iter::once((logical, data))),
+        remaining_depth,
+        resources,
+        false,
+        None,
+    )
 }
 
 fn archive_staged_name(logical: &str) -> String {
@@ -958,9 +1059,11 @@ fn recursively_expand_archive_entries(
     entries: impl IntoIterator<Item = OwnedArchiveEntry>,
     remaining_depth: Option<usize>,
     resources: ResourceLimits,
-) -> Result<Vec<OwnedArchiveEntry>> {
+    parent: Option<String>,
+) -> Result<Vec<ProvenancedArchiveEntry>> {
     let entries: Vec<_> = entries.into_iter().collect();
-    Ok(lazy_expand_entries(Box::new(entries.into_iter()), remaining_depth, resources).collect())
+    Ok(lazy_expand_entries(Box::new(entries.into_iter()), remaining_depth, resources, parent)
+        .collect())
 }
 
 fn archive_entry_suffix<'a>(entry_logical: &'a str, archive_path: &str) -> Option<&'a str> {
@@ -970,6 +1073,7 @@ fn archive_entry_suffix<'a>(entry_logical: &'a str, archive_path: &str) -> Optio
 }
 
 struct GitRepoResultIter<'a> {
+    path_selection: crate::path_selection::PathSelection,
     inner: GitRepoResult,
     deadline: Option<std::time::Instant>,
     /// Extract recognized archive paths and content-sniffed ZIPs before scanning,
@@ -986,6 +1090,7 @@ impl ParallelBlobIterator for GitRepoResult {
 
     fn into_blob_iter<'a>(self) -> Result<Option<Self::Iter<'a>>> {
         Ok(Some(GitRepoResultIter {
+            path_selection: Default::default(),
             inner: self,
             deadline: None,
             // Default to enabled; the dispatch site overrides from CLI args.
@@ -998,7 +1103,7 @@ impl ParallelBlobIterator for GitRepoResult {
 }
 
 impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
-    type Item = Result<(OriginSet, Blob<'a>)>;
+    type Item = Result<LoadedBlob<'a>>;
 
     fn drive_unindexed<C>(self, consumer: C) -> C::Result
     where
@@ -1012,6 +1117,10 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
         let extract_archives = self.extract_archives;
         let extraction_depth = self.extraction_depth;
         let resources = self.resources;
+        let path_selection = self.path_selection;
+        // A Rayon job is not a worker: map_init repeatedly recreates handles and
+        // discards their delta-base caches. Reuse one bounded handle per worker.
+        let repositories = thread_local::ThreadLocal::new();
         // Loads one git blob and returns one *or more* `(OriginSet, Blob)`
         // tuples: a single tuple for normal blobs, multiple tuples for
         // archive blobs (zip/jar/apk/...) whose entries get unpacked into
@@ -1021,7 +1130,24 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
             let repo_path = Arc::clone(&repo_path);
             let flag = Arc::clone(&flag);
 
-            move |repo: &mut GixRepo, md: GitBlobMetadata| -> Result<LoadedGitBlobs<'a>> {
+            move |repo: &GixRepo, mut md: GitBlobMetadata| -> Result<LoadedGitBlobs<'a>> {
+                if !path_selection.is_empty() {
+                    let had_paths = !md.first_seen.is_empty();
+                    md.first_seen.retain(|appearance| {
+                        path_selection.matches(&appearance.path.to_str_lossy())
+                            || (extract_archives
+                                && is_compressed_file(Path::new(
+                                    appearance.path.to_str_lossy().as_ref(),
+                                )))
+                    });
+                    if md.first_seen.is_empty() && (had_paths || !path_selection.matches("")) {
+                        if !had_paths {
+                            debug!(blob = %md.blob_oid, repo = %repo_path.display(),
+                                "Skipping Git blob without path metadata because its path or extension cannot be selected");
+                        }
+                        return Ok(Box::new(std::iter::empty()));
+                    }
+                }
                 if deadline.is_some_and(|deadline| StdInstant::now() > deadline) {
                     if flag.swap(true, Ordering::Relaxed) {
                         bail!("__timeout_silenced__");
@@ -1065,39 +1191,47 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                             resources,
                         );
                         let repo_path = Arc::clone(&repo_path);
-                        return Ok(Box::new(entries.map(move |(entry_logical, entry_bytes)| {
-                            // Invalid/empty archives keep the original blob identity and origins.
-                            if entry_logical == archive_path {
+                        return Ok(Box::new(entries.map(
+                            move |(entry_logical, entry_bytes, member)| {
+                                // Invalid/empty archives keep the original blob identity and origins.
+                                if entry_logical == archive_path {
+                                    let origin =
+                                        OriginSet::try_from_iter(md.first_seen.iter().map(|e| {
+                                            Origin::from_git_repo_with_first_commit(
+                                                Arc::clone(&repo_path),
+                                                Arc::clone(&e.commit_metadata),
+                                                String::from_utf8_lossy(&e.path).to_string(),
+                                            )
+                                        }))
+                                        .unwrap_or_else(
+                                            || Origin::from_git_repo(Arc::clone(&repo_path)).into(),
+                                        );
+                                    return (
+                                        origin,
+                                        Blob::new(BlobId::from(&blob_id), entry_bytes),
+                                        None,
+                                    );
+                                }
+                                let entry_suffix =
+                                    archive_entry_suffix(&entry_logical, &archive_path);
                                 let origin =
                                     OriginSet::try_from_iter(md.first_seen.iter().map(|e| {
+                                        let path = String::from_utf8_lossy(&e.path);
+                                        let logical = entry_suffix
+                                            .map(|suffix| format!("{path}{suffix}"))
+                                            .unwrap_or_else(|| entry_logical.clone());
                                         Origin::from_git_repo_with_first_commit(
                                             Arc::clone(&repo_path),
                                             Arc::clone(&e.commit_metadata),
-                                            String::from_utf8_lossy(&e.path).to_string(),
+                                            logical,
                                         )
                                     }))
                                     .unwrap_or_else(|| {
                                         Origin::from_git_repo(Arc::clone(&repo_path)).into()
                                     });
-                                return (origin, Blob::new(BlobId::from(&blob_id), entry_bytes));
-                            }
-                            let entry_suffix = archive_entry_suffix(&entry_logical, &archive_path);
-                            let origin = OriginSet::try_from_iter(md.first_seen.iter().map(|e| {
-                                let path = String::from_utf8_lossy(&e.path);
-                                let logical = entry_suffix
-                                    .map(|suffix| format!("{path}{suffix}"))
-                                    .unwrap_or_else(|| entry_logical.clone());
-                                Origin::from_git_repo_with_first_commit(
-                                    Arc::clone(&repo_path),
-                                    Arc::clone(&e.commit_metadata),
-                                    logical,
-                                )
-                            }))
-                            .unwrap_or_else(|| {
-                                Origin::from_git_repo(Arc::clone(&repo_path)).into()
-                            });
-                            (origin, Blob::from_bytes(entry_bytes))
-                        })));
+                                (origin, Blob::from_bytes(entry_bytes), member)
+                            },
+                        )));
                     }
                 }
 
@@ -1112,14 +1246,14 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 }))
                 .unwrap_or_else(|| Origin::from_git_repo(Arc::clone(&repo_path)).into());
 
-                Ok(Box::new(std::iter::once((origin, blob))))
+                Ok(Box::new(std::iter::once((origin, blob, None))))
             }
         };
 
         // After flat-mapping, errors and successes both flow as
-        // `Result<(OriginSet, Blob<'a>)>`. Filter out the silenced timeout
+        // `Result<LoadedBlob<'a>>`. Filter out the silenced timeout
         // marker before handing items to the scan consumer.
-        let timeout_filter = |res: &Result<(OriginSet, Blob<'a>)>| -> bool {
+        let timeout_filter = |res: &Result<LoadedBlob<'a>>| -> bool {
             !matches!(res, Err(e) if e.to_string() == "__timeout_silenced__")
         };
 
@@ -1131,7 +1265,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
         // `Blob<'a>` Item type — Blob is covariant in its lifetime, but a
         // free fn would lose that link.
         let fan_out = |res: Result<LoadedGitBlobs<'a>>|
-         -> Box<dyn Iterator<Item = Result<(OriginSet, Blob<'a>)>> + Send + 'a> {
+         -> Box<dyn Iterator<Item = Result<LoadedBlob<'a>>> + Send + 'a> {
             match res {
                 Ok(v) => Box::new(v.map(Ok)),
                 Err(e) => Box::new(std::iter::once(Err(e))),
@@ -1144,7 +1278,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 blobs
                     .into_par_iter()
                     .with_min_len(1024)
-                    .map_init(move || rs.to_thread_local(), load_blob)
+                    .map(|md| load_blob(repositories.get_or(|| rs.to_thread_local()), md))
                     .flat_map_iter(fan_out)
                     .filter(timeout_filter)
                     .drive_unindexed(consumer)
@@ -1204,7 +1338,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 blob_rx
                     .into_iter()
                     .par_bridge()
-                    .map_init(move || rs.to_thread_local(), load_blob)
+                    .map(|md| load_blob(repositories.get_or(|| rs.to_thread_local()), md))
                     .flat_map_iter(fan_out)
                     .filter(timeout_filter)
                     .drive_unindexed(consumer)
@@ -1214,6 +1348,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
 }
 
 struct EnumeratorFileIter<'a> {
+    path_selection: crate::path_selection::PathSelection,
     inner: EnumeratorFileResult,
     reader: std::io::BufReader<std::fs::File>,
     _marker: PhantomData<&'a ()>,
@@ -1225,7 +1360,12 @@ impl ParallelBlobIterator for EnumeratorFileResult {
     fn into_blob_iter<'a>(self) -> Result<Option<Self::Iter<'a>>> {
         let file = std::fs::File::open(&self.path)?;
         let reader = std::io::BufReader::new(file);
-        Ok(Some(EnumeratorFileIter { inner: self, reader, _marker: PhantomData }))
+        Ok(Some(EnumeratorFileIter {
+            path_selection: Default::default(),
+            inner: self,
+            reader,
+            _marker: PhantomData,
+        }))
     }
 }
 #[allow(clippy::large_enum_variant)]
@@ -1238,7 +1378,7 @@ enum FoundInputIter<'a> {
 // Split JSONL sequentially, then deserialize and load each entry in parallel.
 
 impl<'a> ParallelIterator for EnumeratorFileIter<'a> {
-    type Item = Result<(OriginSet, Blob<'a>)>;
+    type Item = Result<LoadedBlob<'a>>;
 
     fn drive_unindexed<C>(self, consumer: C) -> C::Result
     where
@@ -1255,7 +1395,20 @@ impl<'a> ParallelIterator for EnumeratorFileIter<'a> {
                 })?;
                 let origin = OriginSet::new(Origin::from_extended(e.origin), Vec::new());
                 let blob = Blob::from_bytes(e.content.as_bytes().to_owned());
-                Ok((origin, blob))
+                Ok((origin, blob, None))
+            })
+            .filter(|entry| match entry {
+                Err(_) => true,
+                Ok((origin, _, _)) => {
+                    self.path_selection.is_empty()
+                        || self.path_selection.matches(
+                            &origin
+                                .first()
+                                .blob_path()
+                                .map(|path| path.to_string_lossy())
+                                .unwrap_or_default(),
+                        )
+                }
             })
             .drive_unindexed(consumer)
     }
@@ -1264,7 +1417,7 @@ impl<'a> ParallelIterator for EnumeratorFileIter<'a> {
 trait ParallelBlobIterator {
     /// The concrete parallel iterator returned by `into_blob_iter`.
     /// It is generic over the lifetime `'a` that the produced `Blob<'a>` carries.
-    type Iter<'a>: ParallelIterator<Item = Result<(OriginSet, Blob<'a>)>> + 'a
+    type Iter<'a>: ParallelIterator<Item = Result<LoadedBlob<'a>>> + 'a
     where
         Self: 'a;
     /// Convert the input into an *optional* parallel iterator of `(Origin, Blob)` tuples.
@@ -1274,7 +1427,7 @@ trait ParallelBlobIterator {
 }
 
 impl<'a> ParallelIterator for FoundInputIter<'a> {
-    type Item = Result<(OriginSet, Blob<'a>)>;
+    type Item = Result<LoadedBlob<'a>>;
 
     fn drive_unindexed<C>(self, consumer: C) -> C::Result
     where
@@ -1303,7 +1456,21 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
 
         match input {
             // ───────────── regular file ─────────────
-            FoundInput::File(i) => Ok(i.into_blob_iter()?.map(FoundInputIter::File)),
+            FoundInput::File(i) => {
+                if !cfg.path_selection.is_empty()
+                    && !matches_selected_file(
+                        &cfg.path_selection,
+                        &i.path,
+                        &cfg.selection_roots,
+                        &cfg.selection_base,
+                    )
+                    && !(cfg.extract_archives
+                        && (is_compressed_file(&i.path) || file_header_looks_like_zip(&i.path)))
+                {
+                    return Ok(None);
+                }
+                Ok(i.into_blob_iter()?.map(FoundInputIter::File))
+            }
 
             // ───────────── directory (possible Git repo) ─────────────
             FoundInput::Directory(i) => {
@@ -1352,12 +1519,19 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                         )
                     }
                 } else if collect_git_metadata {
-                    GitRepoWithMetadataEnumerator::new(
+                    let enumerator = GitRepoWithMetadataEnumerator::new(
                         path,
                         repository,
                         cfg.exclude_globset.clone(),
-                    )
-                    .run_with_deadline(deadline)
+                    );
+                    // A narrow path selection must not start by reading every blob
+                    // outside that scope. Its eager path metadata is cheaper instead.
+                    let enumerator = if cfg.path_selection.is_empty() {
+                        enumerator.with_content_filter(&cfg.git_content_filter)
+                    } else {
+                        enumerator
+                    };
+                    enumerator.run_with_deadline(deadline)
                 } else {
                     GitRepoEnumerator::new(path, repository).run()
                 };
@@ -1381,6 +1555,7 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                                 gri.deadline =
                                     timeout.and_then(|timeout| Instant::now().checked_add(timeout));
                                 gri.resources = cfg.resources;
+                                gri.path_selection = cfg.path_selection.clone();
                                 gri.extract_archives = extract_archives;
                                 gri.extraction_depth = cfg.extraction_depth;
                                 FoundInputIter::GitRepo(gri)
@@ -1391,9 +1566,10 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
             }
 
             // ───────────── pre-enumerated JSON file list ─────────────
-            FoundInput::EnumeratorFile(i) => {
-                Ok(i.into_blob_iter()?.map(FoundInputIter::EnumeratorFile))
-            }
+            FoundInput::EnumeratorFile(i) => Ok(i.into_blob_iter()?.map(|mut iter| {
+                iter.path_selection = cfg.path_selection.clone();
+                FoundInputIter::EnumeratorFile(iter)
+            })),
         }
     }
 }
@@ -1938,6 +2114,54 @@ mod tests {
     use tempfile::tempdir;
     use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
+    #[test]
+    fn selected_file_paths_preserve_bangs_and_explicit_file_directories() {
+        let base = std::env::current_dir().unwrap();
+        let selection = crate::path_selection::PathSelection {
+            include_prefixes: vec!["configs/".into()],
+            ..Default::default()
+        };
+        for path in [Path::new("configs/key.env"), Path::new("configs/key!literal.env")] {
+            assert!(super::matches_selected_file(&selection, path, &[], &base));
+            assert!(super::matches_selected_file(&selection, &base.join(path), &[], &base));
+        }
+        assert!(!super::matches_selected_file(
+            &selection,
+            Path::new("outside!configs/key.env"),
+            &[],
+            &base
+        ));
+        let literal = crate::path_selection::PathSelection {
+            include_prefixes: vec!["configs/key!".into()],
+            ..Default::default()
+        };
+        assert!(super::matches_selected_file(
+            &literal,
+            Path::new("configs/key!literal.env"),
+            &[],
+            &base
+        ));
+    }
+
+    #[test]
+    fn archive_member_selection_uses_extraction_boundaries_not_literal_bangs() -> Result<()> {
+        let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("configs/key!literal.env", SimpleFileOptions::default())?;
+        zip.write_all(b"archive member content")?;
+        let bytes = zip.finish()?.into_inner();
+        let entries: Vec<_> = lazy_expand_entry(
+            "archive!literal.zip".into(),
+            bytes,
+            Some(2),
+            crate::limits::ResourceLimits::default(),
+        )
+        .collect();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].0, "archive!literal.zip!configs/key!literal.env");
+        assert_eq!(entries[0].2.as_deref(), Some("configs/key!literal.env"));
+        Ok(())
+    }
+
     #[cfg(unix)]
     #[test]
     fn owned_archive_staging_excludes_group_and_other_access() -> std::io::Result<()> {
@@ -1998,6 +2222,82 @@ mod tests {
     #[test]
     fn reference_candidates_for_head_symbol() {
         assert_eq!(reference_candidates("HEAD"), vec!["HEAD".to_string()]);
+    }
+
+    #[test]
+    fn repository_deadlines_apply_to_history_and_snapshot_with_unlimited_content() -> Result<()> {
+        use crate::cli::{CommandLineArgs, commands::scan::ScanOperation, global::Command};
+        use clap::Parser;
+
+        let temp = tempdir()?;
+        let repo = Git2Repository::init(temp.path())?;
+        fs::write(temp.path().join("secret.txt"), "fixture-secret")?;
+        let mut index = repo.index()?;
+        index.add_path(Path::new("secret.txt"))?;
+        let tree = repo.find_tree(index.write_tree()?)?;
+        let signature = Signature::now("tester", "tester@example.com")?;
+        repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])?;
+
+        for content in [false, true] {
+            for timeouts in [false, true] {
+                let mut options = vec!["kingfisher", "scan", ".", "--git-repo-timeout=1"];
+                if content {
+                    options.push("--no-limits");
+                }
+                if timeouts {
+                    options.push("--no-timeouts");
+                }
+                let Command::Scan(command) = CommandLineArgs::try_parse_from(options)?.command
+                else {
+                    panic!()
+                };
+                let ScanOperation::Scan(args) = command.into_operation()? else { panic!() };
+                // Exercise an elapsed budget without relying on repository size or CPU speed.
+                let deadline =
+                    args.repository_timeout().map(|_| Instant::now() - Duration::from_secs(1));
+                let open = || -> Result<gix::Repository> {
+                    Ok(open_opts(repo.path(), Options::isolated().open_path_as_is(true))?)
+                };
+                let history = enumerate_git_branch_history(
+                    temp.path(),
+                    open()?,
+                    Some("HEAD"),
+                    None,
+                    None,
+                    None,
+                    true,
+                    deadline,
+                );
+                let snapshot = enumerate_git_diff_repo(
+                    temp.path(),
+                    open()?,
+                    GitDiffConfig {
+                        since_ref: None,
+                        branch_ref: "HEAD".into(),
+                        branch_root: None,
+                        staged: false,
+                    },
+                    None,
+                    false,
+                    deadline,
+                );
+                for result in [history, snapshot] {
+                    if timeouts {
+                        let GitBlobSource::Precomputed(blobs) = result?.blobs else {
+                            panic!("expected fixture blob")
+                        };
+                        assert_eq!(blobs.len(), 1);
+                        assert_eq!(blobs[0].first_seen[0].path.to_str_lossy(), "secret.txt");
+                    } else {
+                        let error = result
+                            .err()
+                            .expect("an expired repository budget must stop enumeration");
+                        assert!(error.to_string().contains("timed out"), "{error}");
+                    }
+                }
+            }
+        }
+        Ok(())
     }
 
     #[test]
@@ -2466,6 +2766,7 @@ mod tests {
                 None,
                 crate::limits::ResourceLimits { unlimited },
                 false,
+                None,
                 move |logical, data| {
                     extractions += 1;
                     assert!(extractions <= 4, "archive cycle was expanded again");
@@ -2479,7 +2780,10 @@ mod tests {
             .collect();
             assert_eq!(
                 expanded,
-                vec![("first!child!child".into(), vec![1]), ("second!child!child".into(), vec![1]),]
+                vec![
+                    ("first!child!child".into(), vec![1], Some("child".into())),
+                    ("second!child!child".into(), vec![1], Some("child".into())),
+                ]
             );
         }
     }
@@ -2499,7 +2803,7 @@ mod tests {
                 crate::limits::ResourceLimits::default(),
             )
             .collect::<Vec<_>>();
-            assert_eq!(entries, vec![("fixture.zip".into(), bytes)]);
+            assert_eq!(entries, vec![("fixture.zip".into(), bytes, None)]);
         }
         Ok(())
     }
@@ -2528,6 +2832,7 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].0, "dir/payload.zip!nested/secret.txt");
         assert_eq!(entries[0].1, b"token=not-a-real-secret");
+        assert_eq!(entries[0].2.as_deref(), Some("nested/secret.txt"));
         Ok(())
     }
 
@@ -2578,6 +2883,7 @@ mod tests {
         assert_eq!(deep.len(), 1);
         assert_eq!(deep[0].0, "dir/outer.zip!inner.zip!nested/secret.txt");
         assert_eq!(deep[0].1, b"nested archive content");
+        assert_eq!(deep[0].2.as_deref(), Some("nested/secret.txt"));
 
         Ok(())
     }
@@ -2587,7 +2893,7 @@ mod tests {
         iter.collect::<Vec<_>>()
             .into_iter()
             .map(|item| {
-                let (origin, blob) = item?;
+                let (origin, blob, _) = item?;
                 let path = origin
                     .first()
                     .full_path()
@@ -2745,12 +3051,11 @@ mod tests {
     }
 }
 
-/// A simple enum describing how we yield file content:
-/// - Single: one `(origin, blob)`
-/// - Archive: multiple `(origin, blob)` items from a decompressed archive
+/// Single files need no archive-member selection metadata; archive entries carry
+/// paths established during extraction. Keep the ordinary path allocation-free.
 enum FileResultIterKind {
-    Single(Option<(OriginSet, OwnedBlob)>),
-    Archive(Vec<(OriginSet, OwnedBlob)>),
+    Single(Option<(OriginSet, Blob<'static>)>),
+    Archive(Vec<LoadedBlob<'static>>),
 }
 
 #[derive(Deserialize)]

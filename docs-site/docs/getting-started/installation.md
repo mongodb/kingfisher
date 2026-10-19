@@ -478,6 +478,23 @@ Veles sources. Cargo dependencies and native build prerequisites must still be a
 The repository preserves license texts, source headers, and provenance under
 `crates/kingfisher-rules/generated/`; the source archive includes those files.
 
+After installing the native prerequisites, build the headless CLI for the host with:
+
+```bash
+cargo build --release --locked --bin kingfisher
+```
+
+Release builds retain the throughput-focused optimization profile and losslessly
+compressed tokenizer vocabulary. No extra machine-outlining or inlining-threshold
+flags are required. On Windows, use the MSYS2 targets below to select the supported
+GNU/LLVM toolchain and static libraries.
+
+Static release builds for `x86_64-unknown-linux-musl` pack relative relocations
+with `-Wl,-z,pack-relative-relocs`. Use GNU binutils 2.38 or newer, or a compatible
+LLVM lld linker with RELR support. Older linkers may reject this option; upgrade
+the linker or use the Docker-based `make linux` build, which supplies the release
+toolchain. Other targets, debug builds, and SDK libraries do not use this option.
+
 You may compile for your platform via `make`:
 
 ```bash

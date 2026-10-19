@@ -205,6 +205,7 @@ pub async fn execute_http_revocation(
     timeout: Duration,
     retries: u32,
 ) -> Result<DirectRevocationResult> {
+    anyhow::ensure!(http_revocation.auth.is_none(), "OAuth2 auth is supported for validation only");
     let matchers = http_revocation
         .request
         .response_matcher

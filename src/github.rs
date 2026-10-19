@@ -21,6 +21,8 @@ use crate::{
 };
 use std::str::FromStr;
 
+pub(crate) mod retry;
+
 #[derive(Deserialize)]
 struct GitHubContributor {
     login: Option<String>,
@@ -325,12 +327,21 @@ async fn github_token(
     GitHubAuth::from_env(api_url, ignore_certs)?.token(client).await
 }
 
-fn github_get(client: &reqwest::Client, url: Url, token: Option<&str>) -> reqwest::RequestBuilder {
+async fn github_get(
+    client: &reqwest::Client,
+    url: Url,
+    token: Option<&str>,
+    action: &str,
+) -> Result<reqwest::Response> {
     let req = client.get(url).header("User-Agent", GLOBAL_USER_AGENT.as_str());
-    if let Some(token) = token { req.bearer_auth(token) } else { req }
+    let req = if let Some(token) = token { req.bearer_auth(token) } else { req };
+    retry::send(req, action).await
 }
 
-async fn ensure_github_success(resp: reqwest::Response, action: &str) -> Result<reqwest::Response> {
+async fn ensure_github_success(
+    mut resp: reqwest::Response,
+    action: &str,
+) -> Result<reqwest::Response> {
     if resp.status().is_success() {
         return Ok(resp);
     }
@@ -339,9 +350,16 @@ async fn ensure_github_success(resp: reqwest::Response, action: &str) -> Result<
     let url = resp.url().clone();
     warn_on_rate_limit("GitHub", status, action);
 
-    let mut body = resp.text().await.unwrap_or_default();
+    let mut body = match retry::read_body_prefix(&mut resp, 512).await {
+        Ok(body) => String::from_utf8_lossy(&body).into_owned(),
+        Err(error) => format!("<cannot read response body: {error}>"),
+    };
     if body.len() > 512 {
-        body.truncate(512);
+        let mut end = 512;
+        while !body.is_char_boundary(end) {
+            end -= 1;
+        }
+        body.truncate(end);
     }
     anyhow::bail!("GitHub API request failed while {action}: HTTP {status} ({url}): {body}");
 }
@@ -362,12 +380,30 @@ fn github_next_link(headers: &HeaderMap) -> Option<Url> {
     })
 }
 
+fn check_github_pagination(
+    api_base: &Url,
+    url: &Url,
+    seen_pages: &mut HashSet<String>,
+    resource: &str,
+) -> Result<()> {
+    anyhow::ensure!(
+        url.origin() == api_base.origin() && url.username().is_empty() && url.password().is_none(),
+        "GitHub {resource} pagination points to a different origin"
+    );
+    anyhow::ensure!(
+        seen_pages.insert(url.to_string()),
+        "GitHub {resource} pagination repeated a page"
+    );
+    Ok(())
+}
+
 async fn fetch_github_orgs(
     client: &reqwest::Client,
     api_base: &Url,
     token: Option<&str>,
 ) -> Result<Vec<String>> {
     let mut orgs = Vec::new();
+    let mut seen_pages = HashSet::new();
     let mut next_url = {
         let mut url = api_base.join("organizations").context("Failed to build GitHub orgs URL")?;
         url.query_pairs_mut().append_pair("per_page", "100");
@@ -375,8 +411,9 @@ async fn fetch_github_orgs(
     };
 
     while let Some(url) = next_url {
+        check_github_pagination(api_base, &url, &mut seen_pages, "organizations")?;
         let resp = ensure_github_success(
-            github_get(client, url, token).send().await?,
+            github_get(client, url, token, "listing organizations").await?,
             "listing organizations",
         )
         .await?;
@@ -413,7 +450,7 @@ async fn fetch_github_repos(
             .append_pair("sort", "created")
             .append_pair("direction", "desc");
         let resp =
-            ensure_github_success(github_get(client, url, token).send().await?, action).await?;
+            ensure_github_success(github_get(client, url, token, action).await?, action).await?;
         let page_repos: Vec<GitHubRepo> = resp.json().await?;
         if page_repos.is_empty() {
             break;
@@ -446,14 +483,9 @@ async fn fetch_github_gist_urls(
         Some(url)
     };
     while let Some(url) = next_url {
-        if url.origin() != api_base.origin() {
-            anyhow::bail!("GitHub gists pagination points to a different origin");
-        }
-        if !seen_pages.insert(url.to_string()) {
-            anyhow::bail!("GitHub gists pagination repeated a page");
-        }
+        check_github_pagination(api_base, &url, &mut seen_pages, "gists")?;
         let resp = ensure_github_success(
-            github_get(client, url, token).send().await?,
+            github_get(client, url, token, "listing user gists").await?,
             "listing user gists",
         )
         .await?;
@@ -493,7 +525,7 @@ pub async fn enumerate_contributor_repo_urls(
             .join(&format!("repos/{owner}/{repo}/contributors"))
             .context("Failed to build GitHub contributors URL")?;
         url.query_pairs_mut().append_pair("per_page", "100").append_pair("page", &page.to_string());
-        let resp = github_get(&client, url, token.as_deref()).send().await?;
+        let resp = github_get(&client, url, token.as_deref(), "listing contributors").await?;
         if is_github_soft_limit_status(resp.status()) {
             warn_on_rate_limit("GitHub", resp.status(), "listing contributors");
             break;
@@ -551,7 +583,8 @@ pub async fn enumerate_contributor_repo_urls(
                 .append_pair("type", "all")
                 .append_pair("sort", "updated")
                 .append_pair("direction", "desc");
-            let resp = github_get(&client, url, token.as_deref()).send().await?;
+            let resp =
+                github_get(&client, url, token.as_deref(), "listing user repositories").await?;
             if is_github_soft_limit_status(resp.status()) {
                 warn_on_rate_limit("GitHub", resp.status(), "listing user repositories");
                 break;
@@ -664,6 +697,7 @@ pub async fn enumerate_public_event_targets(
     let mut targets = Vec::new();
 
     for username in users {
+        let mut seen_pages = HashSet::new();
         let mut next_url = {
             let mut url = api_base
                 .join(&format!("users/{username}/events/public"))
@@ -673,8 +707,9 @@ pub async fn enumerate_public_event_targets(
         };
 
         while let Some(url) = next_url {
+            check_github_pagination(&api_base, &url, &mut seen_pages, "public events")?;
             let resp = ensure_github_success(
-                github_get(&client, url, token.as_deref()).send().await?,
+                github_get(&client, url, token.as_deref(), "listing public user events").await?,
                 "listing public user events",
             )
             .await?;
@@ -909,7 +944,7 @@ pub async fn fetch_repo_items(
             .append_pair("state", "all")
             .append_pair("per_page", "100")
             .append_pair("page", &page.to_string());
-        let resp = github_get(&client, url, token.as_deref()).send().await?;
+        let resp = github_get(&client, url, token.as_deref(), "listing repository issues").await?;
         if !resp.status().is_success() {
             break;
         }
@@ -947,7 +982,7 @@ pub async fn fetch_repo_items(
             .join(&format!("users/{owner}/gists"))
             .context("Failed to build GitHub user gists URL")?;
         url.query_pairs_mut().append_pair("per_page", "100").append_pair("page", &page.to_string());
-        let resp = github_get(&client, url, token.as_deref()).send().await?;
+        let resp = github_get(&client, url, token.as_deref(), "listing user gists").await?;
         if !resp.status().is_success() {
             break;
         }
@@ -962,8 +997,10 @@ pub async fn fetch_repo_items(
                 let url = api_base
                     .join(&format!("gists/{id}"))
                     .context("Failed to build GitHub gist URL")?;
-                let detail: Value =
-                    github_get(&client, url, token.as_deref()).send().await?.json().await?;
+                let detail: Value = github_get(&client, url, token.as_deref(), "fetching gist")
+                    .await?
+                    .json()
+                    .await?;
                 let gist_url = artifact_html_url(&detail, fallback_gist_url(&host, id));
                 if let Some(files) = detail.get("files").and_then(|v| v.as_object()) {
                     let gist_dir = gists_dir.join(id);
@@ -991,7 +1028,7 @@ pub async fn fetch_repo_items(
             url.query_pairs_mut()
                 .append_pair("per_page", "100")
                 .append_pair("page", &page.to_string());
-            let resp = github_get(&client, url, Some(token)).send().await?;
+            let resp = github_get(&client, url, Some(token), "listing authenticated gists").await?;
             if !resp.status().is_success() {
                 break;
             }
@@ -1009,8 +1046,10 @@ pub async fn fetch_repo_items(
                     let url = api_base
                         .join(&format!("gists/{id}"))
                         .context("Failed to build GitHub gist URL")?;
-                    let detail: Value =
-                        github_get(&client, url, Some(token)).send().await?.json().await?;
+                    let detail: Value = github_get(&client, url, Some(token), "fetching gist")
+                        .await?
+                        .json()
+                        .await?;
                     let gist_url = artifact_html_url(&detail, fallback_gist_url(&host, id));
                     if let Some(files) = detail.get("files").and_then(|v| v.as_object()) {
                         let gist_dir = gists_dir.join(id);
@@ -1041,6 +1080,156 @@ pub async fn fetch_repo_items(
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[tokio::test]
+    async fn organization_and_event_pagination_reject_cross_origin_links_and_cycles() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        for events in [false, true] {
+            for cross_origin in [false, true] {
+                let server = MockServer::start().await;
+                let other = MockServer::start().await;
+                let endpoint = if events { "users/alice/events/public" } else { "organizations" };
+                let origin = if cross_origin { other.uri() } else { server.uri() };
+                let next = format!("<{origin}/api/v3/{endpoint}?per_page=100>; rel=\"next\"");
+                let body = if events {
+                    json!([{"type":"CreateEvent", "repo":{"name":"alice/repo"},
+                        "payload":{"ref_type":"repository"}, "created_at": Utc::now().to_rfc3339()}])
+                } else {
+                    json!([{"login":"acme"}])
+                };
+                Mock::given(method("GET"))
+                    .respond_with(
+                        ResponseTemplate::new(200)
+                            .insert_header("link", next.as_str())
+                            .set_body_json(body),
+                    )
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                Mock::given(method("GET"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+                    .expect(0)
+                    .mount(&other)
+                    .await;
+                let base = Url::parse(&format!("{}/api/v3/", server.uri())).unwrap();
+                let result = if events {
+                    temp_env::async_with_vars(
+                        [
+                            ("KF_GITHUB_TOKEN", Some("pagination-secret")),
+                            ("KF_GITHUB_APP_ID", None),
+                            ("KF_GITHUB_APP_INSTALLATION_ID", None),
+                            ("KF_GITHUB_APP_PRIVATE_KEY", None),
+                            ("KF_GITHUB_APP_PRIVATE_KEY_PATH", None),
+                        ],
+                        enumerate_public_event_targets(
+                            &["alice".into()],
+                            24,
+                            base,
+                            false,
+                            &[],
+                            None,
+                            None,
+                        ),
+                    )
+                    .await
+                    .map(|_| ())
+                } else {
+                    fetch_github_orgs(&reqwest::Client::new(), &base, Some("pagination-secret"))
+                        .await
+                        .map(|_| ())
+                };
+                let error = result.unwrap_err();
+                let expected = if cross_origin { "different origin" } else { "repeated a page" };
+                assert!(error.to_string().contains(expected), "{error}");
+                assert!(other.received_requests().await.unwrap().is_empty());
+                let requests = server.received_requests().await.unwrap();
+                assert_eq!(requests.len(), 1);
+                assert_eq!(requests[0].headers["authorization"], "Bearer pagination-secret");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn organizations_follow_same_origin_pagination() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, query_param, query_param_is_missing},
+        };
+        let server = MockServer::start().await;
+        let next = format!("<{}/api/v3/organizations?since=42>; rel=\"next\"", server.uri());
+        Mock::given(method("GET"))
+            .and(query_param_is_missing("since"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("link", next.as_str())
+                    .set_body_json(json!([{"login":"first"}])),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(query_param("since", "42"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!([{"login":"second"}])))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let base = Url::parse(&format!("{}/api/v3/", server.uri())).unwrap();
+        let organizations = fetch_github_orgs(&reqwest::Client::new(), &base, None).await.unwrap();
+        assert_eq!(organizations, ["first", "second"]);
+    }
+
+    #[test]
+    fn pagination_guard_checks_scheme_port_and_embedded_credentials() {
+        let base = Url::parse("https://api.github.com/").unwrap();
+        for next in [
+            "http://api.github.com/organizations",
+            "https://api.github.com:444/organizations",
+            "https://user:password@api.github.com/organizations",
+        ] {
+            assert!(
+                check_github_pagination(
+                    &base,
+                    &Url::parse(next).unwrap(),
+                    &mut HashSet::new(),
+                    "test"
+                )
+                .is_err()
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn api_error_reporting_stops_at_its_body_prefix_without_draining_the_stream() {
+        use futures::StreamExt;
+        let stream =
+            futures::stream::once(std::future::ready(Ok::<_, std::io::Error>(vec![b'x'; 513])))
+                .chain(futures::stream::pending());
+        let response = http::Response::builder()
+            .status(StatusCode::BAD_REQUEST)
+            .body(reqwest::Body::wrap_stream(stream))
+            .unwrap()
+            .into();
+        let error = tokio::time::timeout(
+            Duration::from_secs(10),
+            ensure_github_success(response, "testing bounded error reporting"),
+        )
+        .await
+        .expect("error reporting must not drain an infinite body")
+        .unwrap_err();
+        assert!(error.to_string().contains("HTTP 400"));
+        assert!(error.to_string().ends_with(&"x".repeat(512)));
+    }
+
+    #[tokio::test]
+    async fn api_error_body_is_truncated_at_a_utf8_boundary() {
+        let response = http::Response::builder()
+            .status(StatusCode::FORBIDDEN)
+            .body(format!("{}é", "x".repeat(511)))
+            .unwrap()
+            .into();
+        let error = ensure_github_success(response, "testing error reporting").await.unwrap_err();
+        assert!(error.to_string().ends_with(&"x".repeat(511)));
+    }
 
     fn public_event(event_type: &str, payload: Value) -> GitHubEvent {
         GitHubEvent {

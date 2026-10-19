@@ -14,10 +14,9 @@ The implementation favors lightweight extractors over full AST parsing:
 - **`cssparser`** for CSS — declaration parsing via Mozilla’s CSS tokenizer
 
 > **History:** Earlier parser implementations relied on 17 statically-linked
-> grammar crates. This added ~20 MB to the binary and required building a
-> full syntax tree just to extract assignment pairs. The current lexer-based
-> approach achieves the same extraction quality with near-zero binary overhead
-> and no external grammar dependencies.
+> grammar crates and required building a full syntax tree just to extract
+> assignment pairs. The current lexer-based approach achieves the same extraction
+> quality without building a full syntax tree or depending on external grammars.
 
 ## How It’s Called
 

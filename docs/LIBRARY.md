@@ -5,9 +5,9 @@ For in-process Python detection, validation and revocation, see the [Python SDK]
 [← Back to README](../README.md)
 
 The prepared library releases are **kingfisher-core 1.0.3**,
-**kingfisher-rules 1.2.1**, and **kingfisher-scanner 1.4.0**.
+**kingfisher-rules 2.0.0**, and **kingfisher-scanner 2.0.0**.
 They require Rust **1.99** or newer and are versioned independently of the
-`kingfisher-bin` CLI, currently **2.13.0**. See [publishing](PUBLISHING.md).
+`kingfisher-bin` CLI, currently **2.14.0**. See [publishing](PUBLISHING.md).
 
 ## Crate Overview
 
@@ -48,7 +48,7 @@ Add the scanner crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-kingfisher-scanner = "1.4.0"
+kingfisher-scanner = "2.0.0"
 anyhow = "1"
 ```
 
@@ -105,12 +105,12 @@ additional validator features your project needs.
 To install the CLI from crates.io:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.13.0
-kingfisher scan path/to/project --no-validate --format toon --no-update-check
+cargo install --locked kingfisher-bin --version 2.14.0
+kingfisher scan path/to/project --no-validate --format json --no-update-check
 ```
 
 For the `kingfisher-bin` library example in your own application, use
-`kingfisher = { package = "kingfisher-bin", version = "2.13.0" }` and `anyhow = "1"`.
+`kingfisher = { package = "kingfisher-bin", version = "2.14.0" }` and `anyhow = "1"`.
 The focused library examples use the crate versions listed above;
 `kingfisher-rules` and `kingfisher-scanner` examples also use `anyhow = "1"`.
 
@@ -119,17 +119,17 @@ The focused library examples use the crate versions listed above;
 Start with a complete example above and copy it into `src/main.rs` in a small Rust
 application. These are public-API consumers; no CLI process or private Kingfisher
 module is required. Choose dependencies from this table in addition to
-`kingfisher-scanner = "1.4.0"` and `anyhow = "1"`:
+`kingfisher-scanner = "2.0.0"` and `anyhow = "1"`:
 
 | Recipe | Additional dependencies / features |
 | ------ | ---------------------------------- |
 | `scan_content` | None |
 | `detection_policy` | Scanner feature `context` |
-| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "1.2.1"` for loading custom YAML/TOML |
+| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "2.0.0"` for loading custom YAML/TOML |
 | `scan_files` | `serde_json = "1"` |
-| `scan_custom_rules` | `kingfisher-rules = "1.2.1"` |
+| `scan_custom_rules` | `kingfisher-rules = "2.0.0"` |
 | `scan_async` | `tokio = { version = "1.53", features = ["macros", "rt", "sync"] }` |
-| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "1.2.1"` |
+| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "2.0.0"` |
 | `http_validation` | Complete manifest below; also copy `fixtures/acme-http.yml` and `support/mod.rs` into `src/fixtures/` and `src/support/` |
 | `validate_file` | Scanner feature `validation`; `serde_json = "1"`; `tokio = { version = "1.53", features = ["macros", "rt"] }` |
 | `git_inputs` | Scanner feature `git` |
@@ -182,6 +182,48 @@ reported findings still pass capture selection, entropy, filters and dependency
 requirements. Inspection makes no validation/revocation requests, and configured
 actions alone do not establish successful validation or revocation. Custom rule
 literals are returned as configured; this is not finding redaction.
+
+### Rule requirements and precise component context
+
+Both raw and Base64 detection enforce `pattern_requirements`: character minimums,
+custom special characters, ignored substrings and Liquid checksums. The shared
+`luhn_valid` and `iban_valid` filters return booleans for offline checksum templates;
+see [rule semantics and examples](RULES.md#character-requirements).
+
+For full-match dependency windows and assignment/object candidate ranking, retain
+compact source context with the findings:
+
+```rust
+# use kingfisher_scanner::{Blob, Scanner, Validator};
+# async fn example(scanner: &Scanner, validator: &Validator) -> anyhow::Result<()> {
+let blob = Blob::from_borrowed(b"token=demo_abcd1234efgh5678");
+let output = scanner.scan_blob_with_context(&blob, "config.env")?;
+let validator = validator.clone().with_scan_context(output.context);
+let results = validator.validate_findings(output.findings).await;
+# Ok(())
+# }
+```
+
+Context retains spans, assignment families and scope identifiers, not input bytes or
+secret values. Without detection options, context scans use full-match component
+windows isolated to raw input or each decoded buffer: sibling Base64 values cannot
+satisfy one another's required components. Explicit `DetectionOptions` still honor
+`cli_match_semantics` even when context is collected; retaining metadata does not
+override that policy. Finding fields and serialization remain unchanged. Existing
+vector-only scan/validation methods remain available and use their historical
+finding-location windows. Python retains and passes the context automatically.
+See the runnable [HTTP example](../crates/kingfisher-scanner/examples/http_validation.rs).
+
+With `validation` enabled, typed credential-URI rules also use the CLI's offline
+syntax checks before reporting. `Validator` honors explicit `verify_candidates`
+opt-ins using shared fixed-origin eligibility, ranked combinations, a 16-attempt
+budget, four concurrent searches and the shorter of 30 seconds or its timeout.
+Zero timeout disables the deadline. Unsupported or endpoint dependencies remain
+ambiguous; failed searches never classify the primary as inactive. Validation batches
+reuse definitive active/inactive results for identical rules and resolved inputs
+while preserving each occurrence, even with different remaining attempt budgets. Inconclusive failures and
+cancellation are not memoized, so later occurrences can retry; separate batches
+recheck. Validation and revocation remain explicit operations.
 
 ### Scan strings, uploads, and application configuration
 
@@ -263,8 +305,8 @@ rust-version = "1.99"
 
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
-kingfisher-rules = "1.2.1"
+kingfisher-scanner = { version = "2.0.0", features = ["validation"] }
+kingfisher-rules = "2.0.0"
 serde_json = "1"
 tokio = { version = "1.53", features = ["macros", "rt", "net", "io-util", "time"] }
 ```
@@ -293,6 +335,30 @@ SMTP credential URIs use `CredentialUri`; separate fields can use
 Both paths require TLS and authenticate without sending email. Keep invisible
 host, username, and optional port findings until validation resolves dependencies.
 Authentication rejection is distinct from inconclusive transport or TLS failures.
+
+### Validate through an OAuth2-protected verifier
+
+Custom YAML HTTP validators support the [OAuth2 auth block](RULES.md#oauth2-authentication-for-http-verification-services).
+Reuse one `Validator` (or its clones) for a session so concurrent checks share
+access tokens, expiry refresh and failure cooldowns. The scanner itself stays
+offline; provider requests begin only when validation is explicitly invoked.
+
+The [runnable example](../crates/kingfisher-scanner/examples/oauth2_validation.rs)
+loads your custom rule and scans a local file before validating its findings:
+
+```bash
+cargo run -p kingfisher-scanner --features validation --example oauth2_validation -- company-rules.yml input.txt
+```
+
+For `ValidationEngine`, reuse the engine or pass a cloned
+`validation::OAuth2TokenCache` through `oauth2_token_cache` when creating engines
+for individual checks. Keep this cache scoped to one application's validation
+session; tokens are stored in memory. HTTPS token/verifier requests always use
+strict TLS and retain environment proxy/`NO_PROXY` policy. Only explicitly allowed
+loopback plain-HTTP token/verifier requests bypass proxies and connect directly;
+both transports disable redirects. This exception does not affect other validator
+traffic. Existing `HttpValidation` struct literals must include `auth: None` when
+service authentication is not required; see the [2.0 migration](#migrating-to-rules-and-scanner-20).
 
 ### Use the validation builder
 
@@ -334,7 +400,9 @@ no detached validation tasks are created by the batch runner.
 The HTTP client is used by YAML HTTP, Betterleaks HTTP requests, Raw HTTP flows,
 and Coinbase. SDK, database, and gRPC helpers own their transports. All dispatches
 share the outer deadline and concurrency bound. `timeout(Duration::ZERO)` also disables
-Kingfisher protocol-helper timeouts. Injected HTTP clients retain their own settings.
+Kingfisher protocol-helper timeouts; best-effort SMTP cleanup remains bounded so
+it cannot delay an already established authentication result indefinitely.
+Injected HTTP clients retain their own settings.
 Positive body-size settings apply to YAML HTTP; Betterleaks and gRPC retain their
 1 MiB defaults unless `max_response_bytes(0)` disables body caps. These policies
 are scoped to each validation future and do not change concurrent validators. The resolver checks are not a
@@ -344,9 +412,13 @@ DNS-pinning guarantee or a substitute for application network policy.
 
 `Validator`, CLI scans, and `kingfisher validate` all call the same
 `validation::ValidationEngine`. It dispatches rules, executes protocols, and returns
-explicit outcomes. CLI candidate selection, rate limiting, and scan caches remain
-outside the engine. Provider responses cannot silently turn an inconclusive outcome
+explicit outcomes. Component eligibility and bounded candidate search are also shared;
+CLI rate limiting and scan caches remain application-owned. Provider responses cannot silently turn an inconclusive outcome
 into an inactive credential through HTTP-status inference.
+
+CLI scans keep content limits and deadlines independent: `--no-limits` lifts
+content caps, and `--no-timeouts` disables scan operation deadlines. For embedded
+validation, use `timeout(Duration::ZERO)` and `max_response_bytes(0)` independently.
 
 Most applications should use `Validator`. Advanced integrations that already resolve
 rule variables can use `ValidationEngine::new(&client, &parser).validate(&rule, &globals)`.
@@ -368,9 +440,10 @@ Pass the complete raw results from **one scan input** into each batch. Component
 must have the same blob ID and encoding as the primary finding, and satisfy the
 rule's `within` constraint when present. Distinct competing values yield `Skipped`
 with `AmbiguousDependency`; required absent values yield `MissingDependency`.
-Repeated occurrences of the same component value are accepted. The API deliberately
-does not try multiple credential combinations, even for `verify_candidates` rules.
-For ambiguous inputs, scan a narrower credential block with its needed context.
+Repeated occurrences of the same component value are accepted. Explicit supported
+`verify_candidates` opt-ins permit bounded try-and-verify pairing; otherwise narrow
+the credential block or supply unambiguous context. Use `scan_blob_with_context`
+and `with_scan_context` for full-match windows, decoded-buffer isolation and ranking.
 Do not combine unrelated file results into one batch.
 
 The dispatcher supports YAML HTTP (including inline multipart), Betterleaks
@@ -411,7 +484,7 @@ Compile once and share the database. Preserve catalog metadata with
 `RulesDatabase::from_rule_collection`; converting the loaded collection into a
 `Vec<Rule>` loses its database-level source prefilter.
 
-For custom files, add `kingfisher-rules = "1.2.1"` and use:
+For custom files, add `kingfisher-rules = "2.0.0"` and use:
 
 ```rust
 use kingfisher_rules::{Confidence, Rules, RulesDatabase};
@@ -472,7 +545,7 @@ services or when every file occurrence must be reported.
 
 ## Scanning Methods
 
-For reuse across processes, add `kingfisher-rules = "1.2.1"` to your dependencies and load the collection with
+For reuse across processes, add `kingfisher-rules = "2.0.0"` to your dependencies and load the collection with
 `kingfisher_rules::RulesDatabase::from_rule_collection_with_cache` and
 `kingfisher_rules::RuleCacheConfig::from_dir_or_env(None)` (or `RuleCacheConfig::new(path)`).
 This is the CLI/Python compiled content-database cache and honors `KF_RULE_CACHE_DIR`.
@@ -559,7 +632,7 @@ No validator features are enabled by default:
 
 ```toml
 [dependencies]
-kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
+kingfisher-scanner = { version = "2.0.0", features = ["validation"] }
 ```
 
 `validation` enables all supported validators and revocation: HTTP, gRPC,
@@ -576,7 +649,7 @@ logging or serializing it:
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
+kingfisher-scanner = { version = "2.0.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -628,7 +701,7 @@ provider constraints/Betterleaks branches are not fully established offline.
 
 `validator.with_variables(mapping)` clones execution policy and the pooled client
 with explicit overrides. `validate_prepared_findings(candidates, &context).await`
-validates only selected candidates, skips known unresolved validation inputs before
+validates only selected candidates, skips unresolved validation inputs without eligible candidate verification before
 provider work and retains supporting context without checking helpers separately.
 Live results retain `input_diagnostics`; missing revocation-only template inputs
 prevent resolved action inputs even when validation proves activity.
@@ -660,7 +733,7 @@ retained credential inputs. Validation never calls revocation automatically.
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "1.4.0", features = ["validation"] }
+kingfisher-scanner = { version = "2.0.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -742,12 +815,12 @@ input limits and bound worker counts for untrusted or large workloads.
 The full application's library is available separately:
 
 ```toml
-kingfisher = { package = "kingfisher-bin", version = "2.13.0" }
+kingfisher = { package = "kingfisher-bin", version = "2.14.0" }
 ```
 
 It carries CLI dependencies and all validator features. The stable embedding
-contract described here applies to the three `1.x` library crates; prefer those
-for detection, validation, and revocation integration.
+contract described here applies to the three focused library crates within each
+stable major; prefer those for detection, validation, and revocation integration.
 
 ## API Stability
 
@@ -771,13 +844,16 @@ compiling all validators. Python SDK 1.0.2 delegated revocation to the shared Ru
 runner.
 
 
-The first published `1.0.0` establishes the stable contract. Within `1.x`:
+The first published `1.0.0` established the stable contract. The rules and scanner
+2.0.0 releases start their next stable major; core remains at 1.0.3. Within each
+stable major:
 
 - Existing reachable public Rust items, signatures, fields, trait implementations,
   and feature names remain compatible. Hidden-but-public items are not exempt.
 - Removing public items, changing field types, adding fields to exhaustive structs,
   adding variants to exhaustive enums, or incompatible public dependency type changes
-  requires a major release. Deprecation can precede removal but does not permit it in `1.x`.
+  requires a major release. Deprecation can precede removal but does not permit it
+  within the same major.
 - Documented defaults, error propagation, location semantics, and redaction behavior
   are behavioral contracts covered by regression tests.
 - Existing documented serialized field names and enum spellings are retained. New
@@ -796,6 +872,22 @@ builds, and `cargo-semver-checks` against the pull request's base revision. Afte
 publication, release checks must also compare against the last published compatible
 library version (see [publishing](PUBLISHING.md)). Static API checks do not prove all
 behavior; review and behavioral tests remain required.
+
+### Migrating to rules and scanner 2.0
+
+- Upgrade `kingfisher-rules` and `kingfisher-scanner` dependencies together to
+  `"2.0.0"` where both are used. The scanner's public `Rule`, `RuleSyntax` and
+  `RulesDatabase` types/re-exports now come from rules 2.x; rules 1.x types are
+  distinct and cannot be passed to scanner 2.x APIs.
+- `HttpValidation` gains the exhaustive public field
+  `auth: Option<Box<HttpValidationAuth>>`. Add `auth: None` to existing literals.
+  To authenticate a verifier, set
+  `auth: Some(Box::new(HttpValidationAuth { oauth2: config }))`; the new
+  `kingfisher_rules::OAuth2Config` holds `OAuth2PasswordCredentials` in `ropc`.
+  All three auth types are exported from `kingfisher_rules`. YAML rules omitting
+  `auth` remain valid; see the [OAuth2 schema](RULES.md#oauth2-authentication-for-http-verification-services).
+- Core stays at 1.0.3, the CLI at 2.14.0 and Python SDK at 1.4.0. This Rust
+  source/type migration does not introduce a Python API major break.
 
 ### Migrating from the 0.1 API
 
@@ -916,6 +1008,7 @@ best-effort limits and may skip/truncate content. Strict counterparts
 extracting and propagate `ExtractionLimitExceeded` without partial text.
 SQLite uses read-only/defensive connections, disables trusted schema expressions,
 bounds native SQLite allocations and checks controls through a VM progress hook.
+Lock waits remain bounded even when content-size limits are disabled.
 The bytecode helper borrows input bytes and checks controls during parsing. Extraction is explicit and
 separate from scanning; findings refer to extracted content. The Python
 `expand_content()` adapter stages a separate copy and adds per-input budgets and

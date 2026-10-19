@@ -872,6 +872,7 @@ mod tests {
         use kingfisher_rules::HttpRequest;
 
         let http = HttpValidation {
+            auth: None,
             request: HttpRequest {
                 method: "DELETE".into(),
                 url: "https://api.example.com/{{ AKID }}/{{ TOKEN }}".into(),

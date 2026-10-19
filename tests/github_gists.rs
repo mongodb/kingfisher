@@ -167,13 +167,15 @@ async fn gists_reject_cross_origin_and_repeated_pagination() {
 }
 
 #[tokio::test]
-async fn gist_api_failure_is_reported() {
+async fn gist_api_long_rate_limit_is_reported() {
     let server = MockServer::start().await;
     mock_repos(&server).await;
     Mock::given(method("GET"))
         .and(path("/api/v3/users/alice/gists"))
         .respond_with(
-            ResponseTemplate::new(403).set_body_json(json!({"message": "rate limit exceeded"})),
+            ResponseTemplate::new(403)
+                .insert_header("retry-after", "3600")
+                .set_body_json(json!({"message": "rate limit exceeded"})),
         )
         .expect(1)
         .mount(&server)

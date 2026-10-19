@@ -7765,7 +7765,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kingfisher-bin"
-version = "2.13.0"
+version = "2.14.0"
 dependencies = [
  "anyhow",
  "asar",
@@ -7861,7 +7861,6 @@ dependencies = [
  "rayon",
  "rcgen",
  "regex",
- "reqwest 0.12.28",
  "reqwest 0.13.5",
  "roaring",
  "rsa",
@@ -7906,6 +7905,7 @@ dependencies = [
  "wait-timeout",
  "walkdir",
  "webbrowser",
+ "webpki-roots",
  "windows-sys 0.61.2",
  "wiremock",
  "xxhash-rust",
@@ -7971,9 +7971,10 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-rules"
-version = "1.2.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
+ "aws-lc-rs",
  "base32",
  "base64 0.23.1",
  "bip39",
@@ -7988,12 +7989,15 @@ dependencies = [
  "libc",
  "liquid",
  "liquid-core",
+ "pem 4.0.0",
  "percent-encoding",
  "pretty_assertions",
  "proptest",
  "rand 0.10.3",
  "regex",
  "regex-syntax",
+ "rsa",
+ "rustc-hash 2.1.3",
  "schemars 1.2.2",
  "serde",
  "serde_json",
@@ -8015,7 +8019,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-scanner"
-version = "1.4.0"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "asar",
@@ -11630,6 +11634,7 @@ dependencies = [
  "pkcs1",
  "pkcs8 0.10.2",
  "rand_core 0.6.4",
+ "sha2 0.10.9",
  "signature 2.2.0",
  "spki 0.7.3",
  "subtle",

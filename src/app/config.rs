@@ -72,6 +72,11 @@ pub(crate) fn apply_config(
     scan_args.skip_word.extend(cfg.filters.skip_words.iter().cloned());
     scan_args.skip_regex.extend(cfg.filters.skip_regex.iter().cloned());
     scan_args.content_filtering_args.exclude.extend(cfg.filters.exclude.iter().cloned());
+    let selection = &mut scan_args.content_filtering_args.path_selection;
+    selection.include_prefixes.extend(cfg.filters.path_prefixes.iter().cloned());
+    selection.exclude_prefixes.extend(cfg.filters.skip_path_prefixes.iter().cloned());
+    selection.include_extensions.extend(cfg.filters.file_extensions.iter().cloned());
+    selection.exclude_extensions.extend(cfg.filters.skip_file_extensions.iter().cloned());
 
     // ---------- scan: behavioral scalars ------------------------------------
     if let Some(c) = cfg.scan.confidence
@@ -140,6 +145,11 @@ pub(crate) fn apply_config(
         && config_wins(scan_matches, "no_limits")
     {
         scan_args.content_filtering_args.no_limits = value;
+    }
+    if let Some(value) = cfg.scan.no_timeouts
+        && config_wins(scan_matches, "no_timeouts")
+    {
+        scan_args.no_timeouts = value;
     }
     if let Some(t) = cfg.scan.git_repo_timeout
         && config_wins(scan_matches, "git_repo_timeout")
