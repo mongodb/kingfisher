@@ -60,6 +60,42 @@ use crate::{
 type LoadedBlob<'a> = (OriginSet, Blob<'a>, Option<String>);
 type LoadedGitBlobs<'a> = Box<dyn Iterator<Item = LoadedBlob<'a>> + Send + 'a>;
 
+// Canonical Windows inputs use verbatim prefixes, while current_dir and walker
+// paths can use ordinary DOS/UNC prefixes for the same location. Compare those
+// prefix components equivalently without resolving symlinks or changing origins.
+fn strip_selection_prefix<'a>(path: &'a Path, prefix: &Path) -> Option<&'a Path> {
+    #[cfg(windows)]
+    use std::path::{Component, Prefix};
+
+    let mut components = path.components();
+    for expected in prefix.components() {
+        let actual = components.next()?;
+        #[cfg(not(windows))]
+        let matches = actual == expected;
+        #[cfg(windows)]
+        let matches = match (actual, expected) {
+            (Component::Prefix(actual), Component::Prefix(expected)) => {
+                match (actual.kind(), expected.kind()) {
+                    (
+                        Prefix::Disk(a) | Prefix::VerbatimDisk(a),
+                        Prefix::Disk(b) | Prefix::VerbatimDisk(b),
+                    ) => a == b,
+                    (
+                        Prefix::UNC(a_server, a_share) | Prefix::VerbatimUNC(a_server, a_share),
+                        Prefix::UNC(b_server, b_share) | Prefix::VerbatimUNC(b_server, b_share),
+                    ) => a_server == b_server && a_share == b_share,
+                    _ => actual == expected,
+                }
+            }
+            _ => actual == expected,
+        };
+        if !matches {
+            return None;
+        }
+    }
+    Some(components.as_path())
+}
+
 fn matches_selected_file(
     selection: &crate::path_selection::PathSelection,
     path: &Path,
@@ -70,11 +106,12 @@ fn matches_selected_file(
     let relative = roots
         .iter()
         .filter_map(|root| {
-            absolute.strip_prefix(root).ok().map(|relative| (root.components().count(), relative))
+            strip_selection_prefix(&absolute, root)
+                .map(|relative| (root.components().count(), relative))
         })
         .max_by_key(|(depth, _)| *depth)
         .map(|(_, relative)| relative)
-        .unwrap_or_else(|| absolute.strip_prefix(base).unwrap_or(path));
+        .unwrap_or_else(|| strip_selection_prefix(&absolute, base).unwrap_or(path));
     selection.matches(&relative.to_string_lossy().replace(std::path::MAIN_SEPARATOR, "/"))
 }
 
@@ -2141,6 +2178,56 @@ mod tests {
             &[],
             &base
         ));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn selected_file_paths_accept_mixed_windows_prefixes() {
+        let selection = crate::path_selection::PathSelection {
+            include_prefixes: vec!["configs/".into()],
+            exclude_prefixes: vec!["configs/generated/".into()],
+            ..Default::default()
+        };
+        for (ordinary, verbatim) in [
+            (Path::new(r"C:\work"), Path::new(r"\\?\C:\work")),
+            (Path::new(r"\\server\share\work"), Path::new(r"\\?\UNC\server\share\work")),
+        ] {
+            for base in [ordinary, verbatim] {
+                for root in [ordinary, verbatim] {
+                    for path_root in [ordinary, verbatim] {
+                        assert_eq!(
+                            super::strip_selection_prefix(path_root, base),
+                            Some(Path::new(""))
+                        );
+                        for roots in [Vec::new(), vec![root.to_path_buf()]] {
+                            for (relative, expected) in [
+                                ("configs/key.env", true),
+                                ("configs/key!literal.env", true),
+                                ("configs/秘密.env", true),
+                                ("configs/generated/key.env", false),
+                                ("outside/key.env", false),
+                            ] {
+                                let path = path_root.join(relative);
+                                assert_eq!(
+                                    super::matches_selected_file(&selection, &path, &roots, base),
+                                    expected,
+                                    "path={path:?}, roots={roots:?}, base={base:?}"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Prefix equivalence must not blur drive, share, or directory boundaries.
+        for (path, prefix) in [
+            (r"\\?\D:\work\configs\key.env", r"C:\work"),
+            (r"\\?\UNC\server\other\work\configs\key.env", r"\\server\share\work"),
+            (r"\\?\UNC\other\share\work\configs\key.env", r"\\server\share\work"),
+            (r"\\?\C:\work-other\configs\key.env", r"C:\work"),
+        ] {
+            assert!(super::strip_selection_prefix(Path::new(path), Path::new(prefix)).is_none());
+        }
     }
 
     #[test]

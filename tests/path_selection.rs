@@ -68,12 +68,21 @@ fn scan_from(
 #[test]
 fn explicit_file_input_preserves_its_cwd_relative_directories() -> Result<()> {
     let root = tempfile::tempdir()?;
-    let cwd = root.path().canonicalize()?;
-    fs::create_dir_all(cwd.join("configs"))?;
-    fs::write(cwd.join("configs/key.env"), KEPT)?;
-    let rules = rules(&cwd)?;
-    scan_from(Path::new("configs/key.env"), &rules, false, Some(&cwd))?;
-    scan_from(&cwd.join("configs/key.env"), &rules, false, Some(&cwd))?;
+    fs::create_dir_all(root.path().join("configs"))?;
+    fs::write(root.path().join("configs/key.env"), KEPT)?;
+    let rules = rules(root.path())?;
+    let canonical_cwd = root.path().canonicalize()?;
+    // On Windows canonicalize adds a verbatim prefix, but current_dir can return
+    // an ordinary drive path. Both spellings must retain configs/.
+    #[cfg(windows)]
+    let working_directories = [canonical_cwd.as_path(), root.path()];
+    // Resolve Unix temp-directory symlinks (e.g. /var -> /private/var on macOS).
+    #[cfg(not(windows))]
+    let working_directories = [canonical_cwd.as_path()];
+    for cwd in working_directories {
+        scan_from(Path::new("configs/key.env"), &rules, false, Some(cwd))?;
+        scan_from(&cwd.join("configs/key.env"), &rules, false, Some(cwd))?;
+    }
     Ok(())
 }
 

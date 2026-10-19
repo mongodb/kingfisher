@@ -1,0 +1,55 @@
+name: Optional wizard regressions
+
+# GUI builds are opt-in and are not part of the headless CLI release gate.
+# Keep this path-filtered check optional in branch protection.
+on:
+  workflow_dispatch:
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/**'
+      - 'crates/**'
+      - 'Cargo.*'
+      - 'build*.rs'
+      - '.cargo/**'
+      - 'rust-toolchain*'
+      - 'docs/viewer/**'
+      - 'tests/wizard_cli.rs'
+      - '.github/workflows/wizard.yml'
+      - '.github/workflows/ci.yml'
+      - '.github/workflows/release.yml'
+      - 'scripts/tests/test_ci_workflows.py'
+
+permissions:
+  contents: read
+
+env:
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_NET_RETRY: "10"
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  RUST_TOOLCHAIN: "1.99.0"
+
+jobs:
+  wizard:
+    name: Native wizard (macOS arm64)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: ${{ env.RUST_TOOLCHAIN }}
+      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: kingfisher-wizard-v1-${{ runner.os }}-${{ runner.arch }}
+          cache-on-failure: true
+      # Retain CMake for AWS-LC; Vectorscan uses a prebuilt archive.
+      - name: Install macOS test dependencies
+        run: |
+          brew list cmake >/dev/null 2>&1 || brew install cmake
+          brew list pkg-config >/dev/null 2>&1 || brew install pkg-config
+      # Includes the process fixture harness and GPUI's headless UI tests.
+      - name: Run wizard regressions
+        run: |
+          cargo test --locked -p kingfisher-bin --features gui-tests --lib wizard::
