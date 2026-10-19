@@ -327,21 +327,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn legacy_yaml_rules_load_unchanged_without_oauth2() {
-        // Frozen, unmodified examples from the pre-OAuth2 Kingfisher rule corpus.
+    fn kingfisher_yaml_rules_load_unchanged_without_oauth2() {
+        // Unmodified Kingfisher-format examples that omit optional OAuth2 service auth.
         // Keep these as YAML: constructing Rust literals would not test file compatibility.
         let fixtures: &[(&str, &[u8])] = &[
-            ("algolia.yml", include_bytes!("fixtures/legacy/algolia.yml")),
-            ("modal.yml", include_bytes!("fixtures/legacy/modal.yml")),
-            ("pypi.yml", include_bytes!("fixtures/legacy/pypi.yml")),
-            ("twitch.yml", include_bytes!("fixtures/legacy/twitch.yml")),
+            ("algolia.yml", include_bytes!("fixtures/kingfisher/algolia.yml")),
+            ("modal.yml", include_bytes!("fixtures/kingfisher/modal.yml")),
+            ("pypi.yml", include_bytes!("fixtures/kingfisher/pypi.yml")),
+            ("twitch.yml", include_bytes!("fixtures/kingfisher/twitch.yml")),
         ];
         let rules = Rules::from_paths_and_contents(
             fixtures.iter().map(|(name, contents)| (Path::new(name), *contents)),
             Confidence::Low,
         )
         .unwrap();
-        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/legacy");
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/kingfisher");
         let file_rules = Rules::from_paths([directory], Confidence::Low).unwrap();
         assert_eq!(rules.rules, file_rules.rules);
         assert_eq!(rules.num_rules(), 5);

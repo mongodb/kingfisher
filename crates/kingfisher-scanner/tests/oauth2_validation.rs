@@ -69,7 +69,7 @@ fn client() -> reqwest::Client {
 }
 
 #[tokio::test]
-async fn legacy_yaml_http_validation_keeps_candidate_auth_without_oauth2() {
+async fn kingfisher_yaml_http_validation_keeps_candidate_auth_without_oauth2() {
     let requests = Arc::new(AtomicUsize::new(0));
     let server = serve(Router::new().route(
         "/verify",
@@ -78,7 +78,7 @@ async fn legacy_yaml_http_validation_keeps_candidate_auth_without_oauth2() {
             move |request: Request| {
                 let requests = requests.clone();
                 async move {
-                    // Neither the legacy candidate headers nor templated origins require
+                    // Neither the candidate headers nor templated origins require
                     // verifier OAuth2 credentials. There is deliberately no token endpoint.
                     assert!(!request.headers().contains_key("x-proxy-authorization"));
                     match request.headers().get("authorization") {
@@ -96,7 +96,7 @@ async fn legacy_yaml_http_validation_keeps_candidate_auth_without_oauth2() {
     ))
     .await;
     let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../kingfisher-rules/src/fixtures/legacy");
+        .join("../kingfisher-rules/src/fixtures/kingfisher");
     let rules = kingfisher_rules::Rules::from_paths(
         [fixtures.join("algolia.yml"), fixtures.join("twitch.yml")],
         kingfisher_rules::Confidence::Low,

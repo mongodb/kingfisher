@@ -911,8 +911,8 @@ pub fn find_secret_capture<'a>(
 /// Select a capture using Betterleaks' `secretGroup` semantics when supplied.
 ///
 /// Betterleaks treats an omitted/zero `secretGroup` as the first non-empty positional capture.
-/// A positive value selects that exact capture. `None` retains Kingfisher's legacy custom-rule
-/// behavior implemented by [`find_secret_capture`].
+/// A positive value selects that exact capture. `None` uses the capture-selection behavior of the
+/// Kingfisher rule format, implemented by [`find_secret_capture`].
 pub fn find_secret_capture_with_group<'a>(
     re: &regex::bytes::Regex,
     captures: &regex::bytes::Captures<'a>,

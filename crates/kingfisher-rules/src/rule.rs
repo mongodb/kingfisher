@@ -900,7 +900,7 @@ pub struct RuleSyntax {
     /// Betterleaks capture-selection semantics.
     ///
     /// `Some(0)` selects the first non-empty capture, while `Some(n)` selects capture `n`.
-    /// `None` preserves the legacy Kingfisher custom-rule behavior.
+    /// `None` uses the capture-selection behavior of the Kingfisher rule format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub betterleaks_secret_group: Option<usize>,
     /// Whether a successful validator may establish that this finding is an active credential.
