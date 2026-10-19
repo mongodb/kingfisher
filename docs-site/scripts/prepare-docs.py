@@ -213,9 +213,11 @@ def remove_breadcrumbs(content: str) -> str:
     return content
 
 
-def rewrite_links(content: str) -> str:
-    """Rewrite internal documentation links to match site structure."""
+def rewrite_links(content: str, *, root_level: bool = False) -> str:
+    """Rewrite links for nested guide pages or a page at the site root."""
+    site_prefix = "" if root_level else "../"
     for old, new in LINK_REWRITES.items():
+        new = site_prefix + new.removeprefix("../")
         # Handle various link patterns:
         # [text](FILENAME.md) or [text](./FILENAME.md) or [text](docs/FILENAME.md)
         content = re.sub(
@@ -224,17 +226,17 @@ def rewrite_links(content: str) -> str:
             content,
         )
     # Rewrite image references from docs/ relative paths (markdown and HTML src=)
-    content = content.replace("](./runtime-comparison.png", "](../assets/images/runtime-comparison.png")
-    content = content.replace('src="./runtime-comparison.png"', 'src="../assets/images/runtime-comparison.png"')
-    content = content.replace("](./assets/icons/", "](../assets/icons/")
+    content = content.replace("](./runtime-comparison.png", f"]({site_prefix}assets/images/runtime-comparison.png")
+    content = content.replace('src="./runtime-comparison.png"', f'src="{site_prefix}assets/images/runtime-comparison.png"')
+    content = content.replace("](./assets/icons/", f"]({site_prefix}assets/icons/")
     content = content.replace(
         "](../docs-site/docs/rules/builtin-rules.md)",
-        "](builtin-rules.md)",
+        "](rules/builtin-rules.md)" if root_level else "](builtin-rules.md)",
     )
 
     # Rewrite links to files that live at non-standard site locations
-    content = content.replace("](../README.md)", "](../getting-started/quick-start.md)")
-    content = content.replace("](../CHANGELOG.md)", "](../changelog.md)")
+    content = content.replace("](../README.md)", f"]({site_prefix}getting-started/quick-start.md)")
+    content = content.replace("](../CHANGELOG.md)", f"]({site_prefix}changelog.md)")
     content = content.replace(
         "](../AGENTS.md)",
         "](https://github.com/mongodb/kingfisher/blob/main/AGENTS.md)",
@@ -270,7 +272,7 @@ def rewrite_links(content: str) -> str:
         content,
     )
     content = content.replace(
-        "](../../../docs/RULES.md", "](overview.md"
+        "](../../../docs/RULES.md", "](rules/overview.md" if root_level else "](overview.md"
     )
     return content
 
@@ -315,6 +317,7 @@ def copy_changelog():
     if os.path.exists(src):
         with open(src, "r", encoding="utf-8") as f:
             content = f.read()
+        content = rewrite_links(content, root_level=True)
         content = add_frontmatter(
             content,
             "Changelog",
