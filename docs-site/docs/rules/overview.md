@@ -30,6 +30,12 @@ Kingfisher fully supports loading both the **Kingfisher rule format** (`.yml`/`.
 and **Betterleaks TOML** (`.toml`) for custom rules. Either format can be used for
 shared or private detections.
 
+Existing rule files require no changes for the rules/scanner 2.0 Rust library
+release. HTTP service authentication (`validation.content.auth`) is optional:
+omitting it preserves the existing request, candidate-token headers, body and
+response matchers, without requiring OAuth2 credentials or a token exchange.
+The `auth: None` migration applies only to Rust struct literals, not YAML or TOML.
+
 The Betterleaks TOML format is supported for custom rules as well as for Kingfisher's built-in
 catalog. Use it for generally useful detectors that should be developed and shared through
 Betterleaks. Custom Betterleaks TOML rules are automatically placed in the `custom.` namespace.

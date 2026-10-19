@@ -875,6 +875,11 @@ behavior; review and behavioral tests remain required.
 
 ### Migrating to rules and scanner 2.0
 
+This is a **Rust source/type migration, not a rule-file migration**. Existing
+Kingfisher YAML and Betterleaks TOML files continue to load unchanged through
+`--rules-path` and the Rust/Python loaders. OAuth2 service authentication is
+strictly opt-in; rules without `auth` do not need OAuth2 configuration or credentials.
+
 - Upgrade `kingfisher-rules` and `kingfisher-scanner` dependencies together to
   `"2.0.0"` where both are used. The scanner's public `Rule`, `RuleSyntax` and
   `RulesDatabase` types/re-exports now come from rules 2.x; rules 1.x types are

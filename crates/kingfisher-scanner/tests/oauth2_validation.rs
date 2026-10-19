@@ -69,6 +69,59 @@ fn client() -> reqwest::Client {
 }
 
 #[tokio::test]
+async fn legacy_yaml_http_validation_keeps_candidate_auth_without_oauth2() {
+    let requests = Arc::new(AtomicUsize::new(0));
+    let server = serve(Router::new().route(
+        "/verify",
+        get({
+            let requests = requests.clone();
+            move |request: Request| {
+                let requests = requests.clone();
+                async move {
+                    // Neither the legacy candidate headers nor templated origins require
+                    // verifier OAuth2 credentials. There is deliberately no token endpoint.
+                    assert!(!request.headers().contains_key("x-proxy-authorization"));
+                    match request.headers().get("authorization") {
+                        Some(value) => assert_eq!(value, "OAuth candidate"),
+                        None => {
+                            assert_eq!(request.headers()["x-algolia-api-key"], "candidate");
+                            assert_eq!(request.headers()["x-algolia-application-id"], "WRB8YLFW7Y");
+                        }
+                    }
+                    requests.fetch_add(1, Ordering::SeqCst);
+                    json_response(json!({"authenticated": true}))
+                }
+            }
+        }),
+    ))
+    .await;
+    let fixtures = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../kingfisher-rules/src/fixtures/legacy");
+    let rules = kingfisher_rules::Rules::from_paths(
+        [fixtures.join("algolia.yml"), fixtures.join("twitch.yml")],
+        kingfisher_rules::Confidence::Low,
+    )
+    .unwrap();
+    let client = client();
+    let parser = parser();
+    let engine = ValidationEngine::new(&client, &parser).allow_internal_ips(true);
+    let globals = liquid::object!({
+        "TOKEN": "candidate", "APPID": "WRB8YLFW7Y", "VERIFIER": server.url.clone()
+    });
+    for id in ["kingfisher.algolia.1", "kingfisher.twitch.1"] {
+        let mut syntax = rules.rules[id].clone();
+        let Some(Validation::Http(http)) = &mut syntax.validation else { panic!() };
+        assert!(http.auth.is_none());
+        // Change only the destination to a local mock; keep the original headers
+        // and response matchers. Finding-driven URLs remain valid without auth.
+        http.request.url = "{{ VERIFIER }}/verify".into();
+        let result = engine.validate(&Rule::new(syntax), &globals).await;
+        assert_eq!(result.outcome, ValidationOutcome::VerifiedActive, "{id}: {result:?}");
+    }
+    assert_eq!(requests.load(Ordering::SeqCst), 2);
+}
+
+#[tokio::test]
 async fn password_form_custom_header_and_concurrent_token_reuse() {
     let exchanges = Arc::new(AtomicUsize::new(0));
     let verifications = Arc::new(AtomicUsize::new(0));

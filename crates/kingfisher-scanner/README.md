@@ -38,14 +38,20 @@ disabled for both transports.
 
 ## Migrating to 2.0
 
+This is a **Rust source/type migration, not a rule-file migration**. Existing
+Kingfisher YAML and Betterleaks TOML rule files need no changes. HTTP service
+authentication (`validation.content.auth`) is optional: omitting it preserves
+existing HTTP requests, candidate-token headers, body and response matchers,
+without requiring OAuth2 credentials or a token exchange.
+
 Upgrade direct `kingfisher-rules` dependencies to `"2.0.0"` alongside this crate.
 The scanner's public `Rule`, `RuleSyntax` and `RulesDatabase` types/re-exports now
 come from rules 2.x and cannot be mixed with rules 1.x types. Existing
-`HttpValidation` literals need `auth: None`, or
+`HttpValidation` Rust struct literals need `auth: None`, or
 `auth: Some(Box::new(HttpValidationAuth { oauth2: config }))` with the new
 `kingfisher_rules::{HttpValidationAuth, OAuth2Config, OAuth2PasswordCredentials}` types.
-YAML rules without `auth` remain valid. Core 1.0.3 and the Python SDK 1.4.0 API
-are unchanged. See the [library migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-scanner-20).
+Core 1.0.3 and the Python SDK 1.4.0 API are unchanged. See the
+[library migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-scanner-20).
 
 ## Custom rules and configuration
 

@@ -327,6 +327,81 @@ mod tests {
     use super::*;
 
     #[test]
+    fn legacy_yaml_rules_load_unchanged_without_oauth2() {
+        // Frozen, unmodified examples from the pre-OAuth2 Kingfisher rule corpus.
+        // Keep these as YAML: constructing Rust literals would not test file compatibility.
+        let fixtures: &[(&str, &[u8])] = &[
+            ("algolia.yml", include_bytes!("fixtures/legacy/algolia.yml")),
+            ("modal.yml", include_bytes!("fixtures/legacy/modal.yml")),
+            ("pypi.yml", include_bytes!("fixtures/legacy/pypi.yml")),
+            ("twitch.yml", include_bytes!("fixtures/legacy/twitch.yml")),
+        ];
+        let rules = Rules::from_paths_and_contents(
+            fixtures.iter().map(|(name, contents)| (Path::new(name), *contents)),
+            Confidence::Low,
+        )
+        .unwrap();
+        let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/legacy");
+        let file_rules = Rules::from_paths([directory], Confidence::Low).unwrap();
+        assert_eq!(rules.rules, file_rules.rules);
+        assert_eq!(rules.num_rules(), 5);
+
+        let mut http_rules = 0;
+        for rule in rules.iter_rules() {
+            let regex = rule.as_regex().unwrap();
+            for example in &rule.examples {
+                assert!(regex.is_match(example.as_bytes()), "{}: {example}", rule.id);
+            }
+            if let Some(Validation::Http(http)) = &rule.validation {
+                http_rules += 1;
+                assert!(http.auth.is_none(), "{} must not require service auth", rule.id);
+                let serialized = serde_json::to_value(rule).unwrap();
+                assert!(serialized["validation"]["content"].get("auth").is_none());
+                let round_trip: RuleSyntax = serde_json::from_value(serialized).unwrap();
+                assert_eq!(*rule, round_trip);
+            }
+        }
+        assert_eq!(http_rules, 3);
+
+        let algolia = &rules.rules["kingfisher.algolia.1"];
+        let Some(Validation::Http(http)) = &algolia.validation else { panic!() };
+        assert_eq!(http.request.headers["X-Algolia-API-Key"], "{{ TOKEN }}");
+        assert_eq!(http.request.headers["X-Algolia-Application-Id"], "{{ APPID }}");
+        assert_eq!(http.request.url, "https://{{ APPID }}-dsn.algolia.net/1/keys/{{ TOKEN }}");
+        let dependency = algolia.depends_on_rule[0].as_ref().unwrap();
+        assert_eq!(dependency.rule_id, "kingfisher.algolia.2");
+        assert_eq!(dependency.variable, "APPID");
+        assert!(!rules.rules[&dependency.rule_id].visible);
+
+        let Some(Validation::Http(pypi)) = &rules.rules["kingfisher.pypi.1"].validation else {
+            panic!()
+        };
+        assert!(pypi.request.response_is_html);
+        assert_eq!(pypi.request.multipart.as_ref().unwrap().parts.len(), 11);
+
+        let Some(Validation::Grpc(modal)) = &rules.rules["kingfisher.modal.1"].validation else {
+            panic!()
+        };
+        assert_eq!(modal.request.body.as_deref(), Some("\0\0\0\0\0"));
+        assert_eq!(modal.request.headers["x-modal-token-id"], "{{ TOKEN_ID }}");
+
+        let Some(Revocation::HttpMultiStep(twitch)) =
+            &rules.rules["kingfisher.twitch.1"].revocation
+        else {
+            panic!()
+        };
+        assert_eq!(twitch.steps.len(), 2);
+        assert_eq!(twitch.steps[0].request.headers["Authorization"], "OAuth {{ TOKEN }}");
+        assert_eq!(
+            twitch.steps[1].request.body.as_deref(),
+            Some("client_id={{ CLIENT_ID | url_encode }}&token={{ TOKEN | url_encode }}")
+        );
+
+        // Exercise the same native compilation path used by the CLI and SDKs, not just Serde.
+        crate::RulesDatabase::from_rule_collection(rules).unwrap();
+    }
+
+    #[test]
     fn loads_betterleaks_toml_as_namespaced_custom_rules() {
         let path =
             std::env::temp_dir().join(format!("kingfisher-custom-{}.toml", uuid::Uuid::new_v4()));

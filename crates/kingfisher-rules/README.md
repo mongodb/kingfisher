@@ -98,11 +98,17 @@ These records document what was imported; they do not establish upstream authors
 
 ## Migrating to 2.0
 
+This is a **Rust source/type migration, not a rule-file migration**. Existing
+Kingfisher YAML and Betterleaks TOML rule files need no changes. HTTP service
+authentication (`validation.content.auth`) is optional: omitting it preserves
+existing HTTP requests, candidate-token headers, body and response matchers,
+without requiring OAuth2 credentials or a token exchange.
+
 `HttpValidation` has a new public `auth: Option<Box<HttpValidationAuth>>` field.
 Add `auth: None` to existing Rust struct literals, or use
 `auth: Some(Box::new(HttpValidationAuth { oauth2: config }))` for service authentication.
 The new `OAuth2Config` contains `OAuth2PasswordCredentials` in its `ropc` field;
-all three auth types are exported by this crate. Existing YAML without `auth` still loads.
+all three auth types are exported by this crate.
 
 Use `kingfisher-scanner = "2.0.0"` with rules 2.x: its public `Rule`, `RuleSyntax`
 and `RulesDatabase` types/re-exports cannot be mixed with rules 1.x types. Core
