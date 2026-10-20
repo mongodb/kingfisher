@@ -20,20 +20,21 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
-| `kingfisher-core` | `1.0.3` | `kingfisher_core` library |
+| `kingfisher-core` | `1.0.4` | `kingfisher_core` library |
 | `kingfisher-rules` | `2.0.0` | `kingfisher_rules` library |
 | `kingfisher-scanner` | `2.0.0` | `kingfisher_scanner` library |
 | `kingfisher-bin` | `2.14.0` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
-`1.4.0` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
+`1.5.0` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
 
 The libraries follow semantic versioning within each stable major and do not inherit
 the CLI version. Rules and scanner 2.0.0 account for the new exhaustive
 `HttpValidation.auth` field and the scanner's public rules-crate types/re-exports.
 Downstream scanner users must use rules 2.x types rather than rules 1.x types.
-Core 1.0.3, CLI 2.14.0 and Python SDK 1.4.0 remain unchanged; the Rust break does
-not change the Python API. See the [migration and compatibility contract](LIBRARY.md#api-stability).
+Core 1.0.4 is a compatible patch containing the Unicode-decoding fast path already
+shipped in CLI 2.14.0. The CLI stays at 2.14.0; the independent Python SDK 1.5.0
+minor release publishes its pending implementation changes without a Python API major break. See the [migration and compatibility contract](LIBRARY.md#api-stability).
 `kingfisher-rule-bundle` is `0.1.0` with `publish = false`. The external
 `kingfisher-vectorscan` dependency is versioned separately.
 
@@ -257,9 +258,63 @@ sparse registry index before advancing. Registry errors and yanked versions fail
 job rather than being mistaken for unpublished versions. Downloaded comparison archives
 are checked against the registry's SHA-256 checksum.
 
-If an upload or index wait fails, rerun the workflow: matching versions already uploaded
-are skipped, and publication resumes with the missing ones. The job cannot roll back
-versions already published to crates.io. A failed publication is never silently accepted.
+If an upload or index wait fails, rerun the failed publishing job in the original run:
+matching versions already uploaded are skipped, and publication resumes with the missing
+ones. The job cannot roll back versions already published to crates.io. A failed
+publication is never silently accepted.
+
+### Metadata-only correction after a successful binary release
+
+An already-published crate version cannot be reused after its packaged source changes.
+Bump the affected crate and its dependent minimum requirements; do not disable the
+publication planner or move the existing public release tag.
+
+When the GitHub release, binaries, Docker image and Python wheels already succeeded,
+a crates-only recovery does not rebuild or replace those artifacts. Merge the version,
+lockfile, provenance and documentation corrections into `main`, then dispatch:
+
+```sh
+gh workflow run release.yml --repo mongodb/kingfisher --ref main \
+  -f crates_only=true -f release_run_id=39339690046 \
+  -f expected_sha="$(git rev-parse HEAD)"
+```
+
+Use the original binary release's run ID. The recovery gate requires its successful
+build/test/release jobs, verifies the public tag, and rejects runtime source, dependency,
+feature or catalog changes. Only the core patch version and corresponding dependency,
+lockfile and provenance metadata may change; the independent SDK version correction
+from 1.4.0 to 1.5.0 and its matching lockfile entry are also allowed. Library tests and all four extracted-crate
+build checks still run before authentication and publication. The ordinary release
+path retains its exact tag/commit guards. A runtime change needs a new binary release.
+
+The original failed run uses its original commit and remains historical; rerunning it
+cannot pick up a later metadata correction. The new recovery run publishes the missing
+crate versions without retagging `v2.14.0` or republishing its assets.
+
+## Independent terminal commands
+
+```sh
+make release crates
+make release kingfisher-secret-scanner
+```
+
+The first command infers all four crates.io versions, checks the complete publication
+plan, and discovers the original passing CLI release run for a failed-job retry or
+metadata-only recovery. The second infers the SDK version from
+`crates/kingfisher-python/Cargo.toml` and starts the tested SDK publishing workflow.
+Neither command changes versions or accepts `VERSION`; commit and merge the intended
+version correction first. The full binary-release command remains
+`make release VERSION=X.Y.Z`.
+
+The launcher requires a clean reviewed upstream checkout, authenticated GitHub access,
+current merged `main`, and a supported active workflow. It pins the expected SHA and
+checks registries before dispatch. A published SDK version, a conflicting crate payload,
+an all-published crates plan, invalid source history, or a registry lookup error stops the
+command instead of starting a doomed build. Identical unchanged crate dependencies can
+still be skipped. Full extracted-package checks and the original protected publication
+guards remain enabled in CI. External Trusted Publisher/token configuration and future
+network availability cannot be proven by read-only preflight; publish jobs still enforce
+them. See the [terminal release runbook](../.github/RELEASING.md#independent-package-releases).
 
 ## Local verification and manual publishing
 
@@ -267,7 +322,7 @@ Python 3.11+ is required for the publishing helper. To inspect the release plan 
 publishing, first create fresh archives:
 
 ```sh
-cargo package --locked --workspace --exclude kingfisher-rule-bundle
+cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
 python3 scripts/publish-crates.py --tag v2.14.0
 python3 -m unittest discover -s scripts/tests -v
 ```

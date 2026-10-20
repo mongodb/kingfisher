@@ -6,7 +6,7 @@ semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-core = "1.0.3"
+kingfisher-core = "1.0.4"
 ```
 
 ```rust

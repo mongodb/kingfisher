@@ -4,6 +4,19 @@ on:
   push:
     tags: ["v*"]
   workflow_dispatch:
+    inputs:
+      crates_only:
+        description: Recover crates.io publication only; keep the public tag and assets unchanged
+        type: boolean
+        default: false
+      release_run_id:
+        description: Original successful GitHub release run ID (required for crates-only recovery)
+        type: string
+        default: ""
+      expected_sha:
+        description: Reviewed main commit SHA (required for crates-only recovery)
+        type: string
+        default: ""
 
 concurrency:
   group: release-${{ github.ref }}
@@ -25,6 +38,7 @@ env:
 jobs:
   validate-release:
     name: Verify release ref and version
+    if: ${{ !inputs.crates_only }}
     runs-on: ubuntu-24.04
     outputs:
       tag: ${{ steps.version.outputs.tag }}
@@ -61,6 +75,28 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ steps.version.outputs.tag }}
         run: python3 scripts/check-release-target.py
+
+  validate-crates-recovery:
+    name: Verify metadata-only crates.io recovery
+    if: github.event_name == 'workflow_dispatch' && inputs.crates_only
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      tag: ${{ steps.recovery.outputs.tag }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Require the public release, prior passing builds, and metadata-only changes
+        id: recovery
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: python3 scripts/check-crates-recovery.py --release-run-id "$RELEASE_RUN_ID"
 
   # Tests save their own dependency caches, including Linux debug artifacts.
   # Build jobs run in parallel; publishing waits for both tests and builds.
@@ -499,8 +535,12 @@ jobs:
 
   publish-crates:
     name: Publish crates.io packages
-    needs: [release]
-    if: github.repository == 'mongodb/kingfisher'
+    needs: [release, validate-crates-recovery]
+    if: >-
+      always() && !cancelled() && github.repository == 'mongodb/kingfisher' &&
+      ((!inputs.crates_only && needs.release.result == 'success') ||
+       (github.event_name == 'workflow_dispatch' && inputs.crates_only &&
+        needs.validate-crates-recovery.result == 'success'))
     runs-on: ubuntu-24.04
     environment: crates-io
     concurrency:
@@ -508,17 +548,19 @@ jobs:
       cancel-in-progress: false
     permissions:
       contents: read
+      actions: read
       id-token: write
     env:
       CARGO_BUILD_JOBS: 2
-      RELEASE_TAG: ${{ needs.release.outputs.tag }}
+      RELEASE_TAG: ${{ needs.release.outputs.tag || needs.validate-crates-recovery.outputs.tag }}
     steps:
-      # Publish the same commit that passed the build/test jobs above.
+      # Normal releases use the tested tag; recovery uses the validated metadata-only commit.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
       - name: Verify release tag identifies the tested commit
+        if: ${{ !inputs.crates_only }}
         run: test "$(git rev-parse "refs/tags/$RELEASE_TAG^{commit}")" = "$(git rev-parse HEAD)"
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
         with:
@@ -528,10 +570,20 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y --no-install-recommends cmake pkg-config perl curl
+      - name: Test libraries for registry-only recovery
+        if: inputs.crates_only
+        run: cargo test --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner
       - name: Verify rule bundle and extracted packages before authenticating
         run: |
           cargo run --locked -p kingfisher-rule-bundle -- --check
           cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
+      - name: Recheck registry recovery before planning or authenticating
+        if: inputs.crates_only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_RUN_ID: ${{ inputs.release_run_id }}
+          EXPECTED_SHA: ${{ inputs.expected_sha }}
+        run: python3 scripts/check-crates-recovery.py --release-run-id "$RELEASE_RUN_ID"
       - name: Plan changed releases and reject missing version bumps
         id: plan
         run: python3 scripts/publish-crates.py --tag "$RELEASE_TAG"

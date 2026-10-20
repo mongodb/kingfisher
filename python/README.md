@@ -12,6 +12,21 @@ uv add kingfisher-secret-scanner
 
 The **PyPI distribution** is `kingfisher-secret-scanner`; the **Python import** is
 `kingfisher_sdk`. It coexists with the separately distributed `kingfisher-bin` CLI.
+The prepared SDK version is **1.5.0**, a backward-compatible feature release.
+The SDK version is independent of the CLI and Rust library versions.
+
+SDK/runtime changes need a new PyPI version. The release workflow checks this
+before native builds, while default manual runs remain test-only. Maintainers
+can check the prepared version without building or publishing:
+
+```bash
+python3 scripts/check-sdk-release.py --require-new --expected-version 1.5.0
+```
+
+Explicit publication requires upstream `main`, `publish=true`, and matching
+`expected_sha` / `expected_version` safety inputs on the existing workflow. See
+the [publishing guide](../docs/PYPI.md#github-actions-and-pypi-publishing) for the
+exact dispatch command, six-wheel/sdist test gates and failed-upload recovery.
 
 ## Scan offline
 

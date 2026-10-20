@@ -50,7 +50,7 @@ come from rules 2.x and cannot be mixed with rules 1.x types. Existing
 `HttpValidation` Rust struct literals need `auth: None`, or
 `auth: Some(Box::new(HttpValidationAuth { oauth2: config }))` with the new
 `kingfisher_rules::{HttpValidationAuth, OAuth2Config, OAuth2PasswordCredentials}` types.
-Core 1.0.3 and the Python SDK 1.4.0 API are unchanged. See the
+Core uses the compatible 1.0.4 patch release; Python SDK 1.5.0 remains compatible with the existing Python API. See the
 [library migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-scanner-20).
 
 ## Custom rules and configuration

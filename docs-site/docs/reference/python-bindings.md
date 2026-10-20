@@ -23,11 +23,13 @@ requires CPython 3.10+ with the standard GIL build. Wheels target Linux x64/ARM6
 (glibc 2.28+), macOS x64/ARM64 (11+), and native Windows x64/ARM64. PyPy,
 free-threaded Python and musl wheels are not currently part of the release matrix.
 
-The prepared SDK release is **1.4.0**, adding offline revocation preparation,
-structured input diagnostics, result-based and batch revocation, validation
-variables and SMTP support. It also includes opt-in CLI detection policies,
-SQLite/bytecode extraction, richer Git scopes and metadata, composable input
-enumeration, per-call controls, a reusable compiled rule cache and `Rules.detail()` inspection. Its version is independent of the CLI and Rust library packages; Python modules share the SDK version.
+The prepared SDK release is **1.5.0**, a backward-compatible feature release.
+The SDK includes offline revocation preparation, structured input
+diagnostics, result-based and batch revocation, validation variables and SMTP
+support, opt-in CLI detection policies, SQLite/bytecode extraction, richer Git
+scopes and metadata, composable input enumeration, per-call controls, a reusable
+compiled rule cache and `Rules.detail()` inspection. Its version is independent
+of the CLI and Rust library packages; Python modules share the SDK version.
 
 ## Install and scan
 
@@ -1365,26 +1367,73 @@ Add `--require-hit` for the exact same wheel/engine build on hosts with
 known compatible CPU features
 to assert that no recompilation occurs.
 
-Merging to `main` automatically builds, tests, and publishes `kingfisher-secret-scanner`
-through this workflow. The CLI release separately publishes `kingfisher-bin`.
-PR/manual SDK builds upload artifacts without publishing. Publishing is restricted
-to `mongodb/kingfisher` and uses the protected `pypi-sdk` environment.
+Merging a new SDK version to `main` automatically builds, tests, and publishes
+`kingfisher-secret-scanner`. The CLI release separately publishes `kingfisher-bin`.
+PRs and default manual runs are test-only. Explicit manual publication is opt-in;
+all publication is restricted to `mongodb/kingfisher`, a pinned commit already in
+upstream `main`, and the protected `pypi-sdk` environment.
 
-The SDK version comes from `crates/kingfisher-python/Cargo.toml` and is independent
-of the CLI version. Increment it when SDK code or its embedded Rust dependencies
-change. A read-only PyPI plan checks whether the SDK version already exists.
-If it does, the entire protected publish job is skipped without requesting credentials
-or attempting uploads, even if that version is missing a platform wheel. Publishing
-requires a new SDK version. Optional `python-v<version>` tag pushes can
-also publish, and the tag must exactly match the SDK package version.
+The root `pyproject.toml` uses a dynamic version from
+`crates/kingfisher-python/Cargo.toml`, independently of the CLI version. Prepare a
+new stable SDK version when Python runtime code, native bindings, shared Rust
+sources/rules, or SDK build dependencies change, and keep its `Cargo.lock` entry
+in sync. The read-only preflight runs **before** wheel/source jobs:
+
+- A main push with an already published version and unchanged SDK runtime inputs
+  is a no-op before expensive builds. CLI-only, documentation, tests and examples
+  do not by themselves require an SDK version bump.
+- PR/main runtime changes targeting an existing PyPI version fail with **bump SDK
+  version**. The guard compares committed versions and meaningful source/build
+  inputs against the push's `before` SHA or PR base SHA; it also rejects a bump to
+  another already published version. PRs with a new version or only non-runtime
+  changes still run the full test matrix.
+- An explicit manual publication always fails if its version exists, even if that
+  release has no files or only yanked files. Only HTTP 404 means unused; network,
+  authorization and server errors fail closed after bounded retries.
+
+For a read-only local/orchestrator check (Python 3.11+), run:
+
+```bash
+python3 scripts/check-sdk-release.py --require-new --expected-version 1.5.0
+```
+
+Omit `--expected-version` to infer the prepared manifest version. The command
+never builds or writes to the registry. It exits nonzero if the expected version
+mismatches, the manifest/lock entry is invalid, the version already exists, or
+PyPI cannot be checked reliably. Without `--require-new`, it reports existence.
+
+For an explicit manual publication, first merge the prepared version, confirm
+that `HEAD` is the current upstream `main` commit, and use the exact version/SHA:
+
+```bash
+gh workflow run python-sdk.yml --ref main \
+  -f publish=true \
+  -f expected_sha="$(git rev-parse HEAD)" \
+  -f expected_version=1.5.0
+```
+
+`publish` defaults to `false`. Publication requires both safety inputs: the full
+`expected_sha` must match the pinned checkout, event SHA and current upstream
+`main` tip, and `expected_version` must match the SDK manifest. Wrong repository,
+ref, unmerged source, SHA or version fails before native builds. Optional
+`python-v<version>` push tags must match the manifest and point into upstream
+`main` history.
+
+After all six wheels, sdist and cache-portability tests pass, a final read-only
+plan stages only filenames still missing from PyPI; `skip-existing` handles a
+concurrent upload after that plan. If publication partially fails, rerun the
+original failed publish job to reuse its tested artifacts. Do not dispatch a new
+manual publication or rebuild an existing version as recovery; a new publication
+requires a new SDK version.
 
 Maintainer release checklist:
 
-1. Review the changes, increment the SDK version for subsequent releases, update
-   `uv.lock` and `Cargo.lock`, regenerate the rule provenance as described in
-   [publishing guidance](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md), and merge through the normal process.
+1. Review and prepare the SDK version, synchronize `Cargo.lock` (and `uv.lock`
+   only if its resolved dependencies change), regenerate rule provenance as
+   described in [publishing guidance](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md), and merge normally. These
+   checks/commands never bump, commit or merge versions for you.
 2. Inspect all six tested wheels and the source artifact in the main-branch run.
-   The protected publish job runs only when all tests succeed and the SDK version is new on PyPI.
+   The protected publish job runs only after all tests and release gates succeed.
 3. Configure PyPI Trusted Publishing for owner `mongodb`, repository `kingfisher`,
    workflow `python-sdk.yml`, and environment `pypi-sdk`. The GitHub environment
    must allow the `main` branch (and `python-v*` tags if using tag releases).

@@ -9,6 +9,27 @@ RELEASE_REMOTE ?= origin
 export KINGFISHER_RELEASE_VERSION = $(VERSION)
 export KINGFISHER_RELEASE_REMOTE = $(RELEASE_REMOTE)
 
+# GNU Make treats the package name as a second goal. Route it through release
+# once (including under -j), and reject ambiguous invocations before any action.
+RELEASE_PACKAGE := $(filter crates kingfisher-secret-scanner,$(MAKECMDGOALS))
+ifneq ($(strip $(RELEASE_PACKAGE)),)
+  ifeq ($(filter release,$(MAKECMDGOALS)),)
+    $(error Use make release crates or make release kingfisher-secret-scanner)
+  endif
+  ifneq ($(words $(MAKECMDGOALS)),2)
+    $(error Select exactly one release package, with no other Make goals)
+  endif
+  ifneq ($(strip $(VERSION)),)
+    $(error Package releases infer committed versions; VERSION is only for a CLI release)
+  endif
+else
+  ifneq ($(filter release,$(MAKECMDGOALS)),)
+    ifneq ($(words $(MAKECMDGOALS)),1)
+      $(error Use make release VERSION=X.Y.Z or select one supported release package)
+    endif
+  endif
+endif
+
 # Normalize uname once for platform checks (uname reports Darwin on macOS).
 OS := $(shell uname -s | tr '[:upper:]' '[:lower:]')
 TAR_CMD := tar
@@ -50,7 +71,7 @@ ARCHIVE_CMD = $(TAR_CMD) $(TAR_OPTS)
 SUDO_CMD := $(shell command -v sudo 2>/dev/null)
 
 .PHONY: \
-        default help release create-dockerignore setup-zig wizard-gui \
+        default help release crates kingfisher-secret-scanner create-dockerignore setup-zig wizard-gui \
         ubuntu-x64 ubuntu-arm64 linux-x64 linux-arm64 linux linux-all \
         darwin-arm64 darwin-x64 darwin-dev darwin darwin-all \
         require-windows-host windows-x64 windows-arm64 windows-test-x64 windows-test-arm64 windows-test windows \
@@ -61,7 +82,9 @@ default: help
 
 help:
 	@echo "Available targets:"
-	@echo "  release            Start a release: make release VERSION=X.Y.Z (RELEASE_REMOTE=origin)"
+	@echo "  release            CLI release: make release VERSION=X.Y.Z (RELEASE_REMOTE=origin)"
+	@echo "  release crates     Publish pending crates.io versions from committed manifests"
+	@echo "  release kingfisher-secret-scanner  Publish the prepared Python SDK version"
 	@echo "  linux              Build Linux archive for current host arch via Docker"
 	@echo "  linux-x64          Build Linux x64 archive via Docker (SKIP_TESTS=1 to skip tests)"
 	@echo "  linux-arm64        Build Linux arm64 archive via Docker (SKIP_TESTS=1 to skip tests)"
@@ -92,7 +115,14 @@ help:
 	@echo "  clean              Remove build artifacts"
 
 release:
+ifeq ($(strip $(RELEASE_PACKAGE)),)
 	@python3 scripts/release.py --version "$$KINGFISHER_RELEASE_VERSION" --remote "$$KINGFISHER_RELEASE_REMOTE"
+else
+	@python3 scripts/release-packages.py $(RELEASE_PACKAGE) --remote "$$KINGFISHER_RELEASE_REMOTE"
+endif
+
+crates kingfisher-secret-scanner: release
+	@:
 
 create-dockerignore:
 	@printf '%s\n' target/ .git/ .vscode/ bin/ > .dockerignore

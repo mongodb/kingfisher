@@ -6,6 +6,17 @@ on:
     branches: [main]
     tags: ['python-v*']
   workflow_dispatch:
+    inputs:
+      publish:
+        description: Publish a new SDK version from the pinned upstream main commit
+        type: boolean
+        default: false
+      expected_sha:
+        description: Full upstream main SHA (required when publish is true)
+        type: string
+      expected_version:
+        description: SDK manifest version (required when publish is true)
+        type: string
 
 permissions:
   contents: read
@@ -27,8 +38,29 @@ env:
   MACOSX_DEPLOYMENT_TARGET: '11.0'
 
 jobs:
+  preflight:
+    name: Read-only SDK release preflight
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.check.outputs.build }}
+      publish: ${{ steps.check.outputs.publish }}
+      version: ${{ steps.check.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+      - name: Check source, SDK version, and PyPI before native builds
+        id: check
+        run: python3 scripts/check-sdk-release.py --github-event
+
   wheels:
     name: Wheel (${{ matrix.target }})
+    needs: preflight
+    if: needs.preflight.outputs.build == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -56,6 +88,8 @@ jobs:
             cxx: clang++
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -188,6 +222,8 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.13'
@@ -241,9 +277,13 @@ jobs:
           done
 
   source:
+    needs: preflight
+    if: needs.preflight.outputs.build == 'true'
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
       - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
@@ -272,13 +312,15 @@ jobs:
           if-no-files-found: error
 
   plan-publish:
-    if: github.repository == 'mongodb/kingfisher' && github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/python-v'))
-    needs: [wheels, source, cache-portability]
+    if: needs.preflight.outputs.publish == 'true' && github.repository == 'mongodb/kingfisher' && ((github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/python-v'))) || (github.event_name == 'workflow_dispatch' && inputs.publish && github.ref == 'refs/heads/main'))
+    needs: [preflight, wheels, source, cache-portability]
     runs-on: ubuntu-latest
     outputs:
       pending: ${{ steps.plan.outputs.pending }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          ref: ${{ github.sha }}
       - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
         with:
           python-version: '3.13'
