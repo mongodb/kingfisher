@@ -93,6 +93,8 @@ class PackageLauncherTests(unittest.TestCase):
         self.sdk_result = None
         self.auth_error = None
         self.package_error = None
+        self.package_result = None
+        self.before_cargo = None
         self.after_sdk_check = None
         self.after_package = None
         self.main_override = None
@@ -217,16 +219,20 @@ class PackageLauncherTests(unittest.TestCase):
             return self.sdk_result or subprocess.CompletedProcess(args, 0, "", "")
         if args[0] == "cargo":
             self.cargo_commands.append(args)
+            if self.before_cargo:
+                self.before_cargo(Path(root), args)
             versions = self.inferred()
             if args[1] == "metadata":
                 packages = [{"name": name, "version": version, "source": None,
                              "publish": ["crates-io"],
-                             "manifest_path": str(self.root / (launcher.SDK_MANIFEST if name == "kingfisher-python" else launcher.MANIFESTS[name]))}
+                             "manifest_path": str(Path(root) / (launcher.SDK_MANIFEST if name == "kingfisher-python" else launcher.MANIFESTS[name]))}
                             for name, version in versions.items()]
                 return subprocess.CompletedProcess(args, 0, json.dumps({"packages": packages}), "")
             if args[1] == "package":
                 if self.package_error:
                     raise self.package_error
+                if self.package_result:
+                    return self.package_result
                 directory = Path(args[args.index("--target-dir") + 1])
                 self.assertEqual(list(directory.iterdir()), [])
                 self.package_dirs.append(directory)
@@ -282,6 +288,42 @@ class PackageLauncherTests(unittest.TestCase):
         self.package_error = launcher.CommandError("cargo package failed")
         with self.assertRaisesRegex(launcher.CommandError, "cargo package failed"):
             self.release()
+        self.assertEqual(self.actions, [])
+
+    def test_crates_packages_only_committed_files_not_ignored_development_state(self):
+        self.write(".git/info/exclude", ".venv/\n.pytest_cache/\n.DS_Store\n.cargo/\n")
+        sha = self.git("rev-parse", "HEAD")
+        ignored = (".venv/lib/licenses/LICENSE", ".pytest_cache/README.md",
+                   "third-party/.DS_Store", ".cargo/config.toml")
+        for path in ignored:
+            self.write(path, "ignored local development state\n")
+        self.assertEqual(self.git("status", "--porcelain"), "")
+        checkouts = []
+
+        def inspect(checkout, args):
+            self.assertNotEqual(checkout.resolve(), self.root.resolve())
+            self.assertEqual(self.real_command(["git", "rev-parse", "HEAD"], checkout).stdout.strip(), sha)
+            self.assertTrue((checkout / "Cargo.toml").is_file())
+            for path in ignored:
+                self.assertFalse((checkout / path).exists(), path)
+            checkouts.append(checkout)
+
+        self.before_cargo = inspect
+        self.release()
+        self.assertEqual(len(checkouts), 2, "both metadata and packaging must use the pinned checkout")
+        self.assertTrue(all(not path.exists() for path in checkouts), "temporary checkouts must be removed")
+        for path in ignored:
+            self.assertEqual((self.root / path).read_text(encoding="utf-8"), "ignored local development state\n")
+        self.assertEqual(self.git("rev-parse", "HEAD"), sha)
+        self.assertEqual(self.git("status", "--porcelain"), "")
+
+    def test_cargo_failure_reports_error_without_dumping_private_logs(self):
+        self.package_result = subprocess.CompletedProcess([], 101, "",
+            "Packaging fixture\nerror: the lock file needs to be updated but --locked was passed\n"
+            "token=private-detail-must-not-leak\n")
+        with self.assertRaisesRegex(launcher.CommandError, "lock file needs to be updated") as error:
+            self.release()
+        self.assertNotIn("private-detail-must-not-leak", str(error.exception))
         self.assertEqual(self.actions, [])
 
     def test_crates_infers_versions_and_automatically_dispatches_pinned_recovery(self):
@@ -556,6 +598,36 @@ class PackageLauncherTests(unittest.TestCase):
 
 
 class CommandSafetyTests(unittest.TestCase):
+    def test_cargo_summary_preserves_cause_and_discards_verbose_output(self):
+        message = launcher.cargo_failure(
+            "private prelude\n\x1b[31merror:\x1b[0m package contains uncommitted files\n"
+            "secret=private-verbose-token\n", 101)
+        self.assertIn("package contains uncommitted files", message)
+        self.assertNotIn("private prelude", message)
+        self.assertNotIn("private-verbose-token", message)
+        self.assertNotIn("\x1b", message)
+
+    def test_cargo_summary_redacts_urls_headers_assignments_and_environment(self):
+        cases = (
+            ("error: download failed from https://user:fixture-password@example.com/index?token=fixture-query", "fixture-password"),
+            ("error: Authorization: Bearer fixture-auth", "fixture-auth"),
+            ("error: CARGO_REGISTRY_TOKEN=fixture-assignment", "fixture-assignment"),
+            ("error: request rejected fixture-environment-secret", "fixture-environment-secret"),
+        )
+        with patch.dict(os.environ, {"TEST_REGISTRY_TOKEN": "fixture-environment-secret"}):
+            for diagnostic, secret in cases:
+                with self.subTest(diagnostic=diagnostic):
+                    message = launcher.cargo_failure(diagnostic, 101)
+                    self.assertIn("[REDACTED", message)
+                    self.assertNotIn(secret, message)
+                    self.assertNotIn("fixture-query", message)
+
+    def test_cargo_summary_is_bounded_and_never_falls_back_to_private_stderr(self):
+        self.assertLess(len(launcher.cargo_failure("error: " + "x" * 5000, 101)), 900)
+        message = launcher.cargo_failure("token=private-no-error-output", 101)
+        self.assertIn("no Cargo error summary", message)
+        self.assertNotIn("private-no-error-output", message)
+
     def test_subprocess_output_is_explicit_utf8_not_host_codepage(self):
         result = subprocess.CompletedProcess([], 0, "# ── release metadata — café 🐟\n", "")
         with patch.object(launcher.subprocess, "run", return_value=result) as run:

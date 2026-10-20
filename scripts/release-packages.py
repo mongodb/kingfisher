@@ -10,6 +10,7 @@ import base64
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import shutil
@@ -55,6 +56,28 @@ def command(args, root, *, check=True):
         raise CommandError(f"{Path(args[0]).name} {args[1]} failed (exit {result.returncode}); "
                          "check authentication, permissions, network and local tool configuration")
     return result
+
+
+def cargo_failure(stderr, returncode):
+    """Keep the first Cargo error useful without dumping credential-bearing logs."""
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", stderr)
+    summary = next((line.strip() for line in text.splitlines()
+                    if re.match(r"^\s*error(?:\[[^\]]+\])?:", line)), "")
+    if not summary:
+        return f"cargo package failed (exit {returncode}); no Cargo error summary was available"
+    # Never include URLs, authorization headers, credential assignments, or known
+    # secret environment values. Keep all other tool diagnostics private as before.
+    for name, value in os.environ.items():
+        if len(value) >= 4 and re.search(r"TOKEN|PASSWORD|PASSWD|SECRET|KEY|CREDENTIAL", name, re.I):
+            summary = summary.replace(value, "[REDACTED]")
+    summary = re.sub(r"(?:https?|ssh|git\+https?)://[^\s`'\"<>]+", "[REDACTED URL]", summary, flags=re.I)
+    summary = re.sub(r"\bauthorization\s*[:=]\s*.*", "Authorization: [REDACTED]", summary, flags=re.I)
+    summary = re.sub(
+        r"\b[A-Za-z0-9_]*(?:token|password|passwd|secret|credential|api_key|private_key)[A-Za-z0-9_]*\s*[:=]\s*.*",
+        "[REDACTED credentials]", summary, flags=re.I,
+    )
+    summary = "".join(character for character in summary if character.isprintable())
+    return f"cargo package failed (exit {returncode}): {summary[:800]}"
 
 
 def git(root, *args, check=True):
@@ -215,22 +238,42 @@ def fresh_crates_plan(root, sha, inferred):
     current = [publisher.published_version(name, inferred[name]) for name in publisher.PACKAGES]
     if all(info is not None for info in current):
         raise ValueError("All committed crate versions already exist; no release is pending")
-    metadata = json.loads(command(["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], root).stdout)
-    for name in publisher.PACKAGES + ("kingfisher-python",):
-        packages = [p for p in metadata["packages"] if p["name"] == name and p.get("source") is None]
-        if len(packages) != 1 or packages[0]["version"] != inferred[name]:
-            raise ValueError(f"Cargo metadata does not match committed {name}")
-        expected_path = SDK_MANIFEST if name == "kingfisher-python" else MANIFESTS[name]
-        if Path(packages[0]["manifest_path"]).resolve() != (root / expected_path).resolve():
-            raise ValueError(f"Cargo metadata selects an unexpected manifest for {name}")
     with tempfile.TemporaryDirectory(prefix="kingfisher-release-plan-") as temporary:
-        args = ["cargo", "package", "--locked", "--no-verify", "--target-dir", temporary]
+        staging = Path(temporary)
+        checkout = staging / "source"
+        hooks = staging / "hooks"
+        hooks.mkdir()
+        # Cargo's include globs can match ignored virtualenv/cache files even when
+        # git status is clean. Package only the selected commit, just as CI does.
+        # A private detached clone also leaves the caller's worktrees/refs alone.
+        command(["git", "-c", f"core.hooksPath={hooks.as_posix()}",
+                 "-c", f"init.templateDir={hooks.as_posix()}",
+                 "clone", "--quiet", "--shared", "--no-checkout", "--",
+                 root.resolve().as_posix(), checkout.as_posix()], root)
+        command(["git", "-c", f"core.hooksPath={hooks.as_posix()}", "-c", "core.autocrlf=false",
+                 "checkout", "--quiet", "--detach", sha], checkout)
+        if clean_head(checkout) != sha:
+            raise ValueError("Packaging checkout does not match the clean selected commit")
+        metadata = json.loads(command(
+            ["cargo", "metadata", "--locked", "--no-deps", "--format-version", "1"], checkout).stdout)
+        for name in publisher.PACKAGES + ("kingfisher-python",):
+            packages = [p for p in metadata["packages"] if p["name"] == name and p.get("source") is None]
+            if len(packages) != 1 or packages[0]["version"] != inferred[name]:
+                raise ValueError(f"Cargo metadata does not match committed {name}")
+            expected_path = SDK_MANIFEST if name == "kingfisher-python" else MANIFESTS[name]
+            if Path(packages[0]["manifest_path"]).resolve() != (checkout / expected_path).resolve():
+                raise ValueError(f"Cargo metadata selects an unexpected manifest for {name}")
+        target = staging / "target"
+        target.mkdir()
+        args = ["cargo", "package", "--locked", "--no-verify", "--target-dir", str(target)]
         for name in publisher.PACKAGES:
             args += ["-p", name]
-        command(args, root)
+        result = command(args, checkout, check=False)
+        if result.returncode:
+            raise CommandError(cargo_failure(result.stderr, result.returncode))
         # The existing planner validates EVERY fresh archive, skips only byte-equivalent
         # published payloads and rejects source conflicts before any remote action.
-        plan = publisher.make_plan(metadata, Path(temporary) / "package")
+        plan = publisher.make_plan(metadata, target / "package")
     if not any(item["publish"] for item in plan):
         raise ValueError("No crate publication is pending; nothing was dispatched")
     return plan

@@ -87,6 +87,13 @@ Registry lookup failures are errors, not evidence that a version is available. E
 SDK versions and an all-already-published crates plan are errors; unchanged published crate
 dependencies can still be skipped, but changed contents at the same version are rejected.
 
+Crates preflight runs Cargo metadata and packaging in a temporary, detached checkout of
+that exact commit. Ignored virtualenvs, caches, Finder files and local Cargo overrides in
+the development checkout are not release inputs, even when Cargo's include globs would
+otherwise match them. No `--allow-dirty` bypass or cleanup of development environments is
+needed. A packaging failure reports Cargo's first error summary with credentials redacted;
+verbose tool/authentication logs remain private. No release is dispatched after a failure.
+
 - **Crates:** discovers the existing CLI release and its passing build/test run. It retries
   only the original failed crates job when using that exact tested commit, or selects the
   guarded metadata-only recovery below. It does not rebuild the platform release archives,
