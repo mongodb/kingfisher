@@ -66,6 +66,42 @@ Do not start a release with `gh release create` or the GitHub **Publish release*
 those publish immediately, before the build. Adding `--draft` prevents immediate publication
 but does not trigger this workflow; push the tag or dispatch on an existing tag instead.
 
+## Independent package releases
+
+From a clean checkout of the reviewed commit on the public repository's current `main`:
+
+```bash
+make release crates
+make release kingfisher-secret-scanner
+```
+
+These commands infer the committed manifest versions; do not pass `VERSION`. They do not
+edit version numbers, commit changes, move tags, or publish from an unmerged working tree.
+Prepare any needed version bump first, update the lockfile/provenance, commit, and merge it.
+`make release VERSION=X.Y.Z` remains the separate full CLI release command.
+
+Both package commands check GitHub authentication, the public upstream/merged commit,
+workflow availability and supported inputs, and registry state before starting release work.
+They pin the expected commit so an advancing `main` cannot silently publish different code.
+Registry lookup failures are errors, not evidence that a version is available. Existing PyPI
+SDK versions and an all-already-published crates plan are errors; unchanged published crate
+dependencies can still be skipped, but changed contents at the same version are rejected.
+
+- **Crates:** discovers the existing CLI release and its passing build/test run. It retries
+  only the original failed crates job when using that exact tested commit, or selects the
+  guarded metadata-only recovery below. It does not rebuild the platform release archives,
+  Docker image, or CLI PyPI package. Crate extraction/build verification still runs.
+- **Python SDK:** dispatches the existing SDK workflow's explicit publish mode. The six wheel
+  builds, source-distribution tests, and cache-portability checks must pass before publication
+  through the protected `pypi-sdk` environment. An existing version fails before those builds;
+  missing-artifact staging and `skip-existing` remain final race/retry safeguards, not permission
+  to replace an existing release. Ordinary versioned main merges still publish automatically.
+
+The `crates-io` and `pypi-sdk` environments and registry Trusted Publishers/API-token permissions
+must already be configured. Read-only local checks cannot prove external registry authorization
+or prevent a later outage/race; the protected publish jobs remain authoritative. See the
+[crate publishing guide](../docs/PUBLISHING.md) and [SDK publishing guide](../docs/PYPI.md).
+
 ## Run through GitHub Actions
 
 For an existing tag, open **Actions → build-and-release → Run workflow**, select the tag,
@@ -96,7 +132,54 @@ jobs to recover package publication. To restart an unpublished release on an exi
 gh workflow run release.yml --repo mongodb/kingfisher --ref vX.Y.Z
 ```
 
-Dispatching on `main` must fail. A free-form tag input or checking out a tag inside a run on
-`main` does not provide the tag-based signing identity consumers verify.
+Normal release dispatch on `main` must fail. A free-form tag input or checking out a tag
+inside a run on `main` does not provide the tag-based signing identity consumers verify.
 
-See the [release workflow](workflows/release.yml) for the implementation.
+### Registry-only metadata recovery
+
+If crates.io planning rejects a missing library version bump **after the GitHub release is
+public**, do not move its tag, replace its assets, or bypass the planner. A rerun of the
+original failed job uses its original commit and cannot pick up a version fix.
+
+Prepare and merge a metadata-only recovery into `main`: increment the core patch version,
+raise its direct minimum requirements in the CLI, rules, and scanner manifests, update the
+matching workspace lockfile entry, and regenerate rule-bundle provenance. An independent SDK
+version correction from 1.4.0 to 1.5.0 and its matching lockfile entry may accompany this metadata fix. Keep the released CLI
+version and all runtime/build/catalog inputs unchanged. Update the associated version docs.
+The recovery validator permits only these exact manifest fields, the two workspace provenance
+hashes, and its explicit maintenance/documentation file list; it rejects other source or
+dependency changes. Unpublished rules, scanner, and CLI versions can retain their versions.
+See [package preparation and publication checks](../docs/PUBLISHING.md).
+
+After reviewing the recovery and its CI, dispatch the **same** workflow on `main`, explicitly
+selecting crates-only mode and the original tag-based run that published the GitHub release.
+For the v2.14.0 recovery:
+
+```bash
+gh workflow run release.yml --repo mongodb/kingfisher --ref main \
+  -f crates_only=true -f release_run_id=39339690046 \
+  -f expected_sha="$(git rev-parse HEAD)"
+```
+
+This is not a new binary release. The validator requires the public `mongodb/kingfisher`
+repository, a clean checkout of the pinned merged commit, an existing public stable release
+at the unchanged tag, and a successful **Public GitHub Release** job at that tag's commit in
+the supplied run. It also requires successful release validation, all six platform builds,
+all six platform test jobs, and every other test job present in that run. An overall failed
+run is acceptable when downstream package publication failed. Missing releases or prerequisite
+jobs, lookup failures, and mismatched commits fail closed.
+
+Normal tests, platform builds, public release uploads, Docker, and PyPI are skipped. The
+crates job runs the library tests, verifies the rule bundle and all four extracted packages,
+rechecks recovery eligibility, then runs the unchanged full publication planner **before
+registry authentication**. It uses the same `crates-io` environment, OIDC workflow identity,
+and publication concurrency lock. Matching already-published packages remain immutable and
+are skipped; conflicting contents still stop publication. No GitHub assets or attestations
+are created or replaced, and the original run can remain red after a successful recovery.
+
+A runtime, build, feature, dependency-graph, or catalog change is not eligible: use a new
+normal release and its full verification instead. Do not broaden the recovery allowlist to
+turn it into a general-purpose release bypass.
+
+See the [release workflow](workflows/release.yml) and
+[recovery validator](../scripts/check-crates-recovery.py) for the implementation.

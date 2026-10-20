@@ -112,7 +112,7 @@ all three auth types are exported by this crate.
 
 Use `kingfisher-scanner = "2.0.0"` with rules 2.x: its public `Rule`, `RuleSyntax`
 and `RulesDatabase` types/re-exports cannot be mixed with rules 1.x types. Core
-remains at 1.0.3; this Rust migration does not break the Python SDK API.
+uses the compatible 1.0.4 patch release; this Rust migration does not break the Python SDK API.
 See the [library migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-scanner-20).
 
 ## Readable rule catalogs

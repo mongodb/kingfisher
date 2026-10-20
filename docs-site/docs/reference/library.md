@@ -7,7 +7,7 @@ description: "Embed Kingfisher's scanning engine in your own Rust applications u
 
 For in-process Python detection, validation and revocation, see the [Python SDK](../reference/python-bindings.md).
 
-The prepared library releases are **kingfisher-core 1.0.3**,
+The prepared library releases are **kingfisher-core 1.0.4**,
 **kingfisher-rules 2.0.0**, and **kingfisher-scanner 2.0.0**.
 They require Rust **1.99** or newer and are versioned independently of the
 `kingfisher-bin` CLI, currently **2.14.0**. See [publishing](https://github.com/mongodb/kingfisher/blob/main/docs/PUBLISHING.md).
@@ -848,7 +848,7 @@ runner.
 
 
 The first published `1.0.0` established the stable contract. The rules and scanner
-2.0.0 releases start their next stable major; core remains at 1.0.3. Within each
+2.0.0 releases start their next stable major; core stays on the compatible 1.x API at 1.0.4. Within each
 stable major:
 
 - Existing reachable public Rust items, signatures, fields, trait implementations,
@@ -894,8 +894,9 @@ strictly opt-in; rules without `auth` do not need OAuth2 configuration or creden
   `kingfisher_rules::OAuth2Config` holds `OAuth2PasswordCredentials` in `ropc`.
   All three auth types are exported from `kingfisher_rules`. YAML rules omitting
   `auth` remain valid; see the [OAuth2 schema](../rules/overview.md#oauth2-authentication-for-http-verification-services).
-- Core stays at 1.0.3, the CLI at 2.14.0 and Python SDK at 1.4.0. This Rust
-  source/type migration does not introduce a Python API major break.
+- Core uses the compatible 1.0.4 patch; the CLI stays at 2.14.0 and the Python SDK
+  uses the independent 1.5.0 minor release. This Rust source/type migration does not
+  introduce a Python API major break.
 
 ### Migrating from the 0.1 API
 
