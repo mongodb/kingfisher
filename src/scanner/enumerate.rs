@@ -133,6 +133,8 @@ struct EnumeratorConfig {
     /// Maximum number of archive layers to extract while scanning git blobs.
     extraction_depth: Option<usize>,
     resources: ResourceLimits,
+    /// Maximum size of a git blob to scan, from `--max-file-size`.
+    max_blob_size: Option<u64>,
     git_content_filter: GitContentFilter,
 }
 
@@ -273,6 +275,7 @@ pub fn enumerate_filesystem_inputs(
         extract_archives: !args.content_filtering_args.no_extract_archives,
         extraction_depth: args.content_filtering_args.archive_depth(),
         resources: args.content_filtering_args.resource_limits(),
+        max_blob_size: args.content_filtering_args.max_file_size_bytes(),
         git_content_filter: GitContentFilter::new(
             Arc::clone(&scanner_pool),
             rules_db.num_rules(),
@@ -1119,6 +1122,8 @@ struct GitRepoResultIter<'a> {
     /// Maximum number of archive layers to extract from each git blob.
     extraction_depth: Option<usize>,
     resources: ResourceLimits,
+    /// Skip git blobs larger than this many bytes, as `--max-file-size` does for files.
+    max_blob_size: Option<u64>,
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
@@ -1134,6 +1139,7 @@ impl ParallelBlobIterator for GitRepoResult {
             extract_archives: true,
             extraction_depth: Some(1),
             resources: ResourceLimits::default(),
+            max_blob_size: None,
             _marker: std::marker::PhantomData,
         }))
     }
@@ -1155,6 +1161,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
         let extraction_depth = self.extraction_depth;
         let resources = self.resources;
         let path_selection = self.path_selection;
+        let max_blob_size = self.max_blob_size;
         // A Rayon job is not a worker: map_init repeatedly recreates handles and
         // discards their delta-base caches. Reuse one bounded handle per worker.
         let repositories = thread_local::ThreadLocal::new();
@@ -1193,6 +1200,16 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 }
 
                 let blob_id = md.blob_oid;
+                // Read only the object header to skip oversized blobs without
+                // inflating them.
+                if let Some(limit) = max_blob_size {
+                    let size = repo.find_header(blob_id)?.size();
+                    if size > limit {
+                        debug!(blob = %blob_id, size, limit, repo = %repo_path.display(),
+                            "Skipping Git blob larger than the maximum file size");
+                        return Ok(Box::new(std::iter::empty()));
+                    }
+                }
                 let mut raw = repo.find_object(blob_id)?.try_into_blob()?;
                 let data = std::mem::take(&mut raw.data);
 
@@ -1595,6 +1612,7 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                                 gri.path_selection = cfg.path_selection.clone();
                                 gri.extract_archives = extract_archives;
                                 gri.extraction_depth = cfg.extraction_depth;
+                                gri.max_blob_size = cfg.max_blob_size;
                                 FoundInputIter::GitRepo(gri)
                             })
                         })
