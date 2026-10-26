@@ -520,7 +520,7 @@ for responder credentials, regions, and AWS action selection.
 
 ### Limit maximum file size scanned (`--max-file-size`)
 
-By default, Kingfisher skips files larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**. Use `--max-file-size 0` for unlimited file size, or `--no-limits` to lift content-size, depth, and count limits while retaining timeouts.
+By default, Kingfisher skips files and Git history blobs larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**. Use `--max-file-size 0` for unlimited file size, or `--no-limits` to lift content-size, depth, and count limits while retaining timeouts.
 
 Since 2.14.0, disabling scan operation deadlines requires `--no-timeouts` explicitly.
 Combine it with `--no-limits` to opt out of both policies; stalled operations can

@@ -335,6 +335,34 @@ fn unlimited_git_history_extracts_nested_archive_with_explicitly_disabled_deadli
 }
 
 #[test]
+fn max_file_size_applies_to_git_history_blobs() -> Result<()> {
+    let dir = tempfile::tempdir()?;
+    let repo = git2::Repository::init_bare(dir.path().join("repo.git"))?;
+    let blob = repo.blob(format!("{}\ntoken={SECRET}\n", "padding ".repeat(100)).as_bytes())?;
+    let mut tree = repo.treebuilder(None)?;
+    tree.insert("secret.txt", blob, 0o100644)?;
+    let tree = repo.find_tree(tree.write()?)?;
+    let signature = git2::Signature::now("Kingfisher Test", "kingfisher@example.invalid")?;
+    repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])?;
+    scan(repo.path())
+        .args(["--git-history=full", "--max-file-size=0.0001"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains(SECRET).not());
+    scan(repo.path())
+        .args(["--git-history=full", "--max-file-size=0.0001", "--no-limits"])
+        .assert()
+        .code(200)
+        .stdout(predicate::str::contains(SECRET));
+    scan(repo.path())
+        .args(["--git-history=full", "--max-file-size=0"])
+        .assert()
+        .code(200)
+        .stdout(predicate::str::contains(SECRET));
+    Ok(())
+}
+
+#[test]
 fn unlimited_base64_depth_preserves_explicit_opt_out() -> Result<()> {
     use base64::Engine;
     let dir = tempfile::tempdir()?;
