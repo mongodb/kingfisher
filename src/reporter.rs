@@ -166,6 +166,18 @@ const BITBUCKET_FRAGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b'}')
     .add(b'|');
 
+const BLOB_PATH_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}');
+
 const AZURE_QUERY_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'"')
@@ -202,7 +214,8 @@ pub(crate) fn build_git_urls(
     let repo_url = repo_url.trim_end_matches('/');
     let mut repository_url = repo_url.to_string();
     let mut commit_url = format!("{repo_url}/commit/{commit_id}");
-    let mut file_url = format!("{repo_url}/blob/{commit_id}/{file_path}#L{line}",);
+    let encoded_file_path = utf8_percent_encode(file_path, BLOB_PATH_ENCODE_SET);
+    let mut file_url = format!("{repo_url}/blob/{commit_id}/{encoded_file_path}#L{line}");
 
     if let Ok(parsed) = Url::parse(repo_url) {
         let scheme = parsed.scheme();
@@ -2255,6 +2268,22 @@ mod tests {
             file_url,
             "https://dev.azure.com/org/project/_git/repo/commit/0123456789abcdef?path=/dir/file.txt&line=7"
         );
+    }
+
+    #[test]
+    fn blob_links_percent_encode_file_paths() {
+        let (_, _, file_url) = build_git_urls(
+            "https://github.com/org/repo",
+            "0123456789abcdef",
+            "src/C#/100% done?.txt",
+            7,
+        );
+
+        assert_eq!(
+            file_url,
+            "https://github.com/org/repo/blob/0123456789abcdef/src/C%23/100%25%20done%3F.txt#L7"
+        );
+        assert_eq!(Url::parse(&file_url).unwrap().fragment(), Some("L7"));
     }
 
     #[test]
