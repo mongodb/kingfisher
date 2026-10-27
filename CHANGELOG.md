@@ -2,9 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [v2.15.0] (Unreleased)
-
-Changes since the published v2.14.0 release.
+## [v2.15.0]
 
 ### Added
 
