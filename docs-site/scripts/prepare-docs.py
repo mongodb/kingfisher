@@ -21,10 +21,12 @@ VIEWER_CLI_BOOTSTRAP = (
     "    // GitHub Pages serves this file statically; only the bundled local viewer\n"
     "    // has the CLI's /report endpoint.\n"
     "    const isHostedViewer = window.location.hostname.endsWith(\".github.io\");\n"
-    "    if (!isHostedViewer) loadCliReport();\n"
+    "    renderInvestigationWorkspace();\n"
+    "    if (!isHostedViewer && /^https?:$/.test(window.location.protocol)) loadCliReport();\n"
 )
 VIEWER_STATIC_BOOTSTRAP = (
     "    // Static docs-site build: skip the CLI-only /report bootstrap.\n"
+    "    renderInvestigationWorkspace();\n"
 )
 
 # Mapping: source filename -> (destination path, title, description)
@@ -137,7 +139,7 @@ DOC_MAP = {
     "LIBRARY.md": (
         "reference/library.md",
         "Rust Library Crates",
-        "Embed Kingfisher's scanning engine in your own Rust applications using kingfisher-core, kingfisher-rules, and kingfisher-scanner crates.",
+        "Embed secret detection, live validation, and explicit revocation in Rust applications using Kingfisher's reusable library crates.",
     ),
     "PYPI.md": (
         "reference/python-bindings.md",
@@ -146,8 +148,8 @@ DOC_MAP = {
     ),
     "COMPARISON.md": (
         "reference/comparison.md",
-        "Benchmarks & Comparison",
-        "Open-source capabilities and published secret-scanning runtime and network-request benchmarks.",
+        "Kingfisher vs. TruffleHog OSS: Capabilities & Benchmarks",
+        "Compare built-in mapping for AWS, GCP, Azure, developer, and AI services in Kingfisher and TruffleHog OSS, with dated sources and published benchmarks.",
     ),
     "PROJECT.md": (
         "reference/project.md",
@@ -229,6 +231,8 @@ def rewrite_links(content: str, *, root_level: bool = False) -> str:
     content = content.replace("](./runtime-comparison.png", f"]({site_prefix}assets/images/runtime-comparison.png")
     content = content.replace('src="./runtime-comparison.png"', f'src="{site_prefix}assets/images/runtime-comparison.png"')
     content = content.replace("](./assets/icons/", f"]({site_prefix}assets/icons/")
+    content = content.replace("](assets/screenshots/", f"]({site_prefix}assets/screenshots/")
+    content = content.replace("](viewer/investigation-demo.json)", f"]({site_prefix}viewer/investigation-demo.json)")
     content = content.replace(
         "](../docs-site/docs/rules/builtin-rules.md)",
         "](rules/builtin-rules.md)" if root_level else "](builtin-rules.md)",
@@ -372,14 +376,20 @@ def copy_report_viewer():
     )
     print("  viewer/kingfisher_logo.png -> viewer/kingfisher_logo.png")
 
-    sample_src = os.path.join(VIEWER_SRC_DIR, "sample-report.json")
-    sample_dst = os.path.join(VIEWER_DST_DIR, "sample-report.json")
-    if os.path.exists(sample_src):
-        shutil.copy2(sample_src, sample_dst)
-        print(
-            "  viewer/sample-report.json -> "
-            "viewer/sample-report.json"
+    for sample in ("sample-report.json", "investigation-demo.json"):
+        sample_src = os.path.join(VIEWER_SRC_DIR, sample)
+        if os.path.exists(sample_src):
+            shutil.copy2(sample_src, os.path.join(VIEWER_DST_DIR, sample))
+            print(f"  viewer/{sample} -> viewer/{sample}")
+
+    screenshots_src = os.path.join(DOCS_SRC, "assets", "screenshots")
+    if os.path.isdir(screenshots_src):
+        shutil.copytree(
+            screenshots_src,
+            os.path.join(DOCS_DST, "assets", "screenshots"),
+            dirs_exist_ok=True,
         )
+        print("  assets/screenshots -> assets/screenshots")
 
 
 def main():

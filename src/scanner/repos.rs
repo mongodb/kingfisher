@@ -51,6 +51,41 @@ fn repo_host_contains(repo_url: &GitUrl, needle: &str) -> bool {
         .unwrap_or(false)
 }
 
+pub(super) async fn fetch_repository_id(
+    repo_url: &GitUrl,
+    args: &scan::ScanArgs,
+    global_args: &global::GlobalArgs,
+) -> Result<Option<crate::git_host::RepositoryId>> {
+    let input = &args.input_specifier_args;
+    let ignore_certs = global_args.ignore_certs;
+    if let Some(id) =
+        github::fetch_repository_id(repo_url, &input.github_api_url, ignore_certs).await?
+    {
+        return Ok(Some(id.into()));
+    }
+    if let Some(id) =
+        gitlab::fetch_repository_id(repo_url, &input.gitlab_api_url, ignore_certs).await?
+    {
+        return Ok(Some(id));
+    }
+    if let Some(id) =
+        gitea::fetch_repository_id(repo_url, &input.gitea_api_url, ignore_certs).await?
+    {
+        return Ok(Some(id));
+    }
+    if let Some(id) =
+        bitbucket::fetch_repository_id(repo_url, &input.bitbucket_api_url, ignore_certs).await?
+    {
+        return Ok(Some(id));
+    }
+    if let Some(id) =
+        azure::fetch_repository_id(repo_url, &input.azure_base_url, ignore_certs).await?
+    {
+        return Ok(Some(id));
+    }
+    huggingface::fetch_repository_id(repo_url, ignore_certs).await
+}
+
 fn repo_clone_host(repo_url: &GitUrl) -> Option<String> {
     let url = Url::parse(repo_url.as_str()).ok()?;
     let host = url.host_str()?.to_ascii_lowercase();
@@ -603,6 +638,7 @@ mod tests {
 pub async fn enumerate_github_repos(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
+    datastore: &Arc<Mutex<findings_store::FindingsStore>>,
     on_repo: &mut (dyn FnMut(GitUrl) -> Result<()> + Send),
 ) -> Result<Vec<GitUrl>> {
     let repo_specifiers = github::RepoSpecifiers {
@@ -615,7 +651,7 @@ pub async fn enumerate_github_repos(
     };
     let mut repo_urls = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    let mut emit = |repo_string: &str| -> Result<()> {
+    let mut emit = |repo_string: &str, repository_id: Option<u64>| -> Result<()> {
         let repo_url = match GitUrl::from_str(repo_string) {
             Ok(url) => url,
             Err(e) => {
@@ -623,6 +659,9 @@ pub async fn enumerate_github_repos(
                 return Ok(());
             }
         };
+        if let Some(id) = repository_id {
+            datastore.lock().unwrap().register_repo_id(repo_url.as_str(), id);
+        }
         if seen.contains(&repo_url)
             || args
                 .input_specifier_args
@@ -641,7 +680,7 @@ pub async fn enumerate_github_repos(
             if !repo_host_contains(repo_url, "github") {
                 continue;
             }
-            match github::enumerate_contributor_repo_urls(
+            match github::enumerate_contributor_repo_urls_with_metadata(
                 repo_url,
                 &args.input_specifier_args.github_api_url,
                 global_args.ignore_certs,
@@ -649,14 +688,11 @@ pub async fn enumerate_github_repos(
                 args.input_specifier_args.repo_clone_limit,
                 global_args.use_progress(),
                 args.input_specifier_args.github_repo_type.into(),
+                &mut emit,
             )
             .await
             {
-                Ok(contributor_urls) => {
-                    for repo_string in contributor_urls {
-                        emit(&repo_string)?;
-                    }
-                }
+                Ok(_) => {}
                 Err(err) => {
                     error!(
                         "Failed to enumerate GitHub contributor repositories for {repo_url}: {err}"
@@ -673,7 +709,7 @@ pub async fn enumerate_github_repos(
         } else {
             ProgressBar::hidden()
         };
-        github::enumerate_repo_urls_streaming(
+        github::enumerate_repo_urls_with_metadata(
             &repo_specifiers,
             args.input_specifier_args.github_api_url.clone(),
             global_args.ignore_certs,
@@ -690,6 +726,7 @@ pub async fn enumerate_github_repos(
 pub async fn enumerate_github_event_targets(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
+    datastore: &Arc<Mutex<findings_store::FindingsStore>>,
 ) -> Result<Vec<github::GitHubEventScanTarget>> {
     let users = &args.input_specifier_args.github_event_user;
     if users.is_empty() {
@@ -708,7 +745,7 @@ pub async fn enumerate_github_event_targets(
         ProgressBar::hidden()
     };
 
-    let targets = github::enumerate_public_event_targets(
+    let targets = github::enumerate_public_event_targets_with_metadata(
         users,
         args.input_specifier_args.github_event_lookback_hours,
         args.input_specifier_args.github_api_url.clone(),
@@ -716,6 +753,10 @@ pub async fn enumerate_github_event_targets(
         &args.input_specifier_args.github_exclude,
         args.input_specifier_args.repo_clone_limit,
         Some(&mut progress),
+        &mut |url, id| {
+            datastore.lock().unwrap().register_repo_id(url.as_str(), id);
+            Ok(())
+        },
     )
     .await
     .context("Failed to enumerate GitHub public events")?;
@@ -730,6 +771,7 @@ pub async fn enumerate_github_event_targets(
 pub async fn enumerate_gitlab_repos(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
+    datastore: &Arc<Mutex<findings_store::FindingsStore>>,
     on_repo: &mut (dyn FnMut(GitUrl) -> Result<()> + Send),
 ) -> Result<Vec<GitUrl>> {
     let repo_specifiers = gitlab::RepoSpecifiers {
@@ -744,7 +786,7 @@ pub async fn enumerate_gitlab_repos(
 
     let mut repo_urls = Vec::new();
     let mut seen = std::collections::BTreeSet::new();
-    let mut emit = |repo_string: &str| -> Result<()> {
+    let mut emit = |repo_string: &str, repository_id: Option<u64>| -> Result<()> {
         let repo_url = match GitUrl::from_str(repo_string) {
             Ok(url) => url,
             Err(e) => {
@@ -752,6 +794,9 @@ pub async fn enumerate_gitlab_repos(
                 return Ok(());
             }
         };
+        if let Some(id) = repository_id {
+            datastore.lock().unwrap().register_repo_id(repo_url.as_str(), id);
+        }
         if seen.contains(&repo_url)
             || args
                 .input_specifier_args
@@ -770,21 +815,18 @@ pub async fn enumerate_gitlab_repos(
             if !repo_host_contains(repo_url, "gitlab") {
                 continue;
             }
-            match gitlab::enumerate_contributor_repo_urls(
+            match gitlab::enumerate_contributor_repo_urls_with_metadata(
                 repo_url,
                 &args.input_specifier_args.gitlab_api_url,
                 global_args.ignore_certs,
                 &args.input_specifier_args.gitlab_exclude,
                 args.input_specifier_args.repo_clone_limit,
                 global_args.use_progress(),
+                &mut emit,
             )
             .await
             {
-                Ok(contributor_urls) => {
-                    for repo_string in contributor_urls {
-                        emit(&repo_string)?;
-                    }
-                }
+                Ok(_) => {}
                 Err(err) => {
                     error!(
                         "Failed to enumerate GitLab contributor repositories for {repo_url}: {err}"
@@ -801,7 +843,7 @@ pub async fn enumerate_gitlab_repos(
         } else {
             ProgressBar::hidden()
         };
-        gitlab::enumerate_repo_urls_streaming(
+        gitlab::enumerate_repo_urls_with_metadata(
             &repo_specifiers,
             args.input_specifier_args.gitlab_api_url.clone(),
             global_args.ignore_certs,
@@ -818,6 +860,7 @@ pub async fn enumerate_gitlab_repos(
 pub async fn enumerate_gitea_repos(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
+    datastore: &Arc<Mutex<findings_store::FindingsStore>>,
 ) -> Result<Vec<GitUrl>> {
     let repo_specifiers = gitea::RepoSpecifiers {
         user: args.input_specifier_args.gitea_user.clone(),
@@ -844,11 +887,17 @@ pub async fn enumerate_gitea_repos(
 
         let mut num_found: u64 = 0;
         let api_url = args.input_specifier_args.gitea_api_url.clone();
-        let repo_strings = gitea::enumerate_repo_urls(
+        let repo_strings = gitea::enumerate_repo_urls_with_metadata(
             &repo_specifiers,
             api_url,
             global_args.ignore_certs,
             Some(&mut progress),
+            &mut |url, id| {
+                if let Some(id) = id {
+                    datastore.lock().unwrap().register_repo_id(url, id);
+                }
+                Ok(())
+            },
         )
         .await
         .context("Failed to enumerate Gitea repositories")?;
@@ -880,6 +929,7 @@ pub async fn enumerate_gitea_repos(
 pub async fn enumerate_huggingface_repos(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
+    datastore: &Arc<Mutex<findings_store::FindingsStore>>,
 ) -> Result<Vec<GitUrl>> {
     let repo_specifiers = huggingface_specifiers(args);
 
@@ -900,18 +950,28 @@ pub async fn enumerate_huggingface_repos(
 
         let mut num_found: u64 = 0;
         let auth = huggingface::AuthConfig::from_env();
-        let repo_strings = huggingface::enumerate_repo_urls(
+        let repo_strings = huggingface::enumerate_repo_urls_with_metadata(
             &repo_specifiers,
             &auth,
             global_args.ignore_certs,
             Some(&mut progress),
+            &mut |url, id| {
+                if let Some(id) = id {
+                    datastore.lock().unwrap().register_repo_id(url, id);
+                }
+                Ok(())
+            },
         )
         .await
         .context("Failed to enumerate Hugging Face repositories")?;
 
+        let mut missing_ids = Vec::new();
         for repo_string in repo_strings {
             match GitUrl::from_str(&repo_string) {
                 Ok(repo_url) => {
+                    if datastore.lock().unwrap().repo_id(repo_url.as_str()).is_none() {
+                        missing_ids.push(repo_url.clone());
+                    }
                     repo_urls.push(repo_url);
                     num_found += 1;
                 }
@@ -920,6 +980,26 @@ pub async fn enumerate_huggingface_repos(
                         error!("Failed to parse repo URL from {repo_string}: {e}");
                     });
                 }
+            }
+        }
+
+        // Optional per-repository metadata must not serialize five-second timeouts
+        // across a large listing. Bound concurrency and avoid duplicate lookups.
+        use futures::stream::{self, StreamExt};
+        missing_ids.sort();
+        missing_ids.dedup();
+        let mut lookups = stream::iter(missing_ids)
+            .map(|repo_url| async move {
+                let result =
+                    huggingface::fetch_repository_id(&repo_url, global_args.ignore_certs).await;
+                (repo_url, result)
+            })
+            .buffer_unordered(8);
+        while let Some((repo_url, result)) = lookups.next().await {
+            match result {
+                Ok(Some(id)) => datastore.lock().unwrap().register_repo_id(repo_url.as_str(), id),
+                Ok(None) => {}
+                Err(error) => debug!("Could not resolve Hugging Face repository ID: {error:#}"),
             }
         }
 
@@ -989,6 +1069,7 @@ pub async fn enumerate_huggingface_buckets(
 pub async fn enumerate_bitbucket_repos(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
+    datastore: &Arc<Mutex<findings_store::FindingsStore>>,
 ) -> Result<Vec<GitUrl>> {
     let repo_specifiers = bitbucket::RepoSpecifiers {
         user: args.input_specifier_args.bitbucket_user.clone(),
@@ -1016,12 +1097,18 @@ pub async fn enumerate_bitbucket_repos(
         let mut num_found: u64 = 0;
         let api_url = args.input_specifier_args.bitbucket_api_url.clone();
         let auth = bitbucket::AuthConfig::from_env();
-        let repo_strings = bitbucket::enumerate_repo_urls(
+        let repo_strings = bitbucket::enumerate_repo_urls_with_metadata(
             &repo_specifiers,
             api_url,
             &auth,
             global_args.ignore_certs,
             Some(&mut progress),
+            &mut |url, id| {
+                if let Some(id) = id {
+                    datastore.lock().unwrap().register_repo_id(url, id);
+                }
+                Ok(())
+            },
         )
         .await
         .context("Failed to enumerate Bitbucket repositories")?;
@@ -1051,6 +1138,7 @@ pub async fn enumerate_bitbucket_repos(
 pub async fn enumerate_azure_repos(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
+    datastore: &Arc<Mutex<findings_store::FindingsStore>>,
 ) -> Result<Vec<GitUrl>> {
     let repo_specifiers = azure::RepoSpecifiers {
         organization: args.input_specifier_args.azure_organization.clone(),
@@ -1077,11 +1165,17 @@ pub async fn enumerate_azure_repos(
 
         let mut num_found: u64 = 0;
         let base_url = args.input_specifier_args.azure_base_url.clone();
-        let repo_strings = azure::enumerate_repo_urls(
+        let repo_strings = azure::enumerate_repo_urls_with_metadata(
             &repo_specifiers,
             base_url,
             global_args.ignore_certs,
             Some(&mut progress),
+            &mut |url, id| {
+                if let Some(id) = id {
+                    datastore.lock().unwrap().register_repo_id(url, id);
+                }
+                Ok(())
+            },
         )
         .await
         .context("Failed to enumerate Azure repositories")?;

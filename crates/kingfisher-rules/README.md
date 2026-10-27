@@ -8,7 +8,7 @@ secrets are detected without changing the Rust API.
 
 ```toml
 [dependencies]
-kingfisher-rules = "2.0.0"
+kingfisher-rules = "3.0.0"
 anyhow = "1"
 ```
 
@@ -96,6 +96,13 @@ and source headers); null records an absent upstream NOTICE. `generated/NOTICES.
 readable attribution and license text preserved in the repository.
 These records document what was imported; they do not establish upstream authorship.
 
+## Migrating to 3.0
+
+Use rules/scanner `3.0.0` together. Existing YAML/TOML rule files remain compatible;
+public Rust schema fields and enum variants require source updates. See the
+[3.0 migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-scanner-30).
+Core stays at 1.0.4; Python SDK 1.6.0 preserves its existing Python API.
+
 ## Migrating to 2.0
 
 This is a **Rust source/type migration, not a rule-file migration**. Existing
@@ -179,6 +186,20 @@ are no longer used. Custom rules remain supported through `--rules-path`.
 
 The tool also generates `docs-site/docs/rules/builtin-rules.md`. Kingfisher-only operational
 metadata lives in `data/imported-rules-capabilities.yml`.
+
+Custom Betterleaks v2 TOML supports Expr validation, analysis and explicit
+revocation, inheritance, path-only rules, specificity and named component captures.
+Filename-only detectors are excluded from the built-in catalog; custom rules can still opt into
+path-only detection. Content detectors with path restrictions remain included.
+Kingfisher YAML also accepts Expr source in `Betterleaks` validation/revocation
+definitions, while retaining the existing AST form. `jwt_sign` creates a complete
+RS256 JWT from JSON claims and a PEM signing key. See the
+[rule format guide](../../docs/RULES.md).
+
+The token-efficiency helper embeds an unchanged Betterleaks subset of wordfreq
+data under CC-BY-SA-4.0; the Rust source keeps its existing license. The separate
+[data attribution and license](data/betterleaks-words.md) accompany the package
+and generated notices.
 
 ## Runnable examples
 

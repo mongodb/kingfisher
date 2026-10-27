@@ -19,7 +19,7 @@ fn parse_nonblank_aws_value(value: &str) -> Result<String, String> {
     }
 }
 
-/// Directly revoke a known secret against a rule's revocation config
+/// Revoke a known secret; --fallbacks validates first and revokes only the verified environment
 #[derive(Args, Debug, Clone)]
 pub struct RevokeArgs {
     /// Rule ID or prefix to use for revocation (for example, a custom legacy rule ID).
@@ -33,6 +33,7 @@ pub struct RevokeArgs {
 
     /// Additional values for revocation, auto-assigned to template variables.
     /// Values are assigned to non-TOKEN variables in alphabetical order.
+    /// With --fallbacks, inputs cover validation and possible revocation actions; prefer --var.
     /// Example: --arg AKIAEXAMPLE assigns to the first required variable.
     #[arg(long = "arg", value_name = "VALUE")]
     pub args: Vec<String>,
@@ -42,7 +43,7 @@ pub struct RevokeArgs {
     #[arg(long = "var", value_name = "NAME=VALUE")]
     pub variables: Vec<String>,
 
-    /// Timeout for HTTP and AWS revocation requests in seconds (1-60)
+    /// Timeout for HTTP/AWS revocation requests and, with --fallbacks, the entire validation phase (1-60 seconds)
     #[arg(
         long = "timeout",
         default_value_t = 10,
@@ -51,7 +52,7 @@ pub struct RevokeArgs {
     )]
     pub timeout: u64,
 
-    /// HTTP 429 retries for read-only lookup steps (0-5); no retries for HTTP mutations
+    /// Read-only lookup 429 retries and fallback validation retries (0-5); never retry HTTP mutations
     #[arg(
         long = "retries",
         default_value_t = 0,

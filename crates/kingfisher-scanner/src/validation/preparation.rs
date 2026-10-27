@@ -85,7 +85,17 @@ fn request(
     stage: &'static str,
     diagnostics: &mut Vec<CredentialInputDiagnostic>,
 ) {
-    template(parser, &request.url, globals, stage, diagnostics);
+    let mut url_diagnostics = Vec::new();
+    let mut renderable = false;
+    for url in request.urls() {
+        let mut issues = Vec::new();
+        template(parser, url, globals, stage, &mut issues);
+        renderable |= issues.is_empty();
+        url_diagnostics.extend(issues);
+    }
+    if !renderable {
+        diagnostics.extend(url_diagnostics);
+    }
     for (name, value) in &request.headers {
         template(parser, name, globals, stage, diagnostics);
         template(parser, value, globals, stage, diagnostics);
@@ -94,6 +104,42 @@ fn request(
         template(parser, body, globals, stage, diagnostics);
     }
     multipart(parser, request.multipart.as_ref(), globals, stage, diagnostics);
+}
+
+/// Inspect only executable alternatives. Retain template diagnostics only when
+/// no enabled configuration is usable. This performs no network requests.
+pub fn rule_validation(
+    parser: &liquid::Parser,
+    rule: &kingfisher_rules::RuleSyntax,
+    http_fallbacks: bool,
+    values: &BTreeMap<String, String>,
+    diagnostics: &mut Vec<CredentialInputDiagnostic>,
+) {
+    if matches!(rule.validation, Some(Validation::Http(_))) {
+        let configurations = match rule.http_validations(http_fallbacks) {
+            Ok(configurations) => configurations,
+            Err(_) => {
+                diagnostics.push(CredentialInputDiagnostic::new(
+                    "validation",
+                    "invalid_configuration",
+                    None,
+                ));
+                return;
+            }
+        };
+        let mut all_issues = Vec::new();
+        for (_, http) in configurations {
+            let mut issues = Vec::new();
+            validation(parser, Some(&Validation::Http(http)), values, &mut issues);
+            if issues.is_empty() {
+                return;
+            }
+            all_issues.extend(issues);
+        }
+        diagnostics.extend(all_issues);
+    } else {
+        validation(parser, rule.validation.as_ref(), values, diagnostics);
+    }
 }
 
 pub(crate) fn validation(
@@ -161,7 +207,8 @@ pub(crate) fn validation(
     }
 }
 
-pub(crate) fn revocation(
+/// Inspect revocation inputs offline. Placeholders do not establish a validated target.
+pub fn revocation(
     parser: &liquid::Parser,
     revocation: &Revocation,
     values: &BTreeMap<String, String>,
@@ -170,6 +217,16 @@ pub(crate) fn revocation(
     let mut globals = with_request_template_globals(
         &values.iter().map(|(k, v)| (k.clone().into(), Value::scalar(v.clone()))).collect(),
     );
+    // These values come from successful validation, not caller inputs. Preflight
+    // only checks template syntax; the revoker still requires a real selection.
+    for (name, placeholder) in [
+        ("VALIDATION_ENDPOINT_INDEX", "0"),
+        ("VALIDATION_ENDPOINT_COUNT", "1"),
+        ("VALIDATION_URL", "https://prepared.example/identity"),
+        ("VALIDATION_ORIGIN", "https://prepared.example"),
+    ] {
+        globals.entry(name).or_insert_with(|| Value::scalar(placeholder));
+    }
     match revocation {
         Revocation::AWS => {
             if !has_value(values, &["AKID", "ACCESS_KEY_ID"]) {
@@ -180,7 +237,7 @@ pub(crate) fn revocation(
                 ));
             }
         }
-        Revocation::GCP => {} // KEY_ID can come from the service-account JSON.
+        Revocation::GCP | Revocation::Betterleaks(_) => {} // Expression branches handle optional inputs.
         Revocation::Http(http) => {
             request(parser, &http.request, &globals, "revocation", diagnostics);
             multipart(parser, http.multipart.as_ref(), &globals, "revocation", diagnostics);

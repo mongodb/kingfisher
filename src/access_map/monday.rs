@@ -325,6 +325,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
             scopes: Vec::new(),
         }),
         provider_metadata: Some(ProviderMetadata {
+            betterleaks_analysis: None,
             version: plan_tier,
             enterprise: None,
             authorization_evidence: None,
@@ -464,6 +465,7 @@ fn derive_severity(
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",

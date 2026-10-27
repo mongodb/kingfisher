@@ -50,6 +50,13 @@ impl ScanContext {
             .get(&(finding.fingerprint, Arc::as_ptr(&finding.rule) as usize))
     }
 
+    pub(crate) fn remap_rule_identity(&mut self, finding: &Finding, previous_rule: usize) {
+        let Some(matches) = self.matches.get_mut(&finding.rule_id) else { return };
+        if let Some(metadata) = matches.remove(&(finding.fingerprint, previous_rule)) {
+            matches.insert((finding.fingerprint, Arc::as_ptr(&finding.rule) as usize), metadata);
+        }
+    }
+
     pub(crate) fn record(
         &mut self,
         bytes: &[u8],

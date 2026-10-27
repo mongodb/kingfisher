@@ -664,6 +664,7 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
                 };
                 let access_map_args = cli::commands::access_map::AccessMapArgs {
                     provider,
+                    analysis: blast_radius_args.analysis.clone(),
                     credential_path: blast_radius_args.credential_path,
                     output_args: cli::commands::access_map::AccessMapOutputArgs {
                         output: blast_radius_args.output,

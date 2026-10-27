@@ -25,6 +25,7 @@ pub(crate) struct GitContentFilter {
     base64: bool,
     archives: bool,
     resources: ResourceLimits,
+    max_blob_size: Option<u64>,
     clean_blobs: AtomicU64,
     clean_bytes: AtomicU64,
 }
@@ -43,9 +44,19 @@ impl GitContentFilter {
             base64,
             archives,
             resources,
+            max_blob_size: None,
             clean_blobs: AtomicU64::new(0),
             clean_bytes: AtomicU64::new(0),
         }
+    }
+
+    pub(crate) fn with_max_blob_size(mut self, max_blob_size: Option<u64>) -> Self {
+        self.max_blob_size = max_blob_size;
+        self
+    }
+
+    pub(crate) fn exceeds_max_blob_size(&self, size: u64) -> bool {
+        self.max_blob_size.is_some_and(|limit| size > limit)
     }
 
     pub(crate) fn record_clean(&self, blobs: u64, bytes: u64) {
@@ -71,7 +82,10 @@ impl GitContentFilter {
         if possible_unicode(bytes) {
             return Ok(true);
         }
-        if self.archives && possible_archive(bytes) {
+        if self.archives
+            && (possible_archive(bytes)
+                || kingfisher_scanner::extraction::pdf::has_pdf_magic(bytes))
+        {
             return Ok(true);
         }
 

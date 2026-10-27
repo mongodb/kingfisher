@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-scanner"
-version = "2.0.0"
+version = "3.0.0"
 description = "High-level scanning API for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -24,7 +24,7 @@ __cli-internals = []
 
 # CLI-compatible detection policies and content extraction are opt-in.
 context = ["dep:cssparser", "dep:tl", "dep:memchr"]
-extraction = ["archives", "dep:rusqlite"]
+extraction = ["archives", "dep:rusqlite", "dep:lopdf"]
 
 # Offline, read-only Git enumeration is optional for byte-only embedders.
 git = ["dep:gix"]
@@ -52,6 +52,7 @@ validation = [
     "dep:liquid-core",
     "dep:quick-xml",
     "dep:sha1",
+    "dep:md-5",
     "dep:hex",
     "dep:time",
     "dep:hmac",
@@ -109,7 +110,7 @@ validation-all = ["validation"]
 [dependencies]
 # Internal dependencies
 kingfisher-core = { version = "1.0.4", path = "../kingfisher-core" }
-kingfisher-rules = { version = "2.0.0", path = "../kingfisher-rules", features = ["__scanner-internals"] }
+kingfisher-rules = { version = "3.0.0", path = "../kingfisher-rules", features = ["__scanner-internals"] }
 
 # Error handling
 anyhow.workspace = true
@@ -158,6 +159,7 @@ cssparser = { version = "0.37.0", default-features = false, optional = true }
 tl = { version = "0.7.8", optional = true }
 memchr = { version = "2.8", optional = true }
 rusqlite = { version = "0.40", features = ["bundled", "hooks", "limits"], optional = true }
+lopdf = { version = "0.46", default-features = false, optional = true }
 
 # ---- Optional archive dependencies ----
 asar = { version = "0.3.0", optional = true }
@@ -190,6 +192,7 @@ tokio = { version = "1.53", features = ["net", "time", "sync", "io-util"], optio
 liquid = { version = "0.26", optional = true }
 liquid-core = { version = "0.26", optional = true }
 quick-xml = { version = "0.42", features = ["serde", "serialize"], optional = true }
+md-5 = { version = "0.11", optional = true }
 sha1 = { workspace = true, optional = true }
 time = { workspace = true, optional = true }
 chrono = { version = "0.4.45", optional = true }
@@ -243,6 +246,10 @@ name = "detection_policy"
 required-features = ["context"]
 
 [[example]]
+name = "pdf"
+required-features = ["extraction"]
+
+[[example]]
 name = "local_validation"
 required-features = ["validation"]
 
@@ -252,6 +259,10 @@ required-features = ["validation"]
 
 [[example]]
 name = "oauth2_validation"
+required-features = ["validation"]
+
+[[example]]
+name = "http_fallbacks"
 required-features = ["validation"]
 
 [[example]]

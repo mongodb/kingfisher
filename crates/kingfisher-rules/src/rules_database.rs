@@ -1,4 +1,5 @@
 use std::{
+    collections::BTreeMap,
     env, fs,
     io::{ErrorKind, Read, Write},
     path::{Path, PathBuf},
@@ -32,6 +33,10 @@ mod cache_security_windows;
 #[cfg(target_os = "macos")]
 #[path = "rule_cache_security_macos.rs"]
 mod cache_security_macos;
+
+#[cfg(test)]
+#[path = "rules_database_path_only_tests.rs"]
+mod path_only_tests;
 
 /// Compiled detection rules, source-path prefilters, and finding-filter helpers.
 ///
@@ -72,12 +77,17 @@ pub enum RuleCacheStatus {
 /// of the main content database without recompiling its regex list for every source path.
 struct BetterleaksPathPrefilter {
     expression: BetterleaksExpr,
-    scanners: ScannerPool,
+    scanners: Option<ScannerPool>,
+    filter_engine: Option<BetterleaksFilterEngine>,
 }
 
 impl BetterleaksPathPrefilter {
     fn compile(expression: BetterleaksExpr) -> Result<Self> {
-        let patterns = extract_path_prefilter_patterns(&expression)?
+        let Ok(patterns) = extract_path_prefilter_patterns(&expression) else {
+            let filter_engine = BetterleaksFilterEngine::compile(std::iter::once(&expression))?;
+            return Ok(Self { expression, scanners: None, filter_engine: Some(filter_engine) });
+        };
+        let patterns = patterns
             .into_iter()
             .enumerate()
             .map(|(id, pattern)| {
@@ -85,19 +95,39 @@ impl BetterleaksPathPrefilter {
             })
             .collect::<Result<Vec<_>>>()?;
         if patterns.is_empty() {
-            bail!("Betterleaks path prefilter contains no patterns");
+            return Ok(Self {
+                expression,
+                scanners: None,
+                filter_engine: Some(BetterleaksFilterEngine::compile(std::iter::empty())?),
+            });
         }
         let database = Arc::new(
             BlockDatabase::new(patterns)
                 .context("compile the Betterleaks path prefilter with Vectorscan")?,
         );
-        Ok(Self { expression, scanners: ScannerPool::new(database) })
+        Ok(Self { expression, scanners: Some(ScannerPool::new(database)), filter_engine: None })
     }
 
     #[inline]
     fn is_match(&self, path: &str) -> Result<bool> {
+        self.is_match_with_attributes(path, None)
+    }
+
+    fn is_match_with_attributes(
+        &self,
+        path: &str,
+        attributes: Option<&BTreeMap<String, String>>,
+    ) -> Result<bool> {
+        let Some(scanners) = self.scanners.as_ref() else {
+            return crate::betterleaks_filter::evaluate_prefilter_with_attributes(
+                &self.expression,
+                path,
+                attributes,
+                self.filter_engine.as_ref().expect("fallback prefilter engine"),
+            );
+        };
         let mut matched = false;
-        self.scanners.try_with(|scanner| {
+        scanners.try_with(|scanner| {
             scanner.scan(path.as_bytes(), |_id, _from, _to, _flags| {
                 matched = true;
                 Scan::Terminate
@@ -187,7 +217,8 @@ impl RuleCacheConfig {
 }
 
 const CACHE_MAGIC: &[u8] = b"KFRULEDB";
-const CACHE_FORMAT_VERSION: u32 = 6;
+// Version 7 bounds path-only placeholder callbacks and keys their compilation mode.
+const CACHE_FORMAT_VERSION: u32 = 7;
 const MAX_CACHE_HEADER_BYTES: usize = 1024 * 1024;
 const MAX_CACHE_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 pub const DEFAULT_RULE_CACHE_MAX_ENTRIES: usize = 10;
@@ -270,9 +301,25 @@ fn compile_vectorscan_database(rules: &[Arc<Rule>]) -> Result<(BlockDatabase, Ve
             .iter()
             .enumerate()
             .map(|(id, rule)| {
-                let flags = if prefilter_flags[id] { Flag::PREFILTER } else { Flag::default() };
+                let flags = if rule.syntax().betterleaks_path_only {
+                    // This placeholder only keeps catalog IDs stable. Without
+                    // SINGLEMATCH, binary/archive data emits a callback per NUL
+                    // and turns metadata-only rules into a content-match storm.
+                    Flag::SINGLEMATCH
+                } else if prefilter_flags[id] {
+                    Flag::PREFILTER
+                } else {
+                    Flag::default()
+                };
                 Pattern::new(
-                    rule.syntax().pattern.clone().into_bytes(),
+                    // Path-only rules are evaluated once against the source path by the
+                    // scanner. Keep their rule IDs in the database without empty-match
+                    // callbacks at every content byte.
+                    if rule.syntax().betterleaks_path_only {
+                        br"\x00".to_vec()
+                    } else {
+                        rule.syntax().pattern.clone().into_bytes()
+                    },
                     flags,
                     Some(id.try_into().expect("rule count fits in u32")),
                 )
@@ -380,6 +427,9 @@ impl RulesDatabase {
         rules: Vec<Rule>,
         betterleaks_prefilter: Option<BetterleaksExpr>,
     ) -> Result<Self> {
+        for rule in &rules {
+            rule.syntax().check_http_fallbacks()?;
+        }
         let rules: Vec<Arc<Rule>> = rules.into_iter().map(Arc::new).collect();
         let betterleaks_prefilter =
             betterleaks_prefilter.map(BetterleaksPathPrefilter::compile).transpose()?;
@@ -432,6 +482,9 @@ impl RulesDatabase {
         cache: &RuleCacheConfig,
         betterleaks_prefilter: Option<BetterleaksExpr>,
     ) -> Result<Self> {
+        for rule in &rules {
+            rule.syntax().check_http_fallbacks()?;
+        }
         let rules: Vec<Arc<Rule>> = rules.into_iter().map(Arc::new).collect();
         let betterleaks_prefilter =
             betterleaks_prefilter.map(BetterleaksPathPrefilter::compile).transpose()?;
@@ -705,6 +758,87 @@ impl RulesDatabase {
         &self.anchored_regexes
     }
 
+    /// Evaluate metadata-only Betterleaks rules once per logical source path.
+    #[doc(hidden)]
+    pub fn path_only_rules(&self, path: &str) -> Result<Vec<(usize, Arc<Rule>)>> {
+        self.path_only_rules_with_attributes(path, None)
+    }
+
+    #[doc(hidden)]
+    pub fn path_only_rules_with_attributes(
+        &self,
+        path: &str,
+        attributes: Option<&BTreeMap<String, String>>,
+    ) -> Result<Vec<(usize, Arc<Rule>)>> {
+        self.path_only_rules_for_source(path, attributes, &[])
+    }
+
+    #[doc(hidden)]
+    pub fn path_only_rules_for_source(
+        &self,
+        path: &str,
+        attributes: Option<&BTreeMap<String, String>>,
+        bytes: &[u8],
+    ) -> Result<Vec<(usize, Arc<Rule>)>> {
+        if attributes
+            .and_then(|attributes| attributes.get("fs.first_fragment"))
+            .is_some_and(|value| value == "false")
+        {
+            return Ok(Vec::new());
+        }
+        let mut matches = Vec::new();
+        let prefiltered = self
+            .betterleaks_prefilter
+            .as_ref()
+            .map_or(Ok(false), |prefilter| prefilter.is_match_with_attributes(path, attributes))?;
+        for (index, rule) in self.rules.iter().enumerate() {
+            if !rule.syntax().betterleaks_path_only
+                || !rule.visible()
+                || !rule.matches_path(path)
+                || !rule.matches_keywords(bytes)
+                || (prefiltered && self.is_betterleaks_rule(index))
+            {
+                continue;
+            }
+            let full_match = format!("file detected: {path}");
+            let outcome = rule
+                .betterleaks_filter()
+                .map(|expression| {
+                    self.evaluate_betterleaks_filter(
+                        expression,
+                        &BetterleaksFilterContext {
+                            path,
+                            attributes,
+                            secret: "",
+                            full_match: &full_match,
+                            line: "",
+                            fragment_raw: "",
+                            match_start_idx: 0,
+                            match_end_idx: 0,
+                            match_line_start_idx: 0,
+                            match_line_end_idx: 0,
+                            rule_id: rule.id(),
+                            description: rule.name(),
+                            captures: Default::default(),
+                        },
+                    )
+                })
+                .transpose()?;
+            if outcome.is_some_and(|outcome| outcome.discard) {
+                continue;
+            }
+            let confidence =
+                outcome.and_then(|outcome| outcome.confidence).unwrap_or_else(|| rule.confidence());
+            if !rule.accepts_effective_confidence(confidence) {
+                continue;
+            }
+            let mut syntax = rule.syntax().clone();
+            syntax.confidence = confidence;
+            matches.push((index, Arc::new(Rule::new(syntax))));
+        }
+        Ok(matches)
+    }
+
     /// Return true when Betterleaks' database-level source prefilter excludes this path.
     ///
     /// # Errors
@@ -713,6 +847,73 @@ impl RulesDatabase {
     #[inline]
     pub fn is_path_prefiltered(&self, path: &str) -> Result<bool> {
         self.betterleaks_prefilter.as_ref().map_or(Ok(false), |prefilter| prefilter.is_match(path))
+    }
+
+    /// Evaluate a Betterleaks source prefilter with all available source metadata.
+    pub fn is_source_prefiltered(
+        &self,
+        path: &str,
+        attributes: &BTreeMap<String, String>,
+    ) -> Result<bool> {
+        self.betterleaks_prefilter.as_ref().map_or(Ok(false), |prefilter| {
+            prefilter.is_match_with_attributes(path, Some(attributes))
+        })
+    }
+
+    /// Source attributes referenced by finding filters and the source prefilter.
+    ///
+    /// `*` means an expression reads the complete attributes map or uses a dynamic
+    /// key. Compute once when initializing a source worker to avoid unnecessary
+    /// filesystem or Git metadata reads for ordinary path-only expressions.
+    pub fn source_attribute_keys(&self) -> std::collections::BTreeSet<String> {
+        fn visit(value: &serde_json::Value, keys: &mut std::collections::BTreeSet<String>) {
+            if value["kind"] == "member"
+                && value["node"]["kind"] == "identifier"
+                && value["node"]["value"] == "attributes"
+            {
+                let property = &value["property"];
+                if property["kind"] == "string" {
+                    if let Some(name) = property["value"].as_str() {
+                        keys.insert(name.into());
+                    }
+                } else {
+                    keys.insert("*".into());
+                }
+                return;
+            }
+            if value["kind"] == "identifier" && value["value"] == "attributes" {
+                keys.insert("*".into());
+                return;
+            }
+            match value {
+                serde_json::Value::Object(values) => {
+                    for value in values.values() {
+                        visit(value, keys);
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        visit(value, keys);
+                    }
+                }
+                _ => {}
+            }
+        }
+        let mut keys = std::collections::BTreeSet::from(["path".into()]);
+        for expression in self
+            .rules
+            .iter()
+            .filter_map(|rule| rule.betterleaks_filter())
+            .chain(self.betterleaks_prefilter.iter().map(|prefilter| &prefilter.expression))
+        {
+            match serde_json::to_value(expression) {
+                Ok(value) => visit(&value, &mut keys),
+                Err(_) => {
+                    keys.insert("*".into());
+                }
+            }
+        }
+        keys
     }
 
     /// Return whether the rule at `index` was imported from Betterleaks.
@@ -788,7 +989,14 @@ impl RulesDatabase {
     }
 
     fn build_betterleaks_rule_flags(rules: &[Arc<Rule>]) -> Vec<bool> {
-        rules.iter().map(|rule| rule.id().starts_with("betterleaks.")).collect()
+        rules
+            .iter()
+            .map(|rule| {
+                rule.id().starts_with("betterleaks.")
+                    || rule.betterleaks_secret_group().is_some()
+                    || rule.syntax().betterleaks_path_only
+            })
+            .collect()
     }
 }
 
@@ -967,6 +1175,7 @@ fn compute_cache_key_from_rules<'a>(rules: impl IntoIterator<Item = &'a Rule>) -
         input.extend_from_slice(rule.id().as_bytes());
         input.push(0);
         input.extend_from_slice(rule.syntax().pattern.as_bytes());
+        input.push(u8::from(rule.syntax().betterleaks_path_only));
         input.push(0xff);
     }
     format!("{:032x}", xxh3_128(&input))
@@ -1540,6 +1749,44 @@ mod test_vectorscan {
     use crate::{Confidence, rules::Rules};
 
     #[test]
+    fn source_attribute_keys_include_prefilter_and_finding_filters_and_dynamic_keys() {
+        let expression = |source: &str| {
+            let validation: crate::Validation = serde_json::from_value(serde_json::json!({
+                "type":"Betterleaks", "content":{"expression":source}
+            }))
+            .unwrap();
+            let crate::Validation::Betterleaks(validation) = validation else { unreachable!() };
+            validation.expression
+        };
+        for (filter, expected) in [
+            ("attributes[\"git.message\"] == \"ignore\"", vec!["git.date", "git.message", "path"]),
+            (
+                "let key = \"git.message\"; attributes[key] == \"ignore\"",
+                vec!["*", "git.date", "path"],
+            ),
+            ("attributes != {}", vec!["*", "git.date", "path"]),
+        ] {
+            let mut rule = crate::RuleSyntax::new("custom.metadata", "Metadata", "(secret)");
+            rule.betterleaks_filter = Some(expression(filter));
+            let database = RulesDatabase::from_rules_with_betterleaks_prefilter(
+                vec![Rule::new(rule)],
+                Some(expression("attributes[\"git.date\"] == \"ignore\"")),
+            )
+            .unwrap();
+            assert_eq!(
+                database.source_attribute_keys(),
+                expected.into_iter().map(str::to_owned).collect()
+            );
+        }
+        let collection = crate::defaults::get_builtin_rules(None).unwrap();
+        let database = RulesDatabase::from_rule_collection(collection).unwrap();
+        assert_eq!(
+            database.source_attribute_keys(),
+            std::collections::BTreeSet::from(["path".into()])
+        );
+    }
+
+    #[test]
     pub fn test_vectorscan_sanity() -> Result<()> {
         use kingfisher_vectorscan::{BlockDatabase, BlockScanner, Pattern, Scan};
         let input = b"some test data for vectorscan";
@@ -2073,6 +2320,57 @@ rules:
         assert!(prefilter.is_match("repo/node_modules/package/index.js")?);
         assert!(prefilter.is_match("assets/LOGO.PNG")?);
         assert!(!prefilter.is_match("src/lib.rs")?);
+        assert!(prefilter.scanners.is_some());
+        Ok(())
+    }
+
+    #[test]
+    fn general_and_inherited_prefilters_use_the_precompiled_filter_engine() -> Result<()> {
+        for source in [
+            "containsAny(attributes.path, [\"vendor/\"]) || attributes.path endsWith \".png\"",
+            "(let path = attributes.path; matchesAny(path, [`^vendor/`])) || (attributes.path == \"asset.png\")",
+        ] {
+            let expression =
+                serde_json::from_value(crate::betterleaks::parse_custom_expression(source)?)?;
+            let prefilter = BetterleaksPathPrefilter::compile(expression)?;
+            assert!(prefilter.filter_engine.is_some());
+            assert!(prefilter.is_match("vendor/library.rs")?);
+            assert!(prefilter.is_match("asset.png")?);
+            assert!(!prefilter.is_match("src/lib.rs")?);
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn source_prefilters_and_path_only_filters_can_read_metadata() -> Result<()> {
+        let yaml = br#"
+rules:
+  - id: custom.file
+    name: Metadata file
+    pattern: '(?:)'
+    path: '\.key$'
+    betterleaks_path_only: true
+    betterleaks_secret_group: 0
+    betterleaks_filter:
+      kind: binary
+      operator: '=='
+      left: {kind: member, node: {kind: identifier, value: attributes}, property: {kind: string, value: git.author_email}}
+      right: {kind: string, value: automation@example.test}
+"#;
+        let rules = Rules::from_paths_and_contents(
+            [(Path::new("test.yml"), yaml.as_slice())],
+            crate::Confidence::Low,
+        )?;
+        let db = RulesDatabase::from_rule_collection(rules)?;
+        assert_eq!(db.path_only_rules("private.key")?.len(), 1);
+        let attrs = BTreeMap::from([("git.author_email".into(), "automation@example.test".into())]);
+        assert!(db.path_only_rules_with_attributes("private.key", Some(&attrs))?.is_empty());
+        let expression = serde_json::from_value(crate::betterleaks::parse_custom_expression(
+            r#"attributes["git.author_email"] == "automation@example.test""#,
+        )?)?;
+        let prefilter = BetterleaksPathPrefilter::compile(expression)?;
+        assert!(!prefilter.is_match("source.rs")?);
+        assert!(prefilter.is_match_with_attributes("source.rs", Some(&attrs))?);
         Ok(())
     }
 

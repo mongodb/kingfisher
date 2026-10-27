@@ -9,6 +9,7 @@ use assert_cmd::prelude::*;
 use predicates::prelude::*;
 use zip::{CompressionMethod, ZipWriter, write::SimpleFileOptions};
 
+// kingfisher:ignore (synthetic test fixture, not a real token)
 const SECRET: &str = "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";
 
 fn scan(path: &Path) -> Command {
@@ -331,6 +332,92 @@ fn unlimited_git_history_extracts_nested_archive_with_explicitly_disabled_deadli
         .code(200)
         .stdout(predicate::str::contains(SECRET))
         .stdout(predicate::str::contains("!inner.zip"));
+    Ok(())
+}
+
+#[test]
+fn max_file_size_applies_to_git_history_blobs() -> Result<()> {
+    // kingfisher:ignore (synthetic test fixture, not a real token)
+    const SMALL_SECRET: &str = "ghp_FZopZDMWeildfoFzyH0KnWyQ5Yy3vy0Y2SU6";
+    let dir = tempfile::tempdir()?;
+    let repo_path = dir.path().join("repo.git");
+    {
+        let repo = git2::Repository::init_bare(&repo_path)?;
+        let mut small = format!("token={SMALL_SECRET}\n").into_bytes();
+        small.resize(64, b' ');
+        let small = repo.blob(&small)?;
+        let large =
+            repo.blob(format!("{}\ntoken={SECRET}\n", "padding ".repeat(100)).as_bytes())?;
+        let mut tree = repo.treebuilder(None)?;
+        tree.insert("small.txt", small, 0o100644)?;
+        tree.insert("large.txt", large, 0o100644)?;
+        let tree = repo.find_tree(tree.write()?)?;
+        let signature = git2::Signature::now("Kingfisher Test", "kingfisher@example.invalid")?;
+        repo.commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])?;
+    }
+    let config = dir.path().join("kingfisher.yml");
+    std::fs::write(&config, "scan:\n  no_limits: true\nfilters:\n  max_file_size_mb: 0.0001\n")?;
+
+    // Exercise both loose objects and packed objects (which may use delta compression).
+    for packed in [false, true] {
+        if packed {
+            Command::new("git")
+                .arg("-C")
+                .arg(&repo_path)
+                .args(["repack", "-ad"])
+                .assert()
+                .success();
+        }
+        for metadata in ["--commit-metadata=true", "--commit-metadata=false"] {
+            // This is exactly 64 bytes in MiB; the boundary itself must be included.
+            let limit = "--max-file-size=0.00006103515625";
+            // Cover the independent timeout override once, not across the whole matrix.
+            let timeout_modes = if !packed && metadata == "--commit-metadata=true" {
+                vec![None, Some("--no-timeouts")]
+            } else {
+                vec![None]
+            };
+            for extra in timeout_modes {
+                let mut command = scan(&repo_path);
+                command.args(["--git-history=full", metadata, limit]);
+                if let Some(extra) = extra {
+                    command.arg(extra);
+                }
+                command
+                    .assert()
+                    .code(200)
+                    .stdout(predicate::str::contains(SMALL_SECRET))
+                    .stdout(predicate::str::contains(SECRET).not());
+            }
+            if metadata == "--commit-metadata=true" {
+                scan(&repo_path)
+                    .args(["--git-history=full", metadata, "--max-file-size=0.00006"])
+                    .assert()
+                    .success()
+                    .stdout(predicate::str::contains(SMALL_SECRET).not())
+                    .stdout(predicate::str::contains(SECRET).not());
+            }
+            // These are option-resolution checks, not storage/metadata variants.
+            if !packed && metadata == "--commit-metadata=true" {
+                for unlimited in ["--no-limits", "--max-file-size=0", "--config"] {
+                    let mut command = scan(&repo_path);
+                    command.args(["--git-history=full", metadata]);
+                    if unlimited != "--max-file-size=0" {
+                        command.arg(limit);
+                    }
+                    command.arg(unlimited);
+                    if unlimited == "--config" {
+                        command.arg(&config);
+                    }
+                    command
+                        .assert()
+                        .code(200)
+                        .stdout(predicate::str::contains(SMALL_SECRET))
+                        .stdout(predicate::str::contains(SECRET));
+                }
+            }
+        }
+    }
     Ok(())
 }
 

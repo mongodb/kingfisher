@@ -10,11 +10,11 @@ use serde::Serialize;
 use tracing::debug;
 
 use crate::{
-    access_map::{AccessMapAttempt, AccessMapResult, map_request_attempts},
+    access_map::{AccessMapAttempt, AccessMapResult},
     cli::{commands::blast_radius::BlastRadiusArgs, global::GlobalArgs},
     direct_validate::{
         build_globals, create_minimal_scan_args, extract_validation_vars, find_rules_by_selector,
-        get_global_var, read_secret,
+        read_secret,
     },
     provider_endpoints::ProviderEndpointOverrides,
     reporter::{
@@ -23,7 +23,7 @@ use crate::{
     },
     rule_loader::RuleLoader,
     rules::Validation,
-    scanner::direct_access_map_requests,
+    scanner::direct_access_map_requests_with_options,
     util::get_writer_for_file_or_stdout,
 };
 
@@ -64,6 +64,7 @@ pub async fn run_direct_access_map(
     args: &BlastRadiusArgs,
     global_args: &GlobalArgs,
 ) -> Result<Vec<DirectAccessMapResult>> {
+    args.analysis.validate()?;
     let rule_selector = args
         .rule
         .as_deref()
@@ -106,18 +107,31 @@ pub async fn run_direct_access_map(
             &template_vars,
             &endpoint_overrides,
         )?;
-        let variables = template_vars
-            .into_iter()
-            .filter(|name| name != "TOKEN")
-            .filter_map(|name| get_global_var(&globals, &name).map(|value| (name, value)))
+        let variables = globals
+            .iter()
+            .filter(|(name, _)| name.as_str() != "TOKEN")
+            .filter_map(|(name, value)| {
+                serde_json::to_value(value).ok().map(|value| {
+                    let value =
+                        value.as_str().map(str::to_owned).unwrap_or_else(|| value.to_string());
+                    (name.to_string(), value)
+                })
+            })
             .collect::<BTreeMap<_, _>>();
 
-        let requests = direct_access_map_requests(Arc::new(rule.clone()), &secret, variables);
+        let requests = direct_access_map_requests_with_options(
+            Arc::new(rule.clone()),
+            &secret,
+            variables,
+            global_args.allow_internal_ips,
+        );
         if requests.is_empty() {
             continue;
         }
 
-        for attempt in map_request_attempts(requests).await {
+        for attempt in
+            crate::access_map::map_request_attempts_with_options(requests, &args.analysis).await
+        {
             record_mapping_attempt(rule.id(), rule.name(), attempt, &mut results, &mut failures);
         }
     }

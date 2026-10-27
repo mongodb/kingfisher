@@ -329,6 +329,30 @@ fn normalize_github_endpoint(raw: &str) -> Result<GitHubEndpoint> {
     })
 }
 
+/// Normalize a configured API base while keeping credential-bearing requests on that origin.
+pub(crate) fn access_map_api_url(provider: &str, raw: &str) -> Result<Url> {
+    let input = parse_url_or_assume_https(raw)?;
+    if !matches!(input.scheme(), "http" | "https")
+        || input.host_str().is_none()
+        || !input.username().is_empty()
+        || input.password().is_some()
+        || input.query().is_some()
+        || input.fragment().is_some()
+    {
+        bail!(
+            "Provider API endpoint must be an HTTP(S) URL without user information, query, or fragment"
+        );
+    }
+    let normalized = match provider {
+        "github" => normalize_github_endpoint(raw)?.api_base_url,
+        "gitlab" => normalize_api_base_url(raw, "/api/v4")?,
+        "gitea" => normalize_api_base_url(raw, "/api/v1")?,
+        _ => bail!("Unsupported source-host access-map provider"),
+    };
+    Url::parse(&format!("{}/", normalized.trim_end_matches('/')))
+        .context("Invalid provider API endpoint")
+}
+
 fn parse_url_or_assume_https(raw: &str) -> Result<Url> {
     match Url::parse(raw.trim()) {
         Ok(url) => Ok(url),
@@ -356,6 +380,34 @@ fn url_with_path(url: &Url, path: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn access_map_preserves_enterprise_api_paths_and_rejects_url_credentials() {
+        for (provider, input, expected) in [
+            (
+                "github",
+                "https://git.example.test/team/api/v3",
+                "https://git.example.test/team/api/v3/user",
+            ),
+            (
+                "gitlab",
+                "https://git.example.test/team/api/v4",
+                "https://git.example.test/team/api/v4/user",
+            ),
+            (
+                "gitea",
+                "https://git.example.test/team/api/v1",
+                "https://git.example.test/team/api/v1/user",
+            ),
+        ] {
+            assert_eq!(
+                access_map_api_url(provider, input).unwrap().join("user").unwrap().as_str(),
+                expected
+            );
+            assert!(access_map_api_url(provider, "https://secret@git.example.test").is_err());
+            assert!(access_map_api_url(provider, "https://git.example.test?secret=value").is_err());
+        }
+    }
 
     #[test]
     fn github_endpoint_normalizes_host_only() {

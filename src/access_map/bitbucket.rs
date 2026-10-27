@@ -334,6 +334,7 @@ fn derive_severity(
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",

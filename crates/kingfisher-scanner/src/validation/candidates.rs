@@ -16,22 +16,30 @@ static SEARCHES: LazyLock<Semaphore> = LazyLock::new(|| Semaphore::new(4));
 /// Only fixed-destination validators may opt into candidate verification.
 /// Betterleaks HTTP calls must have a provably fixed origin and literal header names.
 /// Do not trust a rule ID to establish that its expression is safe.
+#[cfg(feature = "__cli-internals")]
 pub fn supported(rule: &RuleSyntax) -> bool {
+    supported_with_fallbacks(rule, false)
+}
+
+/// Check every enabled destination before attempting ambiguous credential pairs.
+pub fn supported_with_fallbacks(rule: &RuleSyntax, enabled: bool) -> bool {
     if !rule.is_authoritative() {
         return false;
     }
     match &rule.validation {
         Some(Validation::AWS) => true,
-        Some(Validation::Http(http)) => {
-            let url = &http.request.url;
-            !url.contains(['{', '}'])
-                && reqwest::Url::parse(url).is_ok_and(|url| {
-                    matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
-                })
-                && http.multipart.is_none()
-                && http.request.multipart.is_none()
-                && !http.request.headers.keys().any(|name| name.eq_ignore_ascii_case("host"))
-        }
+        Some(Validation::Http(_)) => rule.http_validations(enabled).is_ok_and(|configurations| {
+            configurations.iter().all(|(_, http)| {
+                let url = &http.request.url;
+                !url.contains(['{', '}'])
+                    && reqwest::Url::parse(url).is_ok_and(|url| {
+                        matches!(url.scheme(), "http" | "https") && url.host_str().is_some()
+                    })
+                    && http.multipart.is_none()
+                    && http.request.multipart.is_none()
+                    && !http.request.headers.keys().any(|name| name.eq_ignore_ascii_case("host"))
+            })
+        }),
         Some(Validation::Betterleaks(validation)) => {
             fn function_name(value: &serde_json::Value) -> Option<String> {
                 match value["kind"].as_str()? {
@@ -240,6 +248,44 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn http_candidate_verification_requires_every_fallback_destination_to_be_fixed() {
+        for (urls, expected) in [
+            (vec!["https://first.example/check", "https://second.example/check"], true),
+            (vec!["https://first.example/check", "https://{{ HOST }}/check"], false),
+            (vec!["https://first.example/check", "file:///private"], false),
+        ] {
+            let mut rule = RuleSyntax::new("custom.example", "Example", "(secret)");
+            rule.validation = Some(
+                serde_json::from_value(serde_json::json!({
+                    "type": "Http", "content": {"request": {"method": "GET", "url": urls}}
+                }))
+                .unwrap(),
+            );
+            assert_eq!(supported_with_fallbacks(&rule, true), expected);
+        }
+    }
+
+    #[test]
+    fn named_fallback_destinations_affect_candidate_safety_only_when_enabled() {
+        let mut rule = RuleSyntax::new("custom.candidate", "Candidate", "(secret)");
+        rule.validation = Some(serde_json::from_value(serde_json::json!({
+            "type":"Http","content":{"request":{"method":"GET","url":"https://primary.example/me"}}
+        })).unwrap());
+        rule.fallbacks.push(kingfisher_rules::HttpFallback {
+            id: "dynamic".into(),
+            reuse_primary_validation_logic: true,
+            url: Some("https://{{ CAPTURED_HOST }}/me".into()),
+            validation: None,
+            reuse_primary_revocation_logic: false,
+            revocation_url: None,
+            revocation_urls: Vec::new(),
+            revocation: None,
+        });
+        assert!(supported_with_fallbacks(&rule, false));
+        assert!(!supported_with_fallbacks(&rule, true));
+    }
 
     #[tokio::test]
     async fn rejected_searches_stop_at_the_combination_budget() {

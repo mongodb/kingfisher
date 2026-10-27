@@ -25,7 +25,71 @@ pub struct AccessMapArgs {
     pub credential_path: Option<PathBuf>,
 
     #[command(flatten)]
+    pub analysis: BlastRadiusOptions,
+
+    #[command(flatten)]
     pub output_args: AccessMapOutputArgs,
+}
+
+/// Explicitly bounded cloud scope expansion during blast-radius mapping.
+/// Defaults retain the provider-selected scope; assessments are generated automatically.
+#[derive(Args, Debug, Clone, Default)]
+#[command(next_help_heading = "Blast Radius Investigation")]
+pub struct BlastRadiusOptions {
+    /// Inspect this AWS region (repeat for up to 8 regions; default: SDK-selected region)
+    #[arg(long = "aws-region", global = true, value_name = "REGION", value_parser = parse_aws_region)]
+    pub aws_regions: Vec<String>,
+
+    /// Also inspect this GCP project (repeat for up to 7 additional projects, plus the home project)
+    #[arg(long = "gcp-project", global = true, value_name = "PROJECT", value_parser = parse_scope)]
+    pub gcp_projects: Vec<String>,
+}
+
+impl BlastRadiusOptions {
+    pub fn is_requested(&self) -> bool {
+        !self.aws_regions.is_empty() || !self.gcp_projects.is_empty()
+    }
+
+    pub fn validate(&self) -> anyhow::Result<()> {
+        if self.aws_regions.len() > 8 {
+            anyhow::bail!("blast-radius scope expansion is limited to 8 AWS regions");
+        }
+        if self.gcp_projects.len() > 7 {
+            anyhow::bail!(
+                "blast-radius scope expansion is limited to 7 additional GCP projects, reserving one scope for the home project"
+            );
+        }
+        for region in &self.aws_regions {
+            parse_aws_region(region).map_err(anyhow::Error::msg)?;
+        }
+        for scope in &self.gcp_projects {
+            parse_scope(scope).map_err(anyhow::Error::msg)?;
+        }
+        Ok(())
+    }
+}
+
+fn parse_aws_region(value: &str) -> Result<String, String> {
+    parse_scope(value)?;
+    if !value.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'-') {
+        return Err(
+            "expected a lowercase AWS region identifier, using letters, digits and hyphens".into(),
+        );
+    }
+    Ok(value.to_owned())
+}
+
+fn parse_scope(value: &str) -> Result<String, String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value.bytes().all(|c| c.is_ascii_alphanumeric() || matches!(c, b'-' | b'.' | b':'))
+        || !value.as_bytes()[0].is_ascii_alphanumeric()
+    {
+        return Err(
+            "expected an explicit region or project identifier, without paths or wildcards".into(),
+        );
+    }
+    Ok(value.to_owned())
 }
 
 #[derive(Args, Debug, Clone)]
@@ -307,4 +371,35 @@ fn access_map_provider_values() -> Vec<PossibleValue> {
 
 fn parse_access_map_provider(raw: &str) -> Result<AccessMapProvider, String> {
     AccessMapProvider::from_str(raw)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn aws_regions_are_rejected_before_provider_execution() {
+        for region in ["US-EAST-1", "us.east-1", "us:east-1", "", "../us-east-1"] {
+            assert!(parse_aws_region(region).is_err(), "{region}");
+            let options =
+                BlastRadiusOptions { aws_regions: vec![region.into()], ..Default::default() };
+            assert!(options.validate().is_err());
+        }
+        for region in ["us-east-1", "us-gov-west-1", "cn-north-1"] {
+            assert_eq!(parse_aws_region(region).unwrap(), region);
+        }
+        // GCP's domain-scoped project vocabulary remains independent.
+        assert!(parse_scope("example.com:project").is_ok());
+    }
+
+    #[test]
+    fn gcp_scope_validation_reserves_room_for_each_credentials_home_project() {
+        let mut options = BlastRadiusOptions {
+            gcp_projects: (0..7).map(|index| format!("project-{index}")).collect(),
+            ..Default::default()
+        };
+        assert!(options.validate().is_ok());
+        options.gcp_projects.push("project-7".into());
+        assert!(options.validate().is_err());
+    }
 }

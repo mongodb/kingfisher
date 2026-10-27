@@ -473,14 +473,54 @@ fn render_access_map(access_map: Option<&Vec<AccessMapEntry>>) -> String {
             .filter(|notes| !notes.is_empty())
             .map(|notes| format!("<h4>Coverage limitations</h4><ul>{notes}</ul>"))
             .unwrap_or_default();
+        let assessment = entry
+            .provider_metadata
+            .as_ref()
+            .and_then(|m| m.authorization_evidence.as_ref())
+            .and_then(|e| e.assessment.as_ref())
+            .map(render_assessment)
+            .unwrap_or_default();
         items.push_str(&format!(
-            "<article class=\"access-identity\"><h3>{} · {}</h3><p>{resources} recorded resources · {permissions} unique permissions</p><ol class=\"access-paths\">{paths}</ol>{evidence_counts}{limitations}</article>",
+            "<article class=\"access-identity\"><h3>{} · {}</h3><p>{resources} recorded resources · {permissions} unique permissions</p>{assessment}<ol class=\"access-paths\">{paths}</ol>{evidence_counts}{limitations}</article>",
             escape_html(&entry.provider.to_uppercase()),
             escape_html(entry.account.as_deref().unwrap_or("Identity")),
         ));
     }
     format!(
         "<section class=\"panel\"><h2>Blast Radius Summary</h2><p>Snapshot of recorded access. Unlisted resources are not proof of no access.</p>{items}</section>"
+    )
+}
+
+fn render_assessment(assessment: &crate::access_map::AccessAssessment) -> String {
+    let rows = assessment
+        .capabilities
+        .iter()
+        .take(100)
+        .map(|c| {
+            format!(
+                "<tr><td><code>{}</code></td><td>{}</td><td>{}</td><td>{}</td><td>{}</td></tr>",
+                escape_html(&c.permission),
+                escape_html(&c.category),
+                escape_html(&c.reach),
+                escape_html(&c.evidence),
+                escape_html(&c.scope),
+            )
+        })
+        .collect::<String>();
+    let notes = assessment
+        .risk_notes
+        .iter()
+        .chain(&assessment.recommendations)
+        .take(100)
+        .map(|note| format!("<li>{}</li>", escape_html(note)))
+        .collect::<String>();
+    format!(
+        "<details><summary>Investigation assessment · {} capability impact · {} coverage</summary><p>Observed: {}. Legacy severity: {}. Policy grants and potential identity paths do not prove live data access. Coverage describes this snapshot, not the entire account.</p><table><thead><tr><th>Permission</th><th>Capability</th><th>Reach</th><th>Evidence</th><th>Scope</th></tr></thead><tbody>{rows}</tbody></table><p>Showing up to 100 of {} capability records; full details are retained in structured output.</p><ul>{notes}</ul></details>",
+        escape_html(&assessment.capability_risk),
+        escape_html(&assessment.coverage),
+        escape_html(&assessment.observed_at),
+        escape_html(&assessment.legacy_severity),
+        assessment.capabilities.len(),
     )
 }
 

@@ -420,7 +420,7 @@ async fn completely_rejected_combinations_do_not_mark_primary_inactive() {
 }
 
 /// Exercise the actual pinned provider expressions, changing only their destination
-/// to a local mock and their detection patterns to synthetic fixture tokens.
+/// to a local mock and their detection patterns/keywords to synthetic fixture tokens.
 #[tokio::test]
 async fn builtin_http_expressions_try_rejected_then_valid_component() {
     let catalog = kingfisher_rules::defaults::get_builtin_rules(None).unwrap();
@@ -466,6 +466,7 @@ async fn builtin_http_expressions_try_rejected_then_valid_component() {
         let variable = primary["depends_on_rule"][0]["variable"].as_str().unwrap().to_owned();
         primary["id"] = "custom.provider".into();
         primary["pattern"] = "(token_[a-z]{16})".into();
+        primary["keywords"] = serde_json::json!(["token_"]);
         primary["min_entropy"] = 0.into();
         primary["betterleaks_secret_group"] = 1.into();
         primary["betterleaks_filter"] = serde_json::Value::Null;

@@ -1,7 +1,7 @@
 """Explicit credential validation with bounded concurrency and deadlines."""
 from __future__ import annotations
 from dataclasses import dataclass, field
-from typing import Iterable, Mapping
+from typing import Any, Iterable, Mapping
 from types import MappingProxyType
 from . import _native
 from .core import Finding
@@ -101,7 +101,7 @@ class ValidationResult:
 
     @property
     def revocation_supported(self) -> bool:
-        """Whether the original rule defines revocation, independently of readiness."""
+        """Whether the selected environment defines revocation, independently of readiness."""
         return self._native.revocation_supported if self._native is not None else False
 
     @property
@@ -130,14 +130,19 @@ class Validator:
 
     Distinct components skip validation unless the rule explicitly enables supported,
     bounded candidate verification. Retain complete per-input findings and helpers.
+    HTTP fallbacks default to off. ``http_fallbacks=True`` explicitly permits up to
+    two rule-defined alternatives. Primary revocation reuse requires its own explicit
+    ``reuse_primary_revocation_logic`` rule setting and replacement URL(s); mutations never fail over.
     """
     def __init__(self, *, timeout: float = 10, concurrency: int = 8,
                  retries: int = 0, max_response_bytes: int = 1 << 20,
                  allow_internal_ips: bool = False,
-                 variables: Mapping[str, str] | None = None) -> None:
-        self._native = _native.Validator(timeout, concurrency, retries,
-                                        max_response_bytes, allow_internal_ips,
-                                        dict(variables or {}))
+                 variables: Mapping[str, str] | None = None,
+                 http_fallbacks: bool = False) -> None:
+        self._native = _native.Validator(
+            timeout, concurrency, retries, max_response_bytes, allow_internal_ips,
+            dict(variables or {}), http_fallbacks=http_fallbacks,
+        )
 
     def with_variables(self, variables: Mapping[str, str]) -> Validator:
         """Clone execution policy and pooled client with explicit variable overrides.
@@ -148,6 +153,23 @@ class Validator:
         clone = object.__new__(Validator)
         clone._native = self._native.with_variables(dict(variables))
         return clone
+
+    def analyze(self, result: ValidationResult, *, timeout: float | None = None,
+                cancellation: CancellationToken | None = None) -> dict[str, Any]:
+        """Explicitly analyze one verified credential using its validation snapshot.
+
+        Runs the rule's Betterleaks ``analyze`` expression, including any provider
+        requests, and reuses its private validation evidence and resolved captures.
+        Validation alone never runs analysis. Returned identity, capability and
+        metadata fields can contain sensitive provider information. Private handoff
+        evidence is excluded from result serialization and repr.
+        """
+        if not isinstance(result, ValidationResult):
+            raise TypeError("result must be a ValidationResult")
+        if result._native is None:
+            raise ValueError("Analysis requires an original native validation snapshot")
+        return self._native.analyze_validated(result._native, timeout=timeout,
+                                              cancellation=cancellation)
 
     def inspect(self, findings: Iterable[Finding], *, timeout: float | None = None,
                 cancellation: CancellationToken | None = None) -> list[tuple[InputDiagnostic, ...]]:

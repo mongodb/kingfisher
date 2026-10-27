@@ -48,6 +48,14 @@ def main():
     legacy_context = DetectionScanner(rules, cli_match_semantics=False,
                                       base64_max_depth=1, base64_max_input_bytes=None)
     assert legacy_context.scan_input(sources[-1]) == []
+    # Caller-owned Git/source metadata is supplied explicitly to Betterleaks
+    # prefilters and finding filters. This does not enumerate files or contact Git.
+    attributed = contextual.scan_with_attributes(
+        b"demo_abcd1234efgh5678",
+        {"path": "config.env", "git.author_name": "alice", "git.sha": "synthetic-commit"},
+        timeout=10,
+    )
+    print(json.dumps({"attributed_count": len(attributed)}))
     # Both scanners remain offline; validation is a separate step.
 
 

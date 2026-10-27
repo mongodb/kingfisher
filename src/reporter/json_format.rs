@@ -227,6 +227,7 @@ mod tests {
             no_validate: false,
             no_timeouts: false,
             access_map: false,
+            blast_radius_options: Default::default(),
             rule_stats: false,
             only_valid: false,
             validation_filter: None,
@@ -287,8 +288,13 @@ mod tests {
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         };
         let rule = Arc::new(Rule::new(syntax));
         Match {

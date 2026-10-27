@@ -12,6 +12,10 @@ The current built-in catalog contains **488 rules**, including selected Veles ru
 component/helper rules. See the [built-in rules listing](../docs-site/docs/rules/builtin-rules.md) for the per-rule catalog
 and capability counts.
 
+Filename-only detectors are not imported into the built-in catalog: a filename alone is not
+evidence of an exposed secret. Content detectors may still restrict matching by path. Custom
+Kingfisher YAML and Betterleaks TOML rules continue to support explicit filename-only/path-only rules.
+
 The Betterleaks source is pinned to [v2.0.0-rc.1](https://github.com/betterleaks/betterleaks/tree/b3b4cbb586c964701f78bbfb6bc2129ced99bed3).
 It includes Bitbucket Data Center HTTP access tokens (`betterleaks.bitbucket-data-center-token`),
 Cloudflare `cfut_` user tokens and `cfat_` account tokens (`betterleaks.cloudflare-api-key.2`),
@@ -90,6 +94,77 @@ but must not contain detector regexes. See the [overlay reference](../crates/kin
 Veles support is built-in-only. `crates/kingfisher-rules/data/veles-rules.yml` pins an
 OSV-SCALIBR commit and selects upstream Veles plugin IDs that have explicit import adapters;
 `--rules-path` does not accept Veles source or configuration.
+
+## Betterleaks v2 programs
+
+Custom TOML supports `validate`, `analyze`, and `revoke` Expr programs, named
+`finding.captures` and `components[id].captures`, optional components, `valueGroup`,
+`specificity`, `tags`, `keywords`, and path-only rules. A higher specificity suppresses a
+contained value from another rule on the same line; equal specificity preserves ties.
+Unknown TOML keys, invalid component references, and malformed programs fail loading.
+The optional `malformedPrivateKey` filter helper is a Kingfisher-only extension;
+custom TOML that uses it is not portable to upstream Betterleaks. Do not use it
+in upstream detector contributions.
+It rejects a narrow set of complete placeholder-only bodies (`PRIVATE_KEY`,
+`${PRIVATE_KEY}` / `${PRIVATE_KEY_NAME}` and `<YOUR_PRIVATE_KEY_HERE>`-style markers)
+and demonstrably malformed supported
+containers, not cryptographic weaknesses. Helm templates, `[REDACTED]`, ellipsis-only
+bodies and prose instructions are not generally filtered. Unknown source
+representations and recognized BER container/octet-string forms are retained
+conservatively; this is not a general BER or cryptographic validator.
+
+`[extend]` supports `path`, `useDefault`, and `disabledRules`, with at most two
+inheritance steps. As in Betterleaks, paths resolve from the working directory.
+Child rules replace inherited rules with the same ID; global filters and
+prefilters compose in order. `useDefault` reads the archived Betterleaks source
+offline and imports its rules into the custom namespace.
+
+```toml
+[[rules]]
+id = "acme-token"
+description = "Acme token"
+regex = '''\b(acme_[A-Za-z0-9]{32})\b'''
+validate = '''
+let r = http.get("https://api.example.com/me", {"Authorization": "Bearer " + finding.secret});
+r.status == 200 ? {"result": "valid", "analysis": {"id": r.json.id}} : validate.unknown(r)
+'''
+analyze = '''
+{"identity": {"id": string(validation.analysis.id)}, "capabilities": analysis.capabilities({"read": true})}
+'''
+revoke = '''
+let r = http.delete("https://api.example.com/tokens/self", {"Authorization": "Bearer " + finding.secret});
+r.status == 204 ? {"result": "revoked"} : revoke.unknown(r)
+'''
+```
+
+Scanning never executes revocation. Analysis is an explicit access-map operation
+or SDK call after confirmed validation; private `validation.analysis` evidence is
+retained internally and omitted from validation reports. Revocation runs fresh
+through the explicit revoke command/API, without automatically rerunning validation
+or analysis. A submitted request without confirmation has an unknown outcome.
+
+Kingfisher YAML can also contain Expr source directly; existing AST definitions
+remain supported:
+
+```yaml
+validation:
+  type: Betterleaks
+  content:
+    expression: >-
+      let r = http.get("https://api.example.com/me", {"Authorization": "Bearer " + finding.secret});
+      r.status == 200 ? {"result": "valid"} : validate.unknown(r)
+revocation:
+  type: Betterleaks
+  content:
+    expression: >-
+      let r = http.delete("https://api.example.com/tokens/self", {"Authorization": "Bearer " + finding.secret});
+      r.status == 204 ? {"result": "revoked"} : revoke.unknown(r)
+```
+
+YAML also accepts optional `specificity` (default `0`), `tags`, and `keywords`.
+Keywords select rules case-insensitively using the complete raw or decoded source
+fragment, before content filters run. A keyword outside a Base64 payload cannot
+authorize a match inside that decoded payload. Empty keyword lists impose no gate.
 
 ## Using rules from Rust and Python
 
@@ -281,6 +356,7 @@ revocation:
 | depends_on_rule         | Chain rules: use captures from one rule in another's validation      |
 | pattern_requirements  | Require character types and/or exclude placeholder words from matches |
 | validation              | Configure `Assumed`, `Http`, `Grpc`, typed validators, or `Raw` exception-path checks |
+| fallbacks               | Up to two named HTTP alternatives, disabled unless explicitly enabled; see [fallbacks](#ordered-http-fallback-endpoints) |
 | revocation              | Configure HTTP, AWS, or multi-step revocation for a detected secret  |
 
 ## Validation Types
@@ -332,6 +408,213 @@ The Ethereum family uses `content: private_key`, `public_key`, or `mnemonic`. Mn
 standard `m/44'/60'/0'/0/0` path and explicitly assume an empty BIP-39 passphrase, so the reported
 address is a candidate. Validation responses contain only allowlisted derivation metadata and never
 the private key or seed phrase.
+
+### Ordered HTTP fallback endpoints
+
+**Primary only is the default. Existing Kingfisher YAML and Betterleaks TOML rules
+need no edits.** Keep the existing `validation:` and `revocation:` definitions as
+the primary configuration. Add an optional rule-level `fallbacks:` list only when
+you want additional HTTP environments.
+
+Fallback environments require `--fallbacks` on the CLI, `.http_fallbacks(true)`
+on Rust's `ValidatorBuilder`/`ValidationEngine`, or `Validator(http_fallbacks=True)`
+in Python. Without opt-in, fallback templates are not rendered, their hosts are
+not resolved or contacted, and fallback-only variables are not required. Existing
+explicit `--endpoint` and template-variable overrides still determine the primary.
+The flag does **not** enable automatic revocation: `scan` and `validate` never
+revoke credentials. Revocation remains a separate, explicitly invoked operation.
+
+Each fallback has a unique `id` and chooses **one** of these forms:
+
+**Reuse the primary logic, not the primary destination.** These options copy the
+request/action settings so they need not be duplicated. You still provide the
+fallback target in `url`, `revocation_url`, or `revocation_urls`; the primary URL(s)
+are never inherited. For example, both environments can use the same Bearer header
+and response matchers while contacting different service instances.
+
+| `reuse_primary_validation_logic` | Required fields | Meaning |
+| --- | --- | --- |
+| `true` | Fallback-level `url:` | Copy the primary HTTP validation, replacing only `request.url`. Keep its method, headers, body, matchers, multipart and authentication. A separate `validation:` is forbidden. |
+| `false` or omitted | Complete `validation: { type: Http, content: ... }` | Independent HTTP validation. Nothing is merged with the primary. A fallback-level `url:` is forbidden. |
+
+Incomplete or mixed forms are configuration errors, not implicit inheritance.
+
+Revocation has an **independent** choice, also defaulting to false:
+
+| `reuse_primary_revocation_logic` | Configuration | Meaning |
+| --- | --- | --- |
+| `true`, primary `Http` | Required `revocation_url:` | Copy the complete primary action, replacing only its request URL. |
+| `true`, primary `HttpMultiStep` | Required `revocation_urls:` | Copy the complete primary program, replacing each step URL in order. Exactly one nonblank URL per step (one or two steps). |
+| `false` or omitted | Optional complete `revocation:` | Independent action; if omitted, revocation is unavailable for this fallback. |
+
+Primary revocation must exist and be HTTP or HTTP multi-step when reuse is true.
+Do not combine reuse with a separate `revocation:` definition. URL overrides are
+forbidden when reuse is false. `revocation_url` is for a single request only;
+`revocation_urls` is for multi-step only. Headers, methods, bodies, response
+matchers and extractors are preserved without merging or other overrides.
+Both switches default to false.
+
+For an existing two-step primary program, the reuse form looks like this:
+
+```yaml
+fallbacks:
+  - id: secondary
+    reuse_primary_validation_logic: true
+    url: https://secondary.example.com/v1/me
+    reuse_primary_revocation_logic: true
+    revocation_urls:
+      - "{{ VALIDATION_ORIGIN }}/v1/tokens"
+      - "{{ VALIDATION_ORIGIN }}/v1/tokens/{{ TOKEN_ID }}"
+```
+
+The primary program's first-step extractor must provide `TOKEN_ID`; its extractor
+and final-step response matchers are copied unchanged. No primary URLs are reused
+as mutation destinations.
+
+There may be **at most two fallbacks** (three environments including primary).
+This safety cap is not relaxed by `--no-limits`.
+IDs use ASCII letters, digits, `_`, `-`, or `.`; `primary` is reserved. Nested
+fallbacks, references to other fallbacks, and non-HTTP fallback validators are not
+supported. Repeated YAML is preferable to ambiguous header or matcher merging.
+
+```yaml
+rules:
+  - id: custom.example.token
+    name: Example service token
+    pattern: '\b(svc_[A-Za-z0-9]{32})\b'
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: https://primary.example.com/v1/me
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+            - type: JsonValid
+    revocation:
+      type: Http
+      content:
+        request:
+          method: DELETE
+          url: https://primary.example.com/v1/tokens/self
+          headers:
+            Authorization: "Bearer {{ TOKEN }}"
+          response_matcher:
+            - type: StatusMatch
+              status: [204]
+    fallbacks:
+      - id: secondary
+        reuse_primary_validation_logic: true  # Reuse GET, headers and response matchers.
+        url: https://secondary.example.com/v1/me
+        reuse_primary_revocation_logic: true  # Reuse DELETE, headers and response matchers.
+        revocation_url: https://secondary.example.com/v1/tokens/self
+      - id: legacy-service
+        # reuse_primary_validation_logic defaults to false.
+        validation:
+          type: Http
+          content:
+            request:
+              method: POST
+              url: https://legacy.example.com/check
+              headers:
+                X-API-Key: "{{ TOKEN }}"
+              response_matcher:
+                - type: StatusMatch
+                  status: [200]
+                - type: WordMatch
+                  words: ['"authenticated":true']
+```
+
+```bash
+# Primary only, even if the rule declares fallbacks:
+kingfisher scan ./repo --rules-path ./custom-rules.yml --format toon
+
+# Explicit permission to send candidates to configured fallback environments:
+kingfisher scan ./repo --rules-path ./custom-rules.yml --fallbacks --format toon
+kingfisher validate --rules-path ./custom-rules.yml --rule custom.example.token \
+  --fallbacks --format toon 'svc_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6'
+```
+
+Validation always starts at primary, then tries enabled fallbacks in declaration
+order and stops at the first matcher-confirmed success. Alternatives do not add
+detection rules or duplicate a finding. Each endpoint uses the configured retries
+and response-size limit within one overall deadline; a slow endpoint can consume
+the remaining budget. If none succeeds, any inconclusive attempt keeps the final
+outcome inconclusive. Inactive means every **enabled** endpoint rejected it; without
+opt-in this means only the primary, not every possible environment.
+An enabled fallback with missing inputs also keeps the result inconclusive, with
+credential-free diagnostics naming the missing variables. For `validate`, `--arg`
+continues to map only to primary validation variables; use named `--var` inputs
+for fallback-only fields.
+
+Successful HTTP validation privately retains `VALIDATION_URL`, `VALIDATION_ORIGIN`,
+`VALIDATION_ENDPOINT_INDEX` (zero-based), and the enabled `VALIDATION_ENDPOINT_COUNT`.
+A named fallback also retains `VALIDATION_FALLBACK_ID`. Result-based revocation uses
+only that environment's resolved action: an independent `revocation:` or explicit
+primary revocation reuse with replacement URL(s). If neither is configured,
+revocation is unavailable. Reuse of validation does **not** imply reuse of revocation.
+Selected fallback actions and legacy revocation URL lists must use the accepted
+origin. Primary scalar actions retain their configured destination, even when
+fallbacks are enabled; primary validation and revocation may use different origins.
+A `revocation_urls` list maps existing steps; it is **not** a list of alternative
+mutation targets. Validation may
+try environments in order; revocation never falls back to another environment.
+Redirects are disabled, and response extractors cannot overwrite selection variables.
+URLs may contain secrets; selection snapshots stay out of ordinary reports.
+
+#### Validate, select, then revoke
+
+`revoke --fallbacks` performs validation itself, retains the verified endpoint
+internally, and executes only that environment's resolved action. No preceding
+`validate` command or manual endpoint variables are needed:
+
+```bash
+kingfisher revoke --rules-path ./custom-rules.yml --rule custom.example.token \
+  --fallbacks --format toon 'svc_a1B2c3D4e5F6g7H8i9J0k1L2m3N4o5P6'
+```
+
+The command requires one unambiguous rule with HTTP validation. It checks primary
+first, then the configured alternatives, stopping at the first **verified-active**
+result. If validation is inactive, inconclusive, skipped, unavailable, or times out,
+no revocation action runs. If the first verified environment has no revocation
+configured or lacks action inputs, the command also stops; it does not continue
+searching for another environment to mutate. Validation retries are allowed, but
+HTTP mutations are never automatically retried or moved to another environment.
+
+Pass credential/supporting values using `--var NAME=VALUE`. With `--fallbacks`,
+`--arg` maps alphabetically across validation and possible action inputs, excluding
+internal endpoint state and values extracted by earlier revocation steps. Named
+variables are recommended for compound credentials. `TOKEN` and `VALIDATION_*`
+endpoint-selection variables are determined internally and cannot be overridden.
+For private services, also pass `--allow-internal-ips`: the selection phase uses
+the same SSRF protections and TLS policy as direct validation.
+
+`--timeout` bounds the whole validation phase, including fallback attempts and
+validation retries. Revocation retains its individual HTTP/AWS request/step timeouts.
+`--retries` controls validation retries and read-only revocation lookup retries,
+never mutation retries. A timeout after submission can mean the action occurred;
+verify provider state before retrying manually.
+
+Without `--fallbacks`, `revoke` retains legacy direct-primary behavior and does not
+add validation requests. `scan` and `validate` never revoke automatically.
+
+JSON/TOON output includes a safe `fallback_id` when validation or revocation selects
+a named alternative; private endpoint URLs remain internal. Scan-generated fallback
+revoke commands use the same validate-to-select workflow rather than forwarding
+old `VALIDATION_*` values, so the environment is re-established when executed.
+SDK result-based revocation instead reuses its exact retained validation snapshot
+without revalidation or an additional execution-policy setting.
+
+Legacy scalar `request.url` rules retain their behavior. Legacy `url: [...]` inputs
+remain readable, but additional URLs require the same explicit execution opt-in
+and are limited to two when enabled. Longer legacy lists still load and try the
+primary and first two alternatives, with a warning that remaining URLs are ignored.
+Do not mix those lists with named `fallbacks`.
+Their legacy revocation URL lists select the corresponding validated index; missing
+or mismatched selections fail before mutation. Use named profiles for new rules.
 
 ### OAuth2 authentication for HTTP verification services
 
@@ -775,6 +1058,7 @@ Below is the complete list of Liquid filters available in Kingfisher, along with
 | `uuid`                | –                                            | Generates a random UUIDv4 string.                                                                              | `{{ "" \| uuid }}`                                                   |
 | `jwt_header`          | –                                            | Builds a minimal JWT header JSON (`{"typ":"JWT","alg":…}`) and Base64URL-encodes it.                           | `{{ "HS256" \| jwt_header }}`                                        |
 | `rsa_sha256`          | `key` (string, PEM)                          | Signs the input with RSA PKCS#1 v1.5 and SHA-256 (RS256); returns unpadded Base64URL. Accepts unencrypted PKCS#1/PKCS#8 RSA private keys. | `{{ signing_input \| rsa_sha256: TOKEN }}` |
+| `jwt_sign` | `key` (string, PEM) | Signs a JSON claims object as a complete RS256 JWT. Accepts unencrypted PKCS#1/PKCS#8 RSA private keys; issuer and timestamps are explicit claims. | `{{ payload \| jwt_sign: TOKEN }}` |
 | `replace`             | `from` (string), `to` (string)               | Replaces every occurrence of `from` with `to` in the input string.                                             | `{{ "hello world" \| replace: "world", "mars" }}`                    |
 | `newline`             | –                                            | Returns a single newline character (`\n`). Useful inside YAML block scalars where a literal newline would break indentation. | `{{ "" \| newline }}`                                                |
 | `base36`              | `width` (integer, optional)                  | Encodes the input number as Base36, left-padding with zeros as needed.                                         | `{{ TOKEN \| crc32 \| base36: 6 }}`                                  |
@@ -794,9 +1078,10 @@ Authorization: Basic {{ "api:" | append: TOKEN | b64enc }}
 
 ### Signing RS256 JWTs
 
-Use `jwt_header`, `b64url_enc`, and `rsa_sha256` to build a signed JWT in a validation
-header. Pass the complete PEM text as the signing key; invalid, encrypted, and non-RSA
-keys produce a template error. The signature is already Base64URL-encoded.
+Use `jwt_sign` to sign a JSON claims object and produce the complete JWT in one
+filter. Pass the complete PEM text as the signing key; invalid, encrypted, and
+non-RSA keys produce a template error. The existing `jwt_header`, `b64url_enc`,
+and `rsa_sha256` filters remain available for custom headers and signing inputs.
 
 For a GitHub App custom rule, capture the PEM as `TOKEN` and associate a nearby
 numeric `APP_ID` using `depends_on_rule`. This header creates a short-lived JWT:
@@ -807,10 +1092,7 @@ Authorization: >-
   {%- assign iat = now | minus: 60 -%}
   {%- assign exp = now | plus: 540 -%}
   {%- capture payload -%}{"iss":{{ APP_ID | json_escape }},"iat":{{ iat }},"exp":{{ exp }}}{%- endcapture -%}
-  {%- assign header = "RS256" | jwt_header -%}
-  {%- assign payload = payload | b64url_enc -%}
-  {%- assign signing_input = header | append: "." | append: payload -%}
-  Bearer {{ signing_input }}.{{ signing_input | rsa_sha256: TOKEN }}
+  Bearer {{ payload | jwt_sign: TOKEN }}
 ```
 
 Use it with HTTP `GET https://api.github.com/app`, `Accept: application/vnd.github+json`,

@@ -249,6 +249,7 @@ pub async fn map_access_from_uri(pg_url: &str) -> Result<AccessMapResult> {
         risk_notes,
         token_details: None,
         provider_metadata: Some(super::ProviderMetadata {
+            betterleaks_analysis: None,
             version: Some(server_version),
             enterprise: None,
             authorization_evidence: None,

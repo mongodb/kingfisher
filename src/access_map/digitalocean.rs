@@ -6,8 +6,8 @@ use tracing::warn;
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ResourceExposure,
-    RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, AuthorizationEvidence, PermissionSummary,
+    ProviderMetadata, ResourceExposure, RoleBinding, Severity, build_recommendations,
 };
 
 const DIGITALOCEAN_API: &str = "https://api.digitalocean.com";
@@ -42,7 +42,6 @@ struct DigitalOceanTeam {
 
 #[derive(Deserialize)]
 struct ProjectsResponse {
-    #[serde(default)]
     projects: Vec<DigitalOceanProject>,
 }
 
@@ -58,7 +57,6 @@ struct DigitalOceanProject {
 
 #[derive(Deserialize)]
 struct DropletsResponse {
-    #[serde(default)]
     droplets: Vec<DigitalOceanDroplet>,
 }
 
@@ -74,7 +72,6 @@ struct DigitalOceanDroplet {
 
 #[derive(Deserialize)]
 struct DatabasesResponse {
-    #[serde(default)]
     databases: Vec<DigitalOceanDatabase>,
 }
 
@@ -90,7 +87,6 @@ struct DigitalOceanDatabase {
 
 #[derive(Deserialize)]
 struct KubernetesClustersResponse {
-    #[serde(default)]
     kubernetes_clusters: Vec<DigitalOceanKubernetesCluster>,
 }
 
@@ -120,12 +116,25 @@ pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
 }
 
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
+    map_access_from_token_at(token, DIGITALOCEAN_API).await
+}
+
+async fn map_access_from_token_at(token: &str, api_base: &str) -> Result<AccessMapResult> {
     let client = Client::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("Failed to build DigitalOcean HTTP client")?;
 
-    let account = fetch_account(&client, token).await?;
+    map_access_with_client(&client, token, api_base).await
+}
+
+async fn map_access_with_client(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+) -> Result<AccessMapResult> {
+    let account = fetch_account(client, token, api_base).await?;
 
     let username = account
         .email
@@ -151,10 +160,12 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let mut has_kubernetes = false;
 
     // Enumerate projects
-    let projects = list_projects(&client, token).await.unwrap_or_else(|err| {
-        warn!("DigitalOcean access-map: project enumeration failed: {err}");
-        Vec::new()
-    });
+    let projects = inventory_result(
+        list_projects(client, token, api_base).await,
+        "project:list",
+        &mut permissions,
+        &mut risk_notes,
+    );
 
     for project in &projects {
         let project_name = project
@@ -178,22 +189,21 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
         });
     }
 
-    permissions.read_only.push("project:list".to_string());
-
     // Enumerate droplets
-    let droplets = list_droplets(&client, token).await.unwrap_or_else(|err| {
-        warn!("DigitalOcean access-map: droplet enumeration failed: {err}");
-        Vec::new()
-    });
+    let droplets = inventory_result(
+        list_droplets(client, token, api_base).await,
+        "droplet:list",
+        &mut permissions,
+        &mut risk_notes,
+    );
 
     if !droplets.is_empty() {
         has_droplets = true;
-        permissions.risky.push("droplet:list".to_string());
 
         let role = RoleBinding {
             name: "droplet:access".into(),
             source: "digitalocean".into(),
-            permissions: vec!["droplet:read".to_string(), "droplet:write".to_string()],
+            permissions: vec!["droplet:read".to_string()],
         };
         roles.push(role);
     }
@@ -215,19 +225,20 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     }
 
     // Enumerate databases
-    let databases = list_databases(&client, token).await.unwrap_or_else(|err| {
-        warn!("DigitalOcean access-map: database enumeration failed: {err}");
-        Vec::new()
-    });
+    let databases = inventory_result(
+        list_databases(client, token, api_base).await,
+        "database:list",
+        &mut permissions,
+        &mut risk_notes,
+    );
 
     if !databases.is_empty() {
         has_databases = true;
-        permissions.admin.push("database:list".to_string());
 
         let role = RoleBinding {
             name: "database:access".into(),
             source: "digitalocean".into(),
-            permissions: vec!["database:read".to_string(), "database:write".to_string()],
+            permissions: vec!["database:read".to_string()],
         };
         roles.push(role);
     }
@@ -251,19 +262,20 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     }
 
     // Enumerate Kubernetes clusters
-    let clusters = list_kubernetes_clusters(&client, token).await.unwrap_or_else(|err| {
-        warn!("DigitalOcean access-map: kubernetes enumeration failed: {err}");
-        Vec::new()
-    });
+    let clusters = inventory_result(
+        list_kubernetes_clusters(client, token, api_base).await,
+        "kubernetes:list",
+        &mut permissions,
+        &mut risk_notes,
+    );
 
     if !clusters.is_empty() {
         has_kubernetes = true;
-        permissions.risky.push("kubernetes:list".to_string());
 
         let role = RoleBinding {
             name: "kubernetes:access".into(),
             source: "digitalocean".into(),
-            permissions: vec!["kubernetes:read".to_string(), "kubernetes:write".to_string()],
+            permissions: vec!["kubernetes:read".to_string()],
         };
         roles.push(role);
     }
@@ -335,14 +347,48 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
             user_id: account.uuid,
             scopes: Vec::new(),
         }),
-        provider_metadata: None,
+        provider_metadata: Some(ProviderMetadata {
+            authorization_evidence: Some(AuthorizationEvidence {
+                limitations: vec![
+                    "Resource listing proves metadata visibility, not write access or access to stored data".into(),
+                    "Resource inventories are limited to their first API response; inaccessible services may be omitted".into(),
+                ],
+                ..Default::default()
+            }),
+            ..Default::default()
+        }),
         fingerprint: None,
     })
 }
 
-async fn fetch_account(client: &Client, token: &str) -> Result<DigitalOceanAccount> {
+// A successful empty inventory still proves list access. Denials and malformed
+// responses must remain distinguishable from empty successful inventories.
+fn inventory_result<T>(
+    result: Result<Vec<T>>,
+    permission: &str,
+    permissions: &mut PermissionSummary,
+    risk_notes: &mut Vec<String>,
+) -> Vec<T> {
+    match result {
+        Ok(items) => {
+            permissions.read_only.push(permission.to_owned());
+            items
+        }
+        Err(error) => {
+            warn!("DigitalOcean access-map: {permission} failed: {error}");
+            risk_notes.push(format!("{permission} inventory could not be read"));
+            Vec::new()
+        }
+    }
+}
+
+async fn fetch_account(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+) -> Result<DigitalOceanAccount> {
     let resp = client
-        .get(format!("{DIGITALOCEAN_API}/v2/account"))
+        .get(format!("{api_base}/v2/account"))
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::ACCEPT, "application/json")
         .send()
@@ -363,9 +409,13 @@ async fn fetch_account(client: &Client, token: &str) -> Result<DigitalOceanAccou
         .ok_or_else(|| anyhow!("DigitalOcean access-map: account field missing from response"))
 }
 
-async fn list_projects(client: &Client, token: &str) -> Result<Vec<DigitalOceanProject>> {
+async fn list_projects(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+) -> Result<Vec<DigitalOceanProject>> {
     let resp = client
-        .get(format!("{DIGITALOCEAN_API}/v2/projects"))
+        .get(format!("{api_base}/v2/projects"))
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::ACCEPT, "application/json")
         .send()
@@ -373,8 +423,7 @@ async fn list_projects(client: &Client, token: &str) -> Result<Vec<DigitalOceanP
         .context("DigitalOcean access-map: failed to list projects")?;
 
     if !resp.status().is_success() {
-        warn!("DigitalOcean access-map: project enumeration failed with HTTP {}", resp.status());
-        return Ok(Vec::new());
+        return Err(anyhow!("project enumeration failed with HTTP {}", resp.status()));
     }
 
     let body: ProjectsResponse =
@@ -382,9 +431,13 @@ async fn list_projects(client: &Client, token: &str) -> Result<Vec<DigitalOceanP
     Ok(body.projects)
 }
 
-async fn list_droplets(client: &Client, token: &str) -> Result<Vec<DigitalOceanDroplet>> {
+async fn list_droplets(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+) -> Result<Vec<DigitalOceanDroplet>> {
     let resp = client
-        .get(format!("{DIGITALOCEAN_API}/v2/droplets"))
+        .get(format!("{api_base}/v2/droplets"))
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::ACCEPT, "application/json")
         .send()
@@ -392,8 +445,7 @@ async fn list_droplets(client: &Client, token: &str) -> Result<Vec<DigitalOceanD
         .context("DigitalOcean access-map: failed to list droplets")?;
 
     if !resp.status().is_success() {
-        warn!("DigitalOcean access-map: droplet enumeration failed with HTTP {}", resp.status());
-        return Ok(Vec::new());
+        return Err(anyhow!("droplet enumeration failed with HTTP {}", resp.status()));
     }
 
     let body: DropletsResponse =
@@ -401,9 +453,13 @@ async fn list_droplets(client: &Client, token: &str) -> Result<Vec<DigitalOceanD
     Ok(body.droplets)
 }
 
-async fn list_databases(client: &Client, token: &str) -> Result<Vec<DigitalOceanDatabase>> {
+async fn list_databases(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+) -> Result<Vec<DigitalOceanDatabase>> {
     let resp = client
-        .get(format!("{DIGITALOCEAN_API}/v2/databases"))
+        .get(format!("{api_base}/v2/databases"))
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::ACCEPT, "application/json")
         .send()
@@ -411,8 +467,7 @@ async fn list_databases(client: &Client, token: &str) -> Result<Vec<DigitalOcean
         .context("DigitalOcean access-map: failed to list databases")?;
 
     if !resp.status().is_success() {
-        warn!("DigitalOcean access-map: database enumeration failed with HTTP {}", resp.status());
-        return Ok(Vec::new());
+        return Err(anyhow!("database enumeration failed with HTTP {}", resp.status()));
     }
 
     let body: DatabasesResponse =
@@ -423,9 +478,10 @@ async fn list_databases(client: &Client, token: &str) -> Result<Vec<DigitalOcean
 async fn list_kubernetes_clusters(
     client: &Client,
     token: &str,
+    api_base: &str,
 ) -> Result<Vec<DigitalOceanKubernetesCluster>> {
     let resp = client
-        .get(format!("{DIGITALOCEAN_API}/v2/kubernetes/clusters"))
+        .get(format!("{api_base}/v2/kubernetes/clusters"))
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::ACCEPT, "application/json")
         .send()
@@ -433,8 +489,7 @@ async fn list_kubernetes_clusters(
         .context("DigitalOcean access-map: failed to list kubernetes clusters")?;
 
     if !resp.status().is_success() {
-        warn!("DigitalOcean access-map: kubernetes enumeration failed with HTTP {}", resp.status());
-        return Ok(Vec::new());
+        return Err(anyhow!("kubernetes enumeration failed with HTTP {}", resp.status()));
     }
 
     let body: KubernetesClustersResponse =
@@ -465,9 +520,118 @@ fn derive_severity(
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",
         Severity::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn token_header_is_never_forwarded_to_a_redirect() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{header, method},
+        };
+        let server = MockServer::start().await;
+        let destination = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(header("Authorization", "Bearer test-token"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", destination.uri().replace("127.0.0.1", "localhost")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(super::map_access_from_token_at("test-token", &server.uri()).await.is_err());
+        assert!(destination.received_requests().await.unwrap().is_empty());
+    }
+
+    use super::*;
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    #[tokio::test]
+    async fn empty_successful_inventories_prove_list_access_but_denials_do_not() {
+        for (status, valid_body) in [(200, true), (403, true), (500, true), (200, false)] {
+            let server = MockServer::start().await;
+            Mock::given(method("GET"))
+                .and(path("/v2/account"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                    "account": { "email": "member@example.test" }
+                })))
+                .mount(&server)
+                .await;
+            for (endpoint, field) in [
+                ("projects", "projects"),
+                ("droplets", "droplets"),
+                ("databases", "databases"),
+                ("kubernetes/clusters", "kubernetes_clusters"),
+            ] {
+                Mock::given(method("GET"))
+                    .and(path(format!("/v2/{endpoint}")))
+                    .respond_with(ResponseTemplate::new(status).set_body_json(if valid_body {
+                        json!({field: []})
+                    } else {
+                        json!({"unexpected": []})
+                    }))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+            }
+            let result =
+                map_access_with_client(&Client::new(), "token", &server.uri()).await.unwrap();
+            if status == 200 && valid_body {
+                assert_eq!(
+                    result.permissions.read_only,
+                    ["database:list", "droplet:list", "kubernetes:list", "project:list"]
+                );
+            } else {
+                assert!(result.permissions.read_only.is_empty());
+                assert!(result.risk_notes.iter().any(|note| note.contains("could not be read")));
+            }
+            assert!(result.roles.is_empty());
+            assert!(matches!(result.severity, Severity::Low));
+        }
+    }
+
+    #[tokio::test]
+    async fn list_responses_do_not_establish_write_permissions() {
+        let server = MockServer::start().await;
+        for (endpoint, body) in [
+            ("account", json!({ "account": { "email": "member@example.test" } })),
+            ("projects", json!({ "projects": [] })),
+            ("droplets", json!({ "droplets": [{ "id": 1, "name": "compute" }] })),
+            ("databases", json!({ "databases": [{ "id": "database", "name": "data" }] })),
+            (
+                "kubernetes/clusters",
+                json!({ "kubernetes_clusters": [{ "id": "cluster", "name": "cluster" }] }),
+            ),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/v2/{endpoint}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let result = map_access_with_client(&Client::new(), "token", &server.uri()).await.unwrap();
+        assert!(
+            result
+                .roles
+                .iter()
+                .flat_map(|role| &role.permissions)
+                .all(|permission| !permission.ends_with(":write"))
+        );
+        assert!(result.permissions.admin.is_empty());
+        assert!(result.permissions.read_only.contains(&"database:list".into()));
+        assert!(matches!(result.severity, Severity::Critical));
     }
 }

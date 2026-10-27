@@ -266,3 +266,85 @@ async fn repository_artifacts_retry_issue_pages_and_gist_details() {
         "gist content"
     );
 }
+
+fn list_repositories_command(server: &MockServer) -> assert_cmd::Command {
+    let mut command = assert_cmd::Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
+    command
+        .args([
+            "scan",
+            "github",
+            "--user",
+            "alice",
+            "--api-url",
+            &format!("{}/api/v3/", server.uri()),
+            "--list-only",
+            "--no-update-check",
+        ])
+        .env("KF_GITHUB_TOKEN", "retry-test-token")
+        .env_remove("KF_GITHUB_APP_ID")
+        .env_remove("KF_GITHUB_APP_INSTALLATION_ID")
+        .env_remove("KF_GITHUB_APP_PRIVATE_KEY")
+        .env_remove("KF_GITHUB_APP_PRIVATE_KEY_PATH")
+        .timeout(std::time::Duration::from_secs(30));
+    command
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_retry_wait_budget_controls_whether_discovery_resumes() {
+    for (budget, resumes) in [("0", false), ("1", true)] {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v3/users/alice/repos"))
+            .and(query_param("page", "1"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("retry-after", "1")
+                    .set_body_json(json!({"message": "API rate limit exceeded"})),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        if resumes {
+            page(
+                &server,
+                "users/alice/repos",
+                "1",
+                json!([{"clone_url": "https://github.com/alice/recovered.git", "fork": false}]),
+            )
+            .await;
+            page(&server, "users/alice/repos", "2", json!([])).await;
+        }
+
+        let mut command = list_repositories_command(&server);
+        command.env("KF_GITHUB_MAX_RETRY_WAIT_SECS", budget);
+        if resumes {
+            command.assert().success().stdout("https://github.com/alice/recovered.git\n");
+        } else {
+            command
+                .assert()
+                .failure()
+                .stdout("")
+                .stderr(predicates::str::contains("listing user repositories: HTTP 403"));
+        }
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), if resumes { 3 } else { 1 });
+        for request in requests {
+            assert_eq!(request.headers["authorization"], "Bearer retry-test-token");
+        }
+    }
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn cli_reports_invalid_retry_wait_budget_before_requesting_repositories() {
+    for budget in ["invalid", "-1", "18446744073709551616"] {
+        let server = MockServer::start().await;
+        list_repositories_command(&server)
+            .env("KF_GITHUB_MAX_RETRY_WAIT_SECS", budget)
+            .assert()
+            .failure()
+            .stderr(predicates::str::contains("KF_GITHUB_MAX_RETRY_WAIT_SECS"));
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
+}

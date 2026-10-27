@@ -155,6 +155,47 @@ fn gitlab_private_token() -> Option<String> {
     env::var("KF_GITLAB_TOKEN").ok().filter(|token| !token.is_empty())
 }
 
+pub(crate) async fn fetch_repository_id(
+    repo_url: &GitUrl,
+    api_url: &Url,
+    ignore_certs: bool,
+) -> Result<Option<git_host::RepositoryId>> {
+    let Some(path) = git_host::repository_path(repo_url, api_url, "gitlab.com", "/api/v4") else {
+        return Ok(None);
+    };
+    let segments = path
+        .split('/')
+        .map(|part| percent_encoding::percent_decode_str(part).decode_utf8())
+        .collect::<std::result::Result<Vec<_>, _>>();
+    let Ok(segments) = segments else { return Ok(None) };
+    if segments.len() < 2
+        || segments.iter().any(|part| {
+            part.is_empty()
+                || matches!(part.as_ref(), "." | ".." | "-")
+                || part.contains(['/', '\\'])
+        })
+    {
+        // Decoding an escaped slash must not turn one clone-path component
+        // into another project's namespace. Ambiguous paths get no optional ID.
+        return Ok(None);
+    }
+    let path = segments.join("/");
+    let encoded = percent_encoding::utf8_percent_encode(&path, percent_encoding::NON_ALPHANUMERIC);
+    let base = normalize_api_base(api_url);
+    let endpoint = if api_url.path().trim_end_matches('/').ends_with("/api/v4") {
+        format!("projects/{encoded}")
+    } else {
+        format!("api/v4/projects/{encoded}")
+    };
+    let url = base.join(&endpoint)?;
+    let client = git_host::repository_metadata_client(ignore_certs)?;
+    let mut request = client.get(url);
+    if let Some(token) = gitlab_private_token() {
+        request = request.header("PRIVATE-TOKEN", token);
+    }
+    git_host::repository_id_response(request, "id").await
+}
+
 async fn send_gitlab_json<T: serde::de::DeserializeOwned>(
     client: &reqwest::Client,
     token: Option<&str>,
@@ -178,7 +219,7 @@ async fn fetch_paged_projects(
     base_url: Url,
     extra_query: &[(&str, String)],
     excludes: &git_host::ExcludeMatcher,
-    on_repo: &mut (dyn FnMut(&str) -> Result<()> + Send),
+    on_repo: &mut (dyn FnMut(&str, Option<u64>) -> Result<()> + Send),
 ) -> Result<Vec<SimpleProject>> {
     let mut page = 1u32;
     let mut projects = Vec::new();
@@ -203,7 +244,7 @@ async fn fetch_paged_projects(
             if should_exclude_repo(&project.http_url_to_repo, excludes) {
                 continue;
             }
-            on_repo(&project.http_url_to_repo)?;
+            on_repo(&project.http_url_to_repo, project.id)?;
             projects.push(project);
         }
 
@@ -361,6 +402,23 @@ pub async fn enumerate_repo_urls_streaming(
     progress: Option<ProgressBar>,
     on_repo: &mut (dyn FnMut(&str) -> Result<()> + Send),
 ) -> Result<Vec<String>> {
+    enumerate_repo_urls_with_metadata(
+        repo_specifiers,
+        gitlab_url,
+        ignore_certs,
+        progress,
+        &mut |url, _| on_repo(url),
+    )
+    .await
+}
+
+pub(crate) async fn enumerate_repo_urls_with_metadata(
+    repo_specifiers: &RepoSpecifiers,
+    gitlab_url: Url,
+    ignore_certs: bool,
+    progress: Option<ProgressBar>,
+    on_repo: &mut (dyn FnMut(&str, Option<u64>) -> Result<()> + Send),
+) -> Result<Vec<String>> {
     let client = create_gitlab_http_client(ignore_certs)?;
     let token = gitlab_private_token();
     let api_base = normalize_api_base(&gitlab_url);
@@ -401,7 +459,7 @@ pub async fn enumerate_repo_urls_streaming(
                 token.as_deref(),
                 &api_base,
                 SnippetScope::User(user.id),
-                on_repo,
+                &mut |url| on_repo(url, None),
             )
             .await?;
             repo_urls.extend(snippets);
@@ -489,7 +547,7 @@ pub async fn enumerate_repo_urls_streaming(
                     token.as_deref(),
                     &api_base,
                     SnippetScope::Project(id),
-                    on_repo,
+                    &mut |url| on_repo(url, None),
                 )
                 .await?;
                 repo_urls.extend(snippets);
@@ -514,6 +572,27 @@ pub async fn enumerate_contributor_repo_urls(
     exclude_repos: &[String],
     repo_clone_limit: Option<usize>,
     progress_enabled: bool,
+) -> Result<Vec<String>> {
+    enumerate_contributor_repo_urls_with_metadata(
+        repo_url,
+        gitlab_url,
+        ignore_certs,
+        exclude_repos,
+        repo_clone_limit,
+        progress_enabled,
+        &mut |_, _| Ok(()),
+    )
+    .await
+}
+
+pub(crate) async fn enumerate_contributor_repo_urls_with_metadata(
+    repo_url: &GitUrl,
+    gitlab_url: &Url,
+    ignore_certs: bool,
+    exclude_repos: &[String],
+    repo_clone_limit: Option<usize>,
+    progress_enabled: bool,
+    on_repo: &mut (dyn FnMut(&str, Option<u64>) -> Result<()> + Send),
 ) -> Result<Vec<String>> {
     let (_, path) = parse_repo(repo_url).context("invalid GitLab repo URL")?;
     let encoded = form_urlencoded::byte_serialize(path.as_bytes()).collect::<String>();
@@ -658,6 +737,7 @@ pub async fn enumerate_contributor_repo_urls(
                 if should_exclude_repo(&proj.http_url_to_repo, &exclude_set) {
                     continue;
                 }
+                on_repo(&proj.http_url_to_repo, proj.id)?;
                 repo_urls.push(proj.http_url_to_repo);
                 user_repo_count += 1;
                 total_repo_count += 1;
@@ -885,6 +965,23 @@ pub async fn fetch_repo_items(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn repository_id_lookup_rejects_encoded_path_separators() {
+        let server = wiremock::MockServer::start().await;
+        let api = Url::parse(&server.uri()).unwrap();
+        for path in [
+            "group/foo%2Fbar.git",
+            "group/foo%2fbar.git",
+            "group/foo%5Cbar.git",
+            "group/%2D/repo.git",
+            "group/foo%FFbar.git",
+        ] {
+            let repo = format!("{}/{path}", server.uri()).parse().unwrap();
+            assert_eq!(fetch_repository_id(&repo, &api, false).await.unwrap(), None, "{path}");
+        }
+        assert!(server.received_requests().await.unwrap().is_empty());
+    }
 
     #[test]
     fn parse_excluded_project_variants() {

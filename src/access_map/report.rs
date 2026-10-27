@@ -509,6 +509,10 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
       el.appendChild(badge('Resources: ' + (model.resources?.length || 0)));
       const evidence = model.provider_metadata?.authorization_evidence;
       if (evidence) {
+        if (evidence.assessment) {
+          el.appendChild(badge('Capability impact: ' + (evidence.assessment.capability_risk || 'unknown')));
+          el.appendChild(badge('Coverage: ' + (evidence.assessment.coverage || 'unknown')));
+        }
         el.appendChild(badge('Policies: ' + (evidence.policies?.length || 0)));
         el.appendChild(badge('Identity paths: ' + (evidence.paths?.length || 0)));
         el.appendChild(badge('Reachable roles: ' + (evidence.role_impacts?.length || 0)));
@@ -763,6 +767,8 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
           reason: `${statement.effect || 'Unknown'}${(statement.resources || []).length ? ` on ${(statement.resources || []).join(', ')}` : ''}`,
           notes: [
             ...(statement.principals || []).map(value => `Principal: ${value}`),
+            ...(statement.not_principals || []).map(value => `Excluded principal: ${value}`),
+            ...(statement.not_resources || []).map(value => `Excluded resource: ${value}`),
             ...(statement.condition_keys || []).map(value => `Condition: ${value}`),
           ],
         }))
@@ -828,12 +834,25 @@ fn build_html(json_str: &str, compressed_json_b64: &str) -> String {
         reason: [probe.resource ? `Resource: ${probe.resource}` : null, probe.reason, ...Object.entries(probe.attributes || {}).map(([key, value]) => `${key}: ${value}`)].filter(Boolean).join(' · '),
         permissions: probe.method ? [probe.method] : [],
       }));
+      const assessment = evidence.assessment;
+      const assessmentNodes = assessment ? [{
+        name: `Capability impact: ${assessment.capability_risk || 'unknown'} · coverage: ${assessment.coverage || 'unknown'}`,
+        type: 'assessment',
+        notes: [`Observed at: ${assessment.observed_at || 'not recorded'}`, 'Capability impact is separate from legacy severity. Policy grants and potential paths do not prove live data access.'],
+        children: (assessment.capabilities || []).map(capability => ({
+          name: capability.permission,
+          type: capability.category || 'unclassified',
+          source: [capability.reach, capability.evidence].filter(Boolean).join(' · '),
+          reason: capability.scope || 'Scope not established',
+        })),
+      }] : [];
 
       return {
         name: model.identity?.id || 'Identity',
         type: 'identity',
         fingerprint: model.fingerprint,
         children: [
+          ...assessmentNodes,
           { name: 'Resources', type: 'section', children: resourceNodes },
           { name: 'Roles', type: 'section', children: roleNodes },
           { name: 'Reachable Role Impact', type: 'section', children: roleImpactNodes },

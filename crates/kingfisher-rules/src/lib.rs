@@ -14,6 +14,7 @@ pub mod defaults;
 mod imported_capabilities;
 pub mod legacy_aliases;
 pub mod liquid_filters;
+mod private_key;
 pub mod rule;
 pub mod rules;
 pub mod rules_database;
@@ -28,7 +29,7 @@ mod veles;
 pub use rule::{
     BetterleaksAccessMap, BetterleaksAccessMapHandler, BetterleaksCapabilities, BetterleaksExpr,
     BetterleaksRevocationBindings, BetterleaksValidation, ChecksumActual, ChecksumRequirement,
-    Confidence, DependsOnRule, EthereumValidation, GrpcRequest, GrpcValidation,
+    Confidence, DependsOnRule, EthereumValidation, GrpcRequest, GrpcValidation, HttpFallback,
     HttpMultiStepRevocation, HttpRequest, HttpValidation, HttpValidationAuth, MultipartConfig,
     MultipartPart, OAuth2Config, OAuth2PasswordCredentials, PatternRequirementContext,
     PatternRequirements, PatternValidationResult, RULE_COMMENTS_PATTERN, ReportResponseData,

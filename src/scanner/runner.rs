@@ -228,7 +228,8 @@ async fn run_async_scan_inner(
         crate::scan_progress::PhaseKind::Other,
     );
     // Event selectors must be ready before scanning, since they determine refs.
-    let github_event_targets = enumerate_github_event_targets(args, global_args).await?;
+    let github_event_targets =
+        enumerate_github_event_targets(args, global_args, &datastore).await?;
     let github_event_targets_by_root =
         Arc::new(github_event_targets_by_root(&github_event_targets, &datastore));
     let huggingface_buckets = enumerate_huggingface_buckets(args, global_args).await?;
@@ -333,8 +334,11 @@ async fn run_async_scan_inner(
     let skip_aws_accounts = load_skip_aws_accounts(args)?;
     crate::validation::set_skip_aws_account_ids(skip_aws_accounts);
 
-    let mut access_map_collector =
-        if args.access_map { Some(AccessMapCollector::default()) } else { None };
+    let mut access_map_collector = if args.access_map {
+        Some(AccessMapCollector::default().with_allow_internal_ips(global_args.allow_internal_ips))
+    } else {
+        None
+    };
 
     // Use the same --exclude semantics as the filesystem walker so the
     // discovery pre-scan skips exactly the trees the scan will skip: this
@@ -380,7 +384,8 @@ async fn run_async_scan_inner(
                 Duration::from_secs(args.validation_timeout),
                 args.content_filtering_args.no_limits,
             )?
-            .with_unlimited_results(args.content_filtering_args.no_limits),
+            .with_unlimited_results(args.content_filtering_args.no_limits)
+            .with_http_fallbacks(global_args.http_fallbacks),
             Arc::new(SkipMap::new()),
             validation_rate_limiter.clone(),
             Arc::clone(&provider_endpoints),
@@ -733,13 +738,11 @@ async fn run_sequential_scan(
             let repo_datastore =
                 Arc::new(Mutex::new(FindingsStore::new(datastore.lock().unwrap().clone_root())));
             let repo_rules = datastore.lock().unwrap().get_rules()?;
-            let repo_link = datastore.lock().unwrap().repo_links().get(root).cloned();
             {
+                let shared = datastore.lock().unwrap();
                 let mut ds = repo_datastore.lock().unwrap();
                 ds.record_rules(&repo_rules);
-                if let Some(repo_link) = repo_link {
-                    ds.register_repo_link(root.clone(), repo_link);
-                }
+                ds.copy_repo_metadata_from(&shared, root);
             }
             let repo_matcher_stats = Mutex::new(MatcherStats::default());
             match enumerate_filesystem_inputs(
@@ -804,13 +807,11 @@ async fn run_sequential_scan(
             let repo_datastore =
                 Arc::new(Mutex::new(FindingsStore::new(datastore.lock().unwrap().clone_root())));
             let repo_rules = datastore.lock().unwrap().get_rules()?;
-            let repo_link = datastore.lock().unwrap().repo_links().get(&repo_root).cloned();
             {
+                let shared = datastore.lock().unwrap();
                 let mut ds = repo_datastore.lock().unwrap();
                 ds.record_rules(&repo_rules);
-                if let Some(repo_link) = repo_link {
-                    ds.register_repo_link(repo_root.clone(), repo_link);
-                }
+                ds.copy_repo_metadata_from(&shared, &repo_root);
             }
             let repo_matcher_stats = Mutex::new(MatcherStats::default());
             let result: Result<()> = (|| {
@@ -1217,13 +1218,10 @@ async fn run_parallel_scan(
                             let repo_datastore =
                                 Arc::new(Mutex::new(FindingsStore::new(base_clone_root.clone())));
                             {
-                                let repo_link =
-                                    datastore.lock().unwrap().repo_links().get(&root).cloned();
+                                let shared = datastore.lock().unwrap();
                                 let mut ds = repo_datastore.lock().unwrap();
                                 ds.record_rules(&repo_rules);
-                                if let Some(repo_link) = repo_link {
-                                    ds.register_repo_link(root.clone(), repo_link);
-                                }
+                                ds.copy_repo_metadata_from(&shared, &root);
                             }
 
                             let repo_matcher_stats = Mutex::new(MatcherStats::default());
@@ -1547,7 +1545,7 @@ async fn run_parallel_scan(
 async fn finalize_access_map(
     datastore: &Arc<Mutex<FindingsStore>>,
     collector: AccessMapCollector,
-    _args: &scan::ScanArgs,
+    args: &scan::ScanArgs,
 ) -> Result<()> {
     let requests = collector.into_collected_requests();
 
@@ -1565,7 +1563,8 @@ async fn finalize_access_map(
         0,
         crate::scan_progress::PhaseKind::Other,
     );
-    let results = access_map::map_collected_requests(requests).await;
+    let results =
+        access_map::map_collected_requests_with_options(requests, &args.blast_radius_options).await;
 
     {
         let mut ds = datastore.lock().unwrap();

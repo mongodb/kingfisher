@@ -496,6 +496,7 @@ fn build_access_map(
             scopes: Vec::new(),
         }),
         provider_metadata: Some(ProviderMetadata {
+            betterleaks_analysis: None,
             version: Some(api_version.to_string()),
             enterprise: None,
             authorization_evidence: None,
@@ -1009,6 +1010,7 @@ fn value_as_bool(value: &Value, key: &str) -> bool {
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",

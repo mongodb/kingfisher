@@ -665,6 +665,7 @@ check-rust:
 viewer-tests:
 	node tests/viewer_import_grouping.cjs
 	node tests/viewer_hardening.cjs
+	node tests/viewer_investigation.cjs
 
 tests: viewer-tests
 	@echo "🔍 checking for cargo-nextest …"

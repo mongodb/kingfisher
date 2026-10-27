@@ -1,15 +1,15 @@
 [package]
 name = "kingfisher-rules"
-version = "2.0.0"
+version = "3.0.0"
 description = "Rule definitions and database for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
-license = "Apache-2.0 AND MIT"
+license = "Apache-2.0 AND MIT AND CC-BY-SA-4.0"
 authors.workspace = true
 homepage.workspace = true
 repository.workspace = true
 publish.workspace = true
-include = ["src/**", "examples/**", "build.rs", "build_support/**", "generated/**", "data/*.yml", "data/*.md", "LICENSE", "README.md"]
+include = ["src/**", "examples/**", "build.rs", "build_support/**", "generated/**", "data/*.yml", "data/*.md", "data/*.gz", "data/*.txt", "LICENSE", "README.md"]
 
 # docs.rs blocks network access, so compile the vendored native source there.
 [package.metadata.docs.rs]
@@ -52,12 +52,15 @@ base32.workspace = true
 base64.workspace = true
 bip39.workspace = true
 crc32fast = "1.5"
+der = { version = "0.7.10", features = ["oid"] }
 hmac.workspace = true
 sha1.workspace = true
 sha2.workspace = true
 hex.workspace = true
 percent-encoding.workspace = true
 pem = "4.0.0"
+pkcs1 = { version = "0.7.5", features = ["alloc"] }
+pkcs8 = "0.10.2"
 time.workspace = true
 uuid = { workspace = true, features = ["v4"] }
 rand.workspace = true

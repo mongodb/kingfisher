@@ -11,6 +11,92 @@ use rustc_hash::FxHashMap;
 
 use crate::{ScanAborted, ScanControl};
 
+/// Betterleaks specificity precedence: on the same source line, a higher-ranked
+/// credential suppresses a different rule whose selected value it contains.
+/// Equal ranks preserve both findings. The default rank has no additional cost
+/// beyond collecting the entries.
+pub struct SpecificityOutcome {
+    pub keep: Vec<bool>,
+    /// Suppressed visible components stay available for validation but must not be reported.
+    pub suppress_reporting: Vec<bool>,
+}
+
+pub fn specificity_keep<'a>(
+    entries: impl IntoIterator<Item = (&'a Rule, usize, &'a [u8])>,
+    mut component_attached: impl FnMut(usize, usize, &kingfisher_rules::DependsOnRule) -> bool,
+    control: &ScanControl,
+) -> Result<SpecificityOutcome, ScanAborted> {
+    let entries: Vec<_> = entries.into_iter().collect();
+    let mut keep = vec![true; entries.len()];
+    let mut suppress_reporting = vec![false; entries.len()];
+    if entries.iter().all(|(rule, _, _)| rule.syntax().specificity == 0) {
+        return Ok(SpecificityOutcome { keep, suppress_reporting });
+    }
+    // `skipReport` helpers have no standalone precedence. They participate only as
+    // components attached to an accepted visible primary, including dependency chains.
+    let mut can_suppress: Vec<_> = entries.iter().map(|(rule, _, _)| rule.visible()).collect();
+    let mut attached = vec![false; entries.len()];
+    let mut by_rule: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
+    for (index, (rule, _, _)) in entries.iter().enumerate() {
+        by_rule.entry(rule.id()).or_default().push(index);
+    }
+    let mut primaries: VecDeque<_> = can_suppress
+        .iter()
+        .enumerate()
+        .filter_map(|(index, eligible)| eligible.then_some(index))
+        .collect();
+    while let Some(primary) = primaries.pop_front() {
+        control.check()?;
+        for dependency in entries[primary].0.syntax().depends_on_rule.iter().flatten() {
+            for &component in by_rule.get(dependency.rule_id.as_str()).into_iter().flatten() {
+                if component_attached(primary, component, dependency) {
+                    attached[component] = true;
+                    if !can_suppress[component] {
+                        can_suppress[component] = true;
+                        primaries.push_back(component);
+                    }
+                }
+            }
+        }
+    }
+    let mut lines: FxHashMap<usize, Vec<usize>> = FxHashMap::default();
+    for (index, (_, line, _)) in entries.iter().enumerate() {
+        control.check()?;
+        lines.entry(*line).or_default().push(index);
+    }
+    for indexes in lines.values_mut() {
+        indexes.sort_by_key(|&index| std::cmp::Reverse(entries[index].0.syntax().specificity));
+        for (position, &index) in indexes.iter().enumerate() {
+            control.check()?;
+            let (rule, _, secret) = entries[index];
+            // Hidden findings remain available for credential preparation even if a
+            // visible primary has a higher specificity than its helper's rule.
+            if secret.is_empty() || !rule.visible() {
+                continue;
+            }
+            for &higher in &indexes[..position] {
+                let (other, _, value) = entries[higher];
+                if other.syntax().specificity <= rule.syntax().specificity {
+                    break;
+                }
+                if keep[higher]
+                    && can_suppress[higher]
+                    && other.id() != rule.id()
+                    && value.find(secret).is_some()
+                {
+                    if attached[index] {
+                        suppress_reporting[index] = true;
+                    } else {
+                        keep[index] = false;
+                    }
+                    break;
+                }
+            }
+        }
+    }
+    Ok(SpecificityOutcome { keep, suppress_reporting })
+}
+
 /// Preserve ordered cross-catalog elimination, comparing only identical spans.
 /// Each rank queue is consumed once, including many matches at one Base64 span.
 pub fn catalog_keep<'a>(

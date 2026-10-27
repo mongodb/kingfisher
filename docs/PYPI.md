@@ -18,7 +18,7 @@ requires CPython 3.10+ with the standard GIL build. Wheels target Linux x64/ARM6
 (glibc 2.28+), macOS x64/ARM64 (11+), and native Windows x64/ARM64. PyPy,
 free-threaded Python and musl wheels are not currently part of the release matrix.
 
-The prepared SDK release is **1.5.0**, a backward-compatible feature release.
+The prepared SDK release is **1.6.0**, a backward-compatible feature release.
 The SDK includes offline revocation preparation, structured input
 diagnostics, result-based and batch revocation, validation variables and SMTP
 support, opt-in CLI detection policies, SQLite/bytecode extraction, richer Git
@@ -575,6 +575,62 @@ See the commented [detection example](../python/examples/detection.py):
 uv run --no-sync python python/examples/detection.py
 ```
 
+## Private-key structure checks
+
+Built-in PEM detectors use the CLI's bounded offline structure checks too.
+Recognized BER encodings and keys inside stub markers or partial diffs are kept
+when they may contain real key material; this is not cryptographic or live credential validation. See the
+[private-key filter scope](RULES.md#betterleaks-v2-programs).
+
+## Extract PDF page text
+
+Enable PDF extraction explicitly; existing `expand_content()` defaults and
+`Scanner.scan_file()` continue to leave PDF bytes unchanged:
+
+```python
+from kingfisher_sdk import ScanInput, Scanner, expand_archives, expand_content
+
+sources = expand_content(
+    expand_archives([ScanInput.from_file("documents.zip")]),
+    pdf=True, strict=True, max_bytes=64 * 1024 * 1024, timeout=10,
+)
+for result in Scanner(redact=True).scan_inputs(sources):
+    print(result.input.path, len(result.findings))
+```
+
+The shared `lopdf`-based Rust extractor recognizes a `%PDF-` header or `.pdf`
+extension and emits `document.pdf!page-N.txt` inputs. Hex strings, compressed
+page streams, split text operands, and supported font encodings are decoded.
+Original Git/source metadata is retained; offsets refer to each page's UTF-8
+text, not the PDF bytes. No rendering, OCR, PDF action execution, password support,
+embedded-file extraction, annotation extraction, or Form XObject text extraction.
+
+`max_bytes` separately caps input, aggregate extracted text, and aggregate decoded
+page/font work. Shared streams are decoded once but charged on each page that uses
+them; repeated page IDs are skipped. Individual streams are capped at
+`min(max_bytes, 32 MiB)`, with at most 10,000 pages per
+input. Loading divides the byte budget across a conservative count of literal
+stream markers (at most 32 MiB each), bounding aggregate eager decompression.
+Markers inside payloads/comments can tighten this budget and reject valid large
+streams. These caps are not a total process-memory limit. Controls run
+before/after parsing and between pages; an individual parser call cannot be
+preempted. Limits and interruption raise without yielding partial pages, even
+with `strict=False`. Image-only/empty PDFs pass through unchanged. Malformed or
+encrypted PDFs fall back to their original bytes with
+`extraction_error="malformed_pdf"`, unless `strict=True` requests an error.
+With `strict=False`, individual undecodable streams are skipped while readable
+page text is retained. `strict=True` fails on those stream errors instead of
+yielding partial pages; unsupported features such as Form XObjects remain outside
+the extraction scope in either mode.
+Some codecs can silently recover corrupt data, so `strict=True` is not a guarantee
+that every stream was completely decoded.
+This is best-effort text coverage, not proof that a PDF is secret-free.
+
+See the commented [PDF example](../python/examples/pdf.py). Unlike the explicit
+SDK transform, [CLI PDF extraction](ADVANCED.md#pdf-text-extraction) is on by
+default, scans raw PDF bytes alongside extracted text, and uses warning/raw-fallback
+behavior for over-budget PDFs.
+
 ## Extract SQLite and Python bytecode
 
 `expand_content()` is an explicit input transform using the same native SQLite
@@ -788,6 +844,35 @@ check is not a network sandbox or DNS-pinning guarantee.
 SMTP session cleanup has a short independent timeout so stalled cleanup writes
 finish promptly after an authentication result is established.
 
+Betterleaks v2 custom rules support Expr validation, analysis, and explicit
+revocation. Call `validator.analyze(result, timeout=30)` after confirmed validation
+to run a rule's `analyze` expression using the exact validated credential and
+private evidence. This returns public analysis JSON; private `validation.analysis`
+data stays out of result serialization. Analysis never runs automatically during
+scanning or validation. See the [runnable analysis example](../python/examples/analyze.py).
+HTTP validation uses the primary endpoint only by default. Explicitly use
+`Validator(http_fallbacks=True)` to try up to two rule-defined fallback environments.
+Their `reuse_primary_validation_logic` boolean defaults to false (complete independent
+HTTP definition required); true copies primary validation with only the URL changed.
+Result-based revocation retains the selected environment. Independently opt in to
+`reuse_primary_revocation_logic: true` with `revocation_url` (HTTP) or `revocation_urls`
+(one per multi-step request), or supply an independent revocation definition.
+Otherwise revocation is unavailable; validation reuse never implies revocation reuse,
+and mutations never fail over to another environment. The CLI counterpart is
+`--fallbacks`, covering validation and selected-environment revocation. These switches
+reuse logic, not the primary destination. Existing rules and existing constructor
+calls need no edits. See
+[fallback endpoint rules](RULES.md#ordered-http-fallback-endpoints) and the
+[runnable example](../python/examples/http_fallbacks.py).
+
+CLI `revoke --fallbacks` validates first and selects the environment internally;
+it does not require a preceding `validate` call or manual endpoint variables.
+SDK `Revoker.revoke(result, confirm=True)` instead uses that result's original
+snapshot without revalidation. Both stop rather than mutate another environment
+if the selected action fails or is unavailable.
+Exact-ID revocation calls use only the primary action and reject reserved
+`VALIDATION_*` endpoint-selection variables; pass a validated result for fallbacks.
+
 `validate(findings, timeout=None, cancellation=None)` adds a total batch deadline,
 including queued checks, independently of the constructor's per-check timeout.
 It checks Python signals while waiting on I/O, so Ctrl-C raises `KeyboardInterrupt`.
@@ -795,6 +880,12 @@ Timeout and cancellation raise `TimeoutError` and `RuntimeError` without partial
 batch results. Cancelled I/O does not undo requests already submitted. Provider
 operations reuse a process-wide Tokio runtime sized from available CPUs (2–32
 workers); provider request concurrency is set on each `Validator`.
+
+Use `Scanner.scan_with_attributes(data, attributes, timeout=None, cancellation=None)`
+to supply Betterleaks source metadata such as `path`, `git.sha`, and
+`git.author_name`. Source prefilters and finding filters see these string values.
+The method preserves the scanner's detection policy, component context, and
+cancellation behavior; deduplication includes the supplied attributes.
 
 Results preserve input order and include `finding`, `outcome`, `reason` and
 `http_status`. Outcomes are `verified_active`, `verified_inactive`, `unavailable`,
@@ -1389,7 +1480,7 @@ in sync. The read-only preflight runs **before** wheel/source jobs:
 For a read-only local/orchestrator check (Python 3.11+), run:
 
 ```bash
-python3 scripts/check-sdk-release.py --require-new --expected-version 1.5.0
+python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.0
 ```
 
 Omit `--expected-version` to infer the prepared manifest version. The command
@@ -1404,7 +1495,7 @@ that `HEAD` is the current upstream `main` commit, and use the exact version/SHA
 gh workflow run python-sdk.yml --ref main \
   -f publish=true \
   -f expected_sha="$(git rev-parse HEAD)" \
-  -f expected_version=1.5.0
+  -f expected_version=1.6.0
 ```
 
 `publish` defaults to `false`. Publication requires both safety inputs: the full

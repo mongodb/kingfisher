@@ -360,6 +360,8 @@ class Revoker:
         """Revoke a verified active ValidationResult using its retained inputs,
         or pass an exact rule ID, secret and supporting values explicitly.
         Exact-ID calls require secret and raise TypeError when it is omitted.
+        They use the primary action and reject reserved HTTP endpoint-selection
+        variables; pass a validated result for a fallback environment.
         Result-based calls use the original rule and cannot override inputs.
         Perform revocation only with confirm=True. Pass supporting values
         (e.g. AKID, KEY_ID and enterprise endpoint variables) explicitly.

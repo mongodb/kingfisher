@@ -88,6 +88,18 @@ pub fn is_auto_provided_request_var(var: &str) -> bool {
     matches!(var, "REQUEST_RFC1123_DATE" | "REQUEST_UNIX_MILLIS")
 }
 
+/// Variables reserved for a successful HTTP validation endpoint snapshot.
+pub fn is_validation_endpoint_var(var: &str) -> bool {
+    matches!(
+        var,
+        "VALIDATION_ENDPOINT_INDEX"
+            | "VALIDATION_FALLBACK_ID"
+            | "VALIDATION_ENDPOINT_COUNT"
+            | "VALIDATION_URL"
+            | "VALIDATION_ORIGIN"
+    )
+}
+
 /// Clone `globals` and add stable request-scoped values for templated request rendering.
 ///
 /// These values are computed once so the same generated timestamp can be reused across the URL,

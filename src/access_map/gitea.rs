@@ -66,8 +66,14 @@ pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
 }
 
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
-    let api_url = Url::parse(DEFAULT_GITEA_API).expect("valid Gitea API URL");
+    map_access_from_token_at(token, DEFAULT_GITEA_API).await
+}
+
+pub async fn map_access_from_token_at(token: &str, api_endpoint: &str) -> Result<AccessMapResult> {
+    let api_url = crate::provider_endpoints::access_map_api_url("gitea", api_endpoint)?;
     let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(20))
         .user_agent(GLOBAL_USER_AGENT.as_str())
         .build()
         .context("Failed to build Gitea HTTP client")?;
@@ -345,9 +351,43 @@ fn derive_severity(user: &GiteaUser, repos: &[GiteaRepo]) -> Severity {
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",
         Severity::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path},
+    };
+
+    #[tokio::test]
+    async fn enterprise_mapping_keeps_the_api_prefix() {
+        let server = MockServer::start().await;
+        for (resource, body) in [
+            ("user", json!({ "login": "member" })),
+            ("user/repos", json!([])),
+            ("user/orgs", json!([])),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/team/api/v1/{resource}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let result =
+            map_access_from_token_at("test-token", &format!("{}/team/api/v1", server.uri()))
+                .await
+                .unwrap();
+        assert_eq!(result.identity.id, "member");
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
     }
 }

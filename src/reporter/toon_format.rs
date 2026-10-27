@@ -46,6 +46,8 @@ struct ToonFindingRecord {
     validate_command: Option<String>,
     revoke_command: Option<String>,
     blast_radius_command: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    git_repository_id: Option<serde_json::Value>,
     git_repository_url: Option<String>,
     git_commit_id: Option<String>,
     git_commit_url: Option<String>,
@@ -81,6 +83,7 @@ impl ToonFindingRecord {
             validate_command: record.finding.validate_command.clone(),
             revoke_command: record.finding.revoke_command.clone(),
             blast_radius_command: record.finding.blast_radius_command.clone(),
+            git_repository_id: git.and_then(|git| git.get("repository_id")).cloned(),
             git_repository_url: json_string(git, &["repository_url"]),
             git_commit_id: json_string(git, &["commit", "id"]),
             git_commit_url: json_string(git, &["commit", "url"]),

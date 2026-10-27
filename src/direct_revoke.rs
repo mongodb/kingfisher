@@ -39,7 +39,9 @@ use crate::{
     validation::gcp::revoke_gcp_service_account_key,
 };
 
-use kingfisher_rules::{Revocation, Rule};
+use kingfisher_rules::{
+    HttpRequest, MultipartConfig, ResponseExtractor, Revocation, Rule, RuleSyntax, Validation,
+};
 
 pub use kingfisher_scanner::validation::revocation::DirectRevocationResult;
 use kingfisher_scanner::validation::revocation::{
@@ -172,6 +174,7 @@ impl CliRevocationStatus {
 pub struct DetailedDirectRevocationResult {
     result: DirectRevocationResult,
     status: CliRevocationStatus,
+    fallback_id: Option<String>,
 }
 
 fn http_revocation_outcome(
@@ -184,7 +187,9 @@ fn http_revocation_outcome(
         }
         Err(error) => {
             let category = kingfisher_scanner::Revoker::error_category(&error);
-            let status = if error.is::<RevocationSubmitted>() {
+            let status = if error.is::<RevocationSubmitted>()
+                || error.is::<kingfisher_scanner::validation::revocation::RevocationIndeterminate>()
+            {
                 CliRevocationStatus::Unknown
             } else {
                 CliRevocationStatus::Failed
@@ -206,6 +211,23 @@ fn http_revocation_outcome(
                 status,
             )
         }
+    }
+}
+
+fn betterleaks_revocation_outcome(
+    result: Result<kingfisher_scanner::validation::betterleaks::BetterleaksRevocationOutcome>,
+) -> (DirectRevocationResult, CliRevocationStatus) {
+    use kingfisher_scanner::validation::betterleaks::BetterleaksRevocationStatus;
+    match result {
+        Ok(outcome) => {
+            let status = match outcome.status {
+                BetterleaksRevocationStatus::Revoked => CliRevocationStatus::Succeeded,
+                BetterleaksRevocationStatus::Unknown => CliRevocationStatus::Unknown,
+                BetterleaksRevocationStatus::Error => CliRevocationStatus::Failed,
+            };
+            (outcome.result, status)
+        }
+        Err(error) => http_revocation_outcome(Err(error)),
     }
 }
 
@@ -260,8 +282,21 @@ fn extract_revocation_vars(revocation: &Revocation) -> BTreeSet<String> {
         Revocation::GCP => {
             vars.insert("TOKEN".to_string());
         }
+        Revocation::Betterleaks(config) => {
+            vars.insert("TOKEN".into());
+            vars.extend(config.components.values().cloned());
+        }
         Revocation::Http(http) => {
-            vars.extend(extract_template_vars(&http.request.url));
+            for url in http.request.urls() {
+                vars.extend(extract_template_vars(url));
+            }
+            if !http.request.fallback_urls.is_empty() {
+                vars.extend([
+                    "VALIDATION_ENDPOINT_INDEX".into(),
+                    "VALIDATION_ENDPOINT_COUNT".into(),
+                    "VALIDATION_ORIGIN".into(),
+                ]);
+            }
             for (key, value) in &http.request.headers {
                 vars.extend(extract_template_vars(key));
                 vars.extend(extract_template_vars(value));
@@ -275,7 +310,16 @@ fn extract_revocation_vars(revocation: &Revocation) -> BTreeSet<String> {
             // Note: Variables extracted in step 1 are available in step 2,
             // but we only track initial input variables here
             for step in &multi_step.steps {
-                vars.extend(extract_template_vars(&step.request.url));
+                for url in step.request.urls() {
+                    vars.extend(extract_template_vars(url));
+                }
+                if !step.request.fallback_urls.is_empty() {
+                    vars.extend([
+                        "VALIDATION_ENDPOINT_INDEX".into(),
+                        "VALIDATION_ENDPOINT_COUNT".into(),
+                        "VALIDATION_ORIGIN".into(),
+                    ]);
+                }
                 for (key, value) in &step.request.headers {
                     vars.extend(extract_template_vars(key));
                     vars.extend(extract_template_vars(value));
@@ -288,6 +332,197 @@ fn extract_revocation_vars(revocation: &Revocation) -> BTreeSet<String> {
     }
 
     vars
+}
+
+fn multipart_input_vars(config: Option<&MultipartConfig>, vars: &mut BTreeSet<String>) {
+    for part in config.into_iter().flat_map(|config| &config.parts) {
+        vars.extend(extract_template_vars(&part.name));
+        vars.extend(extract_template_vars(&part.content));
+        if let Some(content_type) = &part.content_type {
+            vars.extend(extract_template_vars(content_type));
+        }
+    }
+}
+
+fn request_input_vars(
+    request: &HttpRequest,
+    multipart: Option<&MultipartConfig>,
+) -> BTreeSet<String> {
+    let mut vars = BTreeSet::new();
+    for template in request
+        .urls()
+        .chain(request.headers.keys().map(String::as_str))
+        .chain(request.headers.values().map(String::as_str))
+        .chain(request.body.as_deref())
+    {
+        vars.extend(extract_template_vars(template));
+    }
+    multipart_input_vars(request.multipart.as_ref(), &mut vars);
+    multipart_input_vars(multipart, &mut vars);
+    vars
+}
+
+/// Inputs to validation and possible actions, excluding trusted selection state
+/// and values produced by earlier revocation steps. Also used by suggested commands.
+pub(crate) fn fallback_input_vars(rule: &RuleSyntax) -> Result<BTreeSet<String>> {
+    anyhow::ensure!(
+        matches!(rule.validation, Some(Validation::Http(_))),
+        "revoke --fallbacks requires primary HTTP validation; omit --fallbacks for legacy direct revocation"
+    );
+    let mut vars = BTreeSet::new();
+    for (_, http) in rule.http_validations(true)? {
+        vars.extend(request_input_vars(&http.request, http.multipart.as_ref()));
+    }
+    vars.extend(
+        rule.depends_on_rule.iter().flatten().map(|dependency| dependency.variable.to_uppercase()),
+    );
+    for id in std::iter::once(None)
+        .chain(rule.fallbacks.iter().map(|fallback| Some(fallback.id.as_str())))
+    {
+        if let Some(action) = rule.selected_revocation(id)? {
+            match action.as_ref() {
+                Revocation::Http(http) => {
+                    vars.extend(request_input_vars(&http.request, http.multipart.as_ref()))
+                }
+                Revocation::HttpMultiStep(multi) => {
+                    let mut produced = BTreeSet::new();
+                    for step in &multi.steps {
+                        let mut needed = request_input_vars(&step.request, step.multipart.as_ref());
+                        for extractor in step.extract.iter().flat_map(|extract| extract.values()) {
+                            let template = match extractor {
+                                ResponseExtractor::JsonPath { path } => Some(path),
+                                ResponseExtractor::Regex { pattern } => Some(pattern),
+                                ResponseExtractor::Header { name } => Some(name),
+                                _ => None,
+                            };
+                            if let Some(template) = template {
+                                needed.extend(extract_template_vars(template));
+                            }
+                        }
+                        vars.extend(needed.into_iter().filter(|name| !produced.contains(name)));
+                        produced.extend(
+                            step.extract
+                                .iter()
+                                .flat_map(|extract| extract.keys())
+                                .map(|name| name.to_uppercase()),
+                        );
+                    }
+                }
+                _ => vars.extend(extract_revocation_vars(&action)),
+            }
+        }
+    }
+    vars.retain(|name| {
+        !crate::validation::httpvalidation::is_validation_endpoint_var(name)
+            && !crate::validation::httpvalidation::is_auto_provided_request_var(name)
+    });
+    Ok(vars)
+}
+
+/// Validate before choosing an action. No caller-provided endpoint state is trusted.
+async fn validated_fallback_globals(
+    args: &RevokeArgs,
+    global_args: &GlobalArgs,
+    rule: &Rule,
+    secret: &str,
+    parser: &liquid::Parser,
+    endpoint_overrides: &ProviderEndpointOverrides,
+) -> Result<Object> {
+    let vars = fallback_input_vars(rule.syntax())?;
+    for assignment in &args.variables {
+        let (name, _) = assignment.split_once('=').context("Expected --var NAME=VALUE")?;
+        let name = name.trim().to_uppercase();
+        anyhow::ensure!(!name.is_empty(), "Variable name cannot be empty");
+        anyhow::ensure!(
+            name != "TOKEN"
+                && !crate::validation::httpvalidation::is_validation_endpoint_var(&name),
+            "revoke --fallbacks determines TOKEN and VALIDATION_* selection internally; pass only credential inputs"
+        );
+    }
+    let non_token_count = vars.iter().filter(|name| name.as_str() != "TOKEN").count();
+    anyhow::ensure!(
+        args.args.len() <= non_token_count,
+        "Too many --arg values for fallback validation/revocation; prefer named --var inputs"
+    );
+    let mut globals =
+        build_globals(rule.id(), secret, &args.args, &args.variables, &vars, endpoint_overrides)?;
+    let values = globals
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_kstr().to_string()))
+        .collect();
+    let mut issues = Vec::new();
+    kingfisher_scanner::validation::inspect_rule_validation(
+        parser,
+        rule.syntax(),
+        true,
+        &values,
+        &mut issues,
+    );
+    anyhow::ensure!(
+        issues.is_empty(),
+        "Fallback validation inputs are missing or invalid ({}); revocation was not attempted",
+        issues
+            .iter()
+            .map(|issue| issue.variable.as_deref().unwrap_or(issue.code))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    let use_lax_tls = global_args.ignore_certs
+        || matches!(
+            global_args.tls_mode,
+            crate::cli::global::TlsMode::Off | crate::cli::global::TlsMode::Lax
+        );
+    let timeout = Duration::from_secs(args.timeout);
+    let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .danger_accept_invalid_certs(use_lax_tls)
+        .timeout(timeout)
+        .user_agent(GLOBAL_USER_AGENT.as_str())
+        .build()?;
+    let checked = kingfisher_scanner::validation::ValidationEngine::new(&client, parser)
+        .http_fallbacks(true)
+        .timeout(timeout)
+        .retries(args.retries)
+        .allow_internal_ips(global_args.allow_internal_ips)
+        .use_lax_tls(use_lax_tls)
+        .validate(rule, &globals)
+        .await;
+    anyhow::ensure!(
+        checked.outcome.is_verified_active(),
+        "Revocation not attempted: no enabled environment verified the credential ({:?}, {:?})",
+        checked.outcome,
+        checked.reason
+    );
+    let selection = checked.endpoint_variables();
+    anyhow::ensure!(
+        !selection.is_empty(),
+        "Revocation not attempted: HTTP validation did not retain an endpoint selection"
+    );
+    let action = rule
+        .syntax()
+        .selected_revocation(selection.get("VALIDATION_FALLBACK_ID").map(String::as_str))?
+        .context(
+            "Revocation not attempted: the verified environment has no revocation configured",
+        )?;
+    for (name, value) in selection {
+        globals.insert(name.into(), Value::scalar(value));
+    }
+    let values = globals
+        .iter()
+        .map(|(name, value)| (name.to_string(), value.to_kstr().to_string()))
+        .collect();
+    let mut issues = Vec::new();
+    kingfisher_scanner::validation::inspect_revocation(parser, &action, &values, &mut issues);
+    anyhow::ensure!(
+        issues.is_empty(),
+        "Selected environment's revocation inputs are missing or invalid ({}); revocation was not attempted",
+        issues
+            .iter()
+            .map(|issue| issue.variable.as_deref().unwrap_or(issue.code))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
+    Ok(crate::validation::httpvalidation::with_request_template_globals(&globals))
 }
 
 /// Extract a string value from the globals object.
@@ -337,6 +572,7 @@ fn build_globals(
         globals.insert(name.into(), Value::scalar(value));
     }
 
+    crate::validation::parse_betterleaks_context_globals(&mut globals)?;
     hydrate_endpoint_globals_for_rule(rule_id, &mut globals);
 
     Ok(globals)
@@ -377,6 +613,12 @@ pub async fn run_direct_revocation_detailed(
 
     let matching_rules = find_rules_by_selector(&args.rule, loaded.id_to_rule())?;
     let num_matching_rules = matching_rules.len();
+    if global_args.http_fallbacks {
+        anyhow::ensure!(
+            num_matching_rules == 1,
+            "revoke --fallbacks requires one unambiguous rule; use a full rule ID to avoid multiple mutations"
+        );
+    }
     let aws_revocation_count = matching_rules
         .iter()
         .filter(|rule| matches!(rule.syntax().revocation.as_ref(), Some(Revocation::AWS)))
@@ -403,7 +645,15 @@ pub async fn run_direct_revocation_detailed(
     }
 
     let client = Client::builder()
-        .danger_accept_invalid_certs(global_args.ignore_certs)
+        .redirect(reqwest::redirect::Policy::none())
+        .danger_accept_invalid_certs(
+            global_args.ignore_certs
+                || (global_args.http_fallbacks
+                    && matches!(
+                        global_args.tls_mode,
+                        crate::cli::global::TlsMode::Off | crate::cli::global::TlsMode::Lax
+                    )),
+        )
         .timeout(Duration::from_secs(args.timeout))
         .user_agent(GLOBAL_USER_AGENT.as_str())
         .gzip(true)
@@ -424,15 +674,50 @@ pub async fn run_direct_revocation_detailed(
 
         debug!("Trying rule: {} ({})", rule_name, rule_id);
 
-        let revocation = match rule.syntax().revocation.as_ref() {
+        if global_args.http_fallbacks {
+            let globals = validated_fallback_globals(
+                args,
+                global_args,
+                rule,
+                &secret,
+                &parser,
+                &endpoint_overrides,
+            )
+            .await?;
+            let fallback_id =
+                globals.get("VALIDATION_FALLBACK_ID").map(|value| value.to_kstr().to_string());
+            let revocation = rule
+                .syntax()
+                .selected_revocation(fallback_id.as_deref())?
+                .context("Verified environment has no revocation configured")?;
+            prepared.push((rule_id, rule_name, revocation, globals));
+            continue;
+        }
+
+        let fallback_id = args
+            .variables
+            .iter()
+            .rev()
+            .filter_map(|pair| pair.split_once('='))
+            .find(|(name, _)| name.trim().eq_ignore_ascii_case("VALIDATION_FALLBACK_ID"))
+            .map(|(_, value)| value.trim());
+        if fallback_id.is_some() && !global_args.http_fallbacks {
+            bail!(
+                "Use revoke --fallbacks to validate and select an environment automatically; do not pass VALIDATION_FALLBACK_ID"
+            );
+        }
+        let revocation = match rule.syntax().selected_revocation(fallback_id)? {
             Some(v) => v,
             None => {
+                if fallback_id.is_some() {
+                    bail!("Selected fallback has no revocation configured");
+                }
                 debug!("Rule '{}' has no revocation defined, skipping", rule_id);
                 continue;
             }
         };
 
-        let template_vars = extract_revocation_vars(revocation);
+        let template_vars = extract_revocation_vars(&revocation);
         let non_token_vars: Vec<&String> = template_vars.iter().filter(|v| *v != "TOKEN").collect();
 
         if args.args.len() > non_token_vars.len() {
@@ -480,7 +765,7 @@ pub async fn run_direct_revocation_detailed(
 
     let mut results = Vec::new();
     for (rule_id, rule_name, revocation, globals) in prepared {
-        let (mut result, status) = match revocation {
+        let (mut result, status) = match revocation.as_ref() {
             Revocation::AWS => {
                 let akid = get_global_var(&globals, "AKID")
                     .or_else(|| get_global_var(&globals, "ACCESS_KEY_ID"))
@@ -547,6 +832,23 @@ pub async fn run_direct_revocation_detailed(
                     }
                 }
             }
+            Revocation::Betterleaks(config) => {
+                let captures = globals
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_kstr().to_string(), 0, 0))
+                    .collect::<Vec<_>>();
+                let result = tokio::time::timeout(
+                    timeout,
+                    kingfisher_scanner::validation::betterleaks::revoke_detailed(
+                        config, &captures, &globals, &client, true,
+                    ),
+                )
+                .await
+                .context(RevocationSubmitted)
+                .context("Revocation timed out; the credential may already have been revoked")
+                .and_then(|result| result);
+                betterleaks_revocation_outcome(result)
+            }
             Revocation::GCP => {
                 let key_id_override = get_global_var(&globals, "KEY_ID")
                     .or_else(|| get_global_var(&globals, "PRIVATE_KEY_ID"));
@@ -600,7 +902,9 @@ pub async fn run_direct_revocation_detailed(
 
         result.rule_id = rule_id;
         result.rule_name = rule_name;
-        results.push(DetailedDirectRevocationResult { result, status });
+        let fallback_id =
+            globals.get("VALIDATION_FALLBACK_ID").map(|value| value.to_kstr().to_string());
+        results.push(DetailedDirectRevocationResult { result, status, fallback_id });
     }
 
     if results.is_empty() {
@@ -639,16 +943,19 @@ fn result_output_value(
     value
 }
 
+fn detailed_output_value(detailed: &DetailedDirectRevocationResult) -> serde_json::Value {
+    let mut value = result_output_value(&detailed.result, detailed.status);
+    if let Some(id) = &detailed.fallback_id {
+        value["fallback_id"] = serde_json::Value::String(id.clone());
+    }
+    value
+}
+
 fn results_output_value(results: &[DetailedDirectRevocationResult]) -> serde_json::Value {
     if results.len() == 1 {
-        result_output_value(&results[0].result, results[0].status)
+        detailed_output_value(&results[0])
     } else {
-        serde_json::Value::Array(
-            results
-                .iter()
-                .map(|detailed| result_output_value(&detailed.result, detailed.status))
-                .collect(),
-        )
+        serde_json::Value::Array(results.iter().map(detailed_output_value).collect())
     }
 }
 
@@ -688,6 +995,9 @@ pub fn print_detailed_results(
 
                 println!("Rule:     {} ({})", result.rule_name, result.rule_id);
                 println!("Result:   {}", result_text);
+                if let Some(id) = &detailed.fallback_id {
+                    println!("Fallback: {}", id);
+                }
                 if let Some(status) = result.status_code {
                     println!("Status:   {}", status);
                 }
@@ -707,6 +1017,7 @@ pub fn print_results(results: &[DirectRevocationResult], format: &str, use_color
         .map(|result| DetailedDirectRevocationResult {
             status: CliRevocationStatus::from_revoked(result.revoked),
             result,
+            fallback_id: None,
         })
         .collect();
     print_detailed_results(&detailed, format, use_color);
@@ -725,6 +1036,19 @@ pub fn any_revoked(results: &[DirectRevocationResult]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_commands_decode_original_betterleaks_named_capture_context() {
+        let globals=build_globals("custom.primary","secret",&[],&[
+            "__BETTERLEAKS_FINDING_CAPTURES={\"MixedCase\":\"original-value\"}".into(),
+            "__BETTERLEAKS_COMPONENTS={\"custom.helper\":{\"secret\":\"component\",\"captures\":{\"Realm\":\"east\"}}}".into(),
+        ],&BTreeSet::new(),&ProviderEndpointOverrides::default()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&globals["__BETTERLEAKS_FINDING_CAPTURES"]).unwrap(),
+            serde_json::json!({"MixedCase":"original-value"})
+        );
+        assert!(globals["__BETTERLEAKS_COMPONENTS"].as_object().is_some());
+    }
     use kingfisher_rules::HttpValidation;
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -855,6 +1179,30 @@ mod tests {
     // ---- extract_revocation_vars ----
 
     #[test]
+    fn fallback_inputs_exclude_endpoint_state_timestamps_and_earlier_step_outputs() {
+        let rule: RuleSyntax = serde_json::from_value(serde_json::json!({
+            "id":"custom.inputs","name":"Inputs","pattern":"(secret)",
+            "validation":{"type":"Http","content":{"request":{
+                "method":"GET","url":"https://primary.example/me",
+                "headers":{"Authorization":"Bearer {{ TOKEN }}", "Date":"{{ REQUEST_RFC1123_DATE }}"},
+                "response_matcher":[{"type":"StatusMatch","status":[200]}]
+            }}},
+            "revocation":{"type":"HttpMultiStep","content":{"steps":[
+                {"request":{"method":"GET","url":"https://primary.example/keys"},
+                 "extract":{"KEY_ID":{"type":"JsonPath","path":"$.id"}}},
+                {"request":{"method":"DELETE","url":"https://primary.example/keys/{{ KEY_ID }}",
+                 "body":"{{ EXTRA }}", "response_matcher":[{"type":"StatusMatch","status":[200]}]}}
+            ]}},
+            "fallbacks":[{"id":"secondary","reuse_primary_validation_logic":true,"url":"https://secondary.example/me",
+                "reuse_primary_revocation_logic":true,"revocation_urls":["{{ VALIDATION_ORIGIN }}/keys", "{{ VALIDATION_ORIGIN }}/keys/{{ KEY_ID }}"]}]
+        })).unwrap();
+        assert_eq!(
+            fallback_input_vars(&rule).unwrap(),
+            BTreeSet::from(["EXTRA".into(), "TOKEN".into()])
+        );
+    }
+
+    #[test]
     fn extract_revocation_vars_aws() {
         let vars = extract_revocation_vars(&Revocation::AWS);
         assert!(vars.contains("AKID"));
@@ -876,6 +1224,7 @@ mod tests {
             request: HttpRequest {
                 method: "DELETE".into(),
                 url: "https://api.example.com/{{ AKID }}/{{ TOKEN }}".into(),
+                fallback_urls: Vec::new(),
                 headers: BTreeMap::from([("Authorization".into(), "Bearer {{ TOKEN }}".into())]),
                 body: Some(r#"{"key":"{{ KEY_ID }}"}"#.into()),
                 response_matcher: None,
@@ -901,6 +1250,7 @@ mod tests {
                     request: HttpRequest {
                         method: "GET".into(),
                         url: "https://api.example.com/{{ TOKEN }}/info".into(),
+                        fallback_urls: Vec::new(),
                         headers: BTreeMap::new(),
                         body: None,
                         response_matcher: None,
@@ -915,6 +1265,7 @@ mod tests {
                     request: HttpRequest {
                         method: "DELETE".into(),
                         url: "https://api.example.com/{{ KEY_ID }}".into(),
+                        fallback_urls: Vec::new(),
                         headers: BTreeMap::from([("X-Api-Key".into(), "{{ API_KEY }}".into())]),
                         body: None,
                         response_matcher: None,
@@ -953,8 +1304,13 @@ mod tests {
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         })
     }
 

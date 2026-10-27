@@ -7,8 +7,12 @@ use anyhow::Result;
 use schemars::JsonSchema;
 use serde::Serialize;
 
-use crate::cli::commands::access_map::{AccessMapArgs, AccessMapOutputFormat, AccessMapProvider};
+use crate::cli::commands::access_map::{
+    AccessMapArgs, AccessMapOutputFormat, AccessMapProvider, BlastRadiusOptions,
+};
 
+mod assessment;
+pub use assessment::AccessAssessment;
 mod airtable;
 mod algolia;
 mod alibaba;
@@ -19,6 +23,7 @@ mod auth0;
 mod aws;
 mod azure;
 mod azure_devops;
+pub(crate) mod betterleaks;
 mod bitbucket;
 mod buildkite;
 mod circleci;
@@ -73,7 +78,7 @@ pub trait TokenAccessMapper: Send + Sync {
 
 /// Run the identity mapping workflow for the selected cloud provider.
 pub async fn run(args: AccessMapArgs) -> Result<()> {
-    let result = dispatch_cli_request(&args).await?;
+    let result = map_credential(&args).await?;
 
     let mut writer = args.output_args.get_writer()?;
     match args.output_args.format {
@@ -95,7 +100,12 @@ type MappedRequestFuture = Pin<Box<dyn Future<Output = (AccessMapAttempt, String
 
 fn dispatch_cli_request(args: &AccessMapArgs) -> AccessMapResultFuture<'_> {
     match &args.provider {
-        AccessMapProvider::Gcp => Box::pin(gcp::map_access(args.credential_path.as_deref())),
+        AccessMapProvider::Gcp if args.analysis.gcp_projects.is_empty() => {
+            Box::pin(gcp::map_access(args.credential_path.as_deref()))
+        }
+        AccessMapProvider::Gcp => {
+            Box::pin(gcp::map_access_with_options(args.credential_path.as_deref(), &args.analysis))
+        }
         AccessMapProvider::Aws => Box::pin(aws::map_access(args)),
         AccessMapProvider::Azure => Box::pin(azure::map_access(args)),
         AccessMapProvider::Github => Box::pin(github::map_access(args)),
@@ -144,6 +154,8 @@ fn dispatch_cli_request(args: &AccessMapArgs) -> AccessMapResultFuture<'_> {
 /// A validated credential that can be mapped to an identity.
 #[derive(Clone, Debug)]
 pub enum AccessMapRequest {
+    /// A custom Betterleaks v2 analysis expression.
+    Betterleaks(Box<betterleaks::AnalysisRequest>),
     /// AWS access key credentials.
     Aws {
         access_key: String,
@@ -161,8 +173,12 @@ pub enum AccessMapRequest {
     AzureDevops { token: String, organization: String, fingerprint: String },
     /// A GitHub token.
     Github { token: String, fingerprint: String },
+    /// A token for the exact GitHub API instance used during validation.
+    GithubAt { token: String, fingerprint: String, api_endpoint: String },
     /// A GitLab token.
     Gitlab { token: String, fingerprint: String },
+    /// A token for the exact GitLab API instance used during validation.
+    GitlabAt { token: String, fingerprint: String, api_endpoint: String },
     /// A Slack token.
     Slack { token: String, fingerprint: String },
     /// A Postgres connection URI.
@@ -173,6 +189,8 @@ pub enum AccessMapRequest {
     HuggingFace { token: String, fingerprint: String },
     /// A Gitea token.
     Gitea { token: String, fingerprint: String },
+    /// A token for the exact Gitea API instance used during validation.
+    GiteaAt { token: String, fingerprint: String, api_endpoint: String },
     /// A Bitbucket token.
     Bitbucket { token: String, fingerprint: String },
     /// A Buildkite token.
@@ -250,18 +268,22 @@ impl AccessMapRequest {
     /// Finding fingerprint attached to this credential occurrence.
     pub(crate) fn finding_fingerprint(&self) -> &str {
         match self {
+            Self::Betterleaks(request) => &request.fingerprint,
             Self::Aws { fingerprint, .. }
             | Self::Gcp { fingerprint, .. }
             | Self::GcpApiKey { fingerprint, .. }
             | Self::Azure { fingerprint, .. }
             | Self::AzureDevops { fingerprint, .. }
             | Self::Github { fingerprint, .. }
+            | Self::GithubAt { fingerprint, .. }
             | Self::Gitlab { fingerprint, .. }
+            | Self::GitlabAt { fingerprint, .. }
             | Self::Slack { fingerprint, .. }
             | Self::Postgres { fingerprint, .. }
             | Self::MongoDB { fingerprint, .. }
             | Self::HuggingFace { fingerprint, .. }
             | Self::Gitea { fingerprint, .. }
+            | Self::GiteaAt { fingerprint, .. }
             | Self::Bitbucket { fingerprint, .. }
             | Self::Buildkite { fingerprint, .. }
             | Self::Harness { fingerprint, .. }
@@ -425,6 +447,8 @@ pub struct ResourceExposure {
 /// Severity classification for the credential.
 #[derive(Debug, Serialize, Clone, Copy)]
 pub enum Severity {
+    /// No positive capability evidence established the credential risk.
+    Unknown,
     /// Low risk.
     Low,
     /// Medium risk.
@@ -457,6 +481,9 @@ pub struct AccessTokenDetails {
 /// Optional metadata about the provider instance.
 #[derive(Debug, Serialize, Clone, Default, JsonSchema)]
 pub struct ProviderMetadata {
+    /// Public Expr analysis output. Private validation handoff data is never included.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub betterleaks_analysis: Option<serde_json::Value>,
     pub version: Option<String>,
     pub enterprise: Option<bool>,
     /// Read-only evidence explaining how permissions and identity paths were derived.
@@ -467,6 +494,9 @@ pub struct ProviderMetadata {
 /// Provider-neutral evidence retained alongside a blast-radius result.
 #[derive(Debug, Serialize, Clone, Default, JsonSchema)]
 pub struct AuthorizationEvidence {
+    /// Automatically attached to new mapping results; absent from older reports.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub assessment: Option<AccessAssessment>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub principal: Option<PrincipalEvidence>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -639,19 +669,27 @@ pub struct HierarchyScope {
     pub id: String,
 }
 
-/// Map a batch of credentials to their effective identities.
+/// Map a batch of credentials to their effective identities, including risk and coverage assessments.
 pub async fn map_requests(requests: Vec<AccessMapRequest>) -> Vec<AccessMapResult> {
     map_request_attempts(requests).await.into_iter().map(|attempt| attempt.result).collect()
 }
 
 /// Map a batch of credentials while preserving whether each provider request succeeded.
 pub(crate) async fn map_request_attempts(requests: Vec<AccessMapRequest>) -> Vec<AccessMapAttempt> {
+    map_request_attempts_with_options(requests, &BlastRadiusOptions::default()).await
+}
+
+pub(crate) async fn map_request_attempts_with_options(
+    requests: Vec<AccessMapRequest>,
+    options: &BlastRadiusOptions,
+) -> Vec<AccessMapAttempt> {
     let mut results = Vec::new();
 
     for request in requests {
-        let (mut attempt, fp) = dispatch_access_map_request(request).await;
+        let (mut attempt, fp) = dispatch_access_map_request(request, options.clone()).await;
 
         attempt.result.fingerprint = Some(fp);
+        assessment::attach(&mut attempt.result);
         results.push(attempt);
     }
 
@@ -659,21 +697,23 @@ pub(crate) async fn map_request_attempts(requests: Vec<AccessMapRequest>) -> Vec
 }
 
 /// Map deduplicated scan credentials while preserving every finding occurrence and whether
-/// identity mapping actually succeeded. The public `map_requests` API intentionally retains its
-/// existing result shape; scan alerting uses this richer internal path.
-pub(crate) async fn map_collected_requests(
+/// identity mapping actually succeeded. Scan alerting uses this correlation metadata independently
+/// of the result's risk and coverage assessment.
+pub(crate) async fn map_collected_requests_with_options(
     requests: Vec<CollectedAccessMapRequest>,
+    options: &BlastRadiusOptions,
 ) -> Vec<ScanAccessMapResult> {
     let mut results = Vec::with_capacity(requests.len());
 
     for collected in requests {
         let (mut attempt, primary_fingerprint) =
-            dispatch_access_map_request(collected.request).await;
+            dispatch_access_map_request(collected.request, options.clone()).await;
         let mut finding_fingerprints = collected.finding_fingerprints;
         finding_fingerprints.push(primary_fingerprint);
         finding_fingerprints.sort_unstable();
         finding_fingerprints.dedup();
         attempt.result.fingerprint = finding_fingerprints.first().cloned();
+        assessment::attach(&mut attempt.result);
         results.push(ScanAccessMapResult {
             result: attempt.result,
             finding_fingerprints,
@@ -698,17 +738,39 @@ fn finish_mapping(
     }
 }
 
-fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture {
+fn dispatch_access_map_request(
+    request: AccessMapRequest,
+    options: BlastRadiusOptions,
+) -> MappedRequestFuture {
     match request {
+        AccessMapRequest::Betterleaks(request) => Box::pin(async move {
+            let fingerprint = request.fingerprint.clone();
+            let mapped = finish_mapping(
+                betterleaks::map_access(*request).await,
+                "betterleaks",
+                "credential",
+            );
+            (mapped, fingerprint)
+        }),
         AccessMapRequest::Aws { access_key, secret_key, session_token, fingerprint } => {
             Box::pin(async move {
                 let mapped = finish_mapping(
-                    aws::map_access_with_credentials(
-                        &access_key,
-                        &secret_key,
-                        session_token.as_deref(),
-                    )
-                    .await,
+                    if options.aws_regions.is_empty() {
+                        aws::map_access_with_credentials(
+                            &access_key,
+                            &secret_key,
+                            session_token.as_deref(),
+                        )
+                        .await
+                    } else {
+                        aws::map_access_with_credentials_and_options(
+                            &access_key,
+                            &secret_key,
+                            session_token.as_deref(),
+                            &options,
+                        )
+                        .await
+                    },
                     "aws",
                     &access_key,
                 );
@@ -717,7 +779,11 @@ fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture
         }
         AccessMapRequest::Gcp { credential_json, fingerprint } => Box::pin(async move {
             let mapped = finish_mapping(
-                gcp::map_access_from_json(&credential_json).await,
+                if options.gcp_projects.is_empty() {
+                    gcp::map_access_from_json(&credential_json).await
+                } else {
+                    gcp::map_access_from_json_with_options(&credential_json, &options).await
+                },
                 "gcp",
                 "service_account",
             );
@@ -752,9 +818,29 @@ fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture
         AccessMapRequest::Github { token, fingerprint } => {
             Box::pin(async move { (map_token(&GithubMapper, &token).await, fingerprint) })
         }
+        AccessMapRequest::GithubAt { token, fingerprint, api_endpoint } => Box::pin(async move {
+            (
+                finish_mapping(
+                    github::map_access_from_token_at(&token, &api_endpoint).await,
+                    "github",
+                    "credential",
+                ),
+                fingerprint,
+            )
+        }),
         AccessMapRequest::Gitlab { token, fingerprint } => {
             Box::pin(async move { (map_token(&GitlabMapper, &token).await, fingerprint) })
         }
+        AccessMapRequest::GitlabAt { token, fingerprint, api_endpoint } => Box::pin(async move {
+            (
+                finish_mapping(
+                    gitlab::map_access_from_token_at(&token, &api_endpoint).await,
+                    "gitlab",
+                    "credential",
+                ),
+                fingerprint,
+            )
+        }),
         AccessMapRequest::Slack { token, fingerprint } => {
             Box::pin(async move { (map_token(&SlackMapper, &token).await, fingerprint) })
         }
@@ -773,6 +859,16 @@ fn dispatch_access_map_request(request: AccessMapRequest) -> MappedRequestFuture
         AccessMapRequest::Gitea { token, fingerprint } => {
             Box::pin(async move { (map_token(&GiteaMapper, &token).await, fingerprint) })
         }
+        AccessMapRequest::GiteaAt { token, fingerprint, api_endpoint } => Box::pin(async move {
+            (
+                finish_mapping(
+                    gitea::map_access_from_token_at(&token, &api_endpoint).await,
+                    "gitea",
+                    "credential",
+                ),
+                fingerprint,
+            )
+        }),
         AccessMapRequest::Bitbucket { token, fingerprint } => {
             Box::pin(async move { (map_token(&BitbucketMapper, &token).await, fingerprint) })
         }
@@ -966,7 +1062,16 @@ pub fn write_reports(results: &[AccessMapResult], html_out: &std::path::Path) ->
 
 /// Map a provider credential without writing its result to an output stream.
 pub async fn map_credential(args: &AccessMapArgs) -> Result<AccessMapResult> {
-    dispatch_cli_request(args).await
+    args.analysis.validate()?;
+    if args.provider != AccessMapProvider::Aws && !args.analysis.aws_regions.is_empty() {
+        anyhow::bail!("--aws-region requires the aws provider in standalone mapping");
+    }
+    if args.provider != AccessMapProvider::Gcp && !args.analysis.gcp_projects.is_empty() {
+        anyhow::bail!("--gcp-project requires the gcp provider in standalone mapping");
+    }
+    let mut result = dispatch_cli_request(args).await?;
+    assessment::attach(&mut result);
+    Ok(result)
 }
 
 // -------------------------------------------------------------------------------------------------
@@ -1304,6 +1409,7 @@ impl TokenAccessMapper for PineconeMapper {
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",
@@ -1372,6 +1478,9 @@ pub(crate) fn build_recommendations(severity: Severity) -> Vec<String> {
         Severity::Medium => {
             recs.push("Review write-level permissions and tighten scopes".to_string())
         }
+        Severity::Unknown => {
+            recs.push("Establish credential permissions before assessing blast radius".into())
+        }
         Severity::Low => recs.push("Maintain monitoring for anomalous access".to_string()),
     }
 
@@ -1381,6 +1490,100 @@ pub(crate) fn build_recommendations(severity: Severity) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const TEAMS_WEBHOOK: &str = "https://example.webhook.office.com/webhookb2/webhook-id@tenant-id/IncomingWebhook/secret-token/channel-id";
+
+    #[tokio::test]
+    async fn batch_mapping_automatically_assesses_without_changing_provider_fields() {
+        let original = microsoft_teams::map_access_from_webhook_url(TEAMS_WEBHOOK).await.unwrap();
+        let results = map_requests(vec![AccessMapRequest::MicrosoftTeams {
+            webhook_url: TEAMS_WEBHOOK.into(),
+            fingerprint: "finding".into(),
+        }])
+        .await;
+
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0].fingerprint.as_deref(), Some("finding"));
+        let original = serde_json::to_value(original).unwrap();
+        let mapped = serde_json::to_value(&results[0]).unwrap();
+        for field in [
+            "cloud",
+            "identity",
+            "roles",
+            "permissions",
+            "resources",
+            "severity",
+            "recommendations",
+            "risk_notes",
+            "token_details",
+        ] {
+            assert_eq!(mapped[field], original[field], "{field}");
+        }
+        assert_eq!(
+            mapped["provider_metadata"]["authorization_evidence"]["assessment"]["schema_version"],
+            1
+        );
+    }
+
+    #[tokio::test]
+    async fn scan_assessments_preserve_mapping_outcomes_and_finding_links() {
+        let requests = [TEAMS_WEBHOOK, "invalid-webhook"]
+            .into_iter()
+            .map(|webhook_url| CollectedAccessMapRequest {
+                request: AccessMapRequest::MicrosoftTeams {
+                    webhook_url: webhook_url.into(),
+                    fingerprint: "finding-b".into(),
+                },
+                finding_fingerprints: vec!["finding-a".into(), "finding-a".into()],
+            })
+            .collect();
+        let results =
+            map_collected_requests_with_options(requests, &BlastRadiusOptions::default()).await;
+
+        assert_eq!(results.len(), 2);
+        for (index, mapped) in results.iter().enumerate() {
+            assert_eq!(mapped.mapping_succeeded, index == 0);
+            assert_eq!(mapped.finding_fingerprints, ["finding-a", "finding-b"]);
+            assert_eq!(mapped.result.fingerprint.as_deref(), Some("finding-a"));
+            let assessment = mapped
+                .result
+                .provider_metadata
+                .as_ref()
+                .and_then(|metadata| metadata.authorization_evidence.as_ref())
+                .and_then(|evidence| evidence.assessment.as_ref())
+                .expect("successful and failed mappings should include an assessment");
+            assert_eq!(assessment.schema_version, 1);
+            if !mapped.mapping_succeeded {
+                assert_eq!(assessment.coverage, "unknown");
+                assert_eq!(assessment.capability_risk, "unknown");
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn standalone_mapping_automatically_includes_assessment() {
+        let directory = tempfile::tempdir().unwrap();
+        let credential_path = directory.path().join("webhook.txt");
+        std::fs::write(&credential_path, TEAMS_WEBHOOK).unwrap();
+        let args = AccessMapArgs {
+            provider: AccessMapProvider::Microsoftteams,
+            credential_path: Some(credential_path),
+            analysis: BlastRadiusOptions::default(),
+            output_args: crate::cli::commands::access_map::AccessMapOutputArgs {
+                output: None,
+                format: AccessMapOutputFormat::Json,
+            },
+        };
+
+        let result = map_credential(&args).await.unwrap();
+        let assessment = result
+            .provider_metadata
+            .as_ref()
+            .and_then(|metadata| metadata.authorization_evidence.as_ref())
+            .and_then(|evidence| evidence.assessment.as_ref())
+            .expect("standalone mapping should include an assessment without extra options");
+        assert_eq!(assessment.schema_version, 1);
+    }
 
     #[test]
     fn provider_metadata_omits_empty_authorization_evidence() {
@@ -1393,6 +1596,7 @@ mod tests {
     #[test]
     fn authorization_evidence_serializes_ordered_identity_path() {
         let metadata = ProviderMetadata {
+            betterleaks_analysis: None,
             version: None,
             enterprise: None,
             authorization_evidence: Some(AuthorizationEvidence {

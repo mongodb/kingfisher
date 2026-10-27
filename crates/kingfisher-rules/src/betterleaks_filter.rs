@@ -5,12 +5,13 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     ops::Range,
     str::FromStr,
-    sync::Arc,
+    sync::{Arc, LazyLock},
 };
 
 use anyhow::{Context, Result, anyhow, bail};
 use kingfisher_vectorscan::{BlockDatabase, Flag, Pattern, Scan};
 use regex::Regex;
+use sha2::{Digest, Sha256};
 use xxhash_rust::xxh3::Xxh3;
 
 use crate::{
@@ -21,6 +22,8 @@ use crate::{
 #[derive(Debug)]
 pub struct BetterleaksFilterContext<'a> {
     pub path: &'a str,
+    /// Source metadata available to both prefilters and finding filters.
+    pub attributes: Option<&'a BTreeMap<String, String>>,
     pub secret: &'a str,
     pub full_match: &'a str,
     pub line: &'a str,
@@ -67,8 +70,10 @@ struct CachedPatterns {
 /// database builds this engine once and each worker retains its own scratch arena.
 pub(crate) struct BetterleaksFilterEngine {
     matches_any: Option<VectorscanRegexDatabase>,
+    matches_any_empty: BTreeMap<String, Regex>,
     find_match: Option<VectorscanRegexDatabase>,
     find_match_exact: BTreeMap<String, Regex>,
+    dynamic_regex: bool,
 }
 
 impl BetterleaksFilterEngine {
@@ -77,7 +82,9 @@ impl BetterleaksFilterEngine {
     ) -> Result<Self> {
         let mut matches_any_patterns = BTreeSet::new();
         let mut find_match_patterns = BTreeSet::new();
+        let mut dynamic_regex = false;
         for expression in expressions {
+            dynamic_regex |= has_dynamic_regex(expression);
             collect_filter_regex_patterns(
                 expression,
                 &mut matches_any_patterns,
@@ -87,11 +94,19 @@ impl BetterleaksFilterEngine {
         let find_match_exact: BTreeMap<String, Regex> = find_match_patterns
             .iter()
             .map(|pattern| {
-                Regex::new(pattern)
+                compile_go_regex(pattern)
                     .with_context(|| format!("compile Betterleaks findMatch regex {pattern:?}"))
                     .map(|regex| (pattern.clone(), regex))
             })
             .collect::<Result<_>>()?;
+        let mut matches_any_empty = BTreeMap::new();
+        for pattern in &matches_any_patterns {
+            let regex = compile_go_regex(pattern)?;
+            if regex.is_match("") {
+                matches_any_empty.insert(pattern.clone(), regex);
+            }
+        }
+        matches_any_patterns.retain(|pattern| !matches_any_empty.contains_key(pattern));
         Ok(Self {
             matches_any: VectorscanRegexDatabase::compile(
                 matches_any_patterns.into_iter().map(|pattern| (pattern.clone(), pattern)),
@@ -115,20 +130,50 @@ impl BetterleaksFilterEngine {
                 "findMatch",
             )?,
             find_match_exact,
+            matches_any_empty,
+            dynamic_regex,
         })
     }
 
     fn matches_any(&self, input: &str, patterns: &[&str]) -> Result<bool> {
+        if self
+            .matches_any_empty
+            .iter()
+            .any(|(pattern, regex)| patterns.contains(&pattern.as_str()) && regex.is_match(input))
+        {
+            return Ok(true);
+        }
+        let patterns: Vec<_> = patterns
+            .iter()
+            .copied()
+            .filter(|pattern| !self.matches_any_empty.contains_key(*pattern))
+            .collect();
         if patterns.is_empty() {
             return Ok(false);
+        }
+        if self.dynamic_regex
+            && self.matches_any.as_ref().is_none_or(|database| {
+                patterns.iter().any(|pattern| !database.pattern_ids.contains_key(*pattern))
+            })
+        {
+            let regexes = patterns
+                .iter()
+                .map(|pattern| compile_go_regex(pattern))
+                .collect::<std::result::Result<Vec<_>, _>>()?;
+            return Ok(regexes.iter().any(|regex| regex.is_match(input)));
         }
         self.matches_any
             .as_ref()
             .ok_or_else(|| anyhow!("matchesAny patterns were not compiled"))?
-            .matches_any(input.as_bytes(), patterns)
+            .matches_any(input.as_bytes(), &patterns)
     }
 
     fn find_match(&self, input: &str, pattern: &str) -> Result<String> {
+        if self.dynamic_regex && !self.find_match_exact.contains_key(pattern) {
+            return Ok(compile_go_regex(pattern)?
+                .find(input)
+                .map_or_else(String::new, |matched| matched.as_str().to_string()));
+        }
         if !self
             .find_match
             .as_ref()
@@ -205,6 +250,50 @@ impl VectorscanRegexDatabase {
     }
 }
 
+fn has_dynamic_regex(expression: &BetterleaksExpr) -> bool {
+    match expression {
+        BetterleaksExpr::Call { callee, arguments } => {
+            let dynamic = match (expression_name(callee).as_deref(), arguments.as_slice()) {
+                (
+                    Some("matchesAny" | "filter.matchesAny"),
+                    [_, BetterleaksExpr::Array { nodes }],
+                ) => nodes.iter().any(|node| !matches!(node, BetterleaksExpr::String { .. })),
+                (Some("matchesAny" | "filter.matchesAny"), _) => true,
+                (Some("findMatch" | "filter.findMatch"), [_, BetterleaksExpr::String { .. }]) => {
+                    false
+                }
+                (Some("findMatch" | "filter.findMatch"), _) => true,
+                _ => false,
+            };
+            dynamic || arguments.iter().any(has_dynamic_regex)
+        }
+        BetterleaksExpr::Builtin { arguments: nodes, .. }
+        | BetterleaksExpr::Array { nodes }
+        | BetterleaksExpr::Sequence { nodes }
+        | BetterleaksExpr::Map { pairs: nodes } => nodes.iter().any(has_dynamic_regex),
+        BetterleaksExpr::Unary { node, .. }
+        | BetterleaksExpr::Chain { node }
+        | BetterleaksExpr::Predicate { node } => has_dynamic_regex(node),
+        BetterleaksExpr::Binary { left, right, .. }
+        | BetterleaksExpr::Pair { key: left, value: right } => {
+            has_dynamic_regex(left) || has_dynamic_regex(right)
+        }
+        BetterleaksExpr::Member { node, property, .. } => {
+            has_dynamic_regex(node) || has_dynamic_regex(property)
+        }
+        BetterleaksExpr::Slice { node, from, to } => {
+            has_dynamic_regex(node) || has_dynamic_regex(from) || has_dynamic_regex(to)
+        }
+        BetterleaksExpr::Conditional { cond, exp1, exp2 } => {
+            has_dynamic_regex(cond) || has_dynamic_regex(exp1) || has_dynamic_regex(exp2)
+        }
+        BetterleaksExpr::VariableDeclarator { value, expr, .. } => {
+            has_dynamic_regex(value) || has_dynamic_regex(expr)
+        }
+        _ => false,
+    }
+}
+
 fn collect_filter_regex_patterns(
     expression: &BetterleaksExpr,
     matches_any_patterns: &mut BTreeSet<String>,
@@ -218,24 +307,21 @@ fn collect_filter_regex_patterns(
                         let [_, patterns] = arguments.as_slice() else {
                             bail!("matchesAny expects two arguments");
                         };
-                        let BetterleaksExpr::Array { nodes } = patterns else {
-                            bail!("Betterleaks matchesAny patterns must be a literal array");
-                        };
-                        for node in nodes {
-                            let BetterleaksExpr::String { value } = node else {
-                                bail!("Betterleaks matchesAny patterns must be string literals");
-                            };
-                            matches_any_patterns.insert(value.clone());
+                        if let BetterleaksExpr::Array { nodes } = patterns {
+                            for node in nodes {
+                                if let BetterleaksExpr::String { value } = node {
+                                    matches_any_patterns.insert(value.clone());
+                                }
+                            }
                         }
                     }
                     "filter.findMatch" | "findMatch" => {
                         let [_, pattern] = arguments.as_slice() else {
                             bail!("findMatch expects two arguments");
                         };
-                        let BetterleaksExpr::String { value } = pattern else {
-                            bail!("Betterleaks findMatch pattern must be a string literal");
-                        };
-                        find_match_patterns.insert(value.clone());
+                        if let BetterleaksExpr::String { value } = pattern {
+                            find_match_patterns.insert(value.clone());
+                        }
                     }
                     _ => {}
                 }
@@ -415,12 +501,16 @@ pub(crate) fn evaluate_filter_with_engine_and_line_cache(
         ),
     );
 
+    let mut attributes = context
+        .attributes
+        .into_iter()
+        .flat_map(|attributes| attributes.iter())
+        .map(|(key, value)| (key.clone(), Value::string(value.as_str())))
+        .collect::<BTreeMap<_, _>>();
+    attributes.entry("path".to_string()).or_insert_with(|| Value::string(context.path));
     let variables = BTreeMap::from([
         ("finding".to_string(), Value::Map(finding)),
-        (
-            "attributes".to_string(),
-            Value::Map(BTreeMap::from([("path".to_string(), Value::string(context.path))])),
-        ),
+        ("attributes".to_string(), Value::Map(attributes)),
     ]);
     let mut evaluator = Evaluator {
         variables,
@@ -440,10 +530,29 @@ pub(crate) fn evaluate_filter_with_engine_and_line_cache(
 /// supplies only `attributes["path"]` to this expression; the empty finding fields keep the
 /// evaluator forward-compatible without conflating source and finding filtering.
 pub fn evaluate_prefilter(expression: &BetterleaksExpr, path: &str) -> Result<bool> {
-    Ok(evaluate_filter(
+    let engine = BetterleaksFilterEngine::compile(std::iter::once(expression))?;
+    evaluate_prefilter_with_engine(expression, path, &engine)
+}
+
+pub(crate) fn evaluate_prefilter_with_engine(
+    expression: &BetterleaksExpr,
+    path: &str,
+    engine: &BetterleaksFilterEngine,
+) -> Result<bool> {
+    evaluate_prefilter_with_attributes(expression, path, None, engine)
+}
+
+pub(crate) fn evaluate_prefilter_with_attributes(
+    expression: &BetterleaksExpr,
+    path: &str,
+    attributes: Option<&BTreeMap<String, String>>,
+    engine: &BetterleaksFilterEngine,
+) -> Result<bool> {
+    Ok(evaluate_filter_with_engine(
         expression,
         &BetterleaksFilterContext {
             path,
+            attributes,
             secret: "",
             full_match: "",
             line: "",
@@ -456,6 +565,7 @@ pub fn evaluate_prefilter(expression: &BetterleaksExpr, path: &str) -> Result<bo
             description: "",
             captures: BTreeMap::new(),
         },
+        engine,
     )?
     .discard)
 }
@@ -486,7 +596,7 @@ impl<'a> Evaluator<'a, '_> {
             BetterleaksExpr::Binary { operator, left, right } => {
                 self.eval_binary(operator, left, right)
             }
-            BetterleaksExpr::Chain { node } => self.eval(node),
+            BetterleaksExpr::Chain { node } => Ok(self.eval_chain(node)?.unwrap_or(Value::Nil)),
             BetterleaksExpr::Member { node, property, optional, method } => {
                 if *method {
                     bail!("method reference was evaluated without being called");
@@ -555,6 +665,42 @@ impl<'a> Evaluator<'a, '_> {
         }
     }
 
+    /// `None` is an optional receiver short-circuit and must skip later indexes and arguments.
+    fn eval_chain(&mut self, expression: &BetterleaksExpr) -> Result<Option<Value<'a>>> {
+        match expression {
+            BetterleaksExpr::Member { node, property, optional, method: false } => {
+                let Some(receiver) = self.eval_chain(node)? else { return Ok(None) };
+                if *optional && receiver == Value::Nil {
+                    return Ok(None);
+                }
+                let property = self.eval(property)?;
+                self.member(receiver, property).map(Some)
+            }
+            BetterleaksExpr::Slice { node, from, to } => {
+                let Some(receiver) = self.eval_chain(node)? else { return Ok(None) };
+                let from = self.eval(from)?.as_i64()?;
+                let to = self.eval(to)?.as_i64()?;
+                self.slice(receiver, from, to).map(Some)
+            }
+            BetterleaksExpr::Call { callee, arguments } => {
+                if let BetterleaksExpr::Member { node, property, optional, method: true } =
+                    callee.as_ref()
+                {
+                    let Some(receiver) = self.eval_chain(node)? else { return Ok(None) };
+                    if *optional && receiver == Value::Nil {
+                        return Ok(None);
+                    }
+                    let method = self.eval(property)?.into_string()?;
+                    let arguments = self.eval_arguments(arguments)?;
+                    self.call_method(receiver, &method, arguments).map(Some)
+                } else {
+                    self.eval(expression).map(Some)
+                }
+            }
+            _ => self.eval(expression).map(Some),
+        }
+    }
+
     fn eval_binary(
         &mut self,
         operator: &str,
@@ -575,7 +721,10 @@ impl<'a> Evaluator<'a, '_> {
             "==" => Ok(Value::Bool(values_equal(&left, &right))),
             "!=" => Ok(Value::Bool(!values_equal(&left, &right))),
             "<" | "<=" | ">" | ">=" => {
-                let ordering = left.as_f64()?.total_cmp(&right.as_f64()?);
+                let ordering = match (&left, &right) {
+                    (Value::String(left), Value::String(right)) => left.cmp(right),
+                    _ => left.as_f64()?.total_cmp(&right.as_f64()?),
+                };
                 Ok(Value::Bool(match operator {
                     "<" => ordering.is_lt(),
                     "<=" => ordering.is_le(),
@@ -585,7 +734,9 @@ impl<'a> Evaluator<'a, '_> {
                 }))
             }
             "+" => match (left, right) {
-                (Value::Integer(left), Value::Integer(right)) => Ok(Value::Integer(left + right)),
+                (Value::Integer(left), Value::Integer(right)) => Ok(Value::Integer(
+                    left.checked_add(right).ok_or_else(|| anyhow!("integer overflow"))?,
+                )),
                 (Value::String(mut left), Value::String(right)) => {
                     left.to_mut().push_str(&right);
                     Ok(Value::String(left))
@@ -594,12 +745,37 @@ impl<'a> Evaluator<'a, '_> {
             },
             "-" => numeric_binary(left, right, |left, right| left - right),
             "*" => numeric_binary(left, right, |left, right| left * right),
-            "/" => Ok(Value::Float(left.as_f64()? / right.as_f64()?)),
-            "%" => Ok(Value::Integer(left.as_i64()? % right.as_i64()?)),
+            "/" => {
+                let right = right.as_f64()?;
+                if right == 0.0 {
+                    bail!("division by zero");
+                }
+                Ok(Value::Float(left.as_f64()? / right))
+            }
+            "%" => Ok(Value::Integer(
+                left.as_i64()?
+                    .checked_rem(right.as_i64()?)
+                    .ok_or_else(|| anyhow!("invalid integer remainder"))?,
+            )),
+            "**" | "^" => numeric_binary(left, right, f64::powf),
+            ".." => {
+                let from = left.as_i64()?;
+                let to = right.as_i64()?;
+                if to.saturating_sub(from) > 1_000_000 {
+                    bail!("range exceeds expression collection limit");
+                }
+                Ok(Value::Array((from..=to).map(Value::Integer).collect()))
+            }
             "contains" => Ok(Value::Bool(left.as_string()?.contains(right.as_string()?))),
+            "startsWith" => Ok(Value::Bool(left.as_string()?.starts_with(right.as_string()?))),
+            "endsWith" => Ok(Value::Bool(left.as_string()?.ends_with(right.as_string()?))),
+            "matches" => {
+                Ok(Value::Bool(compile_go_regex(right.as_string()?)?.is_match(left.as_string()?)))
+            }
             "in" => Ok(Value::Bool(match right {
                 Value::Array(values) => values.iter().any(|value| values_equal(&left, value)),
                 Value::String(value) => value.contains(left.as_string()?),
+                Value::Map(values) => values.contains_key(left.as_string()?),
                 _ => false,
             })),
             other => bail!("unsupported binary filter operator {other:?}"),
@@ -630,13 +806,25 @@ impl<'a> Evaluator<'a, '_> {
     }
 
     fn slice(&self, value: Value<'a>, from: i64, to: i64) -> Result<Value<'a>> {
-        let from = usize::try_from(from.max(0)).unwrap_or(usize::MAX);
-        let to = usize::try_from(to.max(0)).unwrap_or(usize::MAX);
+        let length = match &value {
+            Value::String(value) => value.chars().count(),
+            Value::Array(values) => values.len(),
+            _ => 0,
+        };
+        let index = |index: i64| {
+            usize::try_from(if index < 0 {
+                (length as i64).saturating_add(index).max(0)
+            } else {
+                index
+            })
+            .unwrap_or(usize::MAX)
+            .min(length)
+        };
+        let from = index(from);
+        let to = index(to).max(from);
         match value {
             Value::String(value) => {
-                let from = from.min(value.len());
-                let to = to.min(value.len()).max(from);
-                Ok(Value::string(String::from_utf8_lossy(&value.as_bytes()[from..to]).into_owned()))
+                Ok(Value::string(value.chars().skip(from).take(to - from).collect::<String>()))
             }
             Value::Array(values) => {
                 let from = from.min(values.len());
@@ -653,7 +841,7 @@ impl<'a> Evaluator<'a, '_> {
         arguments: &[BetterleaksExpr],
     ) -> Result<Value<'a>> {
         if let Some(name) = expression_name(callee)
-            && name.starts_with("filter.")
+            && (name.starts_with("filter.") || name.starts_with("crypto."))
         {
             return self.call_named(&name, arguments);
         }
@@ -669,14 +857,41 @@ impl<'a> Evaluator<'a, '_> {
     }
 
     fn call_named(&mut self, name: &str, arguments: &[BetterleaksExpr]) -> Result<Value<'a>> {
-        if name == "any" {
-            return self.call_any(arguments);
+        if matches!(
+            name,
+            "any"
+                | "all"
+                | "none"
+                | "one"
+                | "filter"
+                | "map"
+                | "count"
+                | "find"
+                | "findLast"
+                | "findIndex"
+                | "findLastIndex"
+        ) {
+            return self.call_collection(name, arguments);
         }
         let arguments = self.eval_arguments(arguments)?;
         match name {
+            "malformedPrivateKey" => {
+                let [input] = arguments.as_slice() else {
+                    bail!("malformedPrivateKey expects one argument");
+                };
+                Ok(Value::Bool(crate::private_key::is_malformed(input.as_string()?)))
+            }
             "filter.matchesAny" | "matchesAny" => self.matches_any(arguments),
             "filter.findMatch" | "findMatch" => self.find_match(arguments),
             "filter.containsAny" | "containsAny" => contains_any(arguments),
+            "startsWithAny" => string_set_helper(arguments, "startsWithAny"),
+            "intersects" => string_set_helper(arguments, "intersects"),
+            "crypto.sha256" => {
+                let [input] = arguments.as_slice() else {
+                    bail!("crypto.sha256 expects one argument");
+                };
+                Ok(Value::string(hex::encode(Sha256::digest(input.as_string()?.as_bytes()))))
+            }
             "filter.entropy" | "entropy" => entropy(arguments),
             "filter.tokenRatio" | "tokenRatio" => token_ratio(arguments),
             "filter.failsTokenEfficiency" | "failsTokenEfficiency" => {
@@ -684,11 +899,15 @@ impl<'a> Evaluator<'a, '_> {
             }
             "filter.setConfidence" | "setConfidence" => self.set_confidence(arguments),
             "len" | "size" => length(arguments),
-            "lower" => {
+            "lower" | "upper" => {
                 let [value] = arguments.as_slice() else {
                     bail!("lower expects one argument");
                 };
-                Ok(Value::string(value.as_string()?.to_lowercase()))
+                Ok(Value::string(if name == "lower" {
+                    value.as_string()?.to_lowercase()
+                } else {
+                    value.as_string()?.to_uppercase()
+                }))
             }
             "max" => min_or_max(arguments, true),
             "min" => min_or_max(arguments, false),
@@ -696,6 +915,12 @@ impl<'a> Evaluator<'a, '_> {
             "join" => join(arguments),
             "lastIndexOf" => last_index_of(arguments),
             "replace" => replace(arguments),
+            "type" | "string" | "int" | "float" | "trim" | "trimPrefix" | "trimSuffix"
+            | "repeat" | "indexOf" | "hasPrefix" | "hasSuffix" | "keys" | "values" | "reverse"
+            | "sort" | "uniq" | "flatten" | "concat" | "first" | "last" | "get" | "sum"
+            | "mean" | "abs" | "ceil" | "floor" | "round" | "toJSON" | "fromJSON" => {
+                simple_builtin(name, arguments)
+            }
             other => bail!("unsupported Betterleaks filter function {other:?}"),
         }
     }
@@ -704,31 +929,64 @@ impl<'a> Evaluator<'a, '_> {
         arguments.iter().map(|argument| self.eval(argument)).collect()
     }
 
-    fn call_any(&mut self, arguments: &[BetterleaksExpr]) -> Result<Value<'a>> {
+    fn call_collection(&mut self, name: &str, arguments: &[BetterleaksExpr]) -> Result<Value<'a>> {
         let [items, predicate] = arguments else {
-            bail!("any expects two arguments");
+            bail!("{name} expects two arguments");
         };
         let Value::Array(items) = self.eval(items)? else {
-            bail!("first argument to any must be an array");
+            bail!("first argument to {name} must be an array");
         };
         let previous = self.variables.get("#").cloned();
-        for item in items {
-            self.variables.insert("#".to_string(), item);
-            if self.eval(predicate)?.truthy() {
-                if let Some(previous) = previous {
-                    self.variables.insert("#".to_string(), previous);
-                } else {
-                    self.variables.remove("#");
+        let previous_index = self.variables.get("#index").cloned();
+        let result = (|| {
+            let mut output = Vec::new();
+            let mut count = 0_i64;
+            let mut found = Value::Nil;
+            for (index, item) in items.into_iter().enumerate() {
+                self.variables.insert("#".into(), item.clone());
+                self.variables.insert("#index".into(), Value::Integer(index as i64));
+                let value = self.eval(predicate)?;
+                if name == "map" {
+                    output.push(value);
+                    continue;
                 }
-                return Ok(Value::Bool(true));
+                if value.truthy() {
+                    count += 1;
+                    match name {
+                        "any" => return Ok(Value::Bool(true)),
+                        "none" => return Ok(Value::Bool(false)),
+                        "one" if count > 1 => return Ok(Value::Bool(false)),
+                        "find" => return Ok(item),
+                        "findIndex" => return Ok(Value::Integer(index as i64)),
+                        "findLast" => found = item,
+                        "findLastIndex" => found = Value::Integer(index as i64),
+                        "filter" => output.push(item),
+                        _ => {}
+                    }
+                } else if name == "all" {
+                    return Ok(Value::Bool(false));
+                }
             }
-        }
+            Ok(match name {
+                "filter" | "map" => Value::Array(output),
+                "count" => Value::Integer(count),
+                "find" | "findLast" | "findIndex" | "findLastIndex" => found,
+                "all" | "none" => Value::Bool(true),
+                "one" => Value::Bool(count == 1),
+                _ => Value::Bool(false),
+            })
+        })();
         if let Some(previous) = previous {
             self.variables.insert("#".to_string(), previous);
         } else {
             self.variables.remove("#");
         }
-        Ok(Value::Bool(false))
+        if let Some(previous) = previous_index {
+            self.variables.insert("#index".into(), previous);
+        } else {
+            self.variables.remove("#index");
+        }
+        result
     }
 
     fn set_confidence(&mut self, arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
@@ -744,8 +1002,23 @@ impl<'a> Evaluator<'a, '_> {
         let [input, patterns] = arguments.as_slice() else {
             bail!("matchesAny expects two arguments");
         };
-        let patterns = strings(patterns)?;
-        let input = input.as_string()?;
+        if let Value::Array(values) = input {
+            if values.iter().any(|value| !matches!(value, Value::String(_))) {
+                return Ok(Value::Bool(false));
+            }
+            for value in values {
+                if self.matches_any(vec![value.clone(), patterns.clone()])? == Value::Bool(true) {
+                    return Ok(Value::Bool(true));
+                }
+            }
+            return Ok(Value::Bool(false));
+        }
+        let Ok(patterns) = strings(patterns) else {
+            return Ok(Value::Bool(false));
+        };
+        let Ok(input) = input.as_string() else {
+            return Ok(Value::Bool(false));
+        };
         // Cache only the unmodified source line. Derived strings and shadowed
         // variables still evaluate normally, even when the helper appears in
         // an expression that otherwise refers to finding["line"]. The pointer
@@ -839,6 +1112,63 @@ impl<'a> Evaluator<'a, '_> {
     }
 }
 
+/// Go treats braces that do not form a counted repetition as literals; Rust requires escaping.
+/// Keep Vectorscan source patterns intact and normalize only the exact Rust helper fallback.
+#[doc(hidden)]
+pub fn compile_go_regex(pattern: &str) -> Result<Regex> {
+    if let Ok(regex) = Regex::new(pattern) {
+        return Ok(regex);
+    }
+    let mut normalized = String::with_capacity(pattern.len());
+    let mut chars = pattern.char_indices().peekable();
+    let mut in_class = false;
+    while let Some((offset, ch)) = chars.next() {
+        match ch {
+            '\\' => {
+                normalized.push(ch);
+                if let Some((_, escaped)) = chars.next() {
+                    normalized.push(escaped);
+                }
+            }
+            '[' => {
+                in_class = true;
+                normalized.push(ch);
+            }
+            ']' => {
+                in_class = false;
+                normalized.push(ch);
+            }
+            '{' if !in_class => {
+                let rest = &pattern[offset + 1..];
+                if let Some(end) = rest.find('}') {
+                    let count = &rest[..end];
+                    let valid = count.split_once(',').map_or_else(
+                        || !count.is_empty() && count.bytes().all(|byte| byte.is_ascii_digit()),
+                        |(from, to)| {
+                            !from.is_empty()
+                                && from.bytes().all(|byte| byte.is_ascii_digit())
+                                && to.bytes().all(|byte| byte.is_ascii_digit())
+                        },
+                    );
+                    if valid {
+                        normalized.push('{');
+                        normalized.push_str(count);
+                        normalized.push('}');
+                        while chars.peek().is_some_and(|(index, _)| *index <= offset + end + 1) {
+                            chars.next();
+                        }
+                        continue;
+                    }
+                }
+                normalized.push_str("\\{");
+            }
+            '}' if !in_class => normalized.push_str("\\}"),
+            _ => normalized.push(ch),
+        }
+    }
+    Regex::new(&normalized).with_context(|| format!("invalid Betterleaks regex {pattern:?}"))
+}
+
 fn expression_name(expression: &BetterleaksExpr) -> Option<String> {
     match expression {
         BetterleaksExpr::Identifier { value } => Some(value.clone()),
@@ -886,8 +1216,42 @@ fn contains_any<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
     let [input, terms] = arguments.as_slice() else {
         bail!("containsAny expects two arguments");
     };
-    let input = input.as_string()?.to_lowercase();
-    Ok(Value::Bool(strings(terms)?.into_iter().any(|term| input.contains(&term.to_lowercase()))))
+    let Some(input) = strings_or_single(input) else {
+        return Ok(Value::Bool(false));
+    };
+    let Ok(terms) = strings(terms) else {
+        return Ok(Value::Bool(false));
+    };
+    Ok(Value::Bool(
+        input.iter().any(|input| {
+            terms.iter().any(|term| input.to_lowercase().contains(&term.to_lowercase()))
+        }),
+    ))
+}
+
+fn strings_or_single<'v>(value: &'v Value<'_>) -> Option<Vec<&'v str>> {
+    match value {
+        Value::String(value) => Some(vec![value.as_ref()]),
+        Value::Array(_) => strings(value).ok(),
+        _ => None,
+    }
+}
+
+fn string_set_helper<'a>(arguments: Vec<Value<'a>>, name: &str) -> Result<Value<'a>> {
+    let [input, terms] = arguments.as_slice() else {
+        bail!("{name} expects two arguments");
+    };
+    let Some(input) = strings_or_single(input) else {
+        return Ok(Value::Bool(false));
+    };
+    let Ok(terms) = strings(terms) else {
+        return Ok(Value::Bool(false));
+    };
+    Ok(Value::Bool(input.iter().any(|input| {
+        terms
+            .iter()
+            .any(|term| if name == "intersects" { input == term } else { input.starts_with(term) })
+    })))
 }
 
 fn entropy<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
@@ -919,9 +1283,15 @@ fn token_ratio<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
         bail!("tokenRatio expects one argument");
     };
     let input = input.as_string()?;
-    let tokens = cl100k_base_singleton().encode_ordinary(input).len();
-    let ratio = if tokens == 0 { 0.0 } else { input.len() as f64 / tokens as f64 };
-    Ok(Value::Float(ratio))
+    Ok(Value::Float(token_efficiency_ratio(input)))
+}
+
+#[doc(hidden)]
+pub fn token_efficiency_ratio(input: &str) -> f64 {
+    let mut normalized = String::new();
+    let analyzed = normalize_efficiency_input(input, &mut normalized);
+    let tokens = cl100k_base_singleton().encode_ordinary(analyzed).len();
+    if tokens == 0 { 0.0 } else { analyzed.len() as f64 / tokens as f64 }
 }
 
 fn fails_token_efficiency<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
@@ -929,16 +1299,57 @@ fn fails_token_efficiency<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
         bail!("failsTokenEfficiency expects one argument");
     };
     let input = input.as_string()?;
-    let normalized;
-    let analyzed = if input.len() < 20 && (input.contains('\n') || input.contains('\r')) {
-        normalized = input.replace(['\n', '\r'], "");
-        &normalized
+    Ok(Value::Bool(fails_token_efficiency_value(input)))
+}
+
+#[doc(hidden)]
+pub fn fails_token_efficiency_value(input: &str) -> bool {
+    let mut normalized = String::new();
+    let analyzed = normalize_efficiency_input(input, &mut normalized);
+    let tokens = cl100k_base_singleton().encode_ordinary(analyzed).len();
+    if tokens == 0 {
+        return false;
+    }
+    if contains_dictionary_word(analyzed, 5) {
+        return true;
+    }
+    let threshold =
+        if analyzed.len() < 12 && contains_dictionary_word(analyzed, 4) { 2.1 } else { 2.5 };
+    analyzed.len() as f64 / tokens as f64 >= threshold
+}
+
+fn normalize_efficiency_input<'a>(input: &'a str, normalized: &'a mut String) -> &'a str {
+    if input.len() < 20 && (input.contains('\n') || input.contains('\r')) {
+        *normalized = input.replace(['\n', '\r'], "");
+        normalized.as_str()
     } else {
         input
-    };
-    let tokens = cl100k_base_singleton().encode_ordinary(analyzed).len();
-    let failed = tokens > 0 && analyzed.len() as f64 / tokens as f64 >= 2.5;
-    Ok(Value::Bool(failed))
+    }
+}
+
+static EFFICIENCY_WORDS: LazyLock<BTreeMap<usize, rustc_hash::FxHashSet<String>>> =
+    LazyLock::new(|| {
+        use std::io::Read;
+        let mut words = String::new();
+        flate2::read::GzDecoder::new(include_bytes!("../data/betterleaks-words.txt.gz").as_slice())
+            .read_to_string(&mut words)
+            .expect("bundled Betterleaks wordlist is valid gzip/UTF-8");
+        let mut by_length: BTreeMap<usize, rustc_hash::FxHashSet<String>> = BTreeMap::new();
+        for word in words.lines().filter(|word| !word.is_empty()) {
+            by_length.entry(word.len()).or_default().insert(word.to_string());
+        }
+        by_length
+    });
+
+fn contains_dictionary_word(input: &str, minimum: usize) -> bool {
+    let input = input.to_lowercase();
+    if input.len() < minimum {
+        return false;
+    }
+    EFFICIENCY_WORDS.range(minimum..=input.len()).any(|(&length, words)| {
+        (0..=input.len() - length)
+            .any(|start| input.get(start..start + length).is_some_and(|part| words.contains(part)))
+    })
 }
 
 fn length<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
@@ -946,7 +1357,7 @@ fn length<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
         bail!("len/size expects one argument");
     };
     let length = match value {
-        Value::String(value) => value.len(),
+        Value::String(value) => value.chars().count(),
         Value::Array(value) => value.len(),
         Value::Map(value) => value.len(),
         other => bail!("cannot take length of {other:?}"),
@@ -1018,19 +1429,326 @@ fn last_index_of<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
 }
 
 fn replace<'a>(arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
-    let [input, from, to] = arguments.as_slice() else {
-        bail!("replace expects three arguments");
+    let [input, from, to, rest @ ..] = arguments.as_slice() else {
+        bail!("replace expects three or four arguments");
     };
-    Ok(Value::string(input.as_string()?.replace(from.as_string()?, to.as_string()?)))
+    if rest.len() > 1 {
+        bail!("replace expects three or four arguments");
+    }
+    let output = if let Some(limit) = rest.first() {
+        let limit = limit.as_i64()?;
+        if limit < 0 {
+            input.as_string()?.replace(from.as_string()?, to.as_string()?)
+        } else {
+            input.as_string()?.replacen(from.as_string()?, to.as_string()?, limit as usize)
+        }
+    } else {
+        input.as_string()?.replace(from.as_string()?, to.as_string()?)
+    };
+    Ok(Value::string(output))
+}
+
+fn value_to_json(value: &Value<'_>) -> serde_json::Value {
+    match value {
+        Value::Nil => serde_json::Value::Null,
+        Value::Bool(value) => (*value).into(),
+        Value::Integer(value) => (*value).into(),
+        Value::Float(value) => serde_json::Number::from_f64(*value)
+            .map_or(serde_json::Value::Null, serde_json::Value::Number),
+        Value::String(value) => value.as_ref().into(),
+        Value::Array(values) => values.iter().map(value_to_json).collect(),
+        Value::Map(values) => {
+            values.iter().map(|(key, value)| (key.clone(), value_to_json(value))).collect()
+        }
+    }
+}
+
+fn value_from_json<'a>(value: serde_json::Value) -> Value<'a> {
+    match value {
+        serde_json::Value::Null => Value::Nil,
+        serde_json::Value::Bool(value) => Value::Bool(value),
+        serde_json::Value::Number(value) => value
+            .as_i64()
+            .map(Value::Integer)
+            .unwrap_or_else(|| Value::Float(value.as_f64().unwrap_or_default())),
+        serde_json::Value::String(value) => Value::string(value),
+        serde_json::Value::Array(values) => {
+            Value::Array(values.into_iter().map(value_from_json).collect())
+        }
+        serde_json::Value::Object(values) => Value::Map(
+            values.into_iter().map(|(key, value)| (key, value_from_json(value))).collect(),
+        ),
+    }
+}
+
+fn simple_builtin<'a>(name: &str, arguments: Vec<Value<'a>>) -> Result<Value<'a>> {
+    let input = arguments.first().ok_or_else(|| anyhow!("{name} expects an argument"))?;
+    let text = || input.as_string();
+    let parameter =
+        |index: usize| arguments.get(index).ok_or_else(|| anyhow!("missing argument to {name}"));
+    match name {
+        "type" => Ok(Value::string(match input {
+            Value::Nil => "nil",
+            Value::Bool(_) => "bool",
+            Value::Integer(_) => "int",
+            Value::Float(_) => "float",
+            Value::String(_) => "string",
+            Value::Array(_) => "array",
+            Value::Map(_) => "map",
+        })),
+        "string" => Ok(Value::string(match input {
+            Value::String(value) => value.to_string(),
+            _ => value_to_json(input).to_string(),
+        })),
+        "int" => Ok(Value::Integer(match input {
+            Value::String(value) => value.parse()?,
+            _ => input.as_i64()?,
+        })),
+        "float" => Ok(Value::Float(match input {
+            Value::String(value) => value.parse()?,
+            _ => input.as_f64()?,
+        })),
+        "trim" => Ok(Value::string(if let Some(characters) = arguments.get(1) {
+            text()?
+                .trim_matches(|ch| {
+                    characters.as_string().is_ok_and(|characters| characters.contains(ch))
+                })
+                .to_string()
+        } else {
+            text()?.trim().to_string()
+        })),
+        "trimPrefix" => {
+            let text = text()?;
+            Ok(Value::string(
+                text.strip_prefix(parameter(1)?.as_string()?).unwrap_or(text).to_string(),
+            ))
+        }
+        "trimSuffix" => {
+            let text = text()?;
+            Ok(Value::string(
+                text.strip_suffix(parameter(1)?.as_string()?).unwrap_or(text).to_string(),
+            ))
+        }
+        "repeat" => {
+            let count = usize::try_from(parameter(1)?.as_i64()?)?;
+            if text()?.len().saturating_mul(count) > 16 * 1024 * 1024 {
+                bail!("repeat exceeds expression size limit");
+            }
+            Ok(Value::string(text()?.repeat(count)))
+        }
+        "indexOf" => {
+            Ok(Value::Integer(text()?.find(parameter(1)?.as_string()?).map_or(-1, |index| {
+                text().map(|text| text[..index].chars().count() as i64).unwrap_or(-1)
+            })))
+        }
+        "hasPrefix" => Ok(Value::Bool(text()?.starts_with(parameter(1)?.as_string()?))),
+        "hasSuffix" => Ok(Value::Bool(text()?.ends_with(parameter(1)?.as_string()?))),
+        "keys" | "values" => {
+            let Value::Map(values) = input else {
+                bail!("{name} requires a map");
+            };
+            Ok(Value::Array(if name == "keys" {
+                values.keys().cloned().map(Value::string).collect()
+            } else {
+                values.values().cloned().collect()
+            }))
+        }
+        "get" => match input {
+            Value::Map(values) => {
+                Ok(values.get(parameter(1)?.as_string()?).cloned().unwrap_or(Value::Nil))
+            }
+            Value::Array(values) => {
+                let index = parameter(1)?.as_i64()?;
+                let index = if index < 0 { values.len() as i64 + index } else { index };
+                Ok(usize::try_from(index)
+                    .ok()
+                    .and_then(|index| values.get(index))
+                    .cloned()
+                    .unwrap_or(Value::Nil))
+            }
+            _ => Ok(Value::Nil),
+        },
+        "abs" | "ceil" | "floor" | "round" => {
+            let value = input.as_f64()?;
+            Ok(Value::Float(match name {
+                "abs" => value.abs(),
+                "ceil" => value.ceil(),
+                "floor" => value.floor(),
+                _ => value.round(),
+            }))
+        }
+        "toJSON" => Ok(Value::string(serde_json::to_string(&value_to_json(input))?)),
+        "fromJSON" => Ok(value_from_json(serde_json::from_str(text()?)?)),
+        _ => {
+            let Value::Array(values) = input else {
+                bail!("{name} expects an array");
+            };
+            match name {
+                "first" => Ok(values.first().cloned().unwrap_or(Value::Nil)),
+                "last" => Ok(values.last().cloned().unwrap_or(Value::Nil)),
+                "reverse" => Ok(Value::Array(values.iter().rev().cloned().collect())),
+                "concat" => {
+                    let mut values = values.clone();
+                    for argument in &arguments[1..] {
+                        let Value::Array(extra) = argument else {
+                            bail!("concat expects arrays");
+                        };
+                        values.extend(extra.iter().cloned());
+                    }
+                    Ok(Value::Array(values))
+                }
+                "flatten" => {
+                    fn flatten<'a>(value: Value<'a>, out: &mut Vec<Value<'a>>) {
+                        if let Value::Array(values) = value {
+                            for value in values {
+                                flatten(value, out);
+                            }
+                        } else {
+                            out.push(value);
+                        }
+                    }
+                    let mut out = Vec::new();
+                    for value in values {
+                        flatten(value.clone(), &mut out);
+                    }
+                    Ok(Value::Array(out))
+                }
+                "uniq" => {
+                    let mut out = Vec::new();
+                    for value in values {
+                        if !out.iter().any(|seen| values_equal(seen, value)) {
+                            out.push(value.clone());
+                        }
+                    }
+                    Ok(Value::Array(out))
+                }
+                "sort" => {
+                    let mut values = values.clone();
+                    values.sort_by(|left, right| match (left, right) {
+                        (Value::String(left), Value::String(right)) => left.cmp(right),
+                        _ => left
+                            .as_f64()
+                            .unwrap_or_default()
+                            .total_cmp(&right.as_f64().unwrap_or_default()),
+                    });
+                    if arguments
+                        .get(1)
+                        .is_some_and(|value| value.as_string().is_ok_and(|value| value == "desc"))
+                    {
+                        values.reverse();
+                    }
+                    Ok(Value::Array(values))
+                }
+                "sum" | "mean" => {
+                    let sum = values
+                        .iter()
+                        .map(Value::as_f64)
+                        .collect::<Result<Vec<_>>>()?
+                        .iter()
+                        .sum::<f64>();
+                    Ok(Value::Float(if name == "mean" && !values.is_empty() {
+                        sum / values.len() as f64
+                    } else {
+                        sum
+                    }))
+                }
+                _ => bail!("unsupported filter builtin {name:?}"),
+            }
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn parse(source: &str) -> BetterleaksExpr {
+        serde_json::from_value(crate::betterleaks::parse_custom_expression(source).unwrap())
+            .unwrap()
+    }
+
+    #[test]
+    fn supports_v2_filter_helpers_and_native_collection_operations() {
+        for source in [
+            r#"startsWithAny(["read:repo", "write:user"], ["write:"])"#,
+            r#"!startsWithAny("WRITE:user", ["write:"])"#,
+            r#"intersects(["read", "admin"], ["admin"]) && !intersects("read:repo", ["read"])"#,
+            r#"!intersects(["admin", 42], ["admin"]) && !containsAny(["admin", 42], ["admin"])"#,
+            r#"containsAny(["read", "ADMIN"], ["admin"])"#,
+            r#"matchesAny(["read", "admin"], [`^adm`]) && !matchesAny(["admin", 42], [`^adm`])"#,
+            r#"matchesAny("", [`^$`]) && !matchesAny("abc", [`^$`]) && matchesAny("abc", [`^`])"#,
+            r#"crypto.sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad""#,
+            r#"let patterns = [`^adm`]; matchesAny("admin", patterns)"#,
+            r#"let pattern = `adm[a-z]+`; findMatch("an admin token", pattern) == "admin""#,
+            r#"all(1..3, {# < 4}) && none([1,2], {# > 2}) && one([1,2], {# > 1})"#,
+            r#"map(filter([1,2,3], {# > 1}), {# * 2}) == [4,6]"#,
+            r#"findLast([1,2,3], {# < 3}) == 2 && findIndex([1,2], {# == 2}) == 1"#,
+            r#"count([1,2,3], {# >= 2}) == 2 && findLastIndex([1,2,3], {# < 3}) == 1"#,
+            r#"let xs = [1,2]; all(xs, {any(xs, {# == 2}) && # <= 2})"#,
+            r#"len("é😊") == 2 && "é😊"[-1:] == "😊""#,
+            r#""abc" startsWith "ab" && "abc" endsWith "bc" && "abc" matches `^a`"#,
+            r#"replace("a-a-a", "a", "b", 2) == "b-b-a" && 2 ** 3 == 8"#,
+            r#"sort(uniq(flatten([[3,1],[1,2]]))) == [1,2,3]"#,
+            r#"keys({a:1}) == ["a"] && get({a:1}, "a") == 1 && "a" in {a:1}"#,
+            r#"fromJSON(toJSON({a: [1,2]})).a == [1,2] && upper(trim(" abc ")) == "ABC""#,
+        ] {
+            assert!(
+                evaluate_filter(&parse(source), &context("token", "source.rs")).unwrap().discard,
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
+    fn optional_chains_skip_later_indexes_and_arguments() {
+        for source in [
+            r#"({})?.missing?.captures[1 % 0] ?? "fallback" == "fallback""#,
+            r#"let object = {}; (object.missing?.captures[1 % 0] ?? "fallback") == "fallback""#,
+            r#"let object = {}; (object.missing?.replace(string(1 % 0), "x") ?? "fallback") == "fallback""#,
+        ] {
+            assert!(
+                evaluate_filter(&parse(source), &context("token", "source.rs")).unwrap().discard,
+                "{source}"
+            );
+        }
+        assert!(evaluate_filter(&parse("1 % 0 == 0"), &context("token", "source.rs")).is_err());
+    }
+
+    #[test]
+    fn token_efficiency_uses_upstream_wordlist_and_normalization() {
+        let secret = "linkedinX9qB2mK7pR4zT8";
+        assert!(fails_token_efficiency_value(secret));
+        assert!(token_efficiency_ratio(secret) < 2.5);
+        assert!(!fails_token_efficiency_value("X9qB2mK7pR4zT8"));
+        assert_eq!(token_efficiency_ratio("test\r\n"), token_efficiency_ratio("test"));
+        assert!(!fails_token_efficiency_value(""));
+        assert!(contains_dictionary_word("1PASSword9", 5));
+        assert!(!contains_dictionary_word("abc", 5));
+    }
+
+    #[test]
+    fn go_literal_braces_preserve_helper_regex_semantics() {
+        let regex = compile_go_regex(r"^\$(?:\d+|{\d+})$").unwrap();
+        assert!(regex.is_match("${12}"));
+        assert!(regex.is_match("$12"));
+        assert!(!regex.is_match("$name"));
+        assert!(compile_go_regex(r"^a{2,3}{literal}$").unwrap().is_match("aaa{literal}"));
+        assert!(compile_go_regex("[").is_err());
+    }
+
+    #[test]
+    fn finding_filters_can_use_supplied_source_metadata() {
+        let attributes =
+            BTreeMap::from([("git.author_email".into(), "automation@example.test".into())]);
+        let mut context = context("token", "source.rs");
+        context.attributes = Some(&attributes);
+        assert!(evaluate_filter(&parse(r#"attributes["git.author_email"] == "automation@example.test" && attributes.path == "source.rs""#), &context).unwrap().discard);
+    }
+
     fn context<'a>(secret: &'a str, path: &'a str) -> BetterleaksFilterContext<'a> {
         BetterleaksFilterContext {
             path,
+            attributes: None,
             secret,
             full_match: secret,
             line: secret,

@@ -224,6 +224,7 @@ pub async fn map_access_from_uri(uri: &str) -> Result<AccessMapResult> {
         risk_notes,
         token_details: None,
         provider_metadata: Some(ProviderMetadata {
+            betterleaks_analysis: None,
             version: Some(server_version),
             enterprise: None,
             authorization_evidence: None,

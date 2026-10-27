@@ -5,6 +5,9 @@ use clap::{Args, ValueHint};
 /// Map one known credential to its effective identity and blast radius.
 #[derive(Args, Debug, Clone)]
 pub struct BlastRadiusArgs {
+    #[command(flatten)]
+    pub analysis: super::access_map::BlastRadiusOptions,
+
     /// Rule ID or prefix to use for direct blast-radius mapping
     #[arg(long)]
     pub rule: Option<String>,

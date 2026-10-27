@@ -150,6 +150,8 @@ pub struct Matcher<'a> {
 
     /// Whether matches should honour `ignore_if_contains` requirements.
     respect_ignore_if_contains: bool,
+    /// Metadata acquisition is driven by the loaded expressions, computed once per worker.
+    source_attribute_keys: std::collections::BTreeSet<String>,
 }
 
 /// This `Drop` implementation updates the `global_stats` with the local stats
@@ -216,6 +218,7 @@ impl<'a> Matcher<'a> {
                 InlineIgnoreConfig::new(extra_ignore_directives)
             },
             respect_ignore_if_contains,
+            source_attribute_keys: rules_db.source_attribute_keys(),
         })
     }
 
@@ -259,6 +262,7 @@ impl<'a> Matcher<'a> {
         blob: &'b Blob,
         origin: &OriginSet,
         filename: &str,
+        source_attributes: &std::collections::BTreeMap<String, String>,
         redact: bool,
         matches: &mut Vec<BlobMatch<'b>>,
         previous_matches: &mut FxHashMap<usize, MatchSpans>,
@@ -315,6 +319,7 @@ impl<'a> Matcher<'a> {
                 blob,
                 origin,
                 filename,
+                source_attributes,
                 redact,
                 matches,
                 previous_matches,
@@ -340,6 +345,7 @@ impl<'a> Matcher<'a> {
         blob: &'b Blob,
         origin: &OriginSet,
         filename: &str,
+        source_attributes: &std::collections::BTreeMap<String, String>,
         redact: bool,
         matches: &mut Vec<BlobMatch<'b>>,
         previous_matches: &mut FxHashMap<usize, MatchSpans>,
@@ -360,6 +366,9 @@ impl<'a> Matcher<'a> {
         'a: 'b,
     {
         let rules_db = self.rules_db;
+        // A source path does not change between candidate hits in this segment.
+        // In particular, rejected rules must not recheck it for every endpoint.
+        let mut matching_paths = FxHashMap::default();
         for &RawMatch { rule_id, end_idx } in self.user_data.raw_matches_scratch.iter().rev() {
             let rule_id_usize: usize = rule_id as usize;
             if betterleaks_path_prefiltered && rules_db.is_betterleaks_rule(rule_id_usize) {
@@ -387,7 +396,8 @@ impl<'a> Matcher<'a> {
                 }
                 (end_idx_usize.saturating_sub(RAW_MATCH_LOOKBACK), end_idx_usize)
             };
-            if !rule.matches_path(filename) {
+            if !*matching_paths.entry(rule_id_usize).or_insert_with(|| rule.matches_path(filename))
+            {
                 continue;
             }
             let before_len = matches.len();
@@ -426,6 +436,7 @@ impl<'a> Matcher<'a> {
                     false,
                     redact,
                     filename,
+                    Some(source_attributes),
                     self.profiler.as_ref(),
                     self.respect_ignore_if_contains,
                     &self.inline_ignore_config,
@@ -477,23 +488,35 @@ impl<'a> Matcher<'a> {
         // may have several origins; Betterleaks candidates survive when any path survives its
         // global source prefilter, while rules from other sources are never governed by it.
         let mut filename = None;
+        let mut source_attributes = None;
         let mut saw_path = false;
         let mut betterleaks_path_prefiltered = true;
-        for candidate in origin.iter().filter_map(|item| item.blob_path()) {
+        for item in origin.iter() {
+            let Some(candidate) = item.blob_path() else {
+                continue;
+            };
             saw_path = true;
             let candidate = candidate.to_string_lossy().into_owned();
+            let attributes =
+                filter::source_attributes(item, &candidate, &self.source_attribute_keys);
             if filename.is_none() {
                 filename = Some(candidate.clone());
+                source_attributes = Some(attributes.clone());
             }
-            if !self.rules_db.is_path_prefiltered(&candidate)? {
+            if !self.rules_db.is_source_prefiltered(&candidate, &attributes)? {
                 filename = Some(candidate);
+                source_attributes = Some(attributes);
                 betterleaks_path_prefiltered = false;
                 break;
             }
         }
         let filename = filename.unwrap_or_else(|| "unknown_file".to_string());
+        let source_attributes = source_attributes.unwrap_or_else(|| {
+            filter::source_attributes(origin.first(), &filename, &self.source_attribute_keys)
+        });
         if !saw_path {
-            betterleaks_path_prefiltered = self.rules_db.is_path_prefiltered(&filename)?;
+            betterleaks_path_prefiltered =
+                self.rules_db.is_source_prefiltered(&filename, &source_attributes)?;
         }
         if betterleaks_path_prefiltered && !self.rules_db.has_non_betterleaks_rules() {
             return Ok(ScanResult::New(Vec::new()));
@@ -517,10 +540,43 @@ impl<'a> Matcher<'a> {
 
         let blob_len = blob.len();
         let mut matches = Vec::new();
+        for (rule_index, rule) in self.rules_db.path_only_rules_for_source(
+            &filename,
+            Some(&source_attributes),
+            blob.bytes(),
+        )? {
+            matches.push(BlobMatch {
+                rule,
+                blob_id: blob.id_ref(),
+                matching_input: &[],
+                matching_input_offset_span: OffsetSpan { start: 0, end: 0 },
+                association_offset_span: OffsetSpan { start: 0, end: 0 },
+                captures: SerializableCaptures {
+                    captures: smallvec::smallvec![SerializableCapture {
+                        name: Some(crate::util::intern("TOKEN")),
+                        match_number: 0,
+                        start: 0,
+                        end: 0,
+                        value: "".into(),
+                    }],
+                },
+                validation_response_body: None,
+                validation_response_status: StatusCode::CONTINUE,
+                validation_success: false,
+                validation_outcome: ValidationOutcome::NotAttempted,
+                calculated_entropy: 0.0,
+                is_base64: false,
+                dependent_captures: Default::default(),
+                ambiguous_dependencies: Default::default(),
+                dependency_candidates: Default::default(),
+            });
+            match_rule_indices.push(rule_index);
+        }
         self.scan_and_process_raw_matches(
             blob,
             origin,
             &filename,
+            &source_attributes,
             redact,
             &mut matches,
             &mut previous_matches,
@@ -585,6 +641,7 @@ impl<'a> Matcher<'a> {
                         true,
                         redact,
                         &filename,
+                        Some(&source_attributes),
                         self.profiler.as_ref(),
                         self.respect_ignore_if_contains,
                         &self.inline_ignore_config,
@@ -621,6 +678,59 @@ impl<'a> Matcher<'a> {
         );
         associate_betterleaks_components(blob.bytes(), &mut matches, self.resources);
         suppress_credential_uri_fallbacks(&mut matches);
+        if matches.iter().any(|finding| finding.rule.syntax().specificity != 0) {
+            let lines = kingfisher_scanner::__cli_internals::LineIndex::new(blob.bytes());
+            let line_starts = std::iter::once(0)
+                .chain(
+                    blob.bytes()
+                        .iter()
+                        .enumerate()
+                        .filter_map(|(index, byte)| (*byte == b'\n').then_some(index + 1)),
+                )
+                .collect::<Vec<_>>();
+            let keep = kingfisher_scanner::__cli_internals::specificity_keep(
+                matches.iter().map(|finding| {
+                    (
+                        finding.rule.as_ref(),
+                        lines
+                            .bounds(
+                                finding.matching_input_offset_span.start,
+                                finding.matching_input_offset_span.end,
+                            )
+                            .0,
+                        finding
+                            .captures
+                            .captures
+                            .first()
+                            .map_or(finding.matching_input, |capture| {
+                                capture.raw_value().as_bytes()
+                            }),
+                    )
+                }),
+                |primary, component, dependency| {
+                    component_is_within(
+                        blob.bytes(),
+                        &line_starts,
+                        matches[primary].association_offset_span,
+                        matches[component].association_offset_span,
+                        dependency.within.as_deref().unwrap_or("0"),
+                    )
+                },
+                &kingfisher_scanner::ScanControl::default(),
+            )
+            .expect("unlimited scan cannot be cancelled");
+            let mut index = 0;
+            matches.retain_mut(|finding| {
+                if keep.suppress_reporting[index] {
+                    let mut rule = finding.rule.as_ref().clone();
+                    rule.suppress_runtime_reporting();
+                    finding.rule = Arc::new(rule);
+                }
+                let retain = keep.keep[index];
+                index += 1;
+                retain
+            });
+        }
         deduplicate_imported_catalog_matches(&mut matches);
 
         // Finalize
@@ -687,9 +797,10 @@ fn deduplicate_imported_catalog_matches(matches: &mut Vec<BlobMatch<'_>>) {
 }
 
 #[cfg(test)]
-use kingfisher_scanner::__cli_internals::{component_candidate_range, component_is_within};
+use kingfisher_scanner::__cli_internals::component_candidate_range;
 use kingfisher_scanner::__cli_internals::{
-    component_candidate_range_with_window, component_is_within_window, parse_component_window,
+    component_candidate_range_with_window, component_is_within, component_is_within_window,
+    parse_component_window,
 };
 
 fn associate_betterleaks_components<'a>(
@@ -782,11 +893,72 @@ fn associate_betterleaks_components<'a>(
     } else {
         Default::default()
     };
-    let mut global_values = FxHashMap::<&str, std::collections::BTreeSet<String>>::default();
+    #[derive(Clone, PartialEq, Eq, PartialOrd, Ord)]
+    struct ComponentValue {
+        secret: String,
+        captures: std::collections::BTreeMap<String, String>,
+    }
+    let mut capture_names = FxHashMap::default();
+    let mut component_values = FxHashMap::default();
+    let mut component_value = |index: usize, structured: bool| {
+        component_values
+            .entry((index, structured))
+            .or_insert_with(|| {
+                let candidate = &matches[index];
+                let mut value = ComponentValue {
+                    secret: candidate.captures.captures.first().map_or_else(
+                        || String::from_utf8_lossy(candidate.matching_input).into_owned(),
+                        |capture| capture.raw_value().to_string(),
+                    ),
+                    captures: Default::default(),
+                };
+                if !structured {
+                    return value;
+                }
+                let names = capture_names.entry(candidate.rule.id()).or_insert_with(|| {
+                    candidate
+                        .rule
+                        .syntax()
+                        .as_anchored_regex()
+                        .map(|regex| {
+                            regex
+                                .capture_names()
+                                .flatten()
+                                .map(str::to_owned)
+                                .collect::<std::collections::BTreeSet<_>>()
+                        })
+                        .unwrap_or_default()
+                });
+                value.captures = candidate
+                    .captures
+                    .captures
+                    .iter()
+                    .filter_map(|capture| {
+                        capture
+                            .name
+                            .filter(|name| names.contains(*name))
+                            .map(|name| (name.to_owned(), capture.raw_value().to_owned()))
+                    })
+                    .collect();
+                value
+            })
+            .clone()
+    };
+    let mut global_values =
+        FxHashMap::<(&str, bool), std::collections::BTreeSet<ComponentValue>>::default();
     let mut candidates = vec![std::collections::BTreeMap::new(); matches.len()];
     let mut associated = vec![std::collections::BTreeMap::new(); matches.len()];
+    let mut associated_components = vec![std::collections::BTreeMap::new(); matches.len()];
+    let mut component_candidates = vec![std::collections::BTreeMap::new(); matches.len()];
     let mut ambiguous = vec![std::collections::BTreeMap::new(); matches.len()];
     for (primary_index, primary) in matches.iter().enumerate().filter(|(index, _)| keep[*index]) {
+        let structured = matches!(
+            primary.rule.syntax().validation,
+            Some(crate::rules::Validation::Betterleaks(_))
+        ) || matches!(
+            primary.rule.syntax().revocation,
+            Some(crate::rules::Revocation::Betterleaks(_))
+        );
         let supports_candidates =
             primary.rule.syntax().depends_on_rule.iter().flatten().any(|dep| dep.verify_candidates)
                 && crate::validation::candidates::supported(primary.rule.syntax());
@@ -804,24 +976,25 @@ fn associate_betterleaks_components<'a>(
                     .as_deref()
                     .is_none_or(|within| within.trim().is_empty() || within.trim() == "0")
             {
-                let values = global_values.entry(&dependency.rule_id).or_insert_with(|| {
-                    candidate_index
-                        .candidates(&dependency.rule_id, 0..usize::MAX)
-                        .filter(|&&(_, index)| keep[index])
-                        .map(|&(_, index)| {
-                            let candidate = &matches[index];
-                            candidate.captures.captures.first().map_or_else(
-                                || String::from_utf8_lossy(candidate.matching_input).into_owned(),
-                                |capture| capture.raw_value().to_string(),
-                            )
-                        })
-                        .collect()
-                });
+                let values =
+                    global_values.entry((&dependency.rule_id, structured)).or_insert_with(|| {
+                        candidate_index
+                            .candidates(&dependency.rule_id, 0..usize::MAX)
+                            .filter(|&&(_, index)| keep[index])
+                            .map(|&(_, index)| component_value(index, structured))
+                            .collect()
+                    });
                 let variable = dependency.variable.to_uppercase();
                 if values.len() > 1 {
                     ambiguous[primary_index].insert(variable, values.len());
                 } else if let Some(value) = values.first() {
-                    associated[primary_index].insert(variable, value.clone());
+                    associated[primary_index].insert(variable, value.secret.clone());
+                    if structured {
+                        associated_components[primary_index].insert(
+                            dependency.rule_id.clone(),
+                            serde_json::json!({"secret":value.secret,"captures":value.captures}),
+                        );
+                    }
                 }
                 continue;
             }
@@ -855,10 +1028,7 @@ fn associate_betterleaks_components<'a>(
                         )
                     })
                 {
-                    let value = candidate.captures.captures.first().map_or_else(
-                        || String::from_utf8_lossy(candidate.matching_input).into_owned(),
-                        |capture| capture.raw_value().to_string(),
-                    );
+                    let value = component_value(index, structured);
                     if try_candidates {
                         let matching_name = family.as_ref().is_some_and(|name| {
                             candidate_context::assignment_family(
@@ -897,14 +1067,38 @@ fn associate_betterleaks_components<'a>(
                     if !resources.unlimited {
                         ranked.truncate(crate::validation::candidates::MAX_COMBINATIONS);
                     }
-                    candidates[primary_index].insert(
-                        variable.clone(),
-                        ranked.into_iter().map(|(_, value)| value).collect(),
-                    );
+                    if structured {
+                        let mut snapshots = std::collections::BTreeMap::new();
+                        let mut identifiers = Vec::new();
+                        for (index, (_, value)) in ranked.into_iter().enumerate() {
+                            let identifier = index.to_string();
+                            snapshots.insert(
+                                identifier.clone(),
+                                serde_json::json!({
+                                    "rule_id":dependency.rule_id, "secret":value.secret,
+                                    "captures":value.captures,
+                                }),
+                            );
+                            identifiers.push(identifier);
+                        }
+                        component_candidates[primary_index].insert(variable.clone(), snapshots);
+                        candidates[primary_index].insert(variable.clone(), identifiers);
+                    } else {
+                        candidates[primary_index].insert(
+                            variable.clone(),
+                            ranked.into_iter().map(|(_, value)| value.secret).collect(),
+                        );
+                    }
                 }
                 ambiguous[primary_index].insert(variable, values.len());
             } else if let Some(value) = values.into_iter().next() {
-                associated[primary_index].insert(variable, value);
+                associated[primary_index].insert(variable, value.secret.clone());
+                if structured {
+                    associated_components[primary_index].insert(
+                        dependency.rule_id.clone(),
+                        serde_json::json!({"secret":value.secret,"captures":value.captures}),
+                    );
+                }
             }
         }
     }
@@ -912,6 +1106,20 @@ fn associate_betterleaks_components<'a>(
     let mut index = 0;
     matches.retain_mut(|finding| {
         finding.dependent_captures.append(&mut associated[index]);
+        if !associated_components[index].is_empty() {
+            finding.dependent_captures.insert(
+                "__BETTERLEAKS_COMPONENTS".into(),
+                serde_json::to_string(&associated_components[index])
+                    .expect("component strings serialize"),
+            );
+        }
+        if !component_candidates[index].is_empty() {
+            finding.dependent_captures.insert(
+                "__BETTERLEAKS_COMPONENT_CANDIDATES".into(),
+                serde_json::to_string(&component_candidates[index])
+                    .expect("component strings serialize"),
+            );
+        }
         finding.ambiguous_dependencies.append(&mut ambiguous[index]);
         finding.dependency_candidates.append(&mut candidates[index]);
         let retain = keep[index];
@@ -1082,6 +1290,112 @@ mod test {
             .collect())
     }
 
+    fn scan_owned_test_rules(rules: Vec<Rule>, input: &[u8]) -> Result<Vec<OwnedBlobMatch>> {
+        let rules_db = RulesDatabase::from_rules(rules)?;
+        let seen = BlobIdMap::new();
+        let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let mut matcher =
+            Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
+        let blob = Blob::from_bytes(input.to_vec());
+        let origin = OriginSet::from(Origin::from_file(PathBuf::from("components.txt")));
+        let ScanResult::New(matches) =
+            matcher.scan_blob(&blob, &origin, None, false, true, true)?
+        else {
+            panic!("deduplication is disabled");
+        };
+        Ok(matches.into_iter().map(OwnedBlobMatch::from_blob_match).collect())
+    }
+
+    #[test]
+    fn betterleaks_component_snapshots_preserve_named_captures_and_distinct_identities()
+    -> Result<()> {
+        let helper = compatibility_rule(
+            "custom.helper",
+            r"(?P<ClientId>client_[a-z0-9]{8}):(?P<Realm>[a-z]+)",
+            Confidence::High,
+            None,
+            vec![],
+            false,
+        );
+        for within in [None, Some("3L")] {
+            for (structured, verify_candidates) in [(true, false), (true, true), (false, false)] {
+                let mut syntax = compatibility_rule(
+                    "custom.primary",
+                    r"(?P<PrimaryKey>PRIMARY_[A-Z0-9]{8})",
+                    Confidence::High,
+                    None,
+                    vec![DependsOnRule {
+                        rule_id: "custom.helper".into(),
+                        variable: "COMPONENT".into(),
+                        within: within.map(str::to_owned),
+                        optional: false,
+                        verify_candidates,
+                    }],
+                    true,
+                )
+                .syntax()
+                .clone();
+                if structured {
+                    syntax.validation = Some(serde_json::from_value(serde_json::json!({
+                        "type":"Betterleaks", "content":{
+                            "expression":"http.get(\"https://example.invalid/check\").status == 200",
+                            "components":{"helper":"COMPONENT"}
+                        }
+                    }))?);
+                }
+                let rules = vec![helper.clone(), Rule::new(syntax.clone())];
+                let results = scan_owned_test_rules(
+                    rules.clone(),
+                    b"PRIMARY_ABCDEFGH client_abcd1234:east client_abcd1234:east",
+                )?;
+                let primary = results.iter().find(|m| m.rule.id() == "custom.primary").unwrap();
+                assert!(primary.ambiguous_dependencies.is_empty());
+                assert_eq!(primary.dependent_captures["COMPONENT"], "client_abcd1234");
+                if structured {
+                    let context: serde_json::Value = serde_json::from_str(
+                        &primary.dependent_captures["__BETTERLEAKS_COMPONENTS"],
+                    )?;
+                    assert_eq!(
+                        context["custom.helper"]["captures"],
+                        serde_json::json!({
+                            "ClientId":"client_abcd1234", "Realm":"east"
+                        })
+                    );
+                    let mut globals = liquid::Object::new();
+                    crate::validation::populate_betterleaks_globals(primary, &mut globals);
+                    assert_eq!(
+                        serde_json::to_value(&globals["__BETTERLEAKS_FINDING_CAPTURES"])?,
+                        serde_json::json!({"PrimaryKey":"PRIMARY_ABCDEFGH"})
+                    );
+                    assert!(
+                        serde_json::to_value(&globals["__BETTERLEAKS_COMPONENTS"])?.is_object()
+                    );
+                }
+                let results = scan_owned_test_rules(
+                    rules,
+                    b"PRIMARY_ABCDEFGH client_abcd1234:east client_abcd1234:west",
+                )?;
+                let primary = results.iter().find(|m| m.rule.id() == "custom.primary").unwrap();
+                if structured {
+                    assert_eq!(primary.ambiguous_dependencies["COMPONENT"], 2);
+                    assert!(!primary.dependent_captures.contains_key("COMPONENT"));
+                    if verify_candidates {
+                        assert_eq!(primary.dependency_candidates["COMPONENT"].len(), 2);
+                        assert!(crate::validation::candidates::ready(primary));
+                        let context: serde_json::Value = serde_json::from_str(
+                            &primary.dependent_captures["__BETTERLEAKS_COMPONENT_CANDIDATES"],
+                        )?;
+                        assert_eq!(context["COMPONENT"].as_object().unwrap().len(), 2);
+                    }
+                } else {
+                    assert!(primary.ambiguous_dependencies.is_empty());
+                    assert_eq!(primary.dependent_captures["COMPONENT"], "client_abcd1234");
+                }
+            }
+        }
+        Ok(())
+    }
+
     fn compatibility_rule(
         id: &str,
         pattern: &str,
@@ -1108,8 +1422,13 @@ mod test {
             path: None,
             betterleaks_filter: filter,
             betterleaks_secret_group: Some(1),
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         })
     }
 
@@ -1645,8 +1964,10 @@ mod test {
                 path: None,
                 betterleaks_filter: None,
                 betterleaks_secret_group: None,
+                specificity: 0,                tags: Vec::new(), keywords: Vec::new(),                betterleaks_path_only: false,
                 authoritative: true,
                 vectorscan_compatible: true,
+                fallbacks: Vec::new(),
             });
 
             let rules_db  = RulesDatabase::from_rules(vec![rule]).unwrap();
@@ -1704,6 +2025,7 @@ mod test {
                 request: HttpRequest {
                     method: "GET".to_string(),
                     url: "https://example.com".to_string(),
+                    fallback_urls: Vec::new(),
                     headers: BTreeMap::new(),
                     body: None,
                     response_matcher: Some(vec![]),
@@ -1734,8 +2056,13 @@ mod test {
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         })];
         let rules_db = RulesDatabase::from_rules(rules)?;
         let input = "some test data for vectorscan";
@@ -1789,8 +2116,13 @@ mod test {
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         })];
 
         let rules_db = RulesDatabase::from_rules(rules)?;
@@ -1863,8 +2195,13 @@ mod test {
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         })];
 
         let rules_db = RulesDatabase::from_rules(rules)?;
@@ -1917,8 +2254,13 @@ mod test {
             path: Some(r"(?:^|/)src/nested/config\.txt$".into()),
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
             confidence: Confidence::High,
             min_entropy: 0.0,
             visible: true,
@@ -1945,15 +2287,21 @@ mod test {
             false,
             true,
         )?;
-        let blob = Blob::from_bytes(b"secret_abcd1234".to_vec());
-        let origin = OriginSet::from(Origin::from_file(PathBuf::from("src/nested/config.txt")));
-
-        let ScanResult::New(matches) =
-            matcher.scan_blob(&blob, &origin, None, false, false, false)?
-        else {
-            panic!("fresh blob should return a new scan result");
-        };
-        assert_eq!(matches.len(), 1);
+        let blob = Blob::from_bytes(b"secret_abcd1234\n".repeat(1000));
+        for (path, expected) in [
+            ("other/config.txt", 0),
+            ("src/nested/config.txt", 1000),
+            ("other/config.txt", 0),
+            ("src/nested/config.txt", 1000),
+        ] {
+            let origin = OriginSet::from(Origin::from_file(PathBuf::from(path)));
+            let ScanResult::New(matches) =
+                matcher.scan_blob(&blob, &origin, None, false, true, true)?
+            else {
+                panic!("deduplication is disabled");
+            };
+            assert_eq!(matches.len(), expected, "{path}");
+        }
         Ok(())
     }
 
@@ -1968,8 +2316,13 @@ mod test {
                 path: None,
                 betterleaks_filter: None,
                 betterleaks_secret_group: None,
+                specificity: 0,
+                tags: Vec::new(),
+                betterleaks_path_only: false,
+                keywords: Vec::new(),
                 authoritative: true,
                 vectorscan_compatible: true,
+                fallbacks: Vec::new(),
                 confidence: Confidence::High,
                 min_entropy: 0.0,
                 visible: true,
@@ -2028,6 +2381,68 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
                 "veles.test/pathprefilter",
             ]
         );
+        Ok(())
+    }
+
+    #[test]
+    fn betterleaks_source_attributes_reach_prefilters_and_raw_and_decoded_finding_filters()
+    -> Result<()> {
+        use crate::rules::BetterleaksExpr as Expr;
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let attribute_eq = |key: &str, value: &str| Expr::Binary {
+            operator: "==".into(),
+            left: Box::new(Expr::Member {
+                node: Box::new(Expr::Identifier { value: "attributes".into() }),
+                property: Box::new(Expr::String { value: key.into() }),
+                optional: false,
+                method: false,
+            }),
+            right: Box::new(Expr::String { value: value.into() }),
+        };
+        let rule = compatibility_rule(
+            "betterleaks.metadata",
+            r"(demo_[a-z0-9]{16})",
+            Confidence::High,
+            Some(attribute_eq("git.message", "ignore finding")),
+            vec![],
+            true,
+        );
+        let rules_db = RulesDatabase::from_rules_with_betterleaks_prefilter(
+            vec![rule],
+            Some(attribute_eq("git.author_email", "skip@example.com")),
+        )?;
+        let seen = BlobIdMap::new();
+        let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+        let mut matcher =
+            Matcher::new(&rules_db, scanner_pool, &seen, None, false, None, &[], false, true)?;
+        let source = |author: &str, message: &str| {
+            Origin::from_extended(serde_json::json!({
+                "path":"src/config.txt", "attributes":{"git.author_email":author,"git.message":message}
+            }))
+        };
+        let raw = b"configuration: demo_abcd1234efgh5678 # source metadata fixture";
+        for input in [raw.to_vec(), STANDARD.encode(raw).into_bytes()] {
+            let blob = Blob::from_bytes(input);
+            for (origins, expected) in [
+                (OriginSet::single(source("skip@example.com", "keep")), 0),
+                (OriginSet::single(source("human@example.com", "ignore finding")), 0),
+                (OriginSet::single(source("human@example.com", "keep")), 1),
+                (
+                    OriginSet::new(
+                        source("skip@example.com", "ignore finding"),
+                        vec![source("human@example.com", "keep")],
+                    ),
+                    1,
+                ),
+            ] {
+                let ScanResult::New(matches) =
+                    matcher.scan_blob(&blob, &origins, None, false, true, false)?
+                else {
+                    panic!("deduplication is disabled");
+                };
+                assert_eq!(matches.len(), expected);
+            }
+        }
         Ok(())
     }
 
@@ -2108,8 +2523,13 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -2156,8 +2576,13 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -2229,8 +2654,13 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: Some(0),
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
         let private_key_rule = Rule::new(RuleSyntax {
             id: "test.long-private-key".into(),
@@ -2251,8 +2681,13 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
         let rules_db = RulesDatabase::from_rules(vec![token_rule, private_key_rule])?;
         assert!(!rules_db.uses_vectorscan_prefilter(0));
@@ -2319,8 +2754,13 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
         let seen = BlobIdMap::new();
@@ -2359,8 +2799,13 @@ yaml_Q7mZ2pL9xR4vN8kT\nveles_Q7mZ2pL9xR4vN8kT"
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
         let seen = BlobIdMap::new();
@@ -2407,8 +2852,13 @@ line2
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
 
@@ -2500,8 +2950,10 @@ line2
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,            tags: Vec::new(), keywords: Vec::new(),            betterleaks_path_only: false,
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -2551,8 +3003,10 @@ line2
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,            tags: Vec::new(), keywords: Vec::new(),            betterleaks_path_only: false,
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -2606,8 +3060,10 @@ line2
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,            tags: Vec::new(), keywords: Vec::new(),            betterleaks_path_only: false,
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -2654,8 +3110,10 @@ line2
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,            tags: Vec::new(), keywords: Vec::new(),            betterleaks_path_only: false,
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -2709,8 +3167,10 @@ line2
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,            tags: Vec::new(), keywords: Vec::new(),            betterleaks_path_only: false,
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -2755,8 +3215,13 @@ line2
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -2799,8 +3264,13 @@ line2
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
 
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
@@ -2843,8 +3313,10 @@ line2
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,            tags: Vec::new(), keywords: Vec::new(),            betterleaks_path_only: false,
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         })
     }
 
@@ -3001,8 +3473,13 @@ line2
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
         let rules_db = RulesDatabase::from_rules(vec![rule])?;
         let seen = BlobIdMap::new();

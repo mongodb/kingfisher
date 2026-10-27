@@ -94,7 +94,7 @@ pub enum Command {
     /// Directly revoke a known secret against a rule's revocation config
     Revoke(RevokeArgs),
 
-    /// Directly map a known secret to its identity, permissions, and blast radius
+    /// Map a credential's identity, permissions, and blast radius, including risk and coverage
     #[command(name = "blast-radius", visible_alias = "access-map", aliases = ["blast_radius", "access_map"])]
     BlastRadius(BlastRadiusArgs),
 
@@ -158,6 +158,11 @@ pub struct GlobalArgs {
     #[arg(global = true, long = "allow-internal-ips", default_value_t = false)]
     pub allow_internal_ips: bool,
 
+    /// Enable configured fallback environments; revoke validates first and acts only on the verified environment.
+    /// Primary only by default; scan/validate never revoke automatically, and revocation never fails over mutations.
+    #[arg(global = true, long = "fallbacks", default_value_t = false)]
+    pub http_fallbacks: bool,
+
     /// Disable TLS certificate validation (deprecated: use --tls-mode=off)
     #[arg(global = true, long, hide = true)]
     pub ignore_certs: bool,
@@ -209,6 +214,7 @@ impl Default for GlobalArgs {
             quiet: false,
             tls_mode: TlsMode::Strict,
             allow_internal_ips: false,
+            http_fallbacks: false,
             ignore_certs: false,
             self_update: false,
             no_update_check: false,

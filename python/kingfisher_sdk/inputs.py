@@ -160,12 +160,12 @@ def expand_archives(
 
 
 def expand_content(
-    inputs: Iterable[ScanInput], *, sqlite: bool = True, pyc: bool = True,
+    inputs: Iterable[ScanInput], *, sqlite: bool = True, pyc: bool = True, pdf: bool = False,
     strict: bool = False, max_bytes: int = 256 * 1024 * 1024,
     timeout: float | None = None, cancellation: CancellationToken | None = None,
     temp_dir: str | os.PathLike[str] | None = None,
 ) -> Iterator[ScanInput]:
-    """Extract SQLite SQL and .pyc strings with the shared native CLI extractors.
+    """Extract SQLite SQL, .pyc strings, and opt-in PDF page text (pdf=True).
 
     Compose after expand_archives() to extract archive members. Normal inputs,
     empty databases and unsupported bytecode pass through unchanged. Malformed
@@ -185,6 +185,18 @@ def expand_content(
     progress and bytecode parsing cooperate with deadlines and cancellation.
     Logical paths use ``database!table.sql`` and ``module.pyc!strings.py``;
     finding offsets refer to extracted content, not the original binary.
+
+    PDF extraction is offline, without OCR, rendering, or executing PDF actions.
+    It recognizes a %PDF- header or .pdf extension and yields document.pdf!page-N.txt.
+    Encrypted or malformed PDFs use raw fallback (malformed_pdf) unless strict=True;
+    reported page/font stream decode errors are skipped unless strict=True.
+    Codec recovery can still omit text without reporting errors in either mode.
+    image-only PDFs pass through unchanged. Embedded files, annotations and Form
+    XObject text are not extracted. PDF loading and each page/font stream are
+    limited to min(max_bytes, 32 MiB) decompressed bytes, with at most 10,000 pages
+    and max_bytes aggregate output. These are not total process-memory bounds.
+    Controls run before/after parsing and between pages; a parser call cannot be
+    preempted. Budget/interruption errors always raise, even with strict=False.
     """
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
         raise ValueError("max_bytes must be a positive integer")
@@ -194,7 +206,7 @@ def expand_content(
             if not isinstance(source, ScanInput):
                 raise TypeError("inputs must contain ScanInput objects")
             output, diagnostic = _native.expand_content(
-                source.path, source.data, file=source.file, sqlite=sqlite, pyc=pyc,
+                source.path, source.data, file=source.file, sqlite=sqlite, pyc=pyc, pdf=pdf,
                 strict=strict, max_bytes=max_bytes, timeout=timeout, cancellation=cancellation,
                 temp_dir=None if temp_dir is None else os.fspath(temp_dir),
             )

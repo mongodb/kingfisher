@@ -131,7 +131,8 @@ impl PyRules {
     fn metadata(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         let rules: Vec<_> = self.db.rules().iter().map(|rule| serde_json::json!({
             "id": rule.id(), "name": rule.name(), "visible": rule.syntax().visible,
-            "validation": rule.syntax().validation.is_some(), "revocation": rule.syntax().revocation.is_some(),
+            "validation": rule.syntax().validation.is_some(), "revocation": rule.syntax().revocation.is_some()
+                || rule.syntax().fallbacks.iter().any(|fallback| fallback.revocation.is_some()),
         })).collect();
         json_to_python(py, serde_json::Value::Array(rules))
     }
@@ -142,7 +143,8 @@ impl PyRules {
             )?;
         // Inspect the already-loaded definition and confirmation regex without
         // recompilation, provider requests, or modifying the shared database.
-        let mut detail = serde_json::to_value(rule.syntax()).map_err(error)?;
+        let mut detail =
+            serde_json::to_value(rule.syntax().redacted_for_inspection()).map_err(error)?;
         detail["validation"] = serde_json::to_value(
             rule.syntax()
                 .validation
@@ -417,6 +419,35 @@ impl PyScanner {
     ) -> PyResult<Vec<PyFinding>> {
         self.scan_input(py, data, String::new(), timeout, cancellation)
     }
+    #[pyo3(signature = (data, attributes, *, timeout=None, cancellation=None))]
+    fn scan_with_attributes(
+        &self,
+        py: Python<'_>,
+        data: PyBackedBytes,
+        attributes: BTreeMap<String, String>,
+        timeout: Option<f64>,
+        cancellation: Option<PyRef<'_, PyCancellationToken>>,
+    ) -> PyResult<Vec<PyFinding>> {
+        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
+        py.detach(|| {
+            control.check()?;
+            let blob = kingfisher_scanner::Blob::from_borrowed(&data);
+            let output = self.scanner.scan_blob_with_context_and_attributes_and_control(
+                &blob,
+                &attributes,
+                &control,
+                false,
+                self.detection.as_ref(),
+            )?;
+            Ok(output
+                .findings
+                .into_iter()
+                .map(|finding| PyFinding { finding, context: Some(output.context.clone()) })
+                .collect())
+        })
+        .map_err(scan_error)
+    }
+
     #[pyo3(signature = (path, *, timeout=None, cancellation=None))]
     fn scan_file(
         &self,
@@ -572,6 +603,22 @@ impl PyValidator {
         validation_states(py, results)
     }
 
+    #[pyo3(signature = (validated, *, timeout=None, cancellation=None))]
+    fn analyze_validated(
+        &self,
+        py: Python<'_>,
+        validated: &PyValidatedFinding,
+        timeout: Option<f64>,
+        cancellation: Option<PyRef<'_, PyCancellationToken>>,
+    ) -> PyResult<Py<PyAny>> {
+        let control = scan_control(timeout, cancellation.map(|token| token.token.clone()))?;
+        let result = run_async(py, self.runtime, control, || {
+            self.validator.analyze_validated(&validated.validated)
+        })?
+        .map_err(error)?;
+        json_to_python(py, result)
+    }
+
     fn with_variables(&self, variables: BTreeMap<String, String>) -> Self {
         Self { validator: self.validator.with_variables(variables), runtime: self.runtime }
     }
@@ -610,6 +657,7 @@ impl PyValidator {
     }
 
     #[new]
+    #[pyo3(signature = (timeout, concurrency, retries, max_response_bytes, allow_internal_ips, variables, *, http_fallbacks=false))]
     fn new(
         timeout: f64,
         concurrency: usize,
@@ -617,11 +665,13 @@ impl PyValidator {
         max_response_bytes: usize,
         allow_internal_ips: bool,
         variables: BTreeMap<String, String>,
+        http_fallbacks: bool,
     ) -> PyResult<Self> {
         let mut builder = Validator::builder()
             .timeout(duration(timeout)?)
             .concurrency(concurrency)
             .retries(retries)
+            .http_fallbacks(http_fallbacks)
             .max_response_bytes(max_response_bytes)
             .allow_internal_ips(allow_internal_ips);
         for (k, v) in variables {
@@ -678,11 +728,14 @@ struct PyRevoker {
 }
 
 fn revocation_error(py: Python<'_>, err: anyhow::Error) -> PyErr {
-    use kingfisher_scanner::validation::revocation::RevocationSubmitted;
+    use kingfisher_scanner::validation::revocation::{
+        RevocationIndeterminate, RevocationSubmitted,
+    };
     // Total deadlines can interrupt an in-flight action before its transport
     // returns an error. Preserve that ambiguity along with explicit submission.
-    let outcome_unknown =
-        err.is::<RevocationSubmitted>() || err.is::<tokio::time::error::Elapsed>();
+    let outcome_unknown = err.is::<RevocationSubmitted>()
+        || err.is::<RevocationIndeterminate>()
+        || err.is::<tokio::time::error::Elapsed>();
     let category = Revoker::error_category(&err);
     let message = if outcome_unknown {
         format!("revocation request failed ({category}); outcome may be unknown")
@@ -751,15 +804,24 @@ impl PyRevoker {
             .db
             .get_rule_by_text_id(&rule_id)
             .ok_or_else(|| PyValueError::new_err("unknown exact rule ID"))?;
-        if rule.syntax().revocation.is_none() {
-            return Err(PyValueError::new_err("rule has no revocation"));
-        }
         // Preserve Python's case-insensitive variable names and secret precedence.
         let mut variables: BTreeMap<_, _> =
             variables.into_iter().map(|(name, value)| (name.to_uppercase(), value)).collect();
         variables.remove("TOKEN");
+        if variables.keys().any(|name| {
+            kingfisher_scanner::validation::http_validation::is_validation_endpoint_var(name)
+        }) {
+            return Err(PyValueError::new_err(
+                "HTTP endpoint selection variables are reserved; pass a validated result for fallback revocation",
+            ));
+        }
+        let revocation = rule
+            .syntax()
+            .revocation
+            .as_ref()
+            .ok_or_else(|| PyValueError::new_err("selected environment has no revocation"))?;
         // Keep invalid AWS inputs as ValueError in the Python facade.
-        if matches!(rule.syntax().revocation, Some(kingfisher_rules::Revocation::AWS)) {
+        if matches!(revocation, kingfisher_rules::Revocation::AWS) {
             let akid = variables
                 .get("AKID")
                 .or_else(|| variables.get("ACCESS_KEY_ID"))

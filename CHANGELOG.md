@@ -2,6 +2,71 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.15.0] (Unreleased)
+
+Changes since the published v2.14.0 release.
+
+### Added
+
+- Support Betterleaks v2 validation, analysis, and explicit revocation programs,
+  including inheritance, custom path-only rules, keywords, specificity, and named
+  component captures. Kingfisher YAML also accepts Expr source.
+  [#562](https://github.com/mongodb/kingfisher/issues/562)
+- Add `jwt_sign` to construct complete RS256 JWTs from JSON claims and PEM keys.
+  [#552](https://github.com/mongodb/kingfisher/issues/552)
+- Add offline, resource-bounded PDF page-text extraction for CLI file, Git-history,
+  and archive scans alongside raw-byte scanning. Rust exposes PDF extraction APIs;
+  Python users opt in with `expand_content(..., pdf=True)`. See
+  [extraction scope, limits, and fallback behavior](docs/ADVANCED.md#pdf-text-extraction).
+- Add versioned blast-radius assessments with capability risk, authorization
+  evidence, coverage limitations, and collection-time timestamps, separate from
+  legacy severity. The report viewer provides an investigation-focused workspace
+  with searchable policy, role, and resource evidence and system-aware themes.
+- Include provider-issued repository IDs in Git metadata and TOON reports across
+  supported SCMs, keeping fork findings distinct. Discovery reuses API metadata;
+  explicit remote targets use best-effort, instance-scoped lookups. Local checkout
+  scans remain offline. [#564](https://github.com/mongodb/kingfisher/issues/564)
+- Add `KF_GITHUB_MAX_RETRY_WAIT_SECS` to configure how long scans wait through
+  GitHub quota resets. [#560](https://github.com/mongodb/kingfisher/issues/560)
+
+### Changed
+
+- Add up to two opt-in HTTP fallback environments through `--fallbacks` (CLI),
+  `http_fallbacks=True` (Python), or `.http_fallbacks(true)` (Rust). Validation and
+  revocation logic reuse are independent, default to false, and require explicit
+  replacement URLs; primary target URLs are never inherited. CLI
+  `revoke --fallbacks` validates to select one environment, while SDK result-based
+  revocation retains its validated snapshot. Mutations never fail over.
+  **Behavior change:** legacy HTTP `request.url: [primary, secondary, ...]` lists
+  now use only the primary by default; enabling fallbacks tries at most the primary
+  and two alternatives. Existing YAML/TOML rule files still load without edits.
+  [#553](https://github.com/mongodb/kingfisher/issues/553)
+- **Behavior change:** apply `--max-file-size` (default **256 MB**) to Git-history
+  blobs before reading their content. `--max-file-size 0` and `--no-limits` disable
+  this size limit without disabling timeouts.
+  [#567](https://github.com/mongodb/kingfisher/issues/567),
+  [#568](https://github.com/mongodb/kingfisher/pull/568)
+- **Behavior change:** HTTP revocation no longer follows redirects, including for
+  legacy direct-primary rules. Anthropic, Terraform, and DigitalOcean access-map
+  requests also refuse redirects; configure final canonical URLs instead.
+- Prepare Python SDK **1.6.0** with explicit analysis and source-attribute scanning,
+  and rules/scanner crates **3.0.0** for public Rust schema changes. Existing
+  YAML/TOML rule files and Python APIs remain compatible; core stays at **1.0.4**.
+  Rust callers should follow the [3.0 migration guide](docs/LIBRARY.md#migrating-to-rules-and-scanner-30).
+
+### Improvements
+
+- Reduce malformed-container and recognized-placeholder false positives with
+  conservative, bounded offline private-key checks shared by the CLI and SDKs.
+  These checks do not establish cryptographic or live validity. See the
+  [private-key filter scope](docs/RULES.md#betterleaks-v2-programs).
+- Improve Git file links for punctuation, spaces, Unicode, and literal backslashes
+  while preserving directory separators and line anchors.
+  [#565](https://github.com/mongodb/kingfisher/issues/565),
+  [#566](https://github.com/mongodb/kingfisher/pull/566)
+- Strip clone credentials from reported Git remote URLs and redact OAuth2
+  service-authentication credentials from rule-inspection output.
+
 ## [v2.14.0]
 - Prepare Python SDK `kingfisher-secret-scanner` 1.5.0 so the pending shared Rust and Python changes are not skipped as the already-published 1.4.0 release. The Python API remains compatible.
 - Add independent `make release crates` and `make release kingfisher-secret-scanner` commands. Infer committed package versions, reject immutable-version conflicts and invalid release contexts before dispatch, and retain verified-artifact publication guards. SDK runtime changes without a required version bump fail before wheel builds.

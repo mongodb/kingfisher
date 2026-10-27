@@ -1248,6 +1248,30 @@ pub async fn validate_aws_credentials(
     aws_secret_access_key: &str,
     session_token: Option<&str>,
 ) -> Result<(bool, String)> {
+    let result =
+        validate_aws_credentials_detailed(aws_access_key_id, aws_secret_access_key, session_token)
+            .await?;
+    Ok((result.is_valid, result.message))
+}
+
+#[derive(Default)]
+pub(super) struct AwsValidationDetails {
+    pub user_id: Option<String>,
+    pub account_id: Option<String>,
+    pub error_code: Option<String>,
+}
+
+struct AwsStsValidation {
+    is_valid: bool,
+    message: String,
+    details: AwsValidationDetails,
+}
+
+async fn validate_aws_credentials_detailed(
+    aws_access_key_id: &str,
+    aws_secret_access_key: &str,
+    session_token: Option<&str>,
+) -> Result<AwsStsValidation> {
     let _permit = aws_validation_semaphore().acquire().await.expect("semaphore closed");
 
     // Create static credentials
@@ -1263,7 +1287,10 @@ pub async fn validate_aws_credentials(
     // Create STS client
     let sts_config = StsConfigBuilder::from(&config).interceptor(UaInterceptor).build();
     let sts_client = StsClient::from_conf(sts_config);
+    execute_sts_validation(&sts_client).await
+}
 
+async fn execute_sts_validation(sts_client: &StsClient) -> Result<AwsStsValidation> {
     const MAX_ATTEMPTS: usize = 3;
     const ATTEMPT_TIMEOUT: Duration = Duration::from_secs(5);
 
@@ -1272,7 +1299,15 @@ pub async fn validate_aws_credentials(
         match result {
             Ok(Ok(identity)) => {
                 let arn = identity.arn.unwrap_or_else(|| "Unknown".to_string());
-                return Ok((true, arn));
+                return Ok(AwsStsValidation {
+                    is_valid: true,
+                    message: arn,
+                    details: AwsValidationDetails {
+                        user_id: identity.user_id,
+                        account_id: identity.account,
+                        error_code: None,
+                    },
+                });
             }
             Ok(Err(e)) => {
                 if is_throttling_or_transient(&e) {
@@ -1280,7 +1315,14 @@ pub async fn validate_aws_credentials(
                         return Err(anyhow!("AWS validation failed: {}", e));
                     }
                 } else {
-                    return Ok((false, e.to_string()));
+                    return Ok(AwsStsValidation {
+                        is_valid: false,
+                        message: e.to_string(),
+                        details: AwsValidationDetails {
+                            error_code: aws_error_code(&e),
+                            ..Default::default()
+                        },
+                    });
                 }
             }
             Err(_) => {
@@ -1442,6 +1484,49 @@ mod tests {
             assert_eq!(result.status, AwsRevocationStatus::Unsupported);
             assert_eq!(mutations.load(Ordering::SeqCst), 0);
             assert_eq!(reads.load(Ordering::SeqCst), expected_reads);
+        }
+    }
+
+    #[tokio::test]
+    async fn sts_validation_retains_v2_identity_and_error_fields() {
+        use axum::{Router, routing::post};
+        for (status, body, expected_user, expected_error) in [
+            (
+                StatusCode::OK,
+                r#"<GetCallerIdentityResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><GetCallerIdentityResult><Arn>arn:aws:iam::123456789012:user/alice</Arn><Account>123456789012</Account><UserId>AIDAEXAMPLE</UserId></GetCallerIdentityResult></GetCallerIdentityResponse>"#,
+                Some("AIDAEXAMPLE"),
+                None,
+            ),
+            (
+                StatusCode::FORBIDDEN,
+                r#"<ErrorResponse xmlns="https://sts.amazonaws.com/doc/2011-06-15/"><Error><Type>Sender</Type><Code>ExpiredToken</Code><Message>The token expired</Message></Error></ErrorResponse>"#,
+                None,
+                Some("ExpiredToken"),
+            ),
+        ] {
+            let listener =
+                tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+            let endpoint = format!("http://{}", listener.local_addr().unwrap());
+            let server = tokio::spawn(async move {
+                axum::serve(
+                    listener,
+                    Router::new().route(
+                        "/",
+                        post(move || async move { (status, [("content-type", "text/xml")], body) }),
+                    ),
+                )
+                .await
+                .unwrap();
+            });
+            let config = test_config(&endpoint, "AKIAIOSFODNN7EXAMPLE").await;
+            let result = execute_sts_validation(&StsClient::new(&config)).await.unwrap();
+            assert_eq!(result.is_valid, status == StatusCode::OK);
+            assert_eq!(result.details.user_id.as_deref(), expected_user);
+            assert_eq!(result.details.error_code.as_deref(), expected_error);
+            if result.is_valid {
+                assert_eq!(result.details.account_id.as_deref(), Some("123456789012"));
+            }
+            server.abort();
         }
     }
 
@@ -1681,57 +1766,74 @@ pub async fn validate_aws_credential_pair(
     secret_access_key: &str,
     session_token: Option<&str>,
 ) -> AwsCredentialValidation {
+    validate_aws_credential_pair_detailed(access_key_id, secret_access_key, session_token).await.0
+}
+
+pub(super) async fn validate_aws_credential_pair_detailed(
+    access_key_id: &str,
+    secret_access_key: &str,
+    session_token: Option<&str>,
+) -> (AwsCredentialValidation, AwsValidationDetails) {
     let account_id = aws_key_to_account_number(access_key_id).ok();
 
     if let Some(account_id) = should_skip_aws_validation(access_key_id) {
-        return AwsCredentialValidation {
-            is_valid: false,
-            status: StatusCode::PRECONDITION_REQUIRED,
-            outcome: ValidationOutcome::Skipped,
-            message: format!(
-                "(skip list entry) AWS validation not attempted for account {}.",
-                account_id
-            ),
-            identity: None,
-            account_id: Some(account_id),
-        };
+        return (
+            AwsCredentialValidation {
+                is_valid: false,
+                status: StatusCode::PRECONDITION_REQUIRED,
+                outcome: ValidationOutcome::Skipped,
+                message: format!(
+                    "(skip list entry) AWS validation not attempted for account {}.",
+                    account_id
+                ),
+                identity: None,
+                account_id: Some(account_id),
+            },
+            AwsValidationDetails::default(),
+        );
     }
 
     if let Err(message) = validate_aws_credentials_input(access_key_id, secret_access_key) {
-        return AwsCredentialValidation {
-            is_valid: false,
-            status: StatusCode::BAD_REQUEST,
-            outcome: ValidationOutcome::Unavailable,
-            message,
-            identity: None,
-            account_id,
-        };
+        return (
+            AwsCredentialValidation {
+                is_valid: false,
+                status: StatusCode::BAD_REQUEST,
+                outcome: ValidationOutcome::Unavailable,
+                message,
+                identity: None,
+                account_id,
+            },
+            AwsValidationDetails::default(),
+        );
     }
 
-    match validate_aws_credentials(access_key_id, secret_access_key, session_token).await {
-        Ok((true, identity)) => AwsCredentialValidation {
-            is_valid: true,
-            status: StatusCode::OK,
-            outcome: ValidationOutcome::VerifiedActive,
-            message: identity.clone(),
-            identity: Some(identity),
-            account_id,
-        },
-        Ok((false, message)) => AwsCredentialValidation {
-            is_valid: false,
-            status: StatusCode::FORBIDDEN,
-            outcome: ValidationOutcome::VerifiedInactive,
-            message,
-            identity: None,
-            account_id,
-        },
-        Err(error) => AwsCredentialValidation {
-            is_valid: false,
-            status: StatusCode::BAD_GATEWAY,
-            outcome: ValidationOutcome::Unavailable,
-            message: error.to_string(),
-            identity: None,
-            account_id,
-        },
+    match validate_aws_credentials_detailed(access_key_id, secret_access_key, session_token).await {
+        Ok(result) => {
+            let details = result.details;
+            let outcome = AwsCredentialValidation {
+                is_valid: result.is_valid,
+                status: if result.is_valid { StatusCode::OK } else { StatusCode::FORBIDDEN },
+                outcome: if result.is_valid {
+                    ValidationOutcome::VerifiedActive
+                } else {
+                    ValidationOutcome::VerifiedInactive
+                },
+                identity: result.is_valid.then(|| result.message.clone()),
+                message: result.message,
+                account_id: details.account_id.clone().or(account_id),
+            };
+            (outcome, details)
+        }
+        Err(error) => (
+            AwsCredentialValidation {
+                is_valid: false,
+                status: StatusCode::BAD_GATEWAY,
+                outcome: ValidationOutcome::Unavailable,
+                message: error.to_string(),
+                identity: None,
+                account_id,
+            },
+            AwsValidationDetails::default(),
+        ),
     }
 }

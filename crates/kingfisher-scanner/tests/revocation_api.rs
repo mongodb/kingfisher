@@ -29,6 +29,7 @@ fn request(url: String) -> HttpRequest {
     HttpRequest {
         method: "DELETE".into(),
         url,
+        fallback_urls: Vec::new(),
         headers: BTreeMap::from([("Authorization".into(), "Bearer {{ TOKEN }}".into())]),
         body: None,
         multipart: None,

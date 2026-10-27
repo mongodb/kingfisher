@@ -3,7 +3,7 @@
 use super::{build_request_builder, validate_response};
 use anyhow::{Context, Result, anyhow, bail};
 use kingfisher_rules::{
-    HttpMultiStepRevocation, HttpValidation, ResponseExtractor, RevocationStep,
+    HttpMultiStepRevocation, HttpRequest, HttpValidation, ResponseExtractor, RevocationStep,
 };
 use liquid::{Object, model::Value};
 use regex::Regex;
@@ -18,12 +18,32 @@ use tracing::debug;
 #[doc(hidden)]
 pub struct RevocationSubmitted;
 
+/// A provider program completed without confirming whether revocation happened.
+/// This is an indeterminate outcome and must not be treated as a safe retry.
+#[derive(Debug, thiserror::Error)]
+#[error("provider could not confirm credential revocation; verify provider state before retrying")]
+pub struct RevocationIndeterminate;
+
 fn submitted_error(error: anyhow::Error, may_mutate: bool) -> anyhow::Error {
     if may_mutate { error.context(RevocationSubmitted) } else { error }
 }
 
 fn is_mutating_method(method: &str) -> bool {
     !matches!(method.to_ascii_uppercase().as_str(), "GET" | "HEAD" | "OPTIONS")
+}
+
+fn selected_url<'a>(request: &'a HttpRequest, globals: &Object) -> Result<&'a str> {
+    if request.fallback_urls.is_empty() {
+        return Ok(&request.url);
+    }
+    use liquid_core::ValueView;
+    let index = globals
+        .get("VALIDATION_ENDPOINT_INDEX")
+        .and_then(|value| value.to_kstr().parse::<usize>().ok())
+        .context(
+            "Revocation URL lists require VALIDATION_ENDPOINT_INDEX from successful validation",
+        )?;
+    request.urls().nth(index).context("Validated endpoint index is outside the revocation URL list")
 }
 
 async fn send_revocation_request(
@@ -92,6 +112,32 @@ async fn render_and_parse_url(
         template.render(globals).map_err(|e| anyhow!("Failed to render URL template: {}", e))?;
 
     reqwest::Url::parse(&rendered).map_err(|e| anyhow!("Invalid URL '{}': {}", rendered, e))
+}
+
+async fn revocation_url(
+    parser: &liquid::Parser,
+    globals: &Object,
+    request: &HttpRequest,
+) -> Result<reqwest::Url> {
+    use liquid_core::ValueView;
+    let url = render_and_parse_url(parser, globals, selected_url(request, globals)?).await?;
+    let fallback_validation = globals
+        .get("VALIDATION_ENDPOINT_COUNT")
+        .is_some_and(|value| value.to_kstr().parse::<usize>().is_ok_and(|count| count > 1))
+        && globals.get("VALIDATION_ENDPOINT_INDEX").is_none_or(|value| value.to_kstr() != "0");
+    if fallback_validation
+        || globals.contains_key("VALIDATION_FALLBACK_ID")
+        || !request.fallback_urls.is_empty()
+    {
+        let accepted_origin = globals
+            .get("VALIDATION_ORIGIN")
+            .context("Fallback revocation requires VALIDATION_ORIGIN from successful validation")?;
+        anyhow::ensure!(
+            accepted_origin.to_kstr() == url.origin().ascii_serialization(),
+            "Revocation must use the origin that accepted the credential; use VALIDATION_ORIGIN or a matching URL list"
+        );
+    }
+    Ok(url)
 }
 
 /// Render Liquid templates within an extractor's string fields.
@@ -212,7 +258,7 @@ pub async fn execute_http_revocation(
         .as_deref()
         .filter(|matchers| !matchers.is_empty())
         .context("Revocation response_matcher is required")?;
-    let url = render_and_parse_url(parser, globals, &http_revocation.request.url).await?;
+    let url = revocation_url(parser, globals, &http_revocation.request).await?;
 
     debug!("Submitting HTTP revocation");
 
@@ -274,7 +320,7 @@ async fn execute_revocation_step(
 
     debug!("Executing revocation step {}: {}", step_number, step_name);
 
-    let url = render_and_parse_url(parser, globals, &step.request.url).await?;
+    let url = revocation_url(parser, globals, &step.request).await?;
 
     let request_builder = build_request_builder(
         client,
@@ -380,6 +426,27 @@ pub async fn execute_multi_step_revocation(
     {
         bail!("Final revocation step must have response_matcher");
     }
+    // Resolve every endpoint selection before any step may mutate provider state.
+    let mut endpoint_globals = globals.clone();
+    for step in &multi_step.steps {
+        anyhow::ensure!(
+            !step.extract.iter().flat_map(|extract| extract.keys()).any(|name| {
+                super::http_validation::is_validation_endpoint_var(&name.to_uppercase())
+            }),
+            "Revocation response extractors cannot replace validated endpoint variables"
+        );
+        selected_url(&step.request, globals)?;
+        if globals.contains_key("VALIDATION_ENDPOINT_COUNT")
+            || globals.contains_key("VALIDATION_FALLBACK_ID")
+            || !step.request.fallback_urls.is_empty()
+        {
+            revocation_url(parser, &endpoint_globals, &step.request).await?;
+        }
+        for name in step.extract.iter().flat_map(|extract| extract.keys()) {
+            endpoint_globals
+                .insert(name.to_uppercase().into(), Value::scalar("prepared-response-value"));
+        }
+    }
     let num_steps = multi_step.steps.len();
     debug!("Executing {}-step revocation", num_steps);
 
@@ -442,6 +509,41 @@ mod tests {
     use super::*;
     use reqwest::StatusCode;
     use reqwest::header::{HeaderMap, HeaderValue};
+
+    #[tokio::test]
+    async fn fallback_id_alone_checks_every_origin_before_the_first_mutation() {
+        use std::net::{Ipv4Addr, TcpListener};
+        let accepted = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        let other = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+        accepted.set_nonblocking(true).unwrap();
+        other.set_nonblocking(true).unwrap();
+        let accepted_origin = format!("http://{}", accepted.local_addr().unwrap());
+        let other_origin = format!("http://{}", other.local_addr().unwrap());
+        let program: HttpMultiStepRevocation = serde_json::from_value(serde_json::json!({"steps":[
+            {"request":{"method":"DELETE","url":format!("{accepted_origin}/first")}},
+            {"request":{"method":"DELETE","url":format!("{other_origin}/last"),
+                "response_matcher":[{"type":"StatusMatch","status":[200]}]}}
+        ]}))
+        .unwrap();
+        let mut globals = liquid::object!({
+            "VALIDATION_FALLBACK_ID": "secondary",
+            "VALIDATION_ORIGIN": accepted_origin,
+        });
+        let parser = liquid::ParserBuilder::with_stdlib().build().unwrap();
+        let error = execute_multi_step_revocation(
+            &program,
+            &mut globals,
+            &Client::new(),
+            &parser,
+            Duration::from_secs(2),
+            0,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("origin that accepted"));
+        assert_eq!(accepted.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+        assert_eq!(other.accept().unwrap_err().kind(), std::io::ErrorKind::WouldBlock);
+    }
     // ---- extract_value_from_response: JsonPath ----
 
     #[test]

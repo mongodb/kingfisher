@@ -4,6 +4,7 @@ use std::{collections::BTreeMap, time::Duration};
 use anyhow::{Context, Result, ensure};
 use kingfisher_rules::{Revocation, Rule};
 use liquid::{Object, model::Value};
+use liquid_core::ValueView;
 use reqwest::Client;
 
 use super::revocation::{
@@ -29,6 +30,9 @@ impl Revoker {
     /// Categories describe transport/response failures; an unknown category can
     /// also indicate rule configuration or a provider-specific helper failure.
     pub fn error_category(error: &anyhow::Error) -> &'static str {
+        if error.is::<super::revocation::RevocationIndeterminate>() {
+            return "provider_unknown";
+        }
         if error.downcast_ref::<tokio::time::error::Elapsed>().is_some() {
             return "timeout";
         }
@@ -108,7 +112,37 @@ impl Revoker {
         );
         let credential = validated.credential.as_ref().context("No resolved credential inputs")?;
         let inputs = credential.revocation.as_ref().context("No resolved revocation inputs")?;
-        self.revoke(validated.finding.rule(), &inputs.secret, &inputs.variables).await
+        let selected = validated.finding.rule().syntax().selected_revocation(
+            inputs.variables.get("VALIDATION_FALLBACK_ID").map(String::as_str),
+        )?;
+        if let Some(Revocation::Betterleaks(config)) = selected.as_deref() {
+            let mut globals: Object = inputs
+                .variables
+                .iter()
+                .map(|(name, value)| (name.clone().into(), Value::scalar(value.clone())))
+                .collect();
+            globals.insert("TOKEN".into(), Value::scalar(inputs.secret.clone()));
+            super::betterleaks::add_finding_globals(
+                &mut globals,
+                &validated.finding,
+                &credential.components,
+            );
+            let captures = globals
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_kstr().to_string(), 0, 0))
+                .collect::<Vec<_>>();
+            let mut result = tokio::time::timeout(
+                self.timeout,
+                super::betterleaks::revoke(config, &captures, &globals, &self.client, true),
+            )
+            .await
+            .context(super::revocation::RevocationSubmitted)
+            .context("Revocation timed out; the credential may already have been revoked")??;
+            result.rule_id = validated.finding.rule_id.clone();
+            result.rule_name = validated.finding.rule().name().to_string();
+            return Ok(result);
+        }
+        self.revoke_selected(validated.finding.rule(), &inputs.secret, &inputs.variables).await
     }
 
     /// Revoke a known secret using a built-in or custom rule, without scanning.
@@ -117,14 +151,30 @@ impl Revoker {
     /// and always comes from `secret`. No environment variables or CLI defaults are
     /// read. Missing configuration and execution failures return errors;
     /// a completed provider response is evaluated by the rule's success matcher.
+    /// Direct calls use only primary revocation and reject reserved HTTP endpoint
+    /// selection variables. Use [`Self::revoke_validated`] for fallback environments.
     ///
     /// # Errors
     ///
     /// Returns an error for an empty secret, reserved `TOKEN` variable, missing or
     /// unsupported revocation configuration, template/transport failures, or timeout.
     /// A completed response that fails the success matcher is returned with
-    /// `revoked: false`, rather than treated as a transport error.
+    /// `revoked: false`, rather than treated as a transport error. A Betterleaks
+    /// program returning `unknown` raises [`super::revocation::RevocationIndeterminate`].
     pub async fn revoke(
+        &self,
+        rule: &Rule,
+        secret: &str,
+        variables: &BTreeMap<String, String>,
+    ) -> Result<DirectRevocationResult> {
+        ensure!(
+            !variables.keys().any(|name| super::http_validation::is_validation_endpoint_var(name)),
+            "HTTP endpoint selection variables are reserved; use revoke_validated for a selected environment"
+        );
+        self.revoke_selected(rule, secret, variables).await
+    }
+
+    async fn revoke_selected(
         &self,
         rule: &Rule,
         secret: &str,
@@ -132,7 +182,21 @@ impl Revoker {
     ) -> Result<DirectRevocationResult> {
         ensure!(!secret.is_empty(), "Secret cannot be empty");
         ensure!(!variables.contains_key("TOKEN"), "TOKEN is reserved; pass it as the secret");
-        let revocation = rule.syntax().revocation.as_ref().context("Rule has no revocation")?;
+        let fallback_id = variables.get("VALIDATION_FALLBACK_ID").map(String::as_str);
+        let revocation = rule
+            .syntax()
+            .selected_revocation(fallback_id)?
+            .context("Selected environment has no revocation")?;
+        if fallback_id.is_some() {
+            let mut values = variables.clone();
+            values.insert("TOKEN".into(), secret.to_owned());
+            let mut diagnostics = Vec::new();
+            super::preparation::revocation(&self.parser, &revocation, &values, &mut diagnostics);
+            ensure!(
+                diagnostics.is_empty(),
+                "Selected fallback revocation has missing or invalid inputs"
+            );
+        }
         let mut globals = Object::new();
         for (name, value) in variables {
             globals.insert(name.clone().into(), Value::scalar(value.clone()));
@@ -140,7 +204,15 @@ impl Revoker {
         globals.insert("TOKEN".into(), Value::scalar(secret.to_owned()));
 
         let operation = async {
-            let mut result = match revocation {
+            let mut result = match revocation.as_ref() {
+                Revocation::Betterleaks(config) => {
+                    let captures = globals
+                        .iter()
+                        .map(|(name, value)| (name.to_string(), value.to_kstr().to_string(), 0, 0))
+                        .collect::<Vec<_>>();
+                    super::betterleaks::revoke(config, &captures, &globals, &self.client, true)
+                        .await?
+                }
                 Revocation::Http(http) => {
                     ensure!(
                         http.request.response_matcher.as_ref().is_some_and(|m| !m.is_empty()),
@@ -219,6 +291,7 @@ impl Revoker {
         };
         tokio::time::timeout(self.timeout, operation)
             .await
+            .context(super::revocation::RevocationSubmitted)
             .context("Revocation timed out; the credential may already have been revoked")?
     }
 }

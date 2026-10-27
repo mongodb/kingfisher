@@ -43,6 +43,12 @@ limitations under the License.
 --------------------------------------------------------------------
 Built-in rules
 --------------------------------------------------------------------
+The token-efficiency helper also includes an unchanged Betterleaks subset of
+wordfreq data, Copyright 2022 Robyn Speer, under CC-BY-SA-4.0. The data's separate
+license and corpus attribution are retained in
+crates/kingfisher-rules/data/wordfreq-LICENSE.txt and wordfreq-NOTICE.md, and in
+the generated rule notices. The Rust source retains its existing license.
+
 Kingfisher's candidate detector catalog is sourced from Betterleaks and selected
 Veles detectors in OSV-SCALIBR. A maintainer tool converts pinned upstream sources
 into the bundled catalog; Kingfisher modifies the imported rules with operational

@@ -304,7 +304,7 @@ pub(crate) fn expand_archive(
 /// Shared CLI extraction; failures produce a non-secret diagnostic on raw fallback.
 #[allow(clippy::too_many_arguments)]
 #[pyfunction]
-#[pyo3(signature = (path, data, *, file=None, sqlite=true, pyc=true, strict=false, max_bytes=268435456, timeout=None, cancellation=None, temp_dir=None))]
+#[pyo3(signature = (path, data, *, file=None, sqlite=true, pyc=true, pdf=false, strict=false, max_bytes=268435456, timeout=None, cancellation=None, temp_dir=None))]
 pub(crate) fn expand_content(
     py: Python<'_>,
     path: String,
@@ -312,6 +312,7 @@ pub(crate) fn expand_content(
     file: Option<PathBuf>,
     sqlite: bool,
     pyc: bool,
+    pdf: bool,
     strict: bool,
     max_bytes: u64,
     timeout: Option<f64>,
@@ -327,10 +328,14 @@ pub(crate) fn expand_content(
             control.check()?;
             let is_pyc =
                 pyc && Path::new(&path).extension().is_some_and(|e| e.eq_ignore_ascii_case("pyc"));
+            let pdf_extension =
+                pdf && Path::new(&path).extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"));
+            let mut is_pdf = pdf_extension;
             let is_sqlite = match (&data, &file) {
                 (Some(data), None) => {
+                    is_pdf |= pdf && kingfisher_scanner::extraction::pdf::has_pdf_magic(data);
                     if data.len() as u64 > max_bytes
-                        && (is_pyc || sqlite && data.starts_with(b"SQLite format 3\0"))
+                        && (is_pyc || is_pdf || sqlite && data.starts_with(b"SQLite format 3\0"))
                     {
                         bail!("content input exceeds max_bytes budget");
                     }
@@ -339,11 +344,13 @@ pub(crate) fn expand_content(
                 (None, Some(file)) => {
                     let mut header = [0u8; 16];
                     let count = File::open(file)?.read(&mut header)?;
+                    is_pdf |=
+                        pdf && kingfisher_scanner::extraction::pdf::has_pdf_magic(&header[..count]);
                     sqlite && header[..count].starts_with(b"SQLite format 3\0")
                 }
                 _ => bail!("provide either data or file"),
             };
-            if !is_sqlite && !is_pyc {
+            if !is_sqlite && !is_pyc && !is_pdf {
                 return Ok((None, None));
             }
             let output_cap = max_bytes.min(usize::MAX as u64) as usize;
@@ -395,28 +402,56 @@ pub(crate) fn expand_content(
                     }
                     _ => unreachable!(),
                 };
-                kingfisher_scanner::extraction::pyc::extract_pyc_strings_from_bytes_with_budget(
-                    bytes, output_cap, &control,
-                )
-                .map(|bytes| {
-                    if bytes.is_empty() {
-                        Vec::new()
+                if is_pdf {
+                    use kingfisher_scanner::extraction::pdf::{
+                        extract_pdf_text_from_bytes_with_budget,
+                        extract_pdf_text_from_bytes_with_budget_strict,
+                    };
+                    let extracted = if strict {
+                        extract_pdf_text_from_bytes_with_budget_strict(bytes, output_cap, &control)
                     } else {
-                        vec![(format!("{path}!strings.py"), bytes)]
-                    }
-                })
+                        extract_pdf_text_from_bytes_with_budget(bytes, output_cap, &control)
+                    };
+                    extracted.map(|pages| {
+                        pages
+                            .into_iter()
+                            .map(|(name, bytes)| (format!("{path}!{name}"), bytes))
+                            .collect()
+                    })
+                } else {
+                    kingfisher_scanner::extraction::pyc::extract_pyc_strings_from_bytes_with_budget(
+                        bytes, output_cap, &control,
+                    )
+                    .map(|bytes| {
+                        if bytes.is_empty() {
+                            Vec::new()
+                        } else {
+                            vec![(format!("{path}!strings.py"), bytes)]
+                        }
+                    })
+                }
             };
             control.check()?;
             match extracted {
                 Ok(output) => Ok(((!output.is_empty()).then_some(output), None)),
-                Err(err) if strict || err.downcast_ref::<ExtractionLimitExceeded>().is_some() => {
+                Err(err) if strict || err.downcast_ref::<ExtractionLimitExceeded>().is_some()
+                    || err.downcast_ref::<kingfisher_scanner::extraction::pdf::PdfPageLimitExceeded>().is_some() => {
                     Err(err)
                 }
                 // Do not return parser messages: malformed schemas/bytecode may
                 // contain secrets. This stable category is safe to log or serialize.
                 Err(_) => Ok((
                     None,
-                    Some(if is_sqlite { "malformed_sqlite" } else { "malformed_pyc" }.to_owned()),
+                    Some(
+                        if is_sqlite {
+                            "malformed_sqlite"
+                        } else if is_pdf {
+                            "malformed_pdf"
+                        } else {
+                            "malformed_pyc"
+                        }
+                        .to_owned(),
+                    ),
                 )),
             }
         })

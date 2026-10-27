@@ -47,6 +47,10 @@ fail-closed adapter in `build_support/veles.rs`.
 - Keep detection regexes, components, descriptions, and general validation expressions in
   Betterleaks. Contribute generally useful detector changes upstream first.
 - Do not copy or redefine Betterleaks detectors in the overlay.
+- Do not select or import filename-only/path-only detectors for the built-in catalog. A filename
+  alone is not secret evidence; filter these rules during import rather than disabling them at
+  runtime. Content detectors with path restrictions remain eligible. This policy does not remove
+  support for explicit custom YAML/TOML filename-only rules.
 - Use exact, unqualified upstream IDs such as `mongodb-connection-string`; the importer adds the
   `betterleaks.` namespace.
 - Every overlay entry must exist in the pinned Betterleaks source revision. Prefer a released

@@ -1,4 +1,5 @@
 //! Offline content extraction. Bytecode is parsed, never executed.
+pub mod pdf;
 pub mod pyc;
 pub mod sqlite;
 

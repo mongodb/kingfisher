@@ -120,6 +120,37 @@ TOON emits the same value as `validation_outcome`; SARIF stores it in each resul
 kingfisher scan . --format json | tee kingfisher.json
 ```
 
+Remote repository scans include the provider-issued ID as
+`finding.git_metadata.repository_id` when available, alongside `repository_url`.
+TOON exposes the same value as `git_repository_id`.
+
+| Provider | Repository ID type |
+| --- | --- |
+| GitHub / GitHub Enterprise | Numeric repository ID |
+| GitLab (including self-hosted) | Numeric project ID |
+| Gitea | Numeric repository ID |
+| Bitbucket Cloud | UUID string |
+| Bitbucket Server / Data Center | Numeric repository ID |
+| Azure Repos | GUID string |
+| Hugging Face models, datasets, Spaces | Opaque `_id` string (not the mutable `owner/name`) |
+
+Provider IDs distinguish forks from their source repositories and, unlike URLs,
+identify repositories across renames. Scope IDs to the provider and hosting
+instance; they are not globally unique across SCMs. Identical findings from
+repositories with distinct known IDs remain separate in combined reports.
+Discovery reuses IDs from API
+responses, including GitHub contributor/public-event and GitLab contributor
+discovery. Explicit `--git-url` targets use a best-effort lookup only on the
+configured provider instance. Public clone/API host aliases are accepted only
+when that provider's API URL is also public; configuring a self-hosted API skips
+lookups for that provider's public-host repositories. Configure the matching API/base
+URL for self-hosted targets. Hugging Face explicit resource selectors also use a
+best-effort lookup when discovery did not supply `_id`.
+
+If metadata is unavailable, the field is omitted and scanning continues. Local
+checkout scans remain offline and omit the ID, as do gists, snippets, and generic
+Git servers without a supported repository metadata API.
+
 ### Output TOON for LLM and agent workflows
 
 ```bash
@@ -173,7 +204,9 @@ shows the tip, an optional older diff boundary, and the scope of files/history t
 
 Finding a leaked credential is only the first step. The critical question isn't just "Is this a secret?"—it's "What can an attacker do with it?"
 
-Kingfisher's blast-radius feature transforms secret detection from a simple alert into a comprehensive threat assessment. Instead of leaving you with a cryptic API key, Kingfisher actively authenticates against your cloud provider (AWS, GCP, Azure Storage, Microsoft Entra ID and Graph, Azure RBAC, Azure DevOps, GitHub, GitLab, Slack, or Microsoft Teams) to map the full extent of the credential's power.
+Kingfisher's blast-radius feature maps a supported credential to its identity, permissions, and
+visible resources. Mapping is read-only and best effort; policies and candidate role paths provide
+context without proving every possible access.
 
 * Instant Identity Resolution: Immediately identify who the key belongs to—whether it's a specific IAM user, an assumed role, or a service account.
 * Visualize the Blast Radius: See exactly which resources (S3 buckets, EC2 instances, projects, storage containers) are exposed and at risk.
@@ -224,6 +257,25 @@ The browser-based viewer also supports loading multiple files via drag-and-drop 
 
 #### Report viewer (local and hosted)
 
+The viewer starts in an investigation workspace with an overview queue, findings, repository
+coverage, and Blast Radius. Open reports from the header or drop files into the compact import bar.
+The overview connects credential validity to mapped identities and collection gaps.
+
+![HTML triager resource map with a synthetic AWS identity and recorded resources](../assets/screenshots/blast-radius-map.jpg)
+
+In **Blast Radius**, filter by provider or evidence type and expand an identity to inspect its
+policy provenance, candidate role paths, accepted API methods, and recorded resources. Conditions,
+exclusions, and unknown coverage remain visible. The **Resource map** provides a separate visual
+view. New blast-radius results automatically include permission categories, evidence explanations,
+and coverage gaps using the same provider results, without extra API calls. The viewer uses these
+for priorities, labels, filters, and counts while the report's original severity and scan alert
+behavior stay unchanged. Older reports remain supported.
+
+![Blast-radius investigation with policy and capability evidence](../assets/screenshots/blast-radius-investigation.jpg)
+
+These screenshots use the [synthetic investigation report](../viewer/investigation-demo.json), which
+contains no usable credentials. See [risk explanations and collection limits](../features/blast-radius.md#risk-and-coverage).
+
 The same viewer that powers `kingfisher view` and `--view-report` also accepts **SARIF 2.1.0**, **Gitleaks JSON**, and **TruffleHog JSON/JSONL** as imported report formats, and is published in two forms:
 
 1. **Local CLI viewer** — bundled into every Kingfisher binary. No external services, no install step beyond Kingfisher itself.
@@ -273,7 +325,7 @@ Raw JSON and SARIF output from Kingfisher, Gitleaks, and TruffleHog are excellen
 - **Cross-tool triage in one UI** — import a Gitleaks scan, a TruffleHog scan, and a Kingfisher scan of the same codebase into the same session and look at them side-by-side with deduplication, instead of reconciling three different schemas.
 - **Clear "this is live" signals** — validated Kingfisher findings and TruffleHog-verified findings are surfaced as `Active Credential` so you rotate proven-live keys first; high-confidence static findings are explicitly marked `Assumed Valid (Not Live-Validated)`, while other findings without a live result are marked `Not Attempted`.
 - **Fingerprint-aware deduplication** — the same secret appearing across multiple reports, directories, or scan runs collapses to one entry.
-- **Blast-radius context** — when a Kingfisher report was produced with `--blast-radius`, the viewer opens an interactive blast-radius graph and inspector so you can trace the identity, reachable resources, and permission mix without digging through nested JSON.
+- **Blast-radius context** — when a Kingfisher report was produced with `--blast-radius`, the viewer starts with investigation details for identities, policies, and role grants. Switch to the interactive map to trace recorded resources and permissions without digging through nested JSON.
 - **A shareable, offline-friendly workbench** — runs locally via `kingfisher view` or via the hosted static page; nothing about the report is exfiltrated.
 
 Gitleaks and TruffleHog are great at surfacing candidate matches. Kingfisher's viewer turns their candidates (and its own) into a triageable workflow without changing the scanner you already use.
@@ -312,6 +364,15 @@ To reduce API pressure during validation, you can limit request rate:
 
 - `--validation-rps <RPS>` applies a global rate limit to network validators.
 - `--validation-rps-rule <RULE_SELECTOR=RPS>` applies a rule-scoped override and can be repeated.
+- `--fallbacks` explicitly enables up to two rule-defined fallback environments for validation
+  and revocation. `revoke --fallbacks` validates to select an environment, then runs
+  only its revocation action; inactive/inconclusive checks cause no mutation.
+  Without the flag, direct `revoke` retains primary-only behavior without validation.
+  `scan` and `validate` never revoke automatically, and mutations never fail over.
+  See [fallback configuration and revocation](../rules/overview.md#ordered-http-fallback-endpoints).
+
+For `validate`, positional `--arg` values always map to the primary validation's
+variables, even with `--fallbacks`. Supply fallback-only inputs by name with `--var`.
 
 Rule selectors use the same prefix behavior as `--rule`: `github=2` targets the `betterleaks.github-*` family.
 
@@ -525,7 +586,7 @@ for responder credentials, regions, and AWS action selection.
 
 ### Limit maximum file size scanned (`--max-file-size`)
 
-By default, Kingfisher skips files larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**. Use `--max-file-size 0` for unlimited file size, or `--no-limits` to lift content-size, depth, and count limits while retaining timeouts.
+By default, Kingfisher skips files and Git history blobs larger than **256 MB**. You can raise or lower this cap per run with `--max-file-size`, which takes a value in **megabytes**. Use `--max-file-size 0` for unlimited file size, or `--no-limits` to lift content-size, depth, and count limits while retaining timeouts.
 
 Since 2.14.0, disabling scan operation deadlines requires `--no-timeouts` explicitly.
 Combine it with `--no-limits` to opt out of both policies; stalled operations can
@@ -1080,11 +1141,30 @@ kingfisher scan docker --archive image.tar.gz
 
 GitHub API reads during discovery and repository-artifact fetching retry HTTP
 `5xx`, `429`, and rate-limited `403` responses automatically. Each request allows
-up to three retries and two minutes of total retry waiting. Kingfisher honors
-`Retry-After` and exhausted-quota `X-RateLimit-Reset` headers; a cooldown beyond
-the remaining wait budget is reported immediately. Without a cooldown header,
-server errors use exponential backoff with jitter, and rate limits wait at least
-one minute. Authentication and permission errors are not retried.
+up to three retries and, by default, two minutes of total retry waiting.
+Set `KF_GITHUB_MAX_RETRY_WAIT_SECS` to a non-negative integer number of seconds
+to change this per-request wait budget. For example, allow enough time for an
+hourly quota reset:
+
+```bash
+KF_GITHUB_MAX_RETRY_WAIT_SECS=3900 kingfisher scan github --user alice --include-gists
+```
+
+The budget counts time spent waiting between attempts, excluding request time,
+and starts afresh for each API request. `0` disables positive-delay waiting;
+immediate retries are still limited to three. Invalid values are rejected.
+Kingfisher honors `Retry-After` and exhausted-quota `X-RateLimit-Reset` headers;
+a cooldown beyond the remaining wait budget is reported immediately rather than
+shortened. Without a cooldown header, server errors use exponential backoff with
+jitter, and rate limits wait at least one minute. Authentication and permission
+errors are not retried.
+
+Each read attempt reuses the shared GitHub App token cache and coordinates a
+refresh only near expiry, including after quota waits. Concurrent API and clone
+workers share that refresh. App installation-token exchanges retain their separate
+two-minute wait budget, including on clone workers.
+Externally supplied tokens in `KF_GITHUB_TOKEN` must remain valid for the scan;
+Kingfisher cannot renew them.
 
 ### Scan a GitHub organization
 
@@ -2103,6 +2183,7 @@ not be attempted and may need additional context.
 | Variable          | Purpose                      |
 | ----------------- | ---------------------------- |
 | `KF_GITHUB_TOKEN` | GitHub personal access token or pre-minted App installation token |
+| `KF_GITHUB_MAX_RETRY_WAIT_SECS` | Total retry waiting per GitHub discovery/artifact API read, in seconds (default: `120`; `0` disables positive-delay waits) |
 | `KF_GITHUB_APP_ID` | GitHub App ID used to mint installation tokens |
 | `KF_GITHUB_APP_INSTALLATION_ID` | GitHub App installation ID |
 | `KF_GITHUB_APP_PRIVATE_KEY` | GitHub App RSA private key as PEM content |

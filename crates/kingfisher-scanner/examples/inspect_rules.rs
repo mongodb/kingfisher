@@ -24,8 +24,7 @@ fn inspection_detail(
     syntax: &kingfisher_rules::RuleSyntax,
     detection_regex: &str,
 ) -> anyhow::Result<serde_json::Value> {
-    let mut inspected = syntax.clone();
-    inspected.validation = inspected.validation.as_ref().map(|v| v.redacted_for_inspection());
+    let inspected = syntax.redacted_for_inspection();
     let mut detail = serde_json::to_value(inspected)?;
     detail["detection_regex"] = json!(detection_regex);
     Ok(detail)

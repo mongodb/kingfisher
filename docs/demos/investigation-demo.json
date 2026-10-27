@@ -1,0 +1,16 @@
+{
+  "description": "Captioned screen transitions from existing synthetic-report screenshots, not a live scan or browser recording.",
+  "fixture": "../viewer/investigation-demo.json",
+  "frames": [
+    {
+      "path": "../assets/screenshots/blast-radius-investigation.jpg",
+      "caption": "Inspect policies, capability risk, and evidence",
+      "seconds": 5
+    },
+    {
+      "path": "../assets/screenshots/blast-radius-map.jpg",
+      "caption": "Trace identities to recorded resources",
+      "seconds": 5
+    }
+  ]
+}

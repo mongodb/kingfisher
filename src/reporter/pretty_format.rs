@@ -242,8 +242,13 @@ impl DetailsReporter {
         f: &mut Formatter<'_>,
         git: &serde_json::Value,
     ) -> FmtResult {
-        let repo_url = git["repository_url"].as_str().unwrap_or("");
-        writeln!(f, " |Git Repo........: {}", self.style_metadata(repo_url))?;
+        if let Some(repo_url) = git
+            .get("repository_url")
+            .and_then(|value| value.as_str())
+            .filter(|url| !url.trim().is_empty())
+        {
+            writeln!(f, " |Git Repo........: {}", self.style_metadata(repo_url))?;
+        }
         if let Some(commit) = git.get("commit") {
             if let Some(url) = commit.get("url").and_then(|v| v.as_str()) {
                 writeln!(f, " |__Commit........: {}", self.style_metadata(url))?;
@@ -346,6 +351,36 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use super::*;
+
+    #[test]
+    fn git_metadata_without_a_remote_omits_the_repository_line() {
+        struct GitMetadata<'a>(&'a DetailsReporter, &'a serde_json::Value);
+        impl Display for GitMetadata<'_> {
+            fn fmt(&self, formatter: &mut Formatter<'_>) -> FmtResult {
+                self.0.write_git_metadata_value(formatter, self.1)
+            }
+        }
+        let reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
+                std::path::PathBuf::new(),
+            ))),
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+        for repository_url in [None, Some(""), Some(" "), Some("https://example.test/repo")] {
+            let mut metadata = serde_json::json!({"file": {"path": "secrets.env"}});
+            if let Some(url) = repository_url {
+                metadata["repository_url"] = serde_json::json!(url);
+            }
+            let output = GitMetadata(&reporter, &metadata).to_string();
+            assert!(output.contains("Path..........: secrets.env"));
+            assert_eq!(
+                output.contains("Git Repo........:"),
+                repository_url.is_some_and(|url| !url.trim().is_empty())
+            );
+        }
+    }
 
     #[test]
     fn blast_radius_fields_align_colons() {

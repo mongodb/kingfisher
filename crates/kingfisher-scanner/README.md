@@ -5,7 +5,7 @@ follows semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-scanner = "2.0.0"
+kingfisher-scanner = "3.0.0"
 anyhow = "1"
 ```
 
@@ -35,6 +35,33 @@ and [runnable example](examples/oauth2_validation.rs). OAuth2 HTTPS token/verifi
 requests retain strict TLS and environment proxy/`NO_PROXY` behavior. Only explicitly
 allowed loopback plain-HTTP token/verifier requests bypass proxies; redirects stay
 disabled for both transports.
+
+Betterleaks v2 rules can include explicit Expr analysis and revocation. Use
+`Validator::analyze_validated` after validation and `Revoker::revoke_validated`
+for deliberate revocation; neither runs during scanning. HTTP fallbacks are off
+by default; use `Validator::builder().http_fallbacks(true)` to enable up to two
+named alternatives. Validation logic reuse is explicit (`reuse_primary_validation_logic: true`),
+defaults to false, and does not imply revocation reuse. Independently opt in with
+`reuse_primary_revocation_logic: true` and explicit replacement URL(s), or define an independent
+action. The CLI uses `--fallbacks`; mutations never fail over between environments.
+CLI `revoke --fallbacks` validates to select its target; SDK result-based revocation
+reuses the retained snapshot without another validation request.
+Direct `Revoker::revoke` uses only the primary action and rejects reserved HTTP
+endpoint-selection variables; use `revoke_validated` for fallback environments.
+Existing YAML/TOML rules need no edits.
+Reuse shares logic, not the primary destination.
+The selected environment stays in the private credential snapshot. See the
+[runnable fallback example](examples/http_fallbacks.rs). Source-aware
+custom filters can use `Scanner::scan_blob_with_attributes` with caller-supplied
+`path`, `git.sha`, or other metadata. See the [library guide](../../docs/LIBRARY.md)
+and [rule format guide](../../docs/RULES.md).
+
+## Migrating to 3.0
+
+Use rules/scanner `3.0.0` together. Existing YAML/TOML rule files remain compatible;
+public Rust schema fields and enum variants require source updates. See the
+[3.0 migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-scanner-30).
+Core stays at 1.0.4; Python SDK 1.6.0 preserves its existing Python API.
 
 ## Migrating to 2.0
 
@@ -163,7 +190,7 @@ scratch allocation or reentrant borrowing errors; prefer `try_with`.
 Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "2.0.0", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.0", features = ["validation"] }
 ```
 
 `validation` enables every supported family and its dependencies. Legacy
@@ -518,6 +545,22 @@ cooperative controls. Choose a protected `temp_dir` parent on every platform.
 SDK staging directories use owner-only Unix mode 0700 (the umask may restrict it
 further); Windows inherits the parent DACL. See
 [the SDK guide](../../docs/PYPI.md#extract-sqlite-and-python-bytecode).
+
+The same `extraction` feature provides
+`extraction::pdf::extract_pdf_text_from_bytes_with_budget(bytes, max_bytes, &control)`.
+It returns `(page-N.txt, UTF-8 bytes)` pairs with separate input/aggregate-output
+caps, `min(max_bytes, 32 MiB)` per decoded page/font stream, and a 10,000-page
+cap. Loading divides the byte budget across a conservative count of literal stream
+markers, at most 32 MiB each, bounding aggregate eager decompression before allocation.
+Overcounted markers can cause valid large streams to be rejected.
+Errors return no partial pages. Controls run around parsing and between pages;
+individual parser calls cannot be preempted, and caps are not a process-memory
+bound. CLI-policy variants accept file paths or resident bytes with `ResourceLimits`.
+`extract_pdf_text_from_bytes_with_control(bytes, resources, &control)` also retains
+the caller's deadline/cancellation while applying CLI resource policy.
+Finding offsets refer to extracted page text; retain original provenance separately.
+No OCR, encrypted PDFs, embedded files, annotations, or Form XObject text extraction.
+See the [PDF example](examples/pdf.rs) and [library guide](../../docs/LIBRARY.md#pdf-page-text).
 
 ## Offline Git inputs (`git` feature)
 

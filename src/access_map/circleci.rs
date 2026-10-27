@@ -264,6 +264,7 @@ fn derive_severity(collaborations: &[CircleCiCollaboration]) -> Severity {
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",

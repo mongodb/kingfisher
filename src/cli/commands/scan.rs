@@ -157,11 +157,14 @@ pub struct ScanArgs {
     )]
     pub max_validation_response_length: usize,
 
-    /// Map validated cloud credentials to their effective identities and blast radius; use only when
-    /// authorized for the target account because this triggers additional network
-    /// requests to determine granted access
+    /// Map validated credentials to identity, permissions, and resources, including risk and coverage
+    /// explanations. Use only when authorized for the target account because mapping triggers
+    /// additional network requests to determine granted access
     #[arg(global = true, long = "blast-radius", alias = "access-map", default_value_t = false)]
     pub access_map: bool,
+
+    #[command(flatten)]
+    pub blast_radius_options: super::access_map::BlastRadiusOptions,
 
     /// Display only validated findings
     #[arg(global = true, long, default_value_t = false, conflicts_with = "validation_filter")]
@@ -991,6 +994,10 @@ impl ScanCommandArgs {
 
         if self.scan_args.access_map && self.scan_args.no_validate {
             bail!("--blast-radius cannot be used with --no-validate");
+        }
+        self.scan_args.blast_radius_options.validate()?;
+        if self.scan_args.blast_radius_options.is_requested() && !self.scan_args.access_map {
+            bail!("blast-radius scope options require --blast-radius");
         }
 
         self.scan_args.validate_audit_log_collisions(None, None)?;
