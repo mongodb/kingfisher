@@ -304,7 +304,6 @@ impl Desktop {
             history: true,
             validate: true,
             access_map: false,
-            blast_radius_options: Default::default(),
             redact: false,
             shell: Shell::native(),
             tab: Tab::Scan,

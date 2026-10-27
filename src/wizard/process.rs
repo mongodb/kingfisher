@@ -354,7 +354,6 @@ mod tests {
             history: false,
             validate: false,
             access_map: false,
-            blast_radius_options: Default::default(),
             redact: true,
             rule: "github".into(),
             exclude: "**/vendor/**".into(),
