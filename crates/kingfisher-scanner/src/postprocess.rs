@@ -34,27 +34,40 @@ pub fn specificity_keep<'a>(
     }
     // `skipReport` helpers have no standalone precedence. They participate only as
     // components attached to an accepted visible primary, including dependency chains.
-    let mut can_suppress: Vec<_> = entries.iter().map(|(rule, _, _)| rule.visible()).collect();
-    let mut attached = vec![false; entries.len()];
     let mut by_rule: FxHashMap<&str, Vec<usize>> = FxHashMap::default();
     for (index, (rule, _, _)) in entries.iter().enumerate() {
         by_rule.entry(rule.id()).or_default().push(index);
     }
-    let mut primaries: VecDeque<_> = can_suppress
-        .iter()
-        .enumerate()
-        .filter_map(|(index, eligible)| eligible.then_some(index))
-        .collect();
-    while let Some(primary) = primaries.pop_front() {
+    let mut components = vec![Vec::new(); entries.len()];
+    for (primary, (rule, _, _)) in entries.iter().enumerate() {
         control.check()?;
-        for dependency in entries[primary].0.syntax().depends_on_rule.iter().flatten() {
+        for dependency in rule.syntax().depends_on_rule.iter().flatten() {
             for &component in by_rule.get(dependency.rule_id.as_str()).into_iter().flatten() {
+                control.check()?;
                 if component_attached(primary, component, dependency) {
-                    attached[component] = true;
-                    if !can_suppress[component] {
-                        can_suppress[component] = true;
-                        primaries.push_back(component);
-                    }
+                    components[primary].push(component);
+                }
+            }
+        }
+    }
+    // Retain every visible ancestor, not just the immediate parent: shared
+    // helpers can have several owners, and dependencies can themselves chain.
+    let mut owners = vec![Vec::new(); entries.len()];
+    let mut visited = vec![usize::MAX; entries.len()];
+    let mut primaries = VecDeque::new();
+    for (owner, (rule, _, _)) in entries.iter().enumerate() {
+        if !rule.visible() || components[owner].is_empty() {
+            continue;
+        }
+        visited[owner] = owner;
+        primaries.push_back(owner);
+        while let Some(primary) = primaries.pop_front() {
+            control.check()?;
+            for &component in &components[primary] {
+                if visited[component] != owner {
+                    visited[component] = owner;
+                    owners[component].push(owner);
+                    primaries.push_back(component);
                 }
             }
         }
@@ -66,31 +79,82 @@ pub fn specificity_keep<'a>(
     }
     for indexes in lines.values_mut() {
         indexes.sort_by_key(|&index| std::cmp::Reverse(entries[index].0.syntax().specificity));
+    }
+    // Express every suppression in terms of a surviving visible finding. A
+    // helper contributes its owners, never itself, and cannot suppress any of
+    // its visible ancestors. Deduplicate owners shared by several helpers.
+    let mut dependents = vec![Vec::new(); entries.len()];
+    let mut remaining = vec![0usize; entries.len()];
+    let mut causes = rustc_hash::FxHashSet::default();
+    for indexes in lines.values() {
         for (position, &index) in indexes.iter().enumerate() {
             control.check()?;
             let (rule, _, secret) = entries[index];
-            // Hidden findings remain available for credential preparation even if a
-            // visible primary has a higher specificity than its helper's rule.
             if secret.is_empty() || !rule.visible() {
                 continue;
             }
+            causes.clear();
             for &higher in &indexes[..position] {
+                control.check()?;
                 let (other, _, value) = entries[higher];
                 if other.syntax().specificity <= rule.syntax().specificity {
                     break;
                 }
-                if keep[higher]
-                    && can_suppress[higher]
-                    && other.id() != rule.id()
-                    && value.find(secret).is_some()
-                {
-                    if attached[index] {
-                        suppress_reporting[index] = true;
-                    } else {
-                        keep[index] = false;
-                    }
-                    break;
+                if other.id() == rule.id() || value.find(secret).is_none() {
+                    continue;
                 }
+                if other.visible() {
+                    causes.insert(higher);
+                }
+                if !owners[higher].contains(&index) {
+                    causes.extend(owners[higher].iter().copied());
+                }
+            }
+            remaining[index] = causes.len();
+            for &cause in &causes {
+                dependents[cause].push(index);
+            }
+        }
+    }
+    // Resolve owners before their dependents, regardless of helper rank or
+    // source-line order. A dead owner cannot suppress through a helper; an
+    // owner restored by that fact can still supply its own helpers.
+    let mut reported = vec![None; entries.len()];
+    for (index, (rule, _, _)) in entries.iter().enumerate() {
+        if rule.visible() && remaining[index] == 0 {
+            reported[index] = Some(true);
+            primaries.push_back(index);
+        }
+    }
+    while let Some(primary) = primaries.pop_front() {
+        control.check()?;
+        let survives = reported[primary].expect("only resolved visible findings are queued");
+        for &dependent in &dependents[primary] {
+            control.check()?;
+            if reported[dependent].is_some() {
+                continue;
+            }
+            if survives {
+                reported[dependent] = Some(false);
+                primaries.push_back(dependent);
+            } else {
+                remaining[dependent] -= 1;
+                if remaining[dependent] == 0 {
+                    reported[dependent] = Some(true);
+                    primaries.push_back(dependent);
+                }
+            }
+        }
+    }
+    for (index, report) in reported.into_iter().enumerate() {
+        // Cyclic helper precedence has no safe winner: preserve visible evidence
+        // rather than lose credentials or choose based on traversal order.
+        if report == Some(false) {
+            if owners[index].is_empty() {
+                keep[index] = false;
+            } else {
+                // Components must remain available for credential preparation.
+                suppress_reporting[index] = true;
             }
         }
     }

@@ -336,6 +336,9 @@ pub fn load_yaml_file<T: DeserializeOwned, P: AsRef<Path>>(path: P) -> Result<T>
 }
 
 #[cfg(test)]
+mod yaml_file_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

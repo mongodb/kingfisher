@@ -10,6 +10,7 @@ use tracing::{debug, warn};
 
 const MAX_ROWS_PER_TABLE: usize = 100_000;
 const MAX_TOTAL_BYTES: usize = 256 * 1024 * 1024;
+const LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// Extract all user tables from a SQLite database as SQL text.
 ///
@@ -65,18 +66,10 @@ fn extract_sqlite(
     control.check()?;
     let conn = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
         .with_context(|| format!("Failed to open SQLite database: {}", path.display()))?;
+    configure_lock_wait(&conn, control)?;
     harden_connection(&conn, resources, max_bytes)?;
     let progress_control = control.clone();
     conn.progress_handler(1000, Some(move || progress_control.check().is_err()))?;
-
-    if control.is_limited() {
-        // A staged SDK snapshot should never be locked. Do not let SQLite's busy
-        // wait outlive a caller deadline; return the locking error immediately.
-        conn.busy_timeout(std::time::Duration::ZERO)?;
-    } else {
-        // Unlimited content extraction must not wait forever for a database lock.
-        conn.busy_timeout(std::time::Duration::from_secs(5))?;
-    }
 
     let tables =
         list_user_tables_with_control(&conn, resources.limit(max_bytes), strict_budget, control)?;
@@ -122,6 +115,13 @@ fn extract_sqlite(
     }
     control.check()?;
     Ok(results)
+}
+
+fn configure_lock_wait(conn: &Connection, control: &ScanControl) -> rusqlite::Result<()> {
+    // A staged SDK snapshot should never be locked. Controlled scans fail
+    // immediately rather than let SQLite's busy wait outlive their deadline.
+    // Unlimited content extraction still retains the finite lock wait.
+    conn.busy_timeout(if control.is_limited() { std::time::Duration::ZERO } else { LOCK_WAIT })
 }
 
 fn harden_connection(conn: &Connection, resources: ResourceLimits, max_bytes: usize) -> Result<()> {
@@ -587,13 +587,31 @@ mod unlimited_tests {
     use super::*;
 
     #[test]
+    fn sqlite_lock_wait_policy_is_finite_and_respects_scan_controls() -> Result<()> {
+        let conn = Connection::open_in_memory()?;
+        for (control, expected_millis) in [
+            (ScanControl::default(), 5000),
+            (ScanControl::default().with_timeout(std::time::Duration::from_secs(30))?, 0),
+            (ScanControl::default().with_cancellation(crate::CancellationToken::default()), 0),
+        ] {
+            configure_lock_wait(&conn, &control)?;
+            let actual_millis: i64 =
+                conn.pragma_query_value(None, "busy_timeout", |row| row.get(0))?;
+            assert_eq!(actual_millis, expected_millis);
+        }
+        Ok(())
+    }
+
+    #[test]
     fn unlimited_content_does_not_wait_forever_for_database_locks() -> Result<()> {
         let temp = tempfile::tempdir()?;
         let path = temp.path().join("locked.db");
         let locked = Connection::open(&path)?;
         locked.execute_batch("CREATE TABLE secrets (token TEXT); BEGIN EXCLUSIVE;")?;
         let (sender, receiver) = std::sync::mpsc::channel();
+        let (started_sender, started_receiver) = std::sync::mpsc::channel();
         let worker = std::thread::spawn(move || {
+            started_sender.send(()).unwrap();
             sender
                 .send(extract_sqlite_contents_with_limits(
                     &path,
@@ -601,13 +619,26 @@ mod unlimited_tests {
                 ))
                 .unwrap();
         });
-        let observed = receiver.recv_timeout(std::time::Duration::from_secs(10));
+        // SQLite bounds requested sleeps, not OS scheduling time. Keep a
+        // generous watchdog on shared CI runners, separate from thread startup;
+        // the policy test above checks the exact five-second setting directly.
+        let watchdog = std::time::Duration::from_secs(30);
+        let observed =
+            started_receiver.recv_timeout(watchdog).and_then(|()| receiver.recv_timeout(watchdog));
         // Release the lock and join even on a regression, keeping the fixture
         // portable and avoiding a stranded thread or an open Windows file handle.
         drop(locked);
         worker.join().unwrap();
         assert!(observed.is_ok(), "unlimited extraction must retain the finite lock wait");
-        assert!(observed.unwrap().is_err());
+        let error = observed.unwrap().unwrap_err();
+        assert!(
+            matches!(
+                error.downcast_ref::<rusqlite::Error>(),
+                Some(rusqlite::Error::SqliteFailure(code, _))
+                    if matches!(code.code, rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked)
+            ),
+            "expected a locking error, got {error:#}"
+        );
         Ok(())
     }
 

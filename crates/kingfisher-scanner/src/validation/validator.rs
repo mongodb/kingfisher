@@ -209,22 +209,48 @@ impl ValidationResult {
                 }
                 variables.extend(endpoint_variables.clone());
             }
-            if let Some(id) = self.accepted_http_fallback.as_deref() {
+            if let Some((index, _, _)) = self.accepted_http_endpoint.as_ref() {
+                // Offline preparation may accept any renderable alternative.
+                // Readiness after validation must inspect only the selected
+                // action and URL, using the trusted snapshot above.
                 input_diagnostics.retain(|issue| issue.stage != "revocation");
+                credential.revocation = None;
                 credential.revocation_reason = None;
-                let action = finding.rule().syntax().selected_revocation(Some(id)).ok().flatten();
+                let action = finding
+                    .rule()
+                    .syntax()
+                    .selected_revocation(self.accepted_http_fallback.as_deref())
+                    .ok()
+                    .flatten();
                 let mut issues = Vec::new();
                 if let Some(action) = action.as_deref() {
-                    let mut values = credential.variables.clone();
-                    values.insert("TOKEN".into(), credential.secret.clone());
-                    super::preparation::revocation(parser, action, &values, &mut issues);
+                    match resolve_revocation(&finding, credential) {
+                        Ok(inputs) => {
+                            let mut values = inputs.variables.clone();
+                            values.insert("TOKEN".into(), inputs.secret.clone());
+                            super::preparation::revocation_with_endpoint(
+                                parser,
+                                action,
+                                &values,
+                                Some(*index),
+                                &mut issues,
+                            );
+                            if issues.is_empty() {
+                                credential.revocation = Some(inputs);
+                            }
+                            credential.revocation_reason = issues.first().map(diagnostic_reason);
+                        }
+                        Err(reason) => {
+                            credential.revocation_reason = Some(reason);
+                            let code = match reason {
+                                ValidationReason::RedactedInput => "redacted_input",
+                                ValidationReason::MissingDependency => "missing_dependency",
+                                _ => "invalid_configuration",
+                            };
+                            issues.push(CredentialInputDiagnostic::new("revocation", code, None));
+                        }
+                    }
                 }
-                credential.revocation =
-                    action.filter(|_| issues.is_empty()).map(|_| RevocationInputs {
-                        secret: credential.secret.clone(),
-                        variables: credential.variables.clone(),
-                    });
-                credential.revocation_reason = issues.first().map(diagnostic_reason);
                 input_diagnostics.extend(issues);
             }
         }

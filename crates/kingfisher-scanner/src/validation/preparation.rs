@@ -83,18 +83,27 @@ fn request(
     request: &HttpRequest,
     globals: &Object,
     stage: &'static str,
+    endpoint_index: Option<usize>,
     diagnostics: &mut Vec<CredentialInputDiagnostic>,
 ) {
-    let mut url_diagnostics = Vec::new();
-    let mut renderable = false;
-    for url in request.urls() {
-        let mut issues = Vec::new();
-        template(parser, url, globals, stage, &mut issues);
-        renderable |= issues.is_empty();
-        url_diagnostics.extend(issues);
-    }
-    if !renderable {
-        diagnostics.extend(url_diagnostics);
+    if let Some(index) = endpoint_index.filter(|_| !request.fallback_urls.is_empty()) {
+        if let Some(url) = request.urls().nth(index) {
+            template(parser, url, globals, stage, diagnostics);
+        } else {
+            diagnostics.push(CredentialInputDiagnostic::new(stage, "invalid_configuration", None));
+        }
+    } else {
+        let mut url_diagnostics = Vec::new();
+        let mut renderable = false;
+        for url in request.urls() {
+            let mut issues = Vec::new();
+            template(parser, url, globals, stage, &mut issues);
+            renderable |= issues.is_empty();
+            url_diagnostics.extend(issues);
+        }
+        if !renderable {
+            diagnostics.extend(url_diagnostics);
+        }
     }
     for (name, value) in &request.headers {
         template(parser, name, globals, stage, diagnostics);
@@ -153,7 +162,7 @@ pub(crate) fn validation(
     );
     let required = match validation {
         Some(Validation::Http(http)) => {
-            request(parser, &http.request, &globals, "validation", diagnostics);
+            request(parser, &http.request, &globals, "validation", None, diagnostics);
             multipart(parser, http.multipart.as_ref(), &globals, "validation", diagnostics);
             BTreeSet::new()
         }
@@ -214,6 +223,18 @@ pub fn revocation(
     values: &BTreeMap<String, String>,
     diagnostics: &mut Vec<CredentialInputDiagnostic>,
 ) {
+    revocation_with_endpoint(parser, revocation, values, None, diagnostics);
+}
+
+// The optional index must come from the validator's private accepted-endpoint
+// snapshot, not from caller-provided VALIDATION_* variables.
+pub(crate) fn revocation_with_endpoint(
+    parser: &liquid::Parser,
+    revocation: &Revocation,
+    values: &BTreeMap<String, String>,
+    endpoint_index: Option<usize>,
+    diagnostics: &mut Vec<CredentialInputDiagnostic>,
+) {
     let mut globals = with_request_template_globals(
         &values.iter().map(|(k, v)| (k.clone().into(), Value::scalar(v.clone()))).collect(),
     );
@@ -239,12 +260,12 @@ pub fn revocation(
         }
         Revocation::GCP | Revocation::Betterleaks(_) => {} // Expression branches handle optional inputs.
         Revocation::Http(http) => {
-            request(parser, &http.request, &globals, "revocation", diagnostics);
+            request(parser, &http.request, &globals, "revocation", endpoint_index, diagnostics);
             multipart(parser, http.multipart.as_ref(), &globals, "revocation", diagnostics);
         }
         Revocation::HttpMultiStep(multi) => {
             for step in &multi.steps {
-                request(parser, &step.request, &globals, "revocation", diagnostics);
+                request(parser, &step.request, &globals, "revocation", endpoint_index, diagnostics);
                 multipart(parser, step.multipart.as_ref(), &globals, "revocation", diagnostics);
                 for extractor in step.extract.iter().flat_map(|extract| extract.values()) {
                     let text = match extractor {

@@ -114,6 +114,73 @@ regex = '(Q7m2V9r4)'
 }
 
 #[test]
+fn custom_specificity_helpers_preserve_ancestors_and_do_not_outlive_owners() {
+    let directory = tempfile::tempdir().unwrap();
+    let rules = directory.path().join("rules.toml");
+    let input = directory.path().join("input.txt");
+    let report = directory.path().join("report.json");
+    for (primary, helper, extra, content, mut expected) in [
+        ("svc_(Q7m2V9r4)", "(Q7m2V9r4)", "", "svc_Q7m2V9r4", vec!["custom.primary"]),
+        (
+            "(Q7m2V9r4)",
+            "helper_(R8n3W0s5)",
+            "[[rules]]\nid='specific'\nregex='(owner_Q7m2V9r4)'\nspecificity=5\n\
+             [[rules]]\nid='generic'\nregex='(W0s5)'\n",
+            "owner_Q7m2V9r4 helper_R8n3W0s5",
+            vec!["custom.specific", "custom.generic"],
+        ),
+    ] {
+        fs::write(
+            &rules,
+            format!(
+                r#"
+[[rules]]
+id='primary'
+regex='{primary}'
+components=[{{id='helper',within='1L'}}]
+[[rules]]
+id='helper'
+regex='{helper}'
+specificity=10
+skipReport=true
+{extra}
+"#
+            ),
+        )
+        .unwrap();
+        fs::write(&input, content).unwrap();
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .arg("scan")
+            .arg(&input)
+            .args([
+                "--git-history=none",
+                "--no-validate",
+                "--no-update-check",
+                "--no-rule-cache",
+                "--load-builtins=false",
+                "--format=json",
+                "--rules-path",
+            ])
+            .arg(&rules)
+            .arg("--output")
+            .arg(&report)
+            .assert()
+            .code(200);
+        let report: serde_json::Value =
+            serde_json::from_slice(&fs::read(&report).unwrap()).unwrap();
+        let mut actual: Vec<_> = report["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|finding| finding["rule"]["id"].as_str().unwrap())
+            .collect();
+        actual.sort_unstable();
+        expected.sort_unstable();
+        assert_eq!(actual, expected);
+    }
+}
+
+#[test]
 fn custom_keywords_gate_raw_and_decoded_sources_in_both_rule_formats() {
     use base64::{Engine, engine::general_purpose::STANDARD};
 

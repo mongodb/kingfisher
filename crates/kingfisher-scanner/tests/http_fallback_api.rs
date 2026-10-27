@@ -408,6 +408,103 @@ async fn revocation_origin_template_works_and_a_fixed_rejected_origin_is_refused
 }
 
 #[tokio::test]
+async fn revocation_readiness_checks_only_the_trusted_selected_url() {
+    use kingfisher_rules::{HttpMultiStepRevocation, RevocationStep};
+
+    for (selected, fallbacks) in [(0, false), (0, true), (1, true)] {
+        for multi_step in [false, true] {
+            for missing_selected in [false, true] {
+                let mutations = Arc::new(Mutex::new(0));
+                let counted = mutations.clone();
+                let first_status =
+                    if selected == 0 { StatusCode::OK } else { StatusCode::UNAUTHORIZED };
+                let server = serve(
+                    Router::new()
+                        .route("/first", get(move || async move { (first_status, "{}") }))
+                        .route("/second", get(|| async { "{}" }))
+                        .route("/lookup", get(|| async { "{}" }))
+                        .route(
+                            "/revoke",
+                            delete(move || {
+                                *counted.lock().unwrap() += 1;
+                                async { "{}" }
+                            }),
+                        ),
+                )
+                .await;
+                let mut rule = syntax(json!([
+                    format!("{}/first", server.url),
+                    format!("{}/second", server.url)
+                ]));
+                let mut urls = [format!("{}/revoke", server.url), format!("{}/revoke", server.url)];
+                let missing = if missing_selected { selected } else { 1 - selected };
+                urls[missing] = format!("{}/keys/{{{{ KEY_ID }}}}", server.url);
+                let action = request(json!(urls), "DELETE");
+                rule.revocation = Some(if multi_step {
+                    Revocation::HttpMultiStep(HttpMultiStepRevocation {
+                        steps: vec![
+                            RevocationStep {
+                                name: Some("lookup".into()),
+                                request: request(json!(format!("{}/lookup", server.url)), "GET"),
+                                multipart: None,
+                                extract: None,
+                            },
+                            RevocationStep {
+                                name: Some("revoke".into()),
+                                request: action,
+                                multipart: None,
+                                extract: None,
+                            },
+                        ],
+                    })
+                } else {
+                    Revocation::Http(HttpValidation {
+                        request: action,
+                        multipart: None,
+                        auth: None,
+                    })
+                });
+                let input = findings(rule, b"demo_abcd1234efgh5678");
+                let validator = Validator::builder()
+                    .allow_internal_ips(true)
+                    .http_fallbacks(fallbacks)
+                    // This must not choose the URL inspected after validation.
+                    .variable("VALIDATION_ENDPOINT_INDEX", (1 - selected).to_string())
+                    .build()
+                    .unwrap();
+                let result =
+                    validator.validate_prepared_findings(input.clone(), &input).await.remove(0);
+                assert_eq!(result.outcome, ValidationOutcome::VerifiedActive);
+                let credential = result.credential.as_ref().unwrap();
+                assert_eq!(credential.variables["VALIDATION_ENDPOINT_INDEX"], selected.to_string());
+                assert_eq!(credential.revocation.is_none(), missing_selected);
+                if missing_selected {
+                    assert_eq!(
+                        credential.revocation_reason,
+                        Some(ValidationReason::MissingDependency)
+                    );
+                    assert!(result.input_diagnostics.iter().any(|issue| {
+                        issue.stage == "revocation"
+                            && issue.code == "missing_variable"
+                            && issue.variable.as_deref() == Some("KEY_ID")
+                    }));
+                    assert!(Revoker::new().unwrap().revoke_validated(&result).await.is_err());
+                    assert_eq!(*mutations.lock().unwrap(), 0);
+                } else {
+                    assert!(
+                        !result.input_diagnostics.iter().any(|issue| issue.stage == "revocation")
+                    );
+                    assert!(
+                        Revoker::new().unwrap().revoke_validated(&result).await.unwrap().revoked
+                    );
+                    assert_eq!(*mutations.lock().unwrap(), 1);
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test]
 async fn successful_endpoint_identity_overwrites_untrusted_captured_selection() {
     let server = serve(Router::new().route("/identity", get(|| async { "{}" }))).await;
     let input = findings(

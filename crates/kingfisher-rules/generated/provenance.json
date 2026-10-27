@@ -24,7 +24,7 @@
     "Cargo.toml": "12117df4ca4aca9f611584a083309aef34a41599aa13c62d8b674d5ca764dcd5",
     "LICENSE": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
     "crates/kingfisher-rules/Cargo.toml": "c83c5aa9e2e2e9790f6eb032d0e97b481b9054b33e74b07cd59609ab1ac49b17",
-    "crates/kingfisher-rules/build_support/betterleaks.rs": "14b865a9de8d46cd8d701b9f56d0e2e801bebb117ee66a45d1dbfbf151f4d83a",
+    "crates/kingfisher-rules/build_support/betterleaks.rs": "831d97ea9edcfbb841b7ef5b962e48a6d3ed26ed4c2e85109ac2b49f9425ebfa",
     "crates/kingfisher-rules/build_support/builtin_docs.rs": "3edb2b444acfb2a7ade1ba7f6e1a3cbac14e6a743e01156293683fcdb4a77225",
     "crates/kingfisher-rules/build_support/imported_capabilities.rs": "2ddeaf7ffdcbedb55d1ccb13eb010ad04a5f451cecd91fd418033c1390242914",
     "crates/kingfisher-rules/build_support/veles.rs": "d60c5d3da89bdb795f670e6d12c302102f14750e8f2b432db6cd0b6cbc3c5880",

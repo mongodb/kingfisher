@@ -236,7 +236,7 @@ struct DependsOnRule {
 #[derive(Serialize)]
 #[serde(tag = "type", content = "content")]
 enum Validation {
-    Betterleaks(BetterleaksValidation),
+    Betterleaks(Box<BetterleaksValidation>),
     Assumed,
     #[serde(rename = "AWS")]
     Aws,
@@ -790,7 +790,7 @@ fn import_config_with_namespace(
             })
         } else {
             validation_expression.map(|expression| {
-                Validation::Betterleaks(BetterleaksValidation {
+                Validation::Betterleaks(Box::new(BetterleaksValidation {
                     source: validation_source.expect("parsed validation has source").to_string(),
                     expression,
                     analyze: analysis_expression,
@@ -799,7 +799,7 @@ fn import_config_with_namespace(
                         access_map: rule_capabilities.access_map.clone(),
                         revocation_bindings: rule_capabilities.revocation_bindings.clone(),
                     },
-                })
+                }))
             })
         };
         let confidence = match rule_capabilities
@@ -882,13 +882,15 @@ fn import_config_with_namespace(
                     validate_revocation_expression(&expression).with_context(|| {
                         format!("unsupported revocation operation in {}", source_rule.id)
                     })?;
-                    Some(serde_yaml::to_value(Validation::Betterleaks(BetterleaksValidation {
-                        source: source.to_string(),
-                        expression,
-                        analyze: None,
-                        components,
-                        capabilities: BetterleaksCapabilities::default(),
-                    }))?)
+                    Some(serde_yaml::to_value(Validation::Betterleaks(Box::new(
+                        BetterleaksValidation {
+                            source: source.to_string(),
+                            expression,
+                            analyze: None,
+                            components,
+                            capabilities: BetterleaksCapabilities::default(),
+                        },
+                    )))?)
                 }
                 (None, None) => None,
             },
