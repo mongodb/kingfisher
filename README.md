@@ -86,32 +86,6 @@ credential revocation for supported providers.
 
 ✅ Built in · ❌ Not supported as a built-in capability.
 
-### Blast-radius mapping: Kingfisher vs. TruffleHog OSS
-
-Both tools provide built-in analysis for major developer, collaboration, and AI services.
-Kingfisher also includes cloud IAM mapping and the additional inventory scopes below.
-
-| Built-in mapping scope | Kingfisher | TruffleHog OSS |
-|---|:---:|:---:|
-| **GitHub, GitLab, Bitbucket** identity and repository access | ✅ | ✅ |
-| **Slack** workspace identity and OAuth scopes | ✅ | ✅ |
-| **Stripe, Shopify** account/store and API access | ✅ | ✅ |
-| **Hugging Face, OpenAI, Anthropic** key/resource access | ✅ | ✅ |
-| **AWS** IAM policies and role paths | ✅ | — |
-| **GCP** IAM hierarchy and service-account paths | ✅ | — |
-| **Azure** Graph/ARM RBAC | ✅ | — |
-| **Salesforce** object/system permissions; **Auth0** scopes, applications, APIs | ✅ | — |
-| **MongoDB** roles/databases/collections; **OpenAI admin** project keys, service accounts, users | ✅ | — |
-| **Terraform** workspaces; **Buildkite** pipelines; **Artifactory** user/groups/repos; **Gitea** repos; **Harness** projects | ✅ | — |
-| **IBM Cloud** key/account/service instances; **PayPal** scopes/account/environment | ✅ | — |
-
-✅ Built-in mapping for the named scope · — No equivalent dedicated mapper in the reviewed OSS source.
-
-Kingfisher includes AWS, GCP, and Azure IAM blast-radius mapping. The reviewed TruffleHog OSS
-version has no dedicated IAM mapper for these clouds; it does validate their credentials and return
-metadata. Shared support can differ in depth.
-[Comparison and reviewed source (2026-10-22)](docs/COMPARISON.md#blast-radius-mapping-kingfisher-vs-trufflehog-oss).
-
 ## Built for Speed and Accuracy
 
 Kingfisher's multithreaded Vectorscan engine recorded the lowest runtime on every repository in the published benchmark suite, from small projects through the Linux kernel and GitLab monorepo.
