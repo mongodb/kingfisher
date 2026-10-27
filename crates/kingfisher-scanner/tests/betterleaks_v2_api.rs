@@ -131,6 +131,8 @@ async fn explicit_analysis_obeys_transport_policy_deadline_and_snapshot_redactio
     use std::time::Duration;
     let calls = Arc::new(AtomicUsize::new(0));
     let count = calls.clone();
+    let response_ready = Arc::new(tokio::sync::Notify::new());
+    let response_gate = response_ready.clone();
     let listener = tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
     let endpoint = format!("http://{}/permissions", listener.local_addr().unwrap());
     let server = tokio::spawn(async move {
@@ -140,8 +142,9 @@ async fn explicit_analysis_obeys_transport_policy_deadline_and_snapshot_redactio
                 "/permissions",
                 get(move || {
                     count.fetch_add(1, Ordering::SeqCst);
-                    async {
-                        tokio::time::sleep(Duration::from_millis(150)).await;
+                    let response_gate = response_gate.clone();
+                    async move {
+                        response_gate.notified().await;
                         "{}"
                     }
                 }),
@@ -168,15 +171,36 @@ async fn explicit_analysis_obeys_transport_policy_deadline_and_snapshot_redactio
     assert_eq!(validated.outcome, ValidationOutcome::VerifiedActive);
     assert!(blocked.analyze_validated(&validated).await.is_err());
     assert_eq!(calls.load(Ordering::SeqCst), 0);
+
+    // Prove the same endpoint/expression works before testing its deadline.
+    // A gate, rather than a short sleep, keeps the timeout response pending on
+    // slow CI runners and Windows x64 emulation alike.
+    let allowed = Validator::builder().allow_internal_ips(true).build().unwrap();
+    response_ready.notify_one();
+    let analysis = allowed.analyze_validated(&validated).await.unwrap();
+    assert_eq!(analysis["capabilities"], serde_json::json!(["read"]));
+    assert_eq!(calls.load(Ordering::SeqCst), 1);
     let short = Validator::builder()
-        .timeout(Duration::from_millis(25))
+        // Isolate the total analysis deadline from reqwest's own request timer.
+        .client(
+            reqwest::Client::builder().redirect(reqwest::redirect::Policy::none()).build().unwrap(),
+        )
+        .timeout(Duration::from_millis(200))
         .allow_internal_ips(true)
         .build()
         .unwrap();
-    assert!(short.analyze_validated(&validated).await.is_err());
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    let error = tokio::time::timeout(Duration::from_secs(10), short.analyze_validated(&validated))
+        .await
+        .expect("analysis must observe its configured deadline")
+        .unwrap_err();
+    assert!(error.to_string().contains("timed out"), "{error:#}");
+    // Expiring before dispatch is valid too; do not require a packet to reach
+    // the server before a total deadline. At most one new request is allowed.
+    let calls_after_timeout = calls.load(Ordering::SeqCst);
+    assert!(matches!(calls_after_timeout, 1 | 2));
     let redacted = validated.into_redacted();
     assert!(short.analyze_validated(&redacted).await.is_err());
-    assert_eq!(calls.load(Ordering::SeqCst), 1);
+    assert_eq!(calls.load(Ordering::SeqCst), calls_after_timeout);
+    response_ready.notify_waiters();
     server.abort();
 }

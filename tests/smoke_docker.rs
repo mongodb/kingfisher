@@ -1,9 +1,13 @@
-use std::{fs::File, io::Write, path::Path, process::Command};
+use std::{fs::File, io::Write, path::Path, process::Command, time::Duration};
 
 use assert_cmd::prelude::*;
 use flate2::{Compression, write::GzEncoder};
 use predicates::prelude::*;
 use serde_json::Value;
+use wiremock::{
+    Mock, MockServer, ResponseTemplate,
+    matchers::{method, path_regex},
+};
 
 fn append_bytes(tar: &mut tar::Builder<impl Write>, path: &str, data: &[u8]) -> anyhow::Result<()> {
     let mut header = tar::Header::new_gnu();
@@ -36,8 +40,82 @@ fn build_docker_archive(path: &Path, github_pat: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+#[tokio::test]
+async fn smoke_scan_docker_image() -> anyhow::Result<()> {
+    let dir = tempfile::tempdir()?;
+    let archive = dir.path().join("image.tar");
+    // kingfisher:ignore (synthetic Docker fixture, not a real token)
+    let secret = "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";
+    build_docker_archive(&archive, secret)?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^(/v[0-9.]+)?/version$"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"ApiVersion":"1.40"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^(/v[0-9.]+)?/images/local-smoke.invalid/fixture:latest/json$"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"Id":"sha256:fixture"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path_regex(r"^(/v[0-9.]+)?/images/local-smoke.invalid/fixture:latest/get$"))
+        .respond_with(ResponseTemplate::new(200).set_body_bytes(std::fs::read(&archive)?))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let mut command = assert_cmd::Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
+    command
+        .timeout(Duration::from_secs(30))
+        .args([
+            "scan",
+            "--docker-image",
+            "local-smoke.invalid/fixture:latest",
+            "--format",
+            "json",
+            "--rule",
+            "betterleaks.github-pat",
+            "--no-validate",
+            "--no-update-check",
+        ])
+        .env("DOCKER_HOST", server.uri())
+        .env("DOCKER_CONFIG", dir.path().join("docker config"))
+        .env("PATH", dir.path().join("empty bin"));
+    for name in [
+        "DOCKER_CONTEXT",
+        "DOCKER_API_VERSION",
+        "DOCKER_TLS",
+        "DOCKER_TLS_VERIFY",
+        "DOCKER_CERT_PATH",
+        "KF_DOCKER_TOKEN",
+    ] {
+        command.env_remove(name);
+    }
+    // Keep the mock API responsive while the real CLI subprocess runs.
+    let output = tokio::task::spawn_blocking(move || command.output()).await??;
+    assert_eq!(output.status.code(), Some(200), "{}", String::from_utf8_lossy(&output.stderr));
+    assert!(String::from_utf8_lossy(&output.stdout).contains(secret));
+    let summary = serde_json::Deserializer::from_slice(&output.stdout)
+        .into_iter::<Value>()
+        .filter_map(Result::ok)
+        .find_map(|value| value.pointer("/metadata/summary").cloned())
+        .expect("scan output must contain a JSON summary");
+    assert!(summary["blobs_scanned"].as_u64().unwrap_or_default() > 0);
+    server.verify().await;
+    Ok(())
+}
+
+// Keep the real registry probe available explicitly. It downloads/scans a large,
+// mutable third-party image and is unsuitable for deterministic PR regression CI.
 #[test]
-fn smoke_scan_docker_image() -> anyhow::Result<()> {
+#[ignore = "manual live registry smoke test; downloads/scans a large third-party image"]
+fn smoke_scan_live_wrongsecrets_image() -> anyhow::Result<()> {
     let mut cmd = Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
     let output = cmd
         .args([
@@ -75,6 +153,7 @@ fn smoke_scan_docker_image() -> anyhow::Result<()> {
 fn smoke_scan_docker_archive() -> anyhow::Result<()> {
     let dir = tempfile::tempdir()?;
     let archive = dir.path().join("image.tar");
+    // kingfisher:ignore (synthetic Docker fixture, not a real token)
     let github_pat = "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";
     build_docker_archive(&archive, github_pat)?;
 

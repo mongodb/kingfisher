@@ -3,6 +3,7 @@
 from pathlib import Path
 import re
 import shlex
+import tomllib
 import unittest
 
 
@@ -41,6 +42,7 @@ class WindowsBuildDependenciesTests(unittest.TestCase):
         self.assertTrue({
             "mingw-w64-x86_64-toolchain",
             "mingw-w64-x86_64-cmake",
+            "mingw-w64-x86_64-lld",
             "mingw-w64-x86_64-nasm",
             "mingw-w64-x86_64-pkgconf",
             "mingw-w64-x86_64-zlib",
@@ -91,6 +93,44 @@ class WindowsBuildDependenciesTests(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
         self.assertIn("WINDOWS_ONLY_DEPS=1 make windows-${{ matrix.arch }}", workflow)
         self.assertIn("make windows-test-${{ matrix.arch }}", workflow)
+
+    def test_windows_test_profile_does_not_optimize_the_entire_sdk_graph(self):
+        manifest = tomllib.loads((ROOT / "Cargo.toml").read_text(encoding="utf-8"))
+        profile = manifest["profile"]["ci-test"]
+        self.assertEqual(profile["opt-level"], 0)
+        self.assertEqual(profile["codegen-units"], 256)
+        self.assertFalse(profile["debug"])
+        self.assertFalse(profile["incremental"])
+        self.assertEqual(profile["lto"], "off")
+        self.assertEqual(manifest["profile"]["release"]["opt-level"], 3)
+
+    def test_windows_tests_keep_static_linking_and_use_lld_only_for_x64_tests(self):
+        makefile = (ROOT / "Makefile").read_text(encoding="utf-8")
+        x64 = makefile.split("windows-test-x64:", 1)[1].split("windows-test-arm64:", 1)[0]
+        arm64 = makefile.split("windows-test-arm64:", 1)[1].split("windows-test:", 1)[0]
+        for recipe in (x64, arm64):
+            self.assertIn("-C target-feature=+crt-static -C link-arg=-static", recipe)
+            self.assertIn("cargo test --locked --profile ci-test --workspace --all-targets", recipe)
+        self.assertIn("command -v ld.lld", x64)
+        self.assertIn("-C link-arg=-fuse-ld=lld", x64)
+        self.assertNotIn("-fuse-ld=lld", arm64)
+        self.assertNotIn("-fuse-ld=lld", windows_recipe("x64"))
+
+    def test_windows_hash_preflight_runs_before_expensive_native_setup(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        windows = workflow.split("  windows:", 1)[1]
+        preflight = windows.index("python scripts/update-rule-bundle.py --check-hashes")
+        self.assertLess(preflight, windows.index("name: Set up MSYS2"))
+        self.assertLess(preflight, windows.index("name: Run tests"))
+
+    def test_only_superseded_pull_request_windows_jobs_are_cancelled(self):
+        workflow = (ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8")
+        windows = workflow.split("  windows:", 1)[1]
+        self.assertIn("group: windows-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ matrix.arch }}", windows)
+        self.assertIn("cancel-in-progress: ${{ github.event_name == 'pull_request' }}", windows)
+        # Keep the existing memory bound; faster linking is not permission to
+        # risk simultaneous giant static links on the hosted Windows runners.
+        self.assertIn("CARGO_BUILD_JOBS: 1", windows)
 
 
 if __name__ == "__main__":

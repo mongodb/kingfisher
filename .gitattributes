@@ -10,5 +10,6 @@ testdata/* linguist-vendored
 /LICENSE text eol=lf
 /Cargo.toml text eol=lf
 /Cargo.lock text eol=lf
+/crates/kingfisher-*/Cargo.toml text eol=lf
 /crates/kingfisher-*/LICENSE text eol=lf
 /docs-site/docs/rules/builtin-rules.md text eol=lf
