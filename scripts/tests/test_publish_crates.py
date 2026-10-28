@@ -109,6 +109,14 @@ class PublishTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Bump its version"):
                 publisher.verify_existing(local, "kingfisher-core", "1.0.0", {"checksum": hashlib.sha256(remote).hexdigest()})
 
+    def test_added_packaged_regression_tests_require_version_bump(self):
+        remote = crate()
+        local = crate(**{"src/blob/identity_tests.rs": b"#[test] fn identity_is_stable() {}"})
+        with patch.object(publisher, "fetch", return_value=remote):
+            with self.assertRaisesRegex(ValueError, r"src/blob/identity_tests\.rs.*Bump its version"):
+                publisher.verify_existing(local, "kingfisher-core", "1.0.0",
+                                          {"checksum": hashlib.sha256(remote).hexdigest()})
+
     def test_provenance_exception_is_limited_to_workspace_manifest_hashes(self):
         def rules(root_hash, source_hash, bundle):
             provenance = {"generator_input_sha256": {"Cargo.toml": root_hash, "Cargo.lock": root_hash,

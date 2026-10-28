@@ -9,6 +9,7 @@ an inexpensive workflow job that gates all native builds. Only PyPI HTTP 404
 means an unused version; an existing empty or yanked release is still reserved.
 """
 import argparse
+import importlib.util
 import json
 import os
 from pathlib import Path
@@ -28,6 +29,11 @@ PACKAGE = "kingfisher-secret-scanner"
 UPSTREAM = "mongodb/kingfisher"
 SHA = re.compile(r"[0-9a-f]{40}\Z")
 SHARED_CRATES = ("kingfisher-python", "kingfisher-core", "kingfisher-rules", "kingfisher-scanner")
+
+_recovery_spec = importlib.util.spec_from_file_location(
+    "crates_recovery", ROOT / "scripts/check-crates-recovery.py")
+crates_recovery = importlib.util.module_from_spec(_recovery_spec)
+_recovery_spec.loader.exec_module(crates_recovery)
 
 
 def sdk_version(root=ROOT):
@@ -130,6 +136,16 @@ def runtime_path(path):
 
 def runtime_changed(root, base, head):
     paths = git(root, "diff", "--name-only", "-z", "--no-renames", base, head, "--").split("\0")
+    if "crates/kingfisher-core/Cargo.toml" in paths:
+        # Reuse the strict recovery gate, not a blanket exception for manifest or
+        # version edits. Source/dependency drift or unverified provenance falls
+        # back to the normal SDK runtime checks and still requires a new release.
+        try:
+            crates_recovery.check_metadata(root, base, head)
+        except (ValueError, KeyError, TypeError, OSError, subprocess.CalledProcessError):
+            pass
+        else:
+            return False
     if any(runtime_path(path) for path in paths):
         return True
     if "Cargo.lock" in paths:

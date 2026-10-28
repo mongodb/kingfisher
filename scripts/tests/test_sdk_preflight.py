@@ -1,4 +1,5 @@
 """Read-only SDK preflight and early release DAG regression tests."""
+import hashlib
 import importlib.util
 import io
 import json
@@ -307,6 +308,58 @@ class SourceComparisonTests(unittest.TestCase):
         return ('version = 4\n[[package]]\nname = "kingfisher-python"\nversion = "1.5.0"\n'
                 'dependencies = ["kingfisher-core"]\n[[package]]\nname = "kingfisher-core"\n'
                 f'version = "{core}"\n[[package]]\nname = "cli-only"\nversion = "{cli}"\n')
+
+    def core_metadata_recovery(self):
+        commits = []
+        for version in ("1.0.4", "1.0.5"):
+            self.write("crates/kingfisher-core/Cargo.toml",
+                       f'[package]\nname = "kingfisher-core"\nversion = "{version}"\n')
+            for name, path, package_version in (
+                    ("kingfisher-bin", "Cargo.toml", "2.14.0"),
+                    ("kingfisher-rules", "crates/kingfisher-rules/Cargo.toml", "2.0.0"),
+                    ("kingfisher-scanner", "crates/kingfisher-scanner/Cargo.toml", "2.0.0")):
+                self.write(path, f'[package]\nname = "{name}"\nversion = "{package_version}"\n'
+                           '[dependencies]\n'
+                           f'kingfisher-core = {{ version = "{version}", path = "core" }}\n')
+            self.write("Cargo.lock", self.lock(core=version))
+            inputs = {path: hashlib.sha256((self.root / path).read_bytes()).hexdigest()
+                      for path in ("Cargo.toml", "Cargo.lock", "crates/kingfisher-rules/Cargo.toml")}
+            self.write("crates/kingfisher-rules/generated/provenance.json", json.dumps({
+                "generator_input_sha256": inputs, "artifact_sha256": {"bundle": "unchanged"},
+            }))
+            commits.append(self.commit())
+        return commits
+
+    def test_verified_core_metadata_recovery_does_not_require_sdk_release(self):
+        base, head = self.core_metadata_recovery()
+        self.assertFalse(preflight.runtime_changed(self.root, base, head))
+        for kind, event in (("push", {"before": base}),
+                            ("pull_request", {"pull_request": {"base": {"sha": base}}})):
+            with self.subTest(event=kind), \
+                    patch.object(preflight, "publication_source", return_value=(kind == "push", False)), \
+                    patch.object(preflight, "version_exists", return_value=True):
+                plan = preflight.workflow_plan(self.root, environment(kind, GITHUB_SHA=head), event, VERSION)
+                self.assertEqual(plan, {"build": kind == "pull_request", "publish": False, "version": VERSION})
+
+    def test_core_metadata_recovery_does_not_hide_runtime_changes(self):
+        base, _ = self.core_metadata_recovery()
+        self.write("crates/kingfisher-core/src/lib.rs", "// changed runtime implementation\n")
+        self.assertTrue(preflight.runtime_changed(self.root, base, self.commit()))
+
+    def test_core_metadata_recovery_does_not_hide_dependency_changes(self):
+        base, _ = self.core_metadata_recovery()
+        path = "crates/kingfisher-core/Cargo.toml"
+        manifest = (self.root / path).read_text(encoding="utf-8")
+        self.write(path, manifest + '\n[dependencies]\nnew-dependency = "1"\n')
+        self.assertTrue(preflight.runtime_changed(self.root, base, self.commit()))
+
+    def test_core_metadata_recovery_requires_matching_provenance(self):
+        base, _ = self.core_metadata_recovery()
+        path = "crates/kingfisher-rules/generated/provenance.json"
+        provenance = json.loads((self.root / path).read_text(encoding="utf-8"))
+        provenance["generator_input_sha256"]["crates/kingfisher-rules/Cargo.toml"] = "stale"
+        self.write(path, json.dumps(provenance))
+        self.assertTrue(preflight.runtime_changed(self.root, base, self.commit()))
 
     def test_meaningful_python_native_shared_and_rule_inputs(self):
         for path in ("python/kingfisher_sdk/inputs.py", "python/src/module.py",

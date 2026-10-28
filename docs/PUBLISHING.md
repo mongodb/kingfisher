@@ -20,7 +20,7 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
-| `kingfisher-core` | `1.0.4` | `kingfisher_core` library |
+| `kingfisher-core` | `1.0.5` | `kingfisher_core` library |
 | `kingfisher-rules` | `3.0.0` | `kingfisher_rules` library |
 | `kingfisher-scanner` | `3.0.0` | `kingfisher_scanner` library |
 | `kingfisher-bin` | `2.15.0` | `kingfisher` executable and library |
@@ -30,8 +30,9 @@ The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
 
 The libraries follow semantic versioning and do not inherit the CLI version.
 Rules/scanner 3.0.0 add public Rust schema fields and Expr variants; upgrade both
-crates together. Existing YAML/TOML files remain compatible. Core is unchanged at
-1.0.4. Python SDK 1.6.0 adds compatible APIs for explicit analysis and source attributes.
+crates together. Existing YAML/TOML files remain compatible. Core 1.0.5 packages
+the added regression tests without changing its public API. Python SDK 1.6.0 adds
+compatible APIs for explicit analysis and source attributes.
 See the [3.0 migration guide](LIBRARY.md#migrating-to-rules-and-scanner-30).
 `kingfisher-rule-bundle` is `0.1.0` with `publish = false`. The external
 `kingfisher-vectorscan` dependency is versioned separately.
@@ -273,21 +274,27 @@ lockfile, provenance and documentation corrections into `main`, then dispatch:
 
 ```sh
 gh workflow run release.yml --repo mongodb/kingfisher --ref main \
-  -f crates_only=true -f release_run_id=39339690046 \
+  -f crates_only=true -f release_run_id=40610865292 \
   -f expected_sha="$(git rev-parse HEAD)"
 ```
 
 Use the original binary release's run ID. The recovery gate requires its successful
 build/test/release jobs, verifies the public tag, and rejects runtime source, dependency,
 feature or catalog changes. Only the core patch version and corresponding dependency,
-lockfile and provenance metadata may change; the independent SDK version correction
+lockfile and provenance metadata may change. Regenerated root manifest, lockfile and
+rules-manifest hashes must match their committed files; all other provenance stays
+unchanged. The independent SDK version correction
 from 1.4.0 to 1.5.0 and its matching lockfile entry are also allowed. Library tests and all four extracted-crate
 build checks still run before authentication and publication. The ordinary release
 path retains its exact tag/commit guards. A runtime change needs a new binary release.
 
+The Python SDK preflight reuses the same strict metadata check, so a verified core
+version/dependency-metadata correction does not require another SDK release. Actual
+SDK/shared runtime or unrelated dependency changes still require a new SDK version.
+
 The original failed run uses its original commit and remains historical; rerunning it
 cannot pick up a later metadata correction. The new recovery run publishes the missing
-crate versions without retagging `v2.14.0` or republishing its assets.
+crate versions without retagging `v2.15.0` or republishing its assets.
 
 ## Independent terminal commands
 
@@ -321,7 +328,7 @@ publishing, first create fresh archives:
 
 ```sh
 cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
-python3 scripts/publish-crates.py --tag v2.14.0
+python3 scripts/publish-crates.py --tag v2.15.0
 python3 -m unittest discover -s scripts/tests -v
 ```
 

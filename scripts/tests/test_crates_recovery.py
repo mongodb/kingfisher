@@ -81,10 +81,13 @@ class RecoveryTests(unittest.TestCase):
         self.regenerate_provenance()
 
     def regenerate_provenance(self):
-        provenance = {"generator_input_sha256": {
-            path: hashlib.sha256((self.root / path).read_bytes()).hexdigest()
-            for path in recovery.PROVENANCE_INPUTS},
-            "artifact_sha256": {"builtin-rules.gz": "unchanged"}, "rules": {"unchanged": True}}
+        # Match the real generator inputs independently of the recovery allowlist.
+        inputs = {path: hashlib.sha256((self.root / path).read_bytes()).hexdigest()
+                  for path in ("Cargo.toml", "Cargo.lock", "crates/kingfisher-rules/Cargo.toml")}
+        inputs["tools/rule-bundle/src/main.rs"] = "unchanged"
+        provenance = {"generator_input_sha256": inputs,
+                      "artifact_sha256": {"builtin-rules.gz": "unchanged"},
+                      "rules": {"unchanged": True}}
         self.write(recovery.PROVENANCE, json.dumps(provenance))
 
     def api(self, path, token):
@@ -111,6 +114,14 @@ class RecoveryTests(unittest.TestCase):
         self.git("update-ref", "refs/remotes/origin/main", "HEAD")
         self.assertEqual(self.validate(), "v2.14.0")
         self.assertEqual(self.git("rev-parse", "v2.14.0"), self.base)
+
+    def test_accepts_regenerated_rules_manifest_hash_for_core_requirement_bump(self):
+        before = json.loads(self.git("show", f"{self.base}:{recovery.PROVENANCE}"))
+        after = json.loads((self.root / recovery.PROVENANCE).read_text(encoding="utf-8"))
+        path = "crates/kingfisher-rules/Cargo.toml"
+        self.assertNotEqual(before["generator_input_sha256"][path],
+                            after["generator_input_sha256"][path])
+        recovery.check_metadata(self.root, self.base)
 
     def sdk_version_change(self, version="1.5.0", lock_version=None):
         self.write(recovery.SDK, (self.root / recovery.SDK).read_text(encoding="utf-8").replace("1.4.0", version))
@@ -154,8 +165,9 @@ class RecoveryTests(unittest.TestCase):
             recovery.check_metadata(self.root, self.base)
 
     def test_release_maintenance_allowlist_is_explicit(self):
-        for path in ("Makefile", "scripts/release-packages.py", "scripts/check-sdk-release.py",
+        for path in ("AGENTS.md", "Makefile", "scripts/release-packages.py", "scripts/check-sdk-release.py",
                      "scripts/tests/test_release_packages.py", "scripts/tests/test_release_makefile.py",
+                     "scripts/tests/test_publish_crates.py",
                      "scripts/tests/test_sdk_preflight.py", "scripts/tests/test_python_sdk_release.py",
                      ".github/workflows/python-sdk.yml", "docs/PYPI.md", "python/README.md",
                      "docs-site/docs/reference/python-bindings.md"):
@@ -245,13 +257,14 @@ class RecoveryTests(unittest.TestCase):
 
     def test_rejects_stale_or_unrelated_provenance_changes(self):
         original = json.loads((self.root / recovery.PROVENANCE).read_text(encoding="utf-8"))
-        for field in ("input", "artifact"):
-            with self.subTest(field=field):
+        for section, path in (("generator_input_sha256", "Cargo.toml"),
+                              ("generator_input_sha256", "Cargo.lock"),
+                              ("generator_input_sha256", "crates/kingfisher-rules/Cargo.toml"),
+                              ("generator_input_sha256", "tools/rule-bundle/src/main.rs"),
+                              ("artifact_sha256", "builtin-rules.gz")):
+            with self.subTest(section=section, path=path):
                 changed = copy.deepcopy(original)
-                if field == "input":
-                    changed["generator_input_sha256"]["Cargo.toml"] = "stale"
-                else:
-                    changed["artifact_sha256"]["builtin-rules.gz"] = "changed"
+                changed[section][path] = "changed"
                 self.write(recovery.PROVENANCE, json.dumps(changed))
                 self.commit()
                 with self.assertRaisesRegex(ValueError, "provenance"):
