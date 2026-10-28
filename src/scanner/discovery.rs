@@ -32,6 +32,7 @@ async fn enumerate_all_repos(
     args: &scan::ScanArgs,
     global_args: &global::GlobalArgs,
     github_event_targets: &[github::GitHubEventScanTarget],
+    datastore: &Arc<Mutex<FindingsStore>>,
     on_repo: &mut (dyn FnMut(crate::git_url::GitUrl) -> Result<()> + Send),
 ) -> Result<Vec<crate::git_url::GitUrl>> {
     let mut repo_urls = Vec::new();
@@ -59,24 +60,70 @@ async fn enumerate_all_repos(
         }
         Ok(())
     };
-    for url in &args.input_specifier_args.git_url {
-        emit(url.clone())?;
+    let mut pending = std::collections::BTreeSet::new();
+    let mut explicit = args
+        .input_specifier_args
+        .git_url
+        .iter()
+        .filter(|url| pending.insert((*url).clone()))
+        .enumerate();
+    let lookup_args = Arc::new(args.clone());
+    let lookup_globals = Arc::new(global_args.clone());
+    let network_limits = kingfisher_scanner::validation::limits::NetworkLimits::current();
+    let mut lookups = tokio::task::JoinSet::new();
+    let mut completed = std::collections::BTreeMap::new();
+    let mut next = 0;
+    loop {
+        // Spawn the bounded window independently of emit(): clone-channel
+        // backpressure must not stop polling in-flight HTTP requests/timeouts.
+        // Count completed, not-yet-emitted results too, to bound the reorder buffer.
+        while lookups.len() + completed.len() < args.num_jobs.clamp(1, 16) {
+            let Some((index, url)) = explicit.next() else { break };
+            let url = url.clone();
+            let args = Arc::clone(&lookup_args);
+            let globals = Arc::clone(&lookup_globals);
+            let datastore = Arc::clone(datastore);
+            lookups.spawn(network_limits.scope(async move {
+                // Optional metadata must never prevent an otherwise successful scan.
+                let needs_id = datastore.lock().unwrap().repo_id(url.as_str()).is_none();
+                if needs_id {
+                    match super::repos::fetch_repository_id(&url, &args, &globals).await {
+                        Ok(Some(id)) => {
+                            datastore.lock().unwrap().register_repo_id(url.as_str(), id)
+                        }
+                        Ok(None) => {}
+                        Err(error) => {
+                            debug!("Could not resolve repository ID for {url}: {error:#}")
+                        }
+                    }
+                }
+                (index, url)
+            }));
+        }
+        let Some(result) = lookups.join_next().await else { break };
+        let (index, url) = result.context("Repository metadata lookup task failed")?;
+        completed.insert(index, url);
+        // Preserve explicit target order, including clone-limit selection.
+        while let Some(url) = completed.remove(&next) {
+            emit(url)?;
+            next += 1;
+        }
     }
     for target in github_event_targets {
         emit(target.repo_url.clone())?;
     }
-    enumerate_github_repos(args, global_args, &mut emit).await?;
-    enumerate_gitlab_repos(args, global_args, &mut emit).await?;
-    for url in enumerate_gitea_repos(args, global_args).await? {
+    enumerate_github_repos(args, global_args, datastore, &mut emit).await?;
+    enumerate_gitlab_repos(args, global_args, datastore, &mut emit).await?;
+    for url in enumerate_gitea_repos(args, global_args, datastore).await? {
         emit(url)?;
     }
-    for url in enumerate_huggingface_repos(args, global_args).await? {
+    for url in enumerate_huggingface_repos(args, global_args, datastore).await? {
         emit(url)?;
     }
-    for url in enumerate_bitbucket_repos(args, global_args).await? {
+    for url in enumerate_bitbucket_repos(args, global_args, datastore).await? {
         emit(url)?;
     }
-    for url in enumerate_azure_repos(args, global_args).await? {
+    for url in enumerate_azure_repos(args, global_args, datastore).await? {
         emit(url)?;
     }
     Ok(repo_urls)
@@ -222,10 +269,16 @@ pub(super) fn start_discovery_and_artifact_fetching(
                 .context("Failed to build artifact-fetcher runtime")?;
             let work = network_limits.scope(async {
                 let repo_urls =
-                    enumerate_all_repos(&args, &global_args, &github_event_targets, &mut |url| {
-                        audit.lock().unwrap().discover_remote(url.as_str());
-                        url_tx.send(url).context("Repository cloning stopped during discovery")
-                    })
+                    enumerate_all_repos(
+                        &args,
+                        &global_args,
+                        &github_event_targets,
+                        &datastore,
+                        &mut |url| {
+                            audit.lock().unwrap().discover_remote(url.as_str());
+                            url_tx.send(url).context("Repository cloning stopped during discovery")
+                        },
+                    )
                     .await?;
                 drop(url_tx);
                 let input = &args.input_specifier_args;
@@ -382,6 +435,137 @@ mod tests {
     use crate::{github::GitHubEventScanSelector, scan_audit::ScanAuditCollector};
     use clap::Parser;
     use tokio::time::Duration;
+
+    #[tokio::test]
+    async fn explicit_repository_metadata_lookups_are_bounded_and_concurrent() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let requests = Arc::new(AtomicUsize::new(0));
+        let observed = requests.clone();
+        let first_window = Arc::new(tokio::sync::Barrier::new(2));
+        let app = axum::Router::new().route(
+            "/{*path}",
+            axum::routing::get(move |uri: axum::http::Uri| {
+                let observed = Arc::clone(&observed);
+                let first_window = Arc::clone(&first_window);
+                async move {
+                    observed.fetch_add(1, Ordering::SeqCst);
+                    if uri.path().ends_with("repo-0") || uri.path().ends_with("repo-1") {
+                        // Neither response can arrive until both requests have
+                        // started. Do not infer concurrency from a short sleep.
+                        first_window.wait().await;
+                    }
+                    ([(axum::http::header::CONTENT_TYPE, "application/json")], r#"{"id":42}"#)
+                }
+            }),
+        );
+        let listener =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut args = crate::direct_validate::create_minimal_scan_args();
+        args.num_jobs = 2;
+        args.input_specifier_args.github_api_url = base.parse().unwrap();
+        args.input_specifier_args.git_url =
+            (0..3).map(|index| format!("{base}/acme/repo-{index}.git").parse().unwrap()).collect();
+        let command =
+            crate::cli::CommandLineArgs::try_parse_from(["kingfisher", "scan", "."]).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(FindingsStore::new(directory.path().to_path_buf())));
+        let mut emitted = Vec::new();
+        temp_env::async_with_vars(
+            [
+                ("KF_GITHUB_TOKEN", None::<&str>),
+                ("KF_GITHUB_APP_ID", None),
+                ("KF_GITHUB_APP_INSTALLATION_ID", None),
+                ("KF_GITHUB_APP_PRIVATE_KEY", None),
+                ("KF_GITHUB_APP_PRIVATE_KEY_PATH", None),
+            ],
+            async {
+                enumerate_all_repos(&args, &command.global_args, &[], &store, &mut |url| {
+                    if emitted.is_empty() {
+                        assert_eq!(requests.load(Ordering::SeqCst), 2, "metadata lookups must overlap without exceeding the configured concurrency");
+                    }
+                    assert!(
+                        store.lock().unwrap().repo_id(url.as_str()).is_some(),
+                        "ID must be registered before scanning starts"
+                    );
+                    emitted.push(url);
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            },
+        )
+        .await;
+        assert_eq!(emitted, args.input_specifier_args.git_url);
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        server.abort();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn explicit_repository_metadata_survives_clone_channel_backpressure() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(|request: &wiremock::Request| {
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 42})).set_delay(
+                    if request.url.path().ends_with("repo-0") {
+                        Duration::from_millis(100)
+                    } else {
+                        Duration::from_millis(300)
+                    },
+                )
+            })
+            .expect(3)
+            .mount(&server)
+            .await;
+        let mut args = crate::direct_validate::create_minimal_scan_args();
+        args.num_jobs = 3;
+        args.input_specifier_args.github_api_url = server.uri().parse().unwrap();
+        args.input_specifier_args.git_url = (0..3)
+            .map(|index| format!("{}/acme/repo-{index}.git", server.uri()).parse().unwrap())
+            .collect();
+        let command =
+            crate::cli::CommandLineArgs::try_parse_from(["kingfisher", "scan", "."]).unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let store = Arc::new(Mutex::new(FindingsStore::new(directory.path().to_path_buf())));
+        let (tx, rx) = crossbeam_channel::bounded(0);
+        let (blocked_tx, blocked_rx) = crossbeam_channel::bounded(1);
+        let receiver = std::thread::spawn(move || {
+            // Metadata requests time out after 5s. Hold the first emit longer
+            // than that while the other responses arrive independently.
+            blocked_rx.recv().unwrap();
+            std::thread::sleep(Duration::from_secs(6));
+            rx.into_iter().collect::<Vec<_>>()
+        });
+        temp_env::async_with_vars(
+            [
+                ("KF_GITHUB_TOKEN", None::<&str>),
+                ("KF_GITHUB_APP_ID", None),
+                ("KF_GITHUB_APP_INSTALLATION_ID", None),
+                ("KF_GITHUB_APP_PRIVATE_KEY", None),
+                ("KF_GITHUB_APP_PRIVATE_KEY_PATH", None),
+            ],
+            async {
+                let mut first = true;
+                enumerate_all_repos(&args, &command.global_args, &[], &store, &mut |url| {
+                    assert!(store.lock().unwrap().repo_id(url.as_str()).is_some());
+                    if first {
+                        blocked_tx.send(()).unwrap();
+                        first = false;
+                    }
+                    tx.send(url).unwrap();
+                    Ok(())
+                })
+                .await
+                .unwrap();
+            },
+        )
+        .await;
+        drop(tx);
+        assert_eq!(receiver.join().unwrap(), args.input_specifier_args.git_url);
+    }
 
     #[tokio::test]
     async fn canceled_artifact_fetch_does_not_wait_for_provider_response() {

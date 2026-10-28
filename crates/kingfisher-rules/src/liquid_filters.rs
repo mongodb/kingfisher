@@ -1100,37 +1100,74 @@ struct RsaSha256Filter {
 
 impl Filter for RsaSha256Filter {
     fn evaluate(&self, input: &dyn ValueView, runtime: &dyn Runtime) -> Result<Value> {
-        use aws_lc_rs::{rand::SystemRandom, signature, signature::KeyPair};
-
         let args = self.args.evaluate(runtime)?;
-        // Never include parser errors or key material in template diagnostics.
-        let pem = pem::parse(args.key.as_bytes())
-            .map_err(|_| LiquidError::with_msg("rsa_sha256: invalid private key PEM"))?;
-        let pkcs8 = match pem.tag() {
-            "PRIVATE KEY" => true,
-            "RSA PRIVATE KEY" => false,
-            _ => {
-                return Err(LiquidError::with_msg(
-                    "rsa_sha256: expected an unencrypted PKCS#1 or PKCS#8 RSA private key",
-                ));
-            }
-        };
-        let der = Zeroizing::new(pem.into_contents());
-        let key = if pkcs8 {
-            signature::RsaKeyPair::from_pkcs8(&der)
-        } else {
-            signature::RsaKeyPair::from_der(&der)
-        }
-        .map_err(|_| LiquidError::with_msg("rsa_sha256: invalid RSA private key"))?;
-        let mut signature = vec![0; key.public_key().modulus_len()];
-        key.sign(
-            &signature::RSA_PKCS1_SHA256,
-            &SystemRandom::new(),
+        Ok(Value::scalar(sign_rs256(
             input.to_kstr().as_bytes(),
-            &mut signature,
-        )
-        .map_err(|_| LiquidError::with_msg("rsa_sha256: signing failed"))?;
-        Ok(Value::scalar(general_purpose::URL_SAFE_NO_PAD.encode(signature)))
+            args.key.as_bytes(),
+            "rsa_sha256",
+        )?))
+    }
+}
+
+fn sign_rs256(message: &[u8], key_pem: &[u8], filter: &str) -> Result<String> {
+    use aws_lc_rs::{rand::SystemRandom, signature, signature::KeyPair};
+
+    // Never include parser errors or key material in template diagnostics.
+    let pem = pem::parse(key_pem)
+        .map_err(|_| LiquidError::with_msg(format!("{filter}: invalid private key PEM")))?;
+    let pkcs8 = match pem.tag() {
+        "PRIVATE KEY" => true,
+        "RSA PRIVATE KEY" => false,
+        _ => {
+            return Err(LiquidError::with_msg(format!(
+                "{filter}: expected an unencrypted PKCS#1 or PKCS#8 RSA private key"
+            )));
+        }
+    };
+    let der = Zeroizing::new(pem.into_contents());
+    let key = if pkcs8 {
+        signature::RsaKeyPair::from_pkcs8(&der)
+    } else {
+        signature::RsaKeyPair::from_der(&der)
+    }
+    .map_err(|_| LiquidError::with_msg(format!("{filter}: invalid RSA private key")))?;
+    let mut signature = vec![0; key.public_key().modulus_len()];
+    key.sign(&signature::RSA_PKCS1_SHA256, &SystemRandom::new(), message, &mut signature)
+        .map_err(|_| LiquidError::with_msg(format!("{filter}: signing failed")))?;
+    Ok(general_purpose::URL_SAFE_NO_PAD.encode(signature))
+}
+
+#[derive(Clone, ParseFilter, FilterReflection, Default)]
+#[filter(
+    name = "jwt_sign",
+    description = "Sign a JSON claims object as a complete RS256 JWT with an RSA private key PEM.",
+    parameters(RsaSha256Args),
+    parsed(JwtSignFilter)
+)]
+pub struct JwtSign;
+
+#[derive(Debug, FromFilterParameters, Display_filter)]
+#[name = "jwt_sign"]
+struct JwtSignFilter {
+    #[parameters]
+    args: RsaSha256Args,
+}
+
+impl Filter for JwtSignFilter {
+    fn evaluate(&self, input: &dyn ValueView, runtime: &dyn Runtime) -> Result<Value> {
+        let args = self.args.evaluate(runtime)?;
+        let claims = input.to_kstr();
+        let value: serde_json::Value = serde_json::from_str(&claims)
+            .map_err(|_| LiquidError::with_msg("jwt_sign: expected a JSON claims object"))?;
+        if !value.is_object() {
+            return Err(LiquidError::with_msg("jwt_sign: expected a JSON claims object"));
+        }
+        // Preserve caller-supplied claims exactly; timestamps and issuer remain explicit.
+        let header = general_purpose::URL_SAFE_NO_PAD.encode(br#"{"typ":"JWT","alg":"RS256"}"#);
+        let payload = general_purpose::URL_SAFE_NO_PAD.encode(claims.as_bytes());
+        let message = format!("{header}.{payload}");
+        let signature = sign_rs256(message.as_bytes(), args.key.as_bytes(), "jwt_sign")?;
+        Ok(Value::scalar(format!("{message}.{signature}")))
     }
 }
 
@@ -1251,6 +1288,7 @@ pub fn register_all(builder: liquid::ParserBuilder) -> liquid::ParserBuilder {
         .filter(IbanValidFilter)
         .filter(JwtHeaderFilter)
         .filter(RsaSha256)
+        .filter(JwtSign)
         .filter(B64EncFilter)
         .filter(B64DecFilter)
         .filter(NewlineFilter)
@@ -1487,6 +1525,67 @@ mod tests {
     fn rsa_test_key() -> &'static rsa::RsaPrivateKey {
         static KEY: std::sync::OnceLock<rsa::RsaPrivateKey> = std::sync::OnceLock::new();
         KEY.get_or_init(|| rsa::RsaPrivateKey::new(&mut rsa::rand_core::OsRng, 2048).unwrap())
+    }
+
+    #[test]
+    fn jwt_sign_builds_a_verifiable_jwt_and_preserves_claims() {
+        use rsa::{
+            pkcs1::{EncodeRsaPrivateKey, LineEnding},
+            pkcs8::EncodePrivateKey,
+            signature::Verifier,
+        };
+
+        let key = rsa_test_key();
+        let verifier = rsa::pkcs1v15::VerifyingKey::<rsa::sha2::Sha256>::new(key.to_public_key());
+        let template = parser().parse("Bearer {{ CLAIMS | jwt_sign: TOKEN }}").unwrap();
+        let claims = r#" {"iss":"12345","iat":1,"exp":601,"custom":{"roles":["reader"]}} "#;
+        for line_ending in [LineEnding::LF, LineEnding::CRLF] {
+            for pem in
+                [key.to_pkcs1_pem(line_ending).unwrap(), key.to_pkcs8_pem(line_ending).unwrap()]
+            {
+                let rendered =
+                    template.render(&object!({ "TOKEN": pem.as_str(), "CLAIMS": claims })).unwrap();
+                let token = rendered.strip_prefix("Bearer ").unwrap();
+                let parts: Vec<_> = token.split('.').collect();
+                assert_eq!(parts.len(), 3);
+                let decode = |part| general_purpose::URL_SAFE_NO_PAD.decode(part).unwrap();
+                assert_eq!(
+                    serde_json::from_slice::<serde_json::Value>(&decode(parts[0])).unwrap(),
+                    serde_json::json!({"typ": "JWT", "alg": "RS256"})
+                );
+                assert_eq!(decode(parts[1]), claims.as_bytes());
+                let signature =
+                    rsa::pkcs1v15::Signature::try_from(decode(parts[2]).as_slice()).unwrap();
+                let message = format!("{}.{}", parts[0], parts[1]);
+                verifier.verify(message.as_bytes(), &signature).unwrap();
+                assert!(verifier.verify(b"changed.payload", &signature).is_err());
+            }
+        }
+    }
+
+    #[test]
+    fn jwt_sign_rejects_invalid_claims_without_disclosing_the_signing_key() {
+        let template = parser().parse("{{ CLAIMS | jwt_sign: TOKEN }}").unwrap();
+        let marker = "sensitive-claims-or-key-marker";
+        for claims in ["not-json", "[]", "null", "true", "123", r#""string""#] {
+            let error = template
+                .render(&object!({"CLAIMS": claims, "TOKEN": marker}))
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains("jwt_sign: expected a JSON claims object"));
+            assert!(!error.contains(marker));
+        }
+        for key in [
+            marker.to_string(),
+            pem::encode(&pem::Pem::new("PRIVATE KEY", marker)),
+            pem::encode(&pem::Pem::new("ENCRYPTED PRIVATE KEY", marker)),
+        ] {
+            let error =
+                template.render(&object!({"CLAIMS": "{}", "TOKEN": key})).unwrap_err().to_string();
+            assert!(error.contains("jwt_sign:"));
+            assert!(!error.contains(marker));
+            assert!(!error.contains(&general_purpose::STANDARD.encode(marker)));
+        }
     }
 
     #[test]

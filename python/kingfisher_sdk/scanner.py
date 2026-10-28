@@ -2,7 +2,7 @@
 from __future__ import annotations
 import os
 from dataclasses import dataclass, field
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from . import _native
 from .core import Finding
 from .rules import Rules
@@ -91,6 +91,23 @@ class Scanner:
         if not isinstance(data, bytes):
             raise TypeError("data must be str or bytes")
         return [Finding(f) for f in self._native.scan_bytes(data, timeout=timeout, cancellation=cancellation)]
+
+    def scan_with_attributes(self, data: str | bytes, attributes: Mapping[str, str], *,
+                             timeout: float | None = None,
+                             cancellation: CancellationToken | None = None) -> list[Finding]:
+        """Scan text/bytes offline with explicit Betterleaks source attributes.
+
+        ``path`` selects the logical source path; other keys such as ``git.sha``
+        and ``git.author_name`` are available to source/finding filters. Source
+        attributes are included in deduplication. Existing detection policy and
+        full-match component context apply exactly as for other scan methods.
+        """
+        if isinstance(data, str):
+            data = data.encode("utf-8")
+        if not isinstance(data, bytes):
+            raise TypeError("data must be str or bytes")
+        return [Finding(finding) for finding in self._native.scan_with_attributes(
+            data, dict(attributes), timeout=timeout, cancellation=cancellation)]
 
     def scan_file(self, path: str | os.PathLike[str], *, timeout: float | None = None,
                   cancellation: CancellationToken | None = None) -> list[Finding]:

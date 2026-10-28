@@ -54,9 +54,15 @@ impl Rules {
     }
 
     pub fn update(&mut self, other: Rules) {
-        if self.betterleaks_prefilter.is_none() {
-            self.betterleaks_prefilter = other.betterleaks_prefilter;
-        }
+        self.betterleaks_prefilter =
+            match (self.betterleaks_prefilter.take(), other.betterleaks_prefilter) {
+                (Some(left), Some(right)) => Some(BetterleaksExpr::Binary {
+                    operator: "||".into(),
+                    left: Box::new(left),
+                    right: Box::new(right),
+                }),
+                (left, right) => left.or(right),
+            };
         self.rules.extend(other.rules);
     }
 
@@ -68,10 +74,14 @@ impl Rules {
         for (path, contents) in iterable {
             match serde_yaml::from_slice::<RawRules>(contents) {
                 Ok(rs) => {
-                    if rules.betterleaks_prefilter.is_none() {
-                        rules.betterleaks_prefilter = rs.betterleaks_prefilter;
-                    }
+                    rules.update(Self {
+                        rules: BTreeMap::new(),
+                        betterleaks_prefilter: rs.betterleaks_prefilter,
+                    });
                     for rule_syntax in rs.rules {
+                        rule_syntax.check_http_fallbacks().with_context(|| {
+                            format!("Invalid HTTP fallbacks for rule {}", rule_syntax.id)
+                        })?;
                         if !rule_syntax.confidence.is_at_least(&confidence) {
                             continue;
                         }
@@ -160,6 +170,9 @@ impl Rules {
                 let mut rules = Rules::new();
                 rules.betterleaks_prefilter = rs.betterleaks_prefilter;
                 for rule_syntax in rs.rules {
+                    rule_syntax.check_http_fallbacks().with_context(|| {
+                        format!("Invalid HTTP fallbacks for rule {}", rule_syntax.id)
+                    })?;
                     if !rule_syntax.confidence.is_at_least(&confidence) {
                         continue;
                     }
@@ -323,6 +336,9 @@ pub fn load_yaml_file<T: DeserializeOwned, P: AsRef<Path>>(path: P) -> Result<T>
 }
 
 #[cfg(test)]
+mod yaml_file_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -333,6 +349,7 @@ mod tests {
         let fixtures: &[(&str, &[u8])] = &[
             ("algolia.yml", include_bytes!("fixtures/kingfisher/algolia.yml")),
             ("modal.yml", include_bytes!("fixtures/kingfisher/modal.yml")),
+            ("package-upload.yml", include_bytes!("fixtures/kingfisher/package-upload.yml")),
             ("pypi.yml", include_bytes!("fixtures/kingfisher/pypi.yml")),
             ("twitch.yml", include_bytes!("fixtures/kingfisher/twitch.yml")),
         ];
@@ -344,7 +361,7 @@ mod tests {
         let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("src/fixtures/kingfisher");
         let file_rules = Rules::from_paths([directory], Confidence::Low).unwrap();
         assert_eq!(rules.rules, file_rules.rules);
-        assert_eq!(rules.num_rules(), 5);
+        assert_eq!(rules.num_rules(), 6);
 
         let mut http_rules = 0;
         for rule in rules.iter_rules() {
@@ -361,7 +378,7 @@ mod tests {
                 assert_eq!(*rule, round_trip);
             }
         }
-        assert_eq!(http_rules, 3);
+        assert_eq!(http_rules, 4);
 
         let algolia = &rules.rules["kingfisher.algolia.1"];
         let Some(Validation::Http(http)) = &algolia.validation else { panic!() };

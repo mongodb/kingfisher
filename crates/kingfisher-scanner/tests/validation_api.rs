@@ -28,6 +28,7 @@ fn syntax() -> RuleSyntax {
         request: HttpRequest {
             method: "GET".into(),
             url: "{{ ENDPOINT }}/identity".into(),
+            fallback_urls: Vec::new(),
             headers: BTreeMap::from([("Authorization".into(), "Bearer {{ TOKEN }}".into())]),
             body: None,
             multipart: None,
@@ -368,6 +369,7 @@ async fn missing_revocation_inputs_block_readiness_and_preserve_live_validation(
                 match_all_status: false,
                 negative: false,
             }]),
+            fallback_urls: Vec::new(),
             headers: BTreeMap::new(),
             body: None,
             multipart: None,

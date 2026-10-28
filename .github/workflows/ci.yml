@@ -284,6 +284,11 @@ jobs:
   windows:
     name: Windows ${{ matrix.arch }}
     runs-on: ${{ matrix.runs_on }}
+    # Do not keep compiling superseded PR revisions for hours. Release callers
+    # retain their full runs; only newer PR revisions cancel older Windows jobs.
+    concurrency:
+      group: windows-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}-${{ matrix.arch }}
+      cancel-in-progress: ${{ github.event_name == 'pull_request' }}
     env:
       # Large static test binaries can exhaust memory when linked concurrently.
       CARGO_BUILD_JOBS: 1
@@ -310,6 +315,12 @@ jobs:
         with:
           python-version: '3.13'
           architecture: ${{ matrix.arch }}
+
+      # Catch byte/hash drift (including CRLF checkout mistakes) before the
+      # expensive native toolchain setup and workspace build. Full regeneration
+      # and importer tests still run in the workspace suite below.
+      - name: Verify prepared rule hashes (fast preflight)
+        run: python scripts/update-rule-bundle.py --check-hashes
 
       - name: Set up MSYS2
         uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0

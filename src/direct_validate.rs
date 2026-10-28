@@ -56,6 +56,9 @@ pub struct DirectValidationResult {
     pub validation_outcome: ValidationOutcome,
     /// HTTP status code from the validation request (if applicable).
     pub status_code: Option<u16>,
+    /// Named environment that verified the credential; absent for legacy/primary results.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fallback_id: Option<String>,
     /// Response body or error message.
     pub message: String,
 }
@@ -120,11 +123,6 @@ fn find_validation_rule<'a>(selector: &str, rules: &'a BTreeMap<String, Rule>) -
     Ok(matches[0])
 }
 
-/// Extract a string value from the globals object.
-pub(crate) fn get_global_var(globals: &Object, name: &str) -> Option<String> {
-    globals.get(name).and_then(|v| v.to_kstr().to_string().into())
-}
-
 /// Extract all template variables used in a validation configuration.
 pub(crate) fn extract_validation_vars(validation: &Validation) -> BTreeSet<String> {
     let mut vars = BTreeSet::new();
@@ -136,7 +134,9 @@ pub(crate) fn extract_validation_vars(validation: &Validation) -> BTreeSet<Strin
         }
         Validation::Http(http) => {
             // Extract from URL
-            vars.extend(extract_template_vars(&http.request.url));
+            for url in http.request.urls() {
+                vars.extend(extract_template_vars(url));
+            }
 
             // Extract from headers
             for (key, value) in &http.request.headers {
@@ -266,6 +266,7 @@ pub(crate) fn build_globals(
         globals.insert(name.into(), Value::scalar(value));
     }
 
+    crate::validation::parse_betterleaks_context_globals(&mut globals)?;
     hydrate_endpoint_globals_for_rule(rule_id, &mut globals);
 
     Ok(globals)
@@ -359,6 +360,7 @@ pub async fn run_direct_validation(
                 is_valid: false,
                 validation_outcome: ValidationOutcome::NotAttempted,
                 status_code: None,
+                fallback_id: None,
                 message: "Generic API key validation is not authoritative".to_string(),
             });
             continue;
@@ -373,8 +375,16 @@ pub async fn run_direct_validation(
             }
         };
 
-        // Extract template variables from validation and build globals
-        let mut template_vars = extract_validation_vars(validation);
+        // Positional --arg assignments always use the primary's variables.
+        // Enabling fallbacks must not shift a value to a different field or
+        // destination. Fallback-only inputs can be supplied explicitly via --var.
+        let mut template_vars = if matches!(validation, Validation::Http(_)) {
+            // Clear legacy alternate URLs too, not just named profiles.
+            let (_, primary) = rule.syntax().http_validations(false)?.remove(0);
+            extract_validation_vars(&Validation::Http(primary))
+        } else {
+            extract_validation_vars(validation)
+        };
         if matches!(validation, Validation::AWS)
             && crate::validation::is_aws_session_token_rule(rule)
         {
@@ -419,7 +429,7 @@ pub async fn run_direct_validation(
         let missing_vars: Vec<&String> =
             template_vars.iter().filter(|var| globals.get(var.as_str()).is_none()).collect();
 
-        if !missing_vars.is_empty() {
+        if !missing_vars.is_empty() && !matches!(validation, Validation::Http(_)) {
             // Build a map from variable name to the rule it depends on
             let depends_on_map: BTreeMap<String, &str> = rule
                 .syntax()
@@ -451,22 +461,85 @@ pub async fn run_direct_validation(
             );
         }
 
+        if matches!(validation, Validation::Http(_)) {
+            let values = globals
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.to_kstr().to_string()))
+                .collect();
+            let mut issues = Vec::new();
+            kingfisher_scanner::validation::inspect_rule_validation(
+                &parser,
+                rule.syntax(),
+                global_args.http_fallbacks,
+                &values,
+                &mut issues,
+            );
+            if !issues.is_empty() {
+                let hints = issues
+                    .iter()
+                    .filter(|issue| issue.code == "missing_variable")
+                    .filter_map(|issue| issue.variable.as_deref())
+                    .map(|variable| format!("--var {variable}=<value>"))
+                    .collect::<BTreeSet<_>>()
+                    .into_iter()
+                    .collect::<Vec<_>>();
+                let hint = if hints.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "\n\nProvide them using: kingfisher validate --rule {rule_id} {} <secret>",
+                        hints.join(" ")
+                    )
+                };
+                bail!(
+                    "HTTP validation inputs are missing or invalid: {}{hint}",
+                    issues
+                        .iter()
+                        .map(|issue| {
+                            let name = issue.variable.as_deref().unwrap_or(issue.code);
+                            if issue.code == "missing_variable"
+                                && let Some(dependency) =
+                                    rule.syntax().depends_on_rule.iter().flatten().find(
+                                        |dependency| dependency.variable.eq_ignore_ascii_case(name),
+                                    )
+                            {
+                                format!(
+                                    "{name} (normally captured from rule '{}')",
+                                    dependency.rule_id
+                                )
+                            } else {
+                                name.to_owned()
+                            }
+                        })
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
+
         if let Some(limiter) = rate_limiter.as_deref()
             && should_rate_limit_validation(validation)
+            && !matches!(validation, Validation::Http(_))
         {
             limiter.wait_for_rule(&rule_id).await;
         }
 
         // The shared engine returns explicit outcomes and credential-safe request
         // failure messages, including when validation cannot reach the provider.
-        let checked = kingfisher_scanner::validation::ValidationEngine::new(&client, &parser)
-            .credential_uri_client(&credential_uri_client)
-            .timeout(timeout)
-            .retries(args.retries)
-            .allow_internal_ips(global_args.allow_internal_ips)
-            .use_lax_tls(use_lax_tls)
-            .validate(rule, &globals)
-            .await;
+        let http_gate = rate_limiter.as_deref().map(|limiter| limiter.http_gate(&rule_id));
+        let checked =
+            kingfisher_scanner::validation::ValidationEngine::new(&client, &parser)
+                .credential_uri_client(&credential_uri_client)
+                .timeout(timeout)
+                .retries(args.retries)
+                .http_fallbacks(global_args.http_fallbacks)
+                .http_request_gate(http_gate.as_ref().map(|gate| {
+                    gate as &dyn kingfisher_scanner::validation::engine::HttpRequestGate
+                }))
+                .allow_internal_ips(global_args.allow_internal_ips)
+                .use_lax_tls(use_lax_tls)
+                .validate(rule, &globals)
+                .await;
         let mut result = DirectValidationResult {
             rule_id: String::new(),
             rule_name: String::new(),
@@ -474,6 +547,7 @@ pub async fn run_direct_validation(
                 || checked.outcome == ValidationOutcome::Assumed,
             validation_outcome: checked.outcome,
             status_code: checked.http_status,
+            fallback_id: checked.endpoint_variables().remove("VALIDATION_FALLBACK_ID"),
             message: if checked.response_body.is_empty() {
                 checked
                     .reason
@@ -633,6 +707,7 @@ pub(crate) fn create_minimal_scan_args() -> crate::cli::commands::scan::ScanArgs
         no_validate: true,
         no_timeouts: false,
         access_map: false,
+        blast_radius_options: Default::default(),
         rule_stats: false,
         only_valid: false,
         validation_filter: None,
@@ -743,6 +818,20 @@ pub fn any_actionable(results: &[DirectValidationResult]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use liquid_core::ValueView;
+
+    #[test]
+    fn explicit_commands_decode_original_betterleaks_named_capture_context() {
+        let globals=build_globals("custom.primary","secret",&[],&[
+            "__BETTERLEAKS_FINDING_CAPTURES={\"MixedCase\":\"original-value\"}".into(),
+            "__BETTERLEAKS_COMPONENTS={\"custom.helper\":{\"secret\":\"component\",\"captures\":{\"Realm\":\"east\"}}}".into(),
+        ],&BTreeSet::new(),&ProviderEndpointOverrides::default()).unwrap();
+        assert_eq!(
+            serde_json::to_value(&globals["__BETTERLEAKS_FINDING_CAPTURES"]).unwrap(),
+            serde_json::json!({"MixedCase":"original-value"})
+        );
+        assert!(globals["__BETTERLEAKS_COMPONENTS"].as_object().is_some());
+    }
 
     #[tokio::test]
     async fn direct_http_credential_uri_preserves_sanitized_validator_errors() {
@@ -782,8 +871,13 @@ mod tests {
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         })
     }
 

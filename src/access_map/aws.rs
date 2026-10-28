@@ -29,7 +29,7 @@ use percent_encoding::percent_decode_str;
 use serde_json::Value;
 use tracing::warn;
 
-use crate::cli::commands::access_map::AccessMapArgs;
+use crate::cli::commands::access_map::{AccessMapArgs, BlastRadiusOptions};
 
 use super::{
     AccessMapResult, AccessProbeEvidence, AccessSummary, AccessTokenDetails, AuthorizationEvidence,
@@ -51,10 +51,12 @@ const MAX_BEDROCK_PROFILES: usize = 100;
 const MAX_BEDROCK_PROFILE_PAGES: usize = 2;
 const MAX_BEDROCK_AVAILABILITY_CHECKS: usize = 8;
 const BEDROCK_REQUEST_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_REGION_SCOPES: usize = 8;
+const MAX_INVENTORY_PAGES: usize = 8;
 
 pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
     let config = load_config_from_path(args.credential_path.as_deref()).await?;
-    map_access_with_config(config).await
+    map_access_with_config_and_options(config, &args.analysis).await
 }
 
 fn permissions_for_prefix(summary: &PermissionSummary, prefix: &str) -> Vec<String> {
@@ -79,6 +81,21 @@ pub async fn map_access_with_credentials(
     secret_key: &str,
     session_token: Option<&str>,
 ) -> Result<AccessMapResult> {
+    map_access_with_credentials_and_options(
+        access_key,
+        secret_key,
+        session_token,
+        &BlastRadiusOptions::default(),
+    )
+    .await
+}
+
+pub async fn map_access_with_credentials_and_options(
+    access_key: &str,
+    secret_key: &str,
+    session_token: Option<&str>,
+    options: &BlastRadiusOptions,
+) -> Result<AccessMapResult> {
     let credentials = match session_token {
         Some(token) => {
             Credentials::new(access_key, secret_key, Some(token.to_string()), None, "access_map")
@@ -87,10 +104,46 @@ pub async fn map_access_with_credentials(
     };
 
     let config = load_config(Some(credentials)).await?;
-    map_access_with_config(config).await
+    map_access_with_config_and_options(config, options).await
 }
 
+#[cfg(test)]
 async fn map_access_with_config(config: SdkConfig) -> Result<AccessMapResult> {
+    map_access_with_config_and_options(config, &BlastRadiusOptions::default()).await
+}
+
+fn regional_configs(config: &SdkConfig, requested: &[String]) -> Result<Vec<SdkConfig>> {
+    if requested.is_empty() {
+        return Ok(vec![config.clone()]);
+    }
+    let mut regions = Vec::new();
+    for region in requested {
+        if region.is_empty()
+            || !region
+                .bytes()
+                .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-')
+        {
+            return Err(anyhow!("Invalid AWS region identifier"));
+        }
+        if !regions.contains(region) {
+            regions.push(region.clone());
+        }
+    }
+    if regions.len() > MAX_REGION_SCOPES {
+        return Err(anyhow!("AWS inventory supports at most {MAX_REGION_SCOPES} regions"));
+    }
+    Ok(regions
+        .into_iter()
+        .map(|region| config.to_builder().region(aws_config::Region::new(region)).build())
+        .collect())
+}
+
+async fn map_access_with_config_and_options(
+    config: SdkConfig,
+    options: &BlastRadiusOptions,
+) -> Result<AccessMapResult> {
+    let regional = regional_configs(&config, &options.aws_regions)?;
+    let config = regional.first().expect("region selection is nonempty").clone();
     let sts = StsClient::new(&config);
     let iam = IamClient::new(&config);
 
@@ -102,6 +155,7 @@ async fn map_access_with_config(config: SdkConfig) -> Result<AccessMapResult> {
         .ok_or_else(|| anyhow!("AWS GetCallerIdentity response missing ARN"))?
         .to_string();
     let account_id = caller.account().map(|s| s.to_string());
+    let partition = arn.split(':').nth(1).unwrap_or("aws");
     let caller_user_id = caller.user_id().map(str::to_string);
 
     let identity = AccessSummary {
@@ -147,28 +201,51 @@ async fn map_access_with_config(config: SdkConfig) -> Result<AccessMapResult> {
 
     let role_discovery =
         discover_role_paths(&iam, &principal, &mut authorization_evidence, &mut risk_notes).await;
-    let mut resources = enumerate_resources(
-        &config,
-        &direct_permissions,
-        account_id.as_deref(),
-        &role_discovery.inventory,
-        &mut risk_notes,
-    )
-    .await
-    .unwrap_or_else(|err| {
-        warn!("AWS access-map: resource enumeration failed: {err}");
-        risk_notes.push(format!("AWS enumeration failed: {err}"));
-        Vec::new()
-    });
-    resources.extend(
-        enumerate_bedrock(
-            &config,
-            &direct_permissions,
-            &mut authorization_evidence,
-            &mut risk_notes,
-        )
-        .await,
-    );
+    let mut resources = Vec::new();
+    let selected_regions = regional
+        .iter()
+        .filter_map(|config| config.region().map(|region| region.as_ref()))
+        .collect::<Vec<_>>();
+    authorization_evidence.limitations.push(format!(
+        "Regional resource inventory covers only {}; IAM and S3 account inventory is collected once. Other regions may contain accessible resources.",
+        if selected_regions.is_empty() { "the configured SDK scope".into() } else { selected_regions.join(", ") }
+    ));
+    for (index, region_config) in regional.iter().enumerate() {
+        if let Some(region) = region_config.region() {
+            authorization_evidence
+                .hierarchy
+                .push(HierarchyScope { kind: "region".into(), id: region.as_ref().to_string() });
+        }
+        resources.extend(
+            enumerate_resources(
+                region_config,
+                &direct_permissions,
+                AwsInventoryScope {
+                    account_id: account_id.as_deref(),
+                    partition,
+                    include_global: index == 0,
+                },
+                &role_discovery.inventory,
+                &mut authorization_evidence,
+                &mut risk_notes,
+            )
+            .await
+            .unwrap_or_else(|err| {
+                warn!("AWS access-map: resource enumeration failed: {err}");
+                risk_notes.push(format!("AWS enumeration failed: {err}"));
+                Vec::new()
+            }),
+        );
+        resources.extend(
+            enumerate_bedrock(
+                region_config,
+                &direct_permissions,
+                &mut authorization_evidence,
+                &mut risk_notes,
+            )
+            .await,
+        );
+    }
     resources.extend(role_resource_exposures(&role_discovery.role_impacts));
     roles.extend(role_discovery.role_impacts.iter().map(|impact| RoleBinding {
         name: impact.role.clone(),
@@ -250,6 +327,7 @@ async fn map_access_with_config(config: SdkConfig) -> Result<AccessMapResult> {
             scopes: Vec::new(),
         }),
         provider_metadata: Some(ProviderMetadata {
+            betterleaks_analysis: None,
             version: None,
             enterprise: None,
             authorization_evidence: Some(authorization_evidence),
@@ -2342,13 +2420,47 @@ fn can_read(permissions: &PermissionSummary, service_prefix: &str) -> bool {
         .any(|action| action == "*" || action.starts_with(&prefix))
 }
 
+struct AwsInventoryScope<'a> {
+    account_id: Option<&'a str>,
+    partition: &'a str,
+    include_global: bool,
+}
+
+fn record_inventory_probe(
+    evidence: &mut AuthorizationEvidence,
+    service: &str,
+    method: &str,
+    config: &SdkConfig,
+    account_id: Option<&str>,
+    page: usize,
+    error: Option<&str>,
+) {
+    let (status, reason) = match error {
+        None => ("accepted", None),
+        Some(message) if is_access_denied(message) => ("restricted", Some("permission_denied")),
+        Some(_) => ("inconclusive", Some("request_failed")),
+    };
+    evidence.probes.push(AccessProbeEvidence {
+        service: service.into(),
+        method: method.into(),
+        status: status.into(),
+        reason: reason.map(str::to_owned),
+        region: config.region().map(|region| region.as_ref().to_string()),
+        resource: account_id.map(str::to_owned),
+        attributes: BTreeMap::from([("page".into(), page.to_string())]),
+        ..Default::default()
+    });
+}
+
 async fn enumerate_resources(
     config: &SdkConfig,
     permissions: &PermissionSummary,
-    account_id: Option<&str>,
+    scope: AwsInventoryScope<'_>,
     role_inventory: &[IamRole],
+    evidence: &mut AuthorizationEvidence,
     risk_notes: &mut Vec<String>,
 ) -> Result<Vec<ResourceExposure>> {
+    let AwsInventoryScope { account_id, partition, include_global } = scope;
     let mut resources = Vec::new();
     let no_permissions = permissions.admin.is_empty()
         && permissions.privilege_escalation.is_empty()
@@ -2361,26 +2473,56 @@ async fn enumerate_resources(
         );
     }
 
-    if no_permissions || can_read(permissions, "s3.") {
+    if include_global && (no_permissions || can_read(permissions, "s3.")) {
         let client = S3Client::new(config);
         let mut pages = client.list_buckets().into_paginator().send();
+        let mut page_count = 0;
         loop {
+            if page_count >= MAX_INVENTORY_PAGES {
+                evidence.limitations.push(format!(
+                    "s3.ListBuckets inventory in {} stopped at {MAX_INVENTORY_PAGES} pages; additional resources may exist.",
+                    config.region().map(|region| region.as_ref()).unwrap_or("global")
+                ));
+                break;
+            }
             match pages.try_next().await {
                 Ok(Some(resp)) => {
+                    page_count += 1;
+                    record_inventory_probe(
+                        evidence,
+                        "s3",
+                        "s3.ListBuckets",
+                        config,
+                        account_id,
+                        page_count,
+                        None,
+                    );
                     for bucket in resp.buckets() {
                         if let Some(name) = bucket.name() {
                             resources.push(ResourceExposure {
                                 resource_type: "s3_bucket".into(),
-                                name: format!("arn:aws:s3:::{name}"),
+                                name: format!("arn:{partition}:s3:::{name}"),
                                 permissions: permissions_for_prefix(permissions, "s3."),
                                 risk: "medium".into(),
                                 reason: "S3 bucket visible to the identity".into(),
                             });
                         }
                     }
+                    if resp.continuation_token().is_none_or(str::is_empty) {
+                        break;
+                    }
                 }
                 Ok(None) => break,
                 Err(err) => {
+                    record_inventory_probe(
+                        evidence,
+                        "s3",
+                        "s3.ListBuckets",
+                        config,
+                        account_id,
+                        page_count + 1,
+                        Some(iam_error_message(&err).as_str()),
+                    );
                     record_enumeration_error("s3", &err, risk_notes);
                     break;
                 }
@@ -2391,9 +2533,27 @@ async fn enumerate_resources(
     if no_permissions || can_read(permissions, "ec2.") {
         let ec2 = Ec2Client::new(config);
         let mut pages = ec2.describe_instances().into_paginator().send();
+        let mut page_count = 0;
         loop {
+            if page_count >= MAX_INVENTORY_PAGES {
+                evidence.limitations.push(format!(
+                    "ec2.DescribeInstances inventory in {} stopped at {MAX_INVENTORY_PAGES} pages; additional resources may exist.",
+                    config.region().map(|region| region.as_ref()).unwrap_or("global")
+                ));
+                break;
+            }
             match pages.try_next().await {
                 Ok(Some(resp)) => {
+                    page_count += 1;
+                    record_inventory_probe(
+                        evidence,
+                        "ec2",
+                        "ec2.DescribeInstances",
+                        config,
+                        account_id,
+                        page_count,
+                        None,
+                    );
                     let region = config
                         .region()
                         .map(|r| r.as_ref().to_string())
@@ -2406,7 +2566,7 @@ async fn enumerate_resources(
                                 resources.push(ResourceExposure {
                                     resource_type: "ec2_instance".into(),
                                     name: format!(
-                                        "arn:aws:ec2:{}:{}:instance/{}",
+                                        "arn:{partition}:ec2:{}:{}:instance/{}",
                                         region, account, id
                                     ),
                                     permissions: permissions_for_prefix(permissions, "ec2."),
@@ -2416,9 +2576,21 @@ async fn enumerate_resources(
                             }
                         }
                     }
+                    if resp.next_token().is_none_or(str::is_empty) {
+                        break;
+                    }
                 }
                 Ok(None) => break,
                 Err(err) => {
+                    record_inventory_probe(
+                        evidence,
+                        "ec2",
+                        "ec2.DescribeInstances",
+                        config,
+                        account_id,
+                        page_count + 1,
+                        Some(iam_error_message(&err).as_str()),
+                    );
                     record_enumeration_error("ec2", &err, risk_notes);
                     break;
                 }
@@ -2426,7 +2598,7 @@ async fn enumerate_resources(
         }
     }
 
-    if no_permissions || can_read(permissions, "iam.") {
+    if include_global && (no_permissions || can_read(permissions, "iam.")) {
         for role in role_inventory {
             resources.push(ResourceExposure {
                 resource_type: "iam_role".into(),
@@ -2442,9 +2614,27 @@ async fn enumerate_resources(
     if no_permissions || can_read(permissions, "lambda.") {
         let lambda = LambdaClient::new(config);
         let mut pages = lambda.list_functions().into_paginator().send();
+        let mut page_count = 0;
         loop {
+            if page_count >= MAX_INVENTORY_PAGES {
+                evidence.limitations.push(format!(
+                    "lambda.ListFunctions inventory in {} stopped at {MAX_INVENTORY_PAGES} pages; additional resources may exist.",
+                    config.region().map(|region| region.as_ref()).unwrap_or("global")
+                ));
+                break;
+            }
             match pages.try_next().await {
                 Ok(Some(resp)) => {
+                    page_count += 1;
+                    record_inventory_probe(
+                        evidence,
+                        "lambda",
+                        "lambda.ListFunctions",
+                        config,
+                        account_id,
+                        page_count,
+                        None,
+                    );
                     for function in resp.functions() {
                         if let Some(arn) = function.function_arn() {
                             resources.push(ResourceExposure {
@@ -2456,9 +2646,21 @@ async fn enumerate_resources(
                             });
                         }
                     }
+                    if resp.next_marker().is_none_or(str::is_empty) {
+                        break;
+                    }
                 }
                 Ok(None) => break,
                 Err(err) => {
+                    record_inventory_probe(
+                        evidence,
+                        "lambda",
+                        "lambda.ListFunctions",
+                        config,
+                        account_id,
+                        page_count + 1,
+                        Some(iam_error_message(&err).as_str()),
+                    );
                     record_enumeration_error("lambda", &err, risk_notes);
                     break;
                 }
@@ -2469,14 +2671,33 @@ async fn enumerate_resources(
     if no_permissions || can_read(permissions, "dynamodb.") {
         let dynamo = DynamoClient::new(config);
         let mut pages = dynamo.list_tables().into_paginator().send();
+        let mut page_count = 0;
         loop {
+            if page_count >= MAX_INVENTORY_PAGES {
+                evidence.limitations.push(format!(
+                    "dynamodb.ListTables inventory in {} stopped at {MAX_INVENTORY_PAGES} pages; additional resources may exist.",
+                    config.region().map(|region| region.as_ref()).unwrap_or("global")
+                ));
+                break;
+            }
             match pages.try_next().await {
                 Ok(Some(resp)) => {
+                    page_count += 1;
+                    record_inventory_probe(
+                        evidence,
+                        "dynamodb",
+                        "dynamodb.ListTables",
+                        config,
+                        account_id,
+                        page_count,
+                        None,
+                    );
                     for table in resp.table_names() {
                         resources.push(ResourceExposure {
                             resource_type: "dynamodb_table".into(),
                             name: aws_resource_arn(
                                 config,
+                                partition,
                                 account_id,
                                 "dynamodb",
                                 &format!("table/{table}"),
@@ -2487,9 +2708,21 @@ async fn enumerate_resources(
                             reason: "DynamoDB table visible to the identity".into(),
                         });
                     }
+                    if resp.last_evaluated_table_name().is_none_or(str::is_empty) {
+                        break;
+                    }
                 }
                 Ok(None) => break,
                 Err(err) => {
+                    record_inventory_probe(
+                        evidence,
+                        "dynamodb",
+                        "dynamodb.ListTables",
+                        config,
+                        account_id,
+                        page_count + 1,
+                        Some(iam_error_message(&err).as_str()),
+                    );
                     record_enumeration_error("dynamodb", &err, risk_notes);
                     break;
                 }
@@ -2500,9 +2733,27 @@ async fn enumerate_resources(
     if no_permissions || can_read(permissions, "kms.") {
         let kms = KmsClient::new(config);
         let mut pages = kms.list_keys().into_paginator().send();
+        let mut page_count = 0;
         loop {
+            if page_count >= MAX_INVENTORY_PAGES {
+                evidence.limitations.push(format!(
+                    "kms.ListKeys inventory in {} stopped at {MAX_INVENTORY_PAGES} pages; additional resources may exist.",
+                    config.region().map(|region| region.as_ref()).unwrap_or("global")
+                ));
+                break;
+            }
             match pages.try_next().await {
                 Ok(Some(resp)) => {
+                    page_count += 1;
+                    record_inventory_probe(
+                        evidence,
+                        "kms",
+                        "kms.ListKeys",
+                        config,
+                        account_id,
+                        page_count,
+                        None,
+                    );
                     for key in resp.keys() {
                         if let Some(id) = key.key_id() {
                             let arn = key
@@ -2511,6 +2762,7 @@ async fn enumerate_resources(
                                 .or_else(|| {
                                     aws_resource_arn(
                                         config,
+                                        partition,
                                         account_id,
                                         "kms",
                                         &format!("key/{id}"),
@@ -2529,9 +2781,21 @@ async fn enumerate_resources(
                             });
                         }
                     }
+                    if resp.next_marker().is_none_or(str::is_empty) {
+                        break;
+                    }
                 }
                 Ok(None) => break,
                 Err(err) => {
+                    record_inventory_probe(
+                        evidence,
+                        "kms",
+                        "kms.ListKeys",
+                        config,
+                        account_id,
+                        page_count + 1,
+                        Some(iam_error_message(&err).as_str()),
+                    );
                     record_enumeration_error("kms", &err, risk_notes);
                     break;
                 }
@@ -2542,9 +2806,27 @@ async fn enumerate_resources(
     if no_permissions || can_read(permissions, "secretsmanager.") {
         let sm = SecretsManagerClient::new(config);
         let mut pages = sm.list_secrets().into_paginator().send();
+        let mut page_count = 0;
         loop {
+            if page_count >= MAX_INVENTORY_PAGES {
+                evidence.limitations.push(format!(
+                    "secretsmanager.ListSecrets inventory in {} stopped at {MAX_INVENTORY_PAGES} pages; additional resources may exist.",
+                    config.region().map(|region| region.as_ref()).unwrap_or("global")
+                ));
+                break;
+            }
             match pages.try_next().await {
                 Ok(Some(resp)) => {
+                    page_count += 1;
+                    record_inventory_probe(
+                        evidence,
+                        "secretsmanager",
+                        "secretsmanager.ListSecrets",
+                        config,
+                        account_id,
+                        page_count,
+                        None,
+                    );
                     for secret in resp.secret_list() {
                         if let Some(arn) = secret.arn() {
                             resources.push(ResourceExposure {
@@ -2556,9 +2838,21 @@ async fn enumerate_resources(
                             });
                         }
                     }
+                    if resp.next_token().is_none_or(str::is_empty) {
+                        break;
+                    }
                 }
                 Ok(None) => break,
                 Err(err) => {
+                    record_inventory_probe(
+                        evidence,
+                        "secretsmanager",
+                        "secretsmanager.ListSecrets",
+                        config,
+                        account_id,
+                        page_count + 1,
+                        Some(iam_error_message(&err).as_str()),
+                    );
                     record_enumeration_error("secretsmanager", &err, risk_notes);
                     break;
                 }
@@ -2581,9 +2875,27 @@ async fn enumerate_resources(
                     || perm.starts_with("sqs.createqueue")
             });
         let mut pages = sqs.list_queues().into_paginator().send();
+        let mut page_count = 0;
         loop {
+            if page_count >= MAX_INVENTORY_PAGES {
+                evidence.limitations.push(format!(
+                    "sqs.ListQueues inventory in {} stopped at {MAX_INVENTORY_PAGES} pages; additional resources may exist.",
+                    config.region().map(|region| region.as_ref()).unwrap_or("global")
+                ));
+                break;
+            }
             match pages.try_next().await {
                 Ok(Some(resp)) => {
+                    page_count += 1;
+                    record_inventory_probe(
+                        evidence,
+                        "sqs",
+                        "sqs.ListQueues",
+                        config,
+                        account_id,
+                        page_count,
+                        None,
+                    );
                     for queue_url in resp.queue_urls() {
                         resources.push(ResourceExposure {
                             resource_type: "sqs_queue".into(),
@@ -2598,9 +2910,21 @@ async fn enumerate_resources(
                             },
                         });
                     }
+                    if resp.next_token().is_none_or(str::is_empty) {
+                        break;
+                    }
                 }
                 Ok(None) => break,
                 Err(err) => {
+                    record_inventory_probe(
+                        evidence,
+                        "sqs",
+                        "sqs.ListQueues",
+                        config,
+                        account_id,
+                        page_count + 1,
+                        Some(iam_error_message(&err).as_str()),
+                    );
                     record_enumeration_error("sqs", &err, risk_notes);
                     break;
                 }
@@ -2623,9 +2947,27 @@ async fn enumerate_resources(
                     || perm.starts_with("sns.settopicattributes")
             });
         let mut pages = sns.list_topics().into_paginator().send();
+        let mut page_count = 0;
         loop {
+            if page_count >= MAX_INVENTORY_PAGES {
+                evidence.limitations.push(format!(
+                    "sns.ListTopics inventory in {} stopped at {MAX_INVENTORY_PAGES} pages; additional resources may exist.",
+                    config.region().map(|region| region.as_ref()).unwrap_or("global")
+                ));
+                break;
+            }
             match pages.try_next().await {
                 Ok(Some(resp)) => {
+                    page_count += 1;
+                    record_inventory_probe(
+                        evidence,
+                        "sns",
+                        "sns.ListTopics",
+                        config,
+                        account_id,
+                        page_count,
+                        None,
+                    );
                     for topic in resp.topics() {
                         if let Some(arn) = topic.topic_arn() {
                             resources.push(ResourceExposure {
@@ -2642,9 +2984,21 @@ async fn enumerate_resources(
                             });
                         }
                     }
+                    if resp.next_token().is_none_or(str::is_empty) {
+                        break;
+                    }
                 }
                 Ok(None) => break,
                 Err(err) => {
+                    record_inventory_probe(
+                        evidence,
+                        "sns",
+                        "sns.ListTopics",
+                        config,
+                        account_id,
+                        page_count + 1,
+                        Some(iam_error_message(&err).as_str()),
+                    );
                     record_enumeration_error("sns", &err, risk_notes);
                     break;
                 }
@@ -2667,9 +3021,27 @@ async fn enumerate_resources(
                     || perm.starts_with("rds.restoredbinstance")
             });
         let mut pages = rds.describe_db_instances().into_paginator().send();
+        let mut page_count = 0;
         loop {
+            if page_count >= MAX_INVENTORY_PAGES {
+                evidence.limitations.push(format!(
+                    "rds.DescribeDBInstances inventory in {} stopped at {MAX_INVENTORY_PAGES} pages; additional resources may exist.",
+                    config.region().map(|region| region.as_ref()).unwrap_or("global")
+                ));
+                break;
+            }
             match pages.try_next().await {
                 Ok(Some(resp)) => {
+                    page_count += 1;
+                    record_inventory_probe(
+                        evidence,
+                        "rds",
+                        "rds.DescribeDBInstances",
+                        config,
+                        account_id,
+                        page_count,
+                        None,
+                    );
                     for db in resp.db_instances() {
                         let name = db
                             .db_instance_arn()
@@ -2691,9 +3063,21 @@ async fn enumerate_resources(
                             });
                         }
                     }
+                    if resp.marker().is_none_or(str::is_empty) {
+                        break;
+                    }
                 }
                 Ok(None) => break,
                 Err(err) => {
+                    record_inventory_probe(
+                        evidence,
+                        "rds",
+                        "rds.DescribeDBInstances",
+                        config,
+                        account_id,
+                        page_count + 1,
+                        Some(iam_error_message(&err).as_str()),
+                    );
                     record_enumeration_error("rds", &err, risk_notes);
                     break;
                 }
@@ -2717,9 +3101,27 @@ async fn enumerate_resources(
                     || perm.starts_with("ecr.createrepository")
             });
         let mut pages = ecr.describe_repositories().into_paginator().send();
+        let mut page_count = 0;
         loop {
+            if page_count >= MAX_INVENTORY_PAGES {
+                evidence.limitations.push(format!(
+                    "ecr.DescribeRepositories inventory in {} stopped at {MAX_INVENTORY_PAGES} pages; additional resources may exist.",
+                    config.region().map(|region| region.as_ref()).unwrap_or("global")
+                ));
+                break;
+            }
             match pages.try_next().await {
                 Ok(Some(resp)) => {
+                    page_count += 1;
+                    record_inventory_probe(
+                        evidence,
+                        "ecr",
+                        "ecr.DescribeRepositories",
+                        config,
+                        account_id,
+                        page_count,
+                        None,
+                    );
                     for repo in resp.repositories() {
                         let name = repo
                             .repository_arn()
@@ -2741,9 +3143,21 @@ async fn enumerate_resources(
                             });
                         }
                     }
+                    if resp.next_token().is_none_or(str::is_empty) {
+                        break;
+                    }
                 }
                 Ok(None) => break,
                 Err(err) => {
+                    record_inventory_probe(
+                        evidence,
+                        "ecr",
+                        "ecr.DescribeRepositories",
+                        config,
+                        account_id,
+                        page_count + 1,
+                        Some(iam_error_message(&err).as_str()),
+                    );
                     record_enumeration_error("ecr", &err, risk_notes);
                     break;
                 }
@@ -2777,9 +3191,27 @@ async fn enumerate_resources(
                     || perm.starts_with("ssm.labelparameterversion")
             });
         let mut pages = ssm.describe_parameters().into_paginator().send();
+        let mut page_count = 0;
         loop {
+            if page_count >= MAX_INVENTORY_PAGES {
+                evidence.limitations.push(format!(
+                    "ssm.DescribeParameters inventory in {} stopped at {MAX_INVENTORY_PAGES} pages; additional resources may exist.",
+                    config.region().map(|region| region.as_ref()).unwrap_or("global")
+                ));
+                break;
+            }
             match pages.try_next().await {
                 Ok(Some(resp)) => {
+                    page_count += 1;
+                    record_inventory_probe(
+                        evidence,
+                        "ssm",
+                        "ssm.DescribeParameters",
+                        config,
+                        account_id,
+                        page_count,
+                        None,
+                    );
                     for parameter in resp.parameters() {
                         if let Some(name) = parameter.name() {
                             let reason = if can_modify && can_read_values {
@@ -2796,6 +3228,7 @@ async fn enumerate_resources(
                                 resource_type: "ssm_parameter".into(),
                                 name: aws_resource_arn(
                                     config,
+                                    partition,
                                     account_id,
                                     "ssm",
                                     &format!("parameter/{}", name.trim_start_matches('/')),
@@ -2811,9 +3244,21 @@ async fn enumerate_resources(
                             });
                         }
                     }
+                    if resp.next_token().is_none_or(str::is_empty) {
+                        break;
+                    }
                 }
                 Ok(None) => break,
                 Err(err) => {
+                    record_inventory_probe(
+                        evidence,
+                        "ssm",
+                        "ssm.DescribeParameters",
+                        config,
+                        account_id,
+                        page_count + 1,
+                        Some(iam_error_message(&err).as_str()),
+                    );
                     record_enumeration_error("ssm", &err, risk_notes);
                     break;
                 }
@@ -3165,13 +3610,14 @@ fn record_bedrock_probe(probe: AccessProbeEvidence, evidence: &mut Authorization
 
 fn aws_resource_arn(
     config: &SdkConfig,
+    partition: &str,
     account_id: Option<&str>,
     service: &str,
     resource: &str,
 ) -> Option<String> {
     let region = config.region()?.as_ref();
     let account = account_id?;
-    Some(format!("arn:aws:{service}:{region}:{account}:{resource}"))
+    Some(format!("arn:{partition}:{service}:{region}:{account}:{resource}"))
 }
 
 async fn load_config_from_path(path: Option<&Path>) -> Result<SdkConfig> {
@@ -3828,9 +4274,200 @@ mod tests {
         assert_eq!(mapped.identity.id, arn);
         assert_eq!(mapped.identity.account_id.as_deref(), Some("123456789012"));
         let evidence = mapped.provider_metadata.unwrap().authorization_evidence.unwrap();
-        assert_eq!(evidence.probes.len(), 2);
-        assert!(evidence.probes.iter().all(|probe| probe.status == "restricted"));
+        let bedrock_probes =
+            evidence.probes.iter().filter(|probe| probe.service == "bedrock").collect::<Vec<_>>();
+        assert_eq!(bedrock_probes.len(), 2);
+        assert!(bedrock_probes.iter().all(|probe| probe.status == "restricted"));
+        assert!(evidence.probes.iter().any(|probe| probe.method == "ec2.DescribeInstances"));
         assert!(!mapped.resources.is_empty());
+    }
+
+    #[tokio::test]
+    async fn explicit_regions_collect_regional_resources_and_global_inventory_once() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("Action=GetCallerIdentity"))
+            .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/xml").set_body_string(
+                "<GetCallerIdentityResponse xmlns=\"https://sts.amazonaws.com/doc/2011-06-15/\"><GetCallerIdentityResult><Arn>arn:aws-us-gov:iam::123456789012:user/example</Arn><Account>123456789012</Account><UserId>AIDAEXAMPLE</UserId></GetCallerIdentityResult></GetCallerIdentityResponse>"
+            ))
+            .expect(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(body_string_contains("Action=DescribeInstances"))
+            .respond_with(ResponseTemplate::new(200).insert_header("content-type", "text/xml").set_body_string(
+                "<DescribeInstancesResponse xmlns=\"http://ec2.amazonaws.com/doc/2016-11-15/\"><reservationSet><item><instancesSet><item><instanceId>i-example</instanceId></item></instancesSet></item></reservationSet></DescribeInstancesResponse>"
+            ))
+            .expect(2)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(|_: &wiremock::Request| true)
+            .respond_with(ResponseTemplate::new(403).insert_header("content-type", "text/xml").set_body_string(
+                "<ErrorResponse><Error><Code>AccessDenied</Code><Message>denied</Message></Error></ErrorResponse>"
+            ))
+            .with_priority(10)
+            .mount(&server)
+            .await;
+        let config = SdkConfig::builder()
+            .behavior_version(BehaviorVersion::latest())
+            .region(aws_config::Region::new("us-west-2"))
+            .credentials_provider(aws_credential_types::provider::SharedCredentialsProvider::new(
+                Credentials::new("AKIAEXAMPLE", "test-secret", None, None, "test"),
+            ))
+            .endpoint_url(server.uri())
+            .retry_config(RetryConfig::disabled())
+            .build();
+        let mapped = map_access_with_config_and_options(
+            config,
+            &BlastRadiusOptions {
+                aws_regions: vec![
+                    "us-gov-west-1".into(),
+                    "us-gov-east-1".into(),
+                    "us-gov-west-1".into(),
+                ],
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        let instances = mapped
+            .resources
+            .iter()
+            .filter(|resource| resource.resource_type == "ec2_instance")
+            .map(|resource| resource.name.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            instances,
+            [
+                "arn:aws-us-gov:ec2:us-gov-west-1:123456789012:instance/i-example",
+                "arn:aws-us-gov:ec2:us-gov-east-1:123456789012:instance/i-example",
+            ]
+        );
+        let requests = server.received_requests().await.unwrap();
+        let ec2_requests = requests
+            .iter()
+            .filter(|request| {
+                String::from_utf8_lossy(&request.body).contains("Action=DescribeInstances")
+            })
+            .collect::<Vec<_>>();
+        for (request, region) in ec2_requests.iter().zip(["us-gov-west-1", "us-gov-east-1"]) {
+            assert!(
+                request.headers["authorization"]
+                    .to_str()
+                    .unwrap()
+                    .contains(&format!("/{region}/ec2/"))
+            );
+        }
+        assert_eq!(
+            requests
+                .iter()
+                .filter(|request| request.method == "GET" && request.url.path() == "/")
+                .count(),
+            1
+        );
+        assert_eq!(
+            requests
+                .iter()
+                .filter(
+                    |request| String::from_utf8_lossy(&request.body).contains("Action=ListRoles")
+                )
+                .count(),
+            1
+        );
+        assert!(
+            requests.iter().all(
+                |request| !String::from_utf8_lossy(&request.body).contains("Action=AssumeRole")
+            )
+        );
+    }
+
+    #[test]
+    fn region_selection_preserves_the_default_and_rejects_unbounded_scopes() {
+        let config = SdkConfig::builder().region(aws_config::Region::new("cn-north-1")).build();
+        let selected = regional_configs(&config, &[]).unwrap();
+        assert_eq!(selected.len(), 1);
+        assert_eq!(selected[0].region().unwrap().as_ref(), "cn-north-1");
+        assert_eq!(
+            aws_resource_arn(
+                &selected[0],
+                "aws-cn",
+                Some("123456789012"),
+                "ssm",
+                "parameter/example"
+            )
+            .as_deref(),
+            Some("arn:aws-cn:ssm:cn-north-1:123456789012:parameter/example")
+        );
+        assert!(
+            regional_configs(&config, &(0..9).map(|n| format!("region-{n}")).collect::<Vec<_>>())
+                .is_err()
+        );
+        assert!(regional_configs(&config, &["https://example.com".into()]).is_err());
+    }
+
+    #[tokio::test]
+    async fn regional_inventory_pagination_is_bounded_and_retains_visible_resources() {
+        for has_more in [true, false] {
+            let server = MockServer::start().await;
+            Mock::given(method("POST"))
+                .respond_with(move |request: &wiremock::Request| {
+                    let body: Value = serde_json::from_slice(&request.body).unwrap();
+                    let page = body
+                        .get("ExclusiveStartTableName")
+                        .and_then(Value::as_str)
+                        .and_then(|name| name.strip_prefix("table-"))
+                        .and_then(|page| page.parse::<usize>().ok())
+                        .unwrap_or(0);
+                    let mut body = json!({"TableNames": [format!("table-{page}")]});
+                    if page + 1 < MAX_INVENTORY_PAGES || has_more {
+                        body["LastEvaluatedTableName"] = json!(format!("table-{}", page + 1));
+                    }
+                    ResponseTemplate::new(200).set_body_json(body)
+                })
+                .expect(MAX_INVENTORY_PAGES as u64)
+                .mount(&server)
+                .await;
+            let config = SdkConfig::builder()
+                .behavior_version(BehaviorVersion::latest())
+                .region(aws_config::Region::new("cn-north-1"))
+                .credentials_provider(
+                    aws_credential_types::provider::SharedCredentialsProvider::new(
+                        Credentials::new("AKIAEXAMPLE", "test-secret", None, None, "test"),
+                    ),
+                )
+                .endpoint_url(server.uri())
+                .retry_config(RetryConfig::disabled())
+                .build();
+            let mut evidence = AuthorizationEvidence::default();
+            let resources = enumerate_resources(
+                &config,
+                &classify_permissions(&["dynamodb.listtables".into()]),
+                AwsInventoryScope {
+                    account_id: Some("123456789012"),
+                    partition: "aws-cn",
+                    include_global: true,
+                },
+                &[],
+                &mut evidence,
+                &mut Vec::new(),
+            )
+            .await
+            .unwrap();
+            assert_eq!(resources.len(), MAX_INVENTORY_PAGES);
+            assert!(
+                resources
+                    .iter()
+                    .all(|resource| resource.name.starts_with("arn:aws-cn:dynamodb:cn-north-1:"))
+            );
+            assert_eq!(evidence.probes.len(), MAX_INVENTORY_PAGES);
+            assert_eq!(
+                evidence.limitations.iter().any(|note| note.contains("stopped at")),
+                has_more
+            );
+        }
     }
 
     #[test]

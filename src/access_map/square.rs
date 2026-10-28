@@ -320,6 +320,7 @@ fn derive_severity(has_payments: bool, has_customers: bool, scopes: &[String]) -
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",

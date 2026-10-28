@@ -539,8 +539,13 @@ mod tests {
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         }))
     }
 

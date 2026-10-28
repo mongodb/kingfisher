@@ -98,6 +98,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
         risk_notes: Vec::new(),
         token_details: Some(token_details),
         provider_metadata: Some(ProviderMetadata {
+            betterleaks_analysis: None,
             version: None,
             enterprise: None,
             authorization_evidence: None,

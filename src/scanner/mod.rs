@@ -8,7 +8,7 @@ pub(crate) use repos::{
 pub use rule_loading::load_and_record_rules;
 pub use runner::{run_async_scan, run_scan};
 pub(crate) use validation::{
-    AccessMapCollector, direct_access_map_requests, run_secret_validation,
+    AccessMapCollector, direct_access_map_requests_with_options, run_secret_validation,
 };
 
 /// Input discovery completed without finding any scan targets.

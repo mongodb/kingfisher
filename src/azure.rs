@@ -176,6 +176,7 @@ fn should_exclude_repo(repo_url: &str, excludes: &git_host::ExcludeMatcher) -> b
 
 #[derive(Debug, Deserialize, Default)]
 struct AzureRepository {
+    id: Option<String>,
     #[serde(rename = "remoteUrl")]
     remote_url: Option<String>,
     #[serde(rename = "webUrl")]
@@ -216,6 +217,38 @@ impl AzureAuth {
             request
         }
     }
+}
+
+fn repository_id_lookup_url(repo_url: &GitUrl, base_url: &Url) -> Result<Option<Url>> {
+    let Some(path) = git_host::repository_path(repo_url, base_url, "dev.azure.com", "") else {
+        return Ok(None);
+    };
+    let Some((scope, repo)) = path.rsplit_once("/_git/") else {
+        return Ok(None);
+    };
+    if scope.is_empty() || repo.contains('/') {
+        return Ok(None);
+    }
+    let mut base = base_url.clone();
+    base.set_path(&format!("{}/", base.path().trim_end_matches('/')));
+    // A scope's first segment may contain a colon. Keep it a path reference,
+    // never a scheme that could send the configured credentials to another origin.
+    let url =
+        base.join(&format!("./{scope}/_apis/git/repositories/{repo}?api-version={API_VERSION}"))?;
+    Ok(Some(url))
+}
+
+pub(crate) async fn fetch_repository_id(
+    repo_url: &GitUrl,
+    base_url: &Url,
+    ignore_certs: bool,
+) -> Result<Option<git_host::RepositoryId>> {
+    let Some(url) = repository_id_lookup_url(repo_url, base_url)? else {
+        return Ok(None);
+    };
+    let client = git_host::repository_metadata_client(ignore_certs)?;
+    let request = AzureAuth::from_environment().apply(client.get(url));
+    git_host::repository_id_response(request, "id").await
 }
 
 fn sanitize_remote_url(raw: &str) -> Option<String> {
@@ -325,7 +358,24 @@ pub async fn enumerate_repo_urls(
     repo_specifiers: &RepoSpecifiers,
     base_url: Url,
     ignore_certs: bool,
+    progress: Option<&mut ProgressBar>,
+) -> Result<Vec<String>> {
+    enumerate_repo_urls_with_metadata(
+        repo_specifiers,
+        base_url,
+        ignore_certs,
+        progress,
+        &mut |_, _| Ok(()),
+    )
+    .await
+}
+
+pub(crate) async fn enumerate_repo_urls_with_metadata(
+    repo_specifiers: &RepoSpecifiers,
+    base_url: Url,
+    ignore_certs: bool,
     mut progress: Option<&mut ProgressBar>,
+    on_repo: &mut (dyn FnMut(&str, Option<String>) -> Result<()> + Send),
 ) -> Result<Vec<String>> {
     let auth = AzureAuth::from_environment();
     let client = reqwest::Client::builder()
@@ -404,6 +454,7 @@ pub async fn enumerate_repo_urls(
             if should_exclude_repo(&sanitized, &exclude_matcher) {
                 continue;
             }
+            on_repo(&sanitized, repo.id.filter(|id| !id.is_empty()))?;
             repo_urls.push(sanitized);
         }
     }
@@ -508,6 +559,49 @@ pub async fn fetch_repo_items(
 mod tests {
     use super::*;
     use std::str::FromStr;
+
+    #[test]
+    fn repository_metadata_keeps_scheme_like_scopes_on_the_configured_origin() {
+        for (base, scope) in [
+            ("https://dev.azure.com/", "http:attacker.invalid/project"),
+            ("https://dev.azure.com/", "https:attacker.invalid/project"),
+            ("https://ado.example/collection/", "http:attacker.invalid/project"),
+            ("http://ado.example:8080/collection/", "https:attacker.invalid/project"),
+        ] {
+            let base = Url::parse(base).unwrap();
+            let repo = format!("{base}{scope}/_git/repo.git").parse().unwrap();
+            let url = repository_id_lookup_url(&repo, &base).unwrap().unwrap();
+            assert_eq!(url.origin(), base.origin(), "{repo}");
+            assert_eq!(url.path(), format!("{}{scope}/_apis/git/repositories/repo", base.path()));
+            assert_eq!(url.query(), Some(format!("api-version={API_VERSION}").as_str()));
+        }
+    }
+
+    #[tokio::test]
+    async fn repository_metadata_preserves_encoded_project_and_repository_names() {
+        use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({"id":"repo-id"})),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        let repo =
+            format!("{}/org/proj%25%23%3F/_git/repo%25%23%3F.git", server.uri()).parse().unwrap();
+        let api = Url::parse(&server.uri()).unwrap();
+        assert_eq!(
+            fetch_repository_id(&repo, &api, false).await.unwrap(),
+            Some("repo-id".to_owned().into())
+        );
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(
+            requests[0].url.path(),
+            "/org/proj%25%23%3F/_apis/git/repositories/repo%25%23%3F"
+        );
+        assert_eq!(requests[0].url.query(), Some(format!("api-version={API_VERSION}").as_str()));
+    }
 
     #[test]
     fn sanitize_remote_url_strips_username() {

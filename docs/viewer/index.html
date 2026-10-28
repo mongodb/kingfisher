@@ -993,13 +993,6 @@
       gap: 4px;
     }
 
-    .id-card__perms-preview {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 4px;
-      margin-top: 8px;
-    }
-
     .id-card__toggle {
       font-size: 11px;
       color: var(--text-muted);
@@ -2977,9 +2970,170 @@
 .finding-filter-chips { margin-bottom: 8px; }
 .finding-filter-builder :focus-visible { outline: 2px solid var(--accent, #0e9f6e); outline-offset: 2px; }
 @media (max-width: 600px) { .finding-filter-builder input, .finding-filter-builder select { font-size: 16px; } .finding-filter-builder button, .finding-filter-builder select, .finding-filter-builder input { min-height: 44px; } }
+
+    /* Investigation workspace. All evidence stays inside the loaded snapshot. */
+    .hero__title { font-size: 18px; letter-spacing: -.025em; }
+    .hero { border-top: 0; min-height: 70px; }
+    .local-indicator { display: inline-flex; align-items: center; gap: 7px; color: var(--text-muted); font-size: 11px; }
+    .local-indicator > span { width: 6px; height: 6px; border-radius: 50%; background: var(--brand); }
+    .btn-open-report { background: var(--brand); border-color: var(--brand); color: var(--bg); font-weight: 750; gap: 20px; }
+    .btn-open-report:hover { background: var(--brand-dark); color: var(--bg); }
+    #reset-btn { background: transparent; color: var(--text-muted); border-color: var(--border); }
+    #reset-btn:disabled { opacity: .45; cursor: default; }
+    .workspace-context { font-size: 11px; border: 0; background: transparent; padding-top: 9px; padding-bottom: 9px; }
+    #upload-section.workspace-intake { max-width: none !important; margin: 0 0 18px; padding: 0; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; display: flex; align-items: center; gap: 14px; }
+    .workspace-drop { padding: 13px 16px; flex: 1; min-width: 0; display: flex; gap: 12px; align-items: center; cursor: pointer; font-size: 12px; border-radius: 8px; }
+    .workspace-drop:hover, .workspace-drop.active { background: var(--brand-soft); }
+    .workspace-drop__icon { color: var(--brand); font-size: 23px; font-family: ui-monospace, monospace; }
+    .workspace-drop strong { font-weight: 650; }
+    #upload-instructions { color: var(--text-muted); }
+    .workspace-drop__format { margin-left: auto; white-space: nowrap; color: var(--text-muted); font-size: 11px; }
+    .intake-options { margin-right: 16px; position: relative; font-size: 11px; flex: 0 0 auto; }
+    .intake-options summary { cursor: pointer; padding: 9px 0; color: var(--text-muted); }
+    .intake-options[open] { max-width: 320px; padding: 12px; }
+    .intake-options label { display: flex; align-items: center; gap: 8px; }
+    .intake-options p { color: var(--text-muted); }
+    .workspace-error { margin: 0 0 18px; padding: 14px 16px; border: 1px solid var(--danger); border-radius: 8px; background: var(--danger-soft); color: var(--text-main); }
+    .layout { grid-template-columns: 160px minmax(0, 1fr); gap: 24px; }
+    .sidebar { background: transparent; border: 0; box-shadow: none; padding-left: 0; min-height: 0; }
+    .nav-button { border-color: transparent; border-radius: 6px; }
+    .workspace-tabs { margin-bottom: 0; }
+    .workspace-topbar { grid-template-columns: minmax(0, 1fr) 225px; gap: 16px; }
+    .workspace-overview { padding: 12px 16px; }
+    .workspace-overview__title { font-size: 15px; }
+    .workspace-overview__eyebrow { font-size: 10px; }
+    .workspace-overview__stats { display: none; }
+    .workspace-actions { display: block; align-self: start; position: relative; padding: 0; z-index: 3; }
+    .workspace-actions > summary { cursor: pointer; padding: 16px; font-size: 12px; font-weight: 650; list-style-position: inside; }
+    .workspace-actions > summary span { float: right; color: var(--brand); }
+    .workspace-export-menu { display: grid; gap: 18px; padding: 0 16px 16px; }
+    body.workspace-empty .workspace-topbar, body.workspace-empty .report-data { display: none; }
+    .investigation-intro { display: flex; align-items: end; justify-content: space-between; gap: 30px; padding: 18px 0 12px; }
+    .investigation-eyebrow { color: var(--brand); font-size: 10px; font-weight: 750; letter-spacing: .13em; text-transform: uppercase; margin-bottom: 12px; }
+    .investigation-intro h2 { margin: 0; font-size: clamp(26px, 2.6vw, 40px); line-height: 1.12; font-weight: 600; letter-spacing: -.04em; }
+    .investigation-intro p { color: var(--text-muted); max-width: 560px; font-size: 12px; line-height: 1.8; margin-bottom: 0; }
+    .investigation-snapshot { display: grid; grid-template-columns: repeat(2, minmax(105px, 1fr)); gap: 12px; min-width: 250px; }
+    .investigation-stat { padding: 13px 16px; border-left: 1px solid var(--border); }
+    .investigation-stat strong { font: 500 28px/1.15 ui-monospace, monospace; font-variant-numeric: tabular-nums; display: block; }
+    .investigation-stat span { font-size: 10px; color: var(--text-muted); display: block; margin-top: 6px; }
+    .investigation-grid { display: grid; grid-template-columns: minmax(0, 1.65fr) minmax(245px, .8fr); gap: 18px; align-items: start; }
+    .investigation-grid .panel { margin: 0; overflow: hidden; }
+    .investigation-grid .panel__header { padding: 16px 18px; background: transparent; gap: 12px; }
+    .investigation-guide ol { padding: 6px 18px; list-style: none; margin: 0; }
+    .investigation-guide li { display: flex; gap: 14px; padding: 12px 0; }
+    .investigation-guide li > span { color: var(--brand); font: 11px/1.8 ui-monospace, monospace; }
+    .investigation-guide li strong { font-size: 12px; font-weight: 650; }
+    .investigation-guide p { font-size: 11px; color: var(--text-muted); margin: 5px 0 0; line-height: 1.7; }
+    .investigation-guide details { border-top: 1px solid var(--border); padding: 14px 18px; font-size: 11px; }
+    .investigation-guide summary { cursor: pointer; font-weight: 650; }
+    .investigation-guide code { display: block; white-space: pre-wrap; overflow-wrap: anywhere; margin-top: 12px; font-size: 10px; }
+    .investigation-row { display: flex; align-items: start; gap: 14px; padding: 20px 18px; border-top: 1px solid var(--border); }
+    .investigation-row:first-child { border-top: 0; }
+    .investigation-row__number { flex: 0 0 30px; height: 30px; border: 1px solid var(--border); border-radius: 8px; display: grid; place-items: center; color: var(--brand); font: 11px ui-monospace, monospace; }
+    .investigation-row__body { flex: 1; min-width: 0; }
+    .investigation-row strong { display: block; font-size: 12px; font-weight: 650; overflow-wrap: anywhere; }
+    .investigation-row p { color: var(--text-muted); font-size: 11px; line-height: 1.7; margin: 5px 0 0; }
+    .investigation-row .btn { font-size: 11px; padding: 5px 9px; flex-shrink: 0; min-height: 30px; }
+    .investigation-row--empty { min-height: 103px; }
+    .investigation-row--empty .investigation-row__number { color: var(--text-muted); border-style: dashed; }
+    .evidence-badge { display: inline-flex; align-items: center; padding: 4px 8px; border-radius: 5px; border: 1px solid var(--border); font-size: 10px; font-weight: 650; line-height: 1.5; white-space: normal; color: var(--text-muted); }
+    .evidence-badge--observed { background: var(--brand-soft); border-color: var(--brand-dark); color: var(--brand); }
+    .evidence-badge--policy { background: var(--info-soft); border-color: var(--info); color: var(--text-main); }
+    .evidence-badge--conditional { background: var(--warning-soft); border-color: var(--warning); color: var(--warning); }
+    .evidence-badge--unknown { background: var(--surface-muted); }
+    .evidence-filter-bar { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 0 16px 16px; }
+    .evidence-filter-bar label { display: grid; gap: 5px; color: var(--text-muted); font-size: 10px; }
+    .evidence-filter-bar select { min-height: 34px; border: 1px solid var(--border); border-radius: 6px; padding: 5px 10px; background: var(--surface); color: var(--text-main); font: inherit; font-size: 12px; }
+    .evidence-filter-bar > span { flex: 1 1 220px; font-size: 11px; color: var(--text-muted); padding-bottom: 7px; }
+    .am-toolbar { flex-wrap: wrap; padding: 12px 16px; }
+    .am-toolbar input[type=search] { min-width: 180px; }
+    .evidence-summary { display: flex; flex-wrap: wrap; gap: 7px; margin: 10px 0; }
+    .evidence-workspace { border-top: 1px solid var(--border); padding: 18px; background: var(--surface-muted); }
+    .evidence-route { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 10px; color: var(--text-muted); }
+    .evidence-route span { border: 1px solid var(--border); border-radius: 5px; padding: 5px 8px; background: var(--surface); }
+    .evidence-workspace > p, .evidence-caption { color: var(--text-muted); font-size: 11px; line-height: 1.7; }
+    .evidence-workspace input[type=search] { width: 100%; margin: 8px 0 14px; font-size: 12px; min-height: 36px; border: 1px solid var(--border); border-radius: 6px; padding: 8px 10px; background: var(--surface); color: var(--text-main); }
+    .evidence-section { border: 1px solid var(--border); border-radius: 6px; margin-top: 10px; background: var(--surface); overflow: hidden; }
+    .evidence-section > summary { padding: 12px; cursor: pointer; font-size: 12px; font-weight: 650; }
+    .evidence-section > summary span { float: right; color: var(--text-muted); font-size: 10px; font-weight: 400; }
+    .evidence-section__body { padding: 0 12px 12px; }
+    .evidence-record { padding: 12px 0; border-top: 1px solid var(--border); overflow-wrap: anywhere; }
+    .evidence-record:first-child { border-top: 0; }
+    .evidence-record h4 { font-size: 12px; margin: 4px 0 8px; }
+    .evidence-record p { font-size: 11px; color: var(--text-muted); margin: 6px 0; }
+    .evidence-record code { font-size: 10px; overflow-wrap: anywhere; white-space: normal; }
+    .evidence-table-scroll { overflow: auto; max-height: 430px; }
+    .evidence-table { width: 100%; border-collapse: collapse; text-align: left; font-size: 11px; }
+    .evidence-table th { color: var(--text-muted); font-weight: 600; position: sticky; top: 0; background: var(--surface); z-index: 1; }
+    .evidence-table th, .evidence-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); vertical-align: top; overflow-wrap: anywhere; max-width: 400px; }
+    .evidence-table td small { display: block; color: var(--text-muted); margin-top: 4px; }
+    .evidence-limitations { border-left: 2px solid var(--warning); padding: 2px 12px; margin: 14px 0; }
+    .evidence-limitations li { font-size: 11px; line-height: 1.8; color: var(--text-muted); overflow-wrap: anywhere; }
+    .evidence-more { display: block; margin: 14px 0 0; }
+    .evidence-more[hidden] { display: none; }
+    .badge-perm--unknown, .rollup-chip--unknown { color: var(--text-muted); background: var(--surface-muted); border-color: var(--border); }
+    .am-graph-node--unknown rect { stroke: var(--text-muted); stroke-dasharray: 4 3; }
+    .evidence-empty { padding: 14px 0; color: var(--text-muted); font-size: 12px; }
+    .investigation-grid *, .investigation-intro > *, .evidence-filter-bar > * { min-width: 0; }
+    @media (max-width: 1100px) { .layout { grid-template-columns: minmax(0, 1fr); } .sidebar { display: none; } .investigation-grid { grid-template-columns: minmax(0, 1.5fr) minmax(230px, .8fr); } }
+    @media (max-width: 720px) {
+      .local-indicator, .workspace-drop__format { display: none; }
+      #reset-btn { font-size: 11px; padding: 7px; } #reset-btn::after { content: none; }
+      .hero { padding: 12px 16px; } .hero__title { font-size: 16px; }
+      .page { padding: 0 16px; } .workspace-context { margin: 0 16px; }
+      #upload-section.workspace-intake { align-items: start; flex-direction: column; gap: 0; }
+      .workspace-drop { width: 100%; padding: 12px; font-size: 11px; }
+      .intake-options { margin: 0 12px; } .intake-options[open] { max-width: none; padding: 0 0 12px; }
+      .investigation-intro { display: block; padding-top: 0; } .investigation-intro h2 { font-size: 30px; }
+      .investigation-snapshot { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; margin-top: 22px; min-width: 0; }
+      .investigation-stat { padding: 8px; } .investigation-stat strong { font-size: 22px; } .investigation-stat span { font-size: 9px; }
+      .investigation-grid, .workspace-topbar { grid-template-columns: minmax(0, 1fr); }
+      .investigation-row { gap: 10px; padding: 16px 12px; flex-wrap: wrap; }
+      .investigation-row__body { flex-basis: calc(100% - 42px); } .investigation-row > .btn { margin-left: 40px; }
+      .evidence-filter-bar select, .evidence-workspace input[type=search] { font-size: 16px; min-height: 44px; }
+      .evidence-route { gap: 5px; } .evidence-workspace { padding: 12px; }
+    }
+
+    /* Keep loaded investigations dense enough to inspect the first identity immediately. */
+    .workspace-tabs { display: none; }
+    .view-stack { gap: 12px; }
+    .workspace-topbar { grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+    .workspace-overview { padding: 8px 0; background: transparent; border: 0; box-shadow: none; min-width: 0; }
+    .workspace-overview__eyebrow, .workspace-pill { display: none; }
+    .workspace-overview__header { margin: 0; gap: 10px; }
+    .workspace-overview__title { font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+    .workspace-overview__meta { margin-top: 2px; font-size: 11px; line-height: 1.4; overflow-wrap: anywhere; }
+    .workspace-actions > summary { padding: 9px 12px; font-size: 11px; min-width: 170px; }
+    .workspace-export-menu { position: absolute; right: -1px; top: calc(100% + 5px); width: 270px; padding: 16px; background: var(--surface); border: 1px solid var(--border); border-radius: 8px; box-shadow: var(--shadow-md); }
+    body:not(.workspace-empty) #upload-section.workspace-intake { margin-bottom: 10px; }
+    body:not(.workspace-empty) .workspace-drop { padding: 5px 12px; min-height: 32px; font-size: 11px; }
+    body:not(.workspace-empty) .workspace-drop__icon { font-size: 17px; }
+    body:not(.workspace-empty) .intake-options summary { padding: 5px 0; }
+    body:not(.workspace-empty) .workspace-drop__format { display: none; }
+    .investigation-intro { padding: 8px 0; }
+    .investigation-intro h2 { font-size: clamp(25px, 2.3vw, 30px); }
+    .investigation-eyebrow { margin-bottom: 8px; }
+    .report-metrics { display: none; }
+    #view-access .panel__header { padding: 12px 16px; }
+    #view-access .panel__title p { margin-top: 2px; }
+    .am-stats { margin: 10px 16px 0; padding: 8px 10px; }
+    .am-toolbar { gap: 8px; padding-top: 10px; padding-bottom: 10px; }
+    .evidence-filter-bar { padding-bottom: 12px; }
+    .id-card__info, .id-card__name, .id-card__meta, .id-card__header, .workspace-overview__header > div { min-width: 0; overflow-wrap: anywhere; }
+    .id-card__name { word-break: normal; }
+    .id-card__avatar { width: 34px; height: 34px; font-size: 16px; flex-basis: 34px; }
+    @media (max-width: 1100px) { .workspace-tabs { display: flex; } }
+    @media (max-width: 720px) {
+      .workspace-topbar { grid-template-columns: minmax(0, 1fr) auto; }
+      body:not(.workspace-empty) .workspace-drop { min-height: 44px; }
+      .workspace-actions > summary { min-width: 0; min-height: 44px; }
+      .workspace-overview__title { font-size: 12px; }
+      .workspace-export-menu { max-width: calc(100vw - 32px); }
+      .intake-options summary { min-height: 44px; }
+    }
   </style>
 </head>
-<body>
+<body class="workspace-empty">
 
   <a class="skip-link" href="#main-content">Skip to content</a>
 
@@ -2998,74 +3152,40 @@
       <div class="hero__icon" aria-hidden="true"><img src="kingfisher_logo.png" alt=""></div>
       <div class="workspace-brand">
         <div class="workspace-mode">Kingfisher · Local reports</div>
-        <h1 class="hero__title" translate="no">Report Viewer &amp; Triager</h1>
+        <h1 class="hero__title" translate="no">Exposure investigation</h1>
       </div>
     </div>
     <div style="display:flex; gap:10px; align-items:center; flex-wrap:wrap; justify-content:flex-end;">
-      <a class="btn" href="https://github.com/mongodb/kingfisher" target="_blank" rel="noopener noreferrer">GitHub</a>
+      <span class="local-indicator"><span aria-hidden="true"></span> Local workspace</span>
+      <button class="btn btn-open-report" id="open-report" type="button">Open report <span aria-hidden="true">↗</span></button>
       <button class="btn" id="theme-toggle" type="button">Light Mode</button>
-      <button class="btn" id="reset-btn" type="button">Clear and Load New Report(s)</button>
+      <button class="btn" id="reset-btn" type="button" disabled>Clear workspace</button>
     </div>
   </header>
 
   <div class="workspace-context" aria-label="Current workspace">
-    <strong>Report workspace · Browser-only</strong>
-    <span>Explore loaded scan snapshots. Reports stay local and are never uploaded.</span>
+    <strong id="workspace-state">Ready to investigate</strong>
+    <span id="workspace-state-note">Credential exposure, identity context, and the evidence behind access. Files stay in this browser.</span>
   </div>
   <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
 
   <main id="main-content" class="page">
-    <section id="upload-section" class="panel" style="max-width: 920px; margin: 0 auto;">
-      <div class="panel__header">
-        <div class="panel__title">
-          <h2>Load Report</h2>
-          <p>Analyze Kingfisher JSON / JSONL / SARIF output, plus Gitleaks and TruffleHog JSON reports</p>
-        </div>
+    <section id="upload-section" class="workspace-intake" aria-label="Report files">
+      <div id="drop-zone" class="workspace-drop" role="button" tabindex="0" aria-controls="file-input" aria-describedby="upload-instructions">
+        <span class="workspace-drop__icon" aria-hidden="true">↳</span>
+        <span><strong id="intake-label">Your investigation starts with a report.</strong> <span id="upload-instructions">Drop JSON, JSONL, or SARIF here, or choose a file.</span></span>
+        <span class="workspace-drop__format">Processed locally</span>
       </div>
-      <div class="upload-shell">
-        <div class="upload-area" id="drop-zone" role="button" tabindex="0" aria-controls="file-input" aria-describedby="upload-instructions">
-          <div class="upload-icon" aria-hidden="true">📄</div>
-          <div class="upload-text">Load one or more reports</div>
-          <div class="upload-sub" id="upload-instructions">Drop files anywhere in this card, or press Enter to choose them from disk.</div>
-          <div class="upload-action-row">
-            <span class="upload-primary">Choose Reports</span>
-            <span class="upload-action-hint">JSON, JSONL, and SARIF</span>
-          </div>
-          <input type="file" id="file-input" name="reports" hidden accept=".json,.jsonl,.sarif" multiple aria-label="Choose report files">
-          <div class="upload-options" style="margin-top:14px; display:flex; justify-content:center; font-size:12px; color:var(--text-muted);">
-            <label id="dedup-toggle-label" style="display:inline-flex; align-items:center; gap:6px; cursor:pointer;">
-               <input type="checkbox" id="dedup-toggle" name="deduplicate-findings" checked>
-              <span>Deduplicate findings (remove same-tool fingerprint repeats)</span>
-            </label>
-          </div>
-        </div>
-        <div class="upload-help-grid">
-          <div class="upload-help-card">
-            <div class="upload-help-label">Formats</div>
-            <div class="upload-help-text"><strong>Kingfisher</strong> JSON/JSONL/SARIF, <strong>SARIF</strong> 2.1.0, <strong>Gitleaks</strong> OSS JSON, and <strong>TruffleHog</strong> OSS JSON/JSONL.</div>
-          </div>
-          <div class="upload-help-card">
-            <div class="upload-help-label">Merge More</div>
-            <div class="upload-help-text">Choose multiple files at once, or drag in more report files after loading to merge them into the same view.</div>
-          </div>
-          <div class="upload-help-card">
-            <div class="upload-help-label">Deduplication</div>
-            <div class="upload-help-text"><strong>Kingfisher</strong> reports are already deduplicated. For imported <strong>SARIF</strong>, <strong>Gitleaks</strong>, and <strong>TruffleHog</strong> reports, the viewer attempts deduplication (by default) by finding fingerprint: native fingerprints when present, otherwise a synthetic fingerprint built from the tool, detector, and secret identity, with path/line/snippet fallback when needed.</div>
-          </div>
-          <div class="upload-help-card">
-            <div class="upload-help-label">Privacy</div>
-            <div class="upload-help-text">Everything stays in your browser. Files are not uploaded anywhere.</div>
-          </div>
-          <div class="upload-help-card">
-            <div class="upload-help-label">Attribution</div>
-            <div class="upload-help-text">Reads SARIF plus JSON output from the open-source TruffleHog and Gitleaks CLIs. Kingfisher is not affiliated with or endorsed by Truffle Security Co. or the Gitleaks project. TruffleHog and Gitleaks are trademarks of their respective owners.</div>
-          </div>
-        </div>
-        <div id="error-msg" class="hidden" role="alert" aria-live="assertive" tabindex="-1" style="margin-top:16px; padding:10px 12px; background:#fef2f2; border:1px solid #fecaca; border-radius:6px; color:#b91c1c; font-size:13px;"></div>
-      </div>
+      <input type="file" id="file-input" name="reports" hidden accept=".json,.jsonl,.sarif" multiple aria-label="Choose report files">
+      <details class="intake-options">
+        <summary>Import options</summary>
+        <label id="dedup-toggle-label"><input type="checkbox" id="dedup-toggle" name="deduplicate-findings" checked> Deduplicate repeated findings from the same source</label>
+        <p>Open multiple files together or drop more files to merge reports. Native snapshots preserve validation and blast-radius evidence; imported reports show only the data they contain.</p>
+      </details>
     </section>
+    <div id="error-msg" class="workspace-error hidden" role="alert" aria-live="assertive" tabindex="-1"></div>
 
-    <div id="dashboard" class="hidden">
+    <div id="dashboard">
       <div class="layout">
         <aside class="sidebar">
           <div class="sidebar-nav">
@@ -3180,17 +3300,19 @@
               </div>
             </div>
 
-            <div class="workspace-actions">
+            <details class="workspace-actions">
+              <summary>Export investigation <span aria-hidden="true">↓</span></summary>
+              <div class="workspace-export-menu">
               <div class="report-type-group">
-                <div>For Researchers</div>
+                <div>Per-credential evidence</div>
                 <button class="btn" id="download-risk-report" type="button" style="width:100%;">Risk Report</button>
                 <label class="sidebar-check">
                    <input type="checkbox" id="risk-active-only" name="risk-active-only"> Active credentials only
                 </label>
-                <div class="sidebar-help">Findings + blast radius per credential. Suitable for bug bounty submissions.</div>
+                <div class="sidebar-help">Findings, identity context, and recorded access in one report.</div>
               </div>
               <div class="report-type-group">
-                <div>For Defenders</div>
+                <div>Scan and response</div>
                 <button class="btn" id="download-scan-report" type="button" style="width:100%;">Scan Report</button>
                 <div style="display:flex; flex-direction:column; gap:6px; margin-top:4px;">
                    <select id="report-scope" name="report-scope" aria-label="Scan report scope" class="rows-select">
@@ -3204,10 +3326,27 @@
                 <div class="sidebar-help">Scan summary for tickets and remediation tracking.</div>
                 <button class="btn" id="download-access-report" type="button" style="width:100%; margin-top:4px;" disabled>Blast Radius Report</button>
               </div>
-            </div>
+              </div>
+            </details>
           </section>
 
            <section id="view-dashboard" class="view" role="tabpanel" aria-labelledby="workspace-tab-dashboard" tabindex="0">
+            <section class="investigation-intro" aria-labelledby="investigation-title">
+              <div><div class="investigation-eyebrow">Credential response</div><h2 id="investigation-title">Investigation overview</h2><p id="investigation-subtitle">A focused workspace for the questions that matter: is the credential active, whose identity is it, and what access is actually supported?</p></div>
+              <div class="investigation-snapshot" id="investigation-snapshot" aria-label="Investigation summary"></div>
+            </section>
+            <div class="investigation-grid">
+              <section class="panel investigation-queue" aria-labelledby="investigation-queue-title">
+                <div class="panel__header"><div class="panel__title"><h2 id="investigation-queue-title">Investigation queue</h2><p id="investigation-queue-caption">The next useful step, with its supporting context.</p></div><span class="evidence-badge evidence-badge--unknown" id="investigation-report-state">No report open</span></div>
+                <div id="investigation-queue"></div>
+              </section>
+              <aside class="panel investigation-guide" aria-labelledby="investigation-guide-title">
+                <div class="panel__header"><div class="panel__title"><h2 id="investigation-guide-title">A defensible decision</h2><p>From detection to response</p></div></div>
+                <ol><li><span>01</span><div><strong>Establish identity</strong><p>Separate an active credential from an inferred permission.</p></div></li><li><span>02</span><div><strong>Trace access</strong><p>Follow the policy, role, and resource. Keep conditions and unknowns visible.</p></div></li><li><span>03</span><div><strong>Act with context</strong><p>Review dependencies, rotate or revoke, then verify and rescan.</p></div></li></ol>
+                <details><summary>Generate an investigation snapshot</summary><code>kingfisher scan ./repo --blast-radius --format json --output report.json</code><p>Open the result here. Read-only checks may return partial evidence when the credential cannot enumerate its own access.</p></details>
+              </aside>
+            </div>
+
             <div id="scan-meta-section" class="scan-meta-bar hidden">
               <div class="scan-meta-item"><strong>Report Generated:</strong> <span id="meta-timestamp">—</span></div>
               <div class="scan-meta-item" id="meta-target-wrap" style="display:none;"><strong>Target:</strong> <span id="meta-target">—</span></div>
@@ -3216,7 +3355,7 @@
               <div class="scan-meta-item" id="meta-version-wrap" style="display:none;"><strong>Version:</strong> <span id="meta-version">—</span></div>
             </div>
             <div id="import-note" class="hidden" style="margin-bottom:18px; padding:14px 16px; border-radius:10px; border:1px solid #fcd34d; background:#fffbeb; color:#92400e; font-size:13px; line-height:1.6;"></div>
-            <section class="panel">
+            <section class="panel report-data report-metrics">
               <div class="metrics-grid">
                 <div class="metric">
                   <div class="metric__label">Total Findings</div>
@@ -3268,7 +3407,7 @@
               </div>
             </section>
 
-            <section class="panel">
+            <section class="panel report-data">
               <div class="panel__header">
                 <div class="panel__title">
                   <h2>Finding Status Distribution</h2>
@@ -3290,7 +3429,7 @@
                 </div>
               </div>
             </section>
-            <section class="panel">
+            <section class="panel report-data">
               <div class="panel__header">
                 <div class="panel__title">
                   <h2>Detector Families</h2>
@@ -3373,7 +3512,7 @@
               <div class="panel__header">
                 <div class="panel__title">
                   <h2>Blast Radius</h2>
-                  <p>Credentials and what they can reach</p>
+                  <p>Inspect recorded access, policy provenance, and the limits of this snapshot</p>
                 </div>
                 <div style="display:flex; gap:10px; align-items:center;">
                   <button class="btn" id="copy-access-map" type="button">Copy JSON</button>
@@ -3383,17 +3522,22 @@
               <div class="am-container" id="am-container">
                 <div id="am-stats-bar" class="am-stats hidden"></div>
                 <div class="am-toolbar" style="display:flex; gap:10px; align-items:center;">
-                  <input id="tree-search" name="access-search" type="search" autocomplete="off" spellcheck="false" aria-label="Filter blast radius" placeholder="Filter by identity, resource, or permission…" style="flex:1;">
+                  <input id="tree-search" name="access-search" type="search" autocomplete="off" spellcheck="false" aria-label="Filter blast radius" placeholder="Search identity, policy, role, resource, or permission…" style="flex:1;">
                   <label id="am-critical-toggle" class="am-toolbar__toggle" title="Hide read-only permissions and identities with no admin / privilege-escalation / risky permissions.">
                     <input type="checkbox" id="am-critical-checkbox" name="critical-only">
-                    <span>Critical only</span>
+                    <span>Hide read-only</span>
                   </label>
                   <div class="am-view-switch" role="group" aria-label="Blast radius view">
-                    <button class="am-view-switch__button active" id="am-view-map" type="button" aria-pressed="true">Map</button>
-                    <button class="am-view-switch__button" id="am-view-details" type="button" aria-pressed="false">Details</button>
+                    <button class="am-view-switch__button" id="am-view-map" type="button" aria-pressed="false">Resource map</button>
+                    <button class="am-view-switch__button active" id="am-view-details" type="button" aria-pressed="true">Investigate</button>
                   </div>
                 </div>
-                <div id="am-graph" class="am-graph">
+                <div class="evidence-filter-bar" aria-label="Evidence filters">
+                  <label>Provider <select id="am-provider-filter" name="access-provider"><option value="all">All providers</option></select></label>
+                  <label>Evidence <select id="am-evidence-filter" name="access-evidence"><option value="all">All evidence</option><option value="observed">Observed API acceptance</option><option value="policy">Recorded policy</option><option value="conditional">Conditional paths</option><option value="unknown">Unknown / metadata only</option></select></label>
+                  <span>Policy grants and candidate paths are not proof of effective access.</span>
+                </div>
+                <div id="am-graph" class="am-graph hidden">
                   <div id="am-graph-canvas" class="am-graph__canvas"></div>
                   <aside id="am-graph-inspector" class="am-graph__inspector" aria-live="polite"></aside>
                 </div>
@@ -3681,7 +3825,7 @@
     let autoCollapsedAccessMap = false;
     let currentDetailFinding = null;
     let scanMetadata = {};
-    let accessMapViewMode = "map";
+    let accessMapViewMode = "details";
     let selectedAccessMapNode = null;
     let visibleAccessMapView = [];
     let modalReturnFocus = null;
@@ -3916,7 +4060,9 @@ function createFindingFilters(container, fields, onChange, onClear) {
         sortDirection: params.get("sort-dir") === "desc" ? "desc" : "asc",
         group: params.get("group") !== "0",
         accessFilter: params.get("access-q") || "",
-        accessView: params.get("access-view") === "details" ? "details" : "map",
+        accessView: params.get("access-view") === "map" ? "map" : "details",
+        accessProvider: params.get("access-provider") || "all",
+        accessEvidence: ["observed", "policy", "conditional", "unknown"].includes(params.get("access-evidence")) ? params.get("access-evidence") : "all",
         critical: params.get("critical") === "1",
         expandedAccessKeys: (params.get("access-open") || "").split(",").filter(Boolean),
         accessLimit: Math.max(50, Number.parseInt(params.get("access-limit"), 10) || 50),
@@ -3938,7 +4084,11 @@ function createFindingFilters(container, fields, onChange, onClear) {
       if (sortDirection !== "asc") params.set("sort-dir", sortDirection);
       if (!groupBySecret) params.set("group", "0");
       if (treeSearch && treeSearch.value) params.set("access-q", treeSearch.value);
-      if (accessMapViewMode !== "map") params.set("access-view", accessMapViewMode);
+      if (accessMapViewMode !== "details") params.set("access-view", accessMapViewMode);
+      const provider = document.getElementById("am-provider-filter");
+      const evidence = document.getElementById("am-evidence-filter");
+      if (provider && provider.value !== "all") params.set("access-provider", provider.value);
+      if (evidence && evidence.value !== "all") params.set("access-evidence", evidence.value);
       if (isCriticalOnly()) params.set("critical", "1");
       if (expandedAccessKeys.size) params.set("access-open", [...expandedAccessKeys].join(","));
       if (accessRenderLimit > 50) params.set("access-limit", String(accessRenderLimit));
@@ -3976,6 +4126,10 @@ function createFindingFilters(container, fields, onChange, onClear) {
       rowsSelect.value = String(pageSize);
       treeSearch.value = state.accessFilter;
       accessMapViewMode = state.accessView;
+      const provider = document.getElementById("am-provider-filter");
+      const evidence = document.getElementById("am-evidence-filter");
+      if (provider) provider.value = [...provider.options].some((option) => option.value === state.accessProvider) ? state.accessProvider : "all";
+      if (evidence) evidence.value = state.accessEvidence;
       setCriticalOnly(state.critical);
       if (criticalCheckbox) criticalCheckbox.checked = state.critical;
       setActiveView(state.view);
@@ -4094,6 +4248,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       fileInput.click();
     }
 
+    document.getElementById("open-report").addEventListener("click", openReplaceFilePicker);
     dropZone.addEventListener("click", () => openReplaceFilePicker());
     dropZone.addEventListener("keydown", (event) => {
       if (event.key !== "Enter" && event.key !== " ") return;
@@ -4161,13 +4316,14 @@ function createFindingFilters(container, fields, onChange, onClear) {
     const resetButton = document.getElementById("reset-btn");
 
     resetButton.addEventListener("click", () => {
-      const confirmReset = confirm(
-        "Clearing and loading a new report will discard the currently loaded data from the viewer (your files stay on disk). Continue?",
-      );
+      if (confirm("Clear the loaded snapshot from this workspace? Your files stay on disk.")) resetViewer(false);
+    });
 
-      if (confirmReset) {
-        resetViewer(true);
-      }
+    ["am-provider-filter", "am-evidence-filter"].forEach((id) => {
+      document.getElementById(id).addEventListener("change", () => {
+        renderAccessMapTree(treeSearch.value || "");
+        syncUrlState();
+      });
     });
 
     searchInput.addEventListener("input", (e) => {
@@ -4327,7 +4483,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
     });
 
     function setAccessMapViewMode(mode) {
-      accessMapViewMode = mode === "details" ? "details" : "map";
+      accessMapViewMode = mode === "map" ? "map" : "details";
       if (amGraph) amGraph.classList.toggle("hidden", accessMapViewMode !== "map");
       const cardList = document.getElementById("am-card-list");
       if (cardList) cardList.classList.toggle("hidden", accessMapViewMode !== "details");
@@ -4344,6 +4500,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
     if (amViewMap) {
       amViewMap.addEventListener("click", () => {
         setAccessMapViewMode("map");
+        renderAccessMapTree(treeSearch.value || "");
         syncUrlState();
       });
     }
@@ -4417,7 +4574,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
     // GitHub Pages serves this file statically; only the bundled local viewer
     // has the CLI's /report endpoint.
     const isHostedViewer = window.location.hostname.endsWith(".github.io");
-    if (!isHostedViewer) loadCliReport();
+    renderInvestigationWorkspace();
+    if (!isHostedViewer && /^https?:$/.test(window.location.protocol)) loadCliReport();
 
     document.querySelectorAll("th.sortable").forEach((th) => {
       th.querySelector(".table-sort-button").addEventListener("click", () => {
@@ -4498,8 +4656,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
 
     function escapeHtml(unsafe) {
       if (unsafe === undefined || unsafe === null) return "";
-      return unsafe
-        .toString()
+      return (typeof unsafe === "object" ? evidenceText(unsafe) : String(unsafe))
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
         .replace(/>/g, "&gt;")
@@ -5604,7 +5761,9 @@ function createFindingFilters(container, fields, onChange, onClear) {
       treeSearch.value = "";
       if (coverageSearch) coverageSearch.value = "";
       if (detectorBreakdownActiveOnlyToggle) detectorBreakdownActiveOnlyToggle.checked = false;
-      setAccessMapViewMode("map");
+      setAccessMapViewMode("details");
+      document.getElementById("am-provider-filter").value = "all";
+      document.getElementById("am-evidence-filter").value = "all";
 
       setAccessMapCollapsed(true, { auto: true });
       if (amToggle) amToggle.disabled = true;
@@ -5634,8 +5793,10 @@ function createFindingFilters(container, fields, onChange, onClear) {
       }
 
       setActiveView("view-dashboard");
-      dashboard.classList.add("hidden");
+      dashboard.classList.remove("hidden");
       uploadSection.classList.remove("hidden");
+      syncEvidenceFilters();
+      renderInvestigationWorkspace();
 
       errorMsg.classList.add("hidden");
       errorMsg.textContent = "";
@@ -5643,7 +5804,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       loader.classList.add("hidden");
       loaderText.textContent = "Processing report…";
       loader.setAttribute("aria-busy", "false");
-      document.title = "Kingfisher Report Viewer";
+      document.title = "Exposure investigation | Kingfisher";
 
       fileInput.value = "";
       window.history.replaceState(null, "", window.location.pathname + window.location.hash);
@@ -6001,8 +6162,10 @@ function createFindingFilters(container, fields, onChange, onClear) {
       renderAccessMapTree();
       renderFindingsTable();
 
-      uploadSection.classList.add("hidden");
+      uploadSection.classList.remove("hidden");
       dashboard.classList.remove("hidden");
+      syncEvidenceFilters();
+      renderInvestigationWorkspace();
 
       applyUrlState({ focusFinding: true });
       renderAccessMapTree(treeSearch.value || "");
@@ -6802,11 +6965,11 @@ function createFindingFilters(container, fields, onChange, onClear) {
 
     function renderDonutChart(canvas, legendEl, dataPoints, counts, emptyLabel) {
       if (!canvas) return;
+      const total = dataPoints.reduce((sum, entry) => sum + (counts[entry.key] || 0), 0);
+      const categories = dataPoints.filter((entry) => counts[entry.key] > 0).map((entry) => `${entry.label}: ${formatNumber(counts[entry.key])}`).join("; ");
+      canvas.setAttribute("aria-label", total ? `${formatNumber(total)} findings; ${categories}` : emptyLabel);
       const ctx = canvas.getContext("2d");
       if (!ctx) return;
-
-      const total = dataPoints.reduce((sum, entry) => sum + (counts[entry.key] || 0), 0);
-      canvas.setAttribute("aria-label", `${emptyLabel}; ${formatNumber(total)} findings`);
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const style = getComputedStyle(document.documentElement);
@@ -8308,9 +8471,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
     }
 
     function countResources(entries) {
-      return entries.reduce((total, entry) => total + new Set(
-        (entry.groups || []).flatMap((group) => group.resources || [])
-      ).size, 0);
+      return evidenceList(entries).reduce((total, entry) => total + investigationResourceNames(entry).length, 0);
     }
 
     function countPermissions(entries) {
@@ -8323,103 +8484,284 @@ function createFindingFilters(container, fields, onChange, onClear) {
       return permSet.size;
     }
 
+    function investigationAssessment(entry) {
+      const value = entry?.provider_metadata?.authorization_evidence?.assessment;
+      return value && typeof value === "object" && !Array.isArray(value) ? value : {};
+    }
+
+    function evidenceList(value) {
+      return Array.isArray(value) ? value.filter((item) => item != null) : [];
+    }
+
+    function evidenceRecords(value) {
+      return evidenceList(value).filter((item) => typeof item === "object" && !Array.isArray(item));
+    }
+
+    function evidenceText(value, depth = 0) {
+      if (value == null) return "";
+      if (depth > 8) return "[Nested evidence]";
+      if (Array.isArray(value)) return value.slice(0, 256).map((item) => evidenceText(item, depth + 1)).filter(Boolean).join(", ") + (value.length > 256 ? " [additional values in source report]" : "");
+      if (typeof value === "object") return Object.entries(value).slice(0, 256).map(([key, item]) => key + ": " + evidenceText(item, depth + 1)).join(" · ");
+      return String(value);
+    }
+
+    function evidenceLabel(value) {
+      const labels = { administration: "Administration", credential_minting: "Credential creation", identity_delegation: "Identity delegation", iam_change: "IAM changes", sensitive_read: "Sensitive data read", workload_execution: "Workload execution", service_control: "Service control", metadata_read: "Metadata read", mutation: "Mutation", unclassified: "Unclassified", observed: "Observed method", policy_grant: "Policy grant", conditional: "Conditional", reported: "Provider reported", unspecified: "Unknown", direct: "Direct identity", reachable: "Candidate role path" };
+      return typeof value === "string" && Object.hasOwn(labels, value) ? labels[value] : value == null ? "Unknown" : evidenceText(value).replace(/_/g, " ");
+    }
+
+    function investigationRisk(entry) {
+      const reportedRisk = investigationAssessment(entry).capability_risk;
+      const risk = typeof reportedRisk === "string" ? reportedRisk.toLowerCase() : "";
+      if (["critical", "high", "medium", "low", "unknown"].includes(risk)) return risk;
+      const buckets = entry?.permissions_by_severity || {};
+      if (evidenceList(buckets.admin).length) return "critical";
+      if (evidenceList(buckets.privilege_escalation).length) return "high";
+      if (evidenceList(buckets.risky).length) return "high";
+      if (evidenceList(buckets.read_only).length) return "low";
+      return "unknown";
+    }
+
+    function investigationEvidence(entry) {
+      const rawEvidence = entry?.provider_metadata?.authorization_evidence;
+      const evidence = rawEvidence && typeof rawEvidence === "object" && !Array.isArray(rawEvidence) ? rawEvidence : {};
+      const assessment = investigationAssessment(entry);
+      const probes = evidenceRecords(evidence.probes);
+      const policies = evidenceRecords(evidence.policies);
+      const paths = evidenceRecords(evidence.paths);
+      const capabilities = evidenceRecords(assessment.capabilities);
+      const observed = probes.some((probe) => probe.status === "accepted") || capabilities.some((capability) => capability.evidence === "observed");
+      const conditional = paths.some((path) => ["conditional", "potential", "trust_only"].includes(path.status)) || capabilities.some((capability) => capability.evidence === "conditional");
+      const policy = capabilities.some((capability) => capability.evidence === "policy_grant") || evidenceRecords(evidence.role_impacts).some((impact) => evidenceRecords(impact.grants).length > 0) || policies.some((policy) => evidenceRecords(policy.statements).some((statement) => String(statement.effect).toLowerCase() === "allow"));
+      const kinds = [observed && "observed", policy && "policy", conditional && "conditional"].filter(Boolean);
+      if (!kinds.length) kinds.push("unknown");
+      const coverage = evidenceText(assessment.coverage);
+      const limitations = evidenceList(evidence.limitations).map(String);
+      return { evidence, assessment, probes, policies, paths, kinds, coverage, limitations,
+        observed, policy, conditional, label: observed ? "Observed method acceptance" : policy ? "Recorded policy evidence" : conditional ? "Candidate paths" : "Unknown access" };
+    }
+
+    function investigationResourceGroups(entry) {
+      const assessment = investigationAssessment(entry);
+      if (Array.isArray(assessment.resources)) {
+        const groups = new Map();
+        evidenceRecords(assessment.resources).forEach((resource) => {
+          if (typeof resource.name !== "string" || !resource.name.trim()) return;
+          const name = resource.resource_type && typeof resource.resource_type === "string"
+            ? resource.resource_type + ":" + resource.name : resource.name;
+          const permissions = evidenceList(resource.permissions).filter((permission) => typeof permission === "string").sort();
+          const key = JSON.stringify(permissions);
+          if (!groups.has(key)) groups.set(key, { resources: [], permissions });
+          groups.get(key).resources.push(name);
+        });
+        return [...groups.values()];
+      }
+      const identityId = entry?.context?.identity_id || "";
+      return evidenceRecords(entry?.groups).map((group) => ({
+        resources: evidenceList(group.resources).filter((name) => !(identityId && name === identityId && !evidenceList(group.permissions).length)),
+        permissions: evidenceList(group.permissions),
+      }));
+    }
+
+    function investigationResourceNames(entry) {
+      return [...new Set(investigationResourceGroups(entry).flatMap((group) => group.resources).map(String))];
+    }
+
+    function investigationPermissionBuckets(entry) {
+      const buckets = { admin: [], privilege_escalation: [], risky: [], read_only: [], unknown: [] };
+      const assessment = investigationAssessment(entry);
+      const detailedPresent = Array.isArray(assessment.capabilities);
+      const byClass = detailedPresent ? {} : entry?.permissions_by_severity || {};
+      const assigned = new Map();
+      Object.keys(buckets).forEach((key) => evidenceList(byClass[key]).forEach((permission) => {
+        if (typeof permission === "string") assigned.set(permission.toLowerCase(), { permission, key });
+      }));
+      const categories = { administration: "admin", credential_minting: "privilege_escalation", identity_delegation: "privilege_escalation", iam_change: "privilege_escalation", sensitive_read: "risky", workload_execution: "risky", service_control: "risky", mutation: "risky", metadata_read: "read_only", unclassified: "unknown" };
+      const priority = { read_only: 0, unknown: 1, risky: 2, privilege_escalation: 3, admin: 4 };
+      const detailed = new Map();
+      evidenceRecords(assessment.capabilities).forEach((capability) => {
+        if (typeof capability.permission !== "string") return;
+        const key = typeof capability.category === "string" && Object.hasOwn(categories, capability.category) ? categories[capability.category] : "unknown";
+        const permission = capability.permission;
+        const previous = detailed.get(permission.toLowerCase());
+        if (!previous || priority[key] > priority[previous.key]) detailed.set(permission.toLowerCase(), { permission, key });
+      });
+      detailed.forEach((value, key) => assigned.set(key, value));
+      assigned.forEach(({ permission, key }) => buckets[key].push(permission));
+      return buckets;
+    }
+
+    function investigationPermissionNames(entry, groups = null, hideReadOnly = false) {
+      if (Array.isArray(investigationAssessment(entry).capabilities)) {
+        return Object.entries(investigationPermissionBuckets(entry))
+          .filter(([key]) => !hideReadOnly || key !== "read_only")
+          .flatMap(([, values]) => values);
+      }
+      return [...new Set(evidenceRecords(groups || entry?.groups).flatMap((group) => evidenceList(group.permissions)))];
+    }
+
+    function investigationBadge(kind, label) {
+      const safeKind = ["observed", "policy", "conditional", "unknown"].includes(kind) ? kind : "unknown";
+      return `<span class="evidence-badge evidence-badge--${safeKind}">${escapeHtml(label)}</span>`;
+    }
+
+    function investigationEvidenceBadges(entry) {
+      const profile = investigationEvidence(entry);
+      const labels = { observed: "Observed API acceptance", policy: "Recorded policy", conditional: "Candidate / conditional paths", unknown: "Access unknown" };
+      return profile.kinds.map((kind) => investigationBadge(kind, labels[kind])).join("");
+    }
+
+    function renderInvestigationWorkspace() {
+      const loaded = hasLoadedReportData();
+      document.body.classList.toggle("workspace-empty", !loaded);
+      const setText = (id, value) => { const element = document.getElementById(id); if (element) element.textContent = value; };
+      setText("workspace-state", loaded ? "Snapshot open" : "Ready to investigate");
+      setText("workspace-state-note", loaded ? "Read-only investigation · Evidence describes the collection time, not current effective access." : "Credential exposure, identity context, and the evidence behind access. Files stay in this browser.");
+      setText("intake-label", loaded ? "Add context to this investigation." : "Your investigation starts with a report.");
+      setText("upload-instructions", loaded ? "Drop more reports here to merge them, or use Open report to replace the snapshot." : "Drop JSON, JSONL, or SARIF here, or choose a file.");
+      const clearButton = document.getElementById("reset-btn");
+      if (clearButton) clearButton.disabled = !loaded;
+      const active = findings.filter((record) => normalizeValidationStatus(record.finding?.validation?.status || "") === "active").length;
+      const gaps = accessMap.filter((entry) => {
+        const profile = investigationEvidence(entry);
+        return profile.kinds.includes("unknown") || ["partial", "unknown"].includes(profile.assessment.coverage) || profile.limitations.length > 0;
+      }).length;
+      const snapshot = document.getElementById("investigation-snapshot");
+      if (snapshot) snapshot.innerHTML = [[findings.length, "Findings"], [active, "Active credentials"], [accessMap.length, "Mapped identities"], [gaps, "Coverage gaps"]].map(([value, label]) => `<div class="investigation-stat"><strong>${loaded ? formatNumber(value) : "—"}</strong><span>${label}</span></div>`).join("");
+      const state = document.getElementById("investigation-report-state");
+      if (state) { state.className = "evidence-badge evidence-badge--" + (loaded ? "policy" : "unknown"); state.textContent = loaded ? "Loaded snapshot" : "No report open"; }
+      setText("investigation-title", loaded && active ? `${formatNumber(active)} active credential${active === 1 ? "" : "s"} to investigate` : "Investigation overview");
+      setText("investigation-subtitle", loaded ? "Start with active credentials and sensitive capabilities, then examine the evidence and coverage before deciding on a response." : "A focused workspace for the questions that matter: is the credential active, whose identity is it, and what access is actually supported?");
+      const queue = document.getElementById("investigation-queue");
+      if (!queue) return;
+      queue.innerHTML = "";
+      if (!loaded) {
+        const steps = [["Credential validity", "Validation results appear here with the source, location, and credential context."], ["Identity and capability", "Connect each finding to its principal, policies, role paths, and recorded resources."], ["Coverage and response", "See what was observed, what is conditional, and where the snapshot leaves questions open."]];
+        steps.forEach(([title, detail], index) => {
+          const row = document.createElement("div");
+          row.className = "investigation-row investigation-row--empty";
+          row.innerHTML = `<span class="investigation-row__number">0${index + 1}</span><div class="investigation-row__body"><strong>${title}</strong><p>${detail}</p></div>`;
+          queue.appendChild(row);
+        });
+        return;
+      }
+      const rank = { critical: 0, high: 1, medium: 2, unknown: 3, low: 4 };
+      const candidates = findings.map((record) => {
+        const entries = getAccessMapForFingerprint(record.finding?.fingerprint || "");
+        const active = normalizeValidationStatus(record.finding?.validation?.status || "") === "active";
+        const risk = entries.map(investigationRisk).sort((a, b) => rank[a] - rank[b])[0] || "unknown";
+        return { record, entries, active, risk };
+      }).sort((a, b) => Number(b.active) - Number(a.active) || rank[a.risk] - rank[b.risk]).slice(0, 5);
+      if (!candidates.length && accessMap.length) {
+        const row = document.createElement("div");
+        row.className = "investigation-row";
+        row.innerHTML = `<span class="investigation-row__number">01</span><div class="investigation-row__body"><strong>${formatNumber(accessMap.length)} mapped identities to inspect</strong><p>Review recorded policy grants, candidate identity paths, and coverage limitations.</p></div>`;
+        const action = document.createElement("button"); action.className = "btn"; action.type = "button"; action.textContent = "Inspect access"; action.addEventListener("click", () => setActiveView("view-access", { history: true })); row.appendChild(action); queue.appendChild(row);
+      }
+      candidates.forEach(({ record, entries, active, risk }, index) => {
+        const row = document.createElement("div"); row.className = "investigation-row";
+        const name = record.rule?.name || record.rule?.id || "Credential finding";
+        const note = entries.length ? `${countResources(entries)} recorded resources · ${risk === "unknown" ? "capability risk unknown" : risk + " capability risk"}` : "Blast radius not recorded · access scope unknown";
+        row.innerHTML = `<span class="investigation-row__number">${String(index + 1).padStart(2, "0")}</span><div class="investigation-row__body"><strong>${escapeHtml(name)}</strong><p>${escapeHtml(record.finding?.path || "Location not recorded")}</p><p>${investigationBadge(active ? "observed" : "unknown", validationStatusLabel(record.finding?.validation?.status || "Not Attempted"))} ${escapeHtml(note)}</p></div>`;
+        const button = document.createElement("button"); button.type = "button"; button.className = "btn"; button.textContent = "Investigate"; button.addEventListener("click", () => showFindingDetail(record)); row.appendChild(button); queue.appendChild(row);
+      });
+      if (!queue.children.length) queue.innerHTML = '<div class="investigation-row"><div class="investigation-row__body"><strong>No findings in this snapshot</strong><p>Check Repository Coverage to confirm what was scanned and inspect any failures or exclusions.</p></div></div>';
+    }
+
+    function investigationEvidenceHtml(entry, query = "", limit = 25) {
+      const profile = investigationEvidence(entry);
+      const evidence = profile.evidence;
+      const assessment = profile.assessment;
+      const search = String(query).trim().toLowerCase();
+      const matches = (value) => !search || evidenceText(value).toLowerCase().includes(search);
+      const nestedRecords = (record, key) => {
+        const { [key]: records, ...header } = record;
+        // A policy/role name match keeps its grants visible. A match confined
+        // to a child still filters siblings, without producing an empty body.
+        const children = evidenceRecords(records);
+        return children.length > 0 && matches(header) ? children : children.filter(matches);
+      };
+      const code = (value, fallback = "Not recorded") => `<code>${escapeHtml(evidenceText(value) || fallback)}</code>`;
+      const note = (label, value) => evidenceText(value) ? `<p><strong>${escapeHtml(evidenceText(label))}:</strong> ${code(value)}</p>` : "";
+      let truncated = false;
+      const section = (title, records, render, open = false, columns = null) => {
+        const filtered = evidenceRecords(records).filter(matches);
+        if (!filtered.length) return "";
+        const visible = filtered.slice(0, limit);
+        if (visible.length < filtered.length || visible.some((record) => ["statements", "grants"].some((key) => nestedRecords(record, key).length > limit))) truncated = true;
+        const content = columns ? `<div class="evidence-table-scroll"><table class="evidence-table"><thead><tr>${columns.map((label) => `<th scope="col">${label}</th>`).join("")}</tr></thead><tbody>${visible.map(render).join("")}</tbody></table></div>` : visible.map(render).join("");
+        return `<details class="evidence-section"${open ? " open" : ""}><summary>${title}<span>${visible.length} of ${filtered.length}</span></summary><div class="evidence-section__body">${content}${visible.length < filtered.length ? '<p class="evidence-caption">Additional records are available with Show more evidence.</p>' : ""}</div></details>`;
+      };
+      const principal = evidence.principal;
+      let html = principal && matches(principal) ? `<div class="evidence-record"><h4>${escapeHtml(principal.name || principal.canonical_id || principal.id || "Principal")}</h4>${note("Identity type", principal.kind)}${note("Groups", principal.groups)}${note("Attributes", principal.attributes)}</div>` : "";
+      html += section("Capability assessment", assessment.capabilities, (capability) => `<tr><td>${code(capability.permission)}<small>${escapeHtml(evidenceLabel(capability.category))}</small></td><td>${investigationBadge(capability.evidence === "observed" ? "observed" : capability.evidence === "conditional" ? "conditional" : capability.evidence === "policy_grant" ? "policy" : "unknown", evidenceLabel(capability.evidence))}<small>${escapeHtml(evidenceLabel(capability.reach))}</small></td><td>${code(capability.scope, "Scope not recorded")}</td></tr>`, true, ["Permission / capability", "Evidence / reach", "Scope"]);
+      html += section("Identity and role paths", evidence.paths, (path) => `<div class="evidence-record">${investigationBadge("conditional", [path.direction || "direction unknown", path.status || "potential"].join(" · "))}<h4>${escapeHtml(evidenceRecords(path.hops).map((hop) => hop.from + " → " + hop.to).join(" → ") || "Candidate identity path")}</h4>${evidenceRecords(path.hops).map((hop) => note(hop.relationship || "Relationship", hop.from + " → " + hop.to)).join("")}${note("Conditions", path.conditions)}${note("Source evidence", path.evidence)}</div>`, true);
+      html += section("Reachable role grants", evidence.role_impacts, (impact) => `<div class="evidence-record">${investigationBadge("conditional", impact.status || "potential")}<h4>${escapeHtml([impact.target, impact.role || impact.name].filter(Boolean).join(" → "))}</h4><p>${escapeHtml(String(impact.hop_count || 0))} hop(s). These are candidate grants; the path may require additional authorization.</p>${nestedRecords(impact, "grants").slice(0, limit).map((grant) => `<div class="evidence-record">${note("Permissions", grant.permissions)}${note("Except permissions", grant.excluded_permissions)}${note("Resource scope", grant.resources)}${note("Except resources", grant.excluded_resources)}${note("Condition keys", grant.condition_keys)}${note("Source evidence", grant.evidence)}</div>`).join("")}${nestedRecords(impact, "grants").length > limit ? '<p class="evidence-caption">Additional grants are retained in the original report.</p>' : ""}</div>`);
+      html += section("Policy provenance", evidence.policies, (policy) => `<div class="evidence-record"><h4>${escapeHtml(policy.name || policy.id || "Policy")}</h4>${note("Policy ID", policy.id)}${note("Kind", policy.kind)}${note("Attached to", policy.attached_to)}${note("Via", policy.attached_via)}${note("Scope", policy.scope)}${note("Version", policy.version)}${nestedRecords(policy, "statements").slice(0, limit).map((statement) => `<div class="evidence-record">${investigationBadge(String(statement.effect).toLowerCase() === "deny" ? "conditional" : "policy", statement.effect || "Effect unknown")} ${code(statement.sid || statement.id || "Statement")} ${note("Actions", statement.actions)}${note("Except actions", statement.not_actions)}${note("Resources", statement.resources)}${note("Except resources", statement.not_resources)}${note("Principals", statement.principals)}${note("Except principals", statement.not_principals)}${note("Condition keys", statement.condition_keys)}</div>`).join("")}${nestedRecords(policy, "statements").length > limit ? '<p class="evidence-caption">Additional statements are retained in the original report.</p>' : ""}</div>`);
+      html += section("Recorded resources", assessment.resources, (resource) => `<tr><td>${code(resource.name)}<small>${escapeHtml(evidenceLabel(resource.resource_type))}</small></td><td>${code(resource.permissions)}<small>Resource risk: ${escapeHtml(resource.risk || "unknown")}</small></td><td>${escapeHtml(resource.reason || "Basis not recorded")}</td></tr>`, false, ["Resource", "Recorded permissions", "Basis"]);
+      html += section("Read-only API observations", evidence.probes, (probe) => `<tr><td>${code(probe.service)}<small>${code(probe.method)}</small></td><td>${investigationBadge(probe.status === "accepted" ? "observed" : "unknown", probe.status || "inconclusive")}<small>${escapeHtml(probe.http_status ? "HTTP " + probe.http_status : "HTTP status not recorded")} ${escapeHtml(probe.reason || "")}</small></td><td>${code([probe.region, probe.resource].filter(Boolean), "Scope not recorded")}<small>${escapeHtml(evidenceText(probe.attributes))}</small></td></tr>`, false, ["Service / method", "Outcome", "Recorded scope"]);
+      html += section("Roles and bindings", entry.roles, (role) => `<div class="evidence-record"><h4>${code(role.name)}</h4>${note("Source", role.source)}${note("Permissions", role.permissions)}</div>`);
+      if (evidenceList(evidence.hierarchy).length && matches(evidence.hierarchy)) html += `<div class="evidence-record">${note("Visible hierarchy", evidence.hierarchy)}</div>`;
+      const limitations = profile.limitations.filter(matches);
+      if (limitations.length) html += `<div class="evidence-limitations"><strong>Coverage limitations</strong><ul>${limitations.map((value) => `<li>${escapeHtml(value)}</li>`).join("")}</ul></div>`;
+      const recommendations = evidenceList(assessment.recommendations).concat(evidenceList(assessment.risk_notes)).filter(matches);
+      if (recommendations.length) html += `<div class="evidence-record"><h4>Response context</h4><ul class="evidence-caption">${recommendations.map((value) => `<li>${escapeHtml(value)}</li>`).join("")}</ul></div>`;
+      return { html: html || '<p class="evidence-empty">No matching authorization evidence. Resource and permission groups remain available below; their effective access is not established by this view.</p>', truncated };
+    }
+
+    function buildInvestigationEvidence(entry) {
+      const profile = investigationEvidence(entry);
+      const container = document.createElement("section"); container.className = "evidence-workspace"; container.setAttribute("aria-label", "Authorization investigation");
+      const intro = document.createElement("div");
+      intro.innerHTML = `<div class="evidence-route" aria-label="Investigation sequence"><span>Credential</span> → <span>Principal</span> → <span>Policy / binding</span> → <span>Role path</span> → <span>Resource scope</span></div><div class="evidence-summary">${investigationEvidenceBadges(entry)}${investigationBadge("unknown", "Capability risk: " + investigationRisk(entry))}</div><p class="evidence-caption">Inspect the evidence behind each relationship. An accepted metadata request does not establish object or secret read access. Conditions and visibility limits can leave effective access unknown.</p>${typeof profile.assessment.observed_at === "string" && profile.assessment.observed_at ? '<p class="evidence-caption">Observed ' + escapeHtml(formatDateTime(profile.assessment.observed_at)) + '</p>' : ''}${investigationBadge(profile.coverage === "partial" ? "conditional" : "unknown", "Coverage: " + (profile.coverage || "unknown"))}<p class="evidence-caption">Recorded coverage is not exhaustive. Policy condition values may be redacted or unevaluated.</p>`;
+      container.appendChild(intro);
+      const search = document.createElement("input"); search.type = "search"; search.placeholder = "Search policy, statement, condition, path, or resource…"; search.setAttribute("aria-label", "Search this identity's authorization evidence"); search.autocomplete = "off"; search.spellcheck = false; container.appendChild(search);
+      const records = document.createElement("div"); container.appendChild(records);
+      const more = document.createElement("button"); more.type = "button"; more.className = "btn evidence-more"; more.textContent = "Show more evidence"; container.appendChild(more);
+      let limit = 25;
+      const render = () => { const result = investigationEvidenceHtml(entry, search.value, limit); records.innerHTML = result.html; more.hidden = !result.truncated; };
+      search.addEventListener("input", () => { limit = 25; render(); }); more.addEventListener("click", () => { limit += 25; render(); });
+      render(); return container;
+    }
+
+    function syncEvidenceFilters() {
+      const provider = document.getElementById("am-provider-filter");
+      if (!provider) return;
+      const selected = provider.value || "all";
+      const providers = [...new Set(accessMap.map((entry) => String(entry.provider || "unknown").toLowerCase()))].sort();
+      provider.innerHTML = '<option value="all">All providers</option>' + providers.map((value) => `<option value="${escapeHtml(value)}">${escapeHtml(value.toUpperCase())}</option>`).join("");
+      provider.value = providers.includes(selected) ? selected : "all";
+    }
+
     function generateRiskRationale(finding, accessEntries) {
       const rule = finding.rule || {};
       const fd = finding.finding || {};
-      const importInfo = fd.viewer_import && typeof fd.viewer_import === "object" ? fd.viewer_import : null;
-      const statusRaw = fd.validation && fd.validation.status ? validationStatusLabel(fd.validation.status) : "Not Attempted";
-      const normalizedStatus = normalizeValidationStatus(statusRaw);
-      const isActive = normalizedStatus === "active";
-
-      if (!accessEntries || accessEntries.length === 0) {
-        if (importInfo && scanMetadata.imported && (!scanMetadata.capabilities || !scanMetadata.capabilities.accessMapSupported)) {
-          return {
-            level: isActive ? "low" : "none",
-            text: `This finding was imported from ${escapeHtml(importInfo.source_tool || "an external tool")}. Imported reports do not carry Kingfisher blast-radius data, so blast radius cannot be derived here. Re-scan with <code>kingfisher scan --blast-radius</code> for native mapping.`,
-          };
-        }
-        if (isActive) {
-          return {
-            level: "medium",
-            text: `This is an active ${escapeHtml(rule.name || "credential")} found in ${escapeHtml(fd.path || "the codebase")}. No blast-radius data is available, but the credential validated successfully, indicating it grants live access to the target service.`,
-          };
-        }
-        return {
-          level: "none",
-          text: "No blast-radius data is linked to this finding. Run a scan with --blast-radius to map the blast radius of validated credentials.",
-        };
+      const isActive = normalizeValidationStatus(fd.validation?.status || "") === "active";
+      const entries = evidenceList(accessEntries);
+      if (!entries.length) {
+        const imported = fd.viewer_import && scanMetadata.imported;
+        return { level: "none", text: imported
+          ? "This imported finding has no compatible blast-radius evidence. Re-scan with <code>kingfisher scan --blast-radius</code> to collect native identity and access context."
+          : `${isActive ? "The credential validated as active. " : ""}Capability risk and access scope are <strong>unknown</strong> because no blast-radius evidence is linked to this finding. Collect a snapshot with <code>--blast-radius</code>.` };
       }
-
-      const providers = [...new Set(accessEntries.map((e) => escapeHtml(String(e.provider || "").toUpperCase())).filter(Boolean))];
-      const resourceCount = countResources(accessEntries);
-      const permCount = countPermissions(accessEntries);
-      const identityCount = accessEntries.length;
-
-      // Categorize resources
-      const resourceTypes = {};
-      accessEntries.forEach((entry) => {
-        new Set((entry.groups || []).flatMap((group) => group.resources || [])).forEach((r) => {
-            const rStr = String(r);
-            let type = "resource";
-            if (/s3|bucket|storage|blob/i.test(rStr)) type = "storage bucket";
-            else if (/lambda|function|cloud.run/i.test(rStr)) type = "serverless function";
-            else if (/iam|role|policy/i.test(rStr)) type = "IAM resource";
-            else if (/secret|vault|kms/i.test(rStr)) type = "secret/key";
-            else if (/ec2|instance|vm|compute/i.test(rStr)) type = "compute instance";
-            else if (/dynamodb|database|rds|sql/i.test(rStr)) type = "database";
-            else if (/repo|repository/i.test(rStr)) type = "repository";
-            resourceTypes[type] = (resourceTypes[type] || 0) + 1;
-        });
-      });
-
-      const typeDescriptions = Object.entries(resourceTypes)
-        .sort((a, b) => b[1] - a[1])
-        .map(([type, count]) => `${count} ${type}${count > 1 ? "s" : ""}`)
-        .join(", ");
-
-      // Determine risk level
-      let level = "low";
-      if (isActive && resourceCount > 10) level = "critical";
-      else if (isActive && resourceCount > 3) level = "high";
-      else if (isActive && resourceCount > 0) level = "medium";
-      else if (!isActive && resourceCount > 0) level = "low";
-
-      // Check for dangerous permissions
-      const allPerms = [];
-      accessEntries.forEach((e) => (e.groups || []).forEach((g) => allPerms.push(...(g.permissions || []))));
-      const dangerousPerms = allPerms.filter((p) =>
-        /admin|full.?control|owner|delete|write.*all|manage|superuser|\*/i.test(p)
-      );
-      if (isActive && dangerousPerms.length > 0) level = "critical";
-
-      // Check for token details with scopes
-      const scopeInfo = [];
-      accessEntries.forEach((entry) => {
-        if (entry.token_details && Array.isArray(entry.token_details.scopes)) {
-          scopeInfo.push(...entry.token_details.scopes);
-        }
-      });
-
-      let text = "";
-      if (isActive) {
-        text = `This active ${escapeHtml(rule.name || "credential")} grants access to <strong>${resourceCount} resource${resourceCount !== 1 ? "s" : ""}</strong> across <strong>${identityCount} identit${identityCount !== 1 ? "ies" : "y"}</strong> on ${providers.join(", ")}.`;
-        if (typeDescriptions) {
-          text += ` Accessible resources include ${typeDescriptions}.`;
-        }
-        if (dangerousPerms.length > 0) {
-          text += ` <strong>Warning:</strong> This credential has elevated privileges including ${dangerousPerms.slice(0, 3).map((p) => "<code>" + escapeHtml(p) + "</code>").join(", ")}${dangerousPerms.length > 3 ? ` and ${dangerousPerms.length - 3} more` : ""}.`;
-        }
-        if (scopeInfo.length > 0) {
-          text += ` Token scopes: ${scopeInfo.slice(0, 5).map((s) => escapeHtml(s)).join(", ")}${scopeInfo.length > 5 ? ` (+${scopeInfo.length - 5} more)` : ""}.`;
-        }
-      } else {
-        text = `This ${escapeHtml(rule.name || "credential")} has blast-radius data showing <strong>${resourceCount} resource${resourceCount !== 1 ? "s" : ""}</strong> that would be accessible if the credential were active.`;
-        if (typeDescriptions) {
-          text += ` Resources include ${typeDescriptions}.`;
-        }
-      }
-
-      return { level, text };
+      const providers = [...new Set(entries.map((entry) => String(entry.provider || "unknown").toUpperCase()))].map(escapeHtml);
+      const riskOrder = { unknown: 0, low: 1, medium: 2, high: 3, critical: 4 };
+      const risks = entries.map(investigationRisk);
+      const risk = risks.sort((a, b) => riskOrder[b] - riskOrder[a])[0] || "unknown";
+      const profiles = entries.map(investigationEvidence);
+      const observedCount = profiles.reduce((count, profile) => count + profile.probes.filter((probe) => probe.status === "accepted").length, 0);
+      const policyCount = profiles.reduce((count, profile) => count + profile.policies.length, 0);
+      const pathCount = profiles.reduce((count, profile) => count + profile.paths.length, 0);
+      const resourceCount = countResources(entries);
+      const limitations = profiles.reduce((count, profile) => count + profile.limitations.length, 0);
+      let text = `This snapshot records <strong>${resourceCount} resource${resourceCount === 1 ? "" : "s"}</strong> across <strong>${entries.length} identit${entries.length === 1 ? "y" : "ies"}</strong> on ${providers.join(", ")}. `;
+      text += risk === "unknown" ? "Capability risk remains <strong>unknown</strong>. " : `Recorded capability risk is <strong>${escapeHtml(risk)}</strong>. `;
+      if (observedCount) text += `${observedCount} read-only API check${observedCount === 1 ? " was" : "s were"} accepted within the recorded method and scope. `;
+      if (policyCount) text += `${policyCount} policy record${policyCount === 1 ? " supports" : "s support"} investigation of grants, exclusions, and conditions. `;
+      if (pathCount) text += `${pathCount} candidate identity path${pathCount === 1 ? " requires" : "s require"} review; reachability is not verified by policy visibility alone. `;
+      if (limitations) text += `<strong>Coverage is partial:</strong> ${limitations} limitation${limitations === 1 ? " is" : "s are"} recorded. `;
+      text += isActive ? "An active validation result establishes credential validity, not every listed permission." : "Credential validity is separate from this recorded access snapshot; review its validation state before acting.";
+      return { level: risk === "unknown" ? "none" : risk, text };
     }
 
     function renderBlastRadius(f) {
@@ -8482,14 +8824,15 @@ function createFindingFilters(container, fields, onChange, onClear) {
 
         const stats = document.createElement("p");
         stats.className = "blast-coverage";
-        const groups = entry.groups || [];
+        const groups = investigationResourceGroups(entry);
         const resources = new Set(groups.flatMap((group) => group.resources || []));
-        const permissions = new Set(groups.flatMap((group) => group.permissions || []));
-        stats.textContent = `${resources.size} recorded resources · ${permissions.size} unique permissions · ${groups.length} access groups`;
+        const detailedCapabilities = Array.isArray(investigationAssessment(entry).capabilities);
+        const permissions = new Set(investigationPermissionNames(entry, groups));
+        stats.textContent = `${resources.size} recorded resources · ${permissions.size} unique ${detailedCapabilities ? "capabilities" : "permissions"} · ${groups.length} access groups`;
         identity.appendChild(stats);
         const severity = document.createElement("div");
         severity.className = "blast-perms";
-        Object.entries(entry.permissions_by_severity || {}).forEach(([name, values]) => {
+        Object.entries(investigationPermissionBuckets(entry)).forEach(([name, values]) => {
           if (!Array.isArray(values) || !values.length) return;
           const tag = document.createElement("span");
           tag.className = "blast-perm-tag";
@@ -8573,6 +8916,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
           });
           identity.append(heading, list);
         }
+        identity.appendChild(buildInvestigationEvidence(entry));
         blastEntries.appendChild(identity);
       });
     }
@@ -8897,24 +9241,24 @@ function createFindingFilters(container, fields, onChange, onClear) {
       { key: "privilege_escalation", label: "Privilege Escalation", cls: "privesc"  },
       { key: "risky",                label: "Risky",                cls: "risky"    },
       { key: "read_only",            label: "Read Only",            cls: "readonly" },
+      { key: "unknown",              label: "Unclassified",         cls: "unknown"  },
     ];
 
     // Classify a permission list using the identity's permissions_by_severity
-    // map when available; otherwise treat all permissions as "risky" (unknown
-    // classification — better than green "read only" by default).
+    // map when available. Missing classification remains explicitly unknown.
     function classifyPermissions(perms, byClass) {
-      const out = { admin: [], privilege_escalation: [], risky: [], read_only: [] };
+      const out = { admin: [], privilege_escalation: [], risky: [], read_only: [], unknown: [] };
       if (!perms || !perms.length) return out;
       if (!byClass) {
-        out.risky = perms.slice();
+        out.unknown = perms.slice();
         return out;
       }
       const lookup = new Map();
       Object.keys(out).forEach((k) => {
-        (byClass[k] || []).forEach((p) => lookup.set(String(p).toLowerCase(), k));
+        evidenceList(byClass[k]).forEach((p) => lookup.set(String(p).toLowerCase(), k));
       });
       perms.forEach((p) => {
-        const cls = lookup.get(String(p).toLowerCase()) || "risky";
+        const cls = lookup.get(String(p).toLowerCase()) || "unknown";
         out[cls].push(p);
       });
       return out;
@@ -8922,23 +9266,28 @@ function createFindingFilters(container, fields, onChange, onClear) {
 
     // Aggregate per-identity severity counts across all groups.
     function summarizeSeverity(entry) {
-      const byClass = entry.identity && entry.identity.permissions_by_severity;
-      if (byClass) {
-        return {
-          admin: Array.isArray(byClass.admin) ? byClass.admin.length : 0,
-          privilege_escalation: Array.isArray(byClass.privilege_escalation) ? byClass.privilege_escalation.length : 0,
-          risky: Array.isArray(byClass.risky) ? byClass.risky.length : 0,
-          read_only: Array.isArray(byClass.read_only) ? byClass.read_only.length : 0,
-        };
+      const byClass = investigationPermissionBuckets(entry.identity);
+      if (Array.isArray(investigationAssessment(entry.identity).capabilities)) {
+        return Object.fromEntries(Object.entries(byClass).map(([key, permissions]) => [key, permissions.length]));
       }
       const all = new Set();
-      (entry.groups || []).forEach((g) => (g.permissions || []).forEach((p) => all.add(p)));
-      return { admin: 0, privilege_escalation: 0, risky: all.size, read_only: 0 };
+      evidenceList(entry.groups).forEach((group) => evidenceList(group.permissions).forEach((permission) => all.add(String(permission))));
+      if (byClass) {
+        const known = new Set(["admin", "privilege_escalation", "risky", "read_only"].flatMap((key) => evidenceList(byClass[key])).map((permission) => String(permission).toLowerCase()));
+        return {
+          admin: evidenceList(byClass.admin).length,
+          privilege_escalation: evidenceList(byClass.privilege_escalation).length,
+          risky: evidenceList(byClass.risky).length,
+          read_only: evidenceList(byClass.read_only).length,
+          unknown: [...all].filter((permission) => !known.has(permission.toLowerCase())).length,
+        };
+      }
+      return { admin: 0, privilege_escalation: 0, risky: 0, read_only: 0, unknown: all.size };
     }
 
     function entryHasCritical(entry) {
       const s = summarizeSeverity(entry);
-      return s.admin + s.privilege_escalation + s.risky > 0;
+      return s.admin + s.privilege_escalation + s.risky + (s.unknown || 0) > 0;
     }
 
     // Strip read_only permissions from a group when in "Critical only" mode.
@@ -8947,19 +9296,20 @@ function createFindingFilters(container, fields, onChange, onClear) {
       const perms = group.permissions || [];
       if (!perms.length) return group;
       const cls = classifyPermissions(perms, byClass);
-      const kept = [...cls.admin, ...cls.privilege_escalation, ...cls.risky];
+      const kept = [...cls.admin, ...cls.privilege_escalation, ...cls.risky, ...cls.unknown];
       return { ...group, permissions: kept };
     }
 
     function getAccessMapRiskClass(entry, permissions = null) {
-      const byClass = entry.identity && entry.identity.permissions_by_severity;
+      const byClass = investigationPermissionBuckets(entry.identity);
       const summary = permissions
         ? classifyPermissions(permissions, byClass)
         : summarizeSeverity(entry);
       if ((summary.admin || []).length || Number(summary.admin) > 0) return "admin";
       if ((summary.privilege_escalation || []).length || Number(summary.privilege_escalation) > 0) return "privesc";
       if ((summary.risky || []).length || Number(summary.risky) > 0) return "risky";
-      return "readonly";
+      if ((summary.read_only || []).length || Number(summary.read_only) > 0) return "readonly";
+      return "unknown";
     }
 
     function getAccessMapEntryKey(identity, index) {
@@ -9010,10 +9360,10 @@ function createFindingFilters(container, fields, onChange, onClear) {
 
     function getGraphResources(entry) {
       const resources = new Map();
-      (entry.groups || []).forEach((group) => {
-        const names = (group.resources || []).length
-          ? group.resources
-          : ["Project-wide / unscoped access"];
+      (entry.resourcesNormalized ? evidenceRecords(entry.groups) : investigationResourceGroups({ ...entry.identity, groups: entry.groups })).forEach((group) => {
+        const identityId = entry.identity?.context?.identity_id;
+        const recordedNames = evidenceList(group.resources).filter((name) => !(identityId && name === identityId && !evidenceList(group.permissions).length));
+        const names = recordedNames.length ? recordedNames : evidenceList(group.permissions).length ? ["Scope not recorded"] : [];
         names.forEach((name) => {
           const label = String(name);
           if (!resources.has(label)) resources.set(label, new Set());
@@ -9133,7 +9483,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       });
 
       appendGraphText(svg, 40, 26, "IDENTITIES", "am-graph-column-label");
-      appendGraphText(svg, 470, 26, "REACHABLE RESOURCES", "am-graph-column-label");
+      appendGraphText(svg, 470, 26, "RECORDED RESOURCE SCOPE", "am-graph-column-label");
 
       rows.forEach((row) => {
         if (row.kind === "provider") {
@@ -9159,7 +9509,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         appendGraphText(identityNode, 14, 24, truncateGraphLabel(identity.account || "(unknown identity)", 36), "", {
           "font-size": 13, "font-weight": 750,
         });
-        const identityResourceCount = getGraphResources(entry).length;
+        const identityResourceCount = getGraphResources(entry).filter((resource) => resource.name !== "Scope not recorded").length;
         const identityPermCount = new Set(
           (entry.groups || []).flatMap((group) => group.permissions || [])
         ).size;
@@ -9253,7 +9603,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         ? visibleAccessMapView.find((candidate) => candidate.key === selection.entryKey)
         : null;
       if (!entry) {
-        amGraphInspector.innerHTML = '<div class="am-graph__eyebrow">Access path</div><div class="am-graph__title">Select a node</div><div class="am-graph__subtitle">Choose an identity or resource to inspect its effective reach.</div>';
+        amGraphInspector.innerHTML = '<div class="am-graph__eyebrow">Access path</div><div class="am-graph__title">Select a node</div><div class="am-graph__subtitle">Choose an identity or resource to inspect its recorded access.</div>';
         return;
       }
 
@@ -9262,7 +9612,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       const permissions = isResource
         ? (selection.permissions || [])
         : [...new Set((entry.groups || []).flatMap((group) => group.permissions || []))];
-      const resourceCount = getGraphResources(entry).length;
+      const resourceCount = getGraphResources(entry).filter((resource) => resource.name !== "Scope not recorded").length;
       const authorizationEvidence = identity.provider_metadata && identity.provider_metadata.authorization_evidence;
       const pathCount = authorizationEvidence ? (authorizationEvidence.paths || []).length : 0;
       const policyCount = authorizationEvidence ? (authorizationEvidence.policies || []).length : 0;
@@ -9271,29 +9621,31 @@ function createFindingFilters(container, fields, onChange, onClear) {
         admin: "Admin exposure",
         privesc: "Privilege escalation",
         risky: "Sensitive access",
-        readonly: "Read-only / informational",
+        readonly: "Recorded read capability",
+        unknown: "Access unknown",
       };
       const title = isResource ? selection.resourceName : (identity.account || "(unknown identity)");
       const subtitle = isResource
         ? `${identity.account || "(unknown identity)"} · ${String(identity.provider || "unknown").toUpperCase()}`
-        : `${String(identity.provider || "unknown").toUpperCase()} · ${resourceCount} reachable resource${resourceCount !== 1 ? "s" : ""}`;
+        : `${String(identity.provider || "unknown").toUpperCase()} · ${resourceCount} recorded resource${resourceCount !== 1 ? "s" : ""}`;
       const permissionLimit = 16;
       const permissionHtml = permissions.slice(0, permissionLimit).map((permission) => {
         const permissionRisk = getAccessMapRiskClass(entry, [permission]);
         return `<span class="badge badge-perm badge-perm--${permissionRisk}">${escapeHtml(permission)}</span>`;
       }).join("");
       const morePermissions = permissions.length > permissionLimit
-        ? `<div class="am-graph__hint">+${permissions.length - permissionLimit} more permissions. Open Details for the complete list.</div>`
+        ? `<div class="am-graph__hint">+${permissions.length - permissionLimit} more permissions. Open Investigate for the complete list.</div>`
         : "";
 
       amGraphInspector.innerHTML = `
-        <div class="am-graph__eyebrow">${isResource ? "Reachable resource" : "Credential identity"}</div>
+        <div class="am-graph__eyebrow">${isResource ? "Recorded resource" : "Credential identity"}</div>
         <div class="am-graph__title">${escapeHtml(title)}</div>
         <div class="am-graph__subtitle">${escapeHtml(subtitle)}</div>
         <div class="am-graph__section">
           <span class="rollup-chip rollup-chip--${riskClass}">${escapeHtml(riskLabels[riskClass])}</span>
-          <div class="am-graph__hint">${permissions.length} effective permission${permissions.length !== 1 ? "s" : ""} shown in this access path.</div>
-          ${authorizationEvidence ? `<div class="am-graph__hint">${pathCount} authorization-capability path${pathCount !== 1 ? "s" : ""} and ${policyCount} policy evidence record${policyCount !== 1 ? "s" : ""} available in Details.</div>` : ""}
+          <div class="evidence-summary">${investigationEvidenceBadges(identity)}</div>
+          <div class="am-graph__hint">${permissions.length} recorded permission${permissions.length !== 1 ? "s" : ""} in this scope. Effective access may require additional conditions.</div>
+          ${authorizationEvidence ? `<div class="am-graph__hint">${pathCount} authorization-capability path${pathCount !== 1 ? "s" : ""} and ${policyCount} policy evidence record${policyCount !== 1 ? "s" : ""} available in Investigate.</div>` : ""}
         </div>
         <div class="am-graph__section">
           <div class="am-graph__eyebrow">Permissions</div>
@@ -9314,8 +9666,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
           if (target) {
             const body = target.querySelector(".id-card__body");
             const toggle = target.querySelector(".id-card__toggle");
-            if (body) body.classList.add("open");
-            if (toggle) toggle.textContent = "▼";
+            const header = target.querySelector(".id-card__header");
+            if (header && body && !body.classList.contains("open")) header.click();
             target.scrollIntoView({ behavior: "smooth", block: "center" });
           }
         });
@@ -9344,7 +9696,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       if (!visible || visible.length === 0) {
         renderAccessMapGraph([]);
         list.innerHTML =
-          `<div style="padding:32px 16px; text-align:center; color:var(--text-muted); font-size:13px;">${getAccessMapEmptyMessage()}</div>`;
+          `<div class="evidence-empty">${hasAccess ? "No identities match these filters. Clear the search or choose All providers and All evidence." : getAccessMapEmptyMessage()}</div>`;
         return;
       }
 
@@ -9391,7 +9743,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         more.appendChild(moreButton);
         list.appendChild(more);
       }
-      renderAccessMapGraph(renderedVisible);
+      if (accessMapViewMode === "map") renderAccessMapGraph(renderedVisible);
     }
 
     function buildProviderSection(provider, entries) {
@@ -9403,20 +9755,22 @@ function createFindingFilters(container, fields, onChange, onClear) {
       // filtered view so resource / unique-perm counts and the severity
       // chips match what the user actually sees.
       const criticalMode = isCriticalOnly();
+      const detailedCapabilities = entries.every((entry) => Array.isArray(investigationAssessment(entry.identity).capabilities));
       let totalRes = 0;
       const permSet = new Set();
       let admin = 0;
       let privesc = 0;
       let risky = 0;
       entries.forEach((e) => {
-        const byClass = e.identity && e.identity.permissions_by_severity;
+        const byClass = investigationPermissionBuckets(e.identity);
         const groups = criticalMode
           ? (e.groups || []).map((g) => applyCriticalFilter(g, byClass))
           : (e.groups || []);
         groups.forEach((g) => {
           totalRes += (g.resources || []).length;
-          (g.permissions || []).forEach((p) => permSet.add(p));
+          if (!detailedCapabilities) (g.permissions || []).forEach((p) => permSet.add(p));
         });
+        if (detailedCapabilities) investigationPermissionNames(e.identity, groups, criticalMode).forEach((permission) => permSet.add(permission));
         const s = summarizeSeverity(e);
         admin += s.admin;
         privesc += s.privilege_escalation;
@@ -9447,7 +9801,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       sub.className = "am-provider-header__sub";
       const subParts = [
          `${formatNumber(totalRes)} resource${totalRes !== 1 ? "s" : ""}`,
-         `${formatNumber(permSet.size)} unique perm${permSet.size !== 1 ? "s" : ""}`,
+         `${formatNumber(permSet.size)} unique ${detailedCapabilities ? (permSet.size === 1 ? "capability" : "capabilities") : (permSet.size === 1 ? "permission" : "permissions")}`,
       ];
       if (admin) subParts.push(`<span class="rollup-chip rollup-chip--admin">⚠ ${admin} admin</span>`);
       else if (privesc) subParts.push(`<span class="rollup-chip rollup-chip--privesc">${privesc} privesc</span>`);
@@ -9466,16 +9820,6 @@ function createFindingFilters(container, fields, onChange, onClear) {
         caret.textContent = collapsed ? "▶" : "▼";
         header.setAttribute("aria-expanded", collapsed ? "false" : "true");
       });
-      header.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        header.click();
-      });
-      header.addEventListener("keydown", (event) => {
-        if (event.key !== "Enter" && event.key !== " ") return;
-        event.preventDefault();
-        header.click();
-      });
 
       section.appendChild(header);
       section.appendChild(cards);
@@ -9485,13 +9829,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
     function syncCriticalToggleVisibility() {
       const wrap = document.getElementById("am-critical-toggle");
       if (!wrap) return;
-      const anyClassified = (accessMap || []).some(
-        (e) => e && e.permissions_by_severity && (
-          (e.permissions_by_severity.admin || []).length
-          + (e.permissions_by_severity.privilege_escalation || []).length
-          + (e.permissions_by_severity.risky || []).length
-          + (e.permissions_by_severity.read_only || []).length
-        ) > 0
+      const anyClassified = (accessMap || []).some((entry) =>
+        Object.values(investigationPermissionBuckets(entry)).some((values) => values.length > 0)
       );
       // When no entries are classified, the toggle is meaningless — but if
       // the user previously enabled it, the persisted setting would still
@@ -9514,6 +9853,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         return;
       }
 
+      const detailedCapabilities = accessMap.every((entry) => Array.isArray(investigationAssessment(entry).capabilities));
       let totalRes = 0;
       const permSet = new Set();
       const providerSet = new Set();
@@ -9522,9 +9862,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       accessMap.forEach((entry) => {
         providerSet.add((entry.provider || "unknown").toUpperCase());
         totalRes += countResources([entry]);
-        (entry.groups || []).forEach((g) => {
-          (g.permissions || []).forEach((p) => permSet.add(p));
-        });
+        investigationPermissionNames(entry).forEach((permission) => permSet.add(permission));
         const s = summarizeSeverity({ identity: entry, groups: entry.groups || [] });
         totalAdmin += s.admin;
         if (s.admin > 0) identitiesWithAdmin += 1;
@@ -9537,7 +9875,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       bar.innerHTML = `
         <div class="am-stat"><span class="am-stat-value">${formatNumber(accessMap.length)}</span><span class="am-stat-label">Identities</span></div>
         <div class="am-stat"><span class="am-stat-value">${formatNumber(totalRes)}</span><span class="am-stat-label">Resources</span></div>
-        <div class="am-stat"><span class="am-stat-value">${formatNumber(permSet.size)}</span><span class="am-stat-label">Unique Permissions</span></div>
+        <div class="am-stat"><span class="am-stat-value">${formatNumber(permSet.size)}</span><span class="am-stat-label">${detailedCapabilities ? "Unique capabilities" : "Unique permissions"}</span></div>
         ${adminStat}
         <div class="am-stat">${[...providerSet].map((p) => '<span class="badge ' + providerBadgeClass(p) + '">' + escapeHtml(p) + '</span>').join(" ")}</div>
       `;
@@ -9545,7 +9883,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
 
     function buildIdentityCard(entry) {
       const identity = entry.identity;
-      const byClass = identity.permissions_by_severity || null;
+      const byClass = investigationPermissionBuckets(identity);
       const provider = (identity.provider || "unknown");
       const account = identity.account || "(unknown identity)";
       const fingerprint = identity.fingerprint || "";
@@ -9560,7 +9898,8 @@ function createFindingFilters(container, fields, onChange, onClear) {
         resCount += (g.resources || []).length;
         (g.permissions || []).forEach((p) => allPerms.add(p));
       });
-      const permArr = [...allPerms];
+      const detailedCapabilities = Array.isArray(investigationAssessment(identity).capabilities);
+      const permArr = detailedCapabilities ? investigationPermissionNames(identity, groups, isCriticalOnly()) : [...allPerms];
       const sevSummary = summarizeSeverity(entry);
 
       // Card container
@@ -9623,7 +9962,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       meta.className = "id-card__meta";
       meta.innerHTML = `
         <span class="id-card__meta-item">📦 <strong>${resCount}</strong> resource${resCount !== 1 ? "s" : ""}</span>
-        <span class="id-card__meta-item">🔑 <strong>${permArr.length}</strong> permission${permArr.length !== 1 ? "s" : ""}</span>
+        <span class="id-card__meta-item">🔑 <strong>${permArr.length}</strong> ${detailedCapabilities ? "capabilit" + (permArr.length === 1 ? "y" : "ies") : "permission" + (permArr.length === 1 ? "" : "s")}</span>
       `;
 
       // Token summary in meta
@@ -9651,13 +9990,17 @@ function createFindingFilters(container, fields, onChange, onClear) {
         meta.appendChild(evidenceMeta);
       }
       info.appendChild(meta);
+      const evidenceBadges = document.createElement("div");
+      evidenceBadges.className = "evidence-summary";
+      evidenceBadges.innerHTML = investigationEvidenceBadges(identity);
+      info.appendChild(evidenceBadges);
 
       // Severity rollup chips replace the per-permission preview.
       // In "Critical only" mode the expanded view hides read-only permissions;
       // suppress the read_only chip too so the rollup matches what's rendered
       // (otherwise the header still advertises a count the body never shows).
       const rollupCriticalMode = isCriticalOnly();
-      if (byClass && (sevSummary.admin + sevSummary.privilege_escalation + sevSummary.risky + sevSummary.read_only) > 0) {
+      if (byClass && (sevSummary.admin + sevSummary.privilege_escalation + sevSummary.risky + sevSummary.read_only + (sevSummary.unknown || 0)) > 0) {
         const rollup = document.createElement("div");
         rollup.className = "id-card__rollup";
         SEVERITY_BUCKETS.forEach(({ key, label, cls }) => {
@@ -9670,28 +10013,6 @@ function createFindingFilters(container, fields, onChange, onClear) {
           rollup.appendChild(chip);
         });
         info.appendChild(rollup);
-      } else if (permArr.length > 0) {
-        // Fallback for entries without classification (e.g. imported reports).
-        const preview = document.createElement("div");
-        preview.className = "id-card__perms-preview";
-        const limit = 6;
-        permArr.slice(0, limit).forEach((p) => {
-          const tag = document.createElement("span");
-          tag.className = "badge badge-perm";
-          tag.style.fontSize = "11px";
-          tag.textContent = p;
-          preview.appendChild(tag);
-        });
-        if (permArr.length > limit) {
-          const more = document.createElement("span");
-          more.className = "badge";
-          more.style.fontSize = "11px";
-          more.style.background = "var(--surface-muted)";
-          more.style.color = "var(--text-muted)";
-          more.textContent = "+" + (permArr.length - limit) + " more";
-          preview.appendChild(more);
-        }
-        info.appendChild(preview);
       }
 
       const toggle = document.createElement("div");
@@ -9712,302 +10033,183 @@ function createFindingFilters(container, fields, onChange, onClear) {
        body.setAttribute("aria-hidden", initiallyOpen ? "false" : "true");
       toggle.textContent = initiallyOpen ? "▼" : "▶";
 
-      // Resources / permissions — rendered as one block per group.
-      // Each group is a (resources, permissions) pair where permissions are
-      // shared across all resources in the group, so we render them ONCE.
-      const resSection = document.createElement("div");
-      resSection.className = "id-card__section";
-      const resTitle = document.createElement("div");
-      resTitle.className = "id-card__section-title";
-      resTitle.textContent = "Resources & permissions (" + resCount + " resource" + (resCount !== 1 ? "s" : "") + ", " + groups.length + " group" + (groups.length !== 1 ? "s" : "") + ")";
-      resSection.appendChild(resTitle);
+      let detailsLoaded = false;
+      const loadDetails = () => {
+        if (detailsLoaded) return;
+        detailsLoaded = true;
+        body.appendChild(buildInvestigationEvidence(identity));
 
-      groups.forEach((group, idx) => {
-        const resources = group.resources || [];
-        const perms = group.permissions || [];
-        if (resources.length === 0 && perms.length === 0) return;
+        // Resources / permissions — rendered as one block per group.
+        // Each group is a (resources, permissions) pair where permissions are
+        // shared across all resources in the group, so we render them ONCE.
+        const resSection = document.createElement("div");
+        resSection.className = "id-card__section";
+        const resTitle = document.createElement("div");
+        resTitle.className = "id-card__section-title";
+        resTitle.textContent = "Resources & permissions (" + resCount + " resource" + (resCount !== 1 ? "s" : "") + ", " + groups.length + " group" + (groups.length !== 1 ? "s" : "") + ")";
+        resSection.appendChild(resTitle);
 
-        const block = document.createElement("div");
-        block.className = "perm-group";
+        groups.forEach((group, idx) => {
+          const resources = group.resources || [];
+          const perms = group.permissions || [];
+          if (resources.length === 0 && perms.length === 0) return;
 
-        // Resource chips at the top of the block (no per-chip permissions —
-        // they share the permission set rendered below).
-        if (resources.length > 0) {
-          const resBox = document.createElement("div");
-          resBox.className = "perm-group__resources";
-          resources.forEach((resName) => {
-            const chip = document.createElement("span");
-            chip.className = "perm-group__resource";
-            chip.textContent = String(resName);
-
-            const { resourceType, resourceName } = extractResourceParts(String(resName));
-            const consoleLink = buildResourceConsoleLink(provider, resourceType, resourceName);
-            if (consoleLink) {
-              const a = document.createElement("a");
-              a.href = consoleLink;
-              a.target = "_blank";
-              a.rel = "noopener noreferrer";
-              a.textContent = "↗";
-              a.title = "Open in console";
-              a.addEventListener("click", (e) => e.stopPropagation());
-              chip.appendChild(a);
-            }
-            resBox.appendChild(chip);
-          });
-          block.appendChild(resBox);
-        } else if (perms.length > 0) {
-          const note = document.createElement("div");
-          note.className = "perm-group__shared-note";
-          note.textContent = "Project-wide / Unscoped permissions:";
-          block.appendChild(note);
-        }
-
-        if (resources.length > 1 && perms.length > 0) {
-          const note = document.createElement("div");
-          note.className = "perm-group__shared-note";
-          note.textContent = "These permissions apply to all " + resources.length + " resources above.";
-          block.appendChild(note);
-        }
-
-        // Permissions classified by severity.
-        if (perms.length > 0) {
-          const cls = classifyPermissions(perms, byClass);
-          SEVERITY_BUCKETS.forEach(({ key, label, cls: sevCls }) => {
-            const list = cls[key] || [];
-            if (!list.length) return;
-            const wrap = document.createElement("div");
-            wrap.className = "perm-severity";
-            // Default-collapse Read Only when the group has any non-read-only perms.
-            const hasOther = (cls.admin.length + cls.privilege_escalation.length + cls.risky.length) > 0;
-            if (key === "read_only" && hasOther) wrap.classList.add("collapsed");
-
-             const titleEl = document.createElement("button");
-             titleEl.className = "perm-severity__title";
-             titleEl.type = "button";
-             titleEl.setAttribute("aria-expanded", key === "read_only" && hasOther ? "false" : "true");
-            titleEl.innerHTML = `<span class="perm-severity__caret">▼</span> ${escapeHtml(label)} <span style="color:var(--text-main); font-weight:700;">${list.length}</span>`;
-
-            const pills = document.createElement("div");
-            pills.className = "perm-severity__pills";
-            list.forEach((p) => {
-              const tag = document.createElement("span");
-              tag.className = "badge badge-perm badge-perm--" + sevCls;
-              tag.style.fontSize = "10px";
-              tag.textContent = p;
-              pills.appendChild(tag);
-            });
-
-             titleEl.addEventListener("click", (e) => {
-              e.stopPropagation();
-              wrap.classList.toggle("collapsed");
-              const c = titleEl.querySelector(".perm-severity__caret");
-               if (c) c.textContent = wrap.classList.contains("collapsed") ? "▶" : "▼";
-               titleEl.setAttribute("aria-expanded", wrap.classList.contains("collapsed") ? "false" : "true");
-            });
-
-            wrap.appendChild(titleEl);
-            wrap.appendChild(pills);
-            block.appendChild(wrap);
-          });
-        }
-
-        resSection.appendChild(block);
-      });
-      body.appendChild(resSection);
-
-      if (authorizationEvidence) {
-        const evidenceSection = document.createElement("div");
-        evidenceSection.className = "id-card__section";
-        const evidenceTitle = document.createElement("div");
-        evidenceTitle.className = "id-card__section-title";
-        evidenceTitle.textContent = "Authorization evidence";
-        evidenceSection.appendChild(evidenceTitle);
-
-        const principal = authorizationEvidence.principal;
-        if (principal) {
-          const principalBox = document.createElement("div");
-          principalBox.className = "perm-group";
-          const groups = (principal.groups || []).length ? " · Groups: " + principal.groups.join(", ") : "";
-          principalBox.textContent = (principal.kind || "principal") + ": " + (principal.canonical_id || principal.id || "unknown") + groups;
-          evidenceSection.appendChild(principalBox);
-        }
-
-        (identity.roles || []).forEach((role) => {
           const block = document.createElement("div");
           block.className = "perm-group";
-          const permissions = role.permissions || [];
-          block.textContent = "Role: " + (role.name || "unknown") + " · " + (role.source || "direct") + " · " + permissions.length + " permission(s)";
-          evidenceSection.appendChild(block);
-        });
 
-        const displayedPaths = (authorizationEvidence.paths || []).slice(0, 50);
-        displayedPaths.forEach((path, index) => {
-          const block = document.createElement("div");
-          block.className = "perm-group";
-          const title = document.createElement("div");
-          title.className = "perm-group__shared-note";
-          title.textContent = "Path " + (index + 1) + " [" + (path.direction || "unknown direction") + " · " + (path.status || "potential") + "]";
-          block.appendChild(title);
-          (path.hops || []).forEach((hop) => {
-            const row = document.createElement("div");
-            row.className = "token-field";
-            row.textContent = hop.from + " --" + (hop.relationship || "reaches") + "--> " + hop.to;
-            block.appendChild(row);
-          });
-          const conditions = path.conditions || [];
-          if (conditions.length) {
+          // Resource chips at the top of the block (no per-chip permissions —
+          // they share the permission set rendered below).
+          if (resources.length > 0) {
+            const resBox = document.createElement("div");
+            resBox.className = "perm-group__resources";
+            resources.forEach((resName) => {
+              const chip = document.createElement("span");
+              chip.className = "perm-group__resource";
+              chip.textContent = String(resName);
+
+              const { resourceType, resourceName } = extractResourceParts(String(resName));
+              const consoleLink = buildResourceConsoleLink(provider, resourceType, resourceName);
+              if (consoleLink) {
+                const a = document.createElement("a");
+                a.href = consoleLink;
+                a.target = "_blank";
+                a.rel = "noopener noreferrer";
+                a.textContent = "↗";
+                a.title = "Open in console";
+                a.addEventListener("click", (e) => e.stopPropagation());
+                chip.appendChild(a);
+              }
+              resBox.appendChild(chip);
+            });
+            block.appendChild(resBox);
+          } else if (perms.length > 0) {
             const note = document.createElement("div");
             note.className = "perm-group__shared-note";
-            note.textContent = "Conditions: " + conditions.join(", ");
+            note.textContent = "Resource scope not recorded:";
             block.appendChild(note);
           }
-          evidenceSection.appendChild(block);
-        });
 
-        (authorizationEvidence.role_impacts || []).forEach((impact) => {
-          const block = document.createElement("div");
-          block.className = "perm-group";
-          const title = document.createElement("div");
-          title.className = "perm-group__shared-note";
-          const target = impact.target ? impact.target + " → " : "";
-          title.textContent = "Reachable role [" + (impact.status || "potential") + " · " + (impact.hop_count || 0) + " hop(s)]: " + target + (impact.role || impact.name || "unknown role");
-          block.appendChild(title);
-          (impact.grants || []).forEach((grant) => {
-            const row = document.createElement("div");
-            row.className = "token-field";
-            const excludedPermissions = (grant.excluded_permissions || []).length ? " · Except permissions: " + grant.excluded_permissions.join(", ") : "";
-            const excludedResources = (grant.excluded_resources || []).length ? " · Except resources: " + grant.excluded_resources.join(", ") : "";
-            const conditions = (grant.condition_keys || []).length ? " · Conditions: " + grant.condition_keys.join(", ") : "";
-            row.textContent = ((grant.permissions || []).join(", ") || "no permissions") + " → " + ((grant.resources || []).join(", ") || "*") + excludedPermissions + excludedResources + conditions;
-            block.appendChild(row);
+          if (resources.length > 1 && perms.length > 0) {
+            const note = document.createElement("div");
+            note.className = "perm-group__shared-note";
+            note.textContent = "These permissions apply to all " + resources.length + " resources above.";
+            block.appendChild(note);
+          }
+
+          // Permissions classified by severity.
+          if (perms.length > 0) {
+            const cls = classifyPermissions(perms, byClass);
+            SEVERITY_BUCKETS.forEach(({ key, label, cls: sevCls }) => {
+              const list = cls[key] || [];
+              if (!list.length) return;
+              const wrap = document.createElement("div");
+              wrap.className = "perm-severity";
+              // Default-collapse Read Only when the group has any non-read-only perms.
+              const hasOther = (cls.admin.length + cls.privilege_escalation.length + cls.risky.length) > 0;
+              if (key === "read_only" && hasOther) wrap.classList.add("collapsed");
+
+               const titleEl = document.createElement("button");
+               titleEl.className = "perm-severity__title";
+               titleEl.type = "button";
+               titleEl.setAttribute("aria-expanded", key === "read_only" && hasOther ? "false" : "true");
+              titleEl.innerHTML = `<span class="perm-severity__caret">▼</span> ${escapeHtml(label)} <span style="color:var(--text-main); font-weight:700;">${list.length}</span>`;
+
+              const pills = document.createElement("div");
+              pills.className = "perm-severity__pills";
+              list.forEach((p) => {
+                const tag = document.createElement("span");
+                tag.className = "badge badge-perm badge-perm--" + sevCls;
+                tag.style.fontSize = "10px";
+                tag.textContent = p;
+                pills.appendChild(tag);
+              });
+
+               titleEl.addEventListener("click", (e) => {
+                e.stopPropagation();
+                wrap.classList.toggle("collapsed");
+                const c = titleEl.querySelector(".perm-severity__caret");
+                 if (c) c.textContent = wrap.classList.contains("collapsed") ? "▶" : "▼";
+                 titleEl.setAttribute("aria-expanded", wrap.classList.contains("collapsed") ? "false" : "true");
+              });
+
+              wrap.appendChild(titleEl);
+              wrap.appendChild(pills);
+              block.appendChild(wrap);
+            });
+          }
+
+          resSection.appendChild(block);
+        });
+        body.appendChild(resSection);
+
+        // Token details section
+        if (identity.token_details) {
+          const tokenSection = document.createElement("div");
+          tokenSection.className = "id-card__section";
+          const tokenTitle = document.createElement("div");
+          tokenTitle.className = "id-card__section-title";
+          tokenTitle.textContent = "Token Details";
+          tokenSection.appendChild(tokenTitle);
+
+          const tokenGrid = document.createElement("div");
+          tokenGrid.className = "token-grid";
+          const td = identity.token_details;
+          const fields = [
+            ["Name", td.name], ["Username", td.username], ["Token Type", td.token_type],
+            ["Account Type", td.account_type], ["User ID", td.user_id], ["Email", td.email],
+            ["Company", td.company], ["Created", td.created_at], ["Expires", td.expires_at],
+            ["Last Used", td.last_used_at], ["Location", td.location],
+          ];
+          if (identity.provider_metadata) {
+            if (identity.provider_metadata.version) fields.push(["Version", identity.provider_metadata.version]);
+            if (typeof identity.provider_metadata.enterprise === "boolean") fields.push(["Enterprise", identity.provider_metadata.enterprise ? "Yes" : "No"]);
+          }
+          fields.forEach(([label, value]) => {
+            if (!value) return;
+            const field = document.createElement("div");
+            field.className = "token-field";
+            field.innerHTML = `<strong>${escapeHtml(label)}:</strong> ${escapeHtml(String(value))}`;
+            tokenGrid.appendChild(field);
           });
-          evidenceSection.appendChild(block);
-        });
+          tokenSection.appendChild(tokenGrid);
 
-        if ((authorizationEvidence.paths || []).length > displayedPaths.length) {
-          const note = document.createElement("div");
-          note.className = "perm-group__shared-note";
-          note.textContent = "+" + ((authorizationEvidence.paths || []).length - displayedPaths.length) + " additional paths in structured output";
-          evidenceSection.appendChild(note);
+          // Scopes
+          if (Array.isArray(td.scopes) && td.scopes.length) {
+            const scopeDiv = document.createElement("div");
+            scopeDiv.style.marginTop = "8px";
+            scopeDiv.style.display = "flex";
+            scopeDiv.style.flexWrap = "wrap";
+            scopeDiv.style.gap = "4px";
+            td.scopes.forEach((scope) => {
+              const tag = document.createElement("span");
+              tag.className = "badge badge-perm";
+              tag.style.fontSize = "11px";
+              tag.textContent = scope;
+              scopeDiv.appendChild(tag);
+            });
+            tokenSection.appendChild(scopeDiv);
+          }
+
+          // Profile URL
+          if (isHttpUrl(td.url)) {
+            const urlDiv = document.createElement("div");
+            urlDiv.style.marginTop = "6px";
+            urlDiv.style.fontSize = "12px";
+            const a = document.createElement("a");
+            a.href = td.url;
+            a.target = "_blank";
+            a.rel = "noopener noreferrer";
+            a.textContent = td.url;
+            a.style.color = "var(--brand)";
+            urlDiv.appendChild(a);
+            tokenSection.appendChild(urlDiv);
+          }
+
+          body.appendChild(tokenSection);
         }
 
-        const displayedPolicies = (authorizationEvidence.policies || []).slice(0, 100);
-        displayedPolicies.forEach((policy) => {
-          const block = document.createElement("div");
-          block.className = "perm-group";
-          const title = document.createElement("div");
-          title.className = "perm-group__shared-note";
-          title.textContent = (policy.name || policy.id || "Policy") + " · " + (policy.kind || "policy") + " · " + (policy.scope || policy.attached_to || "unknown scope");
-          block.appendChild(title);
-          (policy.statements || []).forEach((statement) => {
-            const row = document.createElement("div");
-            row.className = "token-field";
-            const actions = [...(statement.actions || []), ...(statement.not_actions || []).map((action) => "NOT " + action)];
-            const conditionText = (statement.condition_keys || []).length ? " · Conditions: " + statement.condition_keys.join(", ") : "";
-            row.textContent = (statement.effect || "Unknown") + " · " + (actions.join(", ") || "no actions") + ((statement.resources || []).length ? " · " + statement.resources.join(", ") : "") + conditionText;
-            block.appendChild(row);
-          });
-          evidenceSection.appendChild(block);
-        });
-
-        if ((authorizationEvidence.policies || []).length > displayedPolicies.length) {
-          const note = document.createElement("div");
-          note.className = "perm-group__shared-note";
-          note.textContent = "+" + ((authorizationEvidence.policies || []).length - displayedPolicies.length) + " additional policies in structured output";
-          evidenceSection.appendChild(note);
-        }
-
-        (authorizationEvidence.probes || []).forEach((probe) => {
-          const row = document.createElement("div");
-          row.className = "token-field";
-          const httpStatus = probe.http_status ? " · HTTP " + probe.http_status : "";
-          const reason = probe.reason ? " · " + probe.reason : "";
-          const scope = [probe.region, probe.resource].filter(Boolean).map((value) => " · " + value).join("");
-          const attributes = Object.entries(probe.attributes || {}).map(([key, value]) => " · " + key + ": " + value).join("");
-          row.textContent = "Probe [" + (probe.status || "inconclusive") + "]: " + (probe.service || "unknown service") + " · " + (probe.method || "unknown method") + scope + httpStatus + reason + attributes;
-          evidenceSection.appendChild(row);
-        });
-
-        if ((authorizationEvidence.hierarchy || []).length) {
-          const hierarchy = document.createElement("div");
-          hierarchy.className = "perm-group__shared-note";
-          hierarchy.textContent = "Hierarchy: " + authorizationEvidence.hierarchy.map((scope) => (scope.kind || "scope") + ":" + scope.id).join(" -> ");
-          evidenceSection.appendChild(hierarchy);
-        }
-        (authorizationEvidence.limitations || []).forEach((limitation) => {
-          const note = document.createElement("div");
-          note.className = "perm-group__shared-note";
-          note.textContent = "Limit: " + limitation;
-          evidenceSection.appendChild(note);
-        });
-        body.appendChild(evidenceSection);
-      }
-
-      // Token details section
-      if (identity.token_details) {
-        const tokenSection = document.createElement("div");
-        tokenSection.className = "id-card__section";
-        const tokenTitle = document.createElement("div");
-        tokenTitle.className = "id-card__section-title";
-        tokenTitle.textContent = "Token Details";
-        tokenSection.appendChild(tokenTitle);
-
-        const tokenGrid = document.createElement("div");
-        tokenGrid.className = "token-grid";
-        const td = identity.token_details;
-        const fields = [
-          ["Name", td.name], ["Username", td.username], ["Token Type", td.token_type],
-          ["Account Type", td.account_type], ["User ID", td.user_id], ["Email", td.email],
-          ["Company", td.company], ["Created", td.created_at], ["Expires", td.expires_at],
-          ["Last Used", td.last_used_at], ["Location", td.location],
-        ];
-        if (identity.provider_metadata) {
-          if (identity.provider_metadata.version) fields.push(["Version", identity.provider_metadata.version]);
-          if (typeof identity.provider_metadata.enterprise === "boolean") fields.push(["Enterprise", identity.provider_metadata.enterprise ? "Yes" : "No"]);
-        }
-        fields.forEach(([label, value]) => {
-          if (!value) return;
-          const field = document.createElement("div");
-          field.className = "token-field";
-          field.innerHTML = `<strong>${escapeHtml(label)}:</strong> ${escapeHtml(String(value))}`;
-          tokenGrid.appendChild(field);
-        });
-        tokenSection.appendChild(tokenGrid);
-
-        // Scopes
-        if (Array.isArray(td.scopes) && td.scopes.length) {
-          const scopeDiv = document.createElement("div");
-          scopeDiv.style.marginTop = "8px";
-          scopeDiv.style.display = "flex";
-          scopeDiv.style.flexWrap = "wrap";
-          scopeDiv.style.gap = "4px";
-          td.scopes.forEach((scope) => {
-            const tag = document.createElement("span");
-            tag.className = "badge badge-perm";
-            tag.style.fontSize = "11px";
-            tag.textContent = scope;
-            scopeDiv.appendChild(tag);
-          });
-          tokenSection.appendChild(scopeDiv);
-        }
-
-        // Profile URL
-        if (isHttpUrl(td.url)) {
-          const urlDiv = document.createElement("div");
-          urlDiv.style.marginTop = "6px";
-          urlDiv.style.fontSize = "12px";
-          const a = document.createElement("a");
-          a.href = td.url;
-          a.target = "_blank";
-          a.rel = "noopener noreferrer";
-          a.textContent = td.url;
-          a.style.color = "var(--brand)";
-          urlDiv.appendChild(a);
-          tokenSection.appendChild(urlDiv);
-        }
-
-        body.appendChild(tokenSection);
-      }
+      };
+      if (initiallyOpen) loadDetails();
 
       card.appendChild(header);
       card.appendChild(body);
@@ -10043,6 +10245,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
       // Toggle expand/collapse
       header.addEventListener("click", () => {
         const isOpen = body.classList.contains("open");
+        if (!isOpen) loadDetails();
         body.classList.toggle("open");
         toggle.textContent = isOpen ? "▶" : "▼";
         header.setAttribute("aria-expanded", isOpen ? "false" : "true");
@@ -10065,12 +10268,16 @@ function createFindingFilters(container, fields, onChange, onClear) {
 
       const identities = [];
       accessMap.forEach((identity, identityIndex) => {
+        const providerFilter = document.getElementById("am-provider-filter")?.value || "all";
+        const evidenceFilter = document.getElementById("am-evidence-filter")?.value || "all";
+        if (providerFilter !== "all" && String(identity.provider || "unknown").toLowerCase() !== providerFilter) return;
+        if (evidenceFilter !== "all" && !investigationEvidence(identity).kinds.includes(evidenceFilter)) return;
         const account = formatIdentityLabel(identity);
-        const groups = Array.isArray(identity.groups) ? identity.groups : [];
+        const groups = investigationResourceGroups(identity);
 
         const fingerprint = (identity.fingerprint || "").toLowerCase();
         const evidence = identity.provider_metadata && identity.provider_metadata.authorization_evidence;
-        const evidenceSearch = evidence ? JSON.stringify({
+        const evidenceSearch = filterLower && evidence ? JSON.stringify({
           principal: evidence.principal,
           policies: evidence.policies,
           paths: evidence.paths,
@@ -10078,8 +10285,9 @@ function createFindingFilters(container, fields, onChange, onClear) {
           hierarchy: evidence.hierarchy,
           probes: evidence.probes,
           limitations: evidence.limitations,
+          assessment: evidence.assessment,
           roles: identity.roles,
-        }).toLowerCase() : JSON.stringify(identity.roles || []).toLowerCase();
+        }).toLowerCase() : filterLower ? JSON.stringify(identity.roles || []).toLowerCase() : "";
         const identityNameMatches = Boolean(filterLower) && (account.toLowerCase().includes(filterLower) || fingerprint.includes(filterLower) || evidenceSearch.includes(filterLower));
         let anyResourceMatches = false;
         let anyPermMatches = false;
@@ -10116,6 +10324,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
         identities.push({
           identity,
           groups: viewGroups,
+          resourcesNormalized: true,
           identityNameMatches,
           key: getAccessMapEntryKey(identity, identityIndex),
         });
@@ -10181,6 +10390,7 @@ function createFindingFilters(container, fields, onChange, onClear) {
 
     function extractResourceParts(label) {
       if (!label) return { resourceType: "", resourceName: "" };
+      if (label.startsWith("arn:")) return { resourceType: "", resourceName: label };
       const idx = label.indexOf(":");
       if (idx === -1) return { resourceType: "", resourceName: label };
       return { resourceType: label.slice(0, idx), resourceName: label.slice(idx + 1) };

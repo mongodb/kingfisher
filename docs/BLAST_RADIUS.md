@@ -37,11 +37,16 @@ For backward compatibility, `--access-map` remains an alias for `--blast-radius`
 The standalone `kingfisher access-map` and `kingfisher blast_radius` spellings also remain aliases
 for `kingfisher blast-radius`.
 
-The HTML blast-radius viewer is built for triage: it starts in a topology view,
-groups identities by provider, lets you click through to individual resources,
-and keeps the detailed permissions in a side inspector. That makes it easier
+The HTML blast-radius viewer is built for triage: its investigation view groups identities by
+provider and connects recorded permissions with policy, path, and resource evidence. A separate
+resource map and detailed inspector are available. That makes it easier
 to compare two credentials at a glance, prioritize administrator or production access, and decide
 what to revoke first without reading nested JSON by hand.
+
+![Resource map and inspector using synthetic AWS resources](assets/screenshots/blast-radius-map.jpg)
+
+*The resource map shows recorded scope; its edges do not prove effective access. This example
+uses [synthetic data](viewer/investigation-demo.json).*
 
 > Blast-radius mapping runs additional network requests. Only use it when you are authorized to inspect the target account/workspace.
 
@@ -108,6 +113,95 @@ AWS and GCP results may populate `provider_metadata.authorization_evidence` in s
 - `limitations`: incomplete reads, traversal caps, and policy-evaluation constraints.
 
 Structured JSON, JSONL, BSON, TOON, and SARIF reports preserve the complete evidence payload. Pretty output summarizes paths and API probes, scan HTML summarizes evidence counts, and the standalone HTML report and interactive report viewer expose policy, path, and probe details without storing condition values or response bodies.
+
+### HTML investigation workflow
+
+Existing commands, format names, report envelopes, and legacy severity fields remain supported.
+The viewer opens older JSON/JSONL reports and starts in an investigation workspace with Overview,
+Findings, Coverage, and Blast Radius views. Open a report from the header or drop files into the
+compact import bar. The Blast Radius investigation view shows policy provenance, candidate paths,
+conditions, exclusions, and observed API methods; the resource map remains available separately.
+
+![Blast-radius investigation with synthetic AWS policy and capability evidence](assets/screenshots/blast-radius-investigation.jpg)
+
+The [synthetic investigation report](viewer/investigation-demo.json) illustrates AWS, GCP, Azure,
+Hugging Face, and GitHub evidence without usable credentials. Open it with `kingfisher view` or the
+report picker. The snapshot demonstrates the interface; it is not a live assessment.
+
+### Risk and coverage
+
+Blast-radius mapping automatically explains **what the collected permissions could allow and how
+strong the evidence is**. This is included in the `blast-radius` command and scans using
+`--blast-radius`; no additional flag is needed.
+
+For example, `s3:ListBucket` is labeled **Metadata read**, while `s3:GetObject` is labeled
+**Sensitive data read**. Each capability distinguishes direct access from candidate role paths and
+observed API access from policy grants or conditions. These explanations reuse collected results
+without additional API requests or wider discovery.
+
+The HTML triager uses these categories and resources for priorities, labels, filters, and counts.
+Existing report fields, severity, and scan alerts stay unchanged; the risk and coverage assessment
+is additional report data. Older reports without it remain readable.
+
+```bash
+kingfisher scan . --blast-radius --format toon
+kingfisher blast-radius aws ./aws.json --format json
+kingfisher blast-radius gcp ./key.json --view-report
+```
+
+**Report integrations:** new blast-radius results include
+`provider_metadata.authorization_evidence.assessment`. It contains a schema version, assessment
+timestamp, capability categories, evidence labels, coverage, resource explanations, recommendations,
+and notes. `capability_risk` is separate from the original `severity`. Structured report formats
+retain this object; HTML and the viewer display it. `pretty` output does not display the assessment.
+The timestamp records when the assessment was generated and intentionally varies between runs;
+exclude `observed_at` when comparing otherwise equivalent snapshots.
+
+A policy grant or candidate role path does not prove live data access. An accepted API observation
+establishes only its recorded method, target, and scope; conditions and uninspected controls can
+still restrict access.
+
+Coverage values are `unknown`, `partial`, or `recorded`. `recorded` describes the collected snapshot
+and does not assert account-wide completeness. Detailed assessments retain at most 4096 capability
+records and 1000 resources per identity, with up to 256 permissions per resource; legacy report data
+is retained separately. Condition values
+and provider response bodies are not included in policy evidence.
+
+### Explicit cloud scope expansion
+
+Default AWS discovery uses the SDK-selected region. Default GCP discovery stays within the home
+project and its readable ancestry. Broader scope is opt-in for both scanning and standalone mapping:
+
+```bash
+kingfisher blast-radius aws ./aws.json --aws-region us-east-1 --aws-region us-west-2
+kingfisher scan . --blast-radius --aws-region us-east-1 --gcp-project production-project --format toon
+kingfisher blast-radius gcp ./key.json --gcp-project production-project
+```
+
+AWS accepts at most eight explicit regions and inventories global IAM/S3 resources once. The CLI
+accepts at most seven additional GCP projects, reserving the eighth scope for each credential's home
+project; additional projects use their own visible IAM
+context. Scope expansion adds network requests, latency, and possible API quota/cost. No target roles
+are assumed and no discovered service accounts are impersonated. GCP inventory follows at most eight
+pages per service, with bounded response sizes and deadlines; earlier pages and independent service
+results survive later failures. API denials and traversal limits remain visible in the evidence.
+
+Scope flags expand native AWS/GCP access-map handlers, including imported Betterleaks rules with
+an AWS or GCP handler. Custom Betterleaks expression-based analysis without a native handler uses
+the scope defined by its analysis program; `--aws-region` and `--gcp-project` do not rewrite or
+expand that program's requests. GCP API-key probes are also separate from service-account project
+inventory. Use standalone provider credential mapping for native regional/project inventory.
+
+The page and request deadlines are not an aggregate blast-radius deadline. Services and requested
+regions/projects run sequentially, so slow or throttled providers can take several minutes. For a
+hard CI wall-clock bound, configure a job/process timeout; no overall cancellation budget is
+currently propagated across the mapping phase.
+
+Azure returns direct/group-inherited ARM role bindings with action exclusions and condition-presence
+evidence. Source-host mapping retains the validated enterprise instance and does not forward tokens
+through redirects. Resource visibility is not promoted to write capability. Per-resource assessments
+remain scoped to the owning organization. Webhook analysis is passive and exports the origin instead
+of a credential-bearing URL; it does not establish webhook liveness.
 
 ## Providers and supported credential formats
 
@@ -280,7 +374,7 @@ control policies, resource policies, and request context can further restrict ac
 values are used only for local evaluation and are not retained in reports; reports contain condition
 operator and key names.
 
-IAM policy summaries are intentionally conservative: explicit denies, `NotAction`, resource scoping, and conditions are called out in risk notes because a flat action list cannot fully reproduce AWS policy evaluation. Global services are mapped account-wide; regional services use the region selected by the AWS SDK configuration.
+IAM policy summaries are intentionally conservative: explicit denies, `NotAction`, resource scoping, and conditions are called out in risk notes because a flat action list cannot fully reproduce AWS policy evaluation. Global services are mapped account-wide; regional services use the region selected by the AWS SDK configuration unless explicit `--aws-region` values are supplied.
 
 ### Alibaba Cloud (`alibaba` / `aliyun`)
 
@@ -344,9 +438,17 @@ Google API-key mapping runs four fixed GET probes with at most four requests in 
 
 This is intentionally a narrow empirical map, not an exhaustive Google API sweep. A successful probe proves only that exact read method. Method-specific API restrictions may deny other calls on the same service, application restrictions may make the key usable only from an allowed IP/referrer/app, and services outside the allowlist may still accept the key. The mapper never invokes generation, translation, sign-in, write, mutation, or administrative methods.
 
+For Gemini, this establishes model-list acceptance only. It does not establish `generateContent`
+permission, paid inference availability, remaining quota, account credit, or a spending limit.
+This mapping is wired to the classic Google API-key rule (`gcp-api-key`, `AIza…` credentials).
+The separate Gemini credential detector (`gcp-gemini-api`, including newer `AQ.…` credentials)
+currently provides validation metadata without an automatic blast-radius mapper.
+Vertex AI uses GCP identities and IAM; visible policy permissions may supply context through the
+service-account mapper, but there is no dedicated Vertex inference or billing assessment.
+
 Kingfisher resolves the service account and reads visible project, folder, and organization IAM policies. When the credential exposes `iam.serviceAccounts.getIamPolicy`, it also uses bounded, read-only policy checks on visible target service accounts to find direct impersonation grants. Authorization evidence records the scope that contributed each role binding, expands roles into permissions, and records both inbound and outbound authorization-capability paths involving visible service accounts. Relationships distinguish access-token creation, OpenID-token creation, `actAs`, signing, and delegation permissions. For target service accounts reachable through access-token or signing capabilities, `role_impacts` matches the target to its visible project/folder/organization role bindings, expands those roles, and pairs their permissions with the hierarchy scopes they affect. `actAs`, OpenID-token, and delegation-only relationships remain path evidence without inheriting the target's Google API roles. Propagated roles are included in the effective severity and their scopes appear as `impersonated_service_account_scope` resources. The mapper also enumerates visible resources in the key's project across services including Cloud Storage, BigQuery, Secret Manager, Compute Engine, Cloud SQL, Pub/Sub, Cloud Run, Artifact Registry, GKE, Cloud KMS, Cloud Functions, Firestore, and Spanner.
 
-GCP analysis is best effort and passive: Kingfisher does not mint an access token for a discovered target service account or repeat resource enumeration as that target. Conditional bindings and deny policies are not fully evaluated, Google group membership is not resolved, service-account inventory is limited to its first API response, direct target-policy checks are capped at 128 visible service accounts, and live resource enumeration is limited to the project associated with the original credential even when an inherited folder or organization role can apply to other descendants. Target role impact is limited to bindings visible in the hierarchy policies the original credential can read. These limits are included in `provider_metadata.authorization_evidence.limitations`.
+GCP analysis is best effort and passive: Kingfisher does not mint an access token for a discovered target service account or repeat resource enumeration as that target. Conditional bindings and deny policies are not fully evaluated, Google group membership is not resolved, inventory is capped at eight pages per service, and direct target-policy checks are capped at 128 visible service accounts. Live resource enumeration uses the home project and any explicitly selected `--gcp-project` scopes; inherited folder or organization roles can also apply to uninspected descendants. Target role impact is limited to bindings visible in the hierarchy policies the original credential can read. Earlier pages and independent service results are retained after failures. These limits are included in `provider_metadata.authorization_evidence.limitations`.
 
 ### Microsoft Azure, Entra ID, and Microsoft Graph (`azure`)
 
@@ -642,6 +744,11 @@ kingfisher blast-radius openai ./openai.token --format json > openai.blast-radiu
 - Blast-radius mapping uses `https://api.openai.com/v1` as the API base.
 - Access is reported only when a list endpoint returns data successfully; no write permission or
   inference capability is claimed from these read-only requests.
+- Project key, service-account, and user inventory requires an authorized organization admin
+  credential and readable projects. Lists are best effort and currently use initial pages;
+  a denied administration step can leave later project inventory uninspected.
+- Configured model rate limits describe request/token throughput where returned. They are not
+  available credit, remaining quota, a spending cap, or a calculation of financial exposure.
 - OpenAI does not expose a stable public identity endpoint for every API-key family, so the mapper
   identifies the credential by key family and observed inventory rather than reusing an
   undocumented identity response schema.
@@ -672,6 +779,10 @@ kingfisher blast-radius anthropic ./anthropic.token --format json > anthropic.bl
 
 - Blast-radius mapping uses `https://api.anthropic.com/v1` as the API base.
 - Keys that can enumerate organization API keys are treated as having broader administrative visibility.
+- Models and available key metadata provide read-only context. The mapper does not send model
+  prompts or calculate remaining credit, spend limits, or maximum financial exposure.
+- Current-key identity and permissions remain unknown when direct introspection is unavailable;
+  visibility of an organization key does not establish that it is the supplied credential.
 
 ### Salesforce (`salesforce`)
 

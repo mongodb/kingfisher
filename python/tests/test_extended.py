@@ -355,9 +355,11 @@ def test_new_examples(example, repo):
     rows = [json.loads(line) for line in result.stdout.splitlines()]
     assert rows and TOKEN.decode() not in result.stdout
     if example == "detection.py":
-        assert [row["context_count"] for row in rows] == [0, 0, 1, 1]
-        assert [row["legacy_count"] for row in rows] == [1, 1, 1, 0]
-        assert rows[-1]["findings"][0]["is_base64_encoded"]
+        comparisons = rows[:-1]
+        assert [row["context_count"] for row in comparisons] == [0, 0, 1, 1]
+        assert [row["legacy_count"] for row in comparisons] == [1, 1, 1, 0]
+        assert comparisons[-1]["findings"][0]["is_base64_encoded"]
+        assert rows[-1] == {"attributed_count": 1}
     elif example == "content.py":
         assert len(rows) == 3 and all(row["findings"] for row in rows[:2])
         assert rows[-1] == {"path": "broken.pyc", "extraction_error": "malformed_pyc"}

@@ -2,7 +2,7 @@
 
 use std::{collections::BTreeMap, future::Future, pin::Pin, time::SystemTime};
 
-use anyhow::{Context, Result, anyhow, bail};
+use anyhow::{Context, Result, anyhow, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use hmac::{Hmac, KeyInit, Mac};
 use http::StatusCode;
@@ -17,13 +17,26 @@ use sha2::{Digest, Sha256};
 
 const MAX_RESPONSE_BODY: usize = 1 << 20;
 
-#[derive(Debug)]
 pub struct BetterleaksValidationOutcome {
     pub valid: bool,
     pub reason: Option<super::ValidationReason>,
     pub status: StatusCode,
     pub body: String,
     pub outcome: ValidationOutcome,
+    /// Private provider evidence passed only to an explicit analysis operation.
+    pub analysis_data: Option<JsonValue>,
+}
+
+impl std::fmt::Debug for BetterleaksValidationOutcome {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BetterleaksValidationOutcome")
+            .field("valid", &self.valid)
+            .field("reason", &self.reason)
+            .field("status", &self.status)
+            .field("outcome", &self.outcome)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -143,6 +156,7 @@ impl Value {
 }
 
 type EvalFuture<'a> = Pin<Box<dyn Future<Output = Result<Value>> + Send + 'a>>;
+type ChainFuture<'a> = Pin<Box<dyn Future<Output = Result<Option<Value>>> + Send + 'a>>;
 
 struct Evaluator<'a> {
     client: &'a Client,
@@ -151,6 +165,8 @@ struct Evaluator<'a> {
     variables: BTreeMap<String, Value>,
     pointer: Option<Value>,
     last_status: Option<StatusCode>,
+    revocation: bool,
+    mutation_submitted: bool,
 }
 
 pub async fn validate(
@@ -160,48 +176,7 @@ pub async fn validate(
     client: &Client,
     allow_internal_ips: bool,
 ) -> BetterleaksValidationOutcome {
-    let mut finding_captures = BTreeMap::new();
-    let mut token = String::new();
-    for (name, value, ..) in captures {
-        if name.eq_ignore_ascii_case("TOKEN") {
-            token = value.clone();
-        } else {
-            finding_captures.insert(name.clone(), Value::String(value.clone()));
-        }
-    }
-
-    let mut finding = BTreeMap::new();
-    finding.insert("secret".to_string(), Value::String(token));
-    finding.insert("captures".to_string(), Value::Object(finding_captures));
-
-    let mut components = BTreeMap::new();
-    for (component_id, variable) in &validation.components {
-        let secret = globals
-            .get(variable.as_str())
-            .map(ValueView::to_kstr)
-            .map(|value| value.to_string())
-            .unwrap_or_default();
-        let mut component = BTreeMap::new();
-        component.insert("secret".to_string(), Value::String(secret));
-        component.insert("captures".to_string(), Value::Object(BTreeMap::new()));
-        components.insert(component_id.clone(), Value::Object(component));
-    }
-
-    let mut evaluator = Evaluator {
-        client,
-        allow_internal_ips,
-        environment: globals
-            .iter()
-            .map(|(name, value)| (name.to_string(), value.to_kstr().to_string()))
-            .collect(),
-        variables: BTreeMap::from([
-            ("finding".to_string(), Value::Object(finding)),
-            ("components".to_string(), Value::Object(components)),
-        ]),
-        pointer: None,
-        last_status: None,
-    };
-
+    let mut evaluator = evaluator(validation, captures, globals, client, allow_internal_ips, false);
     match evaluator.eval(&validation.expression).await {
         Ok(value) => classify(value, evaluator.last_status),
         Err(error) => BetterleaksValidationOutcome {
@@ -210,19 +185,284 @@ pub async fn validate(
             status: StatusCode::BAD_GATEWAY,
             body: format!("Betterleaks validation error: {error:#}"),
             outcome: ValidationOutcome::Unavailable,
+            analysis_data: None,
         },
     }
 }
 
-fn classify(value: Value, remote_status: Option<StatusCode>) -> BetterleaksValidationOutcome {
+/// Run a rule's optional analysis expression after confirmed validation.
+/// This is a separate, explicit operation: ordinary validation never runs analysis.
+/// `validation_result` includes the private handoff and must not be included in
+/// reports or diagnostic output.
+pub async fn analyze(
+    validation: &BetterleaksValidation,
+    captures: &[(String, String, usize, usize)],
+    globals: &LiquidObject,
+    client: &Client,
+    allow_internal_ips: bool,
+    validation_result: &JsonValue,
+) -> Result<JsonValue> {
+    let expression = validation.analyze.as_ref().context("Rule has no analysis expression")?;
+    let result = validation_result;
+    ensure!(
+        result["result"].as_str().is_some_and(|status| status.eq_ignore_ascii_case("valid")),
+        "Analysis requires confirmed valid credentials"
+    );
+    let mut evaluator = evaluator(validation, captures, globals, client, allow_internal_ips, false);
+    evaluator.variables.insert(
+        "validation".into(),
+        Value::Object(BTreeMap::from([
+            ("status".into(), Value::String("valid".into())),
+            ("reason".into(), Value::from_json(result["reason"].clone())),
+            (
+                "metadata".into(),
+                Value::from_json(
+                    result
+                        .get("metadata")
+                        .cloned()
+                        .unwrap_or_else(|| JsonValue::Object(Default::default())),
+                ),
+            ),
+            (
+                "analysis".into(),
+                Value::from_json(
+                    result
+                        .get("analysis")
+                        .cloned()
+                        .unwrap_or_else(|| JsonValue::Object(Default::default())),
+                ),
+            ),
+        ])),
+    );
+    let value = evaluator.eval(expression).await?;
+    normalize_analysis_result(value.to_json())
+}
+
+/// Result classification returned by an explicit Betterleaks revocation program.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum BetterleaksRevocationStatus {
+    Revoked,
+    Unknown,
+    Error,
+}
+
+/// Provider-controlled response data kept separate from the typed outcome.
+#[derive(Debug, Clone)]
+pub struct BetterleaksRevocationOutcome {
+    pub status: BetterleaksRevocationStatus,
+    pub result: super::revocation::DirectRevocationResult,
+}
+
+/// Execute an explicitly authorized Betterleaks revocation expression.
+/// An indeterminate provider result returns [`super::revocation::RevocationIndeterminate`].
+/// The DELETE binding exists only in this operation. Requests are never retried.
+pub async fn revoke(
+    revocation: &BetterleaksValidation,
+    captures: &[(String, String, usize, usize)],
+    globals: &LiquidObject,
+    client: &Client,
+    allow_internal_ips: bool,
+) -> Result<super::revocation::DirectRevocationResult> {
+    let outcome =
+        revoke_detailed(revocation, captures, globals, client, allow_internal_ips).await?;
+    if outcome.status == BetterleaksRevocationStatus::Unknown {
+        return Err(super::revocation::RevocationIndeterminate.into());
+    }
+    Ok(outcome.result)
+}
+
+/// Execute revocation while preserving the provider program's typed outcome.
+/// Errors after a mutating request may have been submitted carry
+/// [`super::revocation::RevocationSubmitted`], including failures while evaluating
+/// later expressions or parsing their final result. No request is retried.
+pub async fn revoke_detailed(
+    revocation: &BetterleaksValidation,
+    captures: &[(String, String, usize, usize)],
+    globals: &LiquidObject,
+    client: &Client,
+    allow_internal_ips: bool,
+) -> Result<BetterleaksRevocationOutcome> {
+    let mut evaluator = evaluator(revocation, captures, globals, client, allow_internal_ips, true);
+    let result = async {
+        let value = evaluator.eval(&revocation.expression).await?;
+        let Value::Object(values) = &value else {
+            bail!("Revocation expression must return an object");
+        };
+        ensure!(
+            values.keys().all(|key| matches!(key.as_str(), "result" | "reason" | "metadata")),
+            "Unknown revocation result field"
+        );
+        let Some(Value::String(status)) = values.get("result") else {
+            bail!("Revocation result must be a string");
+        };
+        let status = match status.to_ascii_lowercase().as_str() {
+            "revoked" => BetterleaksRevocationStatus::Revoked,
+            "unknown" => BetterleaksRevocationStatus::Unknown,
+            "error" => BetterleaksRevocationStatus::Error,
+            _ => bail!("Revocation result must be revoked, unknown, or error"),
+        };
+        ensure!(
+            values.get("reason").is_none_or(|value| matches!(value, Value::String(_))),
+            "Revocation reason must be a string"
+        );
+        ensure!(
+            values
+                .get("metadata")
+                .is_none_or(|value| matches!(value, Value::Null | Value::Object(_))),
+            "Revocation metadata must be an object"
+        );
+        Ok(BetterleaksRevocationOutcome {
+            status,
+            result: super::revocation::DirectRevocationResult {
+                rule_id: String::new(),
+                rule_name: String::new(),
+                revoked: status == BetterleaksRevocationStatus::Revoked,
+                status_code: evaluator.last_status.map(|status| status.as_u16()),
+                message: serde_json::to_string(&value.to_json())?,
+            },
+        })
+    }
+    .await;
+    result.map_err(|error: anyhow::Error| {
+        if evaluator.mutation_submitted {
+            error.context(super::revocation::RevocationSubmitted)
+        } else {
+            error
+        }
+    })
+}
+
+/// Preserve original named captures for the shared validation/revocation runtime.
+pub(crate) fn add_finding_globals(
+    globals: &mut LiquidObject,
+    finding: &crate::Finding,
+    components: &[crate::Finding],
+) {
+    globals.insert(
+        "__BETTERLEAKS_RULE_ID".into(),
+        liquid::model::Value::scalar(finding.rule_id.clone()),
+    );
+    if let Ok(value) = liquid::model::to_value(&finding.captures) {
+        globals.insert("__BETTERLEAKS_FINDING_CAPTURES".into(), value);
+    }
+    let components: BTreeMap<_, _> = components
+        .iter()
+        .map(|component| {
+            (
+                component.rule_id.clone(),
+                serde_json::json!({"secret":component.secret,"captures":component.captures}),
+            )
+        })
+        .collect();
+    if let Ok(value) = liquid::model::to_value(&components) {
+        globals.insert("__BETTERLEAKS_COMPONENTS".into(), value);
+    }
+}
+
+fn structured_global(globals: &LiquidObject, name: &str) -> Option<JsonValue> {
+    let value = serde_json::to_value(globals.get(name)?).ok()?;
+    if let JsonValue::String(source) = value {
+        serde_json::from_str(&source).ok()
+    } else {
+        Some(value)
+    }
+}
+
+fn evaluator<'a>(
+    validation: &BetterleaksValidation,
+    captures: &[(String, String, usize, usize)],
+    globals: &LiquidObject,
+    client: &'a Client,
+    allow_internal_ips: bool,
+    revocation: bool,
+) -> Evaluator<'a> {
+    let mut finding_captures = BTreeMap::new();
+    let mut token = String::new();
+    for (name, value, ..) in captures {
+        if name.eq_ignore_ascii_case("TOKEN") {
+            token = value.clone();
+        } else {
+            finding_captures.insert(name.clone(), Value::String(value.clone()));
+            finding_captures
+                .entry(name.to_ascii_lowercase())
+                .or_insert_with(|| Value::String(value.clone()));
+        }
+    }
+    if let Some(JsonValue::Object(values)) =
+        structured_global(globals, "__BETTERLEAKS_FINDING_CAPTURES")
+    {
+        finding_captures =
+            values.into_iter().map(|(key, value)| (key, Value::from_json(value))).collect();
+    }
+    let mut finding = BTreeMap::from([
+        ("secret".to_string(), Value::String(token)),
+        ("captures".to_string(), Value::Object(finding_captures)),
+    ]);
+    if let Some(value) = globals.get("__BETTERLEAKS_RULE_ID") {
+        finding.insert("rule_id".into(), Value::String(value.to_kstr().to_string()));
+    }
+    let mut components = BTreeMap::new();
+    for (component_id, variable) in &validation.components {
+        // Optional absent components have no entry; null coalescing distinguishes
+        // them from present components whose secret happens to be empty.
+        let Some(secret) = globals
+            .get(variable.as_str())
+            .or_else(|| globals.get(variable.to_uppercase().as_str()))
+        else {
+            continue;
+        };
+        let mut component = BTreeMap::new();
+        component.insert("secret".to_string(), Value::String(secret.to_kstr().to_string()));
+        let component_captures = structured_global(globals, "__BETTERLEAKS_COMPONENTS")
+            .and_then(|values| {
+                values
+                    .get(component_id)
+                    .or_else(|| values.get(format!("custom.{component_id}")))
+                    .or_else(|| values.get(format!("betterleaks.{component_id}")))
+                    .cloned()
+            })
+            .and_then(|value| value.get("captures").cloned())
+            .map(Value::from_json)
+            .unwrap_or_else(|| Value::Object(BTreeMap::new()));
+        component.insert("captures".to_string(), component_captures);
+        components.insert(component_id.clone(), Value::Object(component));
+    }
+    Evaluator {
+        client,
+        allow_internal_ips,
+        environment: globals
+            .iter()
+            .filter_map(|(name, value)| {
+                value.as_scalar().map(|_| (name.to_string(), value.to_kstr().to_string()))
+            })
+            .collect(),
+        variables: BTreeMap::from([
+            ("finding".to_string(), Value::Object(finding)),
+            ("components".to_string(), Value::Object(components)),
+        ]),
+        pointer: None,
+        last_status: None,
+        revocation,
+        mutation_submitted: false,
+    }
+}
+
+fn classify(mut value: Value, remote_status: Option<StatusCode>) -> BetterleaksValidationOutcome {
+    let analysis_data = Some(value.to_json());
+    if let Value::Object(values) = &mut value {
+        values.remove("analysis");
+    }
     let result = match &value {
-        Value::Object(values) => values.get("result").map(Value::as_string).unwrap_or_default(),
+        Value::Object(values) => {
+            values.get("result").map(Value::as_string).unwrap_or_default().to_ascii_lowercase()
+        }
         _ => String::new(),
     };
     let body = serde_json::to_string(&value.to_json())
         .unwrap_or_else(|_| "{\"result\":\"error\"}".to_string());
     match result.as_str() {
         "valid" => BetterleaksValidationOutcome {
+            analysis_data: analysis_data.clone(),
             reason: None,
             valid: true,
             status: remote_status.unwrap_or(StatusCode::OK),
@@ -231,6 +471,7 @@ fn classify(value: Value, remote_status: Option<StatusCode>) -> BetterleaksValid
         },
         "needs_validation" if has_active_credential_marker(&value) => {
             BetterleaksValidationOutcome {
+                analysis_data: analysis_data.clone(),
                 reason: None,
                 valid: true,
                 status: remote_status.unwrap_or(StatusCode::FORBIDDEN),
@@ -239,6 +480,7 @@ fn classify(value: Value, remote_status: Option<StatusCode>) -> BetterleaksValid
             }
         }
         "invalid" | "revoked" => BetterleaksValidationOutcome {
+            analysis_data: analysis_data.clone(),
             reason: None,
             valid: false,
             status: remote_status.unwrap_or(StatusCode::UNAUTHORIZED),
@@ -246,6 +488,7 @@ fn classify(value: Value, remote_status: Option<StatusCode>) -> BetterleaksValid
             outcome: ValidationOutcome::VerifiedInactive,
         },
         "skipped" => BetterleaksValidationOutcome {
+            analysis_data: analysis_data.clone(),
             reason: None,
             valid: false,
             status: remote_status.unwrap_or(StatusCode::PRECONDITION_REQUIRED),
@@ -260,6 +503,7 @@ fn classify(value: Value, remote_status: Option<StatusCode>) -> BetterleaksValid
             outcome: ValidationOutcome::Skipped,
         },
         _ => BetterleaksValidationOutcome {
+            analysis_data: analysis_data.clone(),
             reason: None,
             valid: false,
             // Preserve Betterleaks' unknown classification through Kingfisher's legacy refresh.
@@ -302,32 +546,34 @@ impl Evaluator<'_> {
                     let value = self.eval(node).await?;
                     match operator.as_str() {
                         "!" | "not" => Ok(Value::Bool(!value.truthy())),
-                        "-" => Ok(Value::Float(-value.as_f64().unwrap_or_default())),
+                        "-" => match value {
+                            Value::Integer(value) => {
+                                Ok(Value::Integer(value.checked_neg().context("Integer overflow")?))
+                            }
+                            _ => Ok(Value::Float(-value.as_f64().context("Expected a number")?)),
+                        },
+                        "+" => Ok(value),
                         other => bail!("unsupported unary operator {other}"),
                     }
                 }
                 Expr::Binary { operator, left, right } => {
                     self.eval_binary(operator, left, right).await
                 }
-                Expr::Chain { node } | Expr::Predicate { node } => self.eval(node).await,
-                Expr::Member { node, property, .. } => {
+                Expr::Chain { node } => Ok(self.eval_chain(node).await?.unwrap_or(Value::Null)),
+                Expr::Predicate { node } => self.eval(node).await,
+                Expr::Member { node, property, optional, .. } => {
                     let container = self.eval(node).await?;
+                    if *optional && matches!(container, Value::Null) {
+                        return Ok(Value::Null);
+                    }
                     let property = self.eval(property).await?;
                     Ok(container.get(&property))
                 }
                 Expr::Slice { node, from, to } => {
                     let value = self.eval(node).await?;
-                    let start = self.eval(from).await?.as_i64().unwrap_or_default().max(0) as usize;
-                    let end = self.eval(to).await?.as_i64().unwrap_or(i64::MAX).max(0) as usize;
-                    match value {
-                        Value::Array(values) => Ok(Value::Array(
-                            values[start.min(values.len())..end.min(values.len())].to_vec(),
-                        )),
-                        Value::String(value) => Ok(Value::String(
-                            value.chars().skip(start).take(end.saturating_sub(start)).collect(),
-                        )),
-                        _ => Ok(Value::Null),
-                    }
+                    let from = self.eval(from).await?.as_i64().unwrap_or_default();
+                    let to = self.eval(to).await?.as_i64().unwrap_or(i64::MAX);
+                    Ok(slice_value(value, from, to))
                 }
                 Expr::Call { callee, arguments } => self.eval_call(callee, arguments).await,
                 Expr::Builtin { name, arguments } => self.eval_builtin(name, arguments).await,
@@ -379,7 +625,59 @@ impl Evaluator<'_> {
                     Ok(Value::Object(values))
                 }
                 Expr::Pair { .. } => bail!("pair evaluated outside a map"),
-                Expr::Pointer { .. } => Ok(self.pointer.clone().unwrap_or(Value::Null)),
+                Expr::Pointer { name } => Ok(if name.is_empty() || name == "#" {
+                    self.pointer.clone().unwrap_or(Value::Null)
+                } else {
+                    self.variables
+                        .get(&format!("#{}", name.trim_start_matches('#')))
+                        .cloned()
+                        .unwrap_or(Value::Null)
+                }),
+            }
+        })
+    }
+
+    // None records a short-circuited optional chain, distinct from an ordinary
+    // nil value. Skip the rest of the chain before evaluating indexes or calls.
+    fn eval_chain<'a>(&'a mut self, expression: &'a BetterleaksExpr) -> ChainFuture<'a> {
+        Box::pin(async move {
+            match expression {
+                BetterleaksExpr::Member { node, property, optional, .. } => {
+                    let Some(container) = self.eval_chain(node).await? else {
+                        return Ok(None);
+                    };
+                    if *optional && matches!(container, Value::Null) {
+                        return Ok(None);
+                    }
+                    let property = self.eval(property).await?;
+                    Ok(Some(container.get(&property)))
+                }
+                BetterleaksExpr::Slice { node, from, to } => {
+                    let Some(value) = self.eval_chain(node).await? else {
+                        return Ok(None);
+                    };
+                    let from = self.eval(from).await?.as_i64().unwrap_or_default();
+                    let to = self.eval(to).await?.as_i64().unwrap_or(i64::MAX);
+                    Ok(Some(slice_value(value, from, to)))
+                }
+                BetterleaksExpr::Call { callee, arguments } => {
+                    if let BetterleaksExpr::Member { node, property, optional, method: true } =
+                        callee.as_ref()
+                        && let Some(method) = static_property(property)
+                        && matches!(method.as_str(), "contains" | "split")
+                    {
+                        let Some(receiver) = self.eval_chain(node).await? else {
+                            return Ok(None);
+                        };
+                        if *optional && matches!(receiver, Value::Null) {
+                            return Ok(None);
+                        }
+                        let args = self.eval_arguments(arguments).await?;
+                        return call_method(&receiver, &method, &args).map(Some);
+                    }
+                    self.eval_call(callee, arguments).await.map(Some)
+                }
+                _ => self.eval(expression).await.map(Some),
             }
         })
     }
@@ -392,28 +690,46 @@ impl Evaluator<'_> {
     ) -> Result<Value> {
         let left = self.eval(left).await?;
         match operator {
-            "&&" if !left.truthy() => return Ok(Value::Bool(false)),
-            "||" if left.truthy() => return Ok(Value::Bool(true)),
+            "&&" | "and" if !left.truthy() => return Ok(Value::Bool(false)),
+            "||" | "or" if left.truthy() => return Ok(Value::Bool(true)),
             "??" if !matches!(left, Value::Null) => return Ok(left),
             _ => {}
         }
         let right = self.eval(right).await?;
         match operator {
-            "&&" => Ok(Value::Bool(right.truthy())),
-            "||" => Ok(Value::Bool(right.truthy())),
+            "&&" | "and" => Ok(Value::Bool(right.truthy())),
+            "||" | "or" => Ok(Value::Bool(right.truthy())),
             "??" => Ok(right),
-            "+" => match (&left, &right) {
-                (Value::Integer(a), Value::Integer(b)) => Ok(Value::Integer(a + b)),
-                _ => Ok(Value::String(left.as_string() + &right.as_string())),
-            },
+            "+" if matches!((&left, &right), (Value::String(_), Value::String(_))) => {
+                Ok(Value::String(left.as_string() + &right.as_string()))
+            }
+            "+" | "-" | "*" | "/" | "%" | "**" | "^" => arithmetic(operator, &left, &right),
             "==" => Ok(Value::Bool(values_equal(&left, &right))),
             "!=" => Ok(Value::Bool(!values_equal(&left, &right))),
-            ">" => Ok(Value::Bool(
-                left.as_f64().unwrap_or_default() > right.as_f64().unwrap_or_default(),
-            )),
+            ">" | ">=" | "<" | "<=" => {
+                let order = compare_values(&left, &right).context("Cannot compare these values")?;
+                Ok(Value::Bool(match operator {
+                    ">" => order.is_gt(),
+                    ">=" => order.is_ge(),
+                    "<" => order.is_lt(),
+                    _ => order.is_le(),
+                }))
+            }
             "in" => Ok(Value::Bool(value_in(&left, &right))),
+            "not in" => Ok(Value::Bool(!value_in(&left, &right))),
             "contains" => Ok(Value::Bool(value_contains(&left, &right))),
             "startsWith" => Ok(Value::Bool(left.as_string().starts_with(&right.as_string()))),
+            "endsWith" => Ok(Value::Bool(left.as_string().ends_with(&right.as_string()))),
+            "matches" => Ok(Value::Bool(
+                kingfisher_rules::betterleaks_filter::compile_go_regex(&right.as_string())?
+                    .is_match(&left.as_string()),
+            )),
+            ".." => {
+                let start = left.as_i64().context("Range start must be an integer")?;
+                let end = right.as_i64().context("Range end must be an integer")?;
+                ensure!(end.saturating_sub(start) < 1_000_000, "Range is too large");
+                Ok(Value::Array((start..=end).map(Value::Integer).collect()))
+            }
             other => bail!("unsupported binary operator {other}"),
         }
     }
@@ -424,36 +740,30 @@ impl Evaluator<'_> {
         arguments: &[BetterleaksExpr],
     ) -> Result<Value> {
         let name = static_name(callee).unwrap_or_default();
-        if let BetterleaksExpr::Member { node, property, method: true, .. } = callee
+        if let BetterleaksExpr::Member { node, property, optional, method: true } = callee
             && static_property(property)
                 .is_some_and(|method| matches!(method.as_str(), "contains" | "split"))
         {
             let method = static_property(property).unwrap_or_default();
             let receiver = self.eval(node).await?;
+            if *optional && matches!(receiver, Value::Null) {
+                return Ok(Value::Null);
+            }
             let args = self.eval_arguments(arguments).await?;
-            return match method.as_str() {
-                "contains" => Ok(Value::Bool(
-                    args.first().is_some_and(|needle| value_contains(&receiver, needle)),
-                )),
-                "split" => {
-                    let separator = args.first().map(Value::as_string).unwrap_or_default();
-                    Ok(Value::Array(
-                        receiver
-                            .as_string()
-                            .split(&separator)
-                            .map(|part| Value::String(part.to_string()))
-                            .collect(),
-                    ))
-                }
-                other => bail!("unsupported Betterleaks method {other}"),
-            };
+            return call_method(&receiver, &method, &args);
         }
 
         let args = self.eval_arguments(arguments).await?;
         match name.as_str() {
             "http.get" => self.http_request(Method::GET, &args).await,
             "http.post" => self.http_request(Method::POST, &args).await,
-            "validate.unknown" => Ok(unknown_result(args.first().cloned().unwrap_or(Value::Null))),
+            "http.delete" if self.revocation => self.http_request(Method::DELETE, &args).await,
+            "revoke.unknown" if self.revocation => {
+                Ok(unknown_result(args.first().cloned().unwrap_or(Value::Null)))
+            }
+            "validate.unknown" if !self.revocation => {
+                Ok(unknown_result(args.first().cloned().unwrap_or(Value::Null)))
+            }
             "bytes" => Ok(Value::Bytes(args.first().map(Value::as_bytes).unwrap_or_default())),
             "size" | "len" => Ok(Value::Integer(value_size(args.first()))),
             "string" => Ok(Value::String(args.first().map(Value::as_string).unwrap_or_default())),
@@ -472,6 +782,9 @@ impl Evaluator<'_> {
                 }
                 .to_string(),
             )),
+            "fromJSON" => Ok(Value::from_json(serde_json::from_str(
+                &args.first().map(Value::as_string).unwrap_or_default(),
+            )?)),
             "toJSON" => Ok(Value::String(serde_json::to_string(
                 &args.first().unwrap_or(&Value::Null).to_json(),
             )?)),
@@ -503,10 +816,42 @@ impl Evaluator<'_> {
                         .collect(),
                 ))
             }
+            "intersects" => {
+                let Some(Value::Array(left)) = args.first() else {
+                    bail!("intersects: expected arrays");
+                };
+                let Some(Value::Array(right)) = args.get(1) else {
+                    bail!("intersects: expected arrays");
+                };
+                Ok(Value::Bool(
+                    left.iter().any(|value| right.iter().any(|other| values_equal(value, other))),
+                ))
+            }
+            "containsAny" | "startsWithAny" => {
+                let input = args.first().map(Value::as_string).unwrap_or_default();
+                let Some(Value::Array(needles)) = args.get(1) else {
+                    bail!("{name}: expected an array");
+                };
+                Ok(Value::Bool(needles.iter().any(|needle| {
+                    if name == "containsAny" {
+                        input.contains(&needle.as_string())
+                    } else {
+                        input.starts_with(&needle.as_string())
+                    }
+                })))
+            }
+            "analysis.capabilities" => analysis_capabilities(args.first()),
             "substring" => {
                 let value = args.first().map(Value::as_string).unwrap_or_default();
                 let start = args.get(1).and_then(Value::as_i64).unwrap_or_default().max(0) as usize;
-                Ok(Value::String(value.chars().skip(start).collect()))
+                let end = args
+                    .get(2)
+                    .and_then(Value::as_i64)
+                    .and_then(|end| usize::try_from(end).ok())
+                    .unwrap_or(usize::MAX);
+                Ok(Value::String(
+                    value.chars().skip(start).take(end.saturating_sub(start)).collect(),
+                ))
             }
             "base64.encode" => Ok(Value::String(
                 BASE64.encode(args.first().map(Value::as_bytes).unwrap_or_default()),
@@ -519,6 +864,12 @@ impl Evaluator<'_> {
             "hex.encode" => Ok(Value::String(hex::encode(
                 args.first().map(Value::as_bytes).unwrap_or_default(),
             ))),
+            "crypto.sha256" => Ok(Value::String(hex::encode(Sha256::digest(
+                args.first().map(Value::as_bytes).unwrap_or_default(),
+            )))),
+            "crypto.md5" => Ok(Value::Bytes(
+                md5::Md5::digest(args.first().map(Value::as_bytes).unwrap_or_default()).to_vec(),
+            )),
             "crypto.sha1" => {
                 // Betterleaks' OVH validation protocol requires the SHA-1 160-bit
                 // digest of its UTF-8 signing payload. SHA-256 is not wire-compatible.
@@ -527,6 +878,46 @@ impl Evaluator<'_> {
             }
             "crypto.hmacSha1" => Ok(Value::Bytes(hmac_sha1(&args)?)),
             "crypto.hmacSha256" => Ok(Value::Bytes(hmac_sha256(&args)?)),
+            "strings.obfuscate" => Ok(Value::String(obfuscate(
+                &args.first().map(Value::as_string).unwrap_or_default(),
+            ))),
+            "findMatch" => {
+                let input = args.first().map(Value::as_string).unwrap_or_default();
+                let pattern = args.get(1).map(Value::as_string).unwrap_or_default();
+                Ok(Value::String(
+                    kingfisher_rules::betterleaks_filter::compile_go_regex(&pattern)?
+                        .find(&input)
+                        .map(|matched| matched.as_str().to_string())
+                        .unwrap_or_default(),
+                ))
+            }
+            "tokenRatio" => {
+                Ok(Value::Float(kingfisher_rules::betterleaks_filter::token_efficiency_ratio(
+                    &args.first().map(Value::as_string).unwrap_or_default(),
+                )))
+            }
+            "failsTokenEfficiency" => {
+                Ok(Value::Bool(kingfisher_rules::betterleaks_filter::fails_token_efficiency_value(
+                    &args.first().map(Value::as_string).unwrap_or_default(),
+                )))
+            }
+            "entropy" => {
+                let input = args.first().map(Value::as_string).unwrap_or_default();
+                let mut counts = BTreeMap::new();
+                for byte in input.bytes() {
+                    *counts.entry(byte).or_insert(0usize) += 1;
+                }
+                let length = input.len() as f64;
+                Ok(Value::Float(
+                    counts
+                        .values()
+                        .map(|count| {
+                            let p = *count as f64 / length;
+                            -p * p.log2()
+                        })
+                        .sum(),
+                ))
+            }
             "strings.urlQueryEscape" => Ok(Value::String(query_escape(
                 &args.first().map(Value::as_string).unwrap_or_default(),
             ))),
@@ -537,16 +928,19 @@ impl Evaluator<'_> {
             "time.nowRFC3339" => Ok(Value::String(
                 chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
             )),
-            "env.getOrDefault" => {
+            "env.get" => {
                 let name = args.first().map(Value::as_string).unwrap_or_default();
-                let fallback = args.get(1).map(Value::as_string).unwrap_or_default();
                 Ok(Value::String(
                     self.environment
                         .get(&name)
                         .cloned()
-                        .or_else(|| std::env::var(&name).ok())
-                        .unwrap_or(fallback),
+                        .context("env.get: variable was not explicitly supplied")?,
                 ))
+            }
+            "env.getOrDefault" => {
+                let name = args.first().map(Value::as_string).unwrap_or_default();
+                let fallback = args.get(1).map(Value::as_string).unwrap_or_default();
+                Ok(Value::String(self.environment.get(&name).cloned().unwrap_or(fallback)))
             }
             "filter.matchesAny" | "matchesAny" => matches_any(&args),
             "aws.validate" => self.aws_validate(&args).await,
@@ -555,6 +949,12 @@ impl Evaluator<'_> {
             "azure.validateServicePrincipal" => self.azure_validate_service_principal(&args).await,
             "azure.validateAppConfig" => self.azure_validate_app_config(&args).await,
             "azure.validateServiceBusSAS" => self.azure_validate_service_bus(&args).await,
+            "lower" | "upper" | "trimPrefix" | "trimSuffix" | "repeat" | "join" | "indexOf"
+            | "lastIndexOf" | "hasPrefix" | "hasSuffix" | "keys" | "values" | "reverse"
+            | "sort" | "uniq" | "flatten" | "concat" | "first" | "last" | "get" | "sum" | "min"
+            | "max" | "mean" | "abs" | "ceil" | "floor" | "round" => {
+                eval_simple_builtin(&name, &args)
+            }
             other => bail!("unsupported Betterleaks function {other}"),
         }
     }
@@ -568,54 +968,83 @@ impl Evaluator<'_> {
     }
 
     async fn eval_builtin(&mut self, name: &str, arguments: &[BetterleaksExpr]) -> Result<Value> {
-        if matches!(name, "any" | "all" | "filter") {
+        if matches!(
+            name,
+            "any"
+                | "all"
+                | "none"
+                | "one"
+                | "filter"
+                | "map"
+                | "count"
+                | "find"
+                | "findLast"
+                | "findIndex"
+                | "findLastIndex"
+        ) {
             let [input, predicate] = arguments else {
                 bail!("{name}: expected an array and predicate");
             };
-            let values = self.eval(input).await?;
-            let Value::Array(values) = values else {
+            let Value::Array(values) = self.eval(input).await? else {
                 bail!("{name}: expected an array");
             };
-            let mut filtered = Vec::new();
-            for value in values {
+            let mut output = Vec::new();
+            let mut matches = 0;
+            let mut found = Value::Null;
+            for (index, value) in values.into_iter().enumerate() {
                 let previous = self.pointer.replace(value.clone());
+                let previous_index =
+                    self.variables.insert("#index".into(), Value::Integer(index as i64));
                 let result = self.eval(predicate).await;
                 self.pointer = previous;
-                let matches = result?.truthy();
-                if name == "any" && matches {
+                match previous_index {
+                    Some(value) => {
+                        self.variables.insert("#index".into(), value);
+                    }
+                    None => {
+                        self.variables.remove("#index");
+                    }
+                }
+                let result = result?;
+                let matched = result.truthy();
+                if name == "map" {
+                    output.push(result);
+                    continue;
+                }
+                if matched {
+                    matches += 1;
+                }
+                if name == "any" && matched {
                     return Ok(Value::Bool(true));
                 }
-                if name == "all" && !matches {
+                if name == "all" && !matched {
                     return Ok(Value::Bool(false));
                 }
-                if name == "filter" && matches {
-                    filtered.push(value);
+                if name == "none" && matched {
+                    return Ok(Value::Bool(false));
+                }
+                if name == "filter" && matched {
+                    output.push(value.clone());
+                }
+                if matched && matches!(name, "find" | "findLast" | "findIndex" | "findLastIndex") {
+                    found =
+                        if name.ends_with("Index") { Value::Integer(index as i64) } else { value };
+                    if matches!(name, "find" | "findIndex") {
+                        return Ok(found);
+                    }
                 }
             }
-            return Ok(if name == "filter" {
-                Value::Array(filtered)
-            } else {
-                Value::Bool(name == "all")
+            return Ok(match name {
+                "filter" | "map" => Value::Array(output),
+                "count" => Value::Integer(matches),
+                "find" | "findLast" | "findIndex" | "findLastIndex" => found,
+                "one" => Value::Bool(matches == 1),
+                "all" | "none" => Value::Bool(true),
+                _ => Value::Bool(false),
             });
         }
-
         let args = self.eval_arguments(arguments).await?;
-        match name {
-            "replace" => {
-                let input = args.first().map(Value::as_string).unwrap_or_default();
-                let from = args.get(1).map(Value::as_string).unwrap_or_default();
-                let to = args.get(2).map(Value::as_string).unwrap_or_default();
-                Ok(Value::String(input.replace(&from, &to)))
-            }
-            "lastIndexOf" => {
-                let input = args.first().map(Value::as_string).unwrap_or_default();
-                let needle = args.get(1).map(Value::as_string).unwrap_or_default();
-                Ok(Value::Integer(
-                    input.rfind(&needle).and_then(|index| i64::try_from(index).ok()).unwrap_or(-1),
-                ))
-            }
-            other => bail!("unsupported Betterleaks builtin {other}"),
-        }
+        eval_simple_builtin(name, &args)
     }
 
     async fn http_request(&mut self, method: Method, args: &[Value]) -> Result<Value> {
@@ -626,6 +1055,8 @@ impl Evaluator<'_> {
             .await
             .map_err(|_| anyhow!("Betterleaks validation URL was blocked"))?;
 
+        let may_mutate =
+            self.revocation && !matches!(method, Method::GET | Method::HEAD | Method::OPTIONS);
         let mut request = self.client.request(method, url.clone());
         if let Some(Value::Object(headers)) = args.get(1) {
             for (name, value) in headers {
@@ -636,8 +1067,17 @@ impl Evaluator<'_> {
             request = request.body(body.as_string());
         }
 
-        let response =
-            request.send().await.map_err(|_| anyhow!("Betterleaks validation request failed"))?;
+        // Resolve deferred header/URL/builder errors before marking submission.
+        let request =
+            request.build().map_err(|_| anyhow!("Betterleaks request could not be built"))?;
+        if may_mutate {
+            self.mutation_submitted = true;
+        }
+        let response = self
+            .client
+            .execute(request)
+            .await
+            .map_err(|_| anyhow!("Betterleaks validation request failed"))?;
         if response.url() != &url {
             bail!("Betterleaks validation request was redirected");
         }
@@ -678,10 +1118,19 @@ impl Evaluator<'_> {
     async fn aws_validate(&mut self, args: &[Value]) -> Result<Value> {
         let access_key = args.first().map(Value::as_string).unwrap_or_default();
         let secret_key = args.get(1).map(Value::as_string).unwrap_or_default();
-        let result =
-            crate::validation::aws::validate_aws_credential_pair(&access_key, &secret_key, None)
-                .await;
+        let (result, details) = crate::validation::aws::validate_aws_credential_pair_detailed(
+            &access_key,
+            &secret_key,
+            None,
+        )
+        .await;
         let mut response = BTreeMap::new();
+        if let Some(user_id) = details.user_id {
+            response.insert("userid".into(), Value::String(user_id));
+        }
+        if let Some(error_code) = details.error_code {
+            response.insert("error_code".into(), Value::String(error_code));
+        }
         self.last_status = Some(result.status);
         response.insert("status".to_string(), Value::Integer(i64::from(result.status.as_u16())));
         if result.outcome == ValidationOutcome::Skipped {
@@ -700,8 +1149,16 @@ impl Evaluator<'_> {
 
     async fn gcp_validate(&mut self, args: &[Value]) -> Result<Value> {
         let credential_json = args.first().map(Value::as_string).unwrap_or_default();
-        let parsed: JsonValue =
+        let mut parsed: JsonValue =
             serde_json::from_str(&credential_json).context("GCP credential is not valid JSON")?;
+        if parsed.get("token_uri").and_then(JsonValue::as_str).is_none_or(str::is_empty)
+            && let Some(fields) = parsed.as_object_mut()
+        {
+            fields.insert(
+                "token_uri".into(),
+                JsonValue::String("https://oauth2.googleapis.com/token".into()),
+            );
+        }
         let credential_type = parsed["type"].as_str().unwrap_or_default();
         let mut response = BTreeMap::from([(
             "credential_type".to_string(),
@@ -710,10 +1167,10 @@ impl Evaluator<'_> {
         match credential_type {
             "service_account" => {
                 match crate::validation::gcp::GcpValidator::global()?
-                    .get_access_token_from_sa_json(&credential_json)
+                    .get_access_token_from_sa_json(&serde_json::to_string(&parsed)?)
                     .await
                 {
-                    Ok(context) => {
+                    Ok(context) if !context.access_token.is_empty() => {
                         self.last_status = Some(StatusCode::OK);
                         response.insert("status".to_string(), Value::Integer(200));
                         response
@@ -723,9 +1180,25 @@ impl Evaluator<'_> {
                             Value::String(context.client_email),
                         );
                     }
+                    Ok(_) => {
+                        response.insert("status".into(), Value::Integer(0));
+                        response.insert(
+                            "error_code".into(),
+                            Value::String("missing_access_token".into()),
+                        );
+                    }
                     Err(error) => {
-                        self.last_status = Some(StatusCode::BAD_REQUEST);
-                        response.insert("status".to_string(), Value::Integer(400));
+                        // Transport, decoding and remote 5xx failures cannot prove
+                        // that a service-account credential is inactive.
+                        let status = error
+                            .downcast_ref::<reqwest::Error>()
+                            .map(|error| error.status().unwrap_or(StatusCode::BAD_GATEWAY))
+                            .unwrap_or(StatusCode::BAD_REQUEST);
+                        self.last_status = Some(status);
+                        response.insert(
+                            "status".to_string(),
+                            Value::Integer(i64::from(status.as_u16())),
+                        );
                         response
                             .insert("error_message".to_string(), Value::String(error.to_string()));
                     }
@@ -765,6 +1238,13 @@ impl Evaluator<'_> {
                     "client_id".to_string(),
                     Value::String(parsed["client_id"].as_str().unwrap_or_default().to_string()),
                 );
+                if status == StatusCode::OK
+                    && body["access_token"].as_str().is_none_or(str::is_empty)
+                {
+                    response.insert("status".into(), Value::Integer(0));
+                    response
+                        .insert("error_code".into(), Value::String("missing_access_token".into()));
+                }
                 if let Some(error) = body["error"].as_str() {
                     response.insert("error_code".to_string(), Value::String(error.to_string()));
                 }
@@ -806,7 +1286,10 @@ impl Evaluator<'_> {
             ),
         ]));
         let result = self.http_request(Method::GET, &[Value::String(url), headers]).await?;
-        Ok(with_fields(result, [("account", Value::String(account))]))
+        Ok(with_fields(
+            azure_response_fields(result, true, false),
+            [("account", Value::String(account))],
+        ))
     }
 
     async fn azure_validate_service_principal(&mut self, args: &[Value]) -> Result<Value> {
@@ -816,7 +1299,9 @@ impl Evaluator<'_> {
         if tenant_id.is_empty() || client_id.is_empty() || client_secret.is_empty() {
             return Ok(input_error("missing_service_principal_fields"));
         }
-        let tenant_pattern = regex::Regex::new(r"^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$")?;
+        let tenant_pattern = kingfisher_rules::betterleaks_filter::compile_go_regex(
+            r"^[A-Za-z0-9][A-Za-z0-9.-]{0,127}$",
+        )?;
         if !tenant_pattern.is_match(&tenant_id) {
             return Ok(input_error("invalid_tenant_id"));
         }
@@ -838,7 +1323,7 @@ impl Evaluator<'_> {
             .http_request(Method::POST, &[Value::String(url), headers, Value::String(body)])
             .await?;
         Ok(with_fields(
-            result,
+            azure_response_fields(result, false, true),
             [("tenant_id", Value::String(tenant_id)), ("client_id", Value::String(client_id))],
         ))
     }
@@ -877,7 +1362,10 @@ impl Evaluator<'_> {
         let result = self
             .http_request(Method::GET, &[Value::String(format!("{endpoint}{path}")), headers])
             .await?;
-        Ok(with_fields(result, [("endpoint", Value::String(endpoint)), ("id", Value::String(id))]))
+        Ok(with_fields(
+            azure_response_fields(result, false, false),
+            [("endpoint", Value::String(endpoint)), ("id", Value::String(id))],
+        ))
     }
 
     async fn azure_validate_service_bus(&mut self, args: &[Value]) -> Result<Value> {
@@ -929,7 +1417,520 @@ impl Evaluator<'_> {
         if !path.is_empty() {
             fields.push(("entity_path", Value::String(path.to_string())));
         }
-        Ok(with_fields(result, fields))
+        Ok(with_fields(azure_response_fields(result, false, false), fields))
+    }
+}
+
+fn azure_response_fields(value: Value, storage: bool, requires_token: bool) -> Value {
+    #[derive(serde::Deserialize, Default)]
+    struct Error {
+        #[serde(rename = "Code", default)]
+        code: String,
+        #[serde(rename = "Message", default)]
+        message: String,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct Container {
+        #[serde(rename = "Name", default)]
+        name: String,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct Containers {
+        #[serde(rename = "Container", default)]
+        values: Vec<Container>,
+    }
+    #[derive(serde::Deserialize, Default)]
+    struct Storage {
+        #[serde(rename = "Containers", default)]
+        containers: Containers,
+    }
+    let Value::Object(mut values) = value else {
+        return value;
+    };
+    let body = values.get("body").map(Value::as_string).unwrap_or_default();
+    if let Ok(error) = quick_xml::de::from_str::<Error>(&body) {
+        if !error.code.is_empty() {
+            values.insert("error_code".into(), Value::String(error.code));
+        }
+        if !error.message.is_empty() {
+            values.insert("error_message".into(), Value::String(error.message));
+        }
+    }
+    if let Some(Value::Object(json)) = values.get("json").cloned() {
+        for key in ["error", "code", "Code"] {
+            if let Some(Value::String(code)) = json.get(key)
+                && !code.is_empty()
+            {
+                values.insert("error_code".into(), Value::String(code.clone()));
+                break;
+            }
+        }
+        for key in ["error_description", "message", "Message"] {
+            if let Some(Value::String(message)) = json.get(key)
+                && !message.is_empty()
+            {
+                values.insert("error_message".into(), Value::String(message.clone()));
+                break;
+            }
+        }
+    }
+    let has_token = matches!(values.get("json").map(|json| json.get(&Value::String("access_token".into()))), Some(Value::String(token)) if !token.is_empty());
+    if requires_token && values.get("status").and_then(Value::as_i64) == Some(200) && !has_token {
+        values.insert("status".into(), Value::Integer(0));
+        values.insert("error_code".into(), Value::String("missing_access_token".into()));
+    }
+    if storage
+        && values.get("status").and_then(Value::as_i64) == Some(200)
+        && let Ok(parsed) = quick_xml::de::from_str::<Storage>(&body)
+    {
+        values.insert(
+            "containers".into(),
+            Value::Array(
+                parsed
+                    .containers
+                    .values
+                    .into_iter()
+                    .map(|container| Value::String(container.name))
+                    .collect(),
+            ),
+        );
+    }
+    Value::Object(values)
+}
+
+fn call_method(receiver: &Value, method: &str, args: &[Value]) -> Result<Value> {
+    match method {
+        "contains" => {
+            Ok(Value::Bool(args.first().is_some_and(|needle| value_contains(receiver, needle))))
+        }
+        "split" => {
+            let separator = args.first().map(Value::as_string).unwrap_or_default();
+            Ok(Value::Array(
+                receiver
+                    .as_string()
+                    .split(&separator)
+                    .map(|part| Value::String(part.to_string()))
+                    .collect(),
+            ))
+        }
+        other => bail!("unsupported Betterleaks method {other}"),
+    }
+}
+
+fn slice_value(value: Value, from: i64, to: i64) -> Value {
+    let length = match &value {
+        Value::Array(values) => values.len(),
+        Value::String(value) => value.chars().count(),
+        _ => 0,
+    };
+    let index = |index: i64| {
+        if index < 0 {
+            length.saturating_sub(index.unsigned_abs() as usize)
+        } else {
+            (index as usize).min(length)
+        }
+    };
+    let start = index(from);
+    let end = index(to).max(start);
+    match value {
+        Value::Array(values) => Value::Array(values[start..end].to_vec()),
+        Value::String(value) => {
+            Value::String(value.chars().skip(start).take(end - start).collect())
+        }
+        _ => Value::Null,
+    }
+}
+
+fn obfuscate(secret: &str) -> String {
+    use rand::RngExt;
+    let chars: Vec<char> = secret.chars().collect();
+    let prefix = if chars.len() > 20 {
+        chars.iter().take(8).position(|ch| "_-.".contains(*ch)).map_or(6, |index| index + 1)
+    } else {
+        0
+    };
+    let body = &chars[prefix..];
+    let lower_hex = body.iter().all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(ch))
+        && body.iter().any(char::is_ascii_lowercase);
+    let upper_hex = body.iter().all(|ch| ch.is_ascii_digit() || ('A'..='F').contains(ch))
+        && body.iter().any(char::is_ascii_uppercase);
+    let symbols: Vec<char> = body
+        .iter()
+        .copied()
+        .filter(|ch| ch.is_ascii_punctuation())
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .collect();
+    let mut rng = rand::rng();
+    chars
+        .iter()
+        .enumerate()
+        .map(|(index, ch)| {
+            if index < prefix || !rng.random_bool(0.7) {
+                return *ch;
+            }
+            let pool: Vec<char> = if lower_hex && ch.is_ascii_hexdigit() {
+                "0123456789abcdef".chars().collect()
+            } else if upper_hex && ch.is_ascii_hexdigit() {
+                "0123456789ABCDEF".chars().collect()
+            } else if ch.is_ascii_lowercase() {
+                ('a'..='z').collect()
+            } else if ch.is_ascii_uppercase() {
+                ('A'..='Z').collect()
+            } else if ch.is_ascii_digit() {
+                ('0'..='9').collect()
+            } else if ch.is_ascii_punctuation() {
+                symbols.clone()
+            } else {
+                return *ch;
+            };
+            let alternatives: Vec<char> = pool.into_iter().filter(|other| other != ch).collect();
+            if alternatives.is_empty() {
+                *ch
+            } else {
+                alternatives[rng.random_range(0..alternatives.len())]
+            }
+        })
+        .collect()
+}
+
+fn compare_values(left: &Value, right: &Value) -> Option<std::cmp::Ordering> {
+    match (left, right) {
+        (Value::String(a), Value::String(b)) => Some(a.cmp(b)),
+        (Value::Integer(a), Value::Integer(b)) => Some(a.cmp(b)),
+        _ => left.as_f64()?.partial_cmp(&right.as_f64()?),
+    }
+}
+
+fn arithmetic(operator: &str, left: &Value, right: &Value) -> Result<Value> {
+    if let (Value::Integer(a), Value::Integer(b)) = (left, right) {
+        let value = match operator {
+            "+" => a.checked_add(*b),
+            "-" => a.checked_sub(*b),
+            "*" => a.checked_mul(*b),
+            "%" => a.checked_rem(*b),
+            "/" => return Ok(Value::Float(*a as f64 / nonzero(*b as f64)?)),
+            "**" | "^" => return Ok(Value::Float((*a as f64).powf(*b as f64))),
+            _ => None,
+        };
+        return value.map(Value::Integer).context("Integer overflow or division by zero");
+    }
+    let a = left.as_f64().context("Expected a number")?;
+    let b = right.as_f64().context("Expected a number")?;
+    let value = match operator {
+        "+" => a + b,
+        "-" => a - b,
+        "*" => a * b,
+        "/" => a / nonzero(b)?,
+        "%" => a % nonzero(b)?,
+        "**" | "^" => a.powf(b),
+        _ => unreachable!(),
+    };
+    ensure!(value.is_finite(), "Non-finite arithmetic result");
+    Ok(Value::Float(value))
+}
+
+fn nonzero(value: f64) -> Result<f64> {
+    ensure!(value != 0.0, "Division by zero");
+    Ok(value)
+}
+
+const ANALYSIS_CAPABILITIES: &[&str] =
+    &["read", "write", "read_secrets", "create_credentials", "manage_users", "admin"];
+
+fn reject_unknown_fields(
+    values: &serde_json::Map<String, JsonValue>,
+    allowed: &[&str],
+    label: &str,
+) -> Result<()> {
+    ensure!(
+        values.keys().all(|name| allowed.contains(&name.as_str())),
+        "{label} contains an unknown field"
+    );
+    Ok(())
+}
+
+fn optional_text(
+    values: &serde_json::Map<String, JsonValue>,
+    name: &str,
+    label: &str,
+) -> Result<Option<String>> {
+    let Some(value) = values.get(name).filter(|value| !value.is_null()) else {
+        return Ok(None);
+    };
+    let value = value.as_str().with_context(|| format!("{label} {name} must be a string"))?.trim();
+    Ok((!value.is_empty()).then(|| value.to_string()))
+}
+
+fn string_array(value: &JsonValue, label: &str) -> Result<Vec<String>> {
+    let values = value.as_array().with_context(|| format!("{label} must be an array"))?;
+    values
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(|value| value.trim().to_string())
+                .with_context(|| format!("{label} must contain only strings"))
+        })
+        .collect()
+}
+
+fn normalize_identity(value: &JsonValue) -> Result<Option<JsonValue>> {
+    let values = value.as_object().context("Analysis identity must be an object")?;
+    reject_unknown_fields(
+        values,
+        &["id", "username", "name", "email", "account"],
+        "Analysis identity",
+    )?;
+    let mut normalized = serde_json::Map::new();
+    for name in ["id", "username", "name", "email"] {
+        if let Some(text) = optional_text(values, name, "Analysis identity")? {
+            normalized.insert(name.to_string(), JsonValue::String(text));
+        }
+    }
+    if let Some(account) = values.get("account").filter(|value| !value.is_null()) {
+        let values = account.as_object().context("Analysis identity account must be an object")?;
+        reject_unknown_fields(values, &["id", "name", "domains"], "Analysis identity account")?;
+        let mut account = serde_json::Map::new();
+        for name in ["id", "name"] {
+            if let Some(text) = optional_text(values, name, "Analysis identity account")? {
+                account.insert(name.to_string(), JsonValue::String(text));
+            }
+        }
+        if let Some(domains) = values.get("domains").filter(|value| !value.is_null()) {
+            let domains: std::collections::BTreeSet<_> =
+                string_array(domains, "Analysis identity account domains")?
+                    .into_iter()
+                    .filter(|domain| !domain.is_empty())
+                    .collect();
+            if !domains.is_empty() {
+                account.insert("domains".into(), serde_json::to_value(domains)?);
+            }
+        }
+        if !account.is_empty() {
+            normalized.insert("account".into(), JsonValue::Object(account));
+        }
+    }
+    Ok((!normalized.is_empty()).then_some(JsonValue::Object(normalized)))
+}
+
+// This is the closed v2 analysis contract. Provider evidence belongs in metadata;
+// severity is derived from known positive grants rather than assigned by a rule.
+fn normalize_analysis_result(value: JsonValue) -> Result<JsonValue> {
+    let values = value.as_object().context("Analysis expression must return an object")?;
+    reject_unknown_fields(values, &["reason", "identity", "capabilities", "metadata"], "Analysis")?;
+    let mut normalized = serde_json::Map::new();
+    if let Some(reason) = values.get("reason") {
+        let reason = reason.as_str().context("Analysis reason must be a string")?.trim();
+        if !reason.is_empty() {
+            normalized.insert("reason".into(), JsonValue::String(reason.to_string()));
+        }
+    }
+    if let Some(identity) = values.get("identity").filter(|value| !value.is_null())
+        && let Some(identity) = normalize_identity(identity)?
+    {
+        normalized.insert("identity".into(), identity);
+    }
+    let mut capabilities = Vec::new();
+    if let Some(value) = values.get("capabilities").filter(|value| !value.is_null()) {
+        let values = string_array(value, "Analysis capabilities")?;
+        for capability in values.iter().filter(|value| !value.is_empty()) {
+            ensure!(
+                ANALYSIS_CAPABILITIES.contains(&capability.as_str()),
+                "Unknown analysis capability"
+            );
+        }
+        capabilities.extend(
+            ANALYSIS_CAPABILITIES
+                .iter()
+                .copied()
+                .filter(|capability| values.iter().any(|value| value == capability)),
+        );
+    }
+    let severity = if capabilities.is_empty() {
+        "unknown"
+    } else if capabilities == ["read"] {
+        "medium"
+    } else {
+        "high"
+    };
+    normalized.insert("severity".into(), JsonValue::String(severity.to_string()));
+    if !capabilities.is_empty() {
+        normalized.insert("capabilities".into(), serde_json::to_value(capabilities)?);
+    }
+    if let Some(metadata) = values.get("metadata").filter(|value| !value.is_null()) {
+        let metadata = metadata.as_object().context("Analysis metadata must be an object")?;
+        if !metadata.is_empty() {
+            normalized.insert("metadata".into(), JsonValue::Object(metadata.clone()));
+        }
+    }
+    Ok(JsonValue::Object(normalized))
+}
+
+fn analysis_capabilities(value: Option<&Value>) -> Result<Value> {
+    let Some(Value::Object(conditions)) = value else {
+        bail!("analysis.capabilities: expected an object");
+    };
+    for (name, condition) in conditions {
+        ensure!(
+            ANALYSIS_CAPABILITIES.contains(&name.as_str()),
+            "analysis.capabilities: unknown capability"
+        );
+        ensure!(
+            matches!(condition, Value::Bool(_)),
+            "analysis.capabilities: conditions must be boolean"
+        );
+    }
+    Ok(Value::Array(
+        ANALYSIS_CAPABILITIES
+            .iter()
+            .filter(|name| conditions.get(**name) == Some(&Value::Bool(true)))
+            .map(|name| Value::String((*name).to_string()))
+            .collect(),
+    ))
+}
+
+fn eval_simple_builtin(name: &str, args: &[Value]) -> Result<Value> {
+    let input = args.first().unwrap_or(&Value::Null);
+    let text = || input.as_string();
+    let parameter = |index| args.get(index).map(Value::as_string).unwrap_or_default();
+    match name {
+        "replace" => Ok(Value::String(text().replace(&parameter(1), &parameter(2)))),
+        "lower" => Ok(Value::String(text().to_lowercase())),
+        "upper" => Ok(Value::String(text().to_uppercase())),
+        "trimPrefix" => {
+            let text = text();
+            Ok(Value::String(text.strip_prefix(&parameter(1)).unwrap_or(&text).to_string()))
+        }
+        "trimSuffix" => {
+            let text = text();
+            Ok(Value::String(text.strip_suffix(&parameter(1)).unwrap_or(&text).to_string()))
+        }
+        "repeat" => {
+            let count =
+                args.get(1).and_then(Value::as_i64).context("repeat: expected integer count")?;
+            let count = usize::try_from(count).context("repeat: negative count")?;
+            let text = text();
+            ensure!(
+                text.len().saturating_mul(count) <= 16 * 1024 * 1024,
+                "repeat: output is too large"
+            );
+            Ok(Value::String(text.repeat(count)))
+        }
+        "indexOf" | "lastIndexOf" => {
+            let text = text();
+            let needle = parameter(1);
+            Ok(Value::Integer(
+                if name == "indexOf" { text.find(&needle) } else { text.rfind(&needle) }
+                    .and_then(|index| i64::try_from(index).ok())
+                    .unwrap_or(-1),
+            ))
+        }
+        "hasPrefix" => Ok(Value::Bool(text().starts_with(&parameter(1)))),
+        "hasSuffix" => Ok(Value::Bool(text().ends_with(&parameter(1)))),
+        "keys" | "values" => {
+            let Value::Object(values) = input else {
+                bail!("{name}: expected an object");
+            };
+            Ok(Value::Array(if name == "keys" {
+                values.keys().cloned().map(Value::String).collect()
+            } else {
+                values.values().cloned().collect()
+            }))
+        }
+        "get" => Ok(input.get(args.get(1).unwrap_or(&Value::Null))),
+        "abs" | "ceil" | "floor" | "round" => {
+            let value = input.as_f64().context("Expected a number")?;
+            Ok(Value::Float(match name {
+                "abs" => value.abs(),
+                "ceil" => value.ceil(),
+                "floor" => value.floor(),
+                _ => value.round(),
+            }))
+        }
+        _ => {
+            let values = if let Value::Array(values) = input {
+                values.as_slice()
+            } else if matches!(name, "min" | "max") {
+                args
+            } else {
+                bail!("{name}: expected an array");
+            };
+            match name {
+                "first" => Ok(values.first().cloned().unwrap_or(Value::Null)),
+                "last" => Ok(values.last().cloned().unwrap_or(Value::Null)),
+                "join" => Ok(Value::String(
+                    values.iter().map(Value::as_string).collect::<Vec<_>>().join(&parameter(1)),
+                )),
+                "concat" => {
+                    let mut output = values.to_vec();
+                    for argument in args.iter().skip(1) {
+                        let Value::Array(array) = argument else {
+                            bail!("concat: expected arrays");
+                        };
+                        output.extend_from_slice(array);
+                    }
+                    Ok(Value::Array(output))
+                }
+                "flatten" => {
+                    fn flatten(values: &[Value], output: &mut Vec<Value>) {
+                        for value in values {
+                            if let Value::Array(values) = value {
+                                flatten(values, output);
+                            } else {
+                                output.push(value.clone());
+                            }
+                        }
+                    }
+                    let mut output = Vec::new();
+                    flatten(values, &mut output);
+                    Ok(Value::Array(output))
+                }
+                "uniq" => {
+                    let mut output = Vec::new();
+                    for value in values {
+                        if !output.iter().any(|other| values_equal(value, other)) {
+                            output.push(value.clone());
+                        }
+                    }
+                    Ok(Value::Array(output))
+                }
+                "reverse" => Ok(Value::Array(values.iter().rev().cloned().collect())),
+                "sort" => {
+                    let mut output = values.to_vec();
+                    output
+                        .sort_by(|a, b| compare_values(a, b).unwrap_or(std::cmp::Ordering::Equal));
+                    if args.get(1).is_some_and(|value| value.as_string() == "desc") {
+                        output.reverse();
+                    }
+                    Ok(Value::Array(output))
+                }
+                "sum" | "min" | "max" | "mean" => {
+                    if values.is_empty() {
+                        return Ok(Value::Null);
+                    }
+                    if name == "min" || name == "max" {
+                        let mut sorted = values.to_vec();
+                        sorted.sort_by(|a, b| {
+                            compare_values(a, b).unwrap_or(std::cmp::Ordering::Equal)
+                        });
+                        return Ok(if name == "min" {
+                            sorted.remove(0)
+                        } else {
+                            sorted.pop().unwrap()
+                        });
+                    }
+                    let sum = values
+                        .iter()
+                        .map(|value| value.as_f64().context("Expected a number"))
+                        .collect::<Result<Vec<_>>>()?
+                        .iter()
+                        .sum::<f64>();
+                    Ok(Value::Float(if name == "mean" { sum / values.len() as f64 } else { sum }))
+                }
+                other => bail!("unsupported Betterleaks builtin {other}"),
+            }
+        }
     }
 }
 
@@ -978,8 +1979,9 @@ fn static_property(expression: &BetterleaksExpr) -> Option<String> {
 }
 
 fn values_equal(left: &Value, right: &Value) -> bool {
-    match (left.as_f64(), right.as_f64()) {
-        (Some(left), Some(right)) => left == right,
+    match (left, right) {
+        (Value::Integer(a), Value::Float(b)) => (*a as f64) == *b,
+        (Value::Float(a), Value::Integer(b)) => *a == (*b as f64),
         _ => left == right,
     }
 }
@@ -988,6 +1990,7 @@ fn value_in(needle: &Value, haystack: &Value) -> bool {
     match haystack {
         Value::Array(values) => values.iter().any(|value| values_equal(needle, value)),
         Value::String(value) => value.contains(&needle.as_string()),
+        Value::Object(value) => value.contains_key(&needle.as_string()),
         _ => false,
     }
 }
@@ -1071,7 +2074,9 @@ fn matches_any(args: &[Value]) -> Result<Value> {
         _ => return Ok(Value::Bool(false)),
     };
     for pattern in patterns {
-        if regex::Regex::new(&pattern.as_string())?.is_match(&input) {
+        if kingfisher_rules::betterleaks_filter::compile_go_regex(&pattern.as_string())?
+            .is_match(&input)
+        {
             return Ok(Value::Bool(true));
         }
     }
@@ -1087,6 +2092,448 @@ mod tests {
     use liquid_core::Value as LiquidValue;
     use std::collections::BTreeSet;
 
+    fn program(source: &str) -> BetterleaksValidation {
+        serde_json::from_value(serde_json::json!({"expression": source})).unwrap()
+    }
+
+    #[test]
+    fn v2_azure_helpers_project_provider_evidence_and_require_real_tokens() {
+        let response = |status, body: &str| {
+            Value::Object(BTreeMap::from([
+                ("status".into(), Value::Integer(status)),
+                ("body".into(), Value::String(body.into())),
+                (
+                    "json".into(),
+                    serde_json::from_str(body)
+                        .map(Value::from_json)
+                        .unwrap_or_else(|_| Value::Object(BTreeMap::new())),
+                ),
+            ]))
+        };
+        let storage = azure_response_fields(response(200, "<EnumerationResults><Containers><Container><Name>first</Name></Container><Container><Name>second</Name></Container></Containers></EnumerationResults>"), true, false).to_json();
+        assert_eq!(storage["containers"], serde_json::json!(["first", "second"]));
+        let error = azure_response_fields(
+            response(
+                403,
+                "<Error><Code>AuthenticationFailed</Code><Message>Denied</Message></Error>",
+            ),
+            true,
+            false,
+        )
+        .to_json();
+        assert_eq!(error["error_code"], "AuthenticationFailed");
+        assert_eq!(error["error_message"], "Denied");
+        let error = azure_response_fields(
+            response(400, r#"{"error":"invalid_client","error_description":"Denied"}"#),
+            false,
+            true,
+        )
+        .to_json();
+        assert_eq!(error["error_code"], "invalid_client");
+        for body in ["{}", "[]", "landing page", r#"{"access_token":""}"#] {
+            let missing = azure_response_fields(response(200, body), false, true).to_json();
+            assert_eq!(missing["status"], 0, "{body}");
+            assert_eq!(missing["error_code"], "missing_access_token");
+        }
+        assert_eq!(
+            azure_response_fields(
+                response(200, r#"{"access_token":"minted-test-token"}"#),
+                false,
+                true
+            )
+            .to_json()["status"],
+            200
+        );
+    }
+
+    #[test]
+    fn v2_analysis_result_normalizes_identity_capabilities_and_severity() {
+        let output = normalize_analysis_result(serde_json::json!({
+            "reason":"  observed grants  ",
+            "identity":{"id":"  user-7  ", "username":"alice", "email":null,
+                "account":{"id":" account-1 ", "name":" Example ", "domains":[" b.example ", "a.example", "b.example", ""]}},
+            "capabilities":["write", " read ", "read", ""],
+            "metadata":{"permissions":["repo:write"]},
+        })).unwrap();
+        assert_eq!(output["reason"], "observed grants");
+        assert_eq!(output["identity"]["id"], "user-7");
+        assert!(output["identity"].get("email").is_none());
+        assert_eq!(
+            output["identity"]["account"]["domains"],
+            serde_json::json!(["a.example", "b.example"])
+        );
+        assert_eq!(output["capabilities"], serde_json::json!(["read", "write"]));
+        assert_eq!(output["severity"], "high");
+        for (capability, severity) in [
+            ("read", "medium"),
+            ("write", "high"),
+            ("read_secrets", "high"),
+            ("create_credentials", "high"),
+            ("manage_users", "high"),
+            ("admin", "high"),
+        ] {
+            let output =
+                normalize_analysis_result(serde_json::json!({"capabilities":[capability]}))
+                    .unwrap();
+            assert_eq!(output["severity"], severity, "{capability}");
+        }
+        assert_eq!(
+            normalize_analysis_result(serde_json::json!({})).unwrap(),
+            serde_json::json!({"severity":"unknown"})
+        );
+        assert_eq!(
+            normalize_analysis_result(serde_json::json!({"identity":{"account":{"domains":[]}}}))
+                .unwrap(),
+            serde_json::json!({"severity":"unknown"})
+        );
+    }
+
+    #[test]
+    fn v2_analysis_result_rejects_unrecognized_or_malformed_public_fields() {
+        for value in [
+            serde_json::json!({"severity":"high"}),
+            serde_json::json!({"result":"valid"}),
+            serde_json::json!({"identity":{"type":"user"}}),
+            serde_json::json!({"identity":{"id":7}}),
+            serde_json::json!({"identity":{"account":{"tenant":"unknown"}}}),
+            serde_json::json!({"identity":{"account":{"domains":[7]}}}),
+            serde_json::json!({"identity":[]}),
+            serde_json::json!({"reason":null}),
+            serde_json::json!({"metadata":[]}),
+            serde_json::json!({"capabilities":"read"}),
+            serde_json::json!({"capabilities":["READ"]}),
+            serde_json::json!({"capabilities":[true]}),
+            serde_json::json!([]),
+        ] {
+            assert!(normalize_analysis_result(value.clone()).is_err(), "{value}");
+        }
+    }
+
+    #[tokio::test]
+    async fn v2_analysis_is_explicit_and_private_evidence_is_not_reported() {
+        let mut config = program(
+            r#"{result: "valid", metadata: {account: "demo"}, analysis: {permission: "write"}}"#,
+        );
+        config.analyze = Some(program(r#"
+            let scopes = uniq(sort(flatten(map([["read"], [validation.analysis.permission, "read"]], #))));
+            {identity: {id: validation.metadata.account}, capabilities: analysis.capabilities({read: "read" in scopes, write: intersects(scopes, ["write"]), admin: false}), metadata: {scopes: scopes}}
+        "#).expression);
+        let client = Client::new();
+        let captures = vec![("TOKEN".into(), "synthetic".into(), 0, 0)];
+        let result = validate(&config, &captures, &LiquidObject::new(), &client, true).await;
+        assert!(result.valid, "{}", result.body);
+        assert!(!result.body.contains("permission"));
+        assert!(!result.body.contains("analysis"));
+        let analysis = analyze(
+            &config,
+            &captures,
+            &LiquidObject::new(),
+            &client,
+            true,
+            result.analysis_data.as_ref().unwrap(),
+        )
+        .await
+        .unwrap();
+        assert_eq!(analysis["identity"]["id"], "demo");
+        assert_eq!(analysis["capabilities"], serde_json::json!(["read", "write"]));
+        assert_eq!(analysis["metadata"]["scopes"], serde_json::json!(["read", "write"]));
+        let invalid = serde_json::json!({"result":"invalid"});
+        assert!(
+            analyze(&config, &captures, &LiquidObject::new(), &client, true, &invalid)
+                .await
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn v2_optional_chains_skip_network_indexes_arguments_and_slices() {
+        use axum::routing::post;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let changed = calls.clone();
+        let listener =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/touch",
+                    post(move || {
+                        changed.fetch_add(1, Ordering::SeqCst);
+                        async { "{}" }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        let client = Client::new();
+        for chain in [
+            r#"components["missing"]?.captures[http.post("ENDPOINT/touch", {}, "")]"#,
+            r#"components["missing"]?.secret.contains(http.post("ENDPOINT/touch", {}, ""))"#,
+            r#"components["missing"]?.secret[int(http.post("ENDPOINT/touch", {}, "").status):]"#,
+        ] {
+            let expression = format!(r#"let value = {chain} ?? "safe"; value == "safe" ? {{result: "valid"}} : {{result: "invalid"}}"#).replace("ENDPOINT", &endpoint);
+            let config = program(&expression);
+            let result = validate(&config, &[], &LiquidObject::new(), &client, true).await;
+            assert!(result.valid, "{}", result.body);
+            let revocation = program(
+                &expression.replace("\"valid\"", "\"revoked\"").replace("\"invalid\"", "\"error\""),
+            );
+            assert!(
+                revoke(&revocation, &[], &LiquidObject::new(), &client, true)
+                    .await
+                    .unwrap()
+                    .revoked
+            );
+        }
+        assert_eq!(calls.load(Ordering::SeqCst), 0);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn v2_revocation_is_separate_and_requires_confirmed_revoked_result() {
+        use axum::routing::delete;
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let mutations = Arc::new(AtomicUsize::new(0));
+        let observed = mutations.clone();
+        let listener =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new().route(
+                    "/token",
+                    delete(move |headers: axum::http::HeaderMap| {
+                        observed.fetch_add(1, Ordering::SeqCst);
+                        async move {
+                            assert_eq!(headers["authorization"], "Bearer synthetic");
+                            axum::http::StatusCode::NO_CONTENT
+                        }
+                    }),
+                ),
+            )
+            .await
+            .unwrap();
+        });
+        let config = program(&format!(
+            r#"let r = http.delete("http://{address}/token", {{Authorization: "Bearer " + finding.secret}}); r.status == 204 ? {{result: "revoked"}} : revoke.unknown(r)"#
+        ));
+        let client = Client::new();
+        let captures = vec![("TOKEN".into(), "synthetic".into(), 0, 0)];
+        let validation = validate(&config, &captures, &LiquidObject::new(), &client, true).await;
+        assert!(!validation.valid);
+        assert_eq!(mutations.load(Ordering::SeqCst), 0);
+        let result = revoke(&config, &captures, &LiquidObject::new(), &client, true).await.unwrap();
+        assert!(result.revoked);
+        assert_eq!(result.status_code, Some(204));
+        assert_eq!(mutations.load(Ordering::SeqCst), 1);
+        for (expression, expected) in [
+            (r#"{result: "unknown", reason: "accepted but not confirmed"}"#, false),
+            (r#"{result: "error"}"#, false),
+            (r#"{result: "REVOKED", metadata: {id: 1}}"#, true),
+        ] {
+            assert_eq!(
+                revoke_detailed(
+                    &program(expression),
+                    &captures,
+                    &LiquidObject::new(),
+                    &client,
+                    true
+                )
+                .await
+                .unwrap()
+                .result
+                .revoked,
+                expected
+            );
+        }
+        let unknown = revoke(
+            &program(r#"{result:"unknown", reason:"revoked"}"#),
+            &captures,
+            &LiquidObject::new(),
+            &client,
+            true,
+        )
+        .await
+        .unwrap_err();
+        assert!(unknown.is::<super::super::revocation::RevocationIndeterminate>());
+        for expression in [
+            r#"{result: "valid"}"#,
+            r#"{result: "revoked", reason: 1}"#,
+            r#"{result: "revoked", metadata: []}"#,
+            r#"{result: "revoked", extra: true}"#,
+            "true",
+        ] {
+            assert!(
+                revoke(&program(expression), &captures, &LiquidObject::new(), &client, true)
+                    .await
+                    .is_err(),
+                "{expression}"
+            );
+        }
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn v2_revocation_preserves_ambiguity_after_mutation_submission() {
+        use axum::{
+            body::{Body, Bytes},
+            http::Response,
+            routing::delete,
+        };
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let calls = Arc::new(AtomicUsize::new(0));
+        let changed = calls.clone();
+        let broken = calls.clone();
+        let listener =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                Router::new()
+                    .route(
+                        "/accepted",
+                        delete(move || {
+                            changed.fetch_add(1, Ordering::SeqCst);
+                            async { (axum::http::StatusCode::OK, "invalid JSON") }
+                        }),
+                    )
+                    .route(
+                        "/broken",
+                        delete(move || {
+                            broken.fetch_add(1, Ordering::SeqCst);
+                            async {
+                                let stream = futures::stream::iter([
+                                    Ok::<_, std::io::Error>(Bytes::from_static(b"partial")),
+                                    Err(std::io::Error::other("mock truncated response")),
+                                ]);
+                                Response::builder()
+                                    .status(200)
+                                    .body(Body::from_stream(stream))
+                                    .unwrap()
+                            }
+                        }),
+                    ),
+            )
+            .await
+            .unwrap();
+        });
+        let client = Client::new();
+        for suffix in [
+            "true",
+            r#"{result:"revoked", reason:1}"#,
+            r#"fromJSON(r.body)"#,
+            r#"base64.decode("!")"#,
+        ] {
+            let expression =
+                format!(r#"let r = http.delete("{endpoint}/accepted", {{}}); {suffix}"#);
+            let error =
+                revoke_detailed(&program(&expression), &[], &LiquidObject::new(), &client, true)
+                    .await
+                    .unwrap_err();
+            assert!(error.is::<super::super::revocation::RevocationSubmitted>(), "{error:#}");
+        }
+        let broken =
+            format!(r#"let r = http.delete("{endpoint}/broken", {{}}); {{result:"revoked"}}"#);
+        let error = revoke_detailed(&program(&broken), &[], &LiquidObject::new(), &client, true)
+            .await
+            .unwrap_err();
+        assert!(error.is::<super::super::revocation::RevocationSubmitted>(), "{error:#}");
+        assert_eq!(calls.load(Ordering::SeqCst), 5);
+        let before = calls.load(Ordering::SeqCst);
+        let invalid_builder = format!(
+            r#"let r = http.delete("{endpoint}/accepted", {{Authorization: "invalid\nheader"}}); {{result:"revoked"}}"#
+        );
+        let error =
+            revoke_detailed(&program(&invalid_builder), &[], &LiquidObject::new(), &client, true)
+                .await
+                .unwrap_err();
+        assert!(!error.is::<super::super::revocation::RevocationSubmitted>());
+        assert_eq!(calls.load(Ordering::SeqCst), before);
+        let explicit_unknown = format!(
+            r#"let r = http.delete("{endpoint}/accepted", {{}}); {{result:"unknown", reason:"succeeded"}}"#
+        );
+        let outcome =
+            revoke_detailed(&program(&explicit_unknown), &[], &LiquidObject::new(), &client, true)
+                .await
+                .unwrap();
+        assert_eq!(outcome.status, BetterleaksRevocationStatus::Unknown);
+        assert!(!outcome.result.revoked);
+        assert_eq!(calls.load(Ordering::SeqCst), 6);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn v2_expression_numeric_and_optional_component_semantics() {
+        let mut config = program(
+            r#"
+            let missing = components["optional"]?.secret ?? "absent";
+            let values = map([1, 2, 3], # * 2 + 1);
+            let nested = map([[1, 2], [3]], map(#, # + 1));
+            missing == "absent" && values == [3, 5, 7] && nested == [[2, 3], [4]] &&
+              find(values, # >= 5) == 5 && all(values, # > 0) && 3 - 1 == 2 && 8 / 2 == 4 &&
+              9 % 2 == 1 && "provider" endsWith "der" && "abc1" matches "[0-9]$" ?
+              {result: "valid"} : {result: "invalid"}
+        "#,
+        );
+        config.components.insert("optional".into(), "OPTIONAL".into());
+        let outcome = validate(&config, &[], &LiquidObject::new(), &Client::new(), true).await;
+        assert!(outcome.valid, "{}", outcome.body);
+        let overflow = validate(
+            &program("{result: string(9223372036854775807 + 1)}"),
+            &[],
+            &LiquidObject::new(),
+            &Client::new(),
+            true,
+        )
+        .await;
+        assert_eq!(overflow.outcome, ValidationOutcome::Unavailable);
+        let division = validate(
+            &program("{result: string(1 / 0)}"),
+            &[],
+            &LiquidObject::new(),
+            &Client::new(),
+            true,
+        )
+        .await;
+        assert_eq!(division.outcome, ValidationOutcome::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn v2_cloud_helpers_match_documented_wire_encodings() {
+        let config = program(
+            r#"
+            crypto.sha256("abc") == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad" &&
+            hex.encode(crypto.md5(bytes("abc"))) == "900150983cd24fb0d6963f7d28e17f72" &&
+            findMatch("account=42", "[0-9]+") == "42" &&
+            env.getOrDefault("__KINGFISHER_UNSUPPLIED_TEST", "fallback") == "fallback" &&
+            tokenRatio("hello world") > 1 && failsTokenEfficiency("hello world") ?
+            {result: "valid"} : {result: "invalid"}
+        "#,
+        );
+        let result = validate(&config, &[], &LiquidObject::new(), &Client::new(), true).await;
+        assert!(result.valid, "{}", result.body);
+        let secret = "token_ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+        let perturbed = obfuscate(secret);
+        assert_eq!(perturbed.len(), secret.len());
+        assert!(perturbed.starts_with("token_"));
+        assert!(perturbed[6..32].chars().all(|ch| ch.is_ascii_uppercase()));
+        assert!(perturbed[32..].chars().all(|ch| ch.is_ascii_digit()));
+    }
+
     #[test]
     fn generated_snapshot_uses_only_supported_expression_operations() {
         let rules = get_betterleaks_rules(None).unwrap();
@@ -1097,17 +2544,18 @@ mod tests {
         let mut unary = BTreeSet::new();
 
         for rule in rules {
-            let Some(Validation::Betterleaks(validation)) = rule.validation else {
-                continue;
-            };
-            validations += 1;
-            collect_operations(
-                &validation.expression,
-                &mut calls,
-                &mut builtins,
-                &mut binary,
-                &mut unary,
-            );
+            let mut programs = Vec::new();
+            if let Some(Validation::Betterleaks(validation)) = rule.validation {
+                validations += 1;
+                programs.push(validation.expression);
+                programs.extend(validation.analyze);
+            }
+            if let Some(kingfisher_rules::Revocation::Betterleaks(revocation)) = rule.revocation {
+                programs.push(revocation.expression);
+            }
+            for expression in programs {
+                collect_operations(&expression, &mut calls, &mut builtins, &mut binary, &mut unary);
+            }
         }
 
         assert!(validations > 0);
@@ -1124,6 +2572,25 @@ mod tests {
                 "crypto.hmacSha1",
                 "crypto.hmacSha256",
                 "crypto.sha1",
+                "crypto.sha256",
+                "crypto.md5",
+                "analysis.capabilities",
+                "concat",
+                "flatten",
+                "last",
+                "sort",
+                "uniq",
+                "strings.obfuscate",
+                "env.get",
+                "intersects",
+                "findMatch",
+                "entropy",
+                "tokenRatio",
+                "failsTokenEfficiency",
+                "containsAny",
+                "startsWithAny",
+                "http.delete",
+                "revoke.unknown",
                 "env.getOrDefault",
                 "filter.matchesAny",
                 "gcp.validate",
@@ -1151,12 +2618,56 @@ mod tests {
             ])),
             "unsupported calls: {calls:?}"
         );
-        assert!(builtins.is_subset(&set(&["any", "all", "filter", "lastIndexOf", "replace"])));
+        assert!(builtins.is_subset(&set(&[
+            "any",
+            "all",
+            "none",
+            "one",
+            "filter",
+            "map",
+            "find",
+            "findLast",
+            "findIndex",
+            "findLastIndex",
+            "count",
+            "lastIndexOf",
+            "replace",
+            "flatten",
+            "sort",
+            "uniq",
+            "concat",
+            "last",
+            "first",
+            "join",
+            "lower",
+            "upper",
+            "keys",
+            "values",
+            "reverse",
+            "get",
+            "sum",
+            "min",
+            "max",
+            "mean",
+            "abs",
+            "ceil",
+            "floor",
+            "round"
+        ])));
         assert!(binary.is_subset(&set(&[
             "!=",
             "&&",
             "+",
             ">",
+            ">=",
+            "<",
+            "<=",
+            "-",
+            "*",
+            "/",
+            "%",
+            "matches",
+            "endsWith",
             "==",
             "??",
             "contains",
@@ -1281,6 +2792,8 @@ mod tests {
             variables: BTreeMap::new(),
             pointer: Some(Value::String("outer".to_string())),
             last_status: None,
+            revocation: false,
+            mutation_submitted: false,
         };
         let array = BetterleaksExpr::Array {
             nodes: vec![string("read"), BetterleaksExpr::Integer { value: 42 }, string("write")],
@@ -1376,6 +2889,8 @@ mod tests {
             variables: BTreeMap::new(),
             pointer: None,
             last_status: None,
+            revocation: false,
+            mutation_submitted: false,
         };
 
         assert_eq!(

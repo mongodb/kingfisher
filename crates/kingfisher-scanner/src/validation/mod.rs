@@ -140,7 +140,7 @@ pub const VALIDATION_CACHE_SECONDS: u64 = 1200;
 pub type Cache = Arc<SkipMap<String, CachedResponse>>;
 
 /// A cached validation response.
-#[derive(Clone, Debug)]
+#[derive(Clone)]
 pub struct CachedResponse {
     /// The response body from validation.
     pub body: ValidationResponseBody,
@@ -150,6 +150,8 @@ pub struct CachedResponse {
     pub is_valid: bool,
     /// Semantic validation classification, including offline outcomes.
     pub outcome: ValidationOutcome,
+    /// Private successful endpoint identity. Values may contain credentials.
+    pub endpoint_variables: std::collections::BTreeMap<String, String>,
     /// When this result was cached.
     pub timestamp: Instant,
 }
@@ -158,7 +160,14 @@ impl CachedResponse {
     /// Create a new cached response.
     pub fn new(body: ValidationResponseBody, status: http::StatusCode, is_valid: bool) -> Self {
         let outcome = ValidationOutcome::from_legacy(false, is_valid, status.as_u16());
-        Self { body, status, is_valid, outcome, timestamp: Instant::now() }
+        Self {
+            body,
+            status,
+            is_valid,
+            outcome,
+            endpoint_variables: Default::default(),
+            timestamp: Instant::now(),
+        }
     }
 
     /// Override the inferred legacy outcome with an explicit semantic outcome.
@@ -170,6 +179,17 @@ impl CachedResponse {
     /// Check if this cached response is still valid.
     pub fn is_still_valid(&self, cache_duration: Duration) -> bool {
         self.timestamp.elapsed() < cache_duration
+    }
+}
+
+impl std::fmt::Debug for CachedResponse {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedResponse")
+            .field("status", &self.status)
+            .field("is_valid", &self.is_valid)
+            .field("outcome", &self.outcome)
+            .field("timestamp", &self.timestamp)
+            .finish_non_exhaustive()
     }
 }
 
@@ -196,7 +216,10 @@ mod preparation;
 pub(crate) mod template_vars;
 mod validator;
 
-pub use preparation::CredentialInputDiagnostic;
+pub use preparation::{
+    CredentialInputDiagnostic, revocation as inspect_revocation,
+    rule_validation as inspect_rule_validation,
+};
 
 pub use validator::{
     ResolvedCredential, RevocationInputs, ValidatedFinding, Validator, ValidatorBuilder,

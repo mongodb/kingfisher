@@ -1,7 +1,12 @@
 //! Bounded retries for replayable GitHub API requests. Return the final response so
 //! callers retain their existing error and best-effort discovery behavior.
 
-use std::{future::Future, io::Read, time::Duration};
+use std::{
+    env,
+    future::Future,
+    io::Read,
+    time::{Duration, Instant},
+};
 
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
@@ -10,7 +15,8 @@ use reqwest::{ResponseBuilderExt, StatusCode, header::HeaderMap};
 use tracing::warn;
 
 const MAX_RETRIES: u32 = 3;
-const MAX_RETRY_WAIT: Duration = Duration::from_secs(120);
+const DEFAULT_MAX_RETRY_WAIT: Duration = Duration::from_secs(120);
+const MAX_RETRY_WAIT_ENV: &str = "KF_GITHUB_MAX_RETRY_WAIT_SECS";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 // Secondary-limit detection and error diagnostics are not scannable content. Keep
 // these prefixes bounded even when scan content/result limits are disabled.
@@ -21,27 +27,63 @@ pub(crate) async fn send(
     request: reqwest::RequestBuilder,
     action: &str,
 ) -> Result<reqwest::Response> {
-    send_with_sleep(request, action, tokio::time::sleep).await
+    send_with_sleep(
+        || std::future::ready(request.try_clone().context("GitHub API request cannot be replayed")),
+        action,
+        DEFAULT_MAX_RETRY_WAIT,
+        tokio::time::sleep,
+    )
+    .await
 }
 
-async fn send_with_sleep<S, F>(
-    request: reqwest::RequestBuilder,
+/// Retry API reads with fresh authentication on every attempt. Token exchanges
+/// retain the short default budget so a refresh cannot block other workers for an hour.
+pub(crate) async fn send_with_request<M, R>(
+    make_request: M,
     action: &str,
+) -> Result<reqwest::Response>
+where
+    M: FnMut() -> R,
+    R: Future<Output = Result<reqwest::RequestBuilder>>,
+{
+    let value = match env::var(MAX_RETRY_WAIT_ENV) {
+        Ok(value) => Some(value),
+        Err(env::VarError::NotPresent) => None,
+        Err(error) => return Err(error).with_context(|| format!("Invalid {MAX_RETRY_WAIT_ENV}")),
+    };
+    let max_retry_wait = parse_max_retry_wait(value.as_deref())?;
+    send_with_sleep(make_request, action, max_retry_wait, tokio::time::sleep).await
+}
+
+fn parse_max_retry_wait(value: Option<&str>) -> Result<Duration> {
+    let Some(value) = value else { return Ok(DEFAULT_MAX_RETRY_WAIT) };
+    let seconds = value.trim().parse::<u64>().with_context(|| {
+        format!("{MAX_RETRY_WAIT_ENV} must be a non-negative integer in seconds")
+    })?;
+    let duration = Duration::from_secs(seconds);
+    // Reject values that cannot be represented by the platform's sleep clock.
+    Instant::now()
+        .checked_add(duration)
+        .with_context(|| format!("{MAX_RETRY_WAIT_ENV} is too large for the system clock"))?;
+    Ok(duration)
+}
+
+pub(crate) async fn send_with_sleep<M, R, S, F>(
+    mut make_request: M,
+    action: &str,
+    max_retry_wait: Duration,
     mut sleep: S,
 ) -> Result<reqwest::Response>
 where
+    M: FnMut() -> R,
+    R: Future<Output = Result<reqwest::RequestBuilder>>,
     S: FnMut(Duration) -> F,
     F: Future<Output = ()>,
 {
     let mut retries = 0;
     let mut waited = Duration::ZERO;
     loop {
-        let mut response = request
-            .try_clone()
-            .context("GitHub API request cannot be replayed")?
-            .resource_timeout(REQUEST_TIMEOUT)
-            .send()
-            .await?;
+        let mut response = make_request().await?.resource_timeout(REQUEST_TIMEOUT).send().await?;
 
         // A 403 can also mean missing permissions. GitHub secondary limits may
         // only be identified in the JSON message, without rate-limit headers.
@@ -77,13 +119,13 @@ where
             );
             return Ok(response);
         }
-        if delay > MAX_RETRY_WAIT.saturating_sub(waited) {
+        if delay > max_retry_wait.saturating_sub(waited) {
             warn!(
                 "GitHub API request while {action}: HTTP {} ({}); retry requires {:.1}s, exceeding the remaining {:.1}s retry wait budget",
                 response.status(),
                 response.url(),
                 delay.as_secs_f64(),
-                MAX_RETRY_WAIT.saturating_sub(waited).as_secs_f64()
+                max_retry_wait.saturating_sub(waited).as_secs_f64()
             );
             return Ok(response);
         }
@@ -95,8 +137,8 @@ where
             response.url(),
             delay.as_secs_f64()
         );
-        // Release the response before waiting; the next request keeps the same
-        // authentication, URL and pagination parameters.
+        // Release the response before waiting; the factory preserves the URL and
+        // pagination parameters and refreshes expiring authentication as needed.
         drop(response);
         sleep(delay).await;
         waited += delay;
@@ -162,13 +204,13 @@ where
             );
             return Ok(response);
         }
-        if delay > MAX_RETRY_WAIT.saturating_sub(waited) {
+        if delay > DEFAULT_MAX_RETRY_WAIT.saturating_sub(waited) {
             warn!(
                 "GitHub API request while {action}: HTTP {} ({}); retry requires {:.1}s, exceeding the remaining {:.1}s retry wait budget",
                 response.status(),
                 response.url(),
                 delay.as_secs_f64(),
-                MAX_RETRY_WAIT.saturating_sub(waited).as_secs_f64()
+                DEFAULT_MAX_RETRY_WAIT.saturating_sub(waited).as_secs_f64()
             );
             return Ok(response);
         }
@@ -296,6 +338,19 @@ mod tests {
                 (name.parse::<reqwest::header::HeaderName>().unwrap(), value.parse().unwrap())
             })
             .collect()
+    }
+
+    #[test]
+    fn retry_wait_configuration_uses_seconds_and_rejects_invalid_values() {
+        assert_eq!(parse_max_retry_wait(None).unwrap(), Duration::from_secs(120));
+        for (value, seconds) in [("3900", 3900), (" 600 ", 600), ("0", 0)] {
+            assert_eq!(parse_max_retry_wait(Some(value)).unwrap(), Duration::from_secs(seconds));
+        }
+        for value in ["", " ", "-1", "1.5", "3900s", "invalid", "18446744073709551616"] {
+            let error = parse_max_retry_wait(Some(value)).unwrap_err();
+            assert!(error.to_string().contains(MAX_RETRY_WAIT_ENV), "{error:#}");
+        }
+        assert!(parse_max_retry_wait(Some("18446744073709551615")).is_err());
     }
 
     fn streaming_response(
@@ -548,21 +603,87 @@ mod tests {
             .mount(&server)
             .await;
         let mut delays = Vec::new();
-        let response =
-            send_with_sleep(reqwest::Client::new().get(server.uri()), "testing retries", |delay| {
+        let response = send_with_sleep(
+            || std::future::ready(Ok(reqwest::Client::new().get(server.uri()))),
+            "testing retries",
+            DEFAULT_MAX_RETRY_WAIT,
+            |delay| {
                 delays.push(delay);
                 std::future::ready(())
-            })
-            .await
-            .unwrap();
+            },
+        )
+        .await
+        .unwrap();
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(delays.len(), 1);
         assert!(delays[0] >= Duration::from_secs(60));
     }
 
     #[tokio::test]
+    async fn configured_budget_waits_for_primary_quota_reset_and_resumes_same_page() {
+        let server = MockServer::start().await;
+        let reset = Utc::now().timestamp() + 3600;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(403)
+                    .insert_header("x-ratelimit-remaining", "0")
+                    .insert_header("x-ratelimit-reset", reset.to_string()),
+            )
+            .up_to_n_times(1)
+            .expect(1)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!(["recovered"])))
+            .expect(1)
+            .with_priority(2)
+            .mount(&server)
+            .await;
+        let client = reqwest::Client::new();
+        let mut delays = Vec::new();
+        let response = send_with_sleep(
+            || {
+                std::future::ready(Ok(client
+                    .get(format!("{}/users/alice/gists?page=2", server.uri()))
+                    .bearer_auth("test-token")))
+            },
+            "testing hourly quota reset",
+            Duration::from_secs(3900),
+            |delay| {
+                delays.push(delay);
+                std::future::ready(())
+            },
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.json::<Vec<String>>().await.unwrap(), ["recovered"]);
+        assert_eq!(delays.len(), 1);
+        assert!(delays[0] > Duration::from_secs(120));
+        assert!(delays[0] <= Duration::from_secs(3601));
+        let requests = server.received_requests().await.unwrap();
+        assert_eq!(requests.len(), 2);
+        for request in requests {
+            assert_eq!(request.url.path(), "/users/alice/gists");
+            assert_eq!(request.url.query(), Some("page=2"));
+            assert_eq!(request.headers["authorization"], "Bearer test-token");
+        }
+    }
+
+    #[tokio::test]
     async fn cumulative_wait_is_bounded_and_never_shortens_server_cooldown() {
-        for (seconds, requests, sleeps) in [(60, 3, 2), (61, 2, 1), (121, 1, 0)] {
+        for (budget, seconds, requests, sleeps) in [
+            (120, 60, 3, 2),
+            (120, 61, 2, 1),
+            (120, 121, 1, 0),
+            (3900, 3600, 2, 1),
+            (3900, 1950, 3, 2),
+            (3900, 1951, 2, 1),
+            (3900, 3901, 1, 0),
+            (3900, 1, 4, 3),
+            (0, 1, 1, 0),
+            (0, 0, 4, 3),
+        ] {
             let server = MockServer::start().await;
             Mock::given(method("GET"))
                 .respond_with(
@@ -573,8 +694,9 @@ mod tests {
                 .await;
             let mut delays = Vec::new();
             let response = send_with_sleep(
-                reqwest::Client::new().get(server.uri()),
+                || std::future::ready(Ok(reqwest::Client::new().get(server.uri()))),
                 "testing retries",
+                Duration::from_secs(budget),
                 |delay| {
                     delays.push(delay);
                     std::future::ready(())

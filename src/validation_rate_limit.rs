@@ -18,7 +18,22 @@ pub struct ValidationRateLimiter {
     next_allowed: Arc<DashMap<String, Arc<Mutex<Instant>>>>,
 }
 
+pub struct RuleRequestGate<'a> {
+    limiter: &'a ValidationRateLimiter,
+    rule_id: &'a str,
+}
+
+impl kingfisher_scanner::validation::engine::HttpRequestGate for RuleRequestGate<'_> {
+    fn wait(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>> {
+        Box::pin(self.limiter.wait_for_rule(self.rule_id))
+    }
+}
+
 impl ValidationRateLimiter {
+    pub fn http_gate<'a>(&'a self, rule_id: &'a str) -> RuleRequestGate<'a> {
+        RuleRequestGate { limiter: self, rule_id }
+    }
+
     pub fn from_cli(default_rps: Option<f64>, per_rule: &[String]) -> Result<Option<Self>> {
         let default_rps = default_rps.map(validate_rps).transpose()?;
         let mut normalized = Vec::with_capacity(per_rule.len());

@@ -1,0 +1,40 @@
+# Synthetic YAML compatibility fixture; no real credential format or service.
+rules:
+  - name: Acme Package Upload Key
+    id: acme.package-upload
+    pattern: '\b(acme_upload_[a-f0-9]{32})\b'
+    pattern_requirements:
+      min_digits: 2
+    min_entropy: 3.3
+    confidence: medium
+    examples:
+      - 'upload_key=acme_upload_6f91c4d08ab372e5f0c6b912ad7483e0'
+    negative_examples:
+      - 'upload_key=acme_upload_6f91c4d08ab372e5f0c6b912ad7483e'
+      - 'upload_key=acme_upload_6f91c4d08ab372e5f0c6b912ad7483eg'
+    validation:
+      type: Http
+      content:
+        request:
+          method: POST
+          url: https://packages.example.invalid/v1/uploads
+          headers:
+            Authorization: 'Basic {{ "publisher:" | append: TOKEN | b64enc }}'
+          response_is_html: true
+          response_matcher:
+            - report_response: true
+            - type: WordMatch
+              words:
+                - 'Upload permission confirmed'
+          multipart:
+            parts:
+              - name: package
+                type: text
+                content: acme-widget
+              - name: release
+                type: text
+                content: '1.2.3'
+              - name: artifact
+                type: file
+                content: fixtures/acme-widget.pkg
+                content_type: application/octet-stream

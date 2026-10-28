@@ -903,7 +903,7 @@ not disable certificate verification.
 - `--keep-clones`: Preserve cloned repositories on disk after a scan completes
 - `--repo-clone-limit <N>`: Cap GitHub and GitLab clone targets when enumerating users, orgs/groups, or contributor repos; this includes opted-in GitHub gists and GitLab snippets. The first unique repositories discovered are selected, so provider ordering changes can change the selected subset across runs.
 - `--no-binary`: Skip binary files
-- `--no-extract-archives`: Do not scan inside archives
+- `--no-extract-archives`: Disable archive, SQLite, Python bytecode, and PDF text extraction
 - `--extraction-depth <N>`: Specifies how deep nested archives should be extracted and scanned (default: 2; 0 = unlimited)
 - `--redact`: Replaces discovered secrets with a one-way hash for secure output
 - `--exclude <PATTERN>`: Skip any file or directory whose path matches this glob pattern (repeatable, uses gitignore-style syntax, case sensitive)
@@ -920,6 +920,53 @@ not disable certificate verification.
 - `--validation-retries N`: number of retry attempts for validation requests (default: 1, range: 0-5).
 - `--max-validation-response-length BYTES`: maximum bytes stored from validation response bodies (default: 2048; `0` disables truncation at storage time).
 - `--full-validation-response`: include complete validation response bodies end-to-end (bypasses storage and reporter truncation).
+
+### PDF text extraction
+
+PDF page text is extracted automatically from files, Git history, and archive
+members. A `%PDF-` header recognizes extensionless files too. Findings use
+`document.pdf!page-N.txt`; offsets and line numbers refer to that page's extracted
+UTF-8 text, not the original PDF bytes. Path/extension selection uses the original
+PDF path. PDF extraction does not consume another archive nesting level.
+Raw PDF bytes are scanned alongside page text, preserving coverage of plaintext
+metadata, link URLs, form values, and appended data. `--no-binary` can exclude
+those raw bytes while retaining extracted page text.
+If the same rule and credential inputs match both representations, the raw
+occurrence is retained at its original location/fingerprint; the corresponding
+page copy is suppressed even with `--no-dedup`. Extraction-only findings still
+use page locations. Other repeated occurrences retain the usual deduplication policy.
+
+```bash
+kingfisher scan ./documents --format toon --no-validate
+```
+
+Default caps are 256 MiB each for input, aggregate text, and aggregate decoded
+page/font work, 32 MiB per decompressed stream, and 10,000 pages per PDF. Archive
+expansion with in-memory members, and Git archive blobs, also share a 256 MiB
+tree budget across raw members and extracted text. Filesystem archives whose
+members are staged on disk do not share that single tree budget across all
+members; per-member extraction caps still apply. Standalone Git PDFs, like files
+on disk, have independent input and page-output caps rather than subtracting the
+input from the text budget. Shared streams are decoded once but charged on every
+page that uses them; repeated page IDs are skipped. Loading divides the byte budget across
+a conservative count of literal stream markers, at most 32 MiB each, to bound
+aggregate eager decompression before allocation. Payload/comment markers can
+tighten this budget and reject valid large streams. `--no-limits` removes these
+caps; `--no-extract-archives` disables extraction. PDF text is scanned even with
+`--no-binary`; malformed, encrypted, or over-budget PDFs warn and fall back to
+raw bytes, which still respect `--no-binary`. Empty/image-only PDFs also fall back.
+No partial page set is returned after an extraction error.
+Individual undecodable streams are skipped without discarding other readable
+streams/pages; decompression memory-limit errors still fail extraction.
+There is no OCR, rendering, action execution, embedded-file extraction, annotation extraction, or
+Form XObject text extraction. This is best-effort text coverage, not a full PDF audit.
+
+The shared Rust and Python extractors accept cooperative controls. Git blobs and
+their archive members pass the CLI repository deadline through PDF extraction;
+controls run before/after parsing and between pages. Ordinary files and their
+archives have no repository deadline. Individual parser calls cannot be preempted,
+and byte caps are not a process-memory limit. Use a job/process timeout when a
+hard wall-clock limit is required. See [SDK PDF extraction](PYPI.md#extract-pdf-page-text).
 
 ### Exclude specific paths
 

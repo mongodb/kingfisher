@@ -42,6 +42,7 @@ use crate::{
 pub struct AccessMapCollector {
     inner: Arc<DashMap<u64, AccessMapRequest>>,
     finding_fingerprints: Arc<DashMap<u64, FxHashSet<String>>>,
+    allow_internal_ips: bool,
 }
 
 struct ValidationInFlight {
@@ -50,12 +51,22 @@ struct ValidationInFlight {
 }
 
 /// Build the same access-map request used by scanning for one known finding.
+#[cfg(test)]
 pub(crate) fn direct_access_map_requests(
     rule: Arc<Rule>,
     secret: &str,
     dependent_captures: BTreeMap<String, String>,
 ) -> Vec<AccessMapRequest> {
-    let collector = AccessMapCollector::default();
+    direct_access_map_requests_with_options(rule, secret, dependent_captures, false)
+}
+
+pub(crate) fn direct_access_map_requests_with_options(
+    rule: Arc<Rule>,
+    secret: &str,
+    dependent_captures: BTreeMap<String, String>,
+    allow_internal_ips: bool,
+) -> Vec<AccessMapRequest> {
+    let collector = AccessMapCollector::default().with_allow_internal_ips(allow_internal_ips);
     let mut synthetic_captures = smallvec::smallvec![crate::matcher::SerializableCapture {
         name: Some(crate::util::intern("TOKEN")),
         match_number: 0,
@@ -63,15 +74,20 @@ pub(crate) fn direct_access_map_requests(
         end: secret.len(),
         value: secret.into(),
     }];
-    synthetic_captures.extend(dependent_captures.iter().enumerate().map(
-        |(index, (name, value))| crate::matcher::SerializableCapture {
-            name: Some(crate::util::intern(name)),
-            match_number: index.saturating_add(1).try_into().unwrap_or(i32::MAX),
-            start: 0,
-            end: value.len(),
-            value: value.as_str().into(),
-        },
-    ));
+    // Betterleaks dependent values are supplied to programs as globals, not finding
+    // captures. Treating direct `--var`/endpoint values as captures would make analysis
+    // redact ordinary configuration such as an environment name.
+    if !matches!(rule.syntax().validation, Some(Validation::Betterleaks(_))) {
+        synthetic_captures.extend(dependent_captures.iter().enumerate().map(
+            |(index, (name, value))| crate::matcher::SerializableCapture {
+                name: Some(crate::util::intern(name)),
+                match_number: index.saturating_add(1).try_into().unwrap_or(i32::MAX),
+                start: 0,
+                end: value.len(),
+                value: value.as_str().into(),
+            },
+        ));
+    }
     let captures = SerializableCaptures { captures: synthetic_captures };
     let owned = OwnedBlobMatch {
         rule,
@@ -95,6 +111,10 @@ pub(crate) fn direct_access_map_requests(
 
 #[allow(dead_code)] // Retained for standalone providers awaiting compatible Betterleaks validators.
 impl AccessMapCollector {
+    pub(crate) fn with_allow_internal_ips(mut self, allowed: bool) -> Self {
+        self.allow_internal_ips = allowed;
+        self
+    }
     fn record_request(&self, key: u64, request: AccessMapRequest) {
         self.finding_fingerprints
             .entry(key)
@@ -172,19 +192,48 @@ impl AccessMapCollector {
     }
 
     pub fn record_github(&self, token: &str, fingerprint: String) {
-        let key = xxhash_rust::xxh3::xxh3_64(format!("github|{token}").as_bytes());
-        self.record_request(
-            key,
-            AccessMapRequest::Github { token: token.to_string(), fingerprint },
+        self.record_github_at(token, None, fingerprint);
+    }
+
+    pub fn record_github_at(&self, token: &str, api_endpoint: Option<&str>, fingerprint: String) {
+        let endpoint = api_endpoint
+            .map(|endpoint| endpoint.trim_end_matches('/'))
+            .filter(|endpoint| endpoint.trim_end_matches('/') != "https://api.github.com");
+        let key = xxhash_rust::xxh3::xxh3_64(
+            format!("github|{}|{token}", endpoint.unwrap_or("https://api.github.com")).as_bytes(),
         );
+        let request = match endpoint {
+            Some(api_endpoint) => AccessMapRequest::GithubAt {
+                token: token.to_string(),
+                fingerprint,
+                api_endpoint: api_endpoint.to_string(),
+            },
+            None => AccessMapRequest::Github { token: token.to_string(), fingerprint },
+        };
+        self.record_request(key, request);
     }
 
     pub fn record_gitlab(&self, token: &str, fingerprint: String) {
-        let key = xxhash_rust::xxh3::xxh3_64(format!("gitlab|{token}").as_bytes());
-        self.record_request(
-            key,
-            AccessMapRequest::Gitlab { token: token.to_string(), fingerprint },
+        self.record_gitlab_at(token, None, fingerprint);
+    }
+
+    pub fn record_gitlab_at(&self, token: &str, api_endpoint: Option<&str>, fingerprint: String) {
+        let endpoint = api_endpoint
+            .map(|endpoint| endpoint.trim_end_matches('/'))
+            .filter(|endpoint| endpoint.trim_end_matches('/') != "https://gitlab.com/api/v4");
+        let key = xxhash_rust::xxh3::xxh3_64(
+            format!("gitlab|{}|{token}", endpoint.unwrap_or("https://gitlab.com/api/v4"))
+                .as_bytes(),
         );
+        let request = match endpoint {
+            Some(api_endpoint) => AccessMapRequest::GitlabAt {
+                token: token.to_string(),
+                fingerprint,
+                api_endpoint: api_endpoint.to_string(),
+            },
+            None => AccessMapRequest::Gitlab { token: token.to_string(), fingerprint },
+        };
+        self.record_request(key, request);
     }
 
     pub fn record_slack(&self, token: &str, fingerprint: String) {
@@ -211,8 +260,25 @@ impl AccessMapCollector {
     }
 
     pub fn record_gitea(&self, token: &str, fingerprint: String) {
-        let key = xxhash_rust::xxh3::xxh3_64(format!("gitea|{token}").as_bytes());
-        self.record_request(key, AccessMapRequest::Gitea { token: token.to_string(), fingerprint });
+        self.record_gitea_at(token, None, fingerprint);
+    }
+
+    pub fn record_gitea_at(&self, token: &str, api_endpoint: Option<&str>, fingerprint: String) {
+        let endpoint = api_endpoint
+            .map(|endpoint| endpoint.trim_end_matches('/'))
+            .filter(|endpoint| endpoint.trim_end_matches('/') != "https://gitea.com/api/v1");
+        let key = xxhash_rust::xxh3::xxh3_64(
+            format!("gitea|{}|{token}", endpoint.unwrap_or("https://gitea.com/api/v1")).as_bytes(),
+        );
+        let request = match endpoint {
+            Some(api_endpoint) => AccessMapRequest::GiteaAt {
+                token: token.to_string(),
+                fingerprint,
+                api_endpoint: api_endpoint.to_string(),
+            },
+            None => AccessMapRequest::Gitea { token: token.to_string(), fingerprint },
+        };
+        self.record_request(key, request);
     }
 
     pub fn record_bitbucket(&self, token: &str, fingerprint: String) {
@@ -710,6 +776,7 @@ pub async fn run_secret_validation(
                             status: StatusCode::ACCEPTED,
                             is_valid: false,
                             outcome: ValidationOutcome::NotAttempted,
+                            endpoint_variables: BTreeMap::new(),
                             timestamp: Instant::now(),
                         });
                     }
@@ -745,6 +812,9 @@ pub async fn run_secret_validation(
                     status: om.validation_response_status,
                     is_valid: om.validation_success,
                     outcome: om.validation_outcome,
+                    endpoint_variables: crate::validation::endpoint_variables(
+                        &om.dependent_captures,
+                    ),
                     timestamp: Instant::now(),
                 };
                 val_res.insert(key, cr);
@@ -779,6 +849,11 @@ pub async fn run_secret_validation(
                     existing.validation_response_status = cr.status.as_u16();
                     existing.validation_response_body = cr.body.clone();
                     existing.validation_outcome = cr.outcome;
+                    crate::validation::apply_endpoint_variables(
+                        &existing.rule,
+                        &mut existing.dependent_captures,
+                        cr.endpoint_variables.clone(),
+                    );
                 }
             }
         }
@@ -888,7 +963,10 @@ pub async fn run_secret_validation(
                         let mut by_key: FxHashMap<String, Vec<OwnedBlobMatch>> =
                             FxHashMap::default();
                         for om in owned {
-                            by_key.entry(build_cache_key(&om)).or_default().push(om);
+                            by_key
+                                .entry(build_cache_key_with_policy(&om, clients.http_fallbacks))
+                                .or_default()
+                                .push(om);
                         }
                         let reps: Vec<_> =
                             by_key.into_values().map(|mut v| (v.remove(0), v)).collect();
@@ -1072,7 +1150,7 @@ async fn validate_single(
     // Do not cache an aggregate response without its selected dependencies.
     // Each attempt contains validator panics in validate_resolved_match. An
     // unresolved search is inconclusive, so it must not increment fail_count.
-    if crate::validation::candidates::ready(om) {
+    if crate::validation::candidates::ready_with_fallbacks(om, clients.http_fallbacks) {
         validate_single_match(
             om,
             parser,
@@ -1096,13 +1174,18 @@ async fn validate_single(
     if crate::validation::skip_ambiguous_dependencies(om) {
         return;
     }
-    let cache_key = build_cache_key(om);
+    let cache_key = build_cache_key_with_policy(om, clients.http_fallbacks);
     // Check cache first
     if let Some(cached) = cache.get(&cache_key) {
         om.validation_success = cached.is_valid;
         om.validation_response_body = cached.body.clone();
         om.validation_response_status = cached.status;
         om.validation_outcome = cached.outcome;
+        crate::validation::apply_endpoint_variables(
+            &om.rule,
+            &mut om.dependent_captures,
+            cached.endpoint_variables.clone(),
+        );
         if om.validation_outcome.is_verified_active()
             || matches!(
                 om.validation_outcome,
@@ -1147,6 +1230,11 @@ async fn validate_single(
             om.validation_response_body = cached.body.clone();
             om.validation_response_status = cached.status;
             om.validation_outcome = cached.outcome;
+            crate::validation::apply_endpoint_variables(
+                &om.rule,
+                &mut om.dependent_captures,
+                cached.endpoint_variables.clone(),
+            );
             if om.validation_outcome.is_verified_active()
                 || matches!(
                     om.validation_outcome,
@@ -1246,6 +1334,9 @@ fn apply_validation_outcome(
                     status: om.validation_response_status,
                     body: om.validation_response_body.clone(),
                     outcome: om.validation_outcome,
+                    endpoint_variables: crate::validation::endpoint_variables(
+                        &om.dependent_captures,
+                    ),
                     timestamp: Instant::now(),
                 },
             );
@@ -1269,6 +1360,9 @@ fn apply_validation_outcome(
                     status: om.validation_response_status,
                     body: om.validation_response_body.clone(),
                     outcome: om.validation_outcome,
+                    endpoint_variables: crate::validation::endpoint_variables(
+                        &om.dependent_captures,
+                    ),
                     timestamp: Instant::now(),
                 },
             );
@@ -1321,11 +1415,19 @@ fn validation_input<'a>(
     captures.captures.first().map_or("", |capture| capture.raw_value())
 }
 
+#[cfg(test)]
 fn build_cache_key(om: &OwnedBlobMatch) -> String {
+    build_cache_key_with_policy(om, false)
+}
+
+fn build_cache_key_with_policy(om: &OwnedBlobMatch, http_fallbacks: bool) -> String {
     let validation_input = validation_input(&om.rule, &om.captures);
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"kingfisher.validation-cache.v1\0");
     hash_cache_key_part(&mut hasher, om.rule.id().as_bytes());
+    if matches!(om.rule.syntax().validation, Some(Validation::Http(_))) {
+        hasher.update(&[u8::from(http_fallbacks)]);
+    }
     hash_cache_key_part(&mut hasher, validation_input.as_bytes());
 
     for (variable, count) in &om.ambiguous_dependencies {
@@ -1645,15 +1747,27 @@ fn record_legacy_access_map(
     }
 
     if id.starts_with("kingfisher.github.") && !token.is_empty() {
-        collector.record_github(&token, fp());
+        collector.record_github_at(
+            &token,
+            om.dependent_captures.get("GITHUB_API_BASE_URL").map(String::as_str),
+            fp(),
+        );
     } else if id.starts_with("kingfisher.gitlab.") && !token.is_empty() {
-        collector.record_gitlab(&token, fp());
+        collector.record_gitlab_at(
+            &token,
+            om.dependent_captures.get("GITLAB_API_BASE_URL").map(String::as_str),
+            fp(),
+        );
     } else if id.starts_with("kingfisher.slack.") && !token.is_empty() {
         collector.record_slack(&token, fp());
     } else if id.starts_with("kingfisher.huggingface.") && !token.is_empty() {
         collector.record_huggingface(&token, fp());
     } else if id.starts_with("kingfisher.gitea.") && !token.is_empty() {
-        collector.record_gitea(&token, fp());
+        collector.record_gitea_at(
+            &token,
+            om.dependent_captures.get("GITEA_API_BASE_URL").map(String::as_str),
+            fp(),
+        );
     } else if id.starts_with("kingfisher.bitbucket.") && !token.is_empty() {
         collector.record_bitbucket(&token, fp());
     } else if id.starts_with("kingfisher.buildkite.") && !token.is_empty() {
@@ -1808,6 +1922,36 @@ fn record_betterleaks_access_map(
     captures: &[(String, String, usize, usize)],
     fingerprint: &str,
 ) {
+    if validation.analyze.is_some() && validation.capabilities.access_map.is_none() {
+        let mut globals = liquid::Object::new();
+        for (name, value) in &om.dependent_captures {
+            globals.insert(name.clone().into(), liquid::model::Value::scalar(value.clone()));
+        }
+        globals.insert(
+            "__BETTERLEAKS_RULE_ID".into(),
+            liquid::model::Value::scalar(om.rule.id().to_owned()),
+        );
+        crate::validation::populate_betterleaks_globals(om, &mut globals);
+        let key = xxhash_rust::xxh3::xxh3_64(
+            format!("expr-analysis|{}|{:?}|{:?}", om.rule.id(), captures, om.dependent_captures)
+                .as_bytes(),
+        );
+        collector.record_request(
+            key,
+            AccessMapRequest::Betterleaks(Box::new(
+                crate::access_map::betterleaks::AnalysisRequest {
+                    allow_internal_ips: collector.allow_internal_ips,
+                    rule_id: om.rule.id().to_owned(),
+                    config: validation.clone(),
+                    captures: captures.to_vec(),
+                    globals,
+                    validation_result: crate::validation::cached_betterleaks_validation(om),
+                    fingerprint: fingerprint.to_owned(),
+                },
+            )),
+        );
+        return;
+    }
     let Some(mapping) = validation.capabilities.access_map.as_ref() else {
         return;
     };
@@ -1917,8 +2061,16 @@ fn record_betterleaks_access_map(
         BetterleaksAccessMapHandler::Buildkite => collector.record_buildkite(token, fp()),
         BetterleaksAccessMapHandler::Circleci => collector.record_circleci(token, fp()),
         BetterleaksAccessMapHandler::Fastly => collector.record_fastly(token, fp()),
-        BetterleaksAccessMapHandler::Github => collector.record_github(token, fp()),
-        BetterleaksAccessMapHandler::Gitlab => collector.record_gitlab(token, fp()),
+        BetterleaksAccessMapHandler::Github => collector.record_github_at(
+            token,
+            om.dependent_captures.get("GITHUB_API_BASE_URL").map(String::as_str),
+            fp(),
+        ),
+        BetterleaksAccessMapHandler::Gitlab => collector.record_gitlab_at(
+            token,
+            om.dependent_captures.get("GITLAB_API_BASE_URL").map(String::as_str),
+            fp(),
+        ),
         BetterleaksAccessMapHandler::Harness => collector.record_harness(token, fp()),
         BetterleaksAccessMapHandler::Huggingface => collector.record_huggingface(token, fp()),
         BetterleaksAccessMapHandler::IbmCloud => collector.record_ibm_cloud(token, fp()),
@@ -2021,8 +2173,13 @@ mod tests {
                 path: None,
                 betterleaks_filter: None,
                 betterleaks_secret_group: None,
+                specificity: 0,
+                tags: Vec::new(),
+                betterleaks_path_only: false,
+                keywords: Vec::new(),
                 authoritative: true,
                 vectorscan_compatible: true,
+                fallbacks: Vec::new(),
             })),
             blob_id: BlobId::new(b"panic-test-blob"),
             finding_fingerprint: 1,
@@ -2049,11 +2206,60 @@ mod tests {
     }
 
     #[test]
+    fn source_host_mapping_preserves_endpoint_and_deduplicates_per_instance() {
+        let collector = AccessMapCollector::default();
+        collector.record_github_at(
+            "same-token",
+            Some("https://one.example.test/api/v3"),
+            "one".into(),
+        );
+        collector.record_github_at(
+            "same-token",
+            Some("https://two.example.test/api/v3"),
+            "two".into(),
+        );
+        collector.record_github_at(
+            "same-token",
+            Some("https://one.example.test/api/v3"),
+            "three".into(),
+        );
+        let requests = collector.into_collected_requests();
+        assert_eq!(requests.len(), 2);
+        assert!(requests.iter().any(|item| matches!(&item.request, AccessMapRequest::GithubAt { api_endpoint, .. } if api_endpoint == "https://one.example.test/api/v3") && item.finding_fingerprints.len() == 2));
+    }
+
+    #[test]
     fn counted_validation_status_excludes_skipped_statuses() {
         assert!(!is_counted_validation_status(StatusCode::CONTINUE));
         assert!(!is_counted_validation_status(StatusCode::PRECONDITION_REQUIRED));
         assert!(is_counted_validation_status(StatusCode::OK));
         assert!(is_counted_validation_status(StatusCode::UNAUTHORIZED));
+    }
+
+    #[test]
+    fn http_cache_keys_isolate_fallback_execution_policy() {
+        let mut matched = make_owned_blob_match();
+        Arc::make_mut(&mut matched.rule).syntax.validation = Some(serde_json::from_value(serde_json::json!({
+            "type":"Http", "content":{"request":{"method":"GET","url":"https://primary.example/me"}}
+        })).unwrap());
+        assert_ne!(
+            build_cache_key_with_policy(&matched, false),
+            build_cache_key_with_policy(&matched, true)
+        );
+        matched.dependent_captures.insert("VALIDATION_FALLBACK_ID".into(), "untrusted".into());
+        crate::validation::apply_endpoint_variables(
+            &matched.rule,
+            &mut matched.dependent_captures,
+            std::collections::BTreeMap::from([
+                ("VALIDATION_ENDPOINT_INDEX".into(), "0".into()),
+                ("VALIDATION_ENDPOINT_COUNT".into(), "1".into()),
+            ]),
+        );
+        assert!(!matched.dependent_captures.contains_key("VALIDATION_FALLBACK_ID"));
+        assert_ne!(
+            crate::validation::validation_dedup_key_with_policy(&matched, false),
+            crate::validation::validation_dedup_key_with_policy(&matched, true)
+        );
     }
 
     #[test]
@@ -2213,6 +2419,39 @@ mod tests {
                 assert!(session_token.is_none());
             }
             other => panic!("unexpected request: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn imported_aws_and_gcp_rules_use_native_scope_aware_request_variants() {
+        let mut rules = kingfisher_rules::get_betterleaks_rules(Some(Confidence::Low)).unwrap();
+        for id in ["betterleaks.aws-access-token", "betterleaks.gcp-service-account"] {
+            let syntax = rules.rules.remove(id).expect("imported cloud rule should exist");
+            let mut dependencies = BTreeMap::new();
+            if id == "betterleaks.aws-access-token" {
+                let Some(Validation::Betterleaks(validation)) = &syntax.validation else {
+                    panic!("expected imported AWS validation");
+                };
+                dependencies.insert(
+                    validation.components["aws-secret-access-key"].clone(),
+                    "secret-access-key".into(),
+                );
+            }
+            let requests = direct_access_map_requests_with_options(
+                Arc::new(Rule::new(syntax)),
+                "credential-fixture",
+                dependencies,
+                false,
+            );
+            assert_eq!(requests.len(), 1, "{id}");
+            assert!(
+                matches!(
+                    (&requests[0], id),
+                    (AccessMapRequest::Aws { .. }, "betterleaks.aws-access-token")
+                        | (AccessMapRequest::Gcp { .. }, "betterleaks.gcp-service-account")
+                ),
+                "{id} must use the native dispatcher that receives BlastRadiusOptions"
+            );
         }
     }
 

@@ -880,6 +880,61 @@ mod tests {
         assert_eq!(auth.token(&client).await.unwrap().as_deref(), Some("ghs_async-token"));
     }
 
+    #[tokio::test]
+    async fn get_retry_refreshes_installation_token_that_expires_during_quota_wait() {
+        let server = MockServer::start().await;
+        let auth = app_auth(&Url::parse(&server.uri()).unwrap(), test_private_key());
+        let cache = auth.app.as_ref().unwrap().token_cache.clone();
+        cache.lock().await.token = Some(CachedInstallationToken {
+            token: "ghs_before-wait".into(),
+            expires_at: Utc::now() + chrono::Duration::hours(1),
+        });
+        Mock::given(method("GET"))
+            .and(path("/repos"))
+            .and(header_regex("authorization", r"^Bearer ghs_before-wait$"))
+            .respond_with(move |_: &wiremock::Request| {
+                // Simulate expiry before the retry without waiting an hour.
+                cache.try_lock().unwrap().token.as_mut().unwrap().expires_at =
+                    Utc::now() - chrono::Duration::seconds(1);
+                ResponseTemplate::new(403)
+                    .insert_header("retry-after", "0")
+                    .insert_header("x-ratelimit-remaining", "0")
+            })
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("POST"))
+            .and(path("/app/installations/67890/access_tokens"))
+            .and(header_regex("authorization", r"^Bearer eyJ"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(serde_json::json!({
+                "token": "ghs_after-wait", "expires_at": "2099-01-01T00:00:00Z"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/repos"))
+            .and(header_regex("authorization", r"^Bearer ghs_after-wait$"))
+            .respond_with(ResponseTemplate::new(200))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let response = crate::github::github_get(
+            &reqwest::Client::new(),
+            Url::parse(&format!("{}/repos?page=2", server.uri())).unwrap(),
+            &auth,
+            "testing token refresh after a quota wait",
+        )
+        .await
+        .unwrap();
+        assert_eq!(response.status(), reqwest::StatusCode::OK);
+        let requests = server.received_requests().await.unwrap();
+        let gets: Vec<_> = requests.iter().filter(|request| request.method == "GET").collect();
+        assert_eq!(gets.len(), 2);
+        assert_eq!(gets[0].url, gets[1].url);
+        assert_eq!(gets[0].url.query(), Some("page=2"));
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn blocking_token_exchange_reuses_cached_token() {
         let server = MockServer::start().await;

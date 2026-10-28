@@ -6,6 +6,130 @@ use kingfisher::cli::{
 };
 
 #[test]
+fn standalone_mapping_rejects_scope_options_for_other_providers() {
+    // Exercise main's standalone dispatch, not run_direct_access_map (--rule).
+    for (provider, flag, scope) in
+        [("aws", "--gcp-project", "example-project"), ("gcp", "--aws-region", "us-east-1")]
+    {
+        for viewer in [false, true] {
+            let mut command = assert_cmd::Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"));
+            command.args(["blast-radius", provider, flag, scope, "--no-update-check"]);
+            if viewer {
+                command.arg("--view-report");
+            }
+            command
+                .assert()
+                .failure()
+                .stderr(predicates::str::contains(format!("{flag} requires")));
+        }
+    }
+}
+
+#[test]
+fn standalone_scope_expansion_is_explicit_and_defaults_are_unchanged() {
+    let args = CommandLineArgs::try_parse_from(["kingfisher", "blast-radius", "aws"]).unwrap();
+    let Command::BlastRadius(args) = args.command else { panic!("expected blast-radius") };
+    assert!(!args.analysis.is_requested());
+    assert_eq!(args.format, "json");
+
+    let args = CommandLineArgs::try_parse_from([
+        "kingfisher",
+        "blast-radius",
+        "aws",
+        "--aws-region",
+        "us-east-1",
+        "--aws-region",
+        "us-west-2",
+    ])
+    .unwrap();
+    let Command::BlastRadius(args) = args.command else { panic!("expected blast-radius") };
+    assert!(args.analysis.is_requested());
+    assert_eq!(args.analysis.aws_regions, ["us-east-1", "us-west-2"]);
+    assert!(args.analysis.gcp_projects.is_empty());
+    assert!(args.analysis.validate().is_ok());
+}
+
+#[test]
+fn scan_scope_expansion_is_explicit_and_defaults_are_unchanged() {
+    let args =
+        CommandLineArgs::try_parse_from(["kingfisher", "scan", ".", "--blast-radius"]).unwrap();
+    let Command::Scan(args) = args.command else { panic!("expected scan") };
+    assert!(!args.scan_args.blast_radius_options.is_requested());
+
+    let args = CommandLineArgs::try_parse_from([
+        "kingfisher",
+        "scan",
+        ".",
+        "--blast-radius",
+        "--gcp-project",
+        "additional-project",
+    ])
+    .unwrap();
+    let Command::Scan(args) = args.command else { panic!("expected scan") };
+    assert!(args.scan_args.access_map);
+    let analysis = args.scan_args.blast_radius_options;
+    assert!(analysis.is_requested());
+    assert!(analysis.aws_regions.is_empty());
+    assert_eq!(analysis.gcp_projects, ["additional-project"]);
+    assert!(analysis.validate().is_ok());
+}
+
+#[test]
+fn automatic_assessment_has_no_opt_in_flags() {
+    for flag in ["--blast-radius-assessment", "--blast-radius-details"] {
+        for arguments in [
+            vec!["kingfisher", "blast-radius", "aws", flag],
+            vec!["kingfisher", "scan", ".", "--blast-radius", flag],
+        ] {
+            let error = CommandLineArgs::try_parse_from(arguments)
+                .expect_err("assessment is automatic and has no opt-in flag");
+            assert_eq!(error.kind(), clap::error::ErrorKind::UnknownArgument);
+            assert!(error.to_string().contains(flag));
+        }
+    }
+}
+
+#[test]
+fn blast_radius_help_lists_scope_options_without_assessment_flags() {
+    let mut command = CommandLineArgs::command();
+    for name in ["blast-radius", "scan"] {
+        let subcommand = command.find_subcommand_mut(name).expect("subcommand should exist");
+        for help in
+            [subcommand.render_help().to_string(), subcommand.render_long_help().to_string()]
+        {
+            for removed in ["--blast-radius-assessment", "--blast-radius-details"] {
+                assert!(!help.contains(removed), "{name} help advertises {removed}: {help}");
+            }
+            for scope in ["--aws-region", "--gcp-project"] {
+                assert!(help.contains(scope), "{name} help is missing {scope}: {help}");
+            }
+        }
+    }
+}
+
+#[test]
+fn investigation_scope_rejects_urls_paths_and_unbounded_requests() {
+    for scope in ["https://example.com", "../project", "project/other", "*", ""] {
+        assert!(
+            CommandLineArgs::try_parse_from([
+                "kingfisher",
+                "blast-radius",
+                "gcp",
+                "--gcp-project",
+                scope,
+            ])
+            .is_err(),
+            "{scope}"
+        );
+    }
+    let options = kingfisher::cli::commands::access_map::BlastRadiusOptions {
+        aws_regions: vec!["us-east-1".into(); 9],
+        ..Default::default()
+    };
+    assert!(options.validate().is_err());
+}
+
+#[test]
 fn access_map_accepts_format_and_output_flags() -> anyhow::Result<()> {
     let args = CommandLineArgs::try_parse_from([
         "kingfisher",

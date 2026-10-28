@@ -16,12 +16,16 @@ use base64::{Engine, engine::general_purpose::STANDARD};
 use bstr::{BString, ByteSlice};
 use gix::{Repository as GixRepo, diff::tree::recorder::Change, object::tree::EntryKind};
 use indicatif::{ProgressBar, ProgressStyle};
+use kingfisher_scanner::extraction::pdf::{
+    extract_pdf_text_from_bytes_with_budget, extract_pdf_text_from_bytes_with_control,
+    extract_pdf_text_with_limits, has_pdf_magic,
+};
 use rayon::{
     iter::plumbing::Folder,
     prelude::{ParallelIterator, *},
 };
 use serde::{Deserialize, Deserializer};
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use smallvec::smallvec;
 
@@ -40,7 +44,7 @@ use crate::{
     git_candidates::GitContentFilter,
     git_commit_metadata::{CommitMetadata, intern_git_identity},
     git_repo_enumerator::{GitBlobMetadata, GitBlobSource, MIN_SCANNABLE_BLOB_SIZE},
-    matcher::{Matcher, MatcherStats},
+    matcher::{Match, Matcher, MatcherStats},
     open_git_repo_with_options,
     origin::{Origin, OriginSet},
     pyc::extract_pyc_strings_with_limits,
@@ -55,10 +59,71 @@ use crate::{
     sqlite::extract_sqlite_contents_with_limits,
 };
 
-// The optional selection path is set only while actually extracting an archive member.
+// The optional selection path preserves archive-member or PDF-container selection.
 // Literal `!` characters in ordinary source paths are never archive delimiters.
-type LoadedBlob<'a> = (OriginSet, Blob<'a>, Option<String>);
+type LoadedBlob<'a> = (OriginSet, Blob<'a>, Option<String>, PdfPages);
 type LoadedGitBlobs<'a> = Box<dyn Iterator<Item = LoadedBlob<'a>> + Send + 'a>;
+
+// Keep a PDF's representations in one scan job. Raw matches establish the
+// canonical location before extracted pages can report the same occurrence.
+#[derive(Debug, Default)]
+struct PdfPages {
+    pages: Vec<(String, Vec<u8>)>,
+    control: kingfisher_scanner::ScanControl,
+    // Share the repository's once-only timeout diagnostic with in-flight pages.
+    timeout_reported: Option<Arc<AtomicBool>>,
+}
+
+fn check_pdf_control(
+    control: &kingfisher_scanner::ScanControl,
+    timeout_reported: Option<&AtomicBool>,
+) -> Result<()> {
+    control.check().map_err(|error| {
+        if timeout_reported.is_some_and(|flag| flag.swap(true, Ordering::Relaxed)) {
+            anyhow!("__timeout_silenced__")
+        } else {
+            error.into()
+        }
+    })
+}
+
+fn pdf_page_origin(origin: &OriginSet, name: &str) -> OriginSet {
+    OriginSet::try_from_iter(origin.iter().map(|source| match source {
+        Origin::File(file) => {
+            Origin::from_file(PathBuf::from(format!("{}!{name}", file.path.display())))
+        }
+        Origin::GitRepo(repo) => match &repo.first_commit {
+            Some(commit) => Origin::from_git_repo_with_first_commit(
+                Arc::clone(&repo.repo_path),
+                Arc::clone(&commit.commit_metadata),
+                format!("{}!{name}", commit.blob_path),
+            ),
+            None => source.clone(),
+        },
+        Origin::Extended(_) => source.clone(),
+    }))
+    .expect("a PDF retains its container origins")
+}
+
+fn pdf_match_key(finding: &Match) -> [u8; 32] {
+    // Ignore representation-local offsets, but preserve every credential input
+    // and dependency context. Hidden helpers remain available in each blob.
+    let captures: Vec<_> = finding
+        .groups
+        .captures
+        .iter()
+        .map(|capture| (capture.name, capture.match_number, capture.raw_value()))
+        .collect();
+    let key = serde_json::to_vec(&(
+        finding.rule.id(),
+        captures,
+        &finding.dependent_captures,
+        &finding.ambiguous_dependencies,
+        &finding.dependency_candidates,
+    ))
+    .expect("PDF finding inputs serialize");
+    *blake3::hash(&key).as_bytes()
+}
 
 // Canonical Windows inputs use verbatim prefixes, while current_dir and walker
 // paths can use ordinary DOS/UNC prefixes for the same location. Compare those
@@ -249,6 +314,7 @@ pub fn enumerate_filesystem_inputs(
     };
 
     let scanner_pool = Arc::new(ScannerPool::new(Arc::new(rules_db.vectorscan_db().clone())));
+    let max_blob_size = args.content_filtering_args.max_file_size_bytes();
     let enum_cfg = EnumeratorConfig {
         path_selection: args.content_filtering_args.path_selection.clone(),
         selection_roots: input_roots
@@ -275,7 +341,7 @@ pub fn enumerate_filesystem_inputs(
         extract_archives: !args.content_filtering_args.no_extract_archives,
         extraction_depth: args.content_filtering_args.archive_depth(),
         resources: args.content_filtering_args.resource_limits(),
-        max_blob_size: args.content_filtering_args.max_file_size_bytes(),
+        max_blob_size,
         git_content_filter: GitContentFilter::new(
             Arc::clone(&scanner_pool),
             rules_db.num_rules(),
@@ -283,7 +349,8 @@ pub fn enumerate_filesystem_inputs(
             !args.content_filtering_args.no_extract_archives
                 && args.content_filtering_args.archive_depth() != Some(0),
             args.content_filtering_args.resource_limits(),
-        ),
+        )
+        .with_max_blob_size(max_blob_size),
     };
     let (send_ds, recv_ds) = create_datastore_channel(args.num_jobs);
     let datastore_writer_thread =
@@ -335,7 +402,7 @@ pub fn enumerate_filesystem_inputs(
         .try_for_each_init(
             || (make_blob_processor.clone()(), progress.clone()),
             move |(processor, progress), entry| {
-                let (mut origin, blob, archive_member) = match entry {
+                let (origin, blob, archive_member, pdf_pages) = match entry {
                     Err(e) => {
                         had_errors_for_processing.store(true, Ordering::Relaxed);
                         error!("Error loading input: {e:#}");
@@ -343,93 +410,169 @@ pub fn enumerate_filesystem_inputs(
                     }
                     Ok(entry) => entry,
                 };
-                if !args.content_filtering_args.path_selection.is_empty() {
-                    let selection = &args.content_filtering_args.path_selection;
-                    let selected = origin
-                        .iter()
-                        .filter(|source| {
-                            if let Some(member) = &archive_member {
-                                return selection.matches(member);
-                            }
-                            match source {
-                                Origin::File(file) => matches_selected_file(
-                                    selection,
-                                    &file.path,
-                                    &selection_roots,
-                                    &selection_base,
-                                ),
-                                _ => selection.matches(
-                                    &source
-                                        .blob_path()
-                                        .map(|path| path.to_string_lossy())
-                                        .unwrap_or_default(),
-                                ),
-                            }
-                        })
-                        .cloned();
-                    let Some(selected) = OriginSet::try_from_iter(selected) else { return Ok(()) };
-                    origin = selected;
-                }
-                // Check if this is an archive file. `blob_path()` covers both filesystem and git
-                // origins, so archive/binary filtering stays consistent across input modes.
-                // Byte sniffing also catches ZIP containers with no archive extension (e.g. a
-                // Terraform `tf.plan`).
-                let is_archive = origin
-                    .first()
-                    .blob_path()
-                    .map(|path| is_compressed_content(path, blob.bytes()))
-                    .unwrap_or(false);
-                let is_binary = is_binary(blob.bytes());
-                let should_skip = if is_archive {
-                    // --no-extract-archives also suppresses raw containers at this stage.
-                    args.content_filtering_args.no_extract_archives
-                } else {
-                    // Apply --no-binary to non-archive inputs.
-                    is_binary && args.content_filtering_args.no_binary
-                };
-                if should_skip {
-                    progress.suspend(|| {
-                        let path = origin
-                            .first()
-                            .blob_path()
-                            .map(|p| p.display().to_string())
-                            .unwrap_or_else(|| blob.temp_id().to_string());
-                        if is_archive {
-                            debug!("Skipping archive: {path}");
+                let PdfPages { pages, control, timeout_reported } = pdf_pages;
+                let is_pdf = !pages.is_empty();
+                let page_origin = is_pdf.then(|| origin.clone());
+                let page_selection = if is_pdf {
+                    archive_member.clone().or_else(|| {
+                        let source = origin.first();
+                        let path = source.blob_path()?;
+                        let path = if matches!(source, Origin::File(_)) {
+                            std::path::absolute(path).ok()?
                         } else {
-                            debug!("Skipping binary blob: {path}");
-                        }
-                    });
-                    return Ok(());
-                }
-                progress.inc(blob.len().try_into().unwrap());
-                match processor.run(
-                    origin,
-                    blob,
-                    args.no_dedup,
-                    args.redact,
-                    args.no_base64,
-                    args.turbo,
-                ) {
-                    Ok(None) => {
-                        // nothing to record
-                    }
-                    Ok(Some((origin_set, blob_metadata, vec_of_matches))) => {
-                        let origin_set = Arc::new(origin_set);
-                        let blob_metadata = Arc::new(blob_metadata);
-
-                        for (_, single_match) in vec_of_matches {
-                            // Send each match
-                            send_ds.send((
-                                origin_set.clone(),
-                                blob_metadata.clone(),
-                                single_match,
-                            ))?;
-                        }
-                    }
-                    Err(e) => {
+                            path.to_path_buf()
+                        };
+                        Some(path.to_string_lossy().into_owned())
+                    })
+                } else {
+                    None
+                };
+                let pages = pages.into_iter().map(|(name, bytes)| {
+                    (
+                        false,
+                        pdf_page_origin(page_origin.as_ref().unwrap(), &name),
+                        Blob::from_bytes(bytes),
+                        page_selection.clone(),
+                    )
+                });
+                let mut raw_matches = HashMap::<[u8; 32], usize>::new();
+                for (is_raw, mut origin, blob, archive_member) in
+                    std::iter::once((true, origin, blob, archive_member)).chain(pages)
+                {
+                    if let Err(error) = check_pdf_control(&control, timeout_reported.as_deref()) {
                         had_errors_for_processing.store(true, Ordering::Relaxed);
-                        debug!("Error scanning input: {e:#}");
+                        if error.to_string() != "__timeout_silenced__" {
+                            error!("Error loading PDF content: {error:#}");
+                        }
+                        break;
+                    }
+                    if !args.content_filtering_args.path_selection.is_empty() {
+                        let selection = &args.content_filtering_args.path_selection;
+                        let selected = origin
+                            .iter()
+                            .filter(|source| {
+                                if let Some(member) = &archive_member {
+                                    if Path::new(member).is_absolute()
+                                        && matches!(source, Origin::File(_))
+                                    {
+                                        return matches_selected_file(
+                                            selection,
+                                            Path::new(member),
+                                            &selection_roots,
+                                            &selection_base,
+                                        );
+                                    }
+                                    return selection.matches(member);
+                                }
+                                match source {
+                                    Origin::File(file) => matches_selected_file(
+                                        selection,
+                                        &file.path,
+                                        &selection_roots,
+                                        &selection_base,
+                                    ),
+                                    _ => selection.matches(
+                                        &source
+                                            .blob_path()
+                                            .map(|path| path.to_string_lossy())
+                                            .unwrap_or_default(),
+                                    ),
+                                }
+                            })
+                            .cloned();
+                        let Some(selected) = OriginSet::try_from_iter(selected) else { continue };
+                        origin = selected;
+                    }
+                    // Check if this is an archive file. `blob_path()` covers both filesystem and git
+                    // origins, so archive/binary filtering stays consistent across input modes.
+                    // Byte sniffing also catches ZIP containers with no archive extension (e.g. a
+                    // Terraform `tf.plan`).
+                    let is_archive = origin
+                        .first()
+                        .blob_path()
+                        .map(|path| is_compressed_content(path, blob.bytes()))
+                        .unwrap_or(false);
+                    let is_binary = is_binary(blob.bytes());
+                    let should_skip = if is_archive {
+                        // --no-extract-archives also suppresses raw containers at this stage.
+                        args.content_filtering_args.no_extract_archives
+                    } else {
+                        // Apply --no-binary to non-archive inputs.
+                        is_binary && args.content_filtering_args.no_binary
+                    };
+                    if should_skip {
+                        progress.suspend(|| {
+                            let path = origin
+                                .first()
+                                .blob_path()
+                                .map(|p| p.display().to_string())
+                                .unwrap_or_else(|| blob.temp_id().to_string());
+                            if is_archive {
+                                debug!("Skipping archive: {path}");
+                            } else {
+                                debug!("Skipping binary blob: {path}");
+                            }
+                        });
+                        continue;
+                    }
+                    progress.inc(blob.len().try_into().unwrap());
+                    match processor.run(
+                        origin,
+                        blob,
+                        // Raw PDF matches are also needed for representation-level
+                        // suppression when an identical blob was scanned elsewhere.
+                        args.no_dedup || is_pdf && is_raw,
+                        args.redact,
+                        args.no_base64,
+                        args.turbo,
+                    ) {
+                        Ok(None) => {
+                            // nothing to record
+                        }
+                        Ok(Some((origin_set, blob_metadata, mut vec_of_matches))) => {
+                            if is_pdf {
+                                if is_raw {
+                                    for (_, finding) in &vec_of_matches {
+                                        if finding.visible {
+                                            *raw_matches
+                                                .entry(pdf_match_key(finding))
+                                                .or_default() += 1;
+                                        }
+                                    }
+                                } else {
+                                    vec_of_matches.retain(|(_, finding)| {
+                                        if !finding.visible {
+                                            return true;
+                                        }
+                                        let Some(count) =
+                                            raw_matches.get_mut(&pdf_match_key(finding))
+                                        else {
+                                            return true;
+                                        };
+                                        if *count == 0 {
+                                            return true;
+                                        }
+                                        *count -= 1;
+                                        false
+                                    });
+                                }
+                            }
+                            let origin_set = Arc::new(origin_set);
+                            let blob_metadata = Arc::new(blob_metadata);
+
+                            for (_, single_match) in vec_of_matches {
+                                // Send each match
+                                send_ds.send((
+                                    origin_set.clone(),
+                                    blob_metadata.clone(),
+                                    single_match,
+                                ))?;
+                            }
+                        }
+                        Err(e) => {
+                            had_errors_for_processing.store(true, Ordering::Relaxed);
+                            debug!("Error scanning input: {e:#}");
+                        }
                     }
                 }
                 Ok(())
@@ -516,7 +659,7 @@ impl<'a> ParallelIterator for FileResultIter<'a> {
             FileResultIterKind::Single(maybe_one) => {
                 let mut folder = consumer.into_folder();
                 if let Some((origin, blob)) = maybe_one {
-                    folder = folder.consume(Ok((origin, blob, None)));
+                    folder = folder.consume(Ok((origin, blob, None, PdfPages::default())));
                 }
                 folder.complete()
             }
@@ -547,6 +690,12 @@ fn file_header_looks_like_zip(path: &Path) -> bool {
     looks_like_zip(&header)
 }
 
+fn file_looks_like_pdf(path: &Path) -> bool {
+    let mut header = [0u8; 5];
+    std::fs::File::open(path).and_then(|mut file| file.read_exact(&mut header)).is_ok()
+        && has_pdf_magic(&header)
+}
+
 impl ParallelBlobIterator for FileResult {
     type Iter<'a> = FileResultIter<'a>;
 
@@ -567,7 +716,7 @@ impl ParallelBlobIterator for FileResult {
                         .map(|(logical_name, data)| {
                             let full_path = self.path.join(logical_name);
                             let origin = OriginSet::new(Origin::from_file(full_path), vec![]);
-                            (origin, Blob::from_bytes(data), None)
+                            (origin, Blob::from_bytes(data), None, PdfPages::default())
                         })
                         .collect();
                     Ok(Some(FileResultIter {
@@ -596,6 +745,29 @@ impl ParallelBlobIterator for FileResult {
                 }
                 Err(e) => {
                     debug!("Failed to extract .pyc file {}: {e:#}", self.path.display());
+                    self.raw_blob_iter().map(Some)
+                }
+            }
+        } else if extraction_enabled && file_looks_like_pdf(&self.path) {
+            match extract_pdf_text_with_limits(&self.path, resources) {
+                Ok(pages) if !pages.is_empty() => {
+                    // Page text augments raw coverage; metadata, links and
+                    // attachments need not appear in the extracted text.
+                    let origin = OriginSet::new(Origin::from_file(self.path.clone()), vec![]);
+                    let items = vec![(
+                        origin,
+                        Blob::from_file(&self.path)?,
+                        None,
+                        PdfPages { pages, ..Default::default() },
+                    )];
+                    Ok(Some(FileResultIter {
+                        iter_kind: FileResultIterKind::Archive(items),
+                        _marker: PhantomData,
+                    }))
+                }
+                Ok(_) => self.raw_blob_iter().map(Some),
+                Err(_) => {
+                    warn!(path = %self.path.display(), "PDF text extraction failed or exceeded limits; scanning raw bytes");
                     self.raw_blob_iter().map(Some)
                 }
             }
@@ -641,10 +813,10 @@ impl ParallelBlobIterator for FileResult {
                             Some(self.path.to_string_lossy().into_owned()),
                         )?
                         .into_iter()
-                        .map(|(filename, data, member)| {
+                        .map(|(filename, data, member, pages)| {
                             let origin =
                                 OriginSet::new(Origin::from_file(PathBuf::from(filename)), vec![]);
-                            (origin, Blob::from_bytes(data), member)
+                            (origin, Blob::from_bytes(data), member, pages)
                         })
                         .collect();
                         Ok(Some(FileResultIter {
@@ -667,9 +839,10 @@ impl ParallelBlobIterator for FileResult {
                         // matcher; ordinary entries stay file-backed to avoid an extra copy.
                         let mut items = Vec::new();
                         for (filename, disk_path) in entries {
-                            if max_extraction_depth.is_none_or(|depth| depth > 1)
-                                && (is_compressed_file(Path::new(&filename))
-                                    || file_header_looks_like_zip(&disk_path))
+                            if (file_looks_like_pdf(&disk_path)
+                                || max_extraction_depth.is_none_or(|depth| depth > 1)
+                                    && (is_compressed_file(Path::new(&filename))
+                                        || file_header_looks_like_zip(&disk_path)))
                                 && let Ok(data) = std::fs::read(&disk_path)
                             {
                                 let nested = recursively_expand_archive_entries(
@@ -681,13 +854,16 @@ impl ParallelBlobIterator for FileResult {
                                 // A successful nested extraction replaces the archive entry
                                 // with its contents. Invalid or empty archives are returned as
                                 // the original entry by the helper and remain scanable below.
-                                if nested.len() != 1 || nested[0].0 != filename {
-                                    for (logical, data, member) in nested {
+                                if nested.len() != 1
+                                    || nested[0].0 != filename
+                                    || !nested[0].3.pages.is_empty()
+                                {
+                                    for (logical, data, member, pages) in nested {
                                         let origin = OriginSet::new(
                                             Origin::from_file(PathBuf::from(logical)),
                                             vec![],
                                         );
-                                        items.push((origin, Blob::from_bytes(data), member));
+                                        items.push((origin, Blob::from_bytes(data), member, pages));
                                     }
                                     continue;
                                 }
@@ -708,7 +884,7 @@ impl ParallelBlobIterator for FileResult {
                             let nested_origin =
                                 OriginSet::new(Origin::from_file(full_path), vec![]);
 
-                            items.push((nested_origin, blob, member));
+                            items.push((nested_origin, blob, member, PdfPages::default()));
                         }
                         Ok(Some(FileResultIter {
                             iter_kind: FileResultIterKind::Archive(items),
@@ -762,6 +938,8 @@ impl AsRef<[u8]> for SharedArchive {
 type ArchiveEntries = Box<dyn Iterator<Item = OwnedArchiveEntry> + Send>;
 type ProvenancedArchiveEntry = (String, Vec<u8>, Option<String>);
 type ProvenancedArchiveEntries = Box<dyn Iterator<Item = ProvenancedArchiveEntry> + Send>;
+type ExpandedArchiveEntry = (String, Vec<u8>, Option<String>, PdfPages);
+type ExpandedArchiveEntries = Box<dyn Iterator<Item = ExpandedArchiveEntry> + Send>;
 
 fn member_path(logical: &str, parent: &str) -> Option<String> {
     logical
@@ -775,8 +953,8 @@ fn lazy_expand_entries(
     remaining_depth: Option<usize>,
     resources: ResourceLimits,
     parent: Option<String>,
-) -> ProvenancedArchiveEntries {
-    expand_entries(entries, remaining_depth, resources, true, parent)
+) -> ExpandedArchiveEntries {
+    expand_entries(entries, remaining_depth, resources, true, parent, Default::default())
 }
 
 fn expand_entries(
@@ -785,8 +963,31 @@ fn expand_entries(
     resources: ResourceLimits,
     apply_budget: bool,
     parent: Option<String>,
-) -> ProvenancedArchiveEntries {
-    expand_entries_with(
+    control: kingfisher_scanner::ScanControl,
+) -> ExpandedArchiveEntries {
+    expand_entries_with_pdf_budget(
+        entries,
+        remaining_depth,
+        resources,
+        apply_budget,
+        parent,
+        control,
+        MAX_RECURSIVE_ARCHIVE_BYTES as usize,
+    )
+}
+
+// The explicit PDF budget also lets regression tests exercise the >half-budget
+// boundary through a real archive without allocating a 129 MiB fixture.
+fn expand_entries_with_pdf_budget(
+    entries: ArchiveEntries,
+    remaining_depth: Option<usize>,
+    resources: ResourceLimits,
+    apply_budget: bool,
+    parent: Option<String>,
+    control: kingfisher_scanner::ScanControl,
+    pdf_budget: usize,
+) -> ExpandedArchiveEntries {
+    let entries = expand_entries_with(
         entries,
         remaining_depth,
         resources,
@@ -806,7 +1007,78 @@ fn expand_entries(
                 })
             }
         },
-    )
+    );
+    // PDF is a leaf content transform, not another archive level. Extract it
+    // even when the surrounding archive has reached its configured depth.
+    let mut total = 0usize;
+    Box::new(entries.map_while(move |(logical, mut data, member)| {
+        let remaining = pdf_budget.saturating_sub(total);
+        let archive_entry = apply_budget || member.is_some();
+        // Include extracted page text in the same archive-tree budget as later
+        // siblings. A failed, unexpanded Git input still keeps its raw bytes.
+        if archive_entry {
+            if resources.reached(total as u64, pdf_budget as u64) {
+                return None;
+            }
+            if resources.exceeds(data.len() as u64, remaining as u64) {
+                data.truncate(remaining);
+            }
+        }
+        if has_pdf_magic(&data) {
+            let extracted = if archive_entry {
+                extract_archive_pdf_pages(&data, remaining, resources, &control)
+            } else if resources.unlimited {
+                extract_pdf_text_from_bytes_with_control(&data, resources, &control)
+            } else {
+                // A standalone Git PDF is not an archive tree. As for a file
+                // on disk, its input and page-output caps are independent.
+                extract_pdf_text_from_bytes_with_budget(&data, pdf_budget, &control)
+            };
+            match extracted {
+                Ok(pages) if !pages.is_empty() => {
+                    total = total.saturating_add(data.len());
+                    for (_, bytes) in &pages {
+                        total = total.saturating_add(bytes.len());
+                    }
+                    return Some((
+                        logical,
+                        data,
+                        member,
+                        PdfPages { pages, control: control.clone(), ..Default::default() },
+                    ));
+                }
+                Ok(_) => {}
+                // The Git iterator boundary propagates aborts; do not misreport
+                // an expired repository deadline as a malformed PDF.
+                Err(error) if error.is::<kingfisher_scanner::ScanAborted>() => {}
+                Err(_) => warn!(path = %logical, "PDF text extraction failed or exceeded limits; scanning raw bytes"),
+            }
+        }
+        total = total.saturating_add(data.len());
+        Some((logical, data, member, PdfPages::default()))
+    }))
+}
+
+fn extract_archive_pdf_pages(
+    data: &[u8],
+    remaining: usize,
+    resources: ResourceLimits,
+    control: &kingfisher_scanner::ScanControl,
+) -> Result<Vec<(String, Vec<u8>)>> {
+    if resources.unlimited {
+        return extract_pdf_text_from_bytes_with_control(data, resources, control);
+    }
+    // The extractor checks its input and decoded-work caps separately. Do not
+    // subtract the input before passing that cap, which halves the input limit.
+    let pages = extract_pdf_text_from_bytes_with_budget(data, remaining, control)?;
+    let mut output_remaining = remaining.saturating_sub(data.len());
+    for (_, bytes) in &pages {
+        if bytes.len() > output_remaining {
+            return Err(kingfisher_scanner::extraction::ExtractionLimitExceeded::Bytes.into());
+        }
+        output_remaining -= bytes.len();
+    }
+    Ok(pages)
 }
 
 fn expand_entries_with(
@@ -874,7 +1146,8 @@ fn lazy_expand_entry(
     data: Vec<u8>,
     remaining_depth: Option<usize>,
     resources: ResourceLimits,
-) -> ProvenancedArchiveEntries {
+    control: kingfisher_scanner::ScanControl,
+) -> ExpandedArchiveEntries {
     // Failed extraction preserves the entire raw input, as in bounded mode.
     expand_entries(
         Box::new(std::iter::once((logical, data))),
@@ -882,6 +1155,7 @@ fn lazy_expand_entry(
         resources,
         false,
         None,
+        control,
     )
 }
 
@@ -1100,7 +1374,7 @@ fn recursively_expand_archive_entries(
     remaining_depth: Option<usize>,
     resources: ResourceLimits,
     parent: Option<String>,
-) -> Result<Vec<ProvenancedArchiveEntry>> {
+) -> Result<Vec<ExpandedArchiveEntry>> {
     let entries: Vec<_> = entries.into_iter().collect();
     Ok(lazy_expand_entries(Box::new(entries.into_iter()), remaining_depth, resources, parent)
         .collect())
@@ -1127,21 +1401,22 @@ struct GitRepoResultIter<'a> {
     _marker: std::marker::PhantomData<&'a ()>,
 }
 
-impl ParallelBlobIterator for GitRepoResult {
-    type Iter<'a> = GitRepoResultIter<'a>;
-
-    fn into_blob_iter<'a>(self) -> Result<Option<Self::Iter<'a>>> {
-        Ok(Some(GitRepoResultIter {
-            path_selection: Default::default(),
+impl GitRepoResult {
+    fn into_blob_iter<'a>(
+        self,
+        cfg: &EnumeratorConfig,
+        deadline: Option<Instant>,
+    ) -> GitRepoResultIter<'a> {
+        GitRepoResultIter {
+            path_selection: cfg.path_selection.clone(),
             inner: self,
-            deadline: None,
-            // Default to enabled; the dispatch site overrides from CLI args.
-            extract_archives: true,
-            extraction_depth: Some(1),
-            resources: ResourceLimits::default(),
-            max_blob_size: None,
+            deadline,
+            extract_archives: cfg.extract_archives,
+            extraction_depth: cfg.extraction_depth,
+            resources: cfg.resources,
+            max_blob_size: cfg.max_blob_size,
             _marker: std::marker::PhantomData,
-        }))
+        }
     }
 }
 
@@ -1212,13 +1487,14 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 }
                 let mut raw = repo.find_object(blob_id)?.try_into_blob()?;
                 let data = std::mem::take(&mut raw.data);
+                let is_pdf = has_pdf_magic(&data);
 
-                // Try archive extraction if any first-seen path looks like
+                // Try PDF text or archive extraction if any first-seen path looks like
                 // a known archive format, or the blob bytes are a ZIP under a
                 // name with no archive extension (e.g. a committed `tfplan`).
                 // Successful extraction replaces the raw container; invalid or empty
                 // archives remain available for scanning as raw bytes.
-                if extract_archives && extraction_depth != Some(0) {
+                if extract_archives && (extraction_depth != Some(0) || is_pdf) {
                     // Prefer an appearance whose name is a recognized archive so
                     // report paths stay stable; fall back to the first appearance
                     // only when the bytes are a ZIP with no archive extension.
@@ -1226,7 +1502,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                         .first_seen
                         .iter()
                         .map(|e| String::from_utf8_lossy(&e.path).to_string())
-                        .find(|p| is_compressed_file(Path::new(p)))
+                        .find(|p| is_compressed_file(Path::new(p)) || is_pdf)
                         .or_else(|| {
                             if looks_like_zip(&data) {
                                 md.first_seen
@@ -1243,10 +1519,19 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                             data,
                             extraction_depth,
                             resources,
+                            deadline.map_or_else(
+                                kingfisher_scanner::ScanControl::default,
+                                |deadline| {
+                                    kingfisher_scanner::ScanControl::default()
+                                        .with_deadline(deadline)
+                                },
+                            ),
                         );
                         let repo_path = Arc::clone(&repo_path);
+                        let timeout_reported = Arc::clone(&flag);
                         return Ok(Box::new(entries.map(
-                            move |(entry_logical, entry_bytes, member)| {
+                            move |(entry_logical, entry_bytes, member, mut pages)| {
+                                pages.timeout_reported = Some(Arc::clone(&timeout_reported));
                                 // Invalid/empty archives keep the original blob identity and origins.
                                 if entry_logical == archive_path {
                                     let origin =
@@ -1264,6 +1549,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                                         origin,
                                         Blob::new(BlobId::from(&blob_id), entry_bytes),
                                         None,
+                                        pages,
                                     );
                                 }
                                 let entry_suffix =
@@ -1283,7 +1569,9 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                                     .unwrap_or_else(|| {
                                         Origin::from_git_repo(Arc::clone(&repo_path)).into()
                                     });
-                                (origin, Blob::from_bytes(entry_bytes), member)
+                                let selection_path =
+                                    member.or_else(|| is_pdf.then(|| archive_path.clone()));
+                                (origin, Blob::from_bytes(entry_bytes), selection_path, pages)
                             },
                         )));
                     }
@@ -1300,7 +1588,7 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
                 }))
                 .unwrap_or_else(|| Origin::from_git_repo(Arc::clone(&repo_path)).into());
 
-                Ok(Box::new(std::iter::once((origin, blob, None))))
+                Ok(Box::new(std::iter::once((origin, blob, None, PdfPages::default()))))
             }
         };
 
@@ -1321,7 +1609,19 @@ impl<'a> rayon::iter::ParallelIterator for GitRepoResultIter<'a> {
         let fan_out = |res: Result<LoadedGitBlobs<'a>>|
          -> Box<dyn Iterator<Item = Result<LoadedBlob<'a>>> + Send + 'a> {
             match res {
-                Ok(v) => Box::new(v.map(Ok)),
+                Ok(v) => {
+                    let repo_path = Arc::clone(&repo_path);
+                    let flag = Arc::clone(&flag);
+                    Box::new(v.map(move |blob| {
+                        if let Err(error) = check_repo_deadline(deadline, &repo_path, "git content extraction") {
+                            if flag.swap(true, Ordering::Relaxed) {
+                                bail!("__timeout_silenced__");
+                            }
+                            return Err(error);
+                        }
+                        Ok(blob)
+                    }))
+                }
                 Err(e) => Box::new(std::iter::once(Err(e))),
             }
         };
@@ -1449,11 +1749,11 @@ impl<'a> ParallelIterator for EnumeratorFileIter<'a> {
                 })?;
                 let origin = OriginSet::new(Origin::from_extended(e.origin), Vec::new());
                 let blob = Blob::from_bytes(e.content.as_bytes().to_owned());
-                Ok((origin, blob, None))
+                Ok((origin, blob, None, PdfPages::default()))
             })
             .filter(|entry| match entry {
                 Err(_) => true,
-                Ok((origin, _, _)) => {
+                Ok((origin, _, _, _)) => {
                     self.path_selection.is_empty()
                         || self.path_selection.matches(
                             &origin
@@ -1602,20 +1902,7 @@ impl<'cfg> ParallelBlobIterator for (&'cfg EnumeratorConfig, FoundInput) {
                             t_start.elapsed().as_secs_f64()
                         );
 
-                        // Convert to a blob iterator, then patch deadline + extraction.
-                        let extract_archives = cfg.extract_archives;
-                        repo_result.into_blob_iter().map(|iter| {
-                            iter.map(|mut gri| {
-                                gri.deadline =
-                                    timeout.and_then(|timeout| Instant::now().checked_add(timeout));
-                                gri.resources = cfg.resources;
-                                gri.path_selection = cfg.path_selection.clone();
-                                gri.extract_archives = extract_archives;
-                                gri.extraction_depth = cfg.extraction_depth;
-                                gri.max_blob_size = cfg.max_blob_size;
-                                FoundInputIter::GitRepo(gri)
-                            })
-                        })
+                        Ok(Some(FoundInputIter::GitRepo(repo_result.into_blob_iter(cfg, deadline))))
                     }
                 }
             }
@@ -2259,6 +2546,7 @@ mod tests {
             bytes,
             Some(2),
             crate::limits::ResourceLimits::default(),
+            Default::default(),
         )
         .collect();
         assert_eq!(entries.len(), 1);
@@ -2906,11 +3194,159 @@ mod tests {
                 bytes.clone(),
                 Some(2),
                 crate::limits::ResourceLimits::default(),
+                Default::default(),
             )
+            .map(|(logical, bytes, member, pages)| {
+                assert!(pages.pages.is_empty());
+                (logical, bytes, member)
+            })
             .collect::<Vec<_>>();
             assert_eq!(entries, vec![("fixture.zip".into(), bytes, None)]);
         }
         Ok(())
+    }
+
+    #[test]
+    fn git_pdf_expansion_uses_the_repository_control() -> Result<()> {
+        use kingfisher_scanner::ScanControl;
+        let hex: String =
+            include_str!("../../crates/kingfisher-scanner/src/extraction/testdata/pages.pdf.hex")
+                .split_whitespace()
+                .collect();
+        let bytes: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|index| u8::from_str_radix(&hex[index..index + 2], 16).unwrap())
+            .collect();
+        let deadline = Instant::now();
+        let control = ScanControl::default().with_deadline(deadline);
+        for unlimited in [false, true] {
+            let entries: Vec<_> = lazy_expand_entry(
+                "fixture.pdf".into(),
+                bytes.clone(),
+                Some(1),
+                crate::limits::ResourceLimits { unlimited },
+                control.clone(),
+            )
+            .map(|(logical, bytes, member, pages)| {
+                assert!(pages.pages.is_empty());
+                (logical, bytes, member)
+            })
+            .collect();
+            // The intermediate iterator preserves raw data; the Git fan-out boundary
+            // checks its deadline and returns an error rather than scanning this data.
+            assert_eq!(entries, vec![("fixture.pdf".into(), bytes.clone(), None)]);
+        }
+        assert!(
+            super::check_repo_deadline(Some(deadline), Path::new("repo"), "git content extraction")
+                .is_err()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn archive_pdf_input_is_not_charged_twice_against_the_byte_limit() -> Result<()> {
+        let hex: String =
+            include_str!("../../crates/kingfisher-scanner/src/extraction/testdata/pages.pdf.hex")
+                .split_whitespace()
+                .collect();
+        let bytes = hex::decode(hex)?;
+        let control = kingfisher_scanner::ScanControl::default();
+        let resources = crate::limits::ResourceLimits::default();
+        let expected = super::extract_pdf_text_from_bytes_with_budget(&bytes, 4096, &control)?;
+        let output_size: usize = expected.iter().map(|(_, text)| text.len()).sum();
+        let budget = bytes.len() + output_size;
+        assert!(bytes.len() > budget / 2);
+        assert_eq!(
+            super::extract_archive_pdf_pages(&bytes, budget, resources, &control)?,
+            expected
+        );
+        assert!(
+            super::extract_archive_pdf_pages(&bytes, budget - 1, resources, &control)
+                .unwrap_err()
+                .is::<kingfisher_scanner::extraction::ExtractionLimitExceeded>()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn archive_pdf_expansion_keeps_members_larger_than_half_the_tree_budget() -> Result<()> {
+        let hex: String =
+            include_str!("../../crates/kingfisher-scanner/src/extraction/testdata/pages.pdf.hex")
+                .split_whitespace()
+                .collect();
+        let bytes = hex::decode(hex)?;
+        let control = kingfisher_scanner::ScanControl::default();
+        let expected = super::extract_pdf_text_from_bytes_with_budget(&bytes, 4096, &control)?;
+        let output_size: usize = expected.iter().map(|(_, text)| text.len()).sum();
+        let budget = bytes.len() + output_size;
+        assert!(bytes.len() > budget / 2);
+        let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+        zip.start_file("document.pdf", SimpleFileOptions::default())?;
+        zip.write_all(&bytes)?;
+        let archive = zip.finish()?.into_inner();
+        // Exercise ZIP enumeration and PDF dispatch, not just the leaf helper.
+        // This scales the same 128/256 MiB boundary down to a tiny fixture.
+        let mut entries = super::expand_entries_with_pdf_budget(
+            Box::new(std::iter::once(("outer.zip".into(), archive))),
+            Some(1),
+            crate::limits::ResourceLimits::default(),
+            false,
+            None,
+            control,
+            budget,
+        );
+        let (logical, raw, member, pages) = entries.next().unwrap();
+        assert_eq!(logical, "outer.zip!document.pdf");
+        assert_eq!(member.as_deref(), Some("document.pdf"));
+        assert_eq!(raw, bytes);
+        assert_eq!(pages.pages, expected);
+        assert!(entries.next().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn standalone_git_pdf_has_independent_input_and_output_budgets() -> Result<()> {
+        let hex: String =
+            include_str!("../../crates/kingfisher-scanner/src/extraction/testdata/pages.pdf.hex")
+                .split_whitespace()
+                .collect();
+        let bytes = hex::decode(hex)?;
+        let control = kingfisher_scanner::ScanControl::default();
+        let budget = bytes.len();
+        let expected = super::extract_pdf_text_from_bytes_with_budget(&bytes, budget, &control)?;
+        let mut entries = super::expand_entries_with_pdf_budget(
+            Box::new(std::iter::once(("document.pdf".into(), bytes))),
+            Some(1),
+            crate::limits::ResourceLimits::default(),
+            false,
+            None,
+            control,
+            budget,
+        );
+        let (_, _, member, pages) = entries.next().unwrap();
+        assert_eq!(member, None);
+        assert_eq!(pages.pages, expected);
+        assert!(entries.next().is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn concurrent_pdf_deadlines_claim_only_one_repository_diagnostic() {
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        let control = kingfisher_scanner::ScanControl::default().with_deadline(Instant::now());
+        use rayon::prelude::*;
+        let errors: Vec<_> = (0..16)
+            .into_par_iter()
+            .map(|_| super::check_pdf_control(&control, Some(&flag)).unwrap_err())
+            .collect();
+        assert_eq!(
+            errors.iter().filter(|error| error.is::<kingfisher_scanner::ScanAborted>()).count(),
+            1
+        );
+        assert_eq!(
+            errors.iter().filter(|error| error.to_string() == "__timeout_silenced__").count(),
+            15
+        );
     }
 
     #[test]
@@ -2931,6 +3367,7 @@ mod tests {
             cursor.into_inner(),
             Some(1),
             crate::limits::ResourceLimits::default(),
+            Default::default(),
         )
         .collect::<Vec<_>>();
 
@@ -2972,6 +3409,7 @@ mod tests {
             outer_bytes.clone(),
             Some(1),
             crate::limits::ResourceLimits::default(),
+            Default::default(),
         )
         .collect::<Vec<_>>();
         assert_eq!(shallow.len(), 1);
@@ -2983,6 +3421,7 @@ mod tests {
             outer_bytes,
             Some(2),
             crate::limits::ResourceLimits::default(),
+            Default::default(),
         )
         .collect::<Vec<_>>();
         assert_eq!(deep.len(), 1);
@@ -2998,7 +3437,7 @@ mod tests {
         iter.collect::<Vec<_>>()
             .into_iter()
             .map(|item| {
-                let (origin, blob, _) = item?;
+                let (origin, blob, _, _) = item?;
                 let path = origin
                     .first()
                     .full_path()

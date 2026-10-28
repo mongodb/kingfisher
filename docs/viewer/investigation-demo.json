@@ -1,0 +1,1485 @@
+{
+  "findings": [
+    {
+      "rule": {
+        "title": "AWS build credential (custom.example.aws)",
+        "name": "AWS build credential",
+        "id": "custom.example.aws",
+        "description": "Synthetic documentation detector; no usable credential is present."
+      },
+      "finding": {
+        "snippet": "[REDACTED SYNTHETIC CREDENTIAL]",
+        "fingerprint": "10000000000000000001",
+        "confidence": "high",
+        "entropy": "0.00",
+        "validation": {
+          "outcome": "verified_active",
+          "status": "Active Credential",
+          "response": "Synthetic demonstration state only. No live validation request was performed."
+        },
+        "language": "Plain Text",
+        "line": 12,
+        "column_start": 0,
+        "column_end": 30,
+        "path": "example/demo-platform/deploy/release.env"
+      }
+    },
+    {
+      "rule": {
+        "title": "GCP service account credential (custom.example.gcp)",
+        "name": "GCP service account credential",
+        "id": "custom.example.gcp",
+        "description": "Synthetic documentation detector; no usable credential is present."
+      },
+      "finding": {
+        "snippet": "[REDACTED SYNTHETIC CREDENTIAL]",
+        "fingerprint": "10000000000000000002",
+        "confidence": "high",
+        "entropy": "0.00",
+        "validation": {
+          "outcome": "verified_active",
+          "status": "Active Credential",
+          "response": "Synthetic demonstration state only. No live validation request was performed."
+        },
+        "language": "YAML",
+        "line": 28,
+        "column_start": 0,
+        "column_end": 30,
+        "path": "example/demo-platform/pipelines/training.yml"
+      }
+    },
+    {
+      "rule": {
+        "title": "Azure application credential (custom.example.azure)",
+        "name": "Azure application credential",
+        "id": "custom.example.azure",
+        "description": "Synthetic documentation detector; no usable credential is present."
+      },
+      "finding": {
+        "snippet": "[REDACTED SYNTHETIC CREDENTIAL]",
+        "fingerprint": "10000000000000000003",
+        "confidence": "high",
+        "entropy": "0.00",
+        "validation": {
+          "outcome": "verified_active",
+          "status": "Active Credential",
+          "response": "Synthetic demonstration state only. No live validation request was performed."
+        },
+        "language": "Plain Text",
+        "line": 17,
+        "column_start": 0,
+        "column_end": 30,
+        "path": "example/demo-platform/config/analytics.env"
+      }
+    },
+    {
+      "rule": {
+        "title": "Hugging Face access token (custom.example.huggingface)",
+        "name": "Hugging Face access token",
+        "id": "custom.example.huggingface",
+        "description": "Synthetic documentation detector; no usable credential is present."
+      },
+      "finding": {
+        "snippet": "[REDACTED SYNTHETIC CREDENTIAL]",
+        "fingerprint": "10000000000000000004",
+        "confidence": "high",
+        "entropy": "0.00",
+        "validation": {
+          "outcome": "verified_active",
+          "status": "Active Credential",
+          "response": "Synthetic demonstration state only. No live validation request was performed."
+        },
+        "language": "Plain Text",
+        "line": 8,
+        "column_start": 0,
+        "column_end": 30,
+        "path": "example/demo-platform/notebooks/model-evaluation.env"
+      }
+    },
+    {
+      "rule": {
+        "title": "GitHub application token (custom.example.github)",
+        "name": "GitHub application token",
+        "id": "custom.example.github",
+        "description": "Synthetic documentation detector; no usable credential is present."
+      },
+      "finding": {
+        "snippet": "[REDACTED SYNTHETIC CREDENTIAL]",
+        "fingerprint": "10000000000000000005",
+        "confidence": "high",
+        "entropy": "0.00",
+        "validation": {
+          "outcome": "verified_active",
+          "status": "Active Credential",
+          "response": "Synthetic demonstration state only. No live validation request was performed."
+        },
+        "language": "YAML",
+        "line": 22,
+        "column_start": 0,
+        "column_end": 30,
+        "path": "example/demo-platform/ci/publish.yml"
+      }
+    },
+    {
+      "rule": {
+        "title": "Retired AWS build credential (custom.example.aws-retired)",
+        "name": "Retired AWS build credential",
+        "id": "custom.example.aws-retired",
+        "description": "Synthetic documentation detector; no usable credential is present."
+      },
+      "finding": {
+        "snippet": "[REDACTED SYNTHETIC CREDENTIAL]",
+        "fingerprint": "10000000000000000006",
+        "confidence": "high",
+        "entropy": "0.00",
+        "validation": {
+          "outcome": "verified_inactive",
+          "status": "Inactive Credential",
+          "response": "Synthetic demonstration state only. No live validation request was performed."
+        },
+        "language": "Plain Text",
+        "line": 5,
+        "column_start": 0,
+        "column_end": 30,
+        "path": "example/demo-platform/archive/legacy.env"
+      }
+    },
+    {
+      "rule": {
+        "title": "Retired GitHub token (custom.example.github-retired)",
+        "name": "Retired GitHub token",
+        "id": "custom.example.github-retired",
+        "description": "Synthetic documentation detector; no usable credential is present."
+      },
+      "finding": {
+        "snippet": "[REDACTED SYNTHETIC CREDENTIAL]",
+        "fingerprint": "10000000000000000007",
+        "confidence": "high",
+        "entropy": "0.00",
+        "validation": {
+          "outcome": "verified_inactive",
+          "status": "Inactive Credential",
+          "response": "Synthetic demonstration state only. No live validation request was performed."
+        },
+        "language": "Plain Text",
+        "line": 9,
+        "column_start": 0,
+        "column_end": 30,
+        "path": "example/demo-platform/archive/publish.env"
+      }
+    },
+    {
+      "rule": {
+        "title": "Azure validation unavailable (custom.example.azure-unavailable)",
+        "name": "Azure validation unavailable",
+        "id": "custom.example.azure-unavailable",
+        "description": "Synthetic documentation detector; no usable credential is present."
+      },
+      "finding": {
+        "snippet": "[REDACTED SYNTHETIC CREDENTIAL]",
+        "fingerprint": "10000000000000000008",
+        "confidence": "medium",
+        "entropy": "0.00",
+        "validation": {
+          "outcome": "unavailable",
+          "status": "Inconclusive Validation",
+          "response": "Synthetic demonstration state only. No live validation request was performed."
+        },
+        "language": "Plain Text",
+        "line": 14,
+        "column_start": 0,
+        "column_end": 30,
+        "path": "example/demo-platform/config/old-analytics.env"
+      }
+    },
+    {
+      "rule": {
+        "title": "GCP credential awaiting validation (custom.example.gcp-unchecked)",
+        "name": "GCP credential awaiting validation",
+        "id": "custom.example.gcp-unchecked",
+        "description": "Synthetic documentation detector; no usable credential is present."
+      },
+      "finding": {
+        "snippet": "[REDACTED SYNTHETIC CREDENTIAL]",
+        "fingerprint": "10000000000000000009",
+        "confidence": "medium",
+        "entropy": "0.00",
+        "validation": {
+          "outcome": "not_attempted",
+          "status": "Not Attempted",
+          "response": "Synthetic demonstration state only. No live validation request was performed."
+        },
+        "language": "YAML",
+        "line": 11,
+        "column_start": 0,
+        "column_end": 30,
+        "path": "example/demo-platform/docs/example-config.yml"
+      }
+    }
+  ],
+  "access_map": [
+    {
+      "provider": "aws",
+      "account": "000000000000",
+      "fingerprint": "10000000000000000001",
+      "context": {
+        "identity_id": "arn:aws:iam::000000000000:user/example-demo-build",
+        "account_id": "000000000000",
+        "access_type": "iam_user"
+      },
+      "groups": [
+        {
+          "resources": [
+            "iam:arn:aws:iam::000000000000:role/example-demo-release",
+            "s3:arn:aws:s3:::example-demo-artifacts",
+            "s3:arn:aws:s3:::example-demo-audit",
+            "secretsmanager:arn:aws:secretsmanager:us-west-2:000000000000:secret:example-demo/pipeline-AbCdEf"
+          ]
+        }
+      ],
+      "roles": [
+        {
+          "name": "Example build delegation",
+          "source": "direct managed policy",
+          "permissions": [
+            "sts:AssumeRole"
+          ]
+        },
+        {
+          "name": "arn:aws:iam::000000000000:role/example-demo-release",
+          "source": "assumable role (conditional)",
+          "permissions": [
+            "s3:GetObject",
+            "secretsmanager:GetSecretValue"
+          ]
+        }
+      ],
+      "token_details": null,
+      "provider_metadata": {
+        "version": null,
+        "enterprise": null,
+        "authorization_evidence": {
+          "principal": {
+            "id": "arn:aws:iam::000000000000:user/example-demo-build",
+            "kind": "user",
+            "canonical_id": "arn:aws:iam::000000000000:user/example-demo-build",
+            "name": "example-demo-build",
+            "groups": [
+              "example-demo-builders"
+            ],
+            "tags": {
+              "environment": "example-demo"
+            },
+            "attributes": {
+              "permissions_boundary": "present"
+            }
+          },
+          "policies": [
+            {
+              "id": "arn:aws:iam::000000000000:policy/example-demo-build:v1",
+              "name": "Example build delegation",
+              "kind": "managed",
+              "attached_to": "arn:aws:iam::000000000000:user/example-demo-build",
+              "version": "v1",
+              "statements": [
+                {
+                  "id": "example-build#assume-release",
+                  "effect": "Allow",
+                  "actions": [
+                    "sts:AssumeRole"
+                  ],
+                  "resources": [
+                    "arn:aws:iam::000000000000:role/example-demo-release"
+                  ],
+                  "condition_keys": [
+                    "Bool:aws:MultiFactorAuthPresent"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "example-release#trust",
+              "name": "Example release trust",
+              "kind": "trust",
+              "attached_to": "arn:aws:iam::000000000000:role/example-demo-release",
+              "statements": [
+                {
+                  "id": "example-release#trust-caller",
+                  "effect": "Allow",
+                  "actions": [
+                    "sts:AssumeRole"
+                  ],
+                  "resources": [
+                    "arn:aws:iam::000000000000:role/example-demo-release"
+                  ],
+                  "principals": [
+                    "arn:aws:iam::000000000000:user/example-demo-build"
+                  ],
+                  "condition_keys": [
+                    "StringEquals:sts:ExternalId"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "arn:aws:iam::000000000000:policy/example-demo-release:v1",
+              "name": "Example release data access",
+              "kind": "managed",
+              "attached_to": "arn:aws:iam::000000000000:role/example-demo-release",
+              "version": "v1",
+              "statements": [
+                {
+                  "id": "example-release#artifacts",
+                  "effect": "Allow",
+                  "actions": [
+                    "s3:GetObject"
+                  ],
+                  "resources": [
+                    "arn:aws:s3:::example-demo-artifacts/release/*"
+                  ],
+                  "condition_keys": [
+                    "StringEquals:aws:PrincipalTag/environment"
+                  ]
+                },
+                {
+                  "id": "example-release#deny-restricted",
+                  "effect": "Deny",
+                  "actions": [
+                    "s3:GetObject"
+                  ],
+                  "resources": [
+                    "arn:aws:s3:::example-demo-artifacts/release/restricted/*"
+                  ]
+                },
+                {
+                  "id": "example-release#pipeline-secret",
+                  "effect": "Allow",
+                  "actions": [
+                    "secretsmanager:GetSecretValue"
+                  ],
+                  "resources": [
+                    "arn:aws:secretsmanager:us-west-2:000000000000:secret:example-demo/pipeline-AbCdEf"
+                  ]
+                }
+              ]
+            }
+          ],
+          "paths": [
+            {
+              "direction": "outbound",
+              "status": "conditional",
+              "hops": [
+                {
+                  "from": "arn:aws:iam::000000000000:user/example-demo-build",
+                  "to": "arn:aws:iam::000000000000:role/example-demo-release",
+                  "relationship": "can_assume_role"
+                }
+              ],
+              "evidence": [
+                "example-build#assume-release",
+                "example-release#trust-caller"
+              ],
+              "conditions": [
+                "MFA condition present; value redacted",
+                "External ID condition present; value redacted"
+              ]
+            }
+          ],
+          "role_impacts": [
+            {
+              "role": "arn:aws:iam::000000000000:role/example-demo-release",
+              "name": "example-demo-release",
+              "status": "conditional",
+              "hop_count": 1,
+              "permissions": [
+                "s3:GetObject",
+                "secretsmanager:GetSecretValue"
+              ],
+              "grants": [
+                {
+                  "permissions": [
+                    "s3:GetObject"
+                  ],
+                  "resources": [
+                    "arn:aws:s3:::example-demo-artifacts/release/*"
+                  ],
+                  "excluded_resources": [
+                    "arn:aws:s3:::example-demo-artifacts/release/restricted/*"
+                  ],
+                  "condition_keys": [
+                    "StringEquals:aws:PrincipalTag/environment"
+                  ],
+                  "evidence": [
+                    "example-release#artifacts"
+                  ]
+                },
+                {
+                  "permissions": [
+                    "secretsmanager:GetSecretValue"
+                  ],
+                  "resources": [
+                    "arn:aws:secretsmanager:us-west-2:000000000000:secret:example-demo/pipeline-AbCdEf"
+                  ],
+                  "evidence": [
+                    "example-release#pipeline-secret"
+                  ]
+                }
+              ]
+            }
+          ],
+          "hierarchy": [
+            {
+              "kind": "account",
+              "id": "000000000000"
+            }
+          ],
+          "probes": [
+            {
+              "service": "s3",
+              "method": "ListBuckets",
+              "status": "accepted",
+              "http_status": 200,
+              "region": "us-west-2",
+              "reason": "synthetic_example"
+            },
+            {
+              "service": "iam",
+              "method": "ListRoles",
+              "status": "restricted",
+              "http_status": 403,
+              "reason": "AccessDenied",
+              "attributes": {}
+            }
+          ],
+          "limitations": [
+            "Synthetic role paths are inferred from policy evidence. The role was not assumed and no object or secret content was accessed.",
+            "Permissions boundaries, session policies, organization restrictions, and condition values are not fully evaluated."
+          ],
+          "assessment": {
+            "schema_version": 1,
+            "observed_at": "2026-10-22T16:15:00-07:00",
+            "legacy_severity": "high",
+            "capability_risk": "high",
+            "coverage": "partial",
+            "capabilities": [
+              {
+                "permission": "ListBuckets",
+                "category": "metadata_read",
+                "reach": "direct",
+                "evidence": "observed",
+                "scope": "Region: us-west-2; target scope not recorded"
+              },
+              {
+                "permission": "sts:AssumeRole",
+                "category": "identity_delegation",
+                "reach": "direct",
+                "evidence": "conditional",
+                "scope": "arn:aws:iam::000000000000:role/example-demo-release"
+              },
+              {
+                "permission": "s3:GetObject",
+                "category": "sensitive_read",
+                "reach": "reachable",
+                "evidence": "conditional",
+                "scope": "arn:aws:s3:::example-demo-artifacts/release/*"
+              },
+              {
+                "permission": "secretsmanager:GetSecretValue",
+                "category": "sensitive_read",
+                "reach": "reachable",
+                "evidence": "conditional",
+                "scope": "arn:aws:secretsmanager:us-west-2:000000000000:secret:example-demo/pipeline-AbCdEf"
+              }
+            ],
+            "resources": [
+              {
+                "resource_type": "s3",
+                "name": "arn:aws:s3:::example-demo-artifacts",
+                "permissions": [
+                  "s3:GetObject"
+                ],
+                "risk": "high",
+                "reason": "Synthetic conditional role grant covers release objects; object access was not exercised."
+              },
+              {
+                "resource_type": "s3",
+                "name": "arn:aws:s3:::example-demo-audit",
+                "permissions": [
+                  "s3:ListBucket"
+                ],
+                "risk": "low",
+                "reason": "Synthetic metadata inventory only; listing a bucket does not establish object read access."
+              },
+              {
+                "resource_type": "secretsmanager",
+                "name": "arn:aws:secretsmanager:us-west-2:000000000000:secret:example-demo/pipeline-AbCdEf",
+                "permissions": [
+                  "secretsmanager:GetSecretValue"
+                ],
+                "risk": "high",
+                "reason": "Synthetic candidate impact through the release role; the secret value was not requested."
+              },
+              {
+                "resource_type": "iam",
+                "name": "arn:aws:iam::000000000000:role/example-demo-release",
+                "permissions": [
+                  "sts:AssumeRole"
+                ],
+                "risk": "medium",
+                "reason": "Synthetic candidate role transition; trust and condition values remain unevaluated."
+              }
+            ],
+            "recommendations": [
+              "Review application dependencies, replace the exposed credential, and verify its removal."
+            ],
+            "risk_notes": [
+              "SYNTHETIC DOCUMENTATION EXAMPLE. Every credential, identity, resource, policy, validation outcome, and API observation in this file is fabricated. No provider requests were made. No usable secrets or runnable credential commands are included.",
+              "Synthetic role paths are inferred from policy evidence. The role was not assumed and no object or secret content was accessed.",
+              "Permissions boundaries, session policies, organization restrictions, and condition values are not fully evaluated."
+            ]
+          }
+        }
+      },
+      "permissions_by_severity": {
+        "admin": [],
+        "privilege_escalation": [
+          "sts:AssumeRole"
+        ],
+        "risky": [
+          "s3:GetObject",
+          "secretsmanager:GetSecretValue"
+        ],
+        "read_only": [
+          "s3:ListBucket"
+        ]
+      }
+    },
+    {
+      "provider": "gcp",
+      "account": "example-demo-project",
+      "fingerprint": "10000000000000000002",
+      "context": {
+        "identity_id": "example-reader@example-demo-project.iam.gserviceaccount.com",
+        "project": "example-demo-project",
+        "access_type": "service_account"
+      },
+      "groups": [
+        {
+          "resources": [
+            "bucket:projects/example-demo-project/buckets/example-demo-training"
+          ],
+          "permissions": [
+            "storage.objects.get"
+          ]
+        },
+        {
+          "resources": [
+            "project:projects/example-demo-project"
+          ],
+          "permissions": [
+            "resourcemanager.projects.get"
+          ]
+        },
+        {
+          "resources": [
+            "secret:projects/example-demo-project/secrets/example-demo-pipeline"
+          ],
+          "permissions": [
+            "secretmanager.versions.access"
+          ]
+        }
+      ],
+      "roles": [
+        {
+          "name": "roles/iam.serviceAccountTokenCreator",
+          "source": "direct service account binding",
+          "permissions": [
+            "iam.serviceAccounts.getAccessToken"
+          ]
+        },
+        {
+          "name": "roles/storage.objectViewer",
+          "source": "impersonated service account via folder",
+          "permissions": [
+            "storage.objects.get"
+          ]
+        },
+        {
+          "name": "roles/secretmanager.secretAccessor",
+          "source": "impersonated service account via project",
+          "permissions": [
+            "secretmanager.versions.access"
+          ]
+        }
+      ],
+      "token_details": null,
+      "provider_metadata": {
+        "version": null,
+        "enterprise": null,
+        "authorization_evidence": {
+          "principal": {
+            "id": "example-reader@example-demo-project.iam.gserviceaccount.com",
+            "kind": "service_account",
+            "canonical_id": "projects/-/serviceAccounts/example-reader@example-demo-project.iam.gserviceaccount.com",
+            "name": "Example pipeline reader",
+            "attributes": {
+              "project_id": "example-demo-project",
+              "disabled": "false"
+            }
+          },
+          "policies": [
+            {
+              "id": "example-gcp#token-creator",
+              "name": "roles/iam.serviceAccountTokenCreator",
+              "kind": "iam_binding",
+              "attached_to": "example-reader@example-demo-project.iam.gserviceaccount.com",
+              "scope": "projects/-/serviceAccounts/example-deployer@example-demo-project.iam.gserviceaccount.com",
+              "statements": [
+                {
+                  "id": "example-gcp#mint-token",
+                  "effect": "Allow",
+                  "actions": [
+                    "iam.serviceAccounts.getAccessToken"
+                  ],
+                  "resources": [
+                    "projects/-/serviceAccounts/example-deployer@example-demo-project.iam.gserviceaccount.com"
+                  ],
+                  "principals": [
+                    "serviceAccount:example-reader@example-demo-project.iam.gserviceaccount.com"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "example-gcp#folder-storage",
+              "name": "roles/storage.objectViewer",
+              "kind": "iam_binding",
+              "attached_to": "example-deployer@example-demo-project.iam.gserviceaccount.com",
+              "scope": "folders/000000000000",
+              "statements": [
+                {
+                  "id": "example-gcp#read-training",
+                  "effect": "Allow",
+                  "actions": [
+                    "storage.objects.get"
+                  ],
+                  "resources": [
+                    "projects/example-demo-project/buckets/example-demo-training"
+                  ],
+                  "principals": [
+                    "serviceAccount:example-deployer@example-demo-project.iam.gserviceaccount.com"
+                  ],
+                  "condition_keys": [
+                    "gcp_iam_condition"
+                  ]
+                }
+              ]
+            },
+            {
+              "id": "example-gcp#project-secret",
+              "name": "roles/secretmanager.secretAccessor",
+              "kind": "iam_binding",
+              "attached_to": "example-deployer@example-demo-project.iam.gserviceaccount.com",
+              "scope": "projects/example-demo-project",
+              "statements": [
+                {
+                  "id": "example-gcp#read-pipeline-secret",
+                  "effect": "Allow",
+                  "actions": [
+                    "secretmanager.versions.access"
+                  ],
+                  "resources": [
+                    "projects/example-demo-project/secrets/example-demo-pipeline"
+                  ],
+                  "principals": [
+                    "serviceAccount:example-deployer@example-demo-project.iam.gserviceaccount.com"
+                  ]
+                }
+              ]
+            }
+          ],
+          "paths": [
+            {
+              "direction": "outbound",
+              "status": "conditional",
+              "hops": [
+                {
+                  "from": "example-reader@example-demo-project.iam.gserviceaccount.com",
+                  "to": "example-deployer@example-demo-project.iam.gserviceaccount.com",
+                  "relationship": "can_mint_access_token"
+                }
+              ],
+              "evidence": [
+                "example-gcp#mint-token",
+                "example-gcp#read-training"
+              ],
+              "conditions": [
+                "Inherited IAM condition present; expression values redacted"
+              ]
+            }
+          ],
+          "role_impacts": [
+            {
+              "target": "example-deployer@example-demo-project.iam.gserviceaccount.com",
+              "role": "roles/storage.objectViewer",
+              "status": "conditional",
+              "hop_count": 1,
+              "permissions": [
+                "storage.objects.get"
+              ],
+              "grants": [
+                {
+                  "permissions": [
+                    "storage.objects.get"
+                  ],
+                  "resources": [
+                    "projects/example-demo-project/buckets/example-demo-training"
+                  ],
+                  "condition_keys": [
+                    "gcp_iam_condition"
+                  ],
+                  "evidence": [
+                    "example-gcp#read-training"
+                  ]
+                }
+              ]
+            },
+            {
+              "target": "example-deployer@example-demo-project.iam.gserviceaccount.com",
+              "role": "roles/secretmanager.secretAccessor",
+              "status": "potential",
+              "hop_count": 1,
+              "permissions": [
+                "secretmanager.versions.access"
+              ],
+              "grants": [
+                {
+                  "permissions": [
+                    "secretmanager.versions.access"
+                  ],
+                  "resources": [
+                    "projects/example-demo-project/secrets/example-demo-pipeline"
+                  ],
+                  "evidence": [
+                    "example-gcp#read-pipeline-secret"
+                  ]
+                }
+              ]
+            }
+          ],
+          "hierarchy": [
+            {
+              "kind": "project",
+              "id": "projects/example-demo-project"
+            },
+            {
+              "kind": "folder",
+              "id": "folders/000000000000"
+            },
+            {
+              "kind": "organization",
+              "id": "organizations/000000000000"
+            }
+          ],
+          "probes": [
+            {
+              "service": "cloudresourcemanager.googleapis.com",
+              "method": "projects.get",
+              "status": "accepted",
+              "http_status": 200,
+              "resource": "projects/example-demo-project",
+              "reason": "synthetic_example"
+            }
+          ],
+          "limitations": [
+            "Synthetic impersonation evidence records token-creation permission; no impersonated token was minted.",
+            "Organization deny policies, access boundaries, and inherited condition values were not fully evaluated."
+          ],
+          "assessment": {
+            "schema_version": 1,
+            "observed_at": "2026-10-22T16:15:00-07:00",
+            "legacy_severity": "critical",
+            "capability_risk": "critical",
+            "coverage": "partial",
+            "capabilities": [
+              {
+                "permission": "projects.get",
+                "category": "metadata_read",
+                "reach": "direct",
+                "evidence": "observed",
+                "scope": "projects/example-demo-project"
+              },
+              {
+                "permission": "iam.serviceAccounts.getAccessToken",
+                "category": "credential_minting",
+                "reach": "direct",
+                "evidence": "policy_grant",
+                "scope": "projects/-/serviceAccounts/example-deployer@example-demo-project.iam.gserviceaccount.com"
+              },
+              {
+                "permission": "storage.objects.get",
+                "category": "sensitive_read",
+                "reach": "reachable",
+                "evidence": "conditional",
+                "scope": "projects/example-demo-project/buckets/example-demo-training"
+              },
+              {
+                "permission": "secretmanager.versions.access",
+                "category": "sensitive_read",
+                "reach": "reachable",
+                "evidence": "policy_grant",
+                "scope": "projects/example-demo-project/secrets/example-demo-pipeline"
+              }
+            ],
+            "resources": [
+              {
+                "resource_type": "project",
+                "name": "projects/example-demo-project",
+                "permissions": [
+                  "resourcemanager.projects.get"
+                ],
+                "risk": "low",
+                "reason": "Synthetic project metadata lookup; no organization-wide inventory is implied."
+              },
+              {
+                "resource_type": "bucket",
+                "name": "projects/example-demo-project/buckets/example-demo-training",
+                "permissions": [
+                  "storage.objects.get"
+                ],
+                "risk": "high",
+                "reason": "Synthetic candidate object-read grant inherited by the impersonated service account; objects were not downloaded."
+              },
+              {
+                "resource_type": "secret",
+                "name": "projects/example-demo-project/secrets/example-demo-pipeline",
+                "permissions": [
+                  "secretmanager.versions.access"
+                ],
+                "risk": "high",
+                "reason": "Synthetic candidate secret-access grant on the impersonated account; no secret version was requested."
+              }
+            ],
+            "recommendations": [
+              "Review application dependencies, replace the exposed credential, and verify its removal."
+            ],
+            "risk_notes": [
+              "SYNTHETIC DOCUMENTATION EXAMPLE. Every credential, identity, resource, policy, validation outcome, and API observation in this file is fabricated. No provider requests were made. No usable secrets or runnable credential commands are included.",
+              "Synthetic impersonation evidence records token-creation permission; no impersonated token was minted.",
+              "Organization deny policies, access boundaries, and inherited condition values were not fully evaluated."
+            ]
+          }
+        }
+      },
+      "permissions_by_severity": {
+        "admin": [],
+        "privilege_escalation": [
+          "iam.serviceAccounts.getAccessToken"
+        ],
+        "risky": [
+          "storage.objects.get",
+          "secretmanager.versions.access"
+        ],
+        "read_only": [
+          "resourcemanager.projects.get"
+        ]
+      }
+    },
+    {
+      "provider": "azure",
+      "account": "Example demo subscription",
+      "fingerprint": "10000000000000000003",
+      "context": {
+        "identity_id": "00000000-0000-4000-8000-000000000003",
+        "tenant": "00000000-0000-4000-8000-000000000001",
+        "project": "00000000-0000-4000-8000-000000000002",
+        "access_type": "service_principal"
+      },
+      "groups": [
+        {
+          "resources": [
+            "azure_rbac_assignment:/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics"
+          ],
+          "permissions": [
+            "assignment_id:/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics/providers/Microsoft.Authorization/roleAssignments/00000000-0000-4000-8000-000000000004",
+            "assignment_source:direct principal",
+            "principal_id:00000000-0000-4000-8000-000000000003",
+            "principal_type:ServicePrincipal",
+            "role:Example conditional data reader"
+          ]
+        },
+        {
+          "resources": [
+            "azure_resource_group:/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics"
+          ],
+          "permissions": [
+            "Microsoft.Resources/subscriptions/resourceGroups/read"
+          ]
+        },
+        {
+          "resources": [
+            "azure_subscription:Example demo subscription"
+          ],
+          "permissions": [
+            "state:Enabled",
+            "tenant:00000000-0000-4000-8000-000000000001"
+          ]
+        }
+      ],
+      "roles": [
+        {
+          "name": "Example conditional data reader",
+          "source": "/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics via direct principal",
+          "permissions": [
+            "Microsoft.Resources/subscriptions/resourceGroups/read",
+            "Microsoft.Authorization/roleAssignments/write",
+            "data:Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+          ]
+        }
+      ],
+      "token_details": null,
+      "provider_metadata": {
+        "version": null,
+        "enterprise": null,
+        "authorization_evidence": {
+          "principal": {
+            "id": "00000000-0000-4000-8000-000000000003",
+            "kind": "service_principal",
+            "canonical_id": "00000000-0000-4000-8000-000000000003",
+            "name": "example-demo-analytics-reader",
+            "attributes": {
+              "tenant_id": "00000000-0000-4000-8000-000000000001"
+            }
+          },
+          "policies": [
+            {
+              "id": "/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics/providers/Microsoft.Authorization/roleAssignments/00000000-0000-4000-8000-000000000004",
+              "name": "Example conditional data reader",
+              "kind": "azure_rbac_assignment",
+              "attached_to": "00000000-0000-4000-8000-000000000003",
+              "attached_via": "direct principal",
+              "scope": "/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics",
+              "statements": [
+                {
+                  "id": "/subscriptions/00000000-0000-4000-8000-000000000002/providers/Microsoft.Authorization/roleDefinitions/00000000-0000-4000-8000-000000000005:0",
+                  "effect": "Allow",
+                  "actions": [
+                    "Microsoft.Resources/subscriptions/resourceGroups/read",
+                    "Microsoft.Authorization/roleAssignments/write",
+                    "data:Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+                  ],
+                  "resources": [
+                    "/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics"
+                  ],
+                  "not_actions": [
+                    "Microsoft.Authorization/roleDefinitions/delete",
+                    "data:Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete"
+                  ],
+                  "condition_keys": [
+                    "azure_rbac_condition"
+                  ]
+                }
+              ]
+            }
+          ],
+          "hierarchy": [
+            {
+              "kind": "tenant",
+              "id": "00000000-0000-4000-8000-000000000001"
+            },
+            {
+              "kind": "subscription",
+              "id": "00000000-0000-4000-8000-000000000002"
+            },
+            {
+              "kind": "resource_group",
+              "id": "/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics"
+            }
+          ],
+          "probes": [
+            {
+              "service": "management.azure.com",
+              "method": "subscriptions.list",
+              "status": "accepted",
+              "http_status": 200,
+              "reason": "synthetic_example"
+            },
+            {
+              "service": "graph.microsoft.com",
+              "method": "servicePrincipals.getMemberObjects",
+              "status": "restricted",
+              "http_status": 403,
+              "reason": "Authorization_RequestDenied"
+            }
+          ],
+          "limitations": [
+            "Synthetic RBAC conditions are present but their values and expressions were not evaluated.",
+            "Management-plane enumeration does not establish storage object access. Data-plane grants remain conditional.",
+            "Deny assignments, management-group inheritance, and activation requirements are not fully evaluated."
+          ],
+          "assessment": {
+            "schema_version": 1,
+            "observed_at": "2026-10-22T16:15:00-07:00",
+            "legacy_severity": "high",
+            "capability_risk": "critical",
+            "coverage": "partial",
+            "capabilities": [
+              {
+                "permission": "subscriptions.list",
+                "category": "metadata_read",
+                "reach": "direct",
+                "evidence": "observed",
+                "scope": "Target scope not recorded"
+              },
+              {
+                "permission": "Microsoft.Resources/subscriptions/resourceGroups/read",
+                "category": "metadata_read",
+                "reach": "direct",
+                "evidence": "conditional",
+                "scope": "/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics"
+              },
+              {
+                "permission": "Microsoft.Authorization/roleAssignments/write",
+                "category": "iam_change",
+                "reach": "direct",
+                "evidence": "conditional",
+                "scope": "/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics"
+              },
+              {
+                "permission": "data:Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read",
+                "category": "sensitive_read",
+                "reach": "direct",
+                "evidence": "conditional",
+                "scope": "/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics"
+              }
+            ],
+            "resources": [
+              {
+                "resource_type": "azure_subscription",
+                "name": "Example demo subscription",
+                "permissions": [
+                  "state:Enabled",
+                  "tenant:00000000-0000-4000-8000-000000000001"
+                ],
+                "risk": "medium",
+                "reason": "Synthetic subscription metadata is visible through the management API."
+              },
+              {
+                "resource_type": "azure_resource_group",
+                "name": "/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics",
+                "permissions": [
+                  "Microsoft.Resources/subscriptions/resourceGroups/read"
+                ],
+                "risk": "low",
+                "reason": "Synthetic resource-group inventory; visibility does not establish data-plane access."
+              },
+              {
+                "resource_type": "azure_rbac_assignment",
+                "name": "/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics",
+                "permissions": [
+                  "role:Example conditional data reader",
+                  "assignment_source:direct principal",
+                  "principal_type:ServicePrincipal",
+                  "principal_id:00000000-0000-4000-8000-000000000003",
+                  "assignment_id:/subscriptions/00000000-0000-4000-8000-000000000002/resourceGroups/example-demo-analytics/providers/Microsoft.Authorization/roleAssignments/00000000-0000-4000-8000-000000000004"
+                ],
+                "risk": "high",
+                "reason": "Synthetic direct RBAC assignment; data-plane exclusions and condition presence are retained in policy evidence."
+              }
+            ],
+            "recommendations": [
+              "Review application dependencies, replace the exposed credential, and verify its removal."
+            ],
+            "risk_notes": [
+              "SYNTHETIC DOCUMENTATION EXAMPLE. Every credential, identity, resource, policy, validation outcome, and API observation in this file is fabricated. No provider requests were made. No usable secrets or runnable credential commands are included.",
+              "Synthetic RBAC conditions are present but their values and expressions were not evaluated.",
+              "Management-plane enumeration does not establish storage object access. Data-plane grants remain conditional.",
+              "Deny assignments, management-group inheritance, and activation requirements are not fully evaluated."
+            ]
+          }
+        }
+      },
+      "permissions_by_severity": {
+        "admin": [],
+        "privilege_escalation": [
+          "Microsoft.Authorization/roleAssignments/write"
+        ],
+        "risky": [],
+        "read_only": [
+          "Microsoft.Resources/subscriptions/resourceGroups/read",
+          "data:Microsoft.Storage/storageAccounts/blobServices/containers/blobs/read"
+        ]
+      }
+    },
+    {
+      "provider": "huggingface",
+      "account": "example-demo-reader",
+      "fingerprint": "10000000000000000004",
+      "context": {
+        "identity_id": "example-demo-reader",
+        "access_type": "user"
+      },
+      "groups": [
+        {
+          "resources": [
+            "dataset:example-demo-lab/example-training-set"
+          ],
+          "permissions": [
+            "dataset:private"
+          ]
+        },
+        {
+          "resources": [
+            "model:example-demo-lab/example-classifier"
+          ],
+          "permissions": [
+            "model:private"
+          ]
+        },
+        {
+          "resources": [
+            "space:example-demo-lab/example-preview"
+          ],
+          "permissions": [
+            "space:public"
+          ]
+        }
+      ],
+      "roles": [
+        {
+          "name": "token_role",
+          "source": "huggingface",
+          "permissions": [
+            "role:read"
+          ]
+        }
+      ],
+      "token_details": {
+        "name": "Example demo read token",
+        "username": "example-demo-reader",
+        "account_type": "user",
+        "url": "https://example.invalid/demo/huggingface",
+        "token_type": "access_token",
+        "created_at": "2026-10-01T12:00:00Z",
+        "user_id": "example-demo-reader",
+        "scopes": [
+          "read"
+        ]
+      },
+      "provider_metadata": {
+        "version": null,
+        "enterprise": null,
+        "authorization_evidence": {
+          "limitations": [
+            "The synthetic provider role and repository visibility are reported separately; visibility does not establish write or organization administration.",
+            "No model, dataset, or Space content was downloaded."
+          ],
+          "assessment": {
+            "schema_version": 1,
+            "observed_at": "2026-10-22T16:15:00-07:00",
+            "legacy_severity": "medium",
+            "capability_risk": "low",
+            "coverage": "partial",
+            "capabilities": [
+              {
+                "permission": "role:read",
+                "category": "metadata_read",
+                "reach": "direct",
+                "evidence": "reported",
+                "scope": "huggingface"
+              }
+            ],
+            "resources": [
+              {
+                "resource_type": "model",
+                "name": "example-demo-lab/example-classifier",
+                "permissions": [
+                  "model:private"
+                ],
+                "risk": "medium",
+                "reason": "Synthetic private model repository listed in the account inventory; model files were not downloaded."
+              },
+              {
+                "resource_type": "dataset",
+                "name": "example-demo-lab/example-training-set",
+                "permissions": [
+                  "dataset:private"
+                ],
+                "risk": "medium",
+                "reason": "Synthetic private dataset repository listed in inventory; dataset content was not retrieved."
+              },
+              {
+                "resource_type": "space",
+                "name": "example-demo-lab/example-preview",
+                "permissions": [
+                  "space:public"
+                ],
+                "risk": "low",
+                "reason": "Synthetic public Space repository metadata only."
+              }
+            ],
+            "recommendations": [
+              "Review application dependencies, replace the exposed credential, and verify its removal."
+            ],
+            "risk_notes": [
+              "SYNTHETIC DOCUMENTATION EXAMPLE. Every credential, identity, resource, policy, validation outcome, and API observation in this file is fabricated. No provider requests were made. No usable secrets or runnable credential commands are included.",
+              "The synthetic provider role and repository visibility are reported separately; visibility does not establish write or organization administration.",
+              "No model, dataset, or Space content was downloaded."
+            ]
+          }
+        }
+      },
+      "permissions_by_severity": {
+        "admin": [],
+        "privilege_escalation": [],
+        "risky": [
+          "model:private",
+          "dataset:private"
+        ],
+        "read_only": [
+          "token:read",
+          "space:public"
+        ]
+      }
+    },
+    {
+      "provider": "github",
+      "account": "example-demo-app",
+      "fingerprint": "10000000000000000005",
+      "context": {
+        "identity_id": "example-demo-app",
+        "access_type": "user"
+      },
+      "groups": [
+        {
+          "resources": [
+            "repository:example-demo-lab/example-runbooks"
+          ],
+          "permissions": [
+            "repo:read"
+          ]
+        },
+        {
+          "resources": [
+            "repository:example-demo-lab/example-service"
+          ],
+          "permissions": [
+            "repo:read",
+            "repo:write"
+          ]
+        }
+      ],
+      "roles": [
+        {
+          "name": "installation_repo_permissions:example-demo-lab",
+          "source": "github_app",
+          "permissions": [
+            "contents:read",
+            "contents:write",
+            "metadata:read"
+          ]
+        }
+      ],
+      "token_details": {
+        "name": "Example demo CI app",
+        "username": "example-demo-app",
+        "account_type": "User",
+        "url": "https://example.invalid/demo/github",
+        "token_type": "GitHub App token",
+        "user_id": "example-demo-app",
+        "scopes": []
+      },
+      "provider_metadata": {
+        "version": null,
+        "enterprise": null,
+        "authorization_evidence": {
+          "limitations": [
+            "Synthetic installation permission metadata is reported at installation scope; repository selection and branch protection can narrow actual access.",
+            "No repository contents were modified and no workflow was dispatched."
+          ],
+          "assessment": {
+            "schema_version": 1,
+            "observed_at": "2026-10-22T16:15:00-07:00",
+            "legacy_severity": "medium",
+            "capability_risk": "high",
+            "coverage": "partial",
+            "capabilities": [
+              {
+                "permission": "contents:read",
+                "category": "metadata_read",
+                "reach": "direct",
+                "evidence": "reported",
+                "scope": "github_app"
+              },
+              {
+                "permission": "contents:write",
+                "category": "mutation",
+                "reach": "direct",
+                "evidence": "reported",
+                "scope": "github_app"
+              },
+              {
+                "permission": "metadata:read",
+                "category": "metadata_read",
+                "reach": "direct",
+                "evidence": "reported",
+                "scope": "github_app"
+              }
+            ],
+            "resources": [
+              {
+                "resource_type": "repository",
+                "name": "example-demo-lab/example-service",
+                "permissions": [
+                  "repo:read",
+                  "repo:write"
+                ],
+                "risk": "medium",
+                "reason": "Synthetic private repository returned with read and push permission metadata; no repository changes were made."
+              },
+              {
+                "resource_type": "repository",
+                "name": "example-demo-lab/example-runbooks",
+                "permissions": [
+                  "repo:read"
+                ],
+                "risk": "low",
+                "reason": "Synthetic read-only repository permission metadata; file contents were not fetched."
+              }
+            ],
+            "recommendations": [
+              "Review application dependencies, replace the exposed credential, and verify its removal."
+            ],
+            "risk_notes": [
+              "SYNTHETIC DOCUMENTATION EXAMPLE. Every credential, identity, resource, policy, validation outcome, and API observation in this file is fabricated. No provider requests were made. No usable secrets or runnable credential commands are included.",
+              "Synthetic installation permission metadata is reported at installation scope; repository selection and branch protection can narrow actual access.",
+              "No repository contents were modified and no workflow was dispatched."
+            ]
+          }
+        }
+      },
+      "permissions_by_severity": {
+        "admin": [],
+        "privilege_escalation": [],
+        "risky": [
+          "repo:write"
+        ],
+        "read_only": [
+          "repo:read"
+        ]
+      }
+    }
+  ],
+  "audit": {
+    "schema": "kingfisher.repository-audit.v1",
+    "run_id": "00000000-0000-4000-8000-000000000015",
+    "started_at": "2026-10-22T16:15:00-07:00",
+    "completed_at": "2026-10-22T16:15:18-07:00",
+    "duration_seconds": 18.0,
+    "summary": {
+      "discovered": 2,
+      "fetch_succeeded": 0,
+      "fetch_failed": 0,
+      "scan_succeeded": 2,
+      "scan_partial": 0,
+      "scan_failed": 0,
+      "pending": 0
+    },
+    "repositories": [
+      {
+        "key": "example/demo-platform",
+        "repository": "example/demo-platform",
+        "source": "local",
+        "discovered_at": "2026-10-22T16:15:00-07:00",
+        "fetch": {
+          "status": "not_applicable"
+        },
+        "scan": {
+          "status": "completed",
+          "started_at": "2026-10-22T16:15:00-07:00",
+          "completed_at": "2026-10-22T16:15:18-07:00",
+          "duration_seconds": 18.0
+        },
+        "git": {
+          "scope": "all_fetched_git_objects",
+          "tip_ref": "refs/heads/example-demo",
+          "tip_sha": "1111111111111111111111111111111111111111",
+          "clone_mode": "working_tree",
+          "shallow": false,
+          "fetched_commit_count": 42
+        },
+        "stats": {
+          "findings": 9,
+          "blobs_scanned": 120,
+          "bytes_scanned": 810240
+        }
+      },
+      {
+        "key": "example/demo-runbooks",
+        "repository": "example/demo-runbooks",
+        "source": "local",
+        "discovered_at": "2026-10-22T16:15:00-07:00",
+        "fetch": {
+          "status": "not_applicable"
+        },
+        "scan": {
+          "status": "completed",
+          "started_at": "2026-10-22T16:15:00-07:00",
+          "completed_at": "2026-10-22T16:15:18-07:00",
+          "duration_seconds": 18.0
+        },
+        "git": {
+          "scope": "all_fetched_git_objects",
+          "tip_ref": "refs/heads/example-demo",
+          "tip_sha": "2222222222222222222222222222222222222222",
+          "clone_mode": "working_tree",
+          "shallow": false,
+          "fetched_commit_count": 42
+        },
+        "stats": {
+          "findings": 0,
+          "blobs_scanned": 35,
+          "bytes_scanned": 122880
+        }
+      }
+    ]
+  },
+  "metadata": {
+    "generated_at": "2026-10-22T16:15:18-07:00",
+    "scan_timestamp": "2026-10-22T16:15:00-07:00",
+    "target": "Synthetic investigation example",
+    "command_line_args": [],
+    "kingfisher_version": "2.15.0",
+    "update_check_status": "disabled",
+    "summary": {
+      "findings": 9,
+      "active_findings": 5,
+      "inactive_findings": 2,
+      "locally_derived_findings": 0,
+      "invalid_material_findings": 0,
+      "unknown_validation_findings": 2,
+      "access_map_identities": 5,
+      "rules_applied": 9,
+      "confidence_level": "medium",
+      "custom_rules_used": true,
+      "successful_validations": 5,
+      "failed_validations": 2,
+      "skipped_validations": 1,
+      "blobs_scanned": 155,
+      "bytes_scanned": 933120,
+      "scan_duration_seconds": 18.0
+    },
+    "viewer_import": {
+      "imported": false,
+      "tools": [
+        "Kingfisher"
+      ],
+      "access_map_supported": true,
+      "validate_command_supported": false,
+      "revoke_command_supported": false,
+      "notes": [
+        "SYNTHETIC DOCUMENTATION EXAMPLE. Every credential, identity, resource, policy, validation outcome, and API observation in this file is fabricated. No provider requests were made. No usable secrets or runnable credential commands are included."
+      ]
+    }
+  }
+}

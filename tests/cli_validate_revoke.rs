@@ -594,6 +594,53 @@ rules:
     }
 
     #[test]
+    fn validate_http_missing_variable_has_an_actionable_secret_safe_hint() {
+        let directory = TempDir::new().unwrap();
+        let rules = directory.path().join("rules.yml");
+        fs::write(
+            &rules,
+            r#"rules:
+  - id: acme.http-hint
+    name: HTTP input hint
+    pattern: '(fixture_[a-z0-9]+)'
+    min_entropy: 0
+    depends_on_rule:
+      - rule_id: acme.http-org
+        variable: ORG
+    validation:
+      type: Http
+      content:
+        request:
+          method: GET
+          url: 'https://example.invalid/{{ ORG }}/verify'
+          headers:
+            Authorization: 'Bearer {{ TOKEN }}'
+          response_matcher:
+            - type: StatusMatch
+              status: [200]
+  - id: acme.http-org
+    name: HTTP organization component
+    pattern: 'org_([a-z0-9]+)'
+    min_entropy: 0
+    visible: false
+"#,
+        )
+        .unwrap();
+        Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))
+            .args(["validate", "--rule=acme.http-hint", "fixture_sensitivevalue", "--rules-path"])
+            .arg(rules)
+            .args(["--no-builtins", "--no-update-check"])
+            .assert()
+            .failure()
+            .stderr(
+                contains("--var ORG=<value>")
+                    .and(contains("kingfisher validate --rule acme.http-hint"))
+                    .and(contains("normally captured from rule 'acme.http-org'"))
+                    .and(contains("fixture_sensitivevalue").not()),
+            );
+    }
+
+    #[test]
     fn validate_too_many_args() {
         // GitHub PAT validation only needs TOKEN, no additional variables.
         Command::new(assert_cmd::cargo::cargo_bin!("kingfisher"))

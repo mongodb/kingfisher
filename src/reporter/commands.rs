@@ -29,7 +29,9 @@ fn required_vars_for_validation(validation: &crate::rules::Validation) -> BTreeS
             vars.insert("TOKEN".to_string());
         }
         Validation::Http(http) => {
-            vars.extend(extract_template_vars(&http.request.url));
+            for url in http.request.urls() {
+                vars.extend(extract_template_vars(url));
+            }
             for (k, v) in &http.request.headers {
                 vars.extend(extract_template_vars(k));
                 vars.extend(extract_template_vars(v));
@@ -51,6 +53,11 @@ fn required_vars_for_validation(validation: &crate::rules::Validation) -> BTreeS
         Validation::Betterleaks(validation) => {
             vars.insert("TOKEN".to_string());
             vars.extend(validation.components.values().cloned());
+            vars.extend([
+                "__BETTERLEAKS_COMPONENTS".into(),
+                "__BETTERLEAKS_FINDING_CAPTURES".into(),
+                "__BETTERLEAKS_RULE_ID".into(),
+            ]);
         }
         Validation::AWS => {
             vars.insert("AKID".to_string());
@@ -93,11 +100,29 @@ fn required_vars_for_revocation(revocation: &Revocation) -> BTreeSet<String> {
             vars.insert("AKID".to_string());
             vars.insert("TOKEN".to_string());
         }
+        Revocation::Betterleaks(config) => {
+            vars.insert("TOKEN".into());
+            vars.extend(config.components.values().cloned());
+            vars.extend([
+                "__BETTERLEAKS_COMPONENTS".into(),
+                "__BETTERLEAKS_FINDING_CAPTURES".into(),
+                "__BETTERLEAKS_RULE_ID".into(),
+            ]);
+        }
         Revocation::GCP => {
             vars.insert("TOKEN".to_string());
         }
         Revocation::Http(http) => {
-            vars.extend(extract_template_vars(&http.request.url));
+            if !http.request.fallback_urls.is_empty() {
+                vars.extend([
+                    "VALIDATION_ENDPOINT_INDEX".into(),
+                    "VALIDATION_ENDPOINT_COUNT".into(),
+                    "VALIDATION_ORIGIN".into(),
+                ]);
+            }
+            for url in http.request.urls() {
+                vars.extend(extract_template_vars(url));
+            }
             for (k, v) in &http.request.headers {
                 vars.extend(extract_template_vars(k));
                 vars.extend(extract_template_vars(v));
@@ -108,7 +133,16 @@ fn required_vars_for_revocation(revocation: &Revocation) -> BTreeSet<String> {
         }
         Revocation::HttpMultiStep(multi) => {
             for step in &multi.steps {
-                vars.extend(extract_template_vars(&step.request.url));
+                if !step.request.fallback_urls.is_empty() {
+                    vars.extend([
+                        "VALIDATION_ENDPOINT_INDEX".into(),
+                        "VALIDATION_ENDPOINT_COUNT".into(),
+                        "VALIDATION_ORIGIN".into(),
+                    ]);
+                }
+                for url in step.request.urls() {
+                    vars.extend(extract_template_vars(url));
+                }
                 for (k, v) in &step.request.headers {
                     vars.extend(extract_template_vars(k));
                     vars.extend(extract_template_vars(v));
@@ -173,12 +207,92 @@ fn build_rule_loading_args(rules_path: &[PathBuf], load_builtins: bool) -> Optio
     Some(if args.is_empty() { String::new() } else { format!("{} ", args.join(" ")) })
 }
 
-/// Generate a kingfisher revoke command for an active credential if the rule supports revocation.
+pub(super) fn with_rule_loading(
+    command: Option<String>,
+    rules_path: &[PathBuf],
+    load_builtins: bool,
+) -> Option<String> {
+    let mut command = command?;
+    let loading = build_rule_loading_args(rules_path, load_builtins)?;
+    if !loading.is_empty() {
+        command.push(' ');
+        command.push_str(loading.trim());
+    }
+    Some(command)
+}
+
+pub(super) fn build_validate_command_for_rule(
+    rule: &crate::rules::rule::RuleSyntax,
+    snippet: &str,
+    variables: &BTreeMap<String, String>,
+    akid_from_captures: Option<&str>,
+    akid_from_body: Option<&str>,
+) -> Option<String> {
+    let validation = rule.validation.as_ref()?;
+    let enabled = variables
+        .get("VALIDATION_ENDPOINT_COUNT")
+        .is_some_and(|count| count.parse::<usize>().is_ok_and(|count| count > 1));
+    if enabled && matches!(validation, crate::rules::Validation::Http(_)) {
+        let mut required = BTreeSet::new();
+        for (_, http) in rule.http_validations(true).ok()? {
+            required.extend(required_vars_for_validation(&crate::rules::Validation::Http(http)));
+        }
+        let args = build_var_args(variables, akid_from_captures, akid_from_body, &required);
+        return Some(format!(
+            "kingfisher validate --rule {} --fallbacks {}{}",
+            escape_for_shell(&rule.id),
+            args,
+            escape_for_shell(snippet)
+        ));
+    }
+    build_validate_command(
+        &rule.id,
+        validation,
+        snippet,
+        variables,
+        akid_from_captures,
+        akid_from_body,
+    )
+}
+
+/// Fallback CLI commands revalidate; do not expose or trust a previous endpoint selection.
+pub(super) fn build_revoke_command_for_rule(
+    rule: &crate::rules::rule::RuleSyntax,
+    revocation: &Revocation,
+    snippet: &str,
+    variables: &BTreeMap<String, String>,
+    akid_from_captures: Option<&str>,
+    akid_from_body: Option<&str>,
+) -> Option<String> {
+    let enabled = variables.contains_key("VALIDATION_FALLBACK_ID")
+        || variables
+            .get("VALIDATION_ENDPOINT_COUNT")
+            .is_some_and(|count| count.parse::<usize>().is_ok_and(|count| count > 1));
+    if enabled {
+        let required = crate::direct_revoke::fallback_input_vars(rule).ok()?;
+        let args = build_var_args(variables, akid_from_captures, akid_from_body, &required);
+        return Some(format!(
+            "kingfisher revoke --rule {} --fallbacks {}{}",
+            escape_for_shell(&rule.id),
+            args,
+            escape_for_shell(snippet)
+        ));
+    }
+    build_revoke_command(
+        &rule.id,
+        revocation,
+        snippet,
+        variables,
+        akid_from_captures,
+        akid_from_body,
+    )
+}
+
+/// Generate a legacy direct-primary revoke command, preserving historical bindings.
 ///
-/// Returns `None` if:
-/// - The credential is not active
-/// - The rule doesn't have revocation configured
-/// - Required data (like AWS AKID) cannot be determined
+/// Returns `None` if required AWS AKID data is missing or the variables carry
+/// fallback selection state. The latter is a defense-in-depth guard for direct
+/// callers: only the rule-aware helper can regenerate discovery inputs safely.
 pub(super) fn build_revoke_command(
     rule_id: &str,
     revocation: &Revocation,
@@ -187,6 +301,16 @@ pub(super) fn build_revoke_command(
     akid_from_captures: Option<&str>,
     akid_from_validation_body: Option<&str>,
 ) -> Option<String> {
+    // This helper has no RuleSyntax with which to discover fallback inputs.
+    // Only the rule-aware helper can emit a safe validate-to-select command.
+    // Never serialize a stale environment selection as caller-supplied state.
+    if dependent_captures.contains_key("VALIDATION_FALLBACK_ID")
+        || dependent_captures
+            .get("VALIDATION_ENDPOINT_COUNT")
+            .is_some_and(|count| count.parse::<usize>().is_ok_and(|count| count > 1))
+    {
+        return None;
+    }
     let required_vars = required_vars_for_revocation(revocation);
 
     let var_args = build_var_args(
@@ -224,7 +348,7 @@ pub(super) fn build_revoke_command(
                 escape_for_shell(snippet)
             ))
         }
-        Revocation::Http(_) => {
+        Revocation::Http(_) | Revocation::Betterleaks(_) => {
             // HTTP-based revocation with dependent variables
             Some(format!(
                 "kingfisher revoke --rule {} {}{}",
@@ -440,6 +564,154 @@ pub(super) fn extract_akid_from_validation_body(body: &ValidationResponseBody) -
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fallback_validate_commands_preserve_akid_discovered_outside_variables() {
+        let rule: crate::rules::rule::RuleSyntax = serde_json::from_value(serde_json::json!({
+            "id":"custom.commands","name":"Commands","pattern":"(secret)",
+            "validation":{"type":"Http","content":{"request":{
+                "method":"GET","url":"https://primary.example/me",
+                "headers":{"X-Access-Key":"{{ AKID }}"},
+                "response_matcher":[{"type":"StatusMatch","status":[200]}]
+            }}},
+            "fallbacks":[{"id":"secondary","reuse_primary_validation_logic":true,
+                "url":"https://secondary.example/me"}]
+        }))
+        .unwrap();
+        let vars = BTreeMap::from([("VALIDATION_ENDPOINT_COUNT".into(), "2".into())]);
+        for (capture, body) in [(Some("capture-akid"), None), (None, Some("response-akid"))] {
+            let command =
+                build_validate_command_for_rule(&rule, "secret", &vars, capture, body).unwrap();
+            assert!(command.contains("--fallbacks"));
+            assert!(command.contains(&format!("--var AKID='{}'", capture.or(body).unwrap())));
+            assert!(!command.contains("VALIDATION_"));
+        }
+    }
+
+    #[test]
+    fn fallback_revoke_commands_include_discovery_inputs_but_not_stale_selection() {
+        let action = serde_json::json!({"type":"Http","content":{"request":{
+            "method":"DELETE","url":"{{ VALIDATION_ORIGIN }}/revoke",
+            "headers":{"Authorization":"Bearer {{ TOKEN }}"},
+            "response_matcher":[{"type":"StatusMatch","status":[200]}]
+        }}});
+        let rule: crate::rules::rule::RuleSyntax = serde_json::from_value(serde_json::json!({
+            "id":"custom.commands","name":"Commands","pattern":"(secret)",
+            "validation":{"type":"Http","content":{"request":{
+                "method":"GET","url":"https://primary.example/me",
+                "headers":{"Authorization":"Bearer {{ TOKEN }}", "X-Account":"{{ ACCOUNT_ID }}"},
+                "response_matcher":[{"type":"StatusMatch","status":[200]}]
+            }}},
+            "revocation":action,
+            "fallbacks":[{"id":"secondary","reuse_primary_validation_logic":true,
+                "url":"https://secondary.example/me","revocation":action}]
+        }))
+        .unwrap();
+        for id in [None, Some("secondary")] {
+            let mut vars = BTreeMap::from([
+                ("ACCOUNT_ID".into(), "account-7".into()),
+                ("VALIDATION_ENDPOINT_COUNT".into(), "2".into()),
+                ("VALIDATION_ORIGIN".into(), "https://secondary.example".into()),
+                ("VALIDATION_URL".into(), "https://secondary.example/me?secret=private".into()),
+            ]);
+            if let Some(id) = id {
+                vars.insert("VALIDATION_FALLBACK_ID".into(), id.into());
+            }
+            let selected = rule.selected_revocation(id).unwrap().unwrap();
+            let command =
+                build_revoke_command_for_rule(&rule, &selected, "secret", &vars, None, None)
+                    .unwrap();
+            assert!(command.contains("--fallbacks"));
+            assert!(command.contains("--var ACCOUNT_ID='account-7'"));
+            assert!(!command.contains("VALIDATION_"));
+            assert!(!command.contains("private"));
+        }
+    }
+
+    #[test]
+    fn legacy_revoke_helper_rejects_selection_that_requires_rule_context() {
+        for url in [
+            serde_json::json!("https://primary.example/revoke"),
+            serde_json::json!([
+                "https://primary.example/revoke",
+                "https://secondary.example/revoke"
+            ]),
+        ] {
+            let revocation = serde_json::from_value(serde_json::json!({
+                "type": "Http", "content": {"request": {
+                    "method": "DELETE", "url": url,
+                    "headers": {"Authorization": "Bearer {{ TOKEN }}"}
+                }}
+            }))
+            .unwrap();
+            let variables = BTreeMap::from([
+                ("VALIDATION_ENDPOINT_INDEX".into(), "1".into()),
+                ("VALIDATION_ENDPOINT_COUNT".into(), "2".into()),
+                ("VALIDATION_ORIGIN".into(), "https://secondary.example".into()),
+                ("VALIDATION_URL".into(), "https://secondary.example/check?secret=private".into()),
+            ]);
+            assert!(
+                build_revoke_command(
+                    "custom.fallback",
+                    &revocation,
+                    "secret",
+                    &variables,
+                    None,
+                    None,
+                )
+                .is_none()
+            );
+            assert!(
+                build_revoke_command(
+                    "custom.fallback",
+                    &revocation,
+                    "secret",
+                    &BTreeMap::from([("VALIDATION_FALLBACK_ID".into(), "secondary".into())]),
+                    None,
+                    None,
+                )
+                .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn betterleaks_commands_preserve_exact_primary_and_component_capture_context() {
+        let validation:crate::rules::Validation=serde_json::from_value(serde_json::json!({
+            "type":"Betterleaks", "content":{"expression":"true","components":{"helper":"COMPONENT"}}
+        })).unwrap();
+        let revocation:Revocation=serde_json::from_value(serde_json::json!({
+            "type":"Betterleaks", "content":{"expression":"{\"result\":\"revoked\"}","components":{"helper":"COMPONENT"}}
+        })).unwrap();
+        let component_context = serde_json::json!({"custom.helper":{
+            "secret":"component-secret","captures":{"MixedCase":"O'Reilly"}
+        }})
+        .to_string();
+        let primary_context = serde_json::json!({"OriginalName":"primary-value"}).to_string();
+        let variables = BTreeMap::from([
+            ("COMPONENT".into(), "component-secret".into()),
+            ("__BETTERLEAKS_COMPONENTS".into(), component_context.clone()),
+            ("__BETTERLEAKS_FINDING_CAPTURES".into(), primary_context.clone()),
+            ("__BETTERLEAKS_RULE_ID".into(), "custom.primary".into()),
+        ]);
+        let commands = [
+            build_validate_command("custom.primary", &validation, "secret", &variables, None, None)
+                .unwrap(),
+            build_revoke_command("custom.primary", &revocation, "secret", &variables, None, None)
+                .unwrap(),
+        ];
+        for command in commands {
+            assert!(command.contains(&format!(
+                "--var __BETTERLEAKS_COMPONENTS={}",
+                escape_for_shell(&component_context)
+            )));
+            assert!(command.contains(&format!(
+                "--var __BETTERLEAKS_FINDING_CAPTURES={}",
+                escape_for_shell(&primary_context)
+            )));
+            assert!(command.contains("--var __BETTERLEAKS_RULE_ID='custom.primary'"));
+        }
+    }
     use crate::rules::rule::Confidence;
 
     fn default_blast_radius_context(
@@ -473,6 +745,7 @@ mod tests {
             request: crate::rules::HttpRequest {
                 method: "GET".to_string(),
                 url: "https://api.vercel.com/v2/user".to_string(),
+                fallback_urls: Vec::new(),
                 headers: BTreeMap::from([(
                     "Authorization".to_string(),
                     "Bearer {{TOKEN}}".to_string(),
@@ -783,6 +1056,7 @@ mod tests {
                 method: "DELETE".to_string(),
                 url: "https://example.com/revoke?accountIdentifier={{ ACCOUNTIDENTIFIER }}&token={{ TOKEN }}"
                     .to_string(),
+                fallback_urls: Vec::new(),
                 headers: BTreeMap::new(),
                 body: None,
                 response_matcher: None,

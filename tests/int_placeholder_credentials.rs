@@ -13,6 +13,10 @@ PRIVATE_KEY
 -----BEGIN PRIVATE KEY-----\\n"
               + "PRIVATE_KEY\\n"
               + "-----END PRIVATE KEY-----
+-----BEGIN PRIVATE KEY-----\\n"
+              + privateKeyEncoded
+              + "\\n"
+              + "-----END PRIVATE KEY-----
 mongodb+srv://$(AWS_ACCESS_KEY_ID):$(AWS_SECRET_ACCESS_KEY)@ia-staging-metering-pl-0.nrs6h.mongo.com/mmsdbmetering
 mongodb://$(MONGODB_USERNAME):$(MONGODB_PASSWORD)@dev-metering-host:27017/mmsdbmetering?authSource=admin
 mongodb://$(MONGODB_USERNAME):$(MONGODB_PASSWORD)@dev-cloud-providers-host:27017/mmsdbcloudproviders?authSource=admin

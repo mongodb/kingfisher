@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, anyhow, bail};
 use base64::{
@@ -17,8 +17,9 @@ use tracing::warn;
 use crate::{cli::commands::access_map::AccessMapArgs, validation::GLOBAL_USER_AGENT};
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, PermissionSummary, ProviderMetadata,
-    ResourceExposure, RoleBinding, Severity, build_recommendations,
+    AccessMapResult, AccessSummary, AccessTokenDetails, AuthorizationEvidence,
+    AuthorizationStatement, HierarchyScope, PermissionSummary, PolicyEvidence, PrincipalEvidence,
+    ProviderMetadata, ResourceExposure, RoleBinding, Severity, build_recommendations,
 };
 
 const DEFAULT_AUTHORITY_HOST: &str = "https://login.microsoftonline.com";
@@ -385,6 +386,8 @@ struct ArmRoleAssignmentProperties {
     principal_id: Option<String>,
     #[serde(rename = "principalType")]
     principal_type: Option<String>,
+    #[serde(default)]
+    condition: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Default, Clone)]
@@ -409,6 +412,10 @@ struct ArmRolePermission {
     actions: Vec<String>,
     #[serde(rename = "dataActions", default)]
     data_actions: Vec<String>,
+    #[serde(rename = "notActions", default)]
+    not_actions: Vec<String>,
+    #[serde(rename = "notDataActions", default)]
+    not_data_actions: Vec<String>,
 }
 
 #[derive(Clone)]
@@ -535,6 +542,8 @@ fn find_value(values: &BTreeMap<String, String>, keys: &[&str]) -> Option<String
 async fn map_enterprise_access(config: EnterpriseCredential) -> Result<AccessMapResult> {
     let client = Client::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(20))
         .build()
         .context("Failed to build Azure access-map HTTP client")?;
     let mut risk_notes = Vec::new();
@@ -641,6 +650,7 @@ async fn map_enterprise_access(config: EnterpriseCredential) -> Result<AccessMap
             permissions: graph_permissions.clone(),
         });
     }
+    roles.extend(arm.roles.iter().cloned());
     let mut resources = graph.resources.clone();
     resources.extend(arm.resources.clone());
 
@@ -683,6 +693,9 @@ async fn map_enterprise_access(config: EnterpriseCredential) -> Result<AccessMap
         );
     }
 
+    // Collection diagnostics are coverage limitations. Capture them before
+    // informational identity/inventory notes, without parsing English wording.
+    let limitations = risk_notes.iter().cloned().collect::<BTreeSet<_>>().into_iter().collect();
     let principal = graph.principal.as_ref();
     let identity_id = principal
         .and_then(|value| {
@@ -734,6 +747,56 @@ async fn map_enterprise_access(config: EnterpriseCredential) -> Result<AccessMap
         ));
     }
 
+    let mut evidence = AuthorizationEvidence {
+        principal: Some(PrincipalEvidence {
+            id: claims.object_id.clone().unwrap_or_else(|| identity_id.clone()),
+            kind: access_type.into(),
+            name: Some(identity_id.clone()),
+            groups: rbac_principals
+                .iter()
+                .filter(|principal| principal.source != "direct principal")
+                .map(|principal| principal.id.clone())
+                .collect(),
+            attributes: BTreeMap::from([(
+                "identity_source".into(),
+                if graph.principal.is_some() {
+                    "microsoft_graph".into()
+                } else {
+                    "token_claims".into()
+                },
+            )]),
+            ..Default::default()
+        }),
+        policies: arm.policies.clone(),
+        hierarchy: arm
+            .subscriptions
+            .iter()
+            .map(|subscription| HierarchyScope {
+                kind: "subscription".into(),
+                id: subscription.subscription_id.clone(),
+            })
+            .collect(),
+        limitations,
+        ..Default::default()
+    };
+    if !graph_permissions.is_empty() {
+        evidence.policies.push(PolicyEvidence {
+            id: "microsoft_graph_token_claims".into(),
+            kind: "token_claims".into(),
+            attached_to: claims.object_id.clone().unwrap_or_else(|| identity_id.clone()),
+            scope: tenant_id.clone(),
+            statements: vec![AuthorizationStatement {
+                id: "token_permissions".into(),
+                effect: "Allow".into(),
+                actions: graph_permissions.clone(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+    }
+    evidence.limitations.push("Azure RBAC deny assignments, management-group inheritance, activation requirements, and assignment conditions are not fully evaluated; visible grants are potential capabilities".into());
+    evidence.limitations.push("Azure RBAC wildcard grants retain their exclusions in policy evidence; summary permissions do not enumerate the complete provider action catalog".into());
+
     Ok(AccessMapResult {
         cloud: "azure".into(),
         identity: AccessSummary {
@@ -770,12 +833,13 @@ async fn map_enterprise_access(config: EnterpriseCredential) -> Result<AccessMap
             ..AccessTokenDetails::default()
         }),
         provider_metadata: Some(ProviderMetadata {
+            betterleaks_analysis: None,
             version: claims.version,
             enterprise: claims
                 .tenant_id
                 .as_deref()
                 .map(|tenant_id| tenant_id != MICROSOFT_ACCOUNT_TENANT_ID),
-            authorization_evidence: None,
+            authorization_evidence: Some(evidence),
         }),
         fingerprint: None,
     })
@@ -1013,6 +1077,7 @@ async fn map_graph_access(
         graph_base_url,
         access_token,
         "v1.0/organization?$select=id,displayName",
+        risk_notes,
     )
     .await
     {
@@ -1050,6 +1115,7 @@ async fn map_graph_access(
             graph_base_url,
             access_token,
             &path,
+            risk_notes,
         )
         .await
         {
@@ -1135,6 +1201,7 @@ async fn graph_get_collection<T: for<'de> Deserialize<'de> + Default>(
     graph_base_url: &str,
     access_token: &str,
     path: &str,
+    limitations: &mut Vec<String>,
 ) -> Result<Vec<T>> {
     let base = Url::parse(graph_base_url).context("Invalid Microsoft Graph base URL")?;
     let mut next = Some(append_url(graph_base_url, path)?);
@@ -1145,9 +1212,30 @@ async fn graph_get_collection<T: for<'de> Deserialize<'de> + Default>(
             break;
         };
         ensure_same_origin(&base, &url, "Microsoft Graph pagination")?;
-        let response = client.get(url).bearer_auth(access_token).send().await?;
-        let page: GraphCollection<T> =
-            parse_json_response(response, "Microsoft Graph collection request").await?;
+        let response = match client.get(url).bearer_auth(access_token).send().await {
+            Ok(response) => response,
+            Err(_) if !values.is_empty() => {
+                limitations.push(
+                    "Microsoft Graph enumeration is partial: a later page failed in transport"
+                        .into(),
+                );
+                return Ok(values);
+            }
+            Err(err) => return Err(err.into()),
+        };
+        let page: GraphCollection<T> = match parse_json_response(
+            response,
+            "Microsoft Graph collection request",
+        )
+        .await
+        {
+            Ok(page) => page,
+            Err(_) if !values.is_empty() => {
+                limitations.push("Microsoft Graph enumeration is partial: a later page failed or returned invalid JSON".into());
+                return Ok(values);
+            }
+            Err(err) => return Err(err),
+        };
         values.extend(page.value);
         next = match page.next_link {
             Some(value) => Some(
@@ -1160,7 +1248,9 @@ async fn graph_get_collection<T: for<'de> Deserialize<'de> + Default>(
     }
 
     if next.is_some() {
-        warn!("Azure access-map: stopped Microsoft Graph pagination after {MAX_GRAPH_PAGES} pages");
+        limitations.push(format!(
+            "Microsoft Graph enumeration was capped at {MAX_GRAPH_PAGES} pages for {path}"
+        ));
     }
     Ok(values)
 }
@@ -1171,6 +1261,7 @@ struct ArmMapping {
     roles: Vec<RoleBinding>,
     permissions: PermissionSummary,
     resources: Vec<ResourceExposure>,
+    policies: Vec<PolicyEvidence>,
 }
 
 async fn map_arm_access(
@@ -1186,6 +1277,7 @@ async fn map_arm_access(
         management_base_url,
         access_token,
         "subscriptions?api-version=2022-12-01",
+        risk_notes,
     )
     .await
     {
@@ -1243,6 +1335,7 @@ async fn map_arm_access(
             management_base_url,
             access_token,
             &resource_group_path,
+            risk_notes,
         )
         .await
         {
@@ -1286,6 +1379,7 @@ async fn map_arm_access(
                 management_base_url,
                 access_token,
                 &role_path,
+                risk_notes,
             )
             .await
             {
@@ -1342,6 +1436,64 @@ async fn map_arm_access(
                 } else {
                     assignment.properties.scope.clone()
                 };
+                let conditional =
+                    assignment.properties.condition.as_ref().is_some_and(|value| !value.is_empty());
+                if conditional {
+                    let note = "Azure RBAC assignment conditions are present and were not evaluated; reported grants are conditional";
+                    if !risk_notes.iter().any(|existing| existing == note) {
+                        risk_notes.push(note.into());
+                    }
+                }
+                if let Some(definition) = definition {
+                    mapping.policies.push(PolicyEvidence {
+                        id: assignment.id.clone(),
+                        name: Some(role_name.clone()),
+                        kind: "azure_rbac_assignment".into(),
+                        attached_to: rbac_principal.id.clone(),
+                        attached_via: Some(rbac_principal.source.clone()),
+                        scope: Some(scope.clone()),
+                        statements: definition
+                            .properties
+                            .permissions
+                            .iter()
+                            .enumerate()
+                            .map(|(index, permission)| AuthorizationStatement {
+                                id: format!("{}:{index}", definition.id),
+                                effect: "Allow".into(),
+                                actions: permission
+                                    .actions
+                                    .iter()
+                                    .cloned()
+                                    .chain(
+                                        permission
+                                            .data_actions
+                                            .iter()
+                                            .map(|action| format!("data:{action}")),
+                                    )
+                                    .collect(),
+                                not_actions: permission
+                                    .not_actions
+                                    .iter()
+                                    .cloned()
+                                    .chain(
+                                        permission
+                                            .not_data_actions
+                                            .iter()
+                                            .map(|action| format!("data:{action}")),
+                                    )
+                                    .collect(),
+                                resources: vec![scope.clone()],
+                                condition_keys: if conditional {
+                                    vec!["azure_rbac_condition".into()]
+                                } else {
+                                    Vec::new()
+                                },
+                                ..Default::default()
+                            })
+                            .collect(),
+                        ..Default::default()
+                    });
+                }
                 classify_arm_role(&role_name, &scope, &actions, &mut mapping.permissions);
                 mapping.roles.push(RoleBinding {
                     name: role_name.clone(),
@@ -1401,6 +1553,7 @@ async fn arm_get_collection<T: for<'de> Deserialize<'de> + Default>(
     management_base_url: &str,
     access_token: &str,
     path: &str,
+    limitations: &mut Vec<String>,
 ) -> Result<Vec<T>> {
     let base = Url::parse(management_base_url).context("Invalid Azure management base URL")?;
     let mut next = Some(append_url(management_base_url, path)?);
@@ -1411,9 +1564,27 @@ async fn arm_get_collection<T: for<'de> Deserialize<'de> + Default>(
             break;
         };
         ensure_same_origin(&base, &url, "Azure Resource Manager pagination")?;
-        let response = client.get(url).bearer_auth(access_token).send().await?;
-        let page: ArmCollection<T> =
-            parse_json_response(response, "Azure Resource Manager collection request").await?;
+        let response = match client.get(url).bearer_auth(access_token).send().await {
+            Ok(response) => response,
+            Err(_) if !values.is_empty() => {
+                limitations.push("Azure Resource Manager enumeration is partial: a later page failed in transport".into());
+                return Ok(values);
+            }
+            Err(err) => return Err(err.into()),
+        };
+        let page: ArmCollection<T> = match parse_json_response(
+            response,
+            "Azure Resource Manager collection request",
+        )
+        .await
+        {
+            Ok(page) => page,
+            Err(_) if !values.is_empty() => {
+                limitations.push("Azure Resource Manager enumeration is partial: a later page failed or returned invalid JSON".into());
+                return Ok(values);
+            }
+            Err(err) => return Err(err),
+        };
         values.extend(page.value);
         next = match page.next_link {
             Some(value) => Some(
@@ -1426,7 +1597,9 @@ async fn arm_get_collection<T: for<'de> Deserialize<'de> + Default>(
     }
 
     if next.is_some() {
-        warn!("Azure access-map: stopped ARM pagination after {MAX_ARM_PAGES} pages");
+        limitations.push(format!(
+            "Azure Resource Manager enumeration was capped at {MAX_ARM_PAGES} pages for {path}"
+        ));
     }
     Ok(values)
 }
@@ -1437,8 +1610,7 @@ async fn parse_json_response<T: for<'de> Deserialize<'de>>(
 ) -> Result<T> {
     let status = response.status();
     if !status.is_success() {
-        let body = response.text().await.unwrap_or_default();
-        bail!("{operation} failed with HTTP {status}: {}", truncate(&body, 300));
+        bail!("{operation} failed with HTTP {status}");
     }
     response.json::<T>().await.with_context(|| format!("{operation} returned invalid JSON"))
 }
@@ -1459,10 +1631,6 @@ fn ensure_same_origin(base: &Url, next: &Url, operation: &str) -> Result<()> {
         bail!("{operation} returned a pagination URL on a different origin");
     }
     Ok(())
-}
-
-fn truncate(value: &str, max_chars: usize) -> String {
-    value.chars().take(max_chars).collect()
 }
 
 fn classify_graph_permission(permission: &str, summary: &mut PermissionSummary) {
@@ -1502,14 +1670,41 @@ fn classify_graph_permission(permission: &str, summary: &mut PermissionSummary) 
 fn role_definition_permissions(definition: &ArmRoleDefinition) -> Vec<String> {
     let mut actions = Vec::new();
     for permission in &definition.properties.permissions {
-        actions.extend(permission.actions.iter().cloned());
-        actions.extend(permission.data_actions.iter().map(|action| format!("data:{action}")));
+        actions.extend(
+            permission
+                .actions
+                .iter()
+                .filter(|action| {
+                    !permission
+                        .not_actions
+                        .iter()
+                        .any(|excluded| arm_action_matches(excluded, action))
+                })
+                .cloned(),
+        );
+        actions.extend(
+            permission
+                .data_actions
+                .iter()
+                .filter(|action| {
+                    !permission
+                        .not_data_actions
+                        .iter()
+                        .any(|excluded| arm_action_matches(excluded, action))
+                })
+                .map(|action| format!("data:{action}")),
+        );
     }
     if !definition.id.is_empty() {
         actions.push(format!("role_definition:{}", definition.id));
     }
     sort_dedup(&mut actions);
     actions
+}
+
+fn arm_action_matches(pattern: &str, action: &str) -> bool {
+    let pattern = format!("(?i)^{}$", regex::escape(pattern).replace("\\*", ".*"));
+    regex::Regex::new(&pattern).is_ok_and(|regex| regex.is_match(action))
 }
 
 fn classify_arm_role(
@@ -1603,6 +1798,7 @@ fn derive_enterprise_severity(
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",
@@ -1760,6 +1956,160 @@ mod tests {
         let header = URL_SAFE_NO_PAD.encode(r#"{"alg":"RS256","typ":"JWT"}"#);
         let payload = URL_SAFE_NO_PAD.encode(payload.to_string());
         format!("{header}.{payload}.{}", "signaturebytes01234567890123456789")
+    }
+
+    #[test]
+    fn rbac_exclusions_remove_explicit_actions_without_dropping_other_grants() {
+        let definition: ArmRoleDefinition = serde_json::from_value(json!({
+            "permissions": [],
+            "properties": { "permissions": [
+                { "actions": ["Microsoft.Authorization/roleAssignments/write", "Microsoft.Resources/subscriptions/read"], "notActions": ["Microsoft.Authorization/*"] },
+                { "actions": ["Microsoft.Authorization/roleAssignments/write"] }
+            ] }
+        })).unwrap();
+        let actions = role_definition_permissions(&definition);
+        assert!(actions.contains(&"Microsoft.Resources/subscriptions/read".into()));
+        assert!(actions.contains(&"Microsoft.Authorization/roleAssignments/write".into()));
+        let blocked: ArmRoleDefinition = serde_json::from_value(json!({ "properties": { "permissions": [{ "actions": ["Microsoft.Authorization/roleAssignments/write"], "notActions": ["Microsoft.Authorization/*"] }] } })).unwrap();
+        assert!(role_definition_permissions(&blocked).is_empty());
+    }
+
+    #[test]
+    fn assessment_distinguishes_real_data_roles_from_management_reader() {
+        for (name, action, data_action, risk, legacy) in [
+            (
+                "Storage Blob Data Owner",
+                "Microsoft.Storage/storageAccounts/blobServices/containers/*",
+                Some((
+                    "Microsoft.Storage/storageAccounts/blobServices/containers/blobs/*",
+                    "sensitive_read",
+                )),
+                "high",
+                "high",
+            ),
+            (
+                "Key Vault Secrets Officer",
+                "Microsoft.KeyVault/vaults/read",
+                Some(("Microsoft.KeyVault/vaults/secrets/*", "sensitive_read")),
+                "high",
+                "high",
+            ),
+            (
+                "Key Vault Administrator",
+                "Microsoft.KeyVault/vaults/read",
+                Some(("Microsoft.KeyVault/vaults/*", "sensitive_read")),
+                "high",
+                "high",
+            ),
+            (
+                "Key Vault Reader",
+                "Microsoft.KeyVault/vaults/read",
+                Some(("Microsoft.KeyVault/vaults/*/read", "unclassified")),
+                "low",
+                "high", // Retain the provider's legacy severity, not value-read evidence.
+            ),
+            ("Reader", "*/read", None, "unknown", "medium"),
+            ("Owner", "*", None, "critical", "critical"),
+        ] {
+            let definition: ArmRoleDefinition = serde_json::from_value(json!({
+                "properties": { "roleName": name, "permissions": [{
+                    "actions": [action], "dataActions": data_action.into_iter().map(|(action, _)| action).collect::<Vec<_>>()
+                }] }
+            }))
+            .unwrap();
+            // Exercise the actual provider projection, not hand-written,
+            // unprefixed strings that these Azure roles never emit.
+            let actions = role_definition_permissions(&definition);
+            let mut result = super::super::build_failed_result(
+                "azure",
+                "fixture-principal",
+                anyhow::anyhow!("fixture"),
+            );
+            result.identity.access_type = "service_principal".into();
+            result.risk_notes.clear();
+            result.severity = arm_role_severity(name, &actions);
+            classify_arm_role(name, "/subscriptions/fixture", &actions, &mut result.permissions);
+            result.roles.push(RoleBinding {
+                name: name.into(),
+                source: "/subscriptions/fixture via direct principal".into(),
+                permissions: actions,
+            });
+            super::super::assessment::attach(&mut result);
+            let assessment = result
+                .provider_metadata
+                .as_ref()
+                .unwrap()
+                .authorization_evidence
+                .as_ref()
+                .unwrap()
+                .assessment
+                .as_ref()
+                .unwrap();
+            assert_eq!(assessment.capability_risk, risk, "{name}");
+            assert_eq!(assessment.legacy_severity, legacy, "{name}");
+            if let Some((data_action, expected_category)) = data_action {
+                assert!(
+                    assessment.capabilities.iter().any(|capability| {
+                        capability.permission == format!("data:{data_action}")
+                            && capability.category == expected_category
+                    }),
+                    "{name}: {assessment:?}"
+                );
+            } else if name == "Reader" {
+                assert!(
+                    assessment
+                        .capabilities
+                        .iter()
+                        .all(|capability| { capability.category == "unclassified" })
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn collection_keeps_earlier_pages_when_later_read_is_denied() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/graph/v1.0/organization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "value": [{ "id": "tenant" }], "@odata.nextLink": format!("{}/graph/denied", server.uri()) })))
+            .mount(&server).await;
+        Mock::given(method("GET"))
+            .and(path("/graph/denied"))
+            .respond_with(ResponseTemplate::new(403).set_body_string("private-provider-response"))
+            .mount(&server)
+            .await;
+        let mut limitations = Vec::new();
+        let values = graph_get_collection::<GraphOrganization>(
+            &Client::new(),
+            &format!("{}/graph", server.uri()),
+            "token",
+            "v1.0/organization",
+            &mut limitations,
+        )
+        .await
+        .unwrap();
+        assert_eq!(values.len(), 1);
+        assert!(limitations.iter().any(|note| note.contains("partial")));
+        assert!(!limitations.join(" ").contains("private-provider-response"));
+    }
+
+    #[tokio::test]
+    async fn collection_caps_are_reported_with_partial_results() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET")).and(path("/graph/v1.0/organization"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "value": [{ "id": "tenant" }], "@odata.nextLink": format!("{}/graph/v1.0/organization", server.uri()) })))
+            .expect(MAX_GRAPH_PAGES as u64).mount(&server).await;
+        let mut limitations = Vec::new();
+        let values = graph_get_collection::<GraphOrganization>(
+            &Client::new(),
+            &format!("{}/graph", server.uri()),
+            "token",
+            "v1.0/organization",
+            &mut limitations,
+        )
+        .await
+        .unwrap();
+        assert_eq!(values.len(), MAX_GRAPH_PAGES);
+        assert!(limitations.iter().any(|note| note.contains("capped")));
     }
 
     #[test]
@@ -1941,7 +2291,16 @@ mod tests {
                         "roleDefinitionId": "/subscriptions/sub-123/providers/Microsoft.Authorization/roleDefinitions/role-1",
                         "scope": "/subscriptions/sub-123",
                         "principalId": principal_id,
-                        "principalType": "ServicePrincipal"
+                        "principalType": "ServicePrincipal",
+                        "condition": "private-condition-value"
+                    }
+                }, {
+                    "id": "/subscriptions/sub-123/providers/Microsoft.Authorization/roleAssignments/ra-2",
+                    "properties": {
+                        "roleDefinitionId": "/subscriptions/sub-123/providers/Microsoft.Authorization/roleDefinitions/role-1",
+                        "scope": "/subscriptions/sub-123/resourceGroups/payments",
+                        "principalId": principal_id,
+                        "condition": "another-private-condition"
                     }
                 }]
             })))
@@ -1965,7 +2324,9 @@ mod tests {
                     "roleName": "Contributor",
                     "permissions": [{
                         "actions": ["*"],
-                        "dataActions": []
+                        "dataActions": [],
+                        "notActions": ["Microsoft.Authorization/roleAssignments/write"],
+                        "notDataActions": ["Microsoft.Storage/storageAccounts/blobServices/containers/blobs/delete"]
                     }]
                 }
             })))
@@ -2001,6 +2362,38 @@ mod tests {
                 .any(|resource| resource.resource_type == "azure_resource_group")
         );
         assert!(result.resources.iter().any(|resource| resource.resource_type == "entra_group"));
+        assert!(result.roles.iter().any(|role| role.name == "Contributor"));
+        let evidence =
+            result.provider_metadata.as_ref().unwrap().authorization_evidence.as_ref().unwrap();
+        let assignment =
+            evidence.policies.iter().find(|policy| policy.kind == "azure_rbac_assignment").unwrap();
+        assert_eq!(assignment.scope.as_deref(), Some("/subscriptions/sub-123"));
+        assert!(
+            assignment.statements[0]
+                .not_actions
+                .contains(&"Microsoft.Authorization/roleAssignments/write".into())
+        );
+        assert!(
+            assignment.statements[0].not_actions.iter().any(|action| action.starts_with("data:"))
+        );
+        assert_eq!(assignment.statements[0].condition_keys, vec!["azure_rbac_condition"]);
+        assert_eq!(
+            result
+                .risk_notes
+                .iter()
+                .filter(|note| note.contains("assignment conditions are present"))
+                .count(),
+            1
+        );
+        assert_eq!(
+            evidence
+                .limitations
+                .iter()
+                .filter(|note| note.contains("assignment conditions are present"))
+                .count(),
+            1
+        );
+        assert!(!serde_json::to_string(&result).unwrap().contains("private-condition-value"));
         assert!(matches!(result.severity, Severity::Critical));
     }
 }

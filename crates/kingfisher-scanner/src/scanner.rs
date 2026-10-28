@@ -91,7 +91,7 @@ pub struct Scanner {
     rules_db: Arc<RulesDatabase>,
     scanner_pool: Arc<ScannerPool>,
     config: ScannerConfig,
-    seen_blobs: RwLock<FxHashSet<(BlobId, String)>>,
+    seen_blobs: RwLock<FxHashSet<(BlobId, String, String)>>,
 }
 
 impl Scanner {
@@ -225,6 +225,38 @@ impl Scanner {
             #[cfg(feature = "context")]
             None,
             None,
+            None,
+        )
+    }
+
+    /// Scan with caller-supplied Betterleaks source attributes, including `path`,
+    /// `git.sha`, or `git.author_name`. Attributes affect source prefilters and
+    /// finding filters; scanning remains offline. Deduplication includes them.
+    pub fn scan_blob_with_attributes(
+        &self,
+        blob: &Blob,
+        attributes: &BTreeMap<String, String>,
+    ) -> Result<Vec<Finding>> {
+        self.scan_blob_with_attributes_and_control(blob, attributes, &ScanControl::default())
+    }
+
+    /// Scan source attributes under cooperative cancellation/deadline controls.
+    /// Interrupted calls return no partial findings and do not commit deduplication.
+    pub fn scan_blob_with_attributes_and_control(
+        &self,
+        blob: &Blob,
+        attributes: &BTreeMap<String, String>,
+        control: &ScanControl,
+    ) -> Result<Vec<Finding>> {
+        self.scan_blob_impl(
+            blob,
+            attributes.get("path").map_or("", String::as_str),
+            control,
+            false,
+            #[cfg(feature = "context")]
+            None,
+            None,
+            Some(attributes),
         )
     }
 
@@ -260,7 +292,7 @@ impl Scanner {
         options: &crate::context::DetectionOptions,
         control: &ScanControl,
     ) -> Result<Vec<Finding>> {
-        self.scan_blob_impl(blob, path, control, false, Some(options), None)
+        self.scan_blob_impl(blob, path, control, false, Some(options), None, None)
     }
 
     /// Detect candidates for offline credential preparation, retaining primaries
@@ -285,6 +317,7 @@ impl Scanner {
             #[cfg(feature = "context")]
             None,
             None,
+            None,
         )
     }
 
@@ -300,7 +333,7 @@ impl Scanner {
         options: &crate::context::DetectionOptions,
         control: &ScanControl,
     ) -> Result<Vec<Finding>> {
-        self.scan_blob_impl(blob, path, control, true, Some(options), None)
+        self.scan_blob_impl(blob, path, control, true, Some(options), None, None)
     }
 
     /// Scan while retaining compact full-match context for precise dependency windows
@@ -340,10 +373,37 @@ impl Scanner {
             #[cfg(feature = "context")]
             options,
             Some(&mut context),
+            None,
         )?;
         Ok(crate::ScanOutput { findings, context: Arc::new(context) })
     }
 
+    /// Native integration entrypoint combining source metadata, detection policy,
+    /// cancellation and the full-match context retained for credential assembly.
+    #[doc(hidden)]
+    pub fn scan_blob_with_context_and_attributes_and_control(
+        &self,
+        blob: &Blob,
+        attributes: &BTreeMap<String, String>,
+        control: &ScanControl,
+        retain_unresolved: bool,
+        #[cfg(feature = "context")] options: Option<&crate::context::DetectionOptions>,
+    ) -> Result<crate::ScanOutput> {
+        let mut context = crate::ScanContext::new(&self.rules_db);
+        let findings = self.scan_blob_impl(
+            blob,
+            attributes.get("path").map_or("", String::as_str),
+            control,
+            retain_unresolved,
+            #[cfg(feature = "context")]
+            options,
+            Some(&mut context),
+            Some(attributes),
+        )?;
+        Ok(crate::ScanOutput { findings, context: Arc::new(context) })
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn scan_blob_impl(
         &self,
         blob: &Blob,
@@ -352,6 +412,7 @@ impl Scanner {
         retain_unresolved: bool,
         #[cfg(feature = "context")] options: Option<&crate::context::DetectionOptions>,
         mut match_context: Option<&mut crate::ScanContext>,
+        source_attributes: Option<&BTreeMap<String, String>>,
     ) -> Result<Vec<Finding>> {
         #[cfg(feature = "context")]
         let cli_match_semantics = options.is_some_and(|options| options.cli_match_semantics);
@@ -359,19 +420,29 @@ impl Scanner {
         let cli_match_semantics = false;
         let lookback = if cli_match_semantics { 4 * 1024 } else { RAW_MATCH_LOOKBACK };
         control.check()?;
+        let attribute_key = if self.config.enable_dedup {
+            source_attributes.map(serde_json::to_string).transpose()?.unwrap_or_default()
+        } else {
+            String::new()
+        };
         // Check for dedup
         if self.config.enable_dedup && !retain_unresolved {
             let blob_id = blob.id();
-            if self.seen_blobs.read().contains(&(blob_id, path.to_owned())) {
+            if self.seen_blobs.read().contains(&(blob_id, path.to_owned(), attribute_key.clone())) {
                 return Ok(Vec::new());
             }
         }
 
         let bytes = blob.bytes();
-        if bytes.is_empty() {
+        let path_only_rules =
+            self.rules_db.path_only_rules_for_source(path, source_attributes, bytes)?;
+        if bytes.is_empty() && path_only_rules.is_empty() {
             return Ok(Vec::new());
         }
-        let betterleaks_path_prefiltered = self.rules_db.is_path_prefiltered(path)?;
+        let betterleaks_path_prefiltered = match source_attributes {
+            Some(attributes) => self.rules_db.is_source_prefiltered(path, attributes)?,
+            None => self.rules_db.is_path_prefiltered(path)?,
+        };
         if betterleaks_path_prefiltered && !self.rules_db.has_non_betterleaks_rules() {
             return Ok(Vec::new());
         }
@@ -393,7 +464,10 @@ impl Scanner {
         control.check()?;
         scan_result??;
         // Early exit if no matches
-        if raw_matches.is_empty() && !self.config.enable_base64_decoding {
+        if raw_matches.is_empty()
+            && path_only_rules.is_empty()
+            && !self.config.enable_base64_decoding
+        {
             return Ok(Vec::new());
         }
 
@@ -401,7 +475,34 @@ impl Scanner {
         let loc_mapping = LocationMapping::new(bytes);
 
         // Process matches through regex
-        let mut findings = Vec::new();
+        let mut findings: Vec<_> = path_only_rules
+            .into_iter()
+            .map(|(_rule_index, rule)| ScanFinding {
+                finding: Finding {
+                    rule_id: rule.id().to_owned(),
+                    rule_name: rule.name().to_owned(),
+                    confidence: rule.confidence(),
+                    rule,
+                    secret: String::new(),
+                    location: FindingLocation::new(0, 0, 0, 0, 0, 0),
+                    entropy: 0.0,
+                    fingerprint: primitives::compute_finding_fingerprint(
+                        path,
+                        &blob.id().to_string(),
+                        0,
+                        0,
+                    ),
+                    captures: HashMap::new(),
+                    is_base64_encoded: false,
+                    blob_id: blob.id(),
+                },
+                association_span: OffsetSpan { start: 0, end: 0 },
+                secret_span: OffsetSpan { start: 0, end: 0 },
+                #[cfg(feature = "context")]
+                rule_index: _rule_index,
+                buffer_id: 0,
+            })
+            .collect();
         let mut seen_matches: FxHashSet<u64> = FxHashSet::default();
         let mut seen_raw_match_ends: FxHashSet<(usize, usize)> = FxHashSet::default();
         let mut seen_prefilter_rules: FxHashSet<usize> = FxHashSet::default();
@@ -423,6 +524,9 @@ impl Scanner {
                 Some(r) => r,
                 None => continue,
             };
+            if rule.syntax().betterleaks_path_only {
+                continue;
+            }
             if !rule.matches_path(path) {
                 continue;
             }
@@ -509,6 +613,14 @@ impl Scanner {
                         continue;
                     }
 
+                    // A keyword rejection filters a confirmed match; it must not
+                    // widen the confirmation window or rescan earlier matches.
+                    if !rule.matches_keywords(full_capture.as_bytes())
+                        && !rule.matches_keywords(bytes)
+                    {
+                        continue;
+                    }
+
                     // Get the primary secret value
                     let secret_capture = primitives::find_secret_capture_with_group(
                         confirmation_regex,
@@ -569,6 +681,7 @@ impl Scanner {
                             &mut filter_lines,
                         );
                         let context = BetterleaksFilterContext {
+                            attributes: source_attributes,
                             path,
                             secret: &secret,
                             full_match: &full_match,
@@ -690,6 +803,7 @@ impl Scanner {
                 #[cfg(feature = "context")]
                 options,
                 match_context.as_deref_mut(),
+                source_attributes,
             )?;
             findings.extend(b64_findings);
         }
@@ -731,6 +845,77 @@ impl Scanner {
         }
         control.check()?;
         if !retain_unresolved {
+            let line_starts_for_specificity = if cli_match_semantics
+                && findings.iter().any(|finding| finding.rule.syntax().specificity != 0)
+            {
+                std::iter::once(0)
+                    .chain(
+                        bytes
+                            .iter()
+                            .enumerate()
+                            .filter_map(|(index, byte)| (*byte == b'\n').then_some(index + 1)),
+                    )
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
+            };
+            let specificity_context = match_context.as_deref();
+            #[cfg(feature = "context")]
+            let specificity_context = specificity_context.filter(|_| options.is_none());
+            let keep = crate::postprocess::specificity_keep(
+                findings.iter().map(|f| (f.rule.as_ref(), f.location.line, f.secret.as_bytes())),
+                |primary, component, dependency| {
+                    let primary = &findings[primary];
+                    let component = &findings[component];
+                    if let Some(context) = specificity_context
+                        && let (Some(primary), Some(component)) =
+                            (context.get(primary), context.get(component))
+                    {
+                        return primary.buffer == component.buffer
+                            && FindingWindow::parse(
+                                &primary.location,
+                                dependency.within.as_deref().unwrap_or("0"),
+                            )
+                            .contains_location(&component.location);
+                    }
+                    if cli_match_semantics {
+                        crate::postprocess::parse_component_window(
+                            dependency.within.as_deref().unwrap_or("0"),
+                        )
+                        .is_some_and(|window| {
+                            crate::postprocess::component_is_within_window(
+                                bytes.len(),
+                                &line_starts_for_specificity,
+                                primary.association_span,
+                                component.association_span,
+                                window,
+                            )
+                        })
+                    } else {
+                        FindingWindow::parse(
+                            &primary.location,
+                            dependency.within.as_deref().unwrap_or("0"),
+                        )
+                        .contains(component)
+                    }
+                },
+                control,
+            )?;
+            let mut index = 0;
+            findings.retain_mut(|finding| {
+                if keep.suppress_reporting[index] {
+                    let old_rule = Arc::as_ptr(&finding.rule) as usize;
+                    let mut rule = finding.rule.as_ref().clone();
+                    rule.suppress_runtime_reporting();
+                    finding.finding.rule = Arc::new(rule);
+                    if let Some(context) = match_context.as_deref_mut() {
+                        context.remap_rule_identity(finding, old_rule);
+                    }
+                }
+                let retain = keep.keep[index];
+                index += 1;
+                retain
+            });
             deduplicate_imported_catalog_findings(&mut findings, cli_match_semantics, control)?;
         }
         control.check()?;
@@ -748,7 +933,7 @@ impl Scanner {
         control.check()?;
         // Mark blob as seen for dedup
         if self.config.enable_dedup && !retain_unresolved && !findings.is_empty() {
-            self.seen_blobs.write().insert((blob.id(), path.to_owned()));
+            self.seen_blobs.write().insert((blob.id(), path.to_owned(), attribute_key));
         }
 
         Ok(findings.into_iter().map(|matched| matched.finding).collect())
@@ -774,6 +959,7 @@ impl Scanner {
         control: &ScanControl,
         #[cfg(feature = "context")] options: Option<&crate::context::DetectionOptions>,
         mut match_context: Option<&mut crate::ScanContext>,
+        source_attributes: Option<&BTreeMap<String, String>>,
     ) -> Result<Vec<ScanFinding>> {
         let mut findings = Vec::new();
         let bytes = blob.bytes();
@@ -836,6 +1022,9 @@ impl Scanner {
                 let Some(rule) = self.rules_db.get_rule(rule_id) else {
                     continue;
                 };
+                if rule.syntax().betterleaks_path_only {
+                    continue;
+                }
                 if !rule.matches_path(path) {
                     continue;
                 }
@@ -844,6 +1033,11 @@ impl Scanner {
                 for captures in regex.captures_iter(&item.decoded) {
                     control.check()?;
                     let full_capture = captures.get(0).expect("regex captures include group zero");
+                    if !rule.matches_keywords(full_capture.as_bytes())
+                        && !rule.matches_keywords(&item.decoded)
+                    {
+                        continue;
+                    }
                     let secret_capture = primitives::find_secret_capture_with_group(
                         regex,
                         &captures,
@@ -894,6 +1088,7 @@ impl Scanner {
                             &mut filter_lines,
                         );
                         let context = BetterleaksFilterContext {
+                            attributes: source_attributes,
                             path,
                             secret: &secret,
                             full_match: &full_match,
@@ -1449,8 +1644,13 @@ mod tests {
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible,
+            fallbacks: Vec::new(),
         })];
 
         let rules_db = Arc::new(RulesDatabase::from_rules(rules).unwrap());
@@ -1682,8 +1882,13 @@ mod tests {
                 path: None,
                 betterleaks_filter: None,
                 betterleaks_secret_group: None,
+                specificity: 0,
+                tags: Vec::new(),
+                betterleaks_path_only: false,
+                keywords: Vec::new(),
                 authoritative: true,
                 vectorscan_compatible: true,
+                fallbacks: Vec::new(),
             })
         };
         let custom_toml = rule(
@@ -1748,8 +1953,13 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: Some(2),
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
         assert!(rule.syntax().as_regex().unwrap().is_match(b"prefix_AbCdEfGhIjKlMnOp"));
         let scanner = Scanner::new(Arc::new(RulesDatabase::from_rules(vec![rule]).unwrap()));
@@ -1780,8 +1990,13 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
                 path: None,
                 betterleaks_filter: None,
                 betterleaks_secret_group: secret_group,
+                specificity: 0,
+                tags: Vec::new(),
+                betterleaks_path_only: false,
+                keywords: Vec::new(),
                 authoritative: true,
                 vectorscan_compatible: true,
+                fallbacks: Vec::new(),
             })
         };
         let rules_db = Arc::new(
@@ -1866,14 +2081,104 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
             path: None,
             betterleaks_filter: Some(filter),
             betterleaks_secret_group: Some(1),
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         });
         let scanner = Scanner::new(Arc::new(RulesDatabase::from_rules(vec![rule]).unwrap()));
         let findings = scanner.scan_bytes(b"token_discard token_keepme").unwrap();
 
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].secret, "token_keepme");
+    }
+
+    #[test]
+    fn private_key_structure_filter_runs_offline_for_raw_and_base64_findings() {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+
+        let mut rules = get_builtin_rules(None).unwrap();
+        let rule = Rule::new(rules.rules.remove("betterleaks.private-key").unwrap());
+        let scanner = Scanner::new(Arc::new(RulesDatabase::from_rules(vec![rule]).unwrap()));
+        let java = r#"-----BEGIN PRIVATE KEY-----", "begin key marker"),
+            Pair.of(expectedKeyString, "private key pem"),
+            Pair.of("-----END PRIVATE KEY-----"#;
+        let runtime_key = r#"-----BEGIN PRIVATE KEY-----\\n"
+            + privateKeyEncoded
+            + "\\n"
+            + "-----END PRIVATE KEY-----"#;
+        // Synthetic RFC8410 container, not a live key. No Validator is constructed.
+        let key = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g\n-----END PRIVATE KEY-----";
+        // DER outer container with a BER long-form length on the inner Ed25519
+        // OCTET STRING. The detector must retain it, not just the parser helper.
+        let ber = [
+            vec![0x30, 0x2f, 2, 1, 0, 0x30, 5, 6, 3, 0x2b, 0x65, 0x70, 4, 0x23, 4, 0x81, 0x20],
+            (1..=32).collect::<Vec<u8>>(),
+        ]
+        .concat();
+        let ber_key = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----",
+            STANDARD.encode(ber)
+        );
+        let partial_body = key
+            .lines()
+            .nth(1)
+            .unwrap()
+            .as_bytes()
+            .chunks(8)
+            .enumerate()
+            .map(|(index, line)| {
+                format!(
+                    "{}{}",
+                    if index % 2 == 0 { "+" } else { "" },
+                    std::str::from_utf8(line).unwrap()
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        let partial_diff =
+            format!("-----BEGIN PRIVATE KEY-----\n{partial_body}\n-----END PRIVATE KEY-----");
+        let malformed = format!(
+            "-----BEGIN PRIVATE KEY-----\n{}\n-----END PRIVATE KEY-----",
+            STANDARD.encode([b'x'; 200])
+        );
+        for input in [
+            malformed.clone(),
+            STANDARD.encode(&malformed),
+            runtime_key.to_string(),
+            STANDARD.encode(runtime_key),
+        ] {
+            assert!(scanner.scan_bytes(input.as_bytes()).unwrap().is_empty());
+        }
+        // Opaque source syntax, including the Java fragment, cannot safely be
+        // classified as malformed just because it is not clean Base64 armor.
+        for input in [
+            key.to_string(),
+            ber_key.clone(),
+            STANDARD.encode(ber_key),
+            partial_diff.clone(),
+            STANDARD.encode(partial_diff),
+            format!("-----BEGIN RSA PRIVATE KEY-----\n{key}"),
+            key.replace('\n', "\\n"),
+            STANDARD.encode(key),
+            key.replace('\n', "\n# "),
+            key.replace('\n', "\n+"),
+            key.replace('\n', "\n * "),
+            key.replace('\n', "\n> "),
+            key.replace('\n', "\",\n\""),
+            key.replace('\n', "&#xA;"),
+            key.replace('\n', "\\n\" + b\""),
+            key.replace("PRIVATE KEY", "RSA PRIVATE KEY"),
+            java.to_string(),
+            STANDARD.encode(java),
+        ] {
+            let findings = scanner.scan_bytes(input.as_bytes()).unwrap();
+            assert_eq!(findings.len(), 1);
+            assert_eq!(findings[0].rule_id, "betterleaks.private-key");
+        }
     }
 
     #[test]

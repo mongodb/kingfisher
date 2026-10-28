@@ -116,12 +116,25 @@ pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
 }
 
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
+    map_access_from_token_at(token, TERRAFORM_API).await
+}
+
+async fn map_access_from_token_at(token: &str, api_base: &str) -> Result<AccessMapResult> {
     let client = Client::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("Failed to build Terraform HTTP client")?;
 
-    let account = fetch_account(&client, token).await?;
+    map_access_with_client(&client, token, api_base).await
+}
+
+async fn map_access_with_client(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+) -> Result<AccessMapResult> {
+    let account = fetch_account(client, token, api_base).await?;
 
     let account_data = account.data.as_ref();
     let attrs = account_data.and_then(|d| d.attributes.as_ref());
@@ -147,7 +160,7 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let mut roles = Vec::new();
     let mut all_scopes: Vec<String> = Vec::new();
 
-    let orgs = list_organizations(&client, token).await.unwrap_or_else(|err| {
+    let orgs = list_organizations(client, token, api_base).await.unwrap_or_else(|err| {
         warn!("Terraform access-map: organization enumeration failed: {err}");
         Vec::new()
     });
@@ -156,6 +169,8 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     let mut has_workspace_write = false;
 
     for org in &orgs {
+        let mut org_admin = false;
+        let mut org_workspace_write = false;
         let org_attrs = org.attributes.as_ref();
         let org_name =
             org_attrs.and_then(|a| a.name.clone()).unwrap_or_else(|| "unknown_org".to_string());
@@ -167,27 +182,27 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
             if perms.can_manage_modules == Some(true) {
                 permissions.admin.push(format!("{org_name}:can-manage-modules"));
                 all_scopes.push(format!("{org_name}:can-manage-modules"));
-                has_org_admin = true;
+                org_admin = true;
             }
             if perms.can_manage_providers == Some(true) {
                 permissions.admin.push(format!("{org_name}:can-manage-providers"));
                 all_scopes.push(format!("{org_name}:can-manage-providers"));
-                has_org_admin = true;
+                org_admin = true;
             }
             if perms.can_destroy == Some(true) {
                 permissions.admin.push(format!("{org_name}:can-destroy"));
                 all_scopes.push(format!("{org_name}:can-destroy"));
-                has_org_admin = true;
+                org_admin = true;
             }
             if perms.can_create_workspace == Some(true) {
                 permissions.risky.push(format!("{org_name}:can-create-workspace"));
                 all_scopes.push(format!("{org_name}:can-create-workspace"));
-                has_workspace_write = true;
+                org_workspace_write = true;
             }
             if perms.can_update == Some(true) {
                 permissions.risky.push(format!("{org_name}:can-update"));
                 all_scopes.push(format!("{org_name}:can-update"));
-                has_workspace_write = true;
+                org_workspace_write = true;
             }
             if perms.can_access_via_teams == Some(true) {
                 permissions.read_only.push(format!("{org_name}:can-access-via-teams"));
@@ -227,9 +242,9 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
             resource_type: "organization".into(),
             name: org_name.clone(),
             permissions: org_perm_list,
-            risk: severity_to_str(if has_org_admin {
+            risk: severity_to_str(if org_admin {
                 Severity::Critical
-            } else if has_workspace_write {
+            } else if org_workspace_write {
                 Severity::High
             } else {
                 Severity::Medium
@@ -238,11 +253,15 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
             reason: "Terraform Cloud organization accessible with this token".into(),
         });
 
+        has_org_admin |= org_admin;
+        has_workspace_write |= org_workspace_write;
+
         // Enumerate workspaces.
-        let workspaces = list_workspaces(&client, token, &org_name).await.unwrap_or_else(|err| {
-            warn!("Terraform access-map: workspace enumeration for {org_name} failed: {err}");
-            Vec::new()
-        });
+        let workspaces =
+            list_workspaces(client, token, &org_name, api_base).await.unwrap_or_else(|err| {
+                warn!("Terraform access-map: workspace enumeration for {org_name} failed: {err}");
+                Vec::new()
+            });
 
         for ws in &workspaces {
             let ws_attrs = ws.attributes.as_ref();
@@ -261,9 +280,9 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
                 ws_notes.push("unlocked");
             }
 
-            let ws_risk = if has_workspace_write && is_auto_apply && !is_locked {
+            let ws_risk = if org_workspace_write && is_auto_apply && !is_locked {
                 Severity::High
-            } else if has_workspace_write {
+            } else if org_workspace_write {
                 Severity::Medium
             } else {
                 Severity::Low
@@ -338,9 +357,13 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     })
 }
 
-async fn fetch_account(client: &Client, token: &str) -> Result<TerraformAccountResponse> {
+async fn fetch_account(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+) -> Result<TerraformAccountResponse> {
     let resp = client
-        .get(format!("{TERRAFORM_API}/api/v2/account/details"))
+        .get(format!("{api_base}/api/v2/account/details"))
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::CONTENT_TYPE, "application/vnd.api+json")
         .send()
@@ -357,9 +380,13 @@ async fn fetch_account(client: &Client, token: &str) -> Result<TerraformAccountR
     resp.json().await.context("Terraform access-map: invalid account JSON")
 }
 
-async fn list_organizations(client: &Client, token: &str) -> Result<Vec<TerraformOrgData>> {
+async fn list_organizations(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+) -> Result<Vec<TerraformOrgData>> {
     let resp = client
-        .get(format!("{TERRAFORM_API}/api/v2/organizations"))
+        .get(format!("{api_base}/api/v2/organizations"))
         .header(header::AUTHORIZATION, format!("Bearer {token}"))
         .header(header::CONTENT_TYPE, "application/vnd.api+json")
         .send()
@@ -380,6 +407,7 @@ async fn list_workspaces(
     client: &Client,
     token: &str,
     org_name: &str,
+    api_base: &str,
 ) -> Result<Vec<TerraformWorkspaceData>> {
     let mut workspaces = Vec::new();
     let mut page = 1;
@@ -387,7 +415,7 @@ async fn list_workspaces(
     loop {
         let resp = client
             .get(format!(
-                "{TERRAFORM_API}/api/v2/organizations/{org_name}/workspaces?page%5Bnumber%5D={page}&page%5Bsize%5D=100"
+                "{api_base}/api/v2/organizations/{org_name}/workspaces?page%5Bnumber%5D={page}&page%5Bsize%5D=100"
             ))
             .header(header::AUTHORIZATION, format!("Bearer {token}"))
             .header(header::CONTENT_TYPE, "application/vnd.api+json")
@@ -436,9 +464,78 @@ fn derive_severity(
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",
         Severity::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn token_header_is_never_forwarded_to_a_redirect() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{header, method},
+        };
+        let server = MockServer::start().await;
+        let destination = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(header("Authorization", "Bearer test-token"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", destination.uri().replace("127.0.0.1", "localhost")),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+        assert!(super::map_access_from_token_at("test-token", &server.uri()).await.is_err());
+        assert!(destination.received_requests().await.unwrap().is_empty());
+    }
+
+    use super::*;
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path, query_param},
+    };
+
+    #[tokio::test]
+    async fn organization_permissions_do_not_inflate_other_resource_risk() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v2/account/details"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(
+                json!({"data": {"id": "user", "attributes": { "username": "member" }}}),
+            ))
+            .mount(&server)
+            .await;
+        Mock::given(method("GET")).and(path("/api/v2/organizations"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [
+                { "attributes": { "name": "admin-org", "permissions": { "can-destroy": true, "can-update": true } } },
+                { "attributes": { "name": "read-org", "permissions": { "can-destroy": false, "can-update": false } } }
+            ] }))).mount(&server).await;
+        for org in ["admin-org", "read-org"] {
+            Mock::given(method("GET")).and(path(format!("/api/v2/organizations/{org}/workspaces"))).and(query_param("page[number]", "1"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [{ "attributes": { "name": "workspace", "auto-apply": true, "locked": false } }] })))
+                .mount(&server).await;
+            Mock::given(method("GET"))
+                .and(path(format!("/api/v2/organizations/{org}/workspaces")))
+                .and(query_param("page[number]", "2"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(json!({ "data": [] })))
+                .mount(&server)
+                .await;
+        }
+        let result = map_access_with_client(&Client::new(), "token", &server.uri()).await.unwrap();
+        let risk_for = |name: &str| {
+            result.resources.iter().find(|resource| resource.name == name).unwrap().risk.as_str()
+        };
+        assert_eq!(risk_for("admin-org"), "critical");
+        assert_eq!(risk_for("admin-org/workspace"), "high");
+        assert_eq!(risk_for("read-org"), "medium");
+        assert_eq!(risk_for("read-org/workspace"), "low");
+        assert!(matches!(result.severity, Severity::Critical));
     }
 }

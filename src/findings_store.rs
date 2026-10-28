@@ -49,6 +49,11 @@ fn dedup_origin_kind(origin: &OriginSet) -> &'static str {
     if origin.iter().any(|o| matches!(o, Origin::Extended(_))) { "ext" } else { "file_git" }
 }
 
+fn repo_identity_url(url: &str) -> &str {
+    let url = url.trim_end_matches('/');
+    url.strip_suffix(".git").unwrap_or(url)
+}
+
 pub struct FindingsStore {
     spill: Option<spill::FindingsSpill>,
     rules: Vec<Arc<Rule>>,
@@ -69,6 +74,8 @@ pub struct FindingsStore {
     postman_links: FxHashMap<PathBuf, String>,
     s3_buckets: FxHashMap<PathBuf, String>,
     repo_links: FxHashMap<PathBuf, String>,
+    // Provider-issued IDs are scoped to a repository URL, never to a blob or commit.
+    repo_ids: FxHashMap<String, crate::git_host::RepositoryId>,
     access_map_results: Vec<ScanAccessMapResult>,
     scan_audit: Option<ScanAuditManifest>,
 }
@@ -93,6 +100,7 @@ impl FindingsStore {
             postman_links: FxHashMap::default(),
             s3_buckets: FxHashMap::default(),
             repo_links: FxHashMap::default(),
+            repo_ids: FxHashMap::default(),
             access_map_results: Vec::new(),
             scan_audit: None,
         }
@@ -326,6 +334,10 @@ impl FindingsStore {
                         .expect("dependency maps serialize"),
                     );
                 }
+                if let Some(scope) = self.repository_dedup_scope(&origin) {
+                    key_string.push_str("|repository:");
+                    key_string.push_str(&scope);
+                }
                 let digest = *blake3::hash(key_string.as_bytes()).as_bytes();
 
                 if !self.dedup_exact.insert(digest) {
@@ -449,6 +461,41 @@ impl FindingsStore {
         &self.repo_links
     }
 
+    pub(crate) fn register_repo_id(
+        &mut self,
+        url: &str,
+        id: impl Into<crate::git_host::RepositoryId>,
+    ) {
+        self.repo_ids.insert(repo_identity_url(url).to_owned(), id.into());
+    }
+
+    pub(crate) fn repo_id(&self, url: &str) -> Option<crate::git_host::RepositoryId> {
+        self.repo_ids.get(repo_identity_url(url)).cloned()
+    }
+
+    /// Identical secrets in distinct provider repositories must retain both IDs.
+    /// Preserve existing content deduplication when no repository ID is known.
+    pub(crate) fn repository_dedup_scope(&self, origins: &OriginSet) -> Option<String> {
+        origins.iter().find_map(|origin| {
+            let Origin::GitRepo(repo) = origin else { return None };
+            let link = self.repo_links.get(repo.repo_path.as_ref())?;
+            let id = self.repo_id(link)?;
+            let url = url::Url::parse(link).ok()?;
+            let host = &url[url::Position::BeforeHost..url::Position::AfterPort];
+            Some(serde_json::json!([host, id]).to_string())
+        })
+    }
+
+    /// Carry repository metadata into a per-repository reporting store.
+    pub(crate) fn copy_repo_metadata_from(&mut self, other: &Self, root: &std::path::Path) {
+        if let Some(link) = other.repo_links.get(root) {
+            self.register_repo_link(root.to_path_buf(), link.clone());
+            if let Some(id) = other.repo_id(link) {
+                self.register_repo_id(link, id);
+            }
+        }
+    }
+
     pub fn register_s3_bucket(&mut self, dir: PathBuf, bucket: String) {
         self.s3_buckets.insert(dir, bucket);
     }
@@ -463,6 +510,9 @@ impl FindingsStore {
         }
         for (dir, link) in other.repo_links() {
             self.repo_links.entry(dir.clone()).or_insert_with(|| link.clone());
+        }
+        for (url, id) in &other.repo_ids {
+            self.repo_ids.entry(url.clone()).or_insert_with(|| id.clone());
         }
 
         for (dir, bucket) in other.s3_buckets() {
@@ -568,6 +618,36 @@ mod tests {
     use super::FindingsStore;
     use crate::rules::rule::{DependsOnRule, Rule, RuleSyntax};
 
+    #[test]
+    fn repository_ids_survive_per_repo_reporting_and_merge() {
+        let mut shared = FindingsStore::new(std::env::temp_dir());
+        let root = shared.clone_root().join("source");
+        let fork_root = shared.clone_root().join("fork");
+        let source = "https://github.com/acme/source.git";
+        let fork = "https://github.com/alice/fork.git";
+        shared.register_repo_link(root.clone(), source.to_owned());
+        shared.register_repo_link(fork_root.clone(), fork.to_owned());
+        shared.register_repo_id(source, 123456789);
+        shared.register_repo_id(fork, 987654321);
+
+        let mut per_repo = FindingsStore::new(shared.clone_root());
+        per_repo.copy_repo_metadata_from(&shared, &root);
+        assert_eq!(per_repo.repo_id("https://github.com/acme/source"), Some(123456789.into()));
+        assert_eq!(per_repo.repo_id(fork), None);
+        assert_eq!(per_repo.repo_links().get(&root).map(String::as_str), Some(source));
+
+        let mut merged = FindingsStore::new(shared.clone_root());
+        merged.merge_from(&per_repo, false);
+        assert_eq!(merged.repo_id(source), Some(123456789.into()));
+        assert_eq!(merged.repo_id(fork), None);
+
+        // A renamed repository retains its provider-issued ID; a fork does not.
+        merged.register_repo_id("https://github.com/acme/renamed.git", 123456789);
+        merged.merge_from(&shared, false);
+        assert_eq!(merged.repo_id("https://github.com/acme/renamed.git"), Some(123456789.into()));
+        assert_eq!(merged.repo_id(fork), Some(987654321.into()));
+    }
+
     fn rule(id: &str, visible: bool, depends_on_rule: Vec<Option<DependsOnRule>>) -> Arc<Rule> {
         Arc::new(Rule::new(RuleSyntax {
             name: id.to_owned(),
@@ -587,8 +667,13 @@ mod tests {
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         }))
     }
 

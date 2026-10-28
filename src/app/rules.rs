@@ -359,6 +359,12 @@ pub(crate) fn run_rules_list(args: &RulesListArgs) -> Result<()> {
                                 .map(kingfisher::rules::Validation::redacted_for_inspection),
                         )
                         .expect("validation serialization should succeed");
+                        if !rule.syntax().fallbacks.is_empty() {
+                            value["fallbacks"] = serde_json::to_value(
+                                rule.syntax().redacted_for_inspection().fallbacks,
+                            )
+                            .expect("fallback serialization should succeed");
+                        }
                     }
                     value
                 })

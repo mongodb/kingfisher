@@ -11,6 +11,11 @@ use reqwest::{Client, StatusCode, Url};
 use std::sync::Arc;
 use std::time::Duration;
 
+/// Application-owned admission control before each HTTP attempt, including retries.
+pub trait HttpRequestGate: Send + Sync {
+    fn wait(&self) -> std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send + '_>>;
+}
+
 /// Low-level execution for callers that already resolved a rule's input variables.
 ///
 /// Most applications should use [`super::Validator`], which associates findings and
@@ -23,6 +28,8 @@ pub struct ValidationEngine<'a> {
     parser: &'a liquid::Parser,
     timeout: Option<Duration>,
     retries: u32,
+    http_fallbacks: bool,
+    http_request_gate: Option<&'a dyn HttpRequestGate>,
     max_response_bytes: usize,
     allow_internal_ips: bool,
     use_lax_tls: bool,
@@ -36,6 +43,8 @@ impl<'a> ValidationEngine<'a> {
             parser,
             timeout: Some(Duration::from_secs(10)),
             retries: 0,
+            http_fallbacks: false,
+            http_request_gate: None,
             max_response_bytes: 1 << 20,
             allow_internal_ips: false,
             use_lax_tls: false,
@@ -57,6 +66,18 @@ impl<'a> ValidationEngine<'a> {
         self.retries = retries;
         self
     }
+    /// Explicitly permit configured HTTP fallback environments. Defaults to false.
+    pub fn http_fallbacks(mut self, enabled: bool) -> Self {
+        self.http_fallbacks = enabled;
+        self
+    }
+
+    /// Apply request-level rate limiting within the total validation deadline.
+    pub fn http_request_gate(mut self, gate: Option<&'a dyn HttpRequestGate>) -> Self {
+        self.http_request_gate = gate;
+        self
+    }
+
     /// Maximum YAML HTTP response bytes retained and matched. Defaults to 1 MiB; zero is unlimited.
     pub fn max_response_bytes(mut self, limit: usize) -> Self {
         self.max_response_bytes = limit;
@@ -131,8 +152,13 @@ impl<'a> ValidationEngine<'a> {
         let _ = rule;
         match validation {
             Validation::Assumed => ValidationResult::outcome(ValidationOutcome::Assumed),
-            Validation::Http(config) => self.http(config, globals).await,
+            Validation::Http(_) => self.http(rule, globals).await,
             Validation::Betterleaks(config) => {
+                let mut globals = globals.clone();
+                globals.insert(
+                    "__BETTERLEAKS_RULE_ID".into(),
+                    liquid::model::Value::scalar(rule.id().to_string()),
+                );
                 let captures: Vec<_> = globals
                     .iter()
                     .map(|(name, value)| (name.to_string(), value.to_kstr().to_string(), 0, 0))
@@ -140,7 +166,7 @@ impl<'a> ValidationEngine<'a> {
                 let result = super::betterleaks::validate(
                     config,
                     &captures,
-                    globals,
+                    &globals,
                     self.client,
                     self.allow_internal_ips,
                 )
@@ -149,6 +175,7 @@ impl<'a> ValidationEngine<'a> {
                     .status(result.status)
                     .body(result.body.clone());
                 check.reason = result.reason;
+                check.analysis_data = result.analysis_data;
                 if result.reason == Some(ValidationReason::RequestFailed) {
                     check.response_body = "Betterleaks validation request failed".into();
                 }
@@ -265,7 +292,7 @@ impl<'a> ValidationEngine<'a> {
         &self,
         template: &str,
         globals: &Object,
-    ) -> std::result::Result<Url, ValidationResult> {
+    ) -> std::result::Result<Url, Box<ValidationResult>> {
         let rendered =
             self.parser.parse(template).and_then(|t| t.render(globals)).map_err(|_| {
                 ValidationResult::unavailable(ValidationReason::InvalidConfiguration)
@@ -276,7 +303,7 @@ impl<'a> ValidationEngine<'a> {
             || !url.username().is_empty()
             || url.password().is_some()
         {
-            return Err(ValidationResult::skipped(ValidationReason::TargetBlocked));
+            return Err(Box::new(ValidationResult::skipped(ValidationReason::TargetBlocked)));
         }
         check_url_resolvable(&url, self.allow_internal_ips)
             .await
@@ -284,10 +311,81 @@ impl<'a> ValidationEngine<'a> {
         Ok(url)
     }
 
-    async fn http(&self, config: &HttpValidation, globals: &Object) -> ValidationResult {
+    async fn http(&self, rule: &Rule, globals: &Object) -> ValidationResult {
+        let configurations = match rule.syntax().http_validations(self.http_fallbacks) {
+            Ok(configurations) => configurations,
+            Err(_) => return ValidationResult::unavailable(ValidationReason::InvalidConfiguration),
+        };
+        let mut inactive = None;
+        let mut inconclusive = None;
+        for (index, (id, config)) in configurations.iter().enumerate() {
+            if index > 0 {
+                let values = globals
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_kstr().to_string()))
+                    .collect();
+                let mut issues = Vec::new();
+                super::preparation::validation(
+                    self.parser,
+                    Some(&Validation::Http(config.clone())),
+                    &values,
+                    &mut issues,
+                );
+                if !issues.is_empty() {
+                    let result = inconclusive.get_or_insert_with(|| {
+                        let missing = issues.iter().any(|issue| issue.code == "missing_variable");
+                        ValidationResult::unavailable(if missing {
+                            ValidationReason::MissingDependency
+                        } else {
+                            ValidationReason::InvalidConfiguration
+                        })
+                        .body(format!(
+                            "HTTP fallback {} could not be checked: {}",
+                            id.map_or_else(|| index.to_string(), str::to_owned),
+                            issues
+                                .iter()
+                                .map(|issue| issue.variable.as_deref().unwrap_or(issue.code))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        ))
+                    });
+                    result.input_diagnostics.extend(issues);
+                    continue;
+                }
+            }
+            let result = self.http_endpoint(config, &config.request.url, globals).await;
+            if result.outcome.is_verified_active() {
+                // Retain the exact rendered URL of the accepted request.
+                let mut result = result;
+                if let Some((endpoint_index, count, _)) = &mut result.accepted_http_endpoint {
+                    *endpoint_index = index;
+                    *count = configurations.len();
+                }
+                result.accepted_http_fallback = id.map(str::to_owned);
+                return result;
+            }
+            if result.outcome == ValidationOutcome::VerifiedInactive {
+                inactive = Some(result);
+            } else {
+                inconclusive.get_or_insert(result);
+            }
+        }
+        // A rejection from one environment cannot override an inconclusive check
+        // from another environment that might still accept the credential.
+        inconclusive.or(inactive).unwrap_or_else(|| {
+            ValidationResult::unavailable(ValidationReason::InvalidConfiguration)
+        })
+    }
+
+    async fn http_endpoint(
+        &self,
+        config: &HttpValidation,
+        url_template: &str,
+        globals: &Object,
+    ) -> ValidationResult {
         for attempt in 0..=self.retries {
             // Rebuild multipart requests rather than cloning their non-cloneable stream.
-            let result = self.http_once(config, globals).await;
+            let result = self.http_once(config, url_template, globals).await;
             let retryable = matches!(
                 result.reason,
                 Some(ValidationReason::RequestFailed | ValidationReason::DeadlineExceeded)
@@ -301,7 +399,12 @@ impl<'a> ValidationEngine<'a> {
         unreachable!("the inclusive retry range always executes")
     }
 
-    async fn http_once(&self, config: &HttpValidation, globals: &Object) -> ValidationResult {
+    async fn http_once(
+        &self,
+        config: &HttpValidation,
+        url_template: &str,
+        globals: &Object,
+    ) -> ValidationResult {
         let request = &config.request;
         let matchers = request.response_matcher.as_deref().unwrap_or_default();
         if !has_evidence_matcher(matchers) {
@@ -309,14 +412,14 @@ impl<'a> ValidationEngine<'a> {
         }
         // Reject finding-controlled origins before rendering or resolving their DNS.
         if config.auth.is_some()
-            && let Err(reason) = super::oauth2::fixed_url(&request.url, self.allow_internal_ips)
+            && let Err(reason) = super::oauth2::fixed_url(url_template, self.allow_internal_ips)
         {
             return ValidationResult::unavailable(reason);
         }
         let globals = with_request_template_globals(globals);
-        let url = match self.url(&request.url, &globals).await {
+        let url = match self.url(url_template, &globals).await {
             Ok(url) => url,
-            Err(check) => return check,
+            Err(check) => return *check,
         };
         if let Some(auth) = &config.auth
             && request.headers.keys().any(|key| {
@@ -331,7 +434,7 @@ impl<'a> ValidationEngine<'a> {
                 .oauth2_tokens
                 .header(
                     &auth.oauth2,
-                    &request.url,
+                    url_template,
                     &url,
                     self.timeout.unwrap_or_default(),
                     self.allow_internal_ips,
@@ -397,6 +500,9 @@ impl<'a> ValidationEngine<'a> {
             }
             builder = builder.multipart(form);
         }
+        if let Some(gate) = self.http_request_gate {
+            gate.wait().await;
+        }
         let mut response = match builder.send().await {
             Ok(response) => response,
             Err(error) => return request_failure(&error),
@@ -439,7 +545,11 @@ impl<'a> ValidationEngine<'a> {
                 body = body.replace(token, "[REDACTED]");
             }
         }
-        classify_status(valid, status).body(body)
+        let mut result = classify_status(valid, status).body(body);
+        if result.outcome.is_verified_active() {
+            result.accepted_http_endpoint = Some((0, 1 + request.fallback_urls.len(), url));
+        }
+        result
     }
 
     async fn database(&self, validation: &Validation, uri: &str) -> ValidationResult {
@@ -540,7 +650,7 @@ impl<'a> ValidationEngine<'a> {
         let globals = with_request_template_globals(globals);
         let url = match self.url(&request.url, &globals).await {
             Ok(url) => url,
-            Err(check) => return check,
+            Err(check) => return *check,
         };
         match super::grpc::grpc_unary_call_from_rule(
             &url,

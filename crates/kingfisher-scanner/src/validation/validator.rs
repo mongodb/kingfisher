@@ -11,6 +11,7 @@ use anyhow::{Result, ensure};
 use futures::{StreamExt, stream};
 use kingfisher_rules::Validation;
 use liquid::{Object, model::Value};
+use liquid_core::ValueView;
 use reqwest::Client;
 use tokio::sync::Semaphore;
 
@@ -122,6 +123,9 @@ pub struct ValidatedFinding {
     pub credential: Option<ResolvedCredential>,
     /// Offline names/categories from the exact input context and trusted variables.
     pub input_diagnostics: Vec<CredentialInputDiagnostic>,
+    // Private validation evidence is retained only for explicitly requested analysis.
+    analysis_data: Option<serde_json::Value>,
+    selected_http_fallback: Option<String>,
 }
 
 impl ValidatedFinding {
@@ -134,6 +138,7 @@ impl ValidatedFinding {
         }
         // Drop retained inputs rather than leave a second copy of raw secrets.
         self.credential = None;
+        self.analysis_data = None;
         self
     }
 
@@ -143,6 +148,7 @@ impl ValidatedFinding {
     pub fn same_revocation_target(&self, other: &Self) -> bool {
         self.finding.rule_id == other.finding.rule_id
             && self.finding.rule().syntax().revocation == other.finding.rule().syntax().revocation
+            && self.finding.rule().syntax().fallbacks == other.finding.rule().syntax().fallbacks
             && match (
                 self.credential.as_ref().and_then(|c| c.revocation.as_ref()),
                 other.credential.as_ref().and_then(|c| c.revocation.as_ref()),
@@ -152,9 +158,15 @@ impl ValidatedFinding {
             }
     }
 
-    /// Whether the original rule defines a revocation action (not readiness).
+    /// Whether the selected environment defines a revocation action (not readiness).
     pub fn revocation_supported(&self) -> bool {
-        self.finding.rule().syntax().revocation.is_some()
+        self.finding
+            .rule()
+            .syntax()
+            .selected_revocation(self.selected_http_fallback.as_deref())
+            .ok()
+            .flatten()
+            .is_some()
     }
 }
 
@@ -173,10 +185,79 @@ impl ValidationResult {
     fn attach(
         self,
         finding: Finding,
-        credential: Option<ResolvedCredential>,
-        input_diagnostics: Vec<CredentialInputDiagnostic>,
+        mut credential: Option<ResolvedCredential>,
+        mut input_diagnostics: Vec<CredentialInputDiagnostic>,
+        parser: &liquid::Parser,
     ) -> ValidatedFinding {
+        if matches!(finding.rule().syntax().validation, Some(Validation::Http(_)))
+            && let Some(credential) = credential.as_mut()
+        {
+            // Endpoint identity is trusted execution state, never a finding's
+            // capture or a caller-supplied override. Replace any such bindings.
+            let endpoint_variables = self.endpoint_variables();
+            for variables in std::iter::once(&mut credential.variables)
+                .chain(credential.revocation.iter_mut().map(|inputs| &mut inputs.variables))
+            {
+                for name in [
+                    "VALIDATION_ENDPOINT_INDEX",
+                    "VALIDATION_FALLBACK_ID",
+                    "VALIDATION_ENDPOINT_COUNT",
+                    "VALIDATION_URL",
+                    "VALIDATION_ORIGIN",
+                ] {
+                    variables.remove(name);
+                }
+                variables.extend(endpoint_variables.clone());
+            }
+            if let Some((index, _, _)) = self.accepted_http_endpoint.as_ref() {
+                // Offline preparation may accept any renderable alternative.
+                // Readiness after validation must inspect only the selected
+                // action and URL, using the trusted snapshot above.
+                input_diagnostics.retain(|issue| issue.stage != "revocation");
+                credential.revocation = None;
+                credential.revocation_reason = None;
+                let action = finding
+                    .rule()
+                    .syntax()
+                    .selected_revocation(self.accepted_http_fallback.as_deref())
+                    .ok()
+                    .flatten();
+                let mut issues = Vec::new();
+                if let Some(action) = action.as_deref() {
+                    match resolve_revocation(&finding, credential) {
+                        Ok(inputs) => {
+                            let mut values = inputs.variables.clone();
+                            values.insert("TOKEN".into(), inputs.secret.clone());
+                            super::preparation::revocation_with_endpoint(
+                                parser,
+                                action,
+                                &values,
+                                Some(*index),
+                                &mut issues,
+                            );
+                            if issues.is_empty() {
+                                credential.revocation = Some(inputs);
+                            }
+                            credential.revocation_reason = issues.first().map(diagnostic_reason);
+                        }
+                        Err(reason) => {
+                            credential.revocation_reason = Some(reason);
+                            let code = match reason {
+                                ValidationReason::RedactedInput => "redacted_input",
+                                ValidationReason::MissingDependency => "missing_dependency",
+                                _ => "invalid_configuration",
+                            };
+                            issues.push(CredentialInputDiagnostic::new("revocation", code, None));
+                        }
+                    }
+                }
+                input_diagnostics.extend(issues);
+            }
+        }
+        input_diagnostics.extend(self.input_diagnostics);
         ValidatedFinding {
+            analysis_data: self.analysis_data,
+            selected_http_fallback: self.accepted_http_fallback,
             finding,
             outcome: self.outcome,
             reason: self.reason,
@@ -201,6 +282,7 @@ pub struct Validator {
     concurrency: usize,
     timeout: Duration,
     retries: u32,
+    http_fallbacks: bool,
     max_response_bytes: usize,
     allow_internal_ips: bool,
     variables: BTreeMap<String, String>,
@@ -217,6 +299,7 @@ pub struct ValidatorBuilder {
     concurrency: usize,
     timeout: Duration,
     retries: u32,
+    http_fallbacks: bool,
     max_response_bytes: usize,
     allow_internal_ips: bool,
     variables: BTreeMap<String, String>,
@@ -229,6 +312,7 @@ impl Default for ValidatorBuilder {
             concurrency: 8,
             timeout: Duration::from_secs(10),
             retries: 0,
+            http_fallbacks: false,
             max_response_bytes: 1 << 20,
             allow_internal_ips: false,
             variables: BTreeMap::new(),
@@ -237,6 +321,12 @@ impl Default for ValidatorBuilder {
 }
 
 impl ValidatorBuilder {
+    /// Explicitly permit up to two configured HTTP fallback environments. Defaults to false.
+    pub fn http_fallbacks(mut self, enabled: bool) -> Self {
+        self.http_fallbacks = enabled;
+        self
+    }
+
     /// Supply a pooled client for HTTP, Betterleaks HTTP, Raw HTTP, and Coinbase.
     /// Configure it with redirects disabled and suitable TLS/proxy policy.
     /// OAuth2-authenticated HTTP validators use a separate strict-TLS transport
@@ -312,6 +402,7 @@ impl ValidatorBuilder {
             concurrency: self.concurrency,
             timeout: self.timeout,
             retries: self.retries,
+            http_fallbacks: self.http_fallbacks,
             max_response_bytes: self.max_response_bytes,
             allow_internal_ips: self.allow_internal_ips,
             variables: self.variables,
@@ -343,7 +434,7 @@ impl Validator {
         let cache = ValidationCache::default();
         let (result, credential, diagnostics) =
             self.check_finding(finding, context, false, &cache).await;
-        result.attach(finding.clone(), credential, diagnostics)
+        result.attach(finding.clone(), credential, diagnostics, &self.parser)
     }
 
     async fn check_finding(
@@ -430,7 +521,7 @@ impl Validator {
             .into_iter()
             .zip(checked)
             .map(|(finding, (result, credential, diagnostics))| {
-                result.attach(finding, credential, diagnostics)
+                result.attach(finding, credential, diagnostics, &self.parser)
             })
             .collect()
     }
@@ -454,7 +545,7 @@ impl Validator {
             .into_iter()
             .zip(checked)
             .map(|(finding, (result, credential, diagnostics))| {
-                result.attach(finding, credential, diagnostics)
+                result.attach(finding, credential, diagnostics, &self.parser)
             })
             .collect()
     }
@@ -467,6 +558,75 @@ impl Validator {
             .variables
             .extend(variables.into_iter().map(|(key, value)| (key.to_uppercase(), value)));
         clone
+    }
+
+    /// Analyze a verified credential using its original rule and resolved inputs.
+    ///
+    /// This explicit operation may make additional provider requests. Ordinary
+    /// validation never runs the rule's analysis expression. Private evidence from
+    /// that exact validation is reused without re-associating components or reading
+    /// process environment. Returned provider data may contain sensitive information.
+    ///
+    /// # Errors
+    ///
+    /// Rejects non-active findings, unavailable snapshots and absent analysis
+    /// expressions. Evaluation, transport and total-deadline failures return errors.
+    pub async fn analyze_validated(
+        &self,
+        validated: &ValidatedFinding,
+    ) -> Result<serde_json::Value> {
+        ensure!(
+            validated.outcome.is_verified_active(),
+            "Analysis requires verified_active validation"
+        );
+        let Some(Validation::Betterleaks(config)) = &validated.finding.rule().syntax().validation
+        else {
+            anyhow::bail!("Rule has no Betterleaks analysis expression");
+        };
+        let credential = validated
+            .credential
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No resolved credential inputs"))?;
+        let analysis_data = validated
+            .analysis_data
+            .as_ref()
+            .ok_or_else(|| anyhow::anyhow!("No private validation result"))?;
+        let mut globals = credential.globals();
+        super::betterleaks::add_finding_globals(
+            &mut globals,
+            &validated.finding,
+            &credential.components,
+        );
+        let captures = globals
+            .iter()
+            .map(|(name, value)| (name.to_string(), value.to_kstr().to_string(), 0, 0))
+            .collect::<Vec<_>>();
+        super::limits::NetworkLimits {
+            no_timeouts: self.timeout.is_zero(),
+            unlimited_response: self.max_response_bytes == 0,
+            unlimited_results: false,
+        }
+        .scope(async {
+            super::limits::timeout(self.timeout, async {
+                let _permit = self
+                    .permits
+                    .acquire()
+                    .await
+                    .map_err(|_| anyhow::anyhow!("Credential analysis executor is closed"))?;
+                super::betterleaks::analyze(
+                    config,
+                    &captures,
+                    &globals,
+                    &self.client,
+                    self.allow_internal_ips,
+                    analysis_data,
+                )
+                .await
+            })
+            .await
+            .map_err(|_| anyhow::anyhow!("Credential analysis timed out"))?
+        })
+        .await
     }
 
     /// Inspect one candidate and its complete same-input context without provider
@@ -531,9 +691,10 @@ impl Validator {
                 diagnostics.push(diagnostic);
             }
         }
-        super::preparation::validation(
+        super::preparation::rule_validation(
             &self.parser,
-            finding.rule().syntax().validation.as_ref(),
+            finding.rule().syntax(),
+            self.http_fallbacks,
             &values,
             &mut diagnostics,
         );
@@ -690,10 +851,31 @@ impl Validator {
         timeout: Duration,
         cache: &ValidationCache,
     ) -> ValidationResult {
-        let cell = validation_cache_cell(
-            cache,
-            &(finding.rule().syntax(), &bound.secret, &bound.variables),
-        );
+        let mut globals = bound.globals();
+        let cell = if matches!(finding.rule().syntax().validation, Some(Validation::Betterleaks(_)))
+        {
+            super::betterleaks::add_finding_globals(&mut globals, finding, &bound.components);
+            let component_captures: Vec<_> = bound
+                .components
+                .iter()
+                .map(|component| (&component.rule_id, &component.secret, &component.captures))
+                .collect();
+            validation_cache_cell(
+                cache,
+                &(
+                    finding.rule().syntax(),
+                    &bound.secret,
+                    &bound.variables,
+                    &finding.captures,
+                    component_captures,
+                ),
+            )
+        } else {
+            validation_cache_cell(
+                cache,
+                &(finding.rule().syntax(), &bound.secret, &bound.variables, self.http_fallbacks),
+            )
+        };
         let timeout = if super::limits::NetworkLimits::current().no_timeouts {
             Duration::ZERO
         } else {
@@ -735,9 +917,10 @@ impl Validator {
                 .oauth2_token_cache(self.oauth2_tokens.clone())
                 .timeout(attempt_timeout)
                 .retries(self.retries)
+                .http_fallbacks(self.http_fallbacks)
                 .max_response_bytes(self.max_response_bytes)
                 .allow_internal_ips(self.allow_internal_ips)
-                .validate(finding.rule(), &bound.globals())
+                .validate(finding.rule(), &globals)
                 .await
         })
         .await
@@ -756,7 +939,7 @@ impl Validator {
     fn can_verify_candidates(&self, finding: &Finding, context: &[Finding]) -> bool {
         let rule = finding.rule().syntax();
         if !rule.depends_on_rule.iter().flatten().any(|dep| dep.verify_candidates)
-            || !super::candidates::supported(rule)
+            || !super::candidates::supported_with_fallbacks(rule, self.http_fallbacks)
         {
             return false;
         }
@@ -966,7 +1149,10 @@ fn resolve_revocation(
         secret: credential.secret.clone(),
         variables: credential.variables.clone(),
     };
-    if let Some(Validation::Betterleaks(validation)) = &finding.rule().syntax().validation
+    if !matches!(
+        finding.rule().syntax().revocation,
+        Some(kingfisher_rules::Revocation::Betterleaks(_))
+    ) && let Some(Validation::Betterleaks(validation)) = &finding.rule().syntax().validation
         && let Some(bindings) = &validation.capabilities.revocation_bindings
     {
         let resolve = |source: &str| {
@@ -1231,7 +1417,12 @@ mod tests {
             assert!(requests.load(Ordering::SeqCst) - before <= 2);
             let cell = validation_cache_cell(
                 &cache,
-                &(finding.rule().syntax(), &bound.secret, &bound.variables),
+                &(
+                    finding.rule().syntax(),
+                    &bound.secret,
+                    &bound.variables,
+                    validator.http_fallbacks,
+                ),
             );
             assert!(cell.lock().await.as_ref().unwrap().deadline_retry_used);
 
@@ -1279,7 +1470,7 @@ mod tests {
         assert_eq!(expired.reason, Some(ValidationReason::DeadlineExceeded));
         let cell = validation_cache_cell(
             &cache,
-            &(finding.rule().syntax(), &bound.secret, &bound.variables),
+            &(finding.rule().syntax(), &bound.secret, &bound.variables, validator.http_fallbacks),
         );
         assert_eq!(
             cell.lock().await.as_ref().unwrap().result.reason,
@@ -1554,6 +1745,7 @@ mod tests {
             primary.clone(),
             Some(credential),
             Vec::new(),
+            &validator.parser,
         );
         assert!(validated.revocation_supported());
         let redacted = validated.into_redacted();

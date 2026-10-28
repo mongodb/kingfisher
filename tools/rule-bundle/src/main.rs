@@ -18,6 +18,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail, ensure};
+use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -25,6 +26,8 @@ use sha2::{Digest, Sha256};
 // Betterleaks v2.0.0-rc.1 includes Cloudflare cfut_/cfat_ formats absent from stable v1.9.0.
 const BETTERLEAKS_REVISION: &str = "b3b4cbb586c964701f78bbfb6bc2129ced99bed3";
 const BETTERLEAKS_SHA256: &str = "b8627cfd4b12beb833f0b7e1173157b1a2988ceb87cf3e2e2882182d7229adf7";
+const BETTERLEAKS_WORDS_SHA256: &str =
+    "d4dd5530d98f4ff343864ed71cfc0064abeae34e4f078edc0b46590c2da8fb47";
 const RULES: &str = "crates/kingfisher-rules";
 const GENERATED: &str = "crates/kingfisher-rules/generated";
 const DOCS: &str = "docs-site/docs/rules/builtin-rules.md";
@@ -76,6 +79,10 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
     let betterleaks_url = format!("{betterleaks_base}/config/betterleaks.toml");
     let contents = source(&betterleaks_url, false)?.unwrap();
     ensure!(digest(contents.as_bytes()) == BETTERLEAKS_SHA256, "Betterleaks digest mismatch");
+    let words_url = format!("{betterleaks_base}/internal/words/words.txt.gz");
+    let words = source(&words_url, false)?.unwrap();
+    let words = decode_archived_source(&words_url, &words)?;
+    ensure!(digest(&words) == BETTERLEAKS_WORDS_SHA256, "Betterleaks wordlist digest mismatch");
     let capabilities =
         fs::read_to_string(root.join(format!("{RULES}/data/imported-rules-capabilities.yml")))?;
     let (betterleaks_capabilities, veles_capabilities) =
@@ -93,7 +100,8 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
          Rules are converted and modified by Kingfisher's importers and operational overlays.\n\
          The provenance manifest records source revisions, hashes, and generated rule IDs.\n\
          Exact source files, including their original headers, accompany this bundle in\n\
-         upstream-sources.json.gz. Compression does not change the applicable licenses.\n",
+         upstream-sources.json.gz. Binary sources use a base64: prefix.\n\
+         Compression does not change the applicable licenses.\n",
     );
     for (name, base) in [
         ("Betterleaks (MIT)", &betterleaks_base),
@@ -107,6 +115,21 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
             }
         }
     }
+    let wordfreq_notice_url = "https://raw.githubusercontent.com/rspeer/wordfreq/912caf64b657478d1dff1138efdc078947d54bb1/NOTICE.md";
+    let wordfreq_license_url = "https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt";
+    let wordfreq_notice = source(wordfreq_notice_url, false)?.unwrap();
+    let wordfreq_license = source(wordfreq_license_url, false)?.unwrap();
+    ensure!(
+        digest(wordfreq_notice.as_bytes())
+            == "d9b104dafe63886af55e7cea7484824e32e12d4e1f57f319923dd643b36d6b15",
+        "wordfreq attribution digest mismatch"
+    );
+    ensure!(
+        digest(wordfreq_license.as_bytes())
+            == "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5",
+        "wordfreq data license digest mismatch"
+    );
+    notices.push_str(&format!("\n===== Betterleaks wordfreq-derived wordlist data (CC-BY-SA-4.0) =====\n\n{wordfreq_notice_url}\n\n{wordfreq_notice}\n{wordfreq_license_url}\n\n{wordfreq_license}\n"));
     // Preserve distinct Go copyright/license headers in readable binary notices as well.
     let headers: BTreeSet<_> = sources
         .iter()
@@ -128,6 +151,9 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
     let bundle = rule_bundle(&[("betterleaks.yml", &yaml), ("veles.yml", &veles_yaml)])?;
     let docs = builtin_docs::generate_builtin_rules_page(&[&yaml, &veles_yaml])?;
     let mut artifacts = BTreeMap::from([
+        (format!("{RULES}/data/betterleaks-words.txt.gz"), words),
+        (format!("{RULES}/data/wordfreq-NOTICE.md"), wordfreq_notice.into_bytes()),
+        (format!("{RULES}/data/wordfreq-LICENSE.txt"), wordfreq_license.into_bytes()),
         (format!("{GENERATED}/builtin-rules.gz"), bundle),
         (archive_path, gzip(&serde_json::to_vec_pretty(&sources)?)?),
         (format!("{GENERATED}/NOTICES.txt"), notices.into_bytes()),
@@ -158,20 +184,30 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
         "Cargo.lock",
         "tools/rule-bundle/Cargo.toml",
         "tools/rule-bundle/src/main.rs",
+        "crates/kingfisher-rules/Cargo.toml",
         "crates/kingfisher-rules/build_support/betterleaks.rs",
         "crates/kingfisher-rules/build_support/builtin_docs.rs",
         "crates/kingfisher-rules/build_support/imported_capabilities.rs",
         "crates/kingfisher-rules/build_support/veles.rs",
         "crates/kingfisher-rules/data/imported-rules-capabilities.yml",
         "crates/kingfisher-rules/data/veles-rules.yml",
+        "crates/kingfisher-rules/data/betterleaks-words.md",
     ]
     .into_iter()
     .map(|path| Ok((path, digest(&fs::read(root.join(path))?))))
     .collect::<Result<BTreeMap<_, _>>>()?;
     let source_hashes: BTreeMap<_, _> = sources
         .iter()
-        .map(|(url, contents)| (url, contents.as_ref().map(|text| digest(text.as_bytes()))))
-        .collect();
+        .map(|(url, contents)| {
+            Ok((
+                url,
+                contents
+                    .as_ref()
+                    .map(|text| decode_archived_source(url, text).map(|bytes| digest(&bytes)))
+                    .transpose()?,
+            ))
+        })
+        .collect::<Result<_>>()?;
     let output_hashes: BTreeMap<_, _> =
         artifacts.iter().map(|(path, bytes)| (path, digest(bytes))).collect();
     let mut manifest = json!({
@@ -320,10 +356,25 @@ fn download(url: &str, optional: bool) -> Result<Option<String>> {
         Ok(mut response) => {
             let mut bytes = Vec::new();
             response.body_mut().as_reader().read_to_end(&mut bytes)?;
+            if url.ends_with(".gz") {
+                return Ok(Some(format!("base64:{}", BASE64.encode(bytes))));
+            }
             Ok(Some(String::from_utf8(bytes).with_context(|| format!("non-UTF-8 source {url}"))?))
         }
         Err(ureq::Error::StatusCode(404)) if optional => Ok(None),
         Err(error) => bail!("failed to fetch {url}: {error}"),
+    }
+}
+
+fn decode_archived_source(url: &str, contents: &str) -> Result<Vec<u8>> {
+    if url.ends_with(".gz") {
+        BASE64
+            .decode(
+                contents.strip_prefix("base64:").context("binary source lacks base64 encoding")?,
+            )
+            .context("invalid base64-encoded source archive")
+    } else {
+        Ok(contents.as_bytes().to_vec())
     }
 }
 

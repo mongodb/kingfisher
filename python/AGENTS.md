@@ -60,6 +60,9 @@ explicit action; enumeration, detection, and validation must not invoke it.
 - Keep existing behavior as the default. Expose new behavior through explicit
   transforms, methods, configuration entry points, or opt-in facades. An additive
   feature must not silently widen a source scope or add extraction/network work.
+- Existing YAML/TOML rules must work without edits. HTTP fallback execution defaults
+  to off, both primary-reuse booleans default to false, and revocation reuse requires its
+  own explicit opt-in and replacement URL(s). Never fail over mutation targets.
 - Treat exports in `kingfisher_sdk.__all__`, result objects, iterator behavior,
   redaction, deduplication state, and reset behavior as user-facing APIs.
 - Define ordering, grouping, laziness, ownership, and lifetime guarantees. Preserve
@@ -164,4 +167,3 @@ explicit action; enumeration, detection, and validation must not invoke it.
 - Follow [publishing guidance](../docs/PUBLISHING.md) for independent SDK/crate
   versions and compatibility checks. Follow the root provenance-regeneration
   requirements if dependency or manifest changes affect catalog provenance.
-

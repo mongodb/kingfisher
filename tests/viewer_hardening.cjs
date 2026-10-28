@@ -35,7 +35,7 @@ function element(tag) {
 ctx.document = { createElement: element };
 ctx.localStorage = { getItem: () => null };
 ctx.AM_CRITICAL_KEY = 'test-critical';
-ctx.expandedAccessKeys = new Set();
+ctx.expandedAccessKeys = new Set(['url-test']);
 vm.runInContext('addViewerSelection = () => {};', ctx);
 const label = '<em>example</em>';
 const finding = { rule: { id: '__proto__', name: 'Example' }, finding: {
@@ -48,7 +48,7 @@ assert.ok(!row.innerHTML.includes(label));
 
 for (const url of ['javascript:alert(1)', 'https://example.com/profile']) {
   elements.length = 0;
-  ctx.buildIdentityCard({ identity: { provider: 'aws', account: 'Example', token_details: { url } }, groups: [] });
+  ctx.buildIdentityCard({ key: 'url-test', identity: { provider: 'aws', account: 'Example', token_details: { url } }, groups: [] });
   const links = elements.filter(el => el.tag === 'a');
   assert.equal(links.length, url.startsWith('https:') ? 1 : 0);
   if (links.length) assert.equal(links[0].rel, 'noopener noreferrer');

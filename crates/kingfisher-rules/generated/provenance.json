@@ -2,11 +2,14 @@
   "artifact_sha256": {
     "crates/kingfisher-core/LICENSE": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
     "crates/kingfisher-rules/LICENSE": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
-    "crates/kingfisher-rules/generated/NOTICES.txt": "ba6f2235199460125ff999dc27127b4ba859eab5f5d368941f8b0cbd44af9352",
-    "crates/kingfisher-rules/generated/builtin-rules.gz": "e3f17f07f8c3083529a735543f125307e2c636cf20ca87ba8ea3ac338ef6c997",
-    "crates/kingfisher-rules/generated/rules/betterleaks.yml": "b5080c22df0611c1f3421cb4a035c2331c67937d2953007fc168ab260a516cf4",
+    "crates/kingfisher-rules/data/betterleaks-words.txt.gz": "d4dd5530d98f4ff343864ed71cfc0064abeae34e4f078edc0b46590c2da8fb47",
+    "crates/kingfisher-rules/data/wordfreq-LICENSE.txt": "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5",
+    "crates/kingfisher-rules/data/wordfreq-NOTICE.md": "d9b104dafe63886af55e7cea7484824e32e12d4e1f57f319923dd643b36d6b15",
+    "crates/kingfisher-rules/generated/NOTICES.txt": "77f17db98a15f7361ee48b0d3e8b71b11c3c26d9a5116f855102f95f4454f4f5",
+    "crates/kingfisher-rules/generated/builtin-rules.gz": "ff478ef4e678916a50a68cfff80945fb34987889393ba490c28ace63665b7731",
+    "crates/kingfisher-rules/generated/rules/betterleaks.yml": "e545377e948d237c205c4b8d019e41774aa8f492d22d1308001d54f241217fd3",
     "crates/kingfisher-rules/generated/rules/veles.yml": "632fc6d73d9f4caa13eefc2efdd952fe975a288d968c9799e14500fded169756",
-    "crates/kingfisher-rules/generated/upstream-sources.json.gz": "6c442c48c2349a5cc69c2e47c5b4affef488af042cb5a66eba485fe27577e6d1",
+    "crates/kingfisher-rules/generated/upstream-sources.json.gz": "52ec9d1c7601cf6f0fab89455ef882e2592b72a48ab48dfc3fc9b3ab05dc90b2",
     "crates/kingfisher-scanner/LICENSE": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
     "docs-site/docs/rules/builtin-rules.md": "4d11abb17ee4b60e81994d2dbfba5e4cd1f65c58808cd28fb1c0d85b32fc0a66"
   },
@@ -17,17 +20,19 @@
   },
   "bundle_format": "gzip / KFRULES v1 / converted YAML",
   "generator_input_sha256": {
-    "Cargo.lock": "ff0b5a9be838e124cc93982c12b1546349a37b5549da781ab31c4be0f096f118",
-    "Cargo.toml": "b1e0fb398018356b497cb828bac4299720ccdc6a4959aa1a4efa56131c0abcdb",
+    "Cargo.lock": "366caf1b91c054c61214f99542ff47cb27dcac8698dfcbe12c83e14c851c9ff8",
+    "Cargo.toml": "2e2eb92b537116ca4ef4f31a432b9744aff138c05976e8cb59d00be57970a73e",
     "LICENSE": "43070e2d4e532684de521b885f385d0841030efa2b1a20bafb76133a5e1379c1",
-    "crates/kingfisher-rules/build_support/betterleaks.rs": "16757d74726e5e829007269fdfc158632f11db02a586a31279ca1356b20b9d8b",
+    "crates/kingfisher-rules/Cargo.toml": "c83c5aa9e2e2e9790f6eb032d0e97b481b9054b33e74b07cd59609ab1ac49b17",
+    "crates/kingfisher-rules/build_support/betterleaks.rs": "831d97ea9edcfbb841b7ef5b962e48a6d3ed26ed4c2e85109ac2b49f9425ebfa",
     "crates/kingfisher-rules/build_support/builtin_docs.rs": "3edb2b444acfb2a7ade1ba7f6e1a3cbac14e6a743e01156293683fcdb4a77225",
     "crates/kingfisher-rules/build_support/imported_capabilities.rs": "2ddeaf7ffdcbedb55d1ccb13eb010ad04a5f451cecd91fd418033c1390242914",
     "crates/kingfisher-rules/build_support/veles.rs": "d60c5d3da89bdb795f670e6d12c302102f14750e8f2b432db6cd0b6cbc3c5880",
-    "crates/kingfisher-rules/data/imported-rules-capabilities.yml": "6a5bae97bb1acfa1d6c99e9338642f59ca0f384e8f7b2950c0635887a30d0cdd",
+    "crates/kingfisher-rules/data/betterleaks-words.md": "1ea4a453e9fcfc1c7ba59ae30cc8e41013df472a0d0d35e40d5c7e6be77ff5e4",
+    "crates/kingfisher-rules/data/imported-rules-capabilities.yml": "a76d67a26ca957092ac67b161ab9f738c04c07a33140e2f96fc638a14452f72d",
     "crates/kingfisher-rules/data/veles-rules.yml": "5d3d57be154c91f2e1fbba01725c2596fea5571b7ebac853c1e08bae9d2aedaf",
-    "tools/rule-bundle/Cargo.toml": "23d061a142f72cd5ddc97055d045c74d2f01023d5e139c3b903b49e92b13e823",
-    "tools/rule-bundle/src/main.rs": "713bb332db0cd0cd97a152e0faa6966092dbd67fb493a7fdf1dd3fcfd44aaaa6"
+    "tools/rule-bundle/Cargo.toml": "e4436e04455b497fa3982dac8a1fc967fb1c3e5d0a603e1bbfe0912fcd575e68",
+    "tools/rule-bundle/src/main.rs": "c0a785ccf3ec0ac48fd6a0ce6a8d847b96a43e38af74128c4af45c9fc142defb"
   },
   "rules": {
     "betterleaks.1password-secret-key": {
@@ -3986,9 +3991,11 @@
   },
   "schema_version": 1,
   "source_sha256": {
+    "https://creativecommons.org/licenses/by-sa/4.0/legalcode.txt": "28a9529c7d0bb4dc51f4bf5c116a3d16ef247a052f7591466768ddf563fd1cf5",
     "https://raw.githubusercontent.com/betterleaks/betterleaks/b3b4cbb586c964701f78bbfb6bc2129ced99bed3/LICENSE": "caea114592a8f8e5e05a116d63a99e0ccd79a3ff74f4ddf270bcf4c929eb021e",
     "https://raw.githubusercontent.com/betterleaks/betterleaks/b3b4cbb586c964701f78bbfb6bc2129ced99bed3/NOTICE": null,
     "https://raw.githubusercontent.com/betterleaks/betterleaks/b3b4cbb586c964701f78bbfb6bc2129ced99bed3/config/betterleaks.toml": "b8627cfd4b12beb833f0b7e1173157b1a2988ceb87cf3e2e2882182d7229adf7",
+    "https://raw.githubusercontent.com/betterleaks/betterleaks/b3b4cbb586c964701f78bbfb6bc2129ced99bed3/internal/words/words.txt.gz": "d4dd5530d98f4ff343864ed71cfc0064abeae34e4f078edc0b46590c2da8fb47",
     "https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/LICENSE": "8d51837cfc3877f9847cc13afd6274bf5df00399f65dbf3eed2ca2ea070582ce",
     "https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/NOTICE": null,
     "https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/extractor/filesystem/list/list.go": "209c35928d94a33913638764252c049d25962f9baeab77b28434b6989b0961d5",
@@ -4030,7 +4037,8 @@
     "https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/sendgrid/detector.go": "a9246c73631cbe7e8b79eef6d07cc647c36e05b9dc2d7b11715bbb7a7ff8ab23",
     "https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/sendgrid/validator.go": "32abca31b20e7283093adb7fa77cc60d89b7f7234ba7432c1ef9834b5154236a",
     "https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/slacktoken/detector.go": "bde9533747bef28b5e7a85ed421242d25c3d1e89e20cbee4d199ee6506fb799f",
-    "https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/slacktoken/validator.go": "d1c7f75bacb2092fb7af5475d4ad8b1da1c518062102090e7da030d460624b1a"
+    "https://raw.githubusercontent.com/google/osv-scalibr/e8621f1fff93beb5b70e5d6ba5fdc3e9854ec845/veles/secrets/slacktoken/validator.go": "d1c7f75bacb2092fb7af5475d4ad8b1da1c518062102090e7da030d460624b1a",
+    "https://raw.githubusercontent.com/rspeer/wordfreq/912caf64b657478d1dff1138efdc078947d54bb1/NOTICE.md": "d9b104dafe63886af55e7cea7484824e32e12d4e1f57f319923dd643b36d6b15"
   },
   "transformation": "Kingfisher imports upstream rules and applies its operational overlays; generated rules are modified derivatives, not verbatim upstream files.",
   "veles": {

@@ -84,6 +84,7 @@ fn rule_matches_example_with_substring_filter(
         false,
         "",
         None,
+        None,
         respect_ignore_if_contains,
         &InlineIgnoreConfig::disabled(),
         &std::sync::OnceLock::new(),
@@ -124,6 +125,128 @@ fn check_entropy_and_safelist(
 // filter_match — main entry point
 // -------------------------------------------------------------------------------------------------
 
+/// Source metadata available without fetching content or changing the caller's repository.
+pub(super) fn source_attributes(
+    origin: &crate::origin::Origin,
+    path: &str,
+    requested: &std::collections::BTreeSet<String>,
+) -> BTreeMap<String, String> {
+    use crate::origin::Origin;
+    let needs = |name: &str| requested.contains(name) || requested.contains("*");
+    let mut attributes = BTreeMap::from([("path".into(), path.to_owned())]);
+    match origin {
+        Origin::File(file) => {
+            if needs("resource") {
+                attributes.insert("resource".into(), "fs.content".into());
+            }
+            if needs("fs.first_fragment") {
+                attributes.insert("fs.first_fragment".into(), "true".into());
+            }
+            if needs("fs.symlink")
+                && std::fs::symlink_metadata(file.path.as_ref())
+                    .is_ok_and(|metadata| metadata.file_type().is_symlink())
+            {
+                attributes.insert("fs.symlink".into(), path.to_owned());
+            }
+        }
+        Origin::GitRepo(git) => {
+            if needs("resource") {
+                attributes.insert("resource".into(), "git.blob".into());
+            }
+            if let Some(commit) = &git.first_commit {
+                let metadata = &commit.commit_metadata;
+                if needs("git.sha") {
+                    attributes.insert("git.sha".into(), metadata.commit_id.to_hex().to_string());
+                }
+                if needs("git.author_name")
+                    && let Some(name) = &metadata.author_name
+                {
+                    attributes.insert("git.author_name".into(), name.to_string());
+                }
+                if needs("git.author_email")
+                    && let Some(email) = &metadata.author_email
+                {
+                    attributes.insert("git.author_email".into(), email.to_string());
+                }
+                // The attribution snapshot retains no message or author timestamp.
+                // Read the referenced local commit; unavailable metadata stays absent.
+                let needs_commit = needs("git.message")
+                    || needs("git.date")
+                    || (needs("git.author_name") && metadata.author_name.is_none())
+                    || (needs("git.author_email") && metadata.author_email.is_none());
+                if needs_commit
+                    && let Ok(repo) = gix::open(git.repo_path.as_ref())
+                    && let Ok(commit) = repo.find_commit(metadata.commit_id)
+                {
+                    if needs("git.message")
+                        && let Ok(message) = commit.message_raw()
+                    {
+                        attributes.insert(
+                            "git.message".into(),
+                            String::from_utf8_lossy(message.as_ref()).into_owned(),
+                        );
+                    }
+                    if let Ok(author) = commit.author() {
+                        if needs("git.author_name") {
+                            attributes.insert(
+                                "git.author_name".into(),
+                                String::from_utf8_lossy(author.name.as_ref()).into_owned(),
+                            );
+                        }
+                        if needs("git.author_email") {
+                            attributes.insert(
+                                "git.author_email".into(),
+                                String::from_utf8_lossy(author.email.as_ref()).into_owned(),
+                            );
+                        }
+                        if needs("git.date")
+                            && let Ok(time) = gix::date::parse(author.time, None)
+                            && let Some(date) =
+                                chrono::DateTime::<chrono::Utc>::from_timestamp(time.seconds, 0)
+                        {
+                            attributes.insert(
+                                "git.date".into(),
+                                date.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+                            );
+                        }
+                    }
+                }
+            }
+            if (needs("git.remote_url") || needs("git.platform"))
+                && let Ok(remote) = crate::origin::get_repo_url(git.repo_path.as_ref())
+            {
+                if needs("git.remote_url") {
+                    attributes.insert("git.remote_url".into(), remote.to_string());
+                }
+                if needs("git.platform")
+                    && let Ok(url) = url::Url::parse(&remote)
+                {
+                    let platform = match url.host_str().unwrap_or_default() {
+                        "github.com" => "github",
+                        "gitlab.com" => "gitlab",
+                        "bitbucket.org" => "bitbucket",
+                        "dev.azure.com" => "azuredevops",
+                        host if host.ends_with(".visualstudio.com") => "azuredevops",
+                        _ => "unknown",
+                    };
+                    attributes.insert("git.platform".into(), platform.into());
+                }
+            }
+        }
+        Origin::Extended(extended) => {
+            if let Some(values) =
+                extended.0.get("attributes").and_then(serde_json::Value::as_object)
+            {
+                attributes.extend(values.iter().filter_map(|(key, value)| {
+                    value.as_str().map(|value| (key.clone(), value.to_owned()))
+                }));
+                attributes.insert("path".into(), path.to_owned());
+            }
+        }
+    }
+    attributes
+}
+
 #[expect(clippy::too_many_arguments)]
 pub(crate) fn filter_match<'b>(
     rules_db: &RulesDatabase,
@@ -142,6 +265,7 @@ pub(crate) fn filter_match<'b>(
     is_base64: bool,
     _redact: bool,
     filename: &str,
+    source_attributes: Option<&BTreeMap<String, String>>,
     profiler: Option<&Arc<ConcurrentRuleProfiler>>,
     respect_ignore_if_contains: bool,
     inline_ignore_config: &InlineIgnoreConfig,
@@ -150,7 +274,7 @@ pub(crate) fn filter_match<'b>(
     candidate_index: Option<&kingfisher_scanner::primitives::CandidateMatchIndex>,
     filter_line_cache: &mut BetterleaksFilterLineCache,
 ) -> bool {
-    if !rule.matches_path(filename) {
+    if rule.syntax().betterleaks_path_only || !rule.matches_path(filename) {
         return false;
     }
 
@@ -205,6 +329,11 @@ pub(crate) fn filter_match<'b>(
         let min_entropy = rule.min_entropy();
         let entropy_bytes = matching_input_for_entropy.as_bytes();
         let full_bytes = full_capture.as_bytes();
+        if !rule.matches_keywords(full_bytes)
+            && !rule.matches_keywords(ts_match.unwrap_or(blob_bytes))
+        {
+            continue;
+        }
 
         // Check entropy and safe-listing
         let calculated_entropy =
@@ -264,6 +393,7 @@ pub(crate) fn filter_match<'b>(
             let full_match = String::from_utf8_lossy(full_bytes);
             let context = BetterleaksFilterContext {
                 path: filename,
+                attributes: source_attributes,
                 secret: &secret,
                 full_match: &full_match,
                 line,
@@ -383,4 +513,79 @@ pub(crate) fn filter_match<'b>(
         t.end(new_count > 0, new_count, 0);
     }
     confirmed
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{git_commit_metadata::CommitMetadata, origin::Origin};
+
+    #[test]
+    fn git_source_attributes_use_the_original_author_date_and_local_commit_message() {
+        let directory = tempfile::tempdir().unwrap();
+        let run_git = |args: &[&str]| {
+            let output = std::process::Command::new("git")
+                .current_dir(directory.path())
+                .args(["-c", "user.name=Original Author", "-c", "user.email=original@example.com"])
+                .args(args)
+                .env("GIT_AUTHOR_DATE", "2026-01-02T03:04:05+00:00")
+                .env("GIT_COMMITTER_DATE", "2026-05-06T07:08:09+00:00")
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", String::from_utf8_lossy(&output.stderr));
+        };
+        run_git(&["init", "--quiet"]);
+        std::fs::write(directory.path().join("config.txt"), b"fixture").unwrap();
+        run_git(&["add", "config.txt"]);
+        run_git(&["commit", "--quiet", "--no-gpg-sign", "-m", "Original commit message"]);
+        run_git(&["remote", "add", "origin", "https://github.com/example/project.git"]);
+        let repository = gix::open(directory.path()).unwrap();
+        let commit_id = repository.head_id().unwrap().detach();
+        let origin = Origin::from_git_repo_with_first_commit(
+            Arc::new(directory.path().to_path_buf()),
+            Arc::new(CommitMetadata {
+                commit_id,
+                author_name: None,
+                author_email: None,
+                committer_name: "Different Committer".into(),
+                committer_email: "committer@example.com".into(),
+                committer_timestamp: gix::date::Time::new(0, 0),
+            }),
+            "config.txt".into(),
+        );
+        let attributes = source_attributes(
+            &origin,
+            "config.txt",
+            &std::collections::BTreeSet::from(["*".into()]),
+        );
+        assert_eq!(attributes["path"], "config.txt");
+        assert_eq!(attributes["git.sha"], commit_id.to_hex().to_string());
+        assert_eq!(attributes["git.author_name"], "Original Author");
+        assert_eq!(attributes["git.author_email"], "original@example.com");
+        assert_eq!(attributes["git.date"], "2026-01-02T03:04:05Z");
+        assert_eq!(attributes["git.message"], "Original commit message\n");
+        assert_eq!(attributes["git.remote_url"], "https://github.com/example/project.git");
+        assert_eq!(attributes["git.platform"], "github");
+        let path_only = source_attributes(
+            &origin,
+            "config.txt",
+            &std::collections::BTreeSet::from(["path".into()]),
+        );
+        assert_eq!(path_only, BTreeMap::from([("path".into(), "config.txt".into())]));
+    }
+
+    #[test]
+    fn source_attributes_preserve_explicit_metadata_and_the_actual_logical_path() {
+        let origin = Origin::from_extended(serde_json::json!({"path":"logical.txt","attributes":{
+            "path":"incorrect.txt","fs.symlink":"link.txt","git.message":"fixture","numeric":42
+        }}));
+        let attributes = source_attributes(
+            &origin,
+            "logical.txt",
+            &std::collections::BTreeSet::from(["*".into()]),
+        );
+        assert_eq!(attributes["path"], "logical.txt");
+        assert_eq!(attributes["fs.symlink"], "link.txt");
+        assert!(!attributes.contains_key("numeric"));
+    }
 }

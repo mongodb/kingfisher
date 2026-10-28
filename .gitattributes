@@ -3,11 +3,13 @@ testdata/* linguist-vendored
 /tools/rule-bundle/** text eol=lf
 /crates/kingfisher-rules/build_support/** text eol=lf
 /crates/kingfisher-rules/data/** text eol=lf
+/crates/kingfisher-rules/data/*.gz -text
 /crates/kingfisher-rules/generated/*.json text eol=lf
 /crates/kingfisher-rules/generated/*.txt text eol=lf
 /crates/kingfisher-rules/generated/rules/** text eol=lf
 /LICENSE text eol=lf
 /Cargo.toml text eol=lf
 /Cargo.lock text eol=lf
+/crates/kingfisher-*/Cargo.toml text eol=lf
 /crates/kingfisher-*/LICENSE text eol=lf
 /docs-site/docs/rules/builtin-rules.md text eol=lf

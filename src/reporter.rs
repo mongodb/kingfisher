@@ -32,9 +32,9 @@ use crate::{
 mod bson_format;
 mod commands;
 use commands::{
-    BlastRadiusCommandContext, build_blast_radius_command, build_revoke_command,
-    build_validate_command, extract_akid_from_validation_body,
-    resolve_betterleaks_capability_source,
+    BlastRadiusCommandContext, build_blast_radius_command, build_revoke_command_for_rule,
+    build_validate_command_for_rule, extract_akid_from_validation_body,
+    resolve_betterleaks_capability_source, with_rule_loading,
 };
 mod html_format;
 mod json_format;
@@ -153,6 +153,21 @@ fn format_validation_response(validation_body: &str, redact: bool, full_response
     format!("{truncated_body}{ellipsis}")
 }
 
+// Encode URL path delimiters and literal percent signs, but preserve directory separators.
+const BLOB_PATH_ENCODE_SET: &AsciiSet = &CONTROLS
+    .add(b' ')
+    .add(b'"')
+    .add(b'#')
+    .add(b'%')
+    .add(b'<')
+    .add(b'>')
+    .add(b'?')
+    .add(b'\\')
+    .add(b'`')
+    .add(b'{')
+    .add(b'}')
+    .add(b'|');
+
 const BITBUCKET_FRAGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b' ')
     .add(b'"')
@@ -165,18 +180,6 @@ const BITBUCKET_FRAGMENT_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b'{')
     .add(b'}')
     .add(b'|');
-
-const BLOB_PATH_ENCODE_SET: &AsciiSet = &CONTROLS
-    .add(b' ')
-    .add(b'"')
-    .add(b'#')
-    .add(b'%')
-    .add(b'<')
-    .add(b'>')
-    .add(b'?')
-    .add(b'`')
-    .add(b'{')
-    .add(b'}');
 
 const AZURE_QUERY_ENCODE_SET: &AsciiSet = &CONTROLS
     .add(b' ')
@@ -214,8 +217,8 @@ pub(crate) fn build_git_urls(
     let repo_url = repo_url.trim_end_matches('/');
     let mut repository_url = repo_url.to_string();
     let mut commit_url = format!("{repo_url}/commit/{commit_id}");
-    let encoded_file_path = utf8_percent_encode(file_path, BLOB_PATH_ENCODE_SET);
-    let mut file_url = format!("{repo_url}/blob/{commit_id}/{encoded_file_path}#L{line}");
+    let encoded_path = utf8_percent_encode(file_path, BLOB_PATH_ENCODE_SET);
+    let mut file_url = format!("{repo_url}/blob/{commit_id}/{encoded_path}#L{line}");
 
     if let Ok(parsed) = Url::parse(repo_url) {
         let scheme = parsed.scheme();
@@ -349,24 +352,34 @@ impl DetailsReporter {
         let repo_url = self
             .repo_artifact_url(prov.repo_path.as_ref())
             .or_else(|| get_repo_url(&prov.repo_path).ok().map(|url| url.to_string()))
-            .unwrap_or_else(|| prov.repo_path.to_string_lossy().to_string());
-        let repo_url = repo_url.trim_end_matches(".git").to_string();
+            .and_then(|raw| {
+                // Local origin URLs can embed clone credentials even though
+                // explicit GitUrl inputs cannot. Never copy those into reports.
+                let mut url = Url::parse(&raw).ok()?;
+                if url.host_str().is_none() || url.scheme() == "file" {
+                    return None;
+                }
+                url.set_username("").ok()?;
+                url.set_password(None).ok()?;
+                url.set_query(None);
+                url.set_fragment(None);
+                Some(url.to_string())
+            });
+        let repository_id = repo_url
+            .as_deref()
+            .and_then(|url| self.datastore.lock().ok().and_then(|ds| ds.repo_id(url)));
+        let repo_url = repo_url.map(|url| url.trim_end_matches(".git").to_string());
         if let Some(cs) = &prov.first_commit {
             let cmd = &cs.commit_metadata;
             let commit_id = cmd.commit_id.to_string();
-            let (repository_url, commit_url, file_url) =
-                build_git_urls(&repo_url, &commit_id, &cs.blob_path, source_span.start.line);
-
             let atime = cmd
                 .committer_timestamp
                 .format(gix::date::time::format::SHORT)
                 .unwrap_or_else(|_| cmd.committer_timestamp.seconds.to_string());
 
-            let git_metadata = serde_json::json!({
-                "repository_url": repository_url,
+            let mut git_metadata = serde_json::json!({
                 "commit": {
                     "id": commit_id,
-                    "url": commit_url,
                     "date": atime,
                     "committer": {
                         "name": &cmd.committer_name,
@@ -379,7 +392,6 @@ impl DetailsReporter {
                 },
                 "file": {
                     "path": &cs.blob_path,
-                    "url": file_url,
                     "git_command": format!(
                         "git -C {} show {}:{}",
                         prov.repo_path.display(),
@@ -388,9 +400,24 @@ impl DetailsReporter {
                     )
                 }
             });
+            if let Some(repo_url) = repo_url {
+                let (repository_url, commit_url, file_url) =
+                    build_git_urls(&repo_url, &commit_id, &cs.blob_path, source_span.start.line);
+                git_metadata["repository_url"] = serde_json::json!(repository_url);
+                git_metadata["commit"]["url"] = serde_json::json!(commit_url);
+                git_metadata["file"]["url"] = serde_json::json!(file_url);
+            }
+            if let Some(id) = repository_id {
+                git_metadata["repository_id"] = serde_json::json!(id);
+            }
             Some(git_metadata)
         } else {
-            None
+            // Repository identity does not depend on collecting commit metadata.
+            let mut metadata = serde_json::json!({"repository_url": repo_url?});
+            if let Some(id) = repository_id {
+                metadata["repository_id"] = serde_json::json!(id);
+            }
+            Some(metadata)
         }
     }
 
@@ -609,7 +636,7 @@ impl DetailsReporter {
         }
 
         use std::collections::HashMap;
-        let mut by_fp: HashMap<(u64, String, String), ReportMatch> = HashMap::new();
+        let mut by_fp: HashMap<(u64, String, String, Option<String>), ReportMatch> = HashMap::new();
 
         for rm in matches {
             let key = (
@@ -621,6 +648,7 @@ impl DetailsReporter {
                     &rm.m.dependency_candidates,
                 ))
                 .expect("dependency maps serialize"),
+                self.datastore.lock().ok().and_then(|ds| ds.repository_dedup_scope(&rm.origin)),
             );
             if let Some(existing) = by_fp.get_mut(&key) {
                 *existing = Self::merge_origins_for_dedup(existing.clone(), rm);
@@ -796,13 +824,14 @@ impl DetailsReporter {
             let akid_from_body = extract_akid_from_validation_body(&rm.validation_response_body);
 
             // Generate validate command for findings with validation support
-            let validate_cmd = if let Some(validation) = &rm.m.rule.syntax().validation {
+            let validate_cmd = if rm.m.rule.syntax().validation.is_some() {
                 // Merge dependent captures with named regex captures so the generated command is runnable.
                 // (E.g., Modal needs TOKEN_ID, which is a named capture on the same rule.)
                 let mut merged_vars = rm.m.dependent_captures.clone();
                 for cap in rm.m.groups.captures.iter() {
                     let Some(name) = cap.name else { continue };
-                    if name.eq_ignore_ascii_case("TOKEN") {
+                    if name.eq_ignore_ascii_case("TOKEN")
+                        || kingfisher_scanner::validation::http_validation::is_validation_endpoint_var(&name.to_uppercase()) {
                         continue;
                     }
                     merged_vars
@@ -810,9 +839,8 @@ impl DetailsReporter {
                         .or_insert_with(|| cap.raw_value().to_string());
                 }
 
-                build_validate_command(
-                    rm.m.rule.id(),
-                    validation,
+                build_validate_command_for_rule(
+                    rm.m.rule.syntax(),
                     &raw_snippet,
                     &merged_vars,
                     akid_from_captures.as_deref(),
@@ -826,7 +854,8 @@ impl DetailsReporter {
                 let mut merged_vars = rm.m.dependent_captures.clone();
                 for cap in rm.m.groups.captures.iter() {
                     let Some(name) = cap.name else { continue };
-                    if name.eq_ignore_ascii_case("TOKEN") {
+                    if name.eq_ignore_ascii_case("TOKEN")
+                        || kingfisher_scanner::validation::http_validation::is_validation_endpoint_var(&name.to_uppercase()) {
                         continue;
                     }
                     merged_vars
@@ -850,13 +879,23 @@ impl DetailsReporter {
 
             // Generate revoke command for active credentials with revocation support
             let revoke_cmd = if rm.validation_outcome.is_verified_active() {
-                if let Some(revocation) = &rm.m.rule.syntax().revocation {
+                if let Some(revocation) = rm
+                    .m
+                    .rule
+                    .syntax()
+                    .selected_revocation(
+                        rm.m.dependent_captures.get("VALIDATION_FALLBACK_ID").map(String::as_str),
+                    )
+                    .ok()
+                    .flatten()
+                {
                     // Merge dependent captures with named regex captures so the generated command is runnable.
                     // (Some rules capture required revocation parameters directly in the match.)
                     let mut merged_vars = rm.m.dependent_captures.clone();
                     for cap in rm.m.groups.captures.iter() {
                         let Some(name) = cap.name else { continue };
-                        if name.eq_ignore_ascii_case("TOKEN") {
+                        if name.eq_ignore_ascii_case("TOKEN")
+                            || kingfisher_scanner::validation::http_validation::is_validation_endpoint_var(&name.to_uppercase()) {
                             continue;
                         }
                         merged_vars
@@ -894,9 +933,9 @@ impl DetailsReporter {
                     }
                     bindings_complete
                         .then(|| {
-                            build_revoke_command(
-                                rm.m.rule.id(),
-                                revocation,
+                            build_revoke_command_for_rule(
+                                rm.m.rule.syntax(),
+                                &revocation,
                                 &revoke_secret,
                                 &merged_vars,
                                 akid_from_captures.as_deref(),
@@ -911,7 +950,11 @@ impl DetailsReporter {
                 None
             };
 
-            (validate_cmd, revoke_cmd, blast_radius_cmd)
+            (
+                with_rule_loading(validate_cmd, &args.rules.rules_path, args.rules.load_builtins),
+                with_rule_loading(revoke_cmd, &args.rules.rules_path, args.rules.load_builtins),
+                blast_radius_cmd,
+            )
         };
 
         FindingReporterRecord {
@@ -925,7 +968,21 @@ impl DetailsReporter {
                 dependent_captures: if args.redact {
                     BTreeMap::new()
                 } else {
-                    rm.m.dependent_captures.clone()
+                    rm.m.dependent_captures
+                        .iter()
+                        .filter(|(name, _)| {
+                            !name.starts_with("__BETTERLEAKS_")
+                                && !matches!(
+                                    name.as_str(),
+                                    "VALIDATION_URL"
+                                        | "VALIDATION_FALLBACK_ID"
+                                        | "VALIDATION_ORIGIN"
+                                        | "VALIDATION_ENDPOINT_INDEX"
+                                        | "VALIDATION_ENDPOINT_COUNT"
+                                )
+                        })
+                        .map(|(name, value)| (name.clone(), value.clone()))
+                        .collect()
                 },
                 ambiguous_dependencies: rm.m.ambiguous_dependencies.clone(),
                 snippet,
@@ -1755,6 +1812,7 @@ mod tests {
             no_validate: false,
             no_timeouts: false,
             access_map: false,
+            blast_radius_options: Default::default(),
             only_valid: false,
             validation_filter: None,
             include_hidden_findings: false,
@@ -1836,8 +1894,13 @@ mod tests {
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         }));
 
         let blob_id = BlobId::new(b"blob-data");
@@ -2049,6 +2112,7 @@ mod tests {
             .and_then(|path| path.as_str())
             .unwrap();
         assert_eq!(git_file_path, "path/in/history.txt");
+        assert!(record.finding.git_metadata.as_ref().unwrap().get("repository_id").is_none());
     }
 
     #[test]
@@ -2251,6 +2315,41 @@ mod tests {
     use super::{build_git_urls, gist_file_anchor};
 
     #[test]
+    fn blob_links_encode_file_paths() {
+        let paths = [
+            ("src/lib.rs", "src/lib.rs"),
+            ("src/C#/appsettings.json", "src/C%23/appsettings.json"),
+            ("src/C#/100% done?.txt", "src/C%23/100%25%20done%3F.txt"),
+            ("config/what?.env", "config/what%3F.env"),
+            ("100% done.txt", "100%25%20done.txt"),
+            ("dir/encoded%23%2F.env", "dir/encoded%2523%252F.env"),
+            ("dir/hello world.txt", "dir/hello%20world.txt"),
+            ("café/秘密.env", "caf%C3%A9/%E7%A7%98%E5%AF%86.env"),
+            (r"dir/back\slash.env", "dir/back%5Cslash.env"),
+            ("dir/pipe|name.env", "dir/pipe%7Cname.env"),
+            ("dir/control\t\n.env", "dir/control%09%0A.env"),
+        ];
+
+        for repo in ["https://github.com/org/repo", "https://git.example.com/org/repo"] {
+            for (path, encoded_path) in paths {
+                let (repo_url, commit_url, file_url) = build_git_urls(repo, "abc123", path, 7);
+
+                assert_eq!(repo_url, repo);
+                assert_eq!(commit_url, format!("{repo}/commit/abc123"));
+                assert_eq!(
+                    file_url,
+                    format!("{repo}/blob/abc123/{encoded_path}#L7"),
+                    "incorrect file URL for {path:?}"
+                );
+
+                let parsed = url::Url::parse(&file_url).unwrap();
+                assert_eq!(parsed.query(), None);
+                assert_eq!(parsed.fragment(), Some("L7"));
+            }
+        }
+    }
+
+    #[test]
     fn azure_commit_links_use_query_paths() {
         let (repo_url, commit_url, file_url) = build_git_urls(
             "https://dev.azure.com/org/project/_git/repo",
@@ -2268,22 +2367,6 @@ mod tests {
             file_url,
             "https://dev.azure.com/org/project/_git/repo/commit/0123456789abcdef?path=/dir/file.txt&line=7"
         );
-    }
-
-    #[test]
-    fn blob_links_percent_encode_file_paths() {
-        let (_, _, file_url) = build_git_urls(
-            "https://github.com/org/repo",
-            "0123456789abcdef",
-            "src/C#/100% done?.txt",
-            7,
-        );
-
-        assert_eq!(
-            file_url,
-            "https://github.com/org/repo/blob/0123456789abcdef/src/C%23/100%25%20done%3F.txt#L7"
-        );
-        assert_eq!(Url::parse(&file_url).unwrap().fragment(), Some("L7"));
     }
 
     #[test]
@@ -2331,6 +2414,87 @@ mod tests {
     }
 
     #[test]
+    fn repository_metadata_without_commits_omits_remote_credentials() {
+        let directory = tempdir().unwrap();
+        let repo_path = directory.path().join("repository.git");
+        let repo = git2::Repository::init_bare(&repo_path).unwrap();
+        repo.remote("origin", "https://clone-user:synthetic-token@gitlab.example.com/acme/repo.git?token=synthetic-query#synthetic-fragment").unwrap();
+        drop(repo);
+        let reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
+                directory.path().to_path_buf(),
+            ))),
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+        let origin = GitRepoOrigin { repo_path: Arc::new(repo_path), first_commit: None };
+        let span = SourceSpan {
+            start: SourcePoint { line: 1, column: 0 },
+            end: SourcePoint { line: 1, column: 1 },
+        };
+        let metadata = reporter.extract_git_metadata(&origin, &span).unwrap();
+        assert_eq!(metadata["repository_url"], "https://gitlab.example.com/acme/repo");
+        let serialized = serde_json::to_string(&metadata).unwrap();
+        assert!(!serialized.contains("synthetic-"));
+        assert!(!serialized.contains("clone-user"));
+    }
+
+    #[test]
+    fn repository_metadata_does_not_invent_urls_for_local_repositories() {
+        let directory = tempdir().unwrap();
+        let repo_path = directory.path().join("repository.git");
+        let repo = git2::Repository::init_bare(&repo_path).unwrap();
+        let reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
+                directory.path().to_path_buf(),
+            ))),
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+        let span = SourceSpan {
+            start: SourcePoint { line: 1, column: 0 },
+            end: SourcePoint { line: 1, column: 1 },
+        };
+        for remote in [
+            None,
+            Some(directory.path().to_string_lossy().into_owned()),
+            Some(Url::from_directory_path(directory.path()).unwrap().to_string()),
+        ] {
+            if let Some(remote) = remote {
+                repo.remote("origin", &remote).unwrap();
+            }
+            let origin =
+                GitRepoOrigin { repo_path: Arc::new(repo_path.clone()), first_commit: None };
+            assert!(reporter.extract_git_metadata(&origin, &span).is_none());
+            let origin = Origin::from_git_repo_with_first_commit(
+                Arc::new(repo_path.clone()),
+                Arc::new(CommitMetadata {
+                    commit_id: ObjectId::from_hex(b"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+                        .unwrap(),
+                    author_name: None,
+                    author_email: None,
+                    committer_name: "Fixture".into(),
+                    committer_email: "fixture@example.invalid".into(),
+                    committer_timestamp: Time::new(0, 0),
+                }),
+                "secret.txt".into(),
+            );
+            let Origin::GitRepo(origin) = origin else { unreachable!() };
+            let metadata = reporter.extract_git_metadata(&origin, &span).unwrap();
+            assert!(metadata.get("repository_url").is_none());
+            assert!(metadata["commit"].get("url").is_none());
+            assert!(metadata["file"].get("url").is_none());
+            assert_eq!(metadata["file"]["path"], "secret.txt");
+            assert_eq!(metadata["commit"]["id"], "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+            if repo.find_remote("origin").is_ok() {
+                repo.remote_delete("origin").unwrap();
+            }
+        }
+    }
+
+    #[test]
     fn extract_git_metadata_uses_registered_repo_permalink_after_cleanup() {
         let store_root = tempdir().unwrap();
         let datastore = Arc::new(Mutex::new(findings_store::FindingsStore::new(
@@ -2343,7 +2507,8 @@ mod tests {
         assert!(!repo_path.exists());
 
         let repo_url = "https://github.com/mongodb/kingfisher.git";
-        datastore.lock().unwrap().register_repo_link(repo_path.clone(), repo_url.to_string());
+        datastore.lock().unwrap().register_repo_link(repo_path.clone(), "https://clone-user:synthetic-token@github.com/mongodb/kingfisher.git?token=synthetic-query#synthetic-fragment".into());
+        datastore.lock().unwrap().register_repo_id(repo_url, 123456789);
 
         let reporter = DetailsReporter {
             datastore,
@@ -2380,6 +2545,7 @@ mod tests {
         assert_eq!(git["commit"]["author"]["name"], "Original Author");
         assert_eq!(git["commit"]["author"]["email"], "original@example.invalid");
         assert_eq!(git["repository_url"].as_str(), Some("https://github.com/mongodb/kingfisher"));
+        assert_eq!(git["repository_id"].as_u64(), Some(123456789));
         assert_eq!(
             git["commit"]["url"].as_str(),
             Some(

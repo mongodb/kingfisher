@@ -1,0 +1,76 @@
+# Regression fixture copied from the immutable Betterleaks v2 catalog.
+# Source: https://raw.githubusercontent.com/betterleaks/betterleaks/22ae2f41a70d759e83e832a6a1b205fac729223b/config/betterleaks.toml
+# Source config SHA-256: b9e8ff926e1a8ae701702d42b1cd8c6811af37aa754ce2bd0e3129cff0fe886f
+# Copied rule block SHA-256: 8bc40842614f684912865e82c65e06decb8a15ea4a3a73a0a9bba407a32a26a5
+# Betterleaks copyright 2026 Zachary Rice; MIT license retained in LICENSE.betterleaks.
+minVersion = "v2.0.0-rc.1"
+
+[[rules]]
+id = "buildkite-user-access-token"
+description = "Detected a Buildkite user access token, which may expose pipelines, builds, and organization data."
+regex = '''\b(bkua_(?:[a-z0-9]{40}|[a-z0-9]{53}))\b'''
+confidence = "high"
+keywords = ["bkua_"]
+validate = '''
+let r = http.get("https://api.buildkite.com/v2/access-token", {
+  "Authorization": "Bearer " + finding["secret"],
+  "Accept": "application/json"
+}); r.status == 200 && r.json?.scopes != nil ? {
+  "result": "valid",
+  "analysis": {
+    "token_id": r.json?.uuid ?? "",
+    "token_name": r.json?.description ?? "",
+    "scopes": r.json?.scopes ?? [],
+    "name": r.json?.user?.name ?? "",
+    "email": r.json?.user?.email ?? "",
+    "created_at": r.json?.created_at ?? "",
+    "expires_at": r.json?.expires_at ?? ""
+  }
+} : r.status in [401, 403] ? {
+  "result": "invalid",
+  "reason": "Unauthorized"
+} : validate.unknown(r)
+'''
+analyze = '''
+let input = validation.analysis;
+let scopes = input["scopes"] ?? [];
+let can_read = matchesAny(scopes, [
+  "^read_(?:pipelines|builds|build_logs|job_env|artifacts|agents|clusters|pipeline_templates|rules|organizations|organization_invitations|organization_settings|organization_repository_connections|notification_services|teams|user|audit_events|secrets_details|suites|test_plan|registries|packages|portals)$"
+]);
+let can_write = matchesAny(scopes, [
+  "^write_(?:pipelines|builds|build_logs|artifacts|agents|clusters|pipeline_templates|rules|organizations|organization_invitations|organization_settings|notification_services|teams|secrets|suites|test_plan|registries|packages|portals)$",
+  "^delete_(?:registries|packages)$"
+]);
+{
+  "reason": "graphql" in scopes ? "Buildkite GraphQL permissions were not expanded" :
+    len(scopes) == 0 ? "Buildkite did not return token scopes" :
+    !can_read && !can_write ? "Buildkite returned no recognized REST permission grants" : "",
+  "identity": {
+    "name": input["name"] ?? "",
+    "email": input["email"] ?? ""
+  },
+  "metadata": {
+    "token_id": input["token_id"] ?? "",
+    "token_name": input["token_name"] ?? "",
+    "scopes": scopes,
+    "created_at": input["created_at"] ?? "",
+    "expires_at": input["expires_at"] ?? ""
+  },
+  "capabilities": analysis.capabilities({
+    "read": can_read,
+    "write": can_write,
+    "manage_users": intersects(scopes, ["write_organizations", "write_organization_invitations", "write_teams"])
+  })
+}
+'''
+revoke = '''
+let r = http.delete("https://api.buildkite.com/v2/access-token", {
+  "Authorization": "Bearer " + finding["secret"],
+  "Accept": "application/json"
+}); r.status == 204 ? {
+  "result": "revoked"
+} : revoke.unknown(r)
+'''
+filter = '''
+entropy(finding["secret"]) < 3.5
+'''

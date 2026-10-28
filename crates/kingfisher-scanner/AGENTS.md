@@ -26,6 +26,15 @@ Guidance for working in `crates/kingfisher-scanner/`.
 
 ## API Stability
 
+- Preserve unmodified legacy YAML/TOML rule loading and primary validation/revocation behavior.
+  New fallback endpoints require explicit execution opt-in in every CLI/SDK path. Unused
+  fallbacks must not trigger requests, DNS lookups, or input requirements for primary validation.
+  Validation and revocation reuse are separate booleans, both defaulting to false; reuse
+  replaces only explicit URL(s). `--fallbacks` enables CLI environments, never automatic
+  revocation or mutation failover. Result-based revocation retains the validated selection.
+  CLI fallback revocation validates first; do not add implicit revalidation to SDK result-based
+  revocation or change legacy direct-primary CLI behavior.
+
 - Treat changes to exported structs, methods, and re-exports as user-facing changes.
 - Update `docs/LIBRARY.md` and crate-level docs when the public API or recommended usage changes.
 - Keep examples in the crate README and `docs/LIBRARY.md` consistent with the current API.

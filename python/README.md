@@ -12,7 +12,7 @@ uv add kingfisher-secret-scanner
 
 The **PyPI distribution** is `kingfisher-secret-scanner`; the **Python import** is
 `kingfisher_sdk`. It coexists with the separately distributed `kingfisher-bin` CLI.
-The prepared SDK version is **1.5.0**, a backward-compatible feature release.
+The prepared SDK version is **1.6.0**, a backward-compatible feature release.
 The SDK version is independent of the CLI and Rust library versions.
 
 SDK/runtime changes need a new PyPI version. The release workflow checks this
@@ -20,7 +20,7 @@ before native builds, while default manual runs remain test-only. Maintainers
 can check the prepared version without building or publishing:
 
 ```bash
-python3 scripts/check-sdk-release.py --require-new --expected-version 1.5.0
+python3 scripts/check-sdk-release.py --require-new --expected-version 1.6.0
 ```
 
 Explicit publication requires upstream `main`, `publish=true`, and matching
@@ -45,6 +45,23 @@ Custom YAML HTTP verification services can use
 [OAuth2 authentication](../docs/RULES.md#oauth2-authentication-for-http-verification-services).
 Reuse a `Validator` for token reuse, expiry refresh and failure cooldowns; set
 credential environment variables through the rule's `*_env` fields.
+
+HTTP validation uses only the primary endpoint by default. To explicitly permit up
+to two rule-defined fallback environments, use `Validator(http_fallbacks=True)`.
+`reuse_primary_validation_logic` defaults to false; true reuses primary HTTP validation
+logic with its URL explicitly replaced. `reuse_primary_revocation_logic` separately opts in to primary
+revocation reuse with replacement URL(s); false/omitted requires an independent
+action or leaves revocation unavailable. The CLI flag is `--fallbacks` for both
+capabilities; revocation never fails over mutation targets. Existing rules
+need no edits. See the [rule guide](../docs/RULES.md#ordered-http-fallback-endpoints)
+and [runnable example](examples/http_fallbacks.py).
+Neither switch inherits primary URL(s).
+
+CLI `revoke --fallbacks` validates to select a target automatically. Python
+result-based revocation keeps its existing contract: reuse the retained snapshot
+with `Revoker.revoke(result, confirm=True)`, without another validation request.
+Exact-ID revocation uses only the primary action and rejects reserved `VALIDATION_*`
+endpoint-selection variables; pass a validated result to revoke a fallback credential.
 
 ```python
 import json
@@ -120,6 +137,10 @@ CLI's ranking and bounded search. Identical rule/resolved inputs share one reque
 per validation batch; different rules and components remain independent.
 Scanning stays offline and revocation requires explicit confirmation.
 
+Built-in PEM detectors share bounded offline structure checks with the CLI.
+BER key encodings, incomplete outer markers and partial diff prefixes are kept
+when they may contain real key material; these checks do not prove live validity.
+
 For report filtering, serialize once and inspect the redacted fields:
 
 ```python
@@ -166,7 +187,7 @@ bounded nested Base64, inline-ignore and HTML/CSS checks; validation remains exp
 compared with `kingfisher scan`. See the
 [filtering and CLI comparison guide](https://github.com/mongodb/kingfisher/blob/main/docs/PYPI.md#choose-detection-and-reporting-filters).
 
-## Detection policies, SQLite/bytecode and Git scopes
+## Detection policies, SQLite/bytecode/PDF and Git scopes
 
 ```python
 from kingfisher_sdk import DetectionPolicy, Scanner, GitScope, git_inputs, expand_archives, expand_content
@@ -192,6 +213,15 @@ Set `cli_match_semantics=False`, `base64_max_depth=1`, and
 `base64_max_input_bytes=None` to retain legacy SDK matching/decoding while choosing
 context filters. Each policy can be configured independently. `expand_content` extracts SQLite SQL and `.pyc` strings without
 executing bytecode. SQLite lock waits remain bounded independently of content limits.
+Use `expand_content(sources, pdf=True)` to explicitly extract PDF page text as
+`document.pdf!page-N.txt`, preserving provenance and assigning offsets within each
+page's UTF-8 text. Input, output, decompression and page-count limits apply; no
+OCR, encrypted PDFs, embedded files, annotations, or Form XObject text extraction.
+Reported page/font stream decode errors are skipped by default without losing
+readable pages; `strict=True` raises on those errors instead of yielding partial pages.
+Neither mode guarantees complete coverage when a codec silently recovers corruption.
+See the [PDF example](https://github.com/mongodb/kingfisher/blob/main/python/examples/pdf.py)
+and [limits/fallback guide](https://github.com/mongodb/kingfisher/blob/main/docs/PYPI.md#extract-pdf-page-text).
 `GitScope` supports history ranges, inclusive branch roots,
 time bounds, snapshots, net diffs, staged index content and unreachable objects.
 `since_hours` must be positive and fit in signed 64-bit seconds; scope bounds are
@@ -279,6 +309,12 @@ rule compilation and individual native operations cannot be preempted. Python
 releases the GIL during scanning, allowing another thread to signal cancellation.
 Use a separate process when a hard wall-clock execution limit is required.
 
+Betterleaks source filters can inspect explicit metadata with
+`scanner.scan_with_attributes(content, {"path": "config.env", "git.author_name": "alice"})`.
+This additive method preserves the scanner's detection policy, component context,
+timeout/cancellation controls and source-aware deduplication. It performs no source
+acquisition. See the [detection example](examples/detection.py).
+
 ## Validate explicitly
 
 SMTP URIs use the shared validator. For separate SMTP fields, the
@@ -302,6 +338,14 @@ for result in Validator(timeout=10, concurrency=4).validate(findings, timeout=30
 Scanning is offline. Validation may contact providers using detected credentials.
 Keep the complete scan result, including invisible supporting findings, until
 validation finishes. Report redacted results; do not log `finding.secret`.
+
+For Betterleaks rules with an `analyze` program, explicitly call
+`validator.analyze(result, timeout=30)` after a `verified_active` result. Analysis
+reuses that result's original captures, components and private validation evidence;
+it may make additional provider requests. Ordinary validation never runs analysis.
+The returned identity, capabilities and metadata can contain sensitive information.
+Private handoff evidence is omitted from `ValidationResult.to_dict()` and `repr`.
+See the [runnable analysis example](examples/analyze.py).
 
 Pass a validated result directly to revoke using its original rule and resolved
 credential pair. No credential environment variables or manual AWS association are

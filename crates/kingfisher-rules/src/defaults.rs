@@ -136,6 +136,7 @@ mod test {
         evaluate_filter(
             rule.betterleaks_filter.as_ref().expect("rule should have a filter"),
             &BetterleaksFilterContext {
+                attributes: None,
                 path,
                 secret,
                 full_match,
@@ -168,11 +169,13 @@ mod test {
               + "PRIVATE_KEY\n"
               + ""#,
             "\nYWJjZA==\n",
+            // A long, correctly encoded body is not necessarily a key.
+            "\neHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4\n",
         ] {
             let pem = format!("-----BEGIN PRIVATE KEY-----{body}-----END PRIVATE KEY-----");
             assert!(filter_discards(key_rule, "fixture.java", &pem, &pem, &[]), "{pem}");
         }
-        // A compact, synthetic Ed25519 PKCS#8 key must survive the length gate.
+        // A compact, synthetic Ed25519 PKCS#8 key must survive structural filtering.
         let body = "MC4CAQAwBQYDK2VwBCIEIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g";
         for body in [
             body.to_string(),
@@ -184,7 +187,20 @@ mod test {
         ] {
             let pem = format!("-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----");
             assert!(!filter_discards(key_rule, "fixture.pem", &pem, &pem, &[]), "{pem}");
+            for prefix in ["# ", "+", " * ", "> ", "// ", "; "] {
+                let represented = pem.replace('\n', &format!("\n{prefix}"));
+                assert!(
+                    !filter_discards(key_rule, "fixture.pem", &represented, &represented, &[]),
+                    "{prefix}"
+                );
+            }
         }
+        // Unknown source syntax is now deliberately conservative: the filter
+        // cannot prove that arbitrary punctuation is not a serialized key.
+        let opaque = r#"-----BEGIN PRIVATE KEY-----", "begin key marker"),
+            Pair.of(expectedKeyString, "private key pem"),
+            Pair.of("-----END PRIVATE KEY-----"#;
+        assert!(!filter_discards(key_rule, "fixture.java", opaque, opaque, &[]));
         let mongo = &rules.rules["betterleaks.mongodb-connection-string"];
         for password in [
             "$(AWS_SECRET_ACCESS_KEY)",
@@ -353,6 +369,17 @@ mod test {
     #[test]
     fn test_get_default_rules() {
         assert!(get_builtin_rules(None).unwrap().num_rules() >= 400);
+    }
+
+    #[test]
+    fn builtin_catalog_excludes_filename_only_detectors() {
+        let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        assert!(!rules.rules.contains_key("betterleaks.pkcs12-file"));
+        for rule in rules.rules.values() {
+            assert!(!rule.betterleaks_path_only, "unexpected filename-only rule {}", rule.id);
+        }
+        let provenance: serde_json::Value = serde_json::from_str(BUILTIN_RULE_PROVENANCE).unwrap();
+        assert!(provenance["rules"].get("betterleaks.pkcs12-file").is_none());
     }
 
     #[test]

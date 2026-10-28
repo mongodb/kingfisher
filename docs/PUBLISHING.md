@@ -21,27 +21,25 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
 | `kingfisher-core` | `1.0.4` | `kingfisher_core` library |
-| `kingfisher-rules` | `2.0.0` | `kingfisher_rules` library |
-| `kingfisher-scanner` | `2.0.0` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.14.0` | `kingfisher` executable and library |
+| `kingfisher-rules` | `3.0.0` | `kingfisher_rules` library |
+| `kingfisher-scanner` | `3.0.0` | `kingfisher_scanner` library |
+| `kingfisher-bin` | `2.15.0` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
-`1.5.0` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
+`1.6.0` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
 
-The libraries follow semantic versioning within each stable major and do not inherit
-the CLI version. Rules and scanner 2.0.0 account for the new exhaustive
-`HttpValidation.auth` field and the scanner's public rules-crate types/re-exports.
-Downstream scanner users must use rules 2.x types rather than rules 1.x types.
-Core 1.0.4 is a compatible patch containing the Unicode-decoding fast path already
-shipped in CLI 2.14.0. The CLI stays at 2.14.0; the independent Python SDK 1.5.0
-minor release publishes its pending implementation changes without a Python API major break. See the [migration and compatibility contract](LIBRARY.md#api-stability).
+The libraries follow semantic versioning and do not inherit the CLI version.
+Rules/scanner 3.0.0 add public Rust schema fields and Expr variants; upgrade both
+crates together. Existing YAML/TOML files remain compatible. Core is unchanged at
+1.0.4. Python SDK 1.6.0 adds compatible APIs for explicit analysis and source attributes.
+See the [3.0 migration guide](LIBRARY.md#migrating-to-rules-and-scanner-30).
 `kingfisher-rule-bundle` is `0.1.0` with `publish = false`. The external
 `kingfisher-vectorscan` dependency is versioned separately.
 
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.14.0
+cargo install --locked kingfisher-bin --version 2.15.0
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
@@ -99,7 +97,7 @@ The [generated directory](../crates/kingfisher-rules/generated/) contains:
 
 - `builtin-rules.gz`: the existing portable KFRULES v1 container of converted YAML.
 - `upstream-sources.json.gz`: gzip-compressed JSON mapping immutable URLs to exact UTF-8
-  source/license contents. A null value records an optional NOTICE absent at that revision.
+  source/license contents; binary sources use a `base64:` prefix. A null value records an optional NOTICE absent at that revision.
 - `provenance.json`: upstream revisions, source hashes, generator input hashes, artifact hashes,
   and a source mapping for every generated rule, including helper rules.
 - `NOTICES.txt`: readable rule-source license and attribution text.
@@ -154,8 +152,8 @@ done
 ```
 
 Use an installed `cargo-semver-checks` release compatible with the Rust toolchain.
-For the initial rules/scanner 2.0.0 release, review the intentional break against
-the preceding 1.x releases and the [2.0 migration notes](LIBRARY.md#migrating-to-rules-and-scanner-20);
+For the rules/scanner 3.0.0 release, review the intentional break against
+the published 2.0.0 releases and the [3.0 migration notes](LIBRARY.md#migrating-to-rules-and-scanner-30);
 do not treat a major bump as permission for unrelated breaks. The historical
 [pre-1.0 migration](LIBRARY.md#migrating-from-the-01-api) remains documented.
 CI compares PRs against their base revision so later changes cannot silently break

@@ -140,11 +140,12 @@ impl ResourceKind {
 struct ResourceRef {
     kind: ResourceKind,
     slug: String,
+    repository_id: Option<String>,
 }
 
 impl ResourceRef {
     fn new(kind: ResourceKind, slug: String) -> Self {
-        Self { kind, slug }
+        Self { kind, slug, repository_id: None }
     }
 
     fn canonical_key(&self) -> String {
@@ -212,18 +213,22 @@ struct BucketTreeEntry {
 enum HuggingFaceItem {
     Id {
         id: String,
+        #[serde(rename = "_id")]
+        repository_id: Option<String>,
     },
     ModelId {
         #[serde(rename = "modelId")]
         model_id: String,
+        #[serde(rename = "_id")]
+        repository_id: Option<String>,
     },
 }
 
 impl HuggingFaceItem {
-    fn into_identifier(self) -> String {
+    fn into_identity(self) -> (String, Option<String>) {
         match self {
-            HuggingFaceItem::Id { id } => id,
-            HuggingFaceItem::ModelId { model_id } => model_id,
+            HuggingFaceItem::Id { id, repository_id } => (id, repository_id),
+            HuggingFaceItem::ModelId { model_id, repository_id } => (model_id, repository_id),
         }
     }
 }
@@ -585,9 +590,11 @@ async fn fetch_resources_for_owner(
         match fetch_paginated::<HuggingFaceItem>(client, url, auth, &context).await {
             Ok(items) => {
                 for item in items {
-                    let identifier = item.into_identifier();
+                    let (identifier, repository_id) = item.into_identity();
                     if let Some(slug) = parse_slug_for_kind(kind, &identifier) {
-                        resources.push(ResourceRef::new(kind, slug));
+                        let mut resource = ResourceRef::new(kind, slug);
+                        resource.repository_id = repository_id.filter(|id| !id.is_empty());
+                        resources.push(resource);
                     } else {
                         warn!(
                             "Skipping Hugging Face {} with unexpected identifier '{}'",
@@ -656,6 +663,17 @@ pub async fn enumerate_repo_urls(
     ignore_certs: bool,
     progress: Option<&mut ProgressBar>,
 ) -> Result<Vec<String>> {
+    enumerate_repo_urls_with_metadata(specifiers, auth, ignore_certs, progress, &mut |_, _| Ok(()))
+        .await
+}
+
+pub(crate) async fn enumerate_repo_urls_with_metadata(
+    specifiers: &RepoSpecifiers,
+    auth: &AuthConfig,
+    ignore_certs: bool,
+    progress: Option<&mut ProgressBar>,
+    on_repo: &mut (dyn FnMut(&str, Option<String>) -> Result<()> + Send),
+) -> Result<Vec<String>> {
     let client = reqwest::Client::builder()
         .resource_timeout(Duration::from_secs(30))
         .danger_accept_invalid_certs(ignore_certs)
@@ -707,12 +725,44 @@ pub async fn enumerate_repo_urls(
         if seen.insert(key)
             && let Some(url) = resource.git_url()
         {
+            // `id`/`modelId` is a mutable owner/name, not a stable identity.
+            on_repo(&url, resource.repository_id)?;
             urls.push(url);
         }
     }
     urls.sort();
     urls.dedup();
     Ok(urls)
+}
+
+pub(crate) async fn fetch_repository_id(
+    repo_url: &GitUrl,
+    ignore_certs: bool,
+) -> Result<Option<crate::git_host::RepositoryId>> {
+    let api = Url::parse(HUGGINGFACE_API)?;
+    fetch_repository_id_with_api(repo_url, &api, &AuthConfig::from_env(), ignore_certs).await
+}
+
+async fn fetch_repository_id_with_api(
+    repo_url: &GitUrl,
+    api: &Url,
+    auth: &AuthConfig,
+    ignore_certs: bool,
+) -> Result<Option<crate::git_host::RepositoryId>> {
+    let Some(path) = crate::git_host::repository_path(repo_url, api, "huggingface.co", "/api")
+    else {
+        return Ok(None);
+    };
+    let parts: Vec<_> = path.split('/').collect();
+    let endpoint = match parts.as_slice() {
+        [owner, name] => format!("models/{owner}/{name}"),
+        ["datasets", owner, name] => format!("datasets/{owner}/{name}"),
+        ["spaces", owner, name] => format!("spaces/{owner}/{name}"),
+        _ => return Ok(None),
+    };
+    let client = crate::git_host::repository_metadata_client(ignore_certs)?;
+    let request = auth.apply(client.get(api.join(&endpoint)?));
+    crate::git_host::repository_id_response(request, "_id").await
 }
 
 pub async fn enumerate_bucket_targets(
@@ -1055,6 +1105,110 @@ pub fn wiki_url(_repo_url: &GitUrl) -> Option<GitUrl> {
 
 #[cfg(test)]
 mod tests {
+    #[tokio::test]
+    async fn explicit_repository_lookup_uses_stable_ids_and_provider_auth() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{header, method, path},
+        };
+        for (repo_path, endpoint) in [
+            ("acme/repo.git", "models/acme/repo"),
+            ("datasets/acme/repo.git", "datasets/acme/repo"),
+            ("spaces/acme/repo.git", "spaces/acme/repo"),
+        ] {
+            for opaque_id in [Some("immutable-object-id"), None] {
+                let server = MockServer::start().await;
+                Mock::given(method("GET"))
+                    .and(path(format!("/api/{endpoint}")))
+                    .and(header("authorization", "Bearer fixture-token"))
+                    .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                        "id": "acme/repo", "_id": opaque_id
+                    })))
+                    .expect(1)
+                    .mount(&server)
+                    .await;
+                let id = fetch_repository_id_with_api(
+                    &format!("{}/{repo_path}", server.uri()).parse().unwrap(),
+                    &Url::parse(&format!("{}/api/", server.uri())).unwrap(),
+                    &AuthConfig { token: Some("fixture-token".into()) },
+                    false,
+                )
+                .await
+                .unwrap();
+                assert_eq!(
+                    id,
+                    opaque_id.map(|id| crate::git_host::RepositoryId::Opaque(id.into()))
+                );
+                assert_eq!(
+                    fetch_repository_id_with_api(
+                        &format!("https://huggingface.co/{repo_path}").parse().unwrap(),
+                        &Url::parse(&format!("{}/api/", server.uri())).unwrap(),
+                        &AuthConfig { token: Some("fixture-token".into()) },
+                        false,
+                    )
+                    .await
+                    .unwrap(),
+                    None,
+                    "public repositories must not be assigned IDs from another instance"
+                );
+                assert_eq!(server.received_requests().await.unwrap().len(), 1);
+            }
+        }
+    }
+
+    #[test]
+    fn repository_identity_uses_opaque_id_not_mutable_name() {
+        for body in [
+            serde_json::json!({"id": "acme/model", "_id": "stable-object-id"}),
+            serde_json::json!({"modelId": "acme/model", "_id": "stable-object-id"}),
+        ] {
+            let item: HuggingFaceItem = serde_json::from_value(body).unwrap();
+            assert_eq!(
+                item.into_identity(),
+                ("acme/model".into(), Some("stable-object-id".into()))
+            );
+        }
+        let item: HuggingFaceItem =
+            serde_json::from_value(serde_json::json!({"id": "acme/model"})).unwrap();
+        assert_eq!(item.into_identity(), ("acme/model".into(), None));
+    }
+
+    #[tokio::test]
+    async fn owner_discovery_preserves_ids_for_models_datasets_and_spaces() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+        let server = MockServer::start().await;
+        for kind in ["models", "datasets", "spaces"] {
+            Mock::given(method("GET"))
+                .and(path(format!("/api/{kind}")))
+                .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!([
+                    {"id": format!("acme/{kind}"), "_id": format!("opaque-{kind}")}
+                ])))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let resources = fetch_resources_for_owner(
+            &reqwest::Client::new(),
+            &Url::parse(&format!("{}/api/", server.uri())).unwrap(),
+            "acme",
+            "user acme",
+            &AuthConfig::default(),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(resources.len(), 3);
+        for resource in resources {
+            assert_eq!(
+                resource.repository_id,
+                Some(format!("opaque-{}", resource.kind.api_path()))
+            );
+        }
+    }
+
     #[tokio::test]
     async fn api_error_reads_only_a_bounded_prefix_without_waiting_for_eof() {
         use futures::StreamExt;

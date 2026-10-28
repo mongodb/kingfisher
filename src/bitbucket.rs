@@ -137,6 +137,34 @@ impl BitbucketKind {
     }
 }
 
+pub(crate) async fn fetch_repository_id(
+    repo_url: &GitUrl,
+    api_url: &Url,
+    ignore_certs: bool,
+) -> Result<Option<git_host::RepositoryId>> {
+    let kind = BitbucketKind::from_url(api_url);
+    let suffix = match kind {
+        BitbucketKind::Cloud => "/2.0",
+        BitbucketKind::Server => "/rest/api/1.0",
+    };
+    let Some(path) = git_host::repository_path(repo_url, api_url, "bitbucket.org", suffix) else {
+        return Ok(None);
+    };
+    let parts: Vec<_> = path.split('/').collect();
+    let (endpoint, field) = match (kind, parts.as_slice()) {
+        (BitbucketKind::Cloud, [owner, repo]) => (format!("repositories/{owner}/{repo}"), "uuid"),
+        (BitbucketKind::Server, ["scm", project, repo]) => {
+            (format!("projects/{project}/repos/{repo}"), "id")
+        }
+        _ => return Ok(None),
+    };
+    let mut base = api_url.clone();
+    base.set_path(&format!("{}/", base.path().trim_end_matches('/')));
+    let client = git_host::repository_metadata_client(ignore_certs)?;
+    let request = AuthConfig::from_env().apply(client.get(base.join(&endpoint)?));
+    git_host::repository_id_response(request, field).await
+}
+
 fn normalize_repo_identifier(owner: &str, repo: &str) -> Option<String> {
     let owner = owner.trim().trim_matches('/');
     let repo = repo.trim().trim_matches('/');
@@ -217,6 +245,7 @@ struct CloudRepoLinks {
 
 #[derive(Deserialize)]
 struct CloudRepo {
+    uuid: Option<String>,
     links: CloudRepoLinks,
     #[serde(default)]
     parent: Option<Value>,
@@ -243,6 +272,7 @@ struct CloudWorkspace {
 
 #[derive(Deserialize)]
 struct ServerRepo {
+    id: Option<u64>,
     links: CloudRepoLinks,
     #[serde(default)]
     origin: Option<Value>,
@@ -271,6 +301,7 @@ struct ServerProject {
     key: String,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_cloud_repositories(
     client: &reqwest::Client,
     base: &Url,
@@ -279,6 +310,7 @@ async fn fetch_cloud_repositories(
     repo_filter: RepoType,
     excludes: &git_host::ExcludeMatcher,
     results: &mut Vec<String>,
+    on_repo: &mut (dyn FnMut(&str, Option<git_host::RepositoryId>) -> Result<()> + Send),
 ) -> Result<()> {
     let mut next = base
         .join(&format!("repositories/{owner}?pagelen=100"))
@@ -302,6 +334,7 @@ async fn fetch_cloud_repositories(
                 if should_exclude_repo(&clone, excludes) {
                     continue;
                 }
+                on_repo(&clone, repo.uuid.filter(|id| !id.is_empty()).map(Into::into))?;
                 results.push(clone);
             }
         }
@@ -376,6 +409,7 @@ async fn fetch_cloud_snippets(
     Ok(urls)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_server_repositories(
     client: &reqwest::Client,
     base: &Url,
@@ -384,6 +418,7 @@ async fn fetch_server_repositories(
     repo_filter: RepoType,
     excludes: &git_host::ExcludeMatcher,
     results: &mut Vec<String>,
+    on_repo: &mut (dyn FnMut(&str, Option<git_host::RepositoryId>) -> Result<()> + Send),
 ) -> Result<()> {
     let mut start = 0u64;
     loop {
@@ -411,6 +446,7 @@ async fn fetch_server_repositories(
                 if should_exclude_repo(&clone, excludes) {
                     continue;
                 }
+                on_repo(&clone, repo.id.map(Into::into))?;
                 results.push(clone);
             }
         }
@@ -489,7 +525,26 @@ pub async fn enumerate_repo_urls(
     api_url: Url,
     auth: &AuthConfig,
     ignore_certs: bool,
+    progress: Option<&mut ProgressBar>,
+) -> Result<Vec<String>> {
+    enumerate_repo_urls_with_metadata(
+        repo_specifiers,
+        api_url,
+        auth,
+        ignore_certs,
+        progress,
+        &mut |_, _| Ok(()),
+    )
+    .await
+}
+
+pub(crate) async fn enumerate_repo_urls_with_metadata(
+    repo_specifiers: &RepoSpecifiers,
+    api_url: Url,
+    auth: &AuthConfig,
+    ignore_certs: bool,
     mut progress: Option<&mut ProgressBar>,
+    on_repo: &mut (dyn FnMut(&str, Option<git_host::RepositoryId>) -> Result<()> + Send),
 ) -> Result<Vec<String>> {
     let client = reqwest::Client::builder()
         .danger_accept_invalid_certs(ignore_certs)
@@ -540,6 +595,7 @@ pub async fn enumerate_repo_urls(
                     repo_specifiers.repo_filter,
                     &excludes,
                     &mut repo_urls,
+                    on_repo,
                 )
                 .await
                 {
@@ -572,6 +628,7 @@ pub async fn enumerate_repo_urls(
                     repo_specifiers.repo_filter,
                     &excludes,
                     &mut repo_urls,
+                    on_repo,
                 )
                 .await
                 {
@@ -590,6 +647,7 @@ pub async fn enumerate_repo_urls(
                     repo_specifiers.repo_filter,
                     &excludes,
                     &mut repo_urls,
+                    on_repo,
                 )
                 .await
                 {

@@ -235,7 +235,7 @@ resetting for a new batch.
 - `context` enables the optional detection-settings API and parser dependencies.
   `git` enables read-only scope enumeration with shared commit metadata and
   tree diffs that skip unchanged subtrees; the CLI reuses the tree-diff adapter.
-  `extraction` enables SQLite/bytecode helpers and implies `archives`.
+  `extraction` enables SQLite/bytecode/PDF helpers and implies `archives`.
   `validation` gates all validators and revokers; detection alone remains offline.
 - `__cli-internals` exposes unsupported CLI integration helpers, including parser,
   inline-ignore, index, confirmation, and postprocessing interfaces.

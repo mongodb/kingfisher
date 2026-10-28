@@ -67,31 +67,50 @@ pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
 }
 
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
+    map_access_from_token_at(token, ANTHROPIC_API).await
+}
+
+async fn map_access_from_token_at(token: &str, api_base: &str) -> Result<AccessMapResult> {
     let client = Client::builder()
         .user_agent(GLOBAL_USER_AGENT.as_str())
+        .redirect(reqwest::redirect::Policy::none())
         .build()
         .context("Failed to build Anthropic HTTP client")?;
 
+    map_access_with_client(&client, token, api_base).await
+}
+
+async fn map_access_with_client(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+) -> Result<AccessMapResult> {
     let mut risk_notes = Vec::new();
     let mut roles = Vec::new();
     let mut permissions = PermissionSummary::default();
     let mut resources = Vec::new();
-    let key_info = fetch_key_permissions(&client, token).await.unwrap_or_else(|err| {
+    let key_info = fetch_key_permissions(client, token, api_base).await.unwrap_or_else(|err| {
         warn!("Anthropic access-map: key permission lookup failed: {err}");
-        risk_notes.push(format!("Key permission lookup failed: {err}"));
+        risk_notes.push(format!("Current key identity and permissions are unknown: {err}"));
         KeyIntrospection::default()
     });
-    let visible_api_keys = list_api_keys(&client, token).await.unwrap_or_else(|err| {
+    let visible_api_keys = list_api_keys(client, token, api_base).await.unwrap_or_else(|err| {
         warn!("Anthropic access-map: API key inventory lookup failed: {err}");
         Vec::new()
     });
     let mut token_scopes = key_info.permissions.clone();
 
-    let models = list_models(&client, token).await.unwrap_or_else(|err| {
-        warn!("Anthropic access-map: model enumeration failed: {err}");
-        risk_notes.push(format!("Model enumeration failed: {err}"));
-        Vec::new()
-    });
+    let models = match list_models(client, token, api_base).await {
+        Ok(models) => {
+            permissions.read_only.push("models:list".to_string());
+            models
+        }
+        Err(err) => {
+            warn!("Anthropic access-map: model enumeration failed: {err}");
+            risk_notes.push(format!("Model-list capability is unknown: {err}"));
+            Vec::new()
+        }
+    };
 
     let token_kind = detect_token_type(token);
     roles.push(RoleBinding {
@@ -113,8 +132,6 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
             _ => permissions.risky.push(format!("key:{scope}")),
         }
     }
-    permissions.read_only.push("models:list".to_string());
-
     for model in models.iter().take(MAX_MODEL_RESOURCES) {
         let model_name = model
             .id
@@ -219,9 +236,9 @@ pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
     })
 }
 
-async fn list_models(client: &Client, token: &str) -> Result<Vec<AnthropicModel>> {
+async fn list_models(client: &Client, token: &str, api_base: &str) -> Result<Vec<AnthropicModel>> {
     let resp = client
-        .get(format!("{ANTHROPIC_API}/models"))
+        .get(format!("{api_base}/models"))
         .header("x-api-key", token)
         .header("anthropic-version", ANTHROPIC_VERSION)
         .header(header::ACCEPT, "application/json")
@@ -251,11 +268,15 @@ fn detect_token_type(token: &str) -> &'static str {
     }
 }
 
-async fn fetch_key_permissions(client: &Client, token: &str) -> Result<KeyIntrospection> {
+async fn fetch_key_permissions(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+) -> Result<KeyIntrospection> {
     if let Ok(Some(key)) = fetch_permissions_from_endpoint(
         client,
         token,
-        &format!("{ANTHROPIC_API}/organizations/api_keys/me"),
+        &format!("{api_base}/organizations/api_keys/me"),
     )
     .await
     {
@@ -268,8 +289,7 @@ async fn fetch_key_permissions(client: &Client, token: &str) -> Result<KeyIntros
     }
 
     if let Ok(Some(key)) =
-        fetch_permissions_from_endpoint(client, token, &format!("{ANTHROPIC_API}/api_keys/me"))
-            .await
+        fetch_permissions_from_endpoint(client, token, &format!("{api_base}/api_keys/me")).await
     {
         return Ok(KeyIntrospection {
             permissions: key.permissions,
@@ -279,41 +299,20 @@ async fn fetch_key_permissions(client: &Client, token: &str) -> Result<KeyIntros
         });
     }
 
-    let list_resp = client
-        .get(format!("{ANTHROPIC_API}/organizations/api_keys"))
-        .header("x-api-key", token)
-        .header("anthropic-version", ANTHROPIC_VERSION)
-        .header(header::ACCEPT, "application/json")
-        .send()
-        .await
-        .context("Anthropic access-map: failed to list API keys")?;
-
-    if !list_resp.status().is_success() {
-        return Err(anyhow!(
-            "Anthropic access-map: API key listing failed with HTTP {}",
-            list_resp.status()
-        ));
-    }
-
-    let body: AnthropicApiKeysResponse =
-        list_resp.json().await.context("Anthropic access-map: invalid API key list JSON")?;
-
-    if body.data.len() == 1 {
-        let key = &body.data[0];
-        return Ok(KeyIntrospection {
-            permissions: key.permissions.clone(),
-            id: key.id.clone(),
-            name: key.name.clone(),
-            created_at: key.created_at.clone(),
-        });
-    }
-
-    Err(anyhow!("Anthropic access-map: unable to map listed key permissions to this token"))
+    // Organization inventory is not caller introspection: even one visible key can
+    // belong to another user or service account. Keep it as inventory only.
+    Err(anyhow!(
+        "no current-key endpoint returned permission metadata; organization key inventory does not identify the supplied credential"
+    ))
 }
 
-async fn list_api_keys(client: &Client, token: &str) -> Result<Vec<AnthropicApiKey>> {
+async fn list_api_keys(
+    client: &Client,
+    token: &str,
+    api_base: &str,
+) -> Result<Vec<AnthropicApiKey>> {
     let resp = client
-        .get(format!("{ANTHROPIC_API}/organizations/api_keys"))
+        .get(format!("{api_base}/organizations/api_keys"))
         .header("x-api-key", token)
         .header("anthropic-version", ANTHROPIC_VERSION)
         .header(header::ACCEPT, "application/json")
@@ -370,9 +369,182 @@ fn derive_severity(permissions: &PermissionSummary) -> Severity {
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",
         Severity::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    #[tokio::test]
+    async fn token_header_is_never_forwarded_to_a_redirect() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{header, method},
+        };
+        let server = MockServer::start().await;
+        let destination = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(header("x-api-key", "test-token"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", destination.uri().replace("127.0.0.1", "localhost")),
+            )
+            .mount(&server)
+            .await;
+        // Anthropic retains a partial result when optional inventory calls fail.
+        super::map_access_from_token_at("test-token", &server.uri()).await.unwrap();
+        assert!(!server.received_requests().await.unwrap().is_empty());
+        assert!(destination.received_requests().await.unwrap().is_empty());
+    }
+
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path},
+    };
+
+    use super::*;
+
+    async fn mount_get(server: &MockServer, endpoint: &str, response: ResponseTemplate) {
+        Mock::given(method("GET"))
+            .and(path(endpoint))
+            .and(header("x-api-key", "test-key"))
+            .respond_with(response)
+            .expect(1)
+            .mount(server)
+            .await;
+    }
+
+    async fn inventory_server(models: ResponseTemplate, keys: serde_json::Value) -> MockServer {
+        let server = MockServer::start().await;
+        for endpoint in ["/organizations/api_keys/me", "/api_keys/me"] {
+            mount_get(&server, endpoint, ResponseTemplate::new(404)).await;
+        }
+        mount_get(
+            &server,
+            "/organizations/api_keys",
+            ResponseTemplate::new(200).set_body_json(keys),
+        )
+        .await;
+        mount_get(&server, "/models", models).await;
+        server
+    }
+
+    #[tokio::test]
+    async fn failed_model_requests_do_not_grant_list_permission() {
+        for response in [
+            ResponseTemplate::new(403),
+            ResponseTemplate::new(500),
+            ResponseTemplate::new(200).set_body_string("invalid JSON"),
+        ] {
+            let server = inventory_server(response, json!({"data": []})).await;
+            let result =
+                map_access_with_client(&Client::new(), "test-key", &server.uri()).await.unwrap();
+
+            assert!(!result.permissions.read_only.iter().any(|value| value == "models:list"));
+            assert!(!result.resources.iter().any(|resource| resource.resource_type == "model"));
+            assert!(
+                result
+                    .risk_notes
+                    .iter()
+                    .any(|note| note.contains("Model-list capability is unknown"))
+            );
+            server.verify().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn successful_empty_model_list_proves_list_without_model_exposure() {
+        let server = inventory_server(
+            ResponseTemplate::new(200).set_body_json(json!({"data": []})),
+            json!({"data": []}),
+        )
+        .await;
+        let result =
+            map_access_with_client(&Client::new(), "test-key", &server.uri()).await.unwrap();
+
+        assert!(result.permissions.read_only.iter().any(|value| value == "models:list"));
+        assert!(!result.resources.iter().any(|resource| resource.resource_type == "model"));
+        assert!(
+            !result.risk_notes.iter().any(|note| note.contains("Model-list capability is unknown"))
+        );
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn sole_visible_key_is_inventory_not_caller_identity_or_permissions() {
+        let server = inventory_server(
+            ResponseTemplate::new(200).set_body_json(json!({"data": []})),
+            json!({"data": [{
+                "id": "another-key",
+                "name": "another principal's key",
+                "created_at": "2026-01-01T00:00:00Z",
+                "permissions": ["full_access"]
+            }]}),
+        )
+        .await;
+        let result =
+            map_access_with_client(&Client::new(), "test-key", &server.uri()).await.unwrap();
+
+        let token = result.token_details.as_ref().unwrap();
+        assert!(token.user_id.is_none());
+        assert!(token.name.is_none());
+        assert!(token.created_at.is_none());
+        assert!(token.scopes.is_empty());
+        assert!(result.permissions.admin.is_empty());
+        assert!(result.permissions.risky.is_empty());
+        assert!(
+            result
+                .risk_notes
+                .iter()
+                .any(|note| note.contains("Current key identity and permissions are unknown"))
+        );
+        let inventory =
+            result.resources.iter().find(|resource| resource.resource_type == "api_key").unwrap();
+        assert_eq!(inventory.name, "another principal's key");
+        assert_eq!(inventory.permissions, ["api_key:read"]);
+        server.verify().await;
+    }
+
+    #[tokio::test]
+    async fn current_key_response_is_kept_separate_from_organization_inventory() {
+        let server = MockServer::start().await;
+        mount_get(
+            &server,
+            "/organizations/api_keys/me",
+            ResponseTemplate::new(200).set_body_json(json!({
+                "id": "current-key",
+                "name": "current key",
+                "permissions": ["full_access"]
+            })),
+        )
+        .await;
+        mount_get(
+            &server,
+            "/organizations/api_keys",
+            ResponseTemplate::new(200).set_body_json(json!({"data": [{
+                "id": "another-key", "permissions": ["read"]
+            }]})),
+        )
+        .await;
+        mount_get(
+            &server,
+            "/models",
+            ResponseTemplate::new(200).set_body_json(json!({"data": []})),
+        )
+        .await;
+        let result =
+            map_access_with_client(&Client::new(), "test-key", &server.uri()).await.unwrap();
+
+        let token = result.token_details.as_ref().unwrap();
+        assert_eq!(token.user_id.as_deref(), Some("current-key"));
+        assert_eq!(token.scopes, ["full_access"]);
+        assert_eq!(result.permissions.admin, ["key:full_access"]);
+        assert!(!result.permissions.risky.iter().any(|value| value == "key:read"));
+        server.verify().await;
     }
 }

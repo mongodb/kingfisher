@@ -5,9 +5,9 @@ For in-process Python detection, validation and revocation, see the [Python SDK]
 [← Back to README](../README.md)
 
 The prepared library releases are **kingfisher-core 1.0.4**,
-**kingfisher-rules 2.0.0**, and **kingfisher-scanner 2.0.0**.
+**kingfisher-rules 3.0.0**, and **kingfisher-scanner 3.0.0**.
 They require Rust **1.99** or newer and are versioned independently of the
-`kingfisher-bin` CLI, currently **2.14.0**. See [publishing](PUBLISHING.md).
+`kingfisher-bin` CLI, currently **2.15.0**. See [publishing](PUBLISHING.md).
 
 ## Crate Overview
 
@@ -48,7 +48,7 @@ Add the scanner crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-kingfisher-scanner = "2.0.0"
+kingfisher-scanner = "3.0.0"
 anyhow = "1"
 ```
 
@@ -105,12 +105,12 @@ additional validator features your project needs.
 To install the CLI from crates.io:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.14.0
+cargo install --locked kingfisher-bin --version 2.15.0
 kingfisher scan path/to/project --no-validate --format json --no-update-check
 ```
 
 For the `kingfisher-bin` library example in your own application, use
-`kingfisher = { package = "kingfisher-bin", version = "2.14.0" }` and `anyhow = "1"`.
+`kingfisher = { package = "kingfisher-bin", version = "2.15.0" }` and `anyhow = "1"`.
 The focused library examples use the crate versions listed above;
 `kingfisher-rules` and `kingfisher-scanner` examples also use `anyhow = "1"`.
 
@@ -119,17 +119,17 @@ The focused library examples use the crate versions listed above;
 Start with a complete example above and copy it into `src/main.rs` in a small Rust
 application. These are public-API consumers; no CLI process or private Kingfisher
 module is required. Choose dependencies from this table in addition to
-`kingfisher-scanner = "2.0.0"` and `anyhow = "1"`:
+`kingfisher-scanner = "3.0.0"` and `anyhow = "1"`:
 
 | Recipe | Additional dependencies / features |
 | ------ | ---------------------------------- |
 | `scan_content` | None |
 | `detection_policy` | Scanner feature `context` |
-| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "2.0.0"` for loading custom YAML/TOML |
+| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "3.0.0"` for loading custom YAML/TOML |
 | `scan_files` | `serde_json = "1"` |
-| `scan_custom_rules` | `kingfisher-rules = "2.0.0"` |
+| `scan_custom_rules` | `kingfisher-rules = "3.0.0"` |
 | `scan_async` | `tokio = { version = "1.53", features = ["macros", "rt", "sync"] }` |
-| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "2.0.0"` |
+| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "3.0.0"` |
 | `http_validation` | Complete manifest below; also copy `fixtures/acme-http.yml` and `support/mod.rs` into `src/fixtures/` and `src/support/` |
 | `validate_file` | Scanner feature `validation`; `serde_json = "1"`; `tokio = { version = "1.53", features = ["macros", "rt"] }` |
 | `git_inputs` | Scanner feature `git` |
@@ -305,8 +305,8 @@ rust-version = "1.99"
 
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "2.0.0", features = ["validation"] }
-kingfisher-rules = "2.0.0"
+kingfisher-scanner = { version = "3.0.0", features = ["validation"] }
+kingfisher-rules = "3.0.0"
 serde_json = "1"
 tokio = { version = "1.53", features = ["macros", "rt", "net", "io-util", "time"] }
 ```
@@ -329,6 +329,39 @@ For your own service, replace the mock and synthetic detector with the built-in
 catalog or your private rules. The [validate_file example](../crates/kingfisher-scanner/examples/validate_file.rs)
 shows a complete application using the built-ins. Provider requests happen only
 when you call the validator; scanning alone remains network-free.
+
+For source-aware Betterleaks expressions, pass a `BTreeMap<String, String>` to
+`Scanner::scan_blob_with_attributes` (or its `_and_control` counterpart). The map
+can include `path`, `git.sha`, `git.author_name`, and other source metadata.
+Prefilters and finding filters see these attributes for raw, decoded, and path-only
+findings. Deduplication includes the supplied metadata. Existing path-based scan
+methods supply the path and retain their behavior.
+
+Custom Betterleaks v2 rules can supply Expr `validate`, `analyze`, and `revoke`
+programs. After validation, call `validator.analyze_validated(&result).await?`
+explicitly to evaluate `analyze` against the exact credential and its private
+validation evidence. Ordinary validation does not execute analysis or revocation.
+Analysis returns normalized public JSON; `into_redacted()` discards the private
+handoff. HTTP validation uses the primary only by default. Explicitly opt in with
+`Validator::builder().http_fallbacks(true).build()?` (or
+`ValidationEngine::http_fallbacks(true)`) to try up to two configured fallbacks.
+`reuse_primary_validation_logic: true` reuses the primary HTTP logic with only its
+URL replaced; false/omitted requires a complete independent HTTP validation.
+`reuse_primary_revocation_logic` also defaults to false. True reuses primary HTTP revocation
+with `revocation_url`, or its multi-step program with one `revocation_urls` entry per
+step. `Revoker::revoke_validated` retains the accepted environment and uses only its
+resolved action, never failing over mutations to another environment. Validation
+reuse does not imply revocation reuse; primary target URL(s) are not inherited.
+Existing YAML/TOML rules require no edits. See the [rule guide](RULES.md#ordered-http-fallback-endpoints)
+and [runnable fallback example](../crates/kingfisher-scanner/examples/http_fallbacks.rs).
+
+The CLI's `revoke --fallbacks` validates to select an environment in the same process
+before mutation. SDK `Revoker::revoke_validated` intentionally reuses the supplied
+snapshot without another validation request. Low-level embedders can inspect action
+inputs offline with `validation::inspect_revocation`; inspection does not establish
+an accepted endpoint or authorize mutation.
+Direct `Revoker::revoke` calls use only primary revocation and reject reserved
+`VALIDATION_*` endpoint-selection variables. Use `revoke_validated` for fallbacks.
 
 SMTP credential URIs use `CredentialUri`; separate fields can use
 [custom SMTP rules](RULES.md#smtp-authentication) with `Raw` content `smtp`.
@@ -484,7 +517,7 @@ Compile once and share the database. Preserve catalog metadata with
 `RulesDatabase::from_rule_collection`; converting the loaded collection into a
 `Vec<Rule>` loses its database-level source prefilter.
 
-For custom files, add `kingfisher-rules = "2.0.0"` and use:
+For custom files, add `kingfisher-rules = "3.0.0"` and use:
 
 ```rust
 use kingfisher_rules::{Confidence, Rules, RulesDatabase};
@@ -545,7 +578,7 @@ services or when every file occurrence must be reported.
 
 ## Scanning Methods
 
-For reuse across processes, add `kingfisher-rules = "2.0.0"` to your dependencies and load the collection with
+For reuse across processes, add `kingfisher-rules = "3.0.0"` to your dependencies and load the collection with
 `kingfisher_rules::RulesDatabase::from_rule_collection_with_cache` and
 `kingfisher_rules::RuleCacheConfig::from_dir_or_env(None)` (or `RuleCacheConfig::new(path)`).
 This is the CLI/Python compiled content-database cache and honors `KF_RULE_CACHE_DIR`.
@@ -632,7 +665,7 @@ No validator features are enabled by default:
 
 ```toml
 [dependencies]
-kingfisher-scanner = { version = "2.0.0", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.0", features = ["validation"] }
 ```
 
 `validation` enables all supported validators and revocation: HTTP, gRPC,
@@ -649,7 +682,7 @@ logging or serializing it:
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "2.0.0", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -733,7 +766,7 @@ retained credential inputs. Validation never calls revocation automatically.
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "2.0.0", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.0", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -815,7 +848,7 @@ input limits and bound worker counts for untrusted or large workloads.
 The full application's library is available separately:
 
 ```toml
-kingfisher = { package = "kingfisher-bin", version = "2.14.0" }
+kingfisher = { package = "kingfisher-bin", version = "2.15.0" }
 ```
 
 It carries CLI dependencies and all validator features. The stable embedding
@@ -845,7 +878,7 @@ runner.
 
 
 The first published `1.0.0` established the stable contract. The rules and scanner
-2.0.0 releases start their next stable major; core stays on the compatible 1.x API at 1.0.4. Within each
+3.0.0 releases start their next stable major; core stays on the compatible 1.x API at 1.0.4. Within each
 stable major:
 
 - Existing reachable public Rust items, signatures, fields, trait implementations,
@@ -872,6 +905,21 @@ builds, and `cargo-semver-checks` against the pull request's base revision. Afte
 publication, release checks must also compare against the last published compatible
 library version (see [publishing](PUBLISHING.md)). Static API checks do not prove all
 behavior; review and behavioral tests remain required.
+
+### Migrating to rules and scanner 3.0
+
+Upgrade both crates to `"3.0.0"`; scanner 3.x exposes rules 3.x types.
+Existing YAML/TOML files and Python APIs remain compatible. Core stays at 1.0.4;
+CLI 2.15.0 and Python SDK 1.6.0 are independently versioned.
+
+- `HttpRequest` literals need `fallback_urls: Vec::new()`; `url` remains a string.
+- `RuleSyntax` literals need `specificity: 0`, `tags: Vec::new()`,
+  `keywords: Vec::new()`, `fallbacks: Vec::new()`, and `betterleaks_path_only: false`. Prefer
+  `RuleSyntax::new` followed by field updates to inherit defaults.
+- `BetterleaksValidation` literals need `analyze: None` unless analysis is configured.
+  Exhaustive `Revocation`/`BetterleaksExpr` matches must handle the added variants.
+- `CachedResponse` literals need `endpoint_variables: Default::default()`;
+  `CachedResponse::new` initializes this private endpoint context automatically.
 
 ### Migrating to rules and scanner 2.0
 
@@ -1022,6 +1070,37 @@ cooperative controls. Choose a protected `temp_dir` parent on every platform.
 SDK staging directories use owner-only Unix mode 0700 (the umask may restrict it
 further); Windows inherits the parent DACL. See
 [the SDK guide](PYPI.md#extract-sqlite-and-python-bytecode).
+
+### PDF page text
+
+With `extraction`, use
+`extraction::pdf::extract_pdf_text_from_bytes_with_budget(bytes, max_bytes, &control)`
+to produce `(page-N.txt, UTF-8 bytes)` pairs before scanning. The
+`extract_pdf_text_with_limits(path, resources)` and
+`extract_pdf_text_from_bytes_with_limits(bytes, resources)` variants follow CLI
+resource policy. PDF extraction never returns a partial page set on error.
+Undecodable streams are skipped without discarding readable streams/pages;
+memory-limit errors still fail the complete extraction.
+Use `extract_pdf_text_from_bytes_with_budget_strict(bytes, max_bytes, &control)`
+to fail on undecodable page/font streams too, without returning partial pages.
+Some codecs can recover corrupt data without reporting an error; neither mode
+guarantees complete text coverage.
+Use `extract_pdf_text_from_bytes_with_control(bytes, resources, &control)` when
+combining CLI resource policy with an existing deadline or cancellation token.
+
+The bounded API caps input, aggregate text, and aggregate decoded page/font work
+separately at `max_bytes`, individual streams at `min(max_bytes, 32 MiB)`, and page
+count at 10,000. Shared streams are decoded once but charged on each page that
+uses them; repeated page IDs are skipped. Before
+loading, it divides `max_bytes` across a conservative count of literal stream
+markers (also at most 32 MiB per stream) to bound aggregate eager decompression.
+Payload/comment markers can tighten this budget; valid large streams may be rejected.
+Controls are checked around parsing and between pages, not inside a parser call;
+these caps do not bound total process memory. Preserve the original source
+provenance alongside synthetic page paths; finding offsets describe extracted
+text. No OCR, encrypted PDFs, embedded files, annotations, or Form XObject text.
+See the [runnable PDF example](../crates/kingfisher-scanner/examples/pdf.rs) and
+[CLI fallback behavior](ADVANCED.md#pdf-text-extraction).
 
 ## Optional local Git enumeration
 

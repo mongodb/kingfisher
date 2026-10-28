@@ -44,6 +44,7 @@ impl RepoSpecifiers {
 
 #[derive(Debug, Deserialize)]
 struct GiteaRepository {
+    id: Option<u64>,
     full_name: String,
     clone_url: String,
     #[serde(default)]
@@ -99,6 +100,27 @@ fn should_exclude_repo(repo: &GiteaRepository, excludes: &git_host::ExcludeMatch
     excludes.matches(&repo.full_name.to_lowercase())
 }
 
+pub(crate) async fn fetch_repository_id(
+    repo_url: &GitUrl,
+    api_url: &Url,
+    ignore_certs: bool,
+) -> Result<Option<git_host::RepositoryId>> {
+    let Some(path) = git_host::repository_path(repo_url, api_url, "gitea.com", "/api/v1") else {
+        return Ok(None);
+    };
+    if path.split('/').count() != 2 {
+        return Ok(None);
+    }
+    let mut base = api_url.clone();
+    base.set_path(&format!("{}/", base.path().trim_end_matches('/')));
+    let client = git_host::repository_metadata_client(ignore_certs)?;
+    let mut request = client.get(base.join(&format!("repos/{path}"))?);
+    if let Some(token) = env::var("KF_GITEA_TOKEN").ok().filter(|token| !token.is_empty()) {
+        request = request.header("Authorization", format!("token {token}"));
+    }
+    git_host::repository_id_response(request, "id").await
+}
+
 async fn fetch_paginated_repos(
     client: &reqwest::Client,
     token: Option<&str>,
@@ -106,6 +128,7 @@ async fn fetch_paginated_repos(
     repo_filter: RepoType,
     excludes: &git_host::ExcludeMatcher,
     progress: Option<&ProgressBar>,
+    on_repo: &mut (dyn FnMut(&str, Option<u64>) -> Result<()> + Send),
 ) -> Result<Vec<String>> {
     let mut page = 1u32;
     let mut repos = Vec::new();
@@ -143,6 +166,7 @@ async fn fetch_paginated_repos(
             if should_exclude_repo(&repo, excludes) {
                 continue;
             }
+            on_repo(&repo.clone_url, repo.id)?;
             repos.push(repo.clone_url);
         }
         page += 1;
@@ -150,6 +174,7 @@ async fn fetch_paginated_repos(
     Ok(repos)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_user_repos(
     client: &reqwest::Client,
     token: Option<&str>,
@@ -158,12 +183,14 @@ async fn fetch_user_repos(
     repo_filter: RepoType,
     excludes: &git_host::ExcludeMatcher,
     progress: Option<&ProgressBar>,
+    on_repo: &mut (dyn FnMut(&str, Option<u64>) -> Result<()> + Send),
 ) -> Result<Vec<String>> {
     let endpoint = format!("users/{}/repos", username);
     let url = api_url.join(&endpoint)?;
-    fetch_paginated_repos(client, token, url, repo_filter, excludes, progress).await
+    fetch_paginated_repos(client, token, url, repo_filter, excludes, progress, on_repo).await
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn fetch_org_repos(
     client: &reqwest::Client,
     token: Option<&str>,
@@ -172,10 +199,11 @@ async fn fetch_org_repos(
     repo_filter: RepoType,
     excludes: &git_host::ExcludeMatcher,
     progress: Option<&ProgressBar>,
+    on_repo: &mut (dyn FnMut(&str, Option<u64>) -> Result<()> + Send),
 ) -> Result<Vec<String>> {
     let endpoint = format!("orgs/{}/repos", org);
     let url = api_url.join(&endpoint)?;
-    fetch_paginated_repos(client, token, url, repo_filter, excludes, progress).await
+    fetch_paginated_repos(client, token, url, repo_filter, excludes, progress, on_repo).await
 }
 
 async fn fetch_authenticated_orgs(
@@ -214,7 +242,20 @@ pub async fn enumerate_repo_urls(
     specifiers: &RepoSpecifiers,
     api_url: Url,
     ignore_certs: bool,
+    progress: Option<&mut ProgressBar>,
+) -> Result<Vec<String>> {
+    enumerate_repo_urls_with_metadata(specifiers, api_url, ignore_certs, progress, &mut |_, _| {
+        Ok(())
+    })
+    .await
+}
+
+pub(crate) async fn enumerate_repo_urls_with_metadata(
+    specifiers: &RepoSpecifiers,
+    api_url: Url,
+    ignore_certs: bool,
     mut progress: Option<&mut ProgressBar>,
+    on_repo: &mut (dyn FnMut(&str, Option<u64>) -> Result<()> + Send),
 ) -> Result<Vec<String>> {
     let excludes = build_exclude_matcher(&specifiers.exclude_repos);
     let client = reqwest::Client::builder()
@@ -238,6 +279,7 @@ pub async fn enumerate_repo_urls(
             specifiers.repo_filter,
             &excludes,
             progress.as_deref(),
+            on_repo,
         )
         .await
         {
@@ -276,6 +318,7 @@ pub async fn enumerate_repo_urls(
             specifiers.repo_filter,
             &excludes,
             progress.as_deref(),
+            on_repo,
         )
         .await
         {
@@ -355,6 +398,33 @@ pub fn wiki_url(repo_url: &GitUrl) -> Option<GitUrl> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn empty_metadata_token_does_not_send_an_authorization_header() {
+        use wiremock::{
+            Mock, MockServer, ResponseTemplate,
+            matchers::{method, path},
+        };
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/repos/acme/repo"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"id": 123})))
+            .expect(1)
+            .mount(&server)
+            .await;
+        temp_env::async_with_vars([("KF_GITEA_TOKEN", Some(""))], async {
+            let repo = format!("{}/acme/repo.git", server.uri()).parse().unwrap();
+            let api = Url::parse(&format!("{}/api/v1", server.uri())).unwrap();
+            assert_eq!(
+                fetch_repository_id(&repo, &api, false).await.unwrap(),
+                Some(123_u64.into())
+            );
+        })
+        .await;
+        assert!(
+            !server.received_requests().await.unwrap()[0].headers.contains_key("authorization")
+        );
+    }
 
     #[test]
     fn parse_excluded_repo_variants() {

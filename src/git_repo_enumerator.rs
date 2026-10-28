@@ -349,6 +349,45 @@ mod tests {
     }
 
     #[test]
+    fn content_prepass_respects_blob_size_limits_without_counting_skipped_bytes() -> Result<()> {
+        let temp = tempdir()?;
+        let repo = Git2Repository::init_bare(temp.path())?;
+        let secret = b"candidate_secret_0123456789abcdef";
+        let small = repo.blob(secret)?;
+        let large = repo.blob(&secret.repeat(10))?;
+        let clean = repo.blob(&vec![b'x'; secret.len() + 1])?;
+        let head = commit(
+            &repo,
+            &[("small.txt", small), ("large.txt", large), ("clean.txt", clean)],
+            &[],
+            "size limit fixture",
+        )?;
+        repo.reference("refs/heads/main", head, true, "test")?;
+        repo.set_head("refs/heads/main")?;
+
+        for limit in [Some(secret.len() as u64), None] {
+            let filter = content_filter()?.with_max_blob_size(limit);
+            let result = appearances(
+                GitRepoWithMetadataEnumerator::new(
+                    temp.path(),
+                    gix::open_opts(temp.path(), gix::open::Options::isolated())?,
+                    None,
+                )
+                .with_content_filter(&filter)
+                .run_with_minimum_blobs(None, 0)?,
+            );
+            assert!(result.contains_key(&small.to_string()));
+            assert_eq!(result.contains_key(&large.to_string()), limit.is_none());
+            assert!(!result.contains_key(&clean.to_string()));
+            assert_eq!(
+                filter.clean_stats().bytes_scanned,
+                if limit.is_none() { secret.len() as u64 + 1 } else { 0 }
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn sparse_metadata_preserves_branch_introductions_duplicates_and_orphans() -> Result<()> {
         let temp = tempdir()?;
         let repo = Git2Repository::init_bare(temp.path())?;

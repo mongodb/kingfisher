@@ -258,6 +258,9 @@ pub fn is_test_like_path(path: &Path) -> bool {
 }
 
 #[cfg(test)]
+mod io_tests;
+
+#[cfg(test)]
 mod tests {
     use std::{
         io::{Cursor, Read, Write},

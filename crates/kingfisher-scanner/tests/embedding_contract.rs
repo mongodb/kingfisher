@@ -198,7 +198,13 @@ fn repeated_hex_candidates_are_confirmed_once_and_still_filtered() {
             .count(),
         1
     );
-    assert!(Scanner::new(db).scan_bytes(input.as_bytes()).unwrap().is_empty());
+    let scanner = Scanner::new(db);
+    // Keyword rejection must not cause repeated confirmation-window widening.
+    assert!(scanner.scan_bytes(input.as_bytes()).unwrap().is_empty());
+    // Include provider context so the next scans exercise the content filter,
+    // rather than rejecting the synthetic fixture at the keyword gate.
+    let input = format!("alibaba\n{input}");
+    assert!(scanner.scan_bytes(input.as_bytes()).unwrap().is_empty());
     let mut bare = original;
     bare.betterleaks_filter = None;
     bare.depends_on_rule.clear();

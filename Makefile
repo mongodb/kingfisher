@@ -309,6 +309,7 @@ windows-x64: require-windows-host prepare-release-notices
 	  pacman --noconfirm --needed -S \
 	    mingw-w64-x86_64-toolchain \
 	    mingw-w64-x86_64-cmake \
+	    mingw-w64-x86_64-lld \
 	    mingw-w64-x86_64-nasm \
 	    mingw-w64-x86_64-pkgconf \
 	    mingw-w64-x86_64-zlib \
@@ -490,14 +491,15 @@ windows-test-x64: require-windows-host
 	      echo "Using libgcc from $$libgcc_dir"; \
 	    fi; \
 	  fi; \
-	  export RUSTFLAGS="$${RUSTFLAGS:-} $$extra_native_lib_dirs -C target-feature=+crt-static -C link-arg=-static"; \
+	  command -v ld.lld >/dev/null 2>&1 || { echo "LLD is required for Windows x64 tests; run WINDOWS_ONLY_DEPS=1 make windows-x64 first."; exit 1; }; \
+	  export RUSTFLAGS="$${RUSTFLAGS:-} $$extra_native_lib_dirs -C target-feature=+crt-static -C link-arg=-static -C link-arg=-fuse-ld=lld"; \
 	  if [ -z "$${LOCALAPPDATA:-}" ]; then echo "LOCALAPPDATA is required for Windows tests."; exit 1; fi; \
 	  test_tmp_dir="$$(cygpath -u "$$LOCALAPPDATA")/Temp"; \
 	  mkdir -p "$$test_tmp_dir"; \
 	  native_test_tmp="$$(cygpath -w "$$test_tmp_dir")"; \
 	  export TMP="$$native_test_tmp" TEMP="$$native_test_tmp"; unset TMPDIR; \
-	  echo "▶ cargo test --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
-	  cargo test --profile ci-test --workspace --all-targets --target "$$target_triple"; \
+	  echo "▶ cargo test --locked --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive, LLD)"; \
+	  cargo test --locked --profile ci-test --workspace --all-targets --target "$$target_triple"; \
 	'
 
 windows-test-arm64: require-windows-host
@@ -520,8 +522,8 @@ windows-test-arm64: require-windows-host
 	  mkdir -p "$$test_tmp_dir"; \
 	  native_test_tmp="$$(cygpath -w "$$test_tmp_dir")"; \
 	  export TMP="$$native_test_tmp" TEMP="$$native_test_tmp"; unset TMPDIR; \
-	  echo "▶ cargo test --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
-	  cargo test --profile ci-test --workspace --all-targets --target "$$target_triple"; \
+	  echo "▶ cargo test --locked --profile ci-test --workspace --all-targets --target $$target_triple (published Vectorscan archive)"; \
+	  cargo test --locked --profile ci-test --workspace --all-targets --target "$$target_triple"; \
 	'
 
 windows-test: windows-test-x64 windows-test-arm64
@@ -665,6 +667,7 @@ check-rust:
 viewer-tests:
 	node tests/viewer_import_grouping.cjs
 	node tests/viewer_hardening.cjs
+	node tests/viewer_investigation.cjs
 
 tests: viewer-tests
 	@echo "🔍 checking for cargo-nextest …"

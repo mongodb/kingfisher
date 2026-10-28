@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result, anyhow};
 use futures::{StreamExt, stream};
@@ -16,7 +17,7 @@ macro_rules! verbose_warn {
     };
 }
 
-use crate::validation::gcp::GcpValidator;
+use crate::{cli::commands::access_map::BlastRadiusOptions, validation::gcp::GcpValidator};
 
 mod api_key;
 
@@ -33,6 +34,10 @@ const MAX_IMPERSONATED_ROLE_IMPACTS: usize = 256;
 const MAX_AUTHORIZATION_PATHS: usize = 256;
 const MAX_SERVICE_ACCOUNT_POLICY_PROBES: usize = 128;
 const SERVICE_ACCOUNT_POLICY_CONCURRENCY: usize = 8;
+const MAX_PROJECT_SCOPES: usize = 8;
+const MAX_INVENTORY_PAGES: usize = 8;
+const MAX_INVENTORY_PAGE_BYTES: usize = 2 * 1024 * 1024;
+const INVENTORY_PAGE_TIMEOUT: Duration = Duration::from_secs(10);
 
 #[derive(Debug, Clone)]
 struct GcpIamBinding {
@@ -46,19 +51,41 @@ struct GcpIamBinding {
 }
 
 use super::{
-    AccessMapResult, AccessSummary, AccessTokenDetails, AuthorizationEvidence, AuthorizationGrant,
-    AuthorizationHop, AuthorizationPath, AuthorizationStatement, HierarchyScope, PermissionSummary,
-    PolicyEvidence, PrincipalEvidence, ProviderMetadata, ResourceExposure, RoleBinding, RoleImpact,
-    Severity, build_default_resource, build_recommendations,
+    AccessMapResult, AccessProbeEvidence, AccessSummary, AccessTokenDetails, AuthorizationEvidence,
+    AuthorizationGrant, AuthorizationHop, AuthorizationPath, AuthorizationStatement,
+    HierarchyScope, PermissionSummary, PolicyEvidence, PrincipalEvidence, ProviderMetadata,
+    ResourceExposure, RoleBinding, RoleImpact, Severity, build_default_resource,
+    build_recommendations,
 };
 
 pub async fn map_access(credential_path: Option<&Path>) -> Result<AccessMapResult> {
+    map_access_with_options(credential_path, &BlastRadiusOptions::default()).await
+}
+
+pub async fn map_access_with_options(
+    credential_path: Option<&Path>,
+    options: &BlastRadiusOptions,
+) -> Result<AccessMapResult> {
     let path = credential_path.ok_or_else(|| anyhow!("GCP access-map requires a key.json path"))?;
     let data = std::fs::read_to_string(path).context("Failed to read credential file")?;
-    map_access_from_json(&data).await
+    map_access_from_json_with_options(&data, options).await
 }
 
 pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
+    map_access_from_json_with_options(data, &BlastRadiusOptions::default()).await
+}
+
+pub async fn map_access_from_json_with_options(
+    data: &str,
+    options: &BlastRadiusOptions,
+) -> Result<AccessMapResult> {
+    // Validate requested scopes before making authenticated requests.
+    let credential: Value =
+        serde_json::from_str(data).context("Failed to parse GCP credential JSON")?;
+    select_project_scopes(
+        credential.get("project_id").and_then(Value::as_str).filter(|id| !id.is_empty()),
+        &options.gcp_projects,
+    )?;
     let validator = GcpValidator::global()?;
     let token_context = validator
         .get_access_token_from_sa_json(data)
@@ -88,6 +115,7 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
     let mut role_entries: Vec<(String, String)> = Vec::new();
     let mut iam_bindings = Vec::new();
     let mut role_permissions: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut scope_projects: BTreeMap<String, HashSet<String>> = BTreeMap::new();
     let mut principal_attributes = BTreeMap::new();
     if let Some(unique_id) = sa_metadata.unique_id.as_ref() {
         principal_attributes.insert("unique_id".into(), unique_id.clone());
@@ -113,11 +141,11 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
         }),
         limitations: vec![
             "Conditional IAM bindings and deny policies are retained as limitations rather than fully evaluated.".into(),
-            "Resource inventory is limited to the project associated with the credential; inherited roles may apply to additional descendant projects.".into(),
+            "Resource inventory covers only the credential project and explicitly selected additional projects; inherited roles may apply elsewhere.".into(),
             "Google group membership is not resolved, so group-based service-account grants may be absent.".into(),
             "Outbound service-account paths are permission-based candidates derived from caller-readable hierarchy and target service-account policies; target role impact is limited to direct service-account members in visible hierarchy policies.".into(),
             "Kingfisher does not mint credentials for discovered target service accounts or re-enumerate resources as those identities.".into(),
-            "Service-account inventory is limited to the first API response and at most 128 targets are considered for outbound paths.".into(),
+            "Resource listing is bounded to eight pages per service and project; at most 128 visible service accounts are considered for outbound paths.".into(),
         ],
         ..AuthorizationEvidence::default()
     };
@@ -127,7 +155,15 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
             .hierarchy
             .push(HierarchyScope { kind: "project".into(), id: format!("projects/{project}") });
     }
-    let policy = fetch_project_policy(&http_client, &access_token, project_id.as_deref()).await?;
+    let policy = fetch_project_policy(&http_client, &access_token, project_id.as_deref())
+        .await
+        .unwrap_or_else(|_| {
+            authorization_evidence.limitations.push(
+                "The project IAM policy lookup failed; continuing with partial access evidence."
+                    .into(),
+            );
+            None
+        });
     if let Some(policy) = policy.as_ref() {
         let scope = project_id
             .as_deref()
@@ -158,15 +194,23 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
             });
 
         for ancestor in ancestors {
-            if ancestor.kind == "project" && ancestor.id == project {
+            if ancestor.kind == "project" {
                 continue;
             }
             let scope = format!("{}s/{}", ancestor.kind, ancestor.id);
+            scope_projects.entry(scope.clone()).or_default().insert(project.into());
             authorization_evidence
                 .hierarchy
                 .push(HierarchyScope { kind: ancestor.kind.clone(), id: scope.clone() });
-            if let Some(policy) =
-                fetch_ancestor_policy(&http_client, &access_token, &ancestor).await?
+            if let Some(policy) = fetch_ancestor_policy(&http_client, &access_token, &ancestor)
+                .await
+                .unwrap_or_else(|_| {
+                    authorization_evidence.limitations.push(format!(
+                        "The {} IAM policy lookup for {} failed; continuing with partial access evidence.",
+                        ancestor.kind, scope
+                    ));
+                    None
+                })
             {
                 let source = match ancestor.kind.as_str() {
                     "organization" => format!("org:{}", ancestor.id),
@@ -233,7 +277,7 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
         roles.push(RoleBinding { name: role_name, source, permissions });
     }
 
-    if roles.is_empty()
+    if roles.iter().all(|role| role.permissions.is_empty())
         && let Some(project) = project_id.as_deref()
     {
         let mut tested_permissions = test_project_permissions(&http_client, &access_token, project)
@@ -325,19 +369,42 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
     )
     .await;
 
-    let direct_permissions = classify_permissions(&roles);
-
     let mut resources = Vec::new();
-    if let Some(project) = project_id.as_deref() {
-        let mut enumerated =
-            enumerate_resources(&http_client, &access_token, project, &direct_permissions, &roles)
-                .await
-                .unwrap_or_else(|e| {
-                    verbose_warn!("GCP access-map: failed resource enumeration: {e}");
-                    Vec::new()
-                });
-        resources.append(&mut enumerated);
+    let project_scopes = select_project_scopes(project_id.as_deref(), &options.gcp_projects)?;
+    for project in &project_scopes {
+        let scoped_roles = if project_id.as_deref() == Some(project.as_str()) {
+            roles.clone()
+        } else {
+            let (scoped_roles, bindings) = collect_additional_project_roles(
+                &http_client,
+                &access_token,
+                project,
+                &client_email,
+                &mut role_permissions,
+                &mut authorization_evidence,
+                &mut scope_projects,
+            )
+            .await;
+            iam_bindings.extend(bindings);
+            roles.extend(scoped_roles.iter().cloned());
+            scoped_roles
+        };
+        resources.extend(
+            enumerate_resources(
+                &http_client,
+                &access_token,
+                project,
+                &classify_permissions(&scoped_roles),
+                &scoped_roles,
+                &mut authorization_evidence,
+            )
+            .await,
+        );
     }
+    let mut seen_policies = HashSet::new();
+    authorization_evidence.policies.retain(|policy| seen_policies.insert(policy.id.clone()));
+    let mut seen_bindings = HashSet::new();
+    iam_bindings.retain(|binding| seen_bindings.insert(binding.id.clone()));
     let target_bindings = fetch_visible_service_account_bindings(
         &http_client,
         &access_token,
@@ -356,8 +423,12 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
     )
     .await;
     iam_bindings.extend(target_bindings);
-    let reachable_targets =
-        add_outgoing_impersonation_paths(&client_email, &resources, &mut authorization_evidence);
+    let reachable_targets = add_outgoing_impersonation_paths_with_scopes(
+        &client_email,
+        &resources,
+        &mut authorization_evidence,
+        &scope_projects,
+    );
     let impersonated = build_outgoing_impersonation_impacts(
         &http_client,
         &access_token,
@@ -415,6 +486,7 @@ pub async fn map_access_from_json(data: &str) -> Result<AccessMapResult> {
         risk_notes,
         token_details,
         provider_metadata: Some(ProviderMetadata {
+            betterleaks_analysis: None,
             version: None,
             enterprise: None,
             authorization_evidence: Some(authorization_evidence),
@@ -510,12 +582,12 @@ async fn fetch_project_ancestry(
         verbose_warn!(
             "GCP access-map: Cloud Resource Manager API disabled for project {project_id}: {disabled}"
         );
-        return Ok(Vec::new());
+        return Err(anyhow!("Project ancestry lookup API is disabled"));
     }
 
     if status == StatusCode::FORBIDDEN {
         verbose_warn!("GCP access-map: ancestry lookup forbidden for project {project_id}");
-        return Ok(Vec::new());
+        return Err(anyhow!("Project ancestry lookup is forbidden"));
     }
 
     if !status.is_success() {
@@ -897,13 +969,293 @@ fn matching_permissions(perm_set: &HashSet<String>, prefixes: &[&str]) -> Vec<St
     matches
 }
 
+fn select_project_scopes(home: Option<&str>, additional: &[String]) -> Result<Vec<String>> {
+    let mut projects = Vec::new();
+    for project in home.into_iter().chain(additional.iter().map(String::as_str)) {
+        // Resource names and URLs below interpolate project identifiers, never paths or URLs.
+        if project.is_empty()
+            || project.len() > 128
+            || !project
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b':'))
+        {
+            return Err(anyhow!("Invalid GCP project identifier"));
+        }
+        if !projects.iter().any(|existing| existing == project) {
+            projects.push(project.to_string());
+        }
+    }
+    if projects.len() > MAX_PROJECT_SCOPES {
+        return Err(anyhow!("GCP inventory supports at most {MAX_PROJECT_SCOPES} project scopes"));
+    }
+    Ok(projects)
+}
+
+async fn collect_additional_project_roles(
+    client: &Client,
+    token: &str,
+    project: &str,
+    client_email: &str,
+    role_permissions: &mut BTreeMap<String, Vec<String>>,
+    evidence: &mut AuthorizationEvidence,
+    scope_projects: &mut BTreeMap<String, HashSet<String>>,
+) -> (Vec<RoleBinding>, Vec<GcpIamBinding>) {
+    let mut entries = Vec::new();
+    let mut bindings = Vec::new();
+    let scope = format!("projects/{project}");
+    evidence.hierarchy.push(HierarchyScope { kind: "project".into(), id: scope.clone() });
+    match fetch_project_policy(client, token, Some(project)).await {
+        Ok(Some(policy)) => {
+            collect_roles(&policy, client_email, &scope, &scope, &mut entries, evidence);
+            collect_iam_bindings(&policy, &scope, "iam_binding", &mut bindings);
+        }
+        _ => evidence
+            .limitations
+            .push(format!("The project IAM policy for {scope} could not be read.")),
+    }
+    match fetch_project_ancestry(client, token, project).await {
+        Ok(ancestors) => {
+            for ancestor in ancestors {
+                if ancestor.kind == "project" {
+                    continue;
+                }
+                let ancestor_scope = format!("{}s/{}", ancestor.kind, ancestor.id);
+                scope_projects.entry(ancestor_scope.clone()).or_default().insert(project.into());
+                if !evidence.hierarchy.iter().any(|item| item.id == ancestor_scope) {
+                    evidence.hierarchy.push(HierarchyScope {
+                        kind: ancestor.kind.clone(),
+                        id: ancestor_scope.clone(),
+                    });
+                }
+                match fetch_ancestor_policy(client, token, &ancestor).await {
+                    Ok(Some(policy)) => {
+                        collect_roles(
+                            &policy,
+                            client_email,
+                            &format!("{ancestor_scope} (via {scope})"),
+                            &ancestor_scope,
+                            &mut entries,
+                            evidence,
+                        );
+                        collect_iam_bindings(&policy, &ancestor_scope, "iam_binding", &mut bindings);
+                    }
+                    _ => evidence.limitations.push(format!(
+                        "The ancestor IAM policy for {ancestor_scope} could not be read for {scope}."
+                    )),
+                }
+            }
+        }
+        Err(_) => {
+            evidence.limitations.push(format!("Project ancestry for {scope} could not be read."))
+        }
+    }
+    let mut roles = Vec::new();
+    let mut seen = HashSet::new();
+    for (name, source) in entries {
+        if !seen.insert((name.clone(), source.clone())) {
+            continue;
+        }
+        let permissions = if let Some(permissions) = role_permissions.get(&name) {
+            permissions.clone()
+        } else {
+            match fetch_role_permissions(client, token, &name).await {
+                Ok(fetched) if !fetched.disabled => {
+                    role_permissions.insert(name.clone(), fetched.permissions.clone());
+                    fetched.permissions
+                }
+                Ok(_) => {
+                    evidence.limitations.push(format!(
+                        "IAM role {name} in {scope} is disabled or deleted and was ignored."
+                    ));
+                    continue;
+                }
+                Err(_) => {
+                    evidence.limitations.push(format!(
+                        "Permissions for IAM role {name} in {scope} could not be expanded."
+                    ));
+                    Vec::new()
+                }
+            }
+        };
+        for policy in evidence
+            .policies
+            .iter_mut()
+            .filter(|policy| policy.name.as_deref() == Some(&name) && policy.kind == "iam_binding")
+        {
+            if let Some(statement) = policy.statements.first_mut() {
+                statement.actions = permissions.clone();
+            }
+        }
+        roles.push(RoleBinding { name, source, permissions });
+    }
+    if roles.iter().all(|role| role.permissions.is_empty()) {
+        match test_project_permissions(client, token, project).await {
+            Ok(permissions) if !permissions.is_empty() => {
+                let id = format!("gcp:testIamPermissions:{scope}");
+                evidence.policies.push(PolicyEvidence {
+                    id: id.clone(),
+                    name: Some("testIamPermissions".into()),
+                    kind: "permission_probe".into(),
+                    attached_to: client_email.into(),
+                    scope: Some(scope.clone()),
+                    statements: vec![AuthorizationStatement {
+                        id: format!("{id}#0"),
+                        effect: "Observed".into(),
+                        actions: permissions.clone(),
+                        resources: vec![scope.clone()],
+                        principals: vec![format!("serviceAccount:{client_email}")],
+                        ..Default::default()
+                    }],
+                    ..Default::default()
+                });
+                roles.push(RoleBinding {
+                    name: "testIamPermissions".into(),
+                    source: format!("project_testIamPermissions:{project}"),
+                    permissions,
+                });
+            }
+            _ => evidence.limitations.push(format!(
+                "No tested project permissions were established for {scope}; this does not prove absence of access."
+            )),
+        }
+    }
+    (roles, bindings)
+}
+
+/// Follow only opaque page tokens on the original URL. A later page failure never erases
+/// earlier pages, and a failing service never prevents independent service inventories.
+async fn fetch_inventory_pages(
+    client: &Client,
+    token: &str,
+    url: &str,
+    operation: &str,
+    project: &str,
+    evidence: &mut AuthorizationEvidence,
+) -> Vec<Value> {
+    let mut pages = Vec::new();
+    let mut page_token: Option<String> = None;
+    let mut seen_tokens = HashSet::new();
+    for page in 0..MAX_INVENTORY_PAGES {
+        let mut request = client.get(url).bearer_auth(token).timeout(INVENTORY_PAGE_TIMEOUT);
+        if let Some(page_token) = page_token.as_deref() {
+            request = request.query(&[("pageToken", page_token)]);
+        }
+        let response = async {
+            let response = request.send().await.map_err(|_| "transport_error")?;
+            let status = response.status();
+            let mut body = Vec::new();
+            let mut chunks = response.bytes_stream();
+            while let Some(chunk) = chunks.next().await {
+                let chunk = chunk.map_err(|_| "response_error")?;
+                if body.len().saturating_add(chunk.len()) > MAX_INVENTORY_PAGE_BYTES {
+                    return Err("response_size_limit");
+                }
+                body.extend_from_slice(&chunk);
+            }
+            Ok((status, body))
+        };
+        let outcome = tokio::time::timeout(INVENTORY_PAGE_TIMEOUT, response).await;
+        let mut probe = AccessProbeEvidence {
+            service: reqwest::Url::parse(url)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned))
+                .unwrap_or_default(),
+            method: operation.into(),
+            resource: Some(format!("projects/{project}")),
+            status: "inconclusive".into(),
+            attributes: BTreeMap::from([("page".into(), (page + 1).to_string())]),
+            ..Default::default()
+        };
+        let (status, body) = match outcome {
+            Ok(Ok(response)) => response,
+            result => {
+                let reason = match result {
+                    Ok(Err(reason)) => reason,
+                    _ => "timeout",
+                };
+                probe.reason = Some(reason.into());
+                evidence.probes.push(probe);
+                evidence.limitations.push(format!(
+                    "{operation} in projects/{project} stopped on page {} ({reason}); earlier results were retained.",
+                    page + 1
+                ));
+                break;
+            }
+        };
+        probe.http_status = Some(status.as_u16());
+        if !status.is_success() {
+            let reason = if status == StatusCode::FORBIDDEN {
+                probe.status = "restricted".into();
+                if service_disabled_message(&body).ok().flatten().is_some() {
+                    "service_disabled"
+                } else {
+                    "permission_denied"
+                }
+            } else if status == StatusCode::TOO_MANY_REQUESTS {
+                "throttled"
+            } else {
+                "http_error"
+            };
+            probe.reason = Some(reason.into());
+            evidence.probes.push(probe);
+            evidence.limitations.push(format!(
+                "{operation} in projects/{project} stopped on page {} ({reason}, HTTP {}); earlier results were retained.",
+                page + 1, status.as_u16()
+            ));
+            break;
+        }
+        let json: Value = match serde_json::from_slice(&body) {
+            Ok(Value::Object(object)) => Value::Object(object),
+            _ => {
+                probe.reason = Some("invalid_response".into());
+                evidence.probes.push(probe);
+                evidence.limitations.push(format!(
+                    "{operation} in projects/{project} returned an invalid page; earlier results were retained."
+                ));
+                break;
+            }
+        };
+        probe.status = "accepted".into();
+        evidence.probes.push(probe);
+        if ["unreachable", "unreachables", "missingZones"].iter().any(|key| {
+            json.get(key).and_then(Value::as_array).is_some_and(|items| !items.is_empty())
+        }) {
+            evidence.limitations.push(format!(
+                "{operation} in projects/{project} reported unreachable locations; inventory is partial."
+            ));
+        }
+        page_token = json
+            .get("nextPageToken")
+            .and_then(Value::as_str)
+            .filter(|token| !token.is_empty())
+            .map(str::to_owned);
+        pages.push(json);
+        let Some(next_token) = page_token.as_ref() else {
+            break;
+        };
+        if !seen_tokens.insert(next_token.clone()) {
+            evidence.limitations.push(format!(
+                "{operation} in projects/{project} repeated a page token; pagination stopped."
+            ));
+            break;
+        }
+        if page + 1 == MAX_INVENTORY_PAGES {
+            evidence.limitations.push(format!(
+                "{operation} in projects/{project} was limited to {MAX_INVENTORY_PAGES} pages."
+            ));
+        }
+    }
+    pages
+}
+
 async fn enumerate_resources(
     client: &Client,
     token: &str,
     project_id: &str,
     permissions: &PermissionSummary,
     roles: &[RoleBinding],
-) -> Result<Vec<ResourceExposure>> {
+    evidence: &mut AuthorizationEvidence,
+) -> Vec<ResourceExposure> {
     let mut resources = Vec::new();
     let perm_set = collect_permission_set(roles);
     let mut add_storage = false;
@@ -977,16 +1329,10 @@ async fn enumerate_resources(
 
     if add_storage {
         let url = format!("https://storage.googleapis.com/storage/v1/b?project={}", project_id);
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: Cloud Storage API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in
+            fetch_inventory_pages(client, token, &url, "storage.buckets.list", project_id, evidence)
+                .await
+        {
             if let Some(items) = json.get("items").and_then(|i| i.as_array()) {
                 let writable = perm_set.iter().any(|p| {
                     p.starts_with("storage.objects.create")
@@ -1012,12 +1358,6 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: storage enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
@@ -1026,16 +1366,16 @@ async fn enumerate_resources(
             "https://compute.googleapis.com/compute/v1/projects/{}/aggregated/instances",
             project_id
         );
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: Compute Engine API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in fetch_inventory_pages(
+            client,
+            token,
+            &url,
+            "compute.instances.aggregatedList",
+            project_id,
+            evidence,
+        )
+        .await
+        {
             if let Some(items) = json.get("items").and_then(|i| i.as_object()) {
                 let writable = perm_set.iter().any(|p| {
                     p.starts_with("compute.instances.insert")
@@ -1066,12 +1406,6 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: Compute Engine enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
@@ -1080,16 +1414,16 @@ async fn enumerate_resources(
             "https://sqladmin.googleapis.com/sql/v1beta4/projects/{}/instances",
             project_id
         );
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: Cloud SQL Admin API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in fetch_inventory_pages(
+            client,
+            token,
+            &url,
+            "cloudsql.instances.list",
+            project_id,
+            evidence,
+        )
+        .await
+        {
             if let Some(items) = json.get("items").and_then(|i| i.as_array()) {
                 let writable = perm_set.iter().any(|p| {
                     p.starts_with("cloudsql.instances.update")
@@ -1119,12 +1453,6 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: Cloud SQL enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
@@ -1142,19 +1470,14 @@ async fn enumerate_resources(
         for (url, resource_type) in
             [(topics_url, "pubsub_topic"), (subs_url, "pubsub_subscription")]
         {
-            let resp = client.get(&url).bearer_auth(token).send().await?;
-            let status = resp.status();
-            let body = resp.bytes().await?;
-
-            if let Some(disabled) = service_disabled_message(&body)? {
-                verbose_warn!(
-                    "GCP access-map: Pub/Sub API disabled for project {project_id}: {disabled}"
-                );
-                continue;
-            }
-
-            if status.is_success() {
-                let json: Value = serde_json::from_slice(&body)?;
+            let operation = if resource_type == "pubsub_topic" {
+                "pubsub.topics.list"
+            } else {
+                "pubsub.subscriptions.list"
+            };
+            for json in
+                fetch_inventory_pages(client, token, &url, operation, project_id, evidence).await
+            {
                 let key = if resource_type == "pubsub_topic" { "topics" } else { "subscriptions" };
                 if let Some(items) = json.get(key).and_then(|i| i.as_array()) {
                     for item in items {
@@ -1177,12 +1500,6 @@ async fn enumerate_resources(
                         }
                     }
                 }
-            } else if status != StatusCode::FORBIDDEN {
-                verbose_warn!(
-                    "GCP access-map: Pub/Sub enumeration failed for {resource_type}: HTTP {} {}",
-                    status,
-                    String::from_utf8_lossy(&body)
-                );
             }
         }
     }
@@ -1190,16 +1507,10 @@ async fn enumerate_resources(
     if add_cloud_run {
         let url =
             format!("https://run.googleapis.com/v2/projects/{}/locations/-/services", project_id);
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: Cloud Run API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in
+            fetch_inventory_pages(client, token, &url, "run.services.list", project_id, evidence)
+                .await
+        {
             if let Some(items) = json.get("services").and_then(|i| i.as_array()) {
                 let writable = perm_set.iter().any(|p| {
                     p.starts_with("run.services.update") || p.starts_with("run.services.create")
@@ -1221,12 +1532,6 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: Cloud Run enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
@@ -1235,16 +1540,16 @@ async fn enumerate_resources(
             "https://artifactregistry.googleapis.com/v1/projects/{}/locations/-/repositories",
             project_id
         );
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: Artifact Registry API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in fetch_inventory_pages(
+            client,
+            token,
+            &url,
+            "artifactregistry.repositories.list",
+            project_id,
+            evidence,
+        )
+        .await
+        {
             if let Some(items) = json.get("repositories").and_then(|i| i.as_array()) {
                 let writable = perm_set.iter().any(|p| {
                     p.starts_with("artifactregistry.repositories.uploadArtifacts")
@@ -1269,12 +1574,6 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: Artifact Registry enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
@@ -1283,16 +1582,16 @@ async fn enumerate_resources(
             "https://container.googleapis.com/v1/projects/{}/locations/-/clusters",
             project_id
         );
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: Kubernetes Engine API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in fetch_inventory_pages(
+            client,
+            token,
+            &url,
+            "container.clusters.list",
+            project_id,
+            evidence,
+        )
+        .await
+        {
             if let Some(items) = json.get("clusters").and_then(|i| i.as_array()) {
                 let writable = perm_set.iter().any(|p| {
                     p.starts_with("container.clusters.update")
@@ -1315,28 +1614,22 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: GKE enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
     if add_bigquery {
         let url =
             format!("https://bigquery.googleapis.com/bigquery/v2/projects/{}/datasets", project_id);
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: BigQuery API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in fetch_inventory_pages(
+            client,
+            token,
+            &url,
+            "bigquery.datasets.list",
+            project_id,
+            evidence,
+        )
+        .await
+        {
             if let Some(items) = json.get("datasets").and_then(|i| i.as_array()) {
                 let writable = perm_set.iter().any(|p| {
                     p.starts_with("bigquery.tables.update")
@@ -1369,28 +1662,22 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: BigQuery enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
     if add_secret_manager {
         let url =
             format!("https://secretmanager.googleapis.com/v1/projects/{}/secrets", project_id);
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: Secret Manager API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in fetch_inventory_pages(
+            client,
+            token,
+            &url,
+            "secretmanager.secrets.list",
+            project_id,
+            evidence,
+        )
+        .await
+        {
             if let Some(items) = json.get("secrets").and_then(|i| i.as_array()) {
                 let can_access_values =
                     perm_set.iter().any(|p| p.contains("secretmanager.versions.access"));
@@ -1425,12 +1712,6 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: Secret Manager enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
@@ -1439,16 +1720,16 @@ async fn enumerate_resources(
             "https://cloudkms.googleapis.com/v1/projects/{}/locations/-/keyRings",
             project_id
         );
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: Cloud KMS API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in fetch_inventory_pages(
+            client,
+            token,
+            &url,
+            "cloudkms.keyRings.list",
+            project_id,
+            evidence,
+        )
+        .await
+        {
             if let Some(key_rings) = json.get("keyRings").and_then(|k| k.as_array()) {
                 let can_decrypt = perm_set
                     .iter()
@@ -1495,12 +1776,6 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: Cloud KMS enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
@@ -1509,16 +1784,16 @@ async fn enumerate_resources(
             "https://cloudfunctions.googleapis.com/v2/projects/{}/locations/-/functions",
             project_id
         );
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: Cloud Functions API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in fetch_inventory_pages(
+            client,
+            token,
+            &url,
+            "cloudfunctions.functions.list",
+            project_id,
+            evidence,
+        )
+        .await
+        {
             if let Some(items) = json.get("functions").and_then(|f| f.as_array()) {
                 let writable = perm_set.iter().any(|p| {
                     p.starts_with("cloudfunctions.functions.create")
@@ -1545,25 +1820,21 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: Cloud Functions enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
     if add_service_accounts {
         let url = format!("https://iam.googleapis.com/v1/projects/{}/serviceAccounts", project_id);
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!("GCP access-map: IAM API disabled for project {project_id}: {disabled}");
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in fetch_inventory_pages(
+            client,
+            token,
+            &url,
+            "iam.serviceAccounts.list",
+            project_id,
+            evidence,
+        )
+        .await
+        {
             if let Some(accounts) = json.get("accounts").and_then(|a| a.as_array()) {
                 let can_impersonate = perm_set.iter().any(|p| {
                     p.contains("serviceAccounts.getAccessToken")
@@ -1596,27 +1867,21 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: service account enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
     if add_firestore {
         let url = format!("https://firestore.googleapis.com/v1/projects/{}/databases", project_id);
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: Firestore API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in fetch_inventory_pages(
+            client,
+            token,
+            &url,
+            "firestore.databases.list",
+            project_id,
+            evidence,
+        )
+        .await
+        {
             if let Some(databases) = json.get("databases").and_then(|d| d.as_array()) {
                 let writable = perm_set.iter().any(|p| {
                     p.starts_with("datastore.entities.create")
@@ -1643,27 +1908,21 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: Firestore enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
     if add_spanner {
         let url = format!("https://spanner.googleapis.com/v1/projects/{}/instances", project_id);
-        let resp = client.get(&url).bearer_auth(token).send().await?;
-        let status = resp.status();
-        let body = resp.bytes().await?;
-
-        if let Some(disabled) = service_disabled_message(&body)? {
-            verbose_warn!(
-                "GCP access-map: Cloud Spanner API disabled for project {project_id}: {disabled}"
-            );
-        } else if status.is_success() {
-            let json: Value = serde_json::from_slice(&body)?;
+        for json in fetch_inventory_pages(
+            client,
+            token,
+            &url,
+            "spanner.instances.list",
+            project_id,
+            evidence,
+        )
+        .await
+        {
             if let Some(instances) = json.get("instances").and_then(|i| i.as_array()) {
                 let writable = perm_set.iter().any(|p| {
                     p.starts_with("spanner.instances.update")
@@ -1690,16 +1949,10 @@ async fn enumerate_resources(
                     }
                 }
             }
-        } else if status != StatusCode::FORBIDDEN {
-            verbose_warn!(
-                "GCP access-map: Cloud Spanner enumeration failed: HTTP {} {}",
-                status,
-                String::from_utf8_lossy(&body)
-            );
         }
     }
 
-    Ok(resources)
+    resources
 }
 
 async fn fetch_service_account_iam_policy(
@@ -1966,10 +2219,20 @@ struct GcpImpersonationDiscovery {
     notes: Vec<String>,
 }
 
+#[cfg(test)]
 fn add_outgoing_impersonation_paths(
     source: &str,
     resources: &[ResourceExposure],
     evidence: &mut AuthorizationEvidence,
+) -> Vec<ReachableServiceAccount> {
+    add_outgoing_impersonation_paths_with_scopes(source, resources, evidence, &BTreeMap::new())
+}
+
+fn add_outgoing_impersonation_paths_with_scopes(
+    source: &str,
+    resources: &[ResourceExposure],
+    evidence: &mut AuthorizationEvidence,
+    scope_projects: &BTreeMap<String, HashSet<String>>,
 ) -> Vec<ReachableServiceAccount> {
     let mut reachable = BTreeMap::<String, ReachableServiceAccount>::new();
     let candidates: Vec<(String, Vec<String>, Vec<String>, String)> = evidence
@@ -2010,6 +2273,15 @@ fn add_outgoing_impersonation_paths(
             {
                 if !gcp_scope_contains_service_account(&scope, &resource.name) {
                     continue;
+                }
+                if scope.starts_with("folders/") || scope.starts_with("organizations/") {
+                    let target_project = resource.name.split('/').nth(1).unwrap_or_default();
+                    if !scope_projects
+                        .get(&scope)
+                        .is_some_and(|projects| projects.contains(target_project))
+                    {
+                        continue;
+                    }
                 }
                 if evidence.paths.len() >= MAX_AUTHORIZATION_PATHS {
                     record_gcp_path_cap(evidence);
@@ -2387,7 +2659,6 @@ async fn test_project_permissions(
         "iam.serviceAccounts.list",
         "iam.serviceAccounts.getAccessToken",
         "iam.serviceAccountKeys.list",
-        "iam.serviceAccountTokenCreator",
         "storage.buckets.list",
         "storage.objects.list",
         "compute.instances.list",
@@ -2526,6 +2797,265 @@ fn service_disabled_message(body: &[u8]) -> Result<Option<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{method, path, query_param},
+    };
+
+    #[tokio::test]
+    async fn inventory_pages_follow_opaque_tokens_and_preserve_query_scope() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/buckets"))
+            .and(query_param("project", "example"))
+            .and(|request: &wiremock::Request| {
+                !request.url.query_pairs().any(|(name, _)| name == "pageToken")
+            })
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [{"name": "first"}], "nextPageToken": "opaque +&=token"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/buckets"))
+            .and(query_param("project", "example"))
+            .and(query_param("pageToken", "opaque +&=token"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [{"name": "second"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let mut evidence = AuthorizationEvidence::default();
+        let pages = fetch_inventory_pages(
+            &Client::new(),
+            "test-token",
+            &format!("{}/buckets?project=example", server.uri()),
+            "storage.buckets.list",
+            "example",
+            &mut evidence,
+        )
+        .await;
+
+        assert_eq!(pages.len(), 2);
+        assert_eq!(pages[1]["items"][0]["name"], "second");
+        assert_eq!(evidence.probes.len(), 2);
+        assert!(evidence.probes.iter().all(|probe| probe.status == "accepted"));
+        assert!(evidence.limitations.is_empty());
+        let serialized = serde_json::to_string(&evidence).unwrap();
+        assert!(!serialized.contains("test-token"));
+        assert!(!serialized.contains("opaque"));
+    }
+
+    #[tokio::test]
+    async fn later_page_denial_preserves_earlier_pages_and_independent_service() {
+        let server = MockServer::start().await;
+        Mock::given(path("/accounts"))
+            .and(|request: &wiremock::Request| request.url.query().is_none())
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "accounts": [{"email": "first@example.iam.gserviceaccount.com"}],
+                "nextPageToken": "second"
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/accounts"))
+            .and(query_param("pageToken", "second"))
+            .respond_with(ResponseTemplate::new(403).set_body_json(serde_json::json!({
+                "error": {"message": "sensitive-provider-message", "code": 403}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(path("/secrets"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "secrets": [{"name": "projects/example/secrets/visible"}]
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
+        let client = Client::new();
+        let mut evidence = AuthorizationEvidence::default();
+        let accounts = fetch_inventory_pages(
+            &client,
+            "test-token",
+            &format!("{}/accounts", server.uri()),
+            "iam.serviceAccounts.list",
+            "example",
+            &mut evidence,
+        )
+        .await;
+        let secrets = fetch_inventory_pages(
+            &client,
+            "test-token",
+            &format!("{}/secrets", server.uri()),
+            "secretmanager.secrets.list",
+            "example",
+            &mut evidence,
+        )
+        .await;
+
+        assert_eq!(accounts.len(), 1);
+        assert_eq!(secrets.len(), 1);
+        assert_eq!(
+            evidence.probes.iter().map(|probe| probe.status.as_str()).collect::<Vec<_>>(),
+            ["accepted", "restricted", "accepted"]
+        );
+        assert!(
+            evidence.limitations.iter().any(|note| note.contains("earlier results were retained"))
+        );
+        assert!(!serde_json::to_string(&evidence).unwrap().contains("sensitive-provider-message"));
+    }
+
+    #[tokio::test]
+    async fn interrupted_response_preserves_completed_pages() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener =
+            tokio::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0)).await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            for page in 0..2 {
+                let (mut connection, _) = listener.accept().await.unwrap();
+                let mut request = [0_u8; 4096];
+                let read = connection.read(&mut request).await.unwrap();
+                assert!(read > 0);
+                if page == 0 {
+                    let body = r#"{"accounts":[{"email":"visible@example.com"}],"nextPageToken":"second"}"#;
+                    let response = format!(
+                        "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nContent-Type: application/json\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    );
+                    connection.write_all(response.as_bytes()).await.unwrap();
+                } else {
+                    // Advertise a longer body, then close the connection before it is complete.
+                    connection
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\n{",
+                        )
+                        .await
+                        .unwrap();
+                }
+                connection.shutdown().await.unwrap();
+            }
+        });
+        let mut evidence = AuthorizationEvidence::default();
+        let pages = fetch_inventory_pages(
+            &Client::new(),
+            "test-token",
+            &format!("http://{address}/accounts"),
+            "iam.serviceAccounts.list",
+            "example",
+            &mut evidence,
+        )
+        .await;
+        tokio::time::timeout(Duration::from_secs(5), server).await.unwrap().unwrap();
+
+        assert_eq!(pages.len(), 1);
+        assert_eq!(evidence.probes[0].status, "accepted");
+        assert_eq!(evidence.probes[1].status, "inconclusive");
+        assert_eq!(evidence.probes[1].reason.as_deref(), Some("response_error"));
+        assert!(
+            evidence.limitations.iter().any(|note| note.contains("earlier results were retained"))
+        );
+    }
+
+    #[tokio::test]
+    async fn inventory_stops_at_page_cap_and_repeated_tokens() {
+        let server = MockServer::start().await;
+        Mock::given(path("/bounded"))
+            .respond_with(|request: &wiremock::Request| {
+                let page = request
+                    .url
+                    .query_pairs()
+                    .find(|(name, _)| name == "pageToken")
+                    .and_then(|(_, token)| token.parse::<usize>().ok())
+                    .unwrap_or(0);
+                ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                    "items": [{"name": page.to_string()}], "nextPageToken": (page + 1).to_string()
+                }))
+            })
+            .expect(MAX_INVENTORY_PAGES as u64)
+            .mount(&server)
+            .await;
+        Mock::given(path("/repeated"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [], "nextPageToken": "same"
+            })))
+            .expect(2)
+            .mount(&server)
+            .await;
+        let client = Client::new();
+        let mut evidence = AuthorizationEvidence::default();
+        let bounded = fetch_inventory_pages(
+            &client,
+            "test-token",
+            &format!("{}/bounded", server.uri()),
+            "storage.buckets.list",
+            "example",
+            &mut evidence,
+        )
+        .await;
+        let repeated = fetch_inventory_pages(
+            &client,
+            "test-token",
+            &format!("{}/repeated", server.uri()),
+            "iam.serviceAccounts.list",
+            "example",
+            &mut evidence,
+        )
+        .await;
+        assert_eq!(bounded.len(), MAX_INVENTORY_PAGES);
+        assert_eq!(repeated.len(), 2);
+        assert!(evidence.limitations.iter().any(|note| note.contains("limited to")));
+        assert!(evidence.limitations.iter().any(|note| note.contains("repeated a page token")));
+    }
+
+    #[tokio::test]
+    async fn explicit_project_scopes_are_deduplicated_and_requested_independently() {
+        let server = MockServer::start().await;
+        let scopes = select_project_scopes(Some("home"), &["other".into(), "home".into()]).unwrap();
+        assert_eq!(scopes, ["home", "other"]);
+        for project in &scopes {
+            Mock::given(method("GET"))
+                .and(path(format!("/v1/projects/{project}/accounts")))
+                .respond_with(
+                    ResponseTemplate::new(200).set_body_json(serde_json::json!({"accounts": []})),
+                )
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let mut evidence = AuthorizationEvidence::default();
+        for project in &scopes {
+            fetch_inventory_pages(
+                &Client::new(),
+                "test-token",
+                &format!("{}/v1/projects/{project}/accounts", server.uri()),
+                "iam.serviceAccounts.list",
+                project,
+                &mut evidence,
+            )
+            .await;
+        }
+        assert_eq!(
+            evidence
+                .probes
+                .iter()
+                .filter_map(|probe| probe.resource.as_deref())
+                .collect::<Vec<_>>(),
+            ["projects/home", "projects/other"]
+        );
+        assert!(
+            select_project_scopes(
+                Some("home"),
+                &(0..8).map(|n| format!("extra-{n}")).collect::<Vec<_>>()
+            )
+            .is_err()
+        );
+        assert!(select_project_scopes(Some("home"), &["../other".into()]).is_err());
+    }
 
     #[test]
     fn inherited_binding_retains_scope_role_and_condition_names() {
@@ -2644,6 +3174,46 @@ mod tests {
         assert_eq!(evidence.paths[0].hops[0].relationship, "can_mint_access_token");
         assert_eq!(evidence.paths[0].hops[0].to, "target@example.iam.gserviceaccount.com");
         assert_eq!(evidence.paths[0].conditions, ["expression"]);
+    }
+
+    #[test]
+    fn inherited_impersonation_grants_do_not_cross_unrelated_project_scopes() {
+        let source = "source@example.iam.gserviceaccount.com";
+        let resources = ["home", "other"].map(|project| ResourceExposure {
+            resource_type: "service_account".into(),
+            name: format!(
+                "projects/{project}/serviceAccounts/target@{project}.iam.gserviceaccount.com"
+            ),
+            permissions: Vec::new(),
+            risk: "medium".into(),
+            reason: "visible".into(),
+        });
+        let mut evidence = AuthorizationEvidence {
+            policies: vec![PolicyEvidence {
+                id: "folder-binding".into(),
+                kind: "iam_binding".into(),
+                scope: Some("folders/123".into()),
+                statements: vec![AuthorizationStatement {
+                    id: "folder-binding#0".into(),
+                    actions: vec!["iam.serviceAccounts.getAccessToken".into()],
+                    principals: vec![format!("serviceAccount:{source}")],
+                    ..Default::default()
+                }],
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let scope_projects =
+            BTreeMap::from([("folders/123".into(), HashSet::from(["home".into()]))]);
+        let reachable = add_outgoing_impersonation_paths_with_scopes(
+            source,
+            &resources,
+            &mut evidence,
+            &scope_projects,
+        );
+        assert_eq!(reachable.len(), 1);
+        assert_eq!(reachable[0].email, "target@home.iam.gserviceaccount.com");
+        assert_eq!(evidence.paths.len(), 1);
     }
 
     #[test]

@@ -20,7 +20,7 @@
 
 **Find leaked secrets. Validate what’s live. Map the blast radius. Revoke fast.**
 
-Kingfisher is a blazingly fast, completely free and open source secret scanner built in Rust. It detects leaked secrets across your entire stack with [hundreds of built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), validates which credentials are actually live, maps the blast radius of every leak, and **revokes exposed secrets in minutes** - the full defender workflow in one Apache-2.0-licensed release:
+Kingfisher is a fast, free, open-source secret scanner and credential response tool built in Rust. It detects leaked secrets with [hundreds of built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), validates which credentials are active, maps access for supported credential types, and revokes supported secrets—all in one Apache-2.0-licensed release:
 
 **Detect → Validate → Map → Triage → Revoke**
 
@@ -32,7 +32,7 @@ Kingfisher is a blazingly fast, completely free and open source secret scanner b
 
 > **Defender workflow:** Follow the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md) for secret detection, validation, notifications, blast-radius mapping, and revocation.
 
-## Optionally Embed Kingfisher as a Rust library or Python module
+## Embed Kingfisher in Rust or Python
 
 Add Kingfisher's fast secret scanning, live credential validation, and revocation
 to your own applications through a Python module or native Rust library.
@@ -40,7 +40,7 @@ Everything runs in-process, with no CLI subprocess required.
 
 <p align="center">
   <img src="docs/embeddable.png"
-       alt="Embedding Kingfisher in Python and Rust applications"
+       alt="Embeddable credential security engine: detection, live validation, and explicit revocation in Python and Rust"
        width="800" />
 </p>
 
@@ -74,19 +74,17 @@ For target-specific commands, authentication, scope, and pagination behavior, us
 
 ## Discover, validate, and revoke — open source options
 
-Of the popular secret scanning tools compared below, **only Kingfisher and Betterleaks 2.0
-offer built-in credential revocation.** All open source, with no
-paid edition required.
+All four tools detect secrets. Kingfisher and Betterleaks 2.0 RC1 also include
+credential revocation for supported providers.
 
-| Built-in capability | Kingfisher | Betterleaks 2.0 | TruffleHog OSS | Gitleaks |
+| Built-in capability | Kingfisher | Betterleaks 2.0 RC1 | TruffleHog OSS | Gitleaks |
 |---|:---:|:---:|:---:|:---:|
 | (Find) Secret discovery | ✅ | ✅ | ✅ | ✅ |
 | (Validate) Live credential verification | ✅ | ✅ | ✅ | ❌ |
-| (Map) Identity and permission analysis | ✅ | ✅ | ✅ | ❌ |
 | (Revoke) **Credential revocation** | **✅** | **✅** | ❌ | ❌ |
 | License | Apache-2.0 | MIT | AGPL-3.0 | MIT |
 
-✅ Supported · ❌ Not Supported
+✅ Built in · ❌ Not supported as a built-in capability.
 
 ## Built for Speed and Accuracy
 
@@ -261,15 +259,32 @@ the [end-to-end defender workflow](docs/DEFENDER_WORKFLOW.md),
 ## Map the Blast Radius. Revoke the Credential.
 
 For supported credentials, `--blast-radius` goes beyond a live/inactive verdict. It maps the
-effective identity, permissions, reachable roles or service accounts, and affected resource
-scopes. This includes advanced AWS role-assumption, GCP service-account impersonation analysis,
+credential identity, recorded permissions, candidate role or service-account paths, and resource
+scopes. This includes AWS role-assumption and GCP service-account impersonation analysis,
 bounded Bedrock model discovery and availability checks, and exact read methods accepted by a
 bounded Google API-key probe allowlist.
 
-The HTML viewer turns that evidence into an interactive access map for rapid investigation and
-prioritization:
+The HTML triager opens directly into an investigation workspace. Review active credentials and
+coverage gaps, then trace each identity to policy evidence, candidate privilege paths, and recorded
+resources. AWS, GCP, and Azure mappings are included in the open-source release.
 
-![Kingfisher blast-radius access-map HTML view](docs/access-map.png)
+![Kingfisher viewer walkthrough: inspect blast-radius evidence and trace identities to resources](docs/assets/screenshots/investigation-walkthrough.gif)
+
+*A 10-second walkthrough of actual viewer screens using synthetic data. Prefer a still image?
+Open the [policy investigation](docs/assets/screenshots/blast-radius-investigation.jpg) or
+[resource map](docs/assets/screenshots/blast-radius-map.jpg).*
+
+The Blast Radius view separates observed API access from policy grants and conditional paths.
+Search evidence, filter providers, or switch to the resource map. Risk explanations and coverage
+gaps are included automatically using the same API results. Use `--aws-region` or
+`--gcp-project` to expand discovery.
+Existing report formats and legacy severity fields remain supported.
+
+![Kingfisher blast-radius policy and capability investigation](docs/assets/screenshots/blast-radius-investigation.jpg)
+
+*Screenshots use a [synthetic, credential-free report](docs/viewer/investigation-demo.json).
+See the [triager workflow](docs/USAGE.md#report-viewer-local-and-hosted) and
+[collection limits](docs/BLAST_RADIUS.md#risk-and-coverage).*
 
 Kingfisher also provides explicit, defender-led revocation for supported credentials. Revocation
 is opt-in and is exposed only where Kingfisher has a bounded provider workflow; responders should
@@ -280,10 +295,11 @@ always confirm the target and operational impact before containment.
 - **Extensible rules**: [Betterleaks](https://github.com/betterleaks/betterleaks/blob/main/config/betterleaks.toml) is the main catalog, with selected [Veles detectors](https://github.com/google/osv-scalibr/tree/main/veles/secrets) filling gaps;
   both Betterleaks TOML (`.toml`) and the Kingfisher rule format (`.yml`/`.yaml`) are fully supported via `--rules-path` ([built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), [docs/RULES.md](docs/RULES.md))
 - **Validation and defender-led revocation**: validate discovered credentials live, then revoke supported credentials from the CLI. For supported provider flows, responders can contain a leaked token even when its owner is unknown or has left the company ([docs/USAGE.md](docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](docs/REVOCATION_PROVIDERS.md))
-- **Blast-radius mapping included by default**: use `--blast-radius` (alias `--access-map`) to map supported credentials to their effective identities, permissions, reachable roles/service accounts, and impacted resource scopes. All 43 providers—including advanced AWS role-assumption and GCP service-account impersonation analysis—are included in the Apache-2.0 release ([blast-radius docs](https://mongodb.github.io/kingfisher/features/blast-radius/))
+- **Blast-radius mapping in the open-source release**: use `--blast-radius` (alias `--access-map`) to map supported credentials to identities, permissions, candidate role/service-account paths, and resource scopes. All 43 providers—including AWS IAM, GCP hierarchy/impersonation, and Azure Graph/ARM RBAC mapping—are included in the Apache-2.0 release ([blast-radius docs](https://mongodb.github.io/kingfisher/features/blast-radius/))
 - **Broad provider coverage**: detect and validate credentials across cloud, AI, developer tooling, databases, SaaS, messaging, identity, and cryptographic systems through the Betterleaks- and Veles-based candidate catalog
 - **Compressed Files**: Supports extracting and scanning compressed files for secrets, including `tar.gz`/`bz2`/`xz`, ZIP-family containers (`zip`, `jar`, `docx`, `xlsx`, `pptx`, `odt`, `epub`, `hwpx`, and more), `asar`, HWP (Hancom OLE2/CFBF binary with DEFLATE/zlib stream decoding), and EGG (ALZip; raw-byte scanning)
 - **SQLite Database Scanning**: Automatically extracts and scans SQLite database contents for secrets stored in table rows
+- **PDF Text Scanning**: Extracts page text from PDFs, including Git history and archive members, with decompression/output limits; no OCR or password-protected PDF support
 - **Python Bytecode (.pyc) Scanning**: Extracts and scans string constants from compiled Python (`.pyc`, `.pyo`) files
 - **Baseline management**: generate and track baselines to suppress known secrets ([docs/BASELINE.md](docs/BASELINE.md))
 - **Checksum-aware custom detection**: Kingfisher custom rules can verify token checksums offline before validation ([checksum intelligence](docs/RULES.md#checksum-intelligence))

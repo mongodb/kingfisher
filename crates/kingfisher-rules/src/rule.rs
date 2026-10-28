@@ -5,8 +5,14 @@
 //! and associated metadata such as confidence and fingerprints.
 
 use std::{
-    borrow::Cow, cmp::Ordering, collections::BTreeMap, fmt, hash::Hash, path::Path, str::FromStr,
-    sync::LazyLock,
+    borrow::Cow,
+    cmp::Ordering,
+    collections::BTreeMap,
+    fmt,
+    hash::Hash,
+    path::Path,
+    str::FromStr,
+    sync::{LazyLock, OnceLock},
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -91,22 +97,23 @@ impl Validation {
     /// executable configuration; ordinary `Serialize` remains lossless.
     pub fn redacted_for_inspection(&self) -> Self {
         let mut inspected = self.clone();
-        if let Self::Http(http) = &mut inspected
-            && let Some(auth) = &mut http.auth
-        {
-            let credentials = &mut auth.oauth2.ropc;
-            for value in [
-                &mut credentials.username,
-                &mut credentials.password,
-                &mut credentials.client_secret,
-            ]
-            .into_iter()
-            .flatten()
-            {
-                *value = "[REDACTED]".into();
-            }
+        if let Self::Http(http) = &mut inspected {
+            redact_http_auth(http);
         }
         inspected
+    }
+}
+
+fn redact_http_auth(http: &mut HttpValidation) {
+    if let Some(auth) = &mut http.auth {
+        let credentials = &mut auth.oauth2.ropc;
+        for value in
+            [&mut credentials.username, &mut credentials.password, &mut credentials.client_secret]
+                .into_iter()
+                .flatten()
+        {
+            *value = "[REDACTED]".into();
+        }
     }
 }
 
@@ -117,7 +124,15 @@ pub struct BetterleaksValidation {
     #[cfg(debug_assertions)]
     #[serde(default)]
     pub source: String,
+    #[serde(deserialize_with = "deserialize_betterleaks_expression")]
     pub expression: BetterleaksExpr,
+    /// Optional Betterleaks analysis program, evaluated only by explicit access mapping.
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "deserialize_optional_betterleaks_expression"
+    )]
+    pub analyze: Option<BetterleaksExpr>,
     /// Betterleaks component rule ID to the Kingfisher dependency variable populated at runtime.
     #[serde(default)]
     pub components: BTreeMap<String, String>,
@@ -302,10 +317,61 @@ pub enum EthereumValidation {
 pub enum Revocation {
     AWS,
     GCP,
+    /// Explicit Betterleaks revocation program; never evaluated by scanning or validation.
+    Betterleaks(BetterleaksValidation),
     Http(#[serde(deserialize_with = "deserialize_http_revocation")] HttpValidation),
     /// Multi-step HTTP revocation (up to 2 steps).
     /// Some services require looking up an ID before deletion.
     HttpMultiStep(HttpMultiStepRevocation),
+}
+
+impl Revocation {
+    /// Redact literal OAuth2 credentials even in programmatically built actions.
+    /// Loading rule files rejects revocation auth; inspection must also be safe
+    /// for Rust callers that construct `Revocation::Http` directly.
+    pub fn redacted_for_inspection(&self) -> Self {
+        let mut inspected = self.clone();
+        if let Self::Http(http) = &mut inspected {
+            redact_http_auth(http);
+        }
+        inspected
+    }
+}
+
+fn deserialize_betterleaks_expression<'de, D>(
+    deserializer: D,
+) -> std::result::Result<BetterleaksExpr, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Expression {
+        Ast(BetterleaksExpr),
+        Source(String),
+    }
+
+    match Expression::deserialize(deserializer)? {
+        Expression::Ast(expression) => Ok(expression),
+        Expression::Source(source) => {
+            let expression = crate::betterleaks::parse_custom_expression(&source)
+                .map_err(serde::de::Error::custom)?;
+            serde_json::from_value(expression).map_err(serde::de::Error::custom)
+        }
+    }
+}
+
+fn deserialize_optional_betterleaks_expression<'de, D>(
+    deserializer: D,
+) -> std::result::Result<Option<BetterleaksExpr>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    struct Expression(
+        #[serde(deserialize_with = "deserialize_betterleaks_expression")] BetterleaksExpr,
+    );
+    Option::<Expression>::deserialize(deserializer).map(|value| value.map(|value| value.0))
 }
 
 fn deserialize_http_revocation<'de, D>(
@@ -628,6 +694,98 @@ pub struct HttpValidation {
     pub auth: Option<Box<HttpValidationAuth>>,
 }
 
+/// Maximum additional HTTP environments attempted after the primary.
+pub const MAX_HTTP_FALLBACKS: usize = 2;
+
+/// An explicit alternative environment. Validation and revocation reuse are independent opt-ins.
+#[derive(Debug, Serialize, Deserialize, PartialEq, PartialOrd, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct HttpFallback {
+    /// Unique environment identifier; `primary` is reserved.
+    pub id: String,
+    /// False by default. Reuse primary method/auth/headers/body/matchers, not its target URL.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reuse_primary_validation_logic: bool,
+    /// Required replacement URL when reusing validation logic; the primary URL is not inherited.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Complete independent HTTP validation; required unless reuse is explicitly true.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub validation: Option<Validation>,
+    /// False by default. Reuse primary action logic, with explicit replacement URL(s).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub reuse_primary_revocation_logic: bool,
+    /// Required replacement URL for reused single-request HTTP revocation logic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revocation_url: Option<String>,
+    /// One replacement URL per existing multi-step action step; never alternative mutation targets.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub revocation_urls: Vec<String>,
+    /// Independent action. Omission is unavailable unless primary revocation reuse is explicit.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revocation: Option<Revocation>,
+}
+
+impl HttpFallback {
+    fn resolved_revocation<'a>(
+        &'a self,
+        primary: Option<&Revocation>,
+    ) -> Result<Option<Cow<'a, Revocation>>> {
+        use anyhow::{bail, ensure};
+        if !self.reuse_primary_revocation_logic {
+            ensure!(
+                self.revocation_url.is_none() && self.revocation_urls.is_empty(),
+                "Revocation URL overrides require reuse_primary_revocation_logic: true"
+            );
+            return Ok(self.revocation.as_ref().map(Cow::Borrowed));
+        }
+        ensure!(
+            self.revocation.is_none(),
+            "reuse_primary_revocation_logic: true cannot include revocation"
+        );
+        let mut action = primary
+            .context("reuse_primary_revocation_logic: true requires primary revocation")?
+            .clone();
+        match &mut action {
+            Revocation::Http(http) => {
+                ensure!(
+                    self.revocation_urls.is_empty(),
+                    "Single-request revocation logic reuse requires revocation_url, not revocation_urls"
+                );
+                http.request.url = self
+                    .revocation_url
+                    .as_ref()
+                    .filter(|url| !url.trim().is_empty())
+                    .context(
+                        "Single-request revocation logic reuse requires a nonblank revocation_url",
+                    )?
+                    .clone();
+                http.request.fallback_urls.clear();
+            }
+            Revocation::HttpMultiStep(multi) => {
+                ensure!(
+                    self.revocation_url.is_none(),
+                    "Multi-step revocation logic reuse requires revocation_urls, not revocation_url"
+                );
+                ensure!(
+                    (1..=2).contains(&multi.steps.len())
+                        && self.revocation_urls.len() == multi.steps.len()
+                        && self.revocation_urls.iter().all(|url| !url.trim().is_empty()),
+                    "Multi-step revocation logic reuse requires one nonblank revocation_urls entry per step (one or two steps)"
+                );
+                for (step, url) in multi.steps.iter_mut().zip(&self.revocation_urls) {
+                    step.request.url = url.clone();
+                    step.request.fallback_urls.clear();
+                }
+            }
+            _ => bail!(
+                "Primary revocation logic reuse supports only HTTP and HTTP multi-step actions"
+            ),
+        }
+        Ok(Some(Cow::Owned(action)))
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
 #[serde(deny_unknown_fields)]
 pub struct HttpValidationAuth {
@@ -710,20 +868,101 @@ pub struct GrpcRequest {
 
 /// Configuration for an HTTP request used for validation.
 #[derive(Debug, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord, Hash, Clone)]
+#[serde(try_from = "HttpRequestDefinition", into = "HttpRequestDefinition")]
 pub struct HttpRequest {
     pub method: String,
+    /// Primary URL template. YAML also accepts an ordered, nonempty list of URLs.
     pub url: String,
-    #[serde(default)]
+    /// Additional URL templates, attempted in order after `url` for validation.
+    /// Revocation selects exactly one URL using the accepted validation endpoint index.
+    pub fallback_urls: Vec<String>,
     pub headers: BTreeMap<String, String>,
-    #[serde(default)]
     pub body: Option<String>,
-    #[serde(default)]
     pub response_matcher: Option<Vec<ResponseMatcher>>,
-    #[serde(default)]
     pub multipart: Option<MultipartConfig>,
     // allow HTML only when explicitly set true
-    #[serde(default = "default_false")]
     pub response_is_html: bool,
+}
+
+impl HttpRequest {
+    /// URL templates in their configured order, including the primary URL.
+    pub fn urls(&self) -> impl Iterator<Item = &str> {
+        std::iter::once(self.url.as_str()).chain(self.fallback_urls.iter().map(String::as_str))
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(untagged)]
+enum HttpRequestUrls {
+    Single(String),
+    Multiple(Vec<String>),
+}
+
+#[derive(Serialize, Deserialize)]
+struct HttpRequestDefinition {
+    method: String,
+    url: HttpRequestUrls,
+    #[serde(default)]
+    headers: BTreeMap<String, String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    response_matcher: Option<Vec<ResponseMatcher>>,
+    #[serde(default)]
+    multipart: Option<MultipartConfig>,
+    #[serde(default = "default_false")]
+    response_is_html: bool,
+}
+
+impl TryFrom<HttpRequestDefinition> for HttpRequest {
+    type Error = &'static str;
+
+    fn try_from(definition: HttpRequestDefinition) -> std::result::Result<Self, Self::Error> {
+        let (url, fallback_urls) = match definition.url {
+            HttpRequestUrls::Single(url) => (url, Vec::new()),
+            HttpRequestUrls::Multiple(mut urls) => {
+                if urls.is_empty() {
+                    return Err("HTTP url list must contain at least one endpoint");
+                }
+                if urls.iter().any(|url| url.trim().is_empty()) {
+                    return Err("HTTP url list cannot contain an empty endpoint");
+                }
+                let url = urls.remove(0);
+                (url, urls)
+            }
+        };
+        Ok(Self {
+            method: definition.method,
+            url,
+            fallback_urls,
+            headers: definition.headers,
+            body: definition.body,
+            response_matcher: definition.response_matcher,
+            multipart: definition.multipart,
+            response_is_html: definition.response_is_html,
+        })
+    }
+}
+
+impl From<HttpRequest> for HttpRequestDefinition {
+    fn from(request: HttpRequest) -> Self {
+        let url = if request.fallback_urls.is_empty() {
+            HttpRequestUrls::Single(request.url)
+        } else {
+            HttpRequestUrls::Multiple(
+                std::iter::once(request.url).chain(request.fallback_urls).collect(),
+            )
+        };
+        Self {
+            method: request.method,
+            url,
+            headers: request.headers,
+            body: request.body,
+            response_matcher: request.response_matcher,
+            multipart: request.multipart,
+            response_is_html: request.response_is_html,
+        }
+    }
 }
 
 /// Configuration for multipart HTTP requests.
@@ -891,6 +1130,18 @@ pub struct RuleSyntax {
     pub id: String,
     /// The regex pattern used by the rule.
     pub pattern: String,
+    /// Higher values take precedence when imported Betterleaks findings overlap.
+    #[serde(default)]
+    pub specificity: i64,
+    /// Optional metadata labels retained from custom YAML and Betterleaks TOML.
+    #[serde(default)]
+    pub tags: Vec<String>,
+    /// Case-insensitive candidate keywords; at least one must occur in the source fragment.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keywords: Vec<String>,
+    /// A Betterleaks path-only rule reports its matching path without content matching.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub betterleaks_path_only: bool,
     /// Optional source-path predicate. The content pattern is evaluated only for matching paths.
     #[serde(default)]
     pub path: Option<String>,
@@ -937,6 +1188,9 @@ pub struct RuleSyntax {
     /// Optional revocation configuration.
     #[serde(default)]
     pub revocation: Option<Revocation>,
+    /// Optional named HTTP environments; execution requires explicit opt-in.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fallbacks: Vec<HttpFallback>,
     /// Optional dependencies on other rules.
     #[serde(default)]
     pub depends_on_rule: Vec<Option<DependsOnRule>>,
@@ -961,6 +1215,22 @@ static PATTERN_REQUIREMENTS_TEMPLATE_PARSER: LazyLock<liquid::Parser> = LazyLock
 });
 
 impl RuleSyntax {
+    /// Inspection copy with literal OAuth2 operator credentials redacted in every environment.
+    pub fn redacted_for_inspection(&self) -> Self {
+        let mut inspected = self.clone();
+        inspected.validation =
+            inspected.validation.as_ref().map(Validation::redacted_for_inspection);
+        inspected.revocation =
+            inspected.revocation.as_ref().map(Revocation::redacted_for_inspection);
+        for fallback in &mut inspected.fallbacks {
+            fallback.validation =
+                fallback.validation.as_ref().map(Validation::redacted_for_inspection);
+            fallback.revocation =
+                fallback.revocation.as_ref().map(Revocation::redacted_for_inspection);
+        }
+        inspected
+    }
+
     /// Creates a visible custom rule with no validators, filters, or entropy threshold.
     ///
     /// The pattern is compiled by `RulesDatabase`; construction itself performs no I/O.
@@ -969,6 +1239,10 @@ impl RuleSyntax {
             id: id.into(),
             name: name.into(),
             pattern: pattern.into(),
+            specificity: 0,
+            tags: Vec::new(),
+            keywords: Vec::new(),
+            betterleaks_path_only: false,
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
@@ -982,9 +1256,156 @@ impl RuleSyntax {
             references: Vec::new(),
             validation: None,
             revocation: None,
+            fallbacks: Vec::new(),
             depends_on_rule: Vec::new(),
             pattern_requirements: None,
             tls_mode: None,
+        }
+    }
+
+    /// Validate only the new optional capability; legacy rules need no migration.
+    pub fn check_http_fallbacks(&self) -> Result<()> {
+        use anyhow::{bail, ensure};
+        if self.fallbacks.is_empty() {
+            return Ok(());
+        }
+        ensure!(
+            self.fallbacks.len() <= MAX_HTTP_FALLBACKS,
+            "At most two HTTP fallbacks are allowed"
+        );
+        let Some(Validation::Http(primary)) = &self.validation else {
+            bail!("HTTP fallbacks require primary HTTP validation");
+        };
+        ensure!(
+            primary.request.fallback_urls.is_empty(),
+            "Do not mix named fallbacks with legacy URL lists"
+        );
+        let mut ids = std::collections::BTreeSet::new();
+        for fallback in &self.fallbacks {
+            ensure!(
+                !fallback.id.is_empty()
+                    && fallback.id != "primary"
+                    && fallback
+                        .id
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || b"_.-".contains(&c))
+                    && ids.insert(&fallback.id),
+                "Fallback IDs must be unique, nonempty identifiers other than primary"
+            );
+            if fallback.reuse_primary_validation_logic {
+                ensure!(
+                    fallback.validation.is_none(),
+                    "reuse_primary_validation_logic: true cannot include validation"
+                );
+                ensure!(
+                    fallback.url.as_ref().is_some_and(|url| !url.trim().is_empty()),
+                    "reuse_primary_validation_logic: true requires a nonblank url (only the logic is reused)"
+                );
+            } else {
+                ensure!(
+                    fallback.url.is_none(),
+                    "Fallback url requires reuse_primary_validation_logic: true"
+                );
+                let Some(Validation::Http(http)) = &fallback.validation else {
+                    bail!(
+                        "reuse_primary_validation_logic defaults to false and requires complete HTTP validation"
+                    );
+                };
+                ensure!(
+                    http.request.fallback_urls.is_empty() && !http.request.url.trim().is_empty(),
+                    "Fallback validation must have one nonblank scalar URL"
+                );
+                ensure!(
+                    http.request.response_matcher.as_ref().is_some_and(|m| !m.is_empty()),
+                    "Fallback HTTP validation requires response_matcher"
+                );
+            }
+            if let Some(action) = fallback.resolved_revocation(self.revocation.as_ref())? {
+                let requests: Vec<_> = match action.as_ref() {
+                    Revocation::Http(http) => vec![&http.request],
+                    Revocation::HttpMultiStep(multi) => {
+                        ensure!(
+                            (1..=2).contains(&multi.steps.len()),
+                            "Fallback revocation requires one or two steps"
+                        );
+                        multi.steps.iter().map(|step| &step.request).collect()
+                    }
+                    _ => bail!("Fallback revocation must be HTTP or HTTP multi-step"),
+                };
+                ensure!(
+                    requests.iter().all(|r| r.fallback_urls.is_empty()),
+                    "Named fallback revocation must use scalar URLs"
+                );
+                ensure!(
+                    requests.last().is_some_and(|r| r
+                        .response_matcher
+                        .as_ref()
+                        .is_some_and(|m| !m.is_empty())),
+                    "Fallback revocation requires a final response_matcher"
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// Resolve HTTP configurations without rendering templates or performing I/O.
+    /// The primary is always first. Disabled alternatives impose no input requirements.
+    pub fn http_validations(&self, enabled: bool) -> Result<Vec<(Option<&str>, HttpValidation)>> {
+        self.check_http_fallbacks()?;
+        let Some(Validation::Http(primary)) = &self.validation else { return Ok(Vec::new()) };
+        let mut first = primary.clone();
+        first.request.fallback_urls.clear();
+        let mut configurations = vec![(None, first)];
+        if !enabled {
+            return Ok(configurations);
+        }
+        if self.fallbacks.is_empty() {
+            // Legacy lists must remain loadable and must still try the primary
+            // when alternatives are enabled. Keep the same bounded execution
+            // policy as named fallbacks instead of rejecting the whole rule.
+            if primary.request.fallback_urls.len() > MAX_HTTP_FALLBACKS {
+                static WARN_LEGACY_URL_LIMIT: std::sync::Once = std::sync::Once::new();
+                WARN_LEGACY_URL_LIMIT.call_once(|| {
+                    tracing::warn!("HTTP validation uses only the first three URLs in legacy URL lists (primary and two fallbacks); additional URLs are ignored");
+                });
+            }
+            for url in primary.request.fallback_urls.iter().take(MAX_HTTP_FALLBACKS) {
+                let mut http = primary.clone();
+                http.request.url = url.clone();
+                http.request.fallback_urls.clear();
+                configurations.push((None, http));
+            }
+        } else {
+            for fallback in &self.fallbacks {
+                let mut http = if fallback.reuse_primary_validation_logic {
+                    primary.clone()
+                } else if let Some(Validation::Http(http)) = &fallback.validation {
+                    http.clone()
+                } else {
+                    unreachable!("checked HTTP fallback")
+                };
+                if fallback.reuse_primary_validation_logic {
+                    http.request.url = fallback.url.clone().expect("checked fallback URL");
+                }
+                configurations.push((Some(fallback.id.as_str()), http));
+            }
+        }
+        Ok(configurations)
+    }
+
+    /// Select one environment's action. Primary revocation is reused only on explicit opt-in.
+    pub fn selected_revocation(
+        &self,
+        fallback_id: Option<&str>,
+    ) -> Result<Option<Cow<'_, Revocation>>> {
+        match fallback_id {
+            None => Ok(self.revocation.as_ref().map(Cow::Borrowed)),
+            Some(id) => self
+                .fallbacks
+                .iter()
+                .find(|fallback| fallback.id == id)
+                .ok_or_else(|| anyhow!("Unknown validated fallback ID"))?
+                .resolved_revocation(self.revocation.as_ref()),
         }
     }
 
@@ -1047,10 +1468,15 @@ impl RuleSyntax {
     ///     name: "Test rule".to_string(),
     ///     id: "test.1".to_string(),
     ///     pattern: r"hello\s*world".to_string(),
+    ///     specificity: 0,
+    ///     tags: vec![],
+    ///     keywords: vec![],
+    ///     betterleaks_path_only: false,
     ///     path: None,
     ///     betterleaks_filter: None,
     ///     betterleaks_secret_group: None,
     ///     vectorscan_compatible: true,
+    ///     fallbacks: Vec::new(),
     ///     examples: vec![],
     ///     negative_examples: vec![],
     ///     references: vec![],
@@ -1114,7 +1540,7 @@ impl RuleSyntax {
 }
 
 /// A rule combines its syntactic definition with computed metadata.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Rule {
     pub syntax: RuleSyntax,
     finding_sha1_fingerprint: String,
@@ -1124,6 +1550,21 @@ pub struct Rule {
     runtime_minimum_confidence: Confidence,
     #[serde(skip)]
     runtime_dependency_helper: bool,
+    #[serde(skip)]
+    path_regex: OnceLock<(String, Option<Regex>)>,
+    #[serde(skip)]
+    keyword_regex: OnceLock<(Vec<String>, Option<regex::bytes::Regex>)>,
+}
+
+impl PartialEq for Rule {
+    fn eq(&self, other: &Self) -> bool {
+        self.syntax == other.syntax
+            && self.finding_sha1_fingerprint == other.finding_sha1_fingerprint
+            && self.min_entropy == other.min_entropy
+            && self.visible == other.visible
+            && self.runtime_minimum_confidence == other.runtime_minimum_confidence
+            && self.runtime_dependency_helper == other.runtime_dependency_helper
+    }
 }
 
 fn default_runtime_minimum_confidence() -> Confidence {
@@ -1139,6 +1580,8 @@ impl Rule {
             visible: syntax.visible,
             runtime_minimum_confidence: Confidence::Low,
             runtime_dependency_helper: false,
+            path_regex: OnceLock::new(),
+            keyword_regex: OnceLock::new(),
             syntax,
         }
     }
@@ -1146,6 +1589,63 @@ impl Rule {
     /// Returns a reference to the rule's syntax.
     pub fn syntax(&self) -> &RuleSyntax {
         &self.syntax
+    }
+
+    /// Return whether this source fragment meets the rule's optional keyword gate.
+    pub fn matches_keywords(&self, bytes: &[u8]) -> bool {
+        // Most captures contain their own provider keyword. Keep that short check
+        // cheap; searching a whole source byte by byte for every candidate is not.
+        if bytes.len() <= 256 || self.syntax.keywords.is_empty() {
+            return self.matches_keywords_uncached(bytes);
+        }
+        let (keywords, ascii_regex) = self.keyword_regex.get_or_init(|| {
+            let patterns = self
+                .syntax
+                .keywords
+                .iter()
+                .filter(|keyword| keyword.is_ascii())
+                .map(|keyword| regex::escape(keyword))
+                .collect::<Vec<_>>();
+            let compiled = (!patterns.is_empty())
+                .then(|| {
+                    regex::bytes::RegexBuilder::new(&patterns.join("|"))
+                        .case_insensitive(true)
+                        .unicode(false)
+                        .build()
+                        .ok()
+                })
+                .flatten();
+            (self.syntax.keywords.clone(), compiled)
+        });
+        if keywords == &self.syntax.keywords
+            && let Some(regex) = ascii_regex
+        {
+            // Preserve the existing Unicode lowercase/lossy-UTF-8 semantics rather
+            // than letting regex Unicode folding widen ASCII-only keyword matches.
+            return regex.is_match(bytes)
+                || keywords.iter().filter(|keyword| !keyword.is_ascii()).any(|keyword| {
+                    String::from_utf8_lossy(bytes).to_lowercase().contains(&keyword.to_lowercase())
+                });
+        }
+        // Public syntax can change after the cache is initialized. Compilation
+        // limits and mutated keywords must retain the original matching behavior.
+        self.matches_keywords_uncached(bytes)
+    }
+
+    fn matches_keywords_uncached(&self, bytes: &[u8]) -> bool {
+        self.syntax.keywords.is_empty()
+            || self.syntax.keywords.iter().any(|keyword| {
+                if keyword.is_empty() {
+                    return true;
+                }
+                if keyword.is_ascii() {
+                    bytes
+                        .windows(keyword.len())
+                        .any(|window| window.eq_ignore_ascii_case(keyword.as_bytes()))
+                } else {
+                    String::from_utf8_lossy(bytes).to_lowercase().contains(&keyword.to_lowercase())
+                }
+            })
     }
 
     /// Returns the JSON representation of the rule's syntax.
@@ -1238,7 +1738,17 @@ impl Rule {
 
     /// Return whether this rule is eligible for the supplied source path.
     pub fn matches_path(&self, path: &str) -> bool {
-        self.syntax.matches_path(path)
+        let Some(pattern) = self.syntax.path.as_deref() else {
+            return true;
+        };
+        let (cached_pattern, regex) =
+            self.path_regex.get_or_init(|| (pattern.to_owned(), Regex::new(pattern).ok()));
+        if cached_pattern != pattern {
+            // Syntax is public and can be changed after the cache is initialized.
+            // Preserve that behavior rather than using a stale compiled restriction.
+            return self.syntax.matches_path(path);
+        }
+        regex.as_ref().is_some_and(|regex| regex.is_match(path))
     }
 
     /// Return the imported Betterleaks filter expression, if present.
@@ -1265,6 +1775,185 @@ impl Rule {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn runtime_path_regex_is_cached_without_changing_serialization_or_equality() {
+        let mut syntax = RuleSyntax::new("acme.path", "Path fixture", "token");
+        syntax.path = Some(r"(?i)\.pem$".into());
+        let rule = Rule::new(syntax);
+        let cold = rule.clone();
+        let serialized = serde_json::to_value(&rule).unwrap();
+        assert!(rule.path_regex.get().is_none());
+        for _ in 0..1000 {
+            assert!(rule.matches_path("private.PEM"));
+            assert!(!rule.matches_path("source.rs"));
+        }
+        let (pattern, compiled) = rule.path_regex.get().expect("path regex was cached");
+        assert_eq!(pattern, r"(?i)\.pem$");
+        assert!(compiled.is_some());
+        assert_eq!(rule, cold);
+        assert_eq!(rule, rule.clone());
+        assert_eq!(serde_json::to_value(&rule).unwrap(), serialized);
+        let restored: Rule = serde_json::from_value(serialized).unwrap();
+        assert_eq!(rule, restored);
+        assert!(restored.path_regex.get().is_none());
+        assert!(restored.matches_path("private.pem"));
+    }
+
+    #[test]
+    fn runtime_path_cache_preserves_invalid_and_mutated_path_restrictions() {
+        let mut rule = Rule::new(RuleSyntax::new("acme.path", "Path fixture", "token"));
+        assert!(rule.matches_path("anywhere"));
+        assert!(rule.path_regex.get().is_none());
+        rule.syntax.path = Some("[".into());
+        assert!(!rule.matches_path("anywhere"));
+        assert!(!rule.matches_path("another"));
+        assert!(rule.path_regex.get().unwrap().1.is_none());
+        rule.syntax.path = Some(r"\.key$".into());
+        assert!(rule.matches_path("private.key"));
+        assert!(!rule.matches_path("source.rs"));
+        rule.syntax.path = None;
+        assert!(rule.matches_path("anywhere"));
+    }
+
+    #[test]
+    fn candidate_keywords_support_ascii_and_unicode_case_folding() {
+        let mut syntax = RuleSyntax::new("acme.keyword", "Keyword", "token");
+        assert!(Rule::new(syntax.clone()).matches_keywords(b""));
+        syntax.keywords = vec!["Provider".into(), "CAFÉ".into()];
+        let rule = Rule::new(syntax);
+        assert!(rule.matches_keywords(b"pRoViDeR"));
+        assert!(rule.matches_keywords("café".as_bytes()));
+        assert!(!rule.matches_keywords(b"unrelated"));
+    }
+
+    #[test]
+    fn large_source_keyword_search_preserves_literal_and_case_folding_semantics() {
+        for keywords in [
+            vec!["Provider", "CAFÉ"],
+            vec!["[literal]+.*", "k"],
+            vec!["�", "ASCII"],
+            vec![""],
+            vec!["CAFÉ"],
+        ] {
+            let mut syntax = RuleSyntax::new("acme.keyword", "Keyword", "token");
+            syntax.keywords = keywords.into_iter().map(str::to_owned).collect();
+            let rule = Rule::new(syntax);
+            for value in [
+                b"pRoViDeR".as_slice(),
+                "café".as_bytes(),
+                b"[LITERAL]+.*",
+                b"LITERALxxxxx",
+                "K".as_bytes(),
+                b"\xffASCII",
+                b"\xff",
+                b"unrelated",
+            ] {
+                let bytes = [vec![b' '; 4096], value.to_vec()].concat();
+                assert_eq!(rule.matches_keywords(&bytes), rule.matches_keywords_uncached(&bytes));
+            }
+        }
+    }
+
+    #[test]
+    fn runtime_keyword_cache_preserves_serialization_equality_and_mutated_keywords() {
+        let mut syntax = RuleSyntax::new("acme.keyword", "Keyword", "token");
+        syntax.keywords = vec!["provider".into()];
+        let mut rule = Rule::new(syntax);
+        let cold = rule.clone();
+        let serialized = serde_json::to_value(&rule).unwrap();
+        let bytes = [vec![b' '; 4096], b"PROVIDER".to_vec()].concat();
+        assert!(rule.matches_keywords(&bytes));
+        assert!(rule.keyword_regex.get().unwrap().1.is_some());
+        assert_eq!(rule, cold);
+        assert_eq!(rule, rule.clone());
+        assert_eq!(serde_json::to_value(&rule).unwrap(), serialized);
+        let restored: Rule = serde_json::from_value(serialized).unwrap();
+        assert!(restored.keyword_regex.get().is_none());
+        assert!(restored.matches_keywords(&bytes));
+        rule.syntax.keywords = vec!["replacement".into()];
+        assert!(!rule.matches_keywords(&bytes));
+        let replacement = [vec![b' '; 4096], b"REPLACEMENT".to_vec()].concat();
+        assert!(rule.matches_keywords(&replacement));
+        rule.syntax.keywords.clear();
+        assert!(rule.matches_keywords(&bytes));
+    }
+
+    #[test]
+    fn custom_yaml_betterleaks_programs_accept_source_and_round_trip_as_ast() {
+        let yaml = r#"
+type: Betterleaks
+content:
+  expression: 'let r = http.get("https://example.invalid"); r.status == 200 ? {"result": "valid"} : validate.unknown(r)'
+  analyze: 'analysis.capabilities({"read": true})'
+"#;
+        let validation: Validation = serde_yaml::from_str(yaml).unwrap();
+        let Validation::Betterleaks(program) = &validation else { panic!("wrong validator") };
+        assert!(matches!(program.expression, BetterleaksExpr::VariableDeclarator { .. }));
+        assert!(program.analyze.is_some());
+        let ast_yaml = serde_yaml::to_string(&validation).unwrap();
+        assert_eq!(serde_yaml::from_str::<Validation>(&ast_yaml).unwrap(), validation);
+        let revocation: Revocation = serde_yaml::from_str("type: Betterleaks\ncontent:\n  expression: 'let r = http.delete(\"https://example.invalid\"); r.status == 204 ? {\"result\": \"revoked\"} : revoke.unknown(r)'\n").unwrap();
+        assert!(matches!(revocation, Revocation::Betterleaks(_)));
+        assert!(
+            serde_yaml::from_str::<Validation>(
+                "type: Betterleaks\ncontent:\n  expression: 'let broken ='\n"
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn http_url_strings_and_fallback_lists_round_trip_without_changing_other_request_fields() {
+        for url in [
+            serde_json::json!("https://primary.example/identity"),
+            serde_json::json!([
+                "https://primary.example/identity",
+                "https://secondary.example/identity",
+                "{{ THIRD_ENDPOINT }}/identity"
+            ]),
+        ] {
+            let definition = serde_json::json!({
+                "method": "POST", "url": url,
+                "headers": {"Authorization": "Bearer {{ TOKEN }}"},
+                "body": "{{ TOKEN }}", "multipart": null,
+                "response_matcher": [{"type": "StatusMatch", "status": [200],
+                    "match_all_status": false, "negative": false}],
+                "response_is_html": true
+            });
+            let request: HttpRequest = serde_json::from_value(definition.clone()).unwrap();
+            assert_eq!(serde_json::to_value(&request).unwrap(), definition);
+            let yaml = serde_yaml::to_string(&request).unwrap();
+            assert_eq!(serde_yaml::from_str::<HttpRequest>(&yaml).unwrap(), request);
+        }
+    }
+
+    #[test]
+    fn http_url_lists_reject_empty_non_string_and_blank_endpoints() {
+        for url in [
+            serde_json::json!([]),
+            serde_json::json!(["https://primary.example", "  "]),
+            serde_json::json!(["https://primary.example", 42]),
+        ] {
+            assert!(
+                serde_json::from_value::<HttpRequest>(serde_json::json!({
+                    "method": "GET", "url": url
+                }))
+                .is_err()
+            );
+        }
+    }
+
+    #[test]
+    fn http_url_list_with_one_endpoint_preserves_scalar_request_behavior() {
+        let request: HttpRequest =
+            serde_yaml::from_str("method: GET\nurl:\n  - https://primary.example/identity\n")
+                .unwrap();
+        assert_eq!(request.url, "https://primary.example/identity");
+        assert!(request.fallback_urls.is_empty());
+        assert_eq!(request.urls().collect::<Vec<_>>(), ["https://primary.example/identity"]);
+        assert!(serde_json::to_value(&request).unwrap()["url"].is_string());
+    }
     use regex::bytes::Regex as BytesRegex;
 
     #[test]

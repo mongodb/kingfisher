@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
@@ -70,16 +70,35 @@ const OMITTED_BUILTIN_RULE_IDS: &[&str] =
     &["generic-api-key", "generic-password", "generic-username"];
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BetterleaksConfig {
+    #[serde(default, rename = "title")]
+    _title: String,
+    #[serde(default, rename = "description")]
+    _description: String,
+    min_version: Option<String>,
+    extend: Option<BetterleaksExtend>,
     prefilter: Option<String>,
     filter: Option<String>,
+    #[serde(default)]
     rules: Vec<BetterleaksRule>,
 }
 
 #[derive(Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BetterleaksExtend {
+    path: Option<String>,
+    #[serde(default)]
+    use_default: bool,
+    #[serde(default)]
+    disabled_rules: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct BetterleaksRule {
     id: String,
+    #[serde(default)]
     description: String,
     regex: Option<String>,
     path: Option<String>,
@@ -88,13 +107,22 @@ struct BetterleaksRule {
     #[serde(default)]
     confidence: String,
     #[serde(default)]
+    specificity: i64,
+    #[serde(default)]
+    tags: Vec<String>,
+    #[serde(default)]
+    keywords: Vec<String>,
+    #[serde(default)]
     skip_report: bool,
     validate: Option<String>,
+    analyze: Option<String>,
+    revoke: Option<String>,
     filter: Option<String>,
     components: Option<Vec<BetterleaksComponent>>,
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct BetterleaksComponent {
     id: String,
     #[serde(default)]
@@ -164,6 +192,14 @@ struct ImportedRule {
     name: String,
     id: String,
     pattern: String,
+    #[serde(skip_serializing_if = "is_zero")]
+    specificity: i64,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    tags: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    keywords: Vec<String>,
+    #[serde(skip_serializing_if = "is_false")]
+    betterleaks_path_only: bool,
     #[serde(skip_serializing_if = "is_medium")]
     confidence: String,
     #[serde(skip_serializing_if = "is_true")]
@@ -200,7 +236,7 @@ struct DependsOnRule {
 #[derive(Serialize)]
 #[serde(tag = "type", content = "content")]
 enum Validation {
-    Betterleaks(BetterleaksValidation),
+    Betterleaks(Box<BetterleaksValidation>),
     Assumed,
     #[serde(rename = "AWS")]
     Aws,
@@ -223,6 +259,8 @@ enum EthereumValidation {
 struct BetterleaksValidation {
     source: String,
     expression: BetterleaksExpr,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    analyze: Option<BetterleaksExpr>,
     #[serde(default)]
     components: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "BetterleaksCapabilities::is_empty")]
@@ -324,6 +362,9 @@ enum BetterleaksExpr {
         left: Box<BetterleaksExpr>,
         right: Box<BetterleaksExpr>,
     },
+    Chain {
+        node: Box<BetterleaksExpr>,
+    },
     Member {
         node: Box<BetterleaksExpr>,
         property: Box<BetterleaksExpr>,
@@ -356,6 +397,10 @@ enum BetterleaksExpr {
         name: String,
         value: Box<BetterleaksExpr>,
         expr: Box<BetterleaksExpr>,
+    },
+    Sequence {
+        #[serde(default)]
+        nodes: Vec<BetterleaksExpr>,
     },
     Array {
         #[serde(default)]
@@ -391,15 +436,185 @@ pub(crate) fn import_custom_config(contents: &str, source: &str) -> Result<Strin
     import_config_with_namespace(contents, source, "version: 1\nrules: {}\n", "custom.", false)
 }
 
+/// Parse custom YAML Expr source into the same portable representation as imported TOML.
+#[allow(dead_code)]
+pub(crate) fn parse_custom_expression(source: &str) -> Result<serde_json::Value> {
+    Ok(serde_json::to_value(parse_expression(source)?)?)
+}
+
+fn resolve_config(
+    contents: &str,
+    ancestry: &mut Vec<std::path::PathBuf>,
+    depth: usize,
+) -> Result<BetterleaksConfig> {
+    let mut config: BetterleaksConfig =
+        toml::from_str(contents).context("invalid Betterleaks TOML")?;
+    config.min_version = config.min_version.filter(|value| !value.trim().is_empty());
+    config.prefilter = config.prefilter.filter(|value| !value.trim().is_empty());
+    config.filter = config.filter.filter(|value| !value.trim().is_empty());
+    for rule in &mut config.rules {
+        rule.validate = rule.validate.take().filter(|value| !value.trim().is_empty());
+        rule.analyze = rule.analyze.take().filter(|value| !value.trim().is_empty());
+        rule.revoke = rule.revoke.take().filter(|value| !value.trim().is_empty());
+        rule.filter = rule.filter.take().filter(|value| !value.trim().is_empty());
+    }
+    if let Some(version) = config.min_version.as_deref() {
+        // This declares the Betterleaks configuration dialect, not Kingfisher's binary version.
+        // Accept v1/v2 constraints while refusing a future incompatible dialect explicitly.
+        let pattern =
+            Regex::new(r"^v?([0-9]+)\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?$")?;
+        let captures = pattern
+            .captures(version)
+            .ok_or_else(|| anyhow!("invalid Betterleaks minVersion {version:?}"))?;
+        let major: u64 = captures[1].parse()?;
+        if major > 2 {
+            bail!(
+                "unsupported Betterleaks minVersion {version:?}: supported configuration major version is 2"
+            );
+        }
+    }
+    let mut ids = BTreeSet::new();
+    for rule in &config.rules {
+        if !ids.insert(rule.id.clone()) {
+            bail!("duplicate Betterleaks rule ID {:?}", rule.id);
+        }
+    }
+    let Some(extend) = config.extend.take() else { return Ok(config) };
+    if extend.path.as_deref().is_some_and(|path| !path.is_empty()) && extend.use_default {
+        bail!("Betterleaks extend.path and extend.useDefault are mutually exclusive");
+    }
+    let path = extend.path.filter(|path| !path.is_empty());
+    if path.is_none() && !extend.use_default {
+        return Ok(config);
+    }
+    if depth >= 2 {
+        bail!("Betterleaks config extension exceeds maximum depth of 2");
+    }
+    let base_contents = if let Some(path) = path.as_deref() {
+        let canonical = std::fs::canonicalize(path)
+            .with_context(|| format!("failed to load extended Betterleaks config {path:?}"))?;
+        if ancestry.contains(&canonical) {
+            bail!("Betterleaks config extension cycle at {path:?}");
+        }
+        ancestry.push(canonical);
+        std::fs::read_to_string(path)
+            .with_context(|| format!("failed to load extended Betterleaks config {path:?}"))?
+    } else {
+        use std::io::Read;
+        let mut decoded = String::new();
+        flate2::read::GzDecoder::new(
+            include_bytes!("../generated/upstream-sources.json.gz").as_slice(),
+        )
+        .read_to_string(&mut decoded)
+        .context("failed to read archived Betterleaks defaults")?;
+        let sources: BTreeMap<String, Option<String>> = serde_json::from_str(&decoded)?;
+        sources
+            .into_iter()
+            .find_map(|(url, contents)| {
+                url.ends_with("/config/betterleaks.toml").then_some(contents).flatten()
+            })
+            .ok_or_else(|| anyhow!("archived Betterleaks defaults are missing"))?
+    };
+    let base = resolve_config(&base_contents, ancestry, depth + 1)?;
+    if path.is_some() {
+        ancestry.pop();
+    }
+    let disabled: BTreeSet<_> = extend.disabled_rules.into_iter().collect();
+    config.rules.extend(
+        base.rules
+            .into_iter()
+            .filter(|rule| !ids.contains(&rule.id) && !disabled.contains(&rule.id)),
+    );
+    config.prefilter = extend_expression(base.prefilter, config.prefilter);
+    config.filter = extend_expression(base.filter, config.filter);
+    Ok(config)
+}
+
+fn extend_expression(base: Option<String>, child: Option<String>) -> Option<String> {
+    match (
+        base.filter(|source| !source.trim().is_empty()),
+        child.filter(|source| !source.trim().is_empty()),
+    ) {
+        (Some(base), Some(child)) => Some(format!("({base}) || ({child})")),
+        (base, child) => base.or(child),
+    }
+}
+
+fn validate_source_config(config: &BetterleaksConfig) -> Result<()> {
+    let rules: BTreeMap<_, _> = config.rules.iter().map(|rule| (rule.id.as_str(), rule)).collect();
+    let window_pattern = Regex::new(r"(?i)^[+-]?[0-9]+[CL]?$")?;
+    for rule in &config.rules {
+        if rule.id.trim().is_empty() {
+            bail!("Betterleaks rule id is missing or empty");
+        }
+        let path_only = rule.regex.as_deref().is_none_or(str::is_empty);
+        if path_only && rule.path.as_deref().is_none_or(str::is_empty) {
+            bail!("Betterleaks rule {} has neither regex nor path", rule.id);
+        }
+        if path_only
+            && (rule.secret_group != 0
+                || rule.components.as_ref().is_some_and(|components| !components.is_empty())
+                || rule.validate.is_some()
+                || rule.analyze.is_some()
+                || rule.revoke.is_some())
+        {
+            bail!(
+                "path-only Betterleaks rule {} cannot declare captures, components, validation, analysis, or revocation",
+                rule.id
+            );
+        }
+        if rule.analyze.is_some() && rule.validate.is_none() {
+            bail!("analysis on {} requires a validation expression", rule.id);
+        }
+        let mut components = BTreeSet::new();
+        for component in rule.components.as_deref().unwrap_or_default() {
+            if component.id == rule.id {
+                bail!("Betterleaks rule {} cannot reference itself as a component", rule.id);
+            }
+            if !components.insert(&component.id) {
+                bail!("duplicate component {} on {}", component.id, rule.id);
+            }
+            let Some(target) = rules.get(component.id.as_str()) else {
+                bail!("component {} on {} does not exist", component.id, rule.id)
+            };
+            if target.regex.as_deref().is_none_or(str::is_empty)
+                || target.components.as_ref().is_some_and(|components| !components.is_empty())
+            {
+                bail!(
+                    "component {} on {} must be a content rule without components",
+                    component.id,
+                    rule.id
+                );
+            }
+            if let Some(window) =
+                component.within.as_deref().map(str::trim).filter(|window| !window.is_empty())
+            {
+                for token in window.split(',').map(str::trim) {
+                    if !window_pattern.is_match(token)
+                        || token
+                            .trim_start_matches(['+', '-'])
+                            .trim_end_matches(['C', 'c', 'L', 'l'])
+                            .parse::<usize>()
+                            .is_err()
+                    {
+                        bail!("invalid component within {window:?} on {}", rule.id);
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn import_config_with_namespace(
     contents: &str,
     source: &str,
     capabilities: &str,
     namespace: &str,
-    omit_low_value_builtins: bool,
+    filter_builtins: bool,
 ) -> Result<String> {
-    let source_config: BetterleaksConfig =
-        toml::from_str(contents).context("invalid Betterleaks TOML")?;
+    let source_config = resolve_config(contents, &mut Vec::new(), 0)?;
+    validate_source_config(&source_config)?;
     let mut capability_overlay: CapabilityOverlay =
         serde_yaml::from_str(capabilities).context("invalid Betterleaks capability overlay")?;
     if capability_overlay.version != 1 {
@@ -427,17 +642,24 @@ fn import_config_with_namespace(
             .context("unsupported operation in the Betterleaks global filter")?;
     }
     let mut imported = Vec::with_capacity(source_count);
-    let mut skipped_path_only = Vec::new();
     let mut omitted_low_value = Vec::new();
+    let mut omitted_path_only = Vec::new();
 
     for source_rule in source_config.rules {
-        if omit_low_value_builtins && OMITTED_BUILTIN_RULE_IDS.contains(&source_rule.id.as_str()) {
+        if filter_builtins && OMITTED_BUILTIN_RULE_IDS.contains(&source_rule.id.as_str()) {
             omitted_low_value.push(source_rule.id);
+            continue;
+        }
+        let path_only = source_rule.regex.as_deref().is_none_or(str::is_empty);
+        // A filename alone is not evidence of exposed secret material. Keep these
+        // rules available to explicit custom configs, but never bundle them.
+        if filter_builtins && path_only {
+            omitted_path_only.push(source_rule.id);
             continue;
         }
         let rule_capabilities =
             capability_overlay.rules.remove(&source_rule.id).unwrap_or_default();
-        let Some(source_pattern) = source_rule.regex else {
+        let source_pattern = if path_only {
             if rule_capabilities.bare {
                 bail!("bare on {} requires a regex", source_rule.id);
             }
@@ -448,8 +670,9 @@ fn import_config_with_namespace(
             {
                 bail!("capabilities target path-only Betterleaks rule {}", source_rule.id);
             }
-            skipped_path_only.push(source_rule.id);
-            continue;
+            "(?:)".to_string()
+        } else {
+            source_rule.regex.clone().expect("checked regex")
         };
         let compiled_pattern = regex::bytes::RegexBuilder::new(&source_pattern)
             .unicode(false)
@@ -530,6 +753,16 @@ fn import_config_with_namespace(
                 format!("unsupported validation operation in {}", source_rule.id)
             })?;
         }
+        let analysis_expression = source_rule
+            .analyze
+            .as_deref()
+            .map(parse_expression)
+            .transpose()
+            .with_context(|| format!("failed to parse analysis for {}", source_rule.id))?;
+        if let Some(expression) = analysis_expression.as_ref() {
+            validate_analysis_expression(expression)
+                .with_context(|| format!("unsupported analysis operation in {}", source_rule.id))?;
+        }
         if validation_expression.is_none()
             && (rule_capabilities.access_map.is_some()
                 || rule_capabilities.revocation_bindings.is_some())
@@ -557,15 +790,16 @@ fn import_config_with_namespace(
             })
         } else {
             validation_expression.map(|expression| {
-                Validation::Betterleaks(BetterleaksValidation {
+                Validation::Betterleaks(Box::new(BetterleaksValidation {
                     source: validation_source.expect("parsed validation has source").to_string(),
                     expression,
-                    components,
+                    analyze: analysis_expression,
+                    components: components.clone(),
                     capabilities: BetterleaksCapabilities {
                         access_map: rule_capabilities.access_map.clone(),
                         revocation_bindings: rule_capabilities.revocation_bindings.clone(),
                     },
-                })
+                }))
             })
         };
         let confidence = match rule_capabilities
@@ -631,11 +865,35 @@ fn import_config_with_namespace(
             },
             id: qualify_id(&source_rule.id, namespace),
             pattern: source_pattern,
+            specificity: source_rule.specificity,
+            tags: source_rule.tags,
+            keywords: if rule_capabilities.bare { Vec::new() } else { source_rule.keywords },
+            betterleaks_path_only: path_only,
             confidence: confidence.to_string(),
             authoritative: rule_capabilities.authoritative.unwrap_or(true),
             visible: !source_rule.skip_report,
             validation,
-            revocation: rule_capabilities.revocation,
+            revocation: match (rule_capabilities.revocation, source_rule.revoke.as_deref()) {
+                (Some(revocation), _) => Some(revocation),
+                (None, Some(source)) => {
+                    let expression = parse_expression(source).with_context(|| {
+                        format!("failed to parse revocation for {}", source_rule.id)
+                    })?;
+                    validate_revocation_expression(&expression).with_context(|| {
+                        format!("unsupported revocation operation in {}", source_rule.id)
+                    })?;
+                    Some(serde_yaml::to_value(Validation::Betterleaks(Box::new(
+                        BetterleaksValidation {
+                            source: source.to_string(),
+                            expression,
+                            analyze: None,
+                            components,
+                            capabilities: BetterleaksCapabilities::default(),
+                        },
+                    )))?)
+                }
+                (None, None) => None,
+            },
             depends_on_rule,
             path: source_rule.path,
             betterleaks_filter,
@@ -662,10 +920,11 @@ fn import_config_with_namespace(
     Ok(format!(
         "# Generated from source {source}; do not edit.\n\
          # Imported {} of {source_count} Betterleaks rules. Omitted low-value generic rules: {}.\n\
-         # Path-only rules not representable as content detectors were skipped: {}.\n{yaml}",
-        source_count - skipped_path_only.len() - omitted_low_value.len(),
+         # Omitted filename-only built-in rules: {}.\n\
+         # Custom path-only rules retain path matching semantics.\n{yaml}",
+        source_count - omitted_low_value.len() - omitted_path_only.len(),
         omitted_low_value.join(", "),
-        skipped_path_only.join(", "),
+        omitted_path_only.join(", "),
     ))
 }
 
@@ -677,6 +936,10 @@ fn aws_session_token_rule(namespace: &str) -> ImportedRule {
         name: "AWS Session Token".to_string(),
         id: qualify_id("aws-session-token", namespace),
         pattern: r#"(?x)\b(?i:AWS[_-]?(?:SESSION|SECURITY)[_-]?TOKEN)\b["']?\s*(?:=|:)\s*["']?([A-Za-z0-9/+=._-]{16,2048})(?:["'\s,;}]|$)"#.to_string(),
+        specificity: 0,
+        tags: Vec::new(),
+        keywords: Vec::new(),
+        betterleaks_path_only: false,
         confidence: "medium".to_string(),
         authoritative: true,
         visible: true,
@@ -771,24 +1034,28 @@ fn validate_filter_expression(expression: &BetterleaksExpr) -> Result<()> {
                             | "filter.setConfidence"
                     )
                 } else {
-                    matches!(
-                        name.rsplit('.').next(),
-                        Some(
-                            "contains"
-                                | "startsWith"
-                                | "endsWith"
-                                | "substring"
-                                | "lastIndexOf"
-                                | "replace"
+                    matches!(name.as_str(), "crypto.sha256")
+                        || matches!(
+                            name.rsplit('.').next(),
+                            Some(
+                                "contains"
+                                    | "startsWith"
+                                    | "endsWith"
+                                    | "substring"
+                                    | "lastIndexOf"
+                                    | "replace"
+                            )
                         )
-                    )
                 }
             } else {
                 matches!(
                     name.as_str(),
                     "matchesAny"
+                        | "malformedPrivateKey"
                         | "findMatch"
                         | "containsAny"
+                        | "startsWithAny"
+                        | "intersects"
                         | "entropy"
                         | "tokenRatio"
                         | "failsTokenEfficiency"
@@ -800,6 +1067,37 @@ fn validate_filter_expression(expression: &BetterleaksExpr) -> Result<()> {
                         | "split"
                         | "join"
                         | "lower"
+                        | "upper"
+                        | "trim"
+                        | "trimPrefix"
+                        | "trimSuffix"
+                        | "repeat"
+                        | "indexOf"
+                        | "lastIndexOf"
+                        | "hasPrefix"
+                        | "hasSuffix"
+                        | "keys"
+                        | "values"
+                        | "reverse"
+                        | "sort"
+                        | "uniq"
+                        | "flatten"
+                        | "concat"
+                        | "first"
+                        | "last"
+                        | "get"
+                        | "sum"
+                        | "mean"
+                        | "abs"
+                        | "ceil"
+                        | "floor"
+                        | "round"
+                        | "type"
+                        | "string"
+                        | "int"
+                        | "float"
+                        | "toJSON"
+                        | "fromJSON"
                 )
             };
             if !supported {
@@ -811,7 +1109,22 @@ fn validate_filter_expression(expression: &BetterleaksExpr) -> Result<()> {
             }
         }
         BetterleaksExpr::Builtin { name, arguments } => {
-            if !matches!(name.as_str(), "any" | "lastIndexOf" | "replace") {
+            if !matches!(
+                name.as_str(),
+                "any"
+                    | "all"
+                    | "none"
+                    | "one"
+                    | "map"
+                    | "filter"
+                    | "find"
+                    | "findLast"
+                    | "findIndex"
+                    | "findLastIndex"
+                    | "count"
+                    | "lastIndexOf"
+                    | "replace"
+            ) {
                 bail!("unsupported Betterleaks filter builtin {name:?}");
             }
             for argument in arguments {
@@ -824,7 +1137,9 @@ fn validate_filter_expression(expression: &BetterleaksExpr) -> Result<()> {
             }
             validate_filter_expression(node)?
         }
-        BetterleaksExpr::Predicate { node } => validate_filter_expression(node)?,
+        BetterleaksExpr::Predicate { node } | BetterleaksExpr::Chain { node } => {
+            validate_filter_expression(node)?
+        }
         BetterleaksExpr::Binary { operator, left, right } => {
             if !matches!(
                 operator.as_str(),
@@ -845,6 +1160,12 @@ fn validate_filter_expression(expression: &BetterleaksExpr) -> Result<()> {
                     | "%"
                     | "contains"
                     | "in"
+                    | "startsWith"
+                    | "endsWith"
+                    | "matches"
+                    | ".."
+                    | "**"
+                    | "^"
             ) {
                 bail!("unsupported Betterleaks filter binary operator {operator:?}");
             }
@@ -869,7 +1190,9 @@ fn validate_filter_expression(expression: &BetterleaksExpr) -> Result<()> {
             validate_filter_expression(value)?;
             validate_filter_expression(expr)?;
         }
-        BetterleaksExpr::Array { nodes } | BetterleaksExpr::Map { pairs: nodes } => {
+        BetterleaksExpr::Array { nodes }
+        | BetterleaksExpr::Map { pairs: nodes }
+        | BetterleaksExpr::Sequence { nodes } => {
             for node in nodes {
                 validate_filter_expression(node)?;
             }
@@ -890,115 +1213,213 @@ fn validate_filter_expression(expression: &BetterleaksExpr) -> Result<()> {
 }
 
 fn validate_validation_expression(expression: &BetterleaksExpr) -> Result<()> {
+    validate_provider_expression(expression, false, false)
+}
+
+fn validate_revocation_expression(expression: &BetterleaksExpr) -> Result<()> {
+    validate_provider_expression(expression, true, false)
+}
+
+fn validate_analysis_expression(expression: &BetterleaksExpr) -> Result<()> {
+    validate_provider_expression(expression, false, true)
+}
+
+fn validate_provider_expression(
+    expression: &BetterleaksExpr,
+    revoke: bool,
+    analyze: bool,
+) -> Result<()> {
     match expression {
         BetterleaksExpr::Call { callee, arguments } => {
             let name = expression_name(callee)
                 .ok_or_else(|| anyhow!("dynamic function calls are not supported"))?;
-            let supported = if let BetterleaksExpr::Member { method: true, .. } = callee.as_ref() {
-                matches!(name.rsplit('.').next(), Some("contains" | "split"))
-                    || matches!(
+            let supported = (revoke && matches!(name.as_str(), "http.delete" | "revoke.unknown"))
+                || (analyze && name == "analysis.capabilities")
+                || if let BetterleaksExpr::Member { method: true, .. } = callee.as_ref() {
+                    matches!(name.rsplit('.').next(), Some("contains" | "split"))
+                        || matches!(
+                            name.as_str(),
+                            "http.get"
+                                | "http.post"
+                                | "validate.unknown"
+                                | "bytes"
+                                | "size"
+                                | "substring"
+                                | "base64.encode"
+                                | "base64.decode"
+                                | "hex.encode"
+                                | "crypto.sha1"
+                                | "crypto.sha256"
+                                | "crypto.md5"
+                                | "crypto.hmacSha1"
+                                | "crypto.hmacSha256"
+                                | "strings.urlQueryEscape"
+                                | "strings.splitTrim"
+                                | "strings.obfuscate"
+                                | "json.string"
+                                | "time.nowUnix"
+                                | "time.nowRFC3339"
+                                | "env.getOrDefault"
+                                | "env.get"
+                                | "filter.matchesAny"
+                                | "aws.validate"
+                                | "gcp.validate"
+                                | "azure.validateStorage"
+                                | "azure.validateServicePrincipal"
+                                | "azure.validateAppConfig"
+                                | "azure.validateServiceBusSAS"
+                        )
+                } else {
+                    matches!(
                         name.as_str(),
-                        "http.get"
-                            | "http.post"
-                            | "validate.unknown"
-                            | "bytes"
+                        "bytes"
                             | "size"
                             | "substring"
-                            | "base64.encode"
-                            | "base64.decode"
-                            | "hex.encode"
-                            | "crypto.sha1"
-                            | "crypto.hmacSha1"
-                            | "crypto.hmacSha256"
-                            | "strings.urlQueryEscape"
-                            | "strings.splitTrim"
-                            | "json.string"
-                            | "time.nowUnix"
-                            | "time.nowRFC3339"
-                            | "env.getOrDefault"
-                            | "filter.matchesAny"
-                            | "aws.validate"
-                            | "gcp.validate"
-                            | "azure.validateStorage"
-                            | "azure.validateServicePrincipal"
-                            | "azure.validateAppConfig"
-                            | "azure.validateServiceBusSAS"
+                            | "toJSON"
+                            | "type"
+                            | "string"
+                            | "int"
+                            | "len"
+                            | "trim"
+                            | "split"
+                            | "matchesAny"
+                            | "containsAny"
+                            | "startsWithAny"
+                            | "entropy"
+                            | "tokenRatio"
+                            | "failsTokenEfficiency"
+                            | "findMatch"
+                            | "intersects"
+                            | "flatten"
+                            | "sort"
+                            | "uniq"
+                            | "concat"
+                            | "last"
+                            | "lower"
+                            | "upper"
+                            | "join"
+                            | "keys"
+                            | "values"
+                            | "get"
+                            | "fromJSON"
+                            | "trimPrefix"
+                            | "trimSuffix"
+                            | "repeat"
+                            | "indexOf"
+                            | "hasPrefix"
+                            | "hasSuffix"
+                            | "reverse"
+                            | "first"
+                            | "sum"
+                            | "min"
+                            | "max"
+                            | "mean"
+                            | "abs"
+                            | "ceil"
+                            | "floor"
+                            | "round"
                     )
-            } else {
-                matches!(
-                    name.as_str(),
-                    "bytes"
-                        | "size"
-                        | "substring"
-                        | "toJSON"
-                        | "type"
-                        | "string"
-                        | "int"
-                        | "len"
-                        | "trim"
-                        | "split"
-                        | "matchesAny"
-                )
-            };
+                };
             if !supported {
                 bail!("unsupported Betterleaks validation call {name:?}");
             }
-            validate_validation_expression(callee)?;
+            validate_provider_expression(callee, revoke, analyze)?;
             for argument in arguments {
-                validate_validation_expression(argument)?;
+                validate_provider_expression(argument, revoke, analyze)?;
             }
         }
         BetterleaksExpr::Builtin { name, arguments } => {
-            if !matches!(name.as_str(), "any" | "all" | "filter" | "lastIndexOf" | "replace") {
+            if !matches!(
+                name.as_str(),
+                "any"
+                    | "all"
+                    | "none"
+                    | "one"
+                    | "filter"
+                    | "map"
+                    | "find"
+                    | "findLast"
+                    | "findIndex"
+                    | "findLastIndex"
+                    | "count"
+                    | "lastIndexOf"
+                    | "replace"
+            ) {
                 bail!("unsupported Betterleaks validation builtin {name:?}");
             }
             for argument in arguments {
-                validate_validation_expression(argument)?;
+                validate_provider_expression(argument, revoke, analyze)?;
             }
         }
         BetterleaksExpr::Unary { operator, node } => {
             if !matches!(operator.as_str(), "!" | "not" | "-") {
                 bail!("unsupported Betterleaks validation unary operator {operator:?}");
             }
-            validate_validation_expression(node)?;
+            validate_provider_expression(node, revoke, analyze)?;
         }
         BetterleaksExpr::Binary { operator, left, right } => {
             if !matches!(
                 operator.as_str(),
-                "&&" | "||" | "??" | "+" | "==" | "!=" | ">" | "in" | "contains" | "startsWith"
+                "&&" | "and"
+                    | "||"
+                    | "or"
+                    | "??"
+                    | "+"
+                    | "-"
+                    | "*"
+                    | "/"
+                    | "%"
+                    | "**"
+                    | "^"
+                    | ".."
+                    | "=="
+                    | "!="
+                    | ">"
+                    | ">="
+                    | "<"
+                    | "<="
+                    | "in"
+                    | "contains"
+                    | "startsWith"
+                    | "endsWith"
+                    | "matches"
             ) {
                 bail!("unsupported Betterleaks validation binary operator {operator:?}");
             }
-            validate_validation_expression(left)?;
-            validate_validation_expression(right)?;
+            validate_provider_expression(left, revoke, analyze)?;
+            validate_provider_expression(right, revoke, analyze)?;
         }
-        BetterleaksExpr::Predicate { node } => validate_validation_expression(node)?,
+        BetterleaksExpr::Predicate { node } | BetterleaksExpr::Chain { node } => {
+            validate_provider_expression(node, revoke, analyze)?
+        }
         BetterleaksExpr::Member { node, property, .. } => {
-            validate_validation_expression(node)?;
-            validate_validation_expression(property)?;
+            validate_provider_expression(node, revoke, analyze)?;
+            validate_provider_expression(property, revoke, analyze)?;
         }
         BetterleaksExpr::Slice { node, from, to } => {
-            validate_validation_expression(node)?;
-            validate_validation_expression(from)?;
-            validate_validation_expression(to)?;
+            validate_provider_expression(node, revoke, analyze)?;
+            validate_provider_expression(from, revoke, analyze)?;
+            validate_provider_expression(to, revoke, analyze)?;
         }
         BetterleaksExpr::Conditional { cond, exp1, exp2 } => {
-            validate_validation_expression(cond)?;
-            validate_validation_expression(exp1)?;
-            validate_validation_expression(exp2)?;
+            validate_provider_expression(cond, revoke, analyze)?;
+            validate_provider_expression(exp1, revoke, analyze)?;
+            validate_provider_expression(exp2, revoke, analyze)?;
         }
         BetterleaksExpr::VariableDeclarator { value, expr, .. } => {
-            validate_validation_expression(value)?;
-            validate_validation_expression(expr)?;
+            validate_provider_expression(value, revoke, analyze)?;
+            validate_provider_expression(expr, revoke, analyze)?;
         }
-        BetterleaksExpr::Array { nodes } | BetterleaksExpr::Map { pairs: nodes } => {
+        BetterleaksExpr::Array { nodes }
+        | BetterleaksExpr::Map { pairs: nodes }
+        | BetterleaksExpr::Sequence { nodes } => {
             for node in nodes {
-                validate_validation_expression(node)?;
+                validate_provider_expression(node, revoke, analyze)?;
             }
         }
         BetterleaksExpr::Pair { key, value } => {
-            validate_validation_expression(key)?;
-            validate_validation_expression(value)?;
+            validate_provider_expression(key, revoke, analyze)?;
+            validate_provider_expression(value, revoke, analyze)?;
         }
         BetterleaksExpr::Nil
         | BetterleaksExpr::Identifier { .. }
@@ -1047,6 +1468,10 @@ fn is_true(value: &bool) -> bool {
 
 fn is_false(value: &bool) -> bool {
     !*value
+}
+
+fn is_zero(value: &i64) -> bool {
+    *value == 0
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -1099,10 +1524,16 @@ impl Parser {
             declarations.push((name, value));
         }
         let mut expression = self.parse_expr(0)?;
-        if terminator != Token::Eof {
-            self.expect(terminator)?;
+        if self.peek() == &Token::Semicolon {
+            self.advance();
+            let rest = self.parse_program(terminator)?;
+            expression = BetterleaksExpr::Sequence { nodes: vec![expression, rest] };
         } else {
-            self.expect(Token::Eof)?;
+            if terminator != Token::Eof {
+                self.expect(terminator)?;
+            } else {
+                self.expect(Token::Eof)?;
+            }
         }
         for (name, value) in declarations.into_iter().rev() {
             expression = BetterleaksExpr::VariableDeclarator {
@@ -1191,10 +1622,12 @@ impl Parser {
     }
 
     fn parse_postfix(&mut self, mut node: BetterleaksExpr) -> Result<BetterleaksExpr> {
+        let mut optional_chain = false;
         loop {
             match self.peek() {
                 Token::Dot | Token::OptionalDot => {
                     let optional = self.advance() == &Token::OptionalDot;
+                    optional_chain |= optional;
                     if optional && self.peek() == &Token::LBracket {
                         self.advance();
                         let property = self.parse_expr(0)?;
@@ -1265,7 +1698,19 @@ impl Parser {
                         BetterleaksExpr::Identifier { value }
                             if matches!(
                                 value.as_str(),
-                                "any" | "all" | "filter" | "lastIndexOf" | "replace"
+                                "any"
+                                    | "all"
+                                    | "none"
+                                    | "one"
+                                    | "filter"
+                                    | "map"
+                                    | "find"
+                                    | "findLast"
+                                    | "findIndex"
+                                    | "findLastIndex"
+                                    | "count"
+                                    | "lastIndexOf"
+                                    | "replace"
                             ) =>
                         {
                             Some(value.clone())
@@ -1281,7 +1726,7 @@ impl Parser {
                 _ => break,
             }
         }
-        Ok(node)
+        Ok(if optional_chain { BetterleaksExpr::Chain { node: Box::new(node) } } else { node })
     }
 
     fn parse_arguments(&mut self) -> Result<Vec<BetterleaksExpr>> {
@@ -1391,9 +1836,12 @@ fn binary_precedence(operator: &str) -> Option<(u8, bool)> {
         "??" => (2, true),
         "&&" | "and" => (3, false),
         "==" | "!=" => (4, false),
-        "in" | "not in" | "contains" | "startsWith" | "<" | "<=" | ">" | ">=" => (5, false),
+        "in" | "not in" | "contains" | "startsWith" | "endsWith" | "matches" | "<" | "<=" | ">"
+        | ">=" => (5, false),
         "+" | "-" => (6, false),
         "*" | "/" | "%" => (7, false),
+        ".." => (8, false),
+        "**" | "^" => (9, true),
         _ => return None,
     })
 }
@@ -1415,6 +1863,10 @@ fn lex(source: &str) -> Result<Vec<Token>> {
             ',' => Token::Comma,
             ':' => Token::Colon,
             ';' => Token::Semicolon,
+            '.' if chars.peek().is_some_and(|(_, next)| *next == '.') => {
+                chars.next();
+                Token::Operator("..".to_string())
+            }
             '.' => Token::Dot,
             '?' if chars.peek().is_some_and(|(_, next)| *next == '.') => {
                 chars.next();
@@ -1425,15 +1877,28 @@ fn lex(source: &str) -> Result<Vec<Token>> {
                 Token::Operator("??".to_string())
             }
             '?' => Token::Question,
-            '"' | '\'' | '`' => Token::String(read_string(source, &mut chars, ch)?),
+            '"' | '\'' | '`' => Token::String(read_string(&mut chars, ch)?),
             '/' if chars.peek().is_some_and(|(_, next)| *next == '/') => {
                 chars.next();
                 while chars.next().is_some_and(|(_, value)| value != '\n') {}
                 continue;
             }
             '0'..='9' => {
-                let end =
-                    take_while_end(&mut chars, |value| value.is_ascii_digit() || value == '.');
+                let mut end = offset + ch.len_utf8();
+                while let Some((position, value)) = chars.peek().copied() {
+                    if value.is_ascii_digit() {
+                        chars.next();
+                        end = position + value.len_utf8();
+                    } else if value == '.'
+                        && !source[position..].starts_with("..")
+                        && !source[offset..end].contains('.')
+                    {
+                        chars.next();
+                        end = position + 1;
+                    } else {
+                        break;
+                    }
+                }
                 let raw = &source[offset..end];
                 if raw.contains('.') {
                     Token::Float(raw.to_string())
@@ -1444,14 +1909,16 @@ fn lex(source: &str) -> Result<Vec<Token>> {
             'A'..='Z' | 'a'..='z' | '_' | '#' | '$' => {
                 let end = take_while_end(&mut chars, |value| {
                     value.is_ascii_alphanumeric() || matches!(value, '_' | '#' | '$')
-                });
+                })
+                .max(offset + ch.len_utf8());
                 let word = &source[offset..end];
                 match word {
                     "let" => Token::Let,
                     "true" => Token::Bool(true),
                     "false" => Token::Bool(false),
                     "nil" => Token::Nil,
-                    "and" | "or" | "in" | "contains" | "startsWith" | "not" => {
+                    "and" | "or" | "in" | "contains" | "startsWith" | "endsWith" | "matches"
+                    | "not" => {
                         if word == "not" {
                             let saved = chars.clone();
                             while chars.peek().is_some_and(|(_, value)| value.is_whitespace()) {
@@ -1480,6 +1947,10 @@ fn lex(source: &str) -> Result<Vec<Token>> {
                     }
                     _ => Token::Identifier(word.to_string()),
                 }
+            }
+            '*' if chars.peek().is_some_and(|(_, next)| *next == '*') => {
+                chars.next();
+                Token::Operator("**".to_string())
             }
             '+' | '-' | '*' | '%' | '^' => Token::Operator(ch.to_string()),
             '/' => Token::Operator("/".to_string()),
@@ -1519,11 +1990,7 @@ where
     end
 }
 
-fn read_string<I>(
-    source: &str,
-    chars: &mut std::iter::Peekable<I>,
-    delimiter: char,
-) -> Result<String>
+fn read_string<I>(chars: &mut std::iter::Peekable<I>, delimiter: char) -> Result<String>
 where
     I: Iterator<Item = (usize, char)> + Clone,
 {
@@ -1548,12 +2015,17 @@ where
             '\'' => '\'',
             '"' => '"',
             'u' => {
-                let start = chars.peek().map(|(position, _)| *position).unwrap_or(source.len());
-                let end = take_while_end(chars, |ch| ch.is_ascii_hexdigit());
-                if end.saturating_sub(start) != 4 {
-                    bail!("invalid unicode escape at byte {offset}");
+                let mut codepoint = String::new();
+                for _ in 0..4 {
+                    let (_, digit) = chars
+                        .next()
+                        .ok_or_else(|| anyhow!("invalid unicode escape at byte {offset}"))?;
+                    if !digit.is_ascii_hexdigit() {
+                        bail!("invalid unicode escape at byte {offset}");
+                    }
+                    codepoint.push(digit);
                 }
-                char::from_u32(u32::from_str_radix(&source[start..end], 16)?)
+                char::from_u32(u32::from_str_radix(&codepoint, 16)?)
                     .ok_or_else(|| anyhow!("invalid unicode escape at byte {offset}"))?
             }
             other => bail!("unsupported escape \\{other} at byte {offset}"),
@@ -1567,7 +2039,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn v2_validation_helpers_import_without_executing_analysis_or_revocation() {
+    fn v2_validation_analysis_and_revocation_import_as_separate_programs() {
         let source = r#"
 [[rules]]
 id = "v2-token"
@@ -1580,7 +2052,7 @@ let scopes = filter(["read", 42], {type(#) == "string"});
 let valid = all(scopes, {type(#) == "string"}) && len(scopes) > 0;
 valid ? {"result": "valid", "analysis": {"account_token": account_token}} : {"result": "unknown"}
 '''
-analyze = 'http.delete("https://example.invalid/analysis")'
+analyze = 'analysis.capabilities({"read": len(validation.analysis?.scopes ?? []) > 0})'
 revoke = 'http.delete("https://example.invalid/revoke")'
 "#;
         let yaml = import_config(source, "synthetic-v2", "version: 1\nrules: {}\n").unwrap();
@@ -1590,8 +2062,255 @@ revoke = 'http.delete("https://example.invalid/revoke")'
         assert!(rule["validation"]["content"]["source"].as_str().unwrap().contains("startsWith"));
         assert!(yaml.contains("name: filter"));
         assert!(yaml.contains("name: all"));
-        assert!(rule["revocation"].is_null());
-        assert!(!yaml.contains("http.delete"));
+        assert_eq!(rule["revocation"]["type"].as_str(), Some("Betterleaks"));
+        assert!(!rule["validation"]["content"]["analyze"].is_null());
+        assert!(rule["revocation"]["content"]["source"].as_str().unwrap().contains("http.delete"));
+        assert!(!rule["validation"]["content"]["source"].as_str().unwrap().contains("http.delete"));
+    }
+
+    #[test]
+    fn imports_immutable_v2_provider_program_fixture_without_losing_stages() {
+        let source = include_str!("fixtures/betterleaks-v2.toml");
+        let yaml =
+            import_custom_config(source, "Betterleaks 22ae2f41a70d759e83e832a6a1b205fac729223b")
+                .unwrap();
+        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let rule = &snapshot["rules"][0];
+        assert_eq!(rule["id"], "custom.buildkite-user-access-token");
+        assert_eq!(rule["validation"]["type"], "Betterleaks");
+        assert!(!rule["validation"]["content"]["analyze"].is_null());
+        assert_eq!(rule["revocation"]["type"], "Betterleaks");
+        assert!(yaml.contains("value: analysis") && yaml.contains("value: capabilities"));
+        assert!(yaml.contains("value: revoke") && yaml.contains("value: delete"));
+        assert!(!rule["betterleaks_filter"].is_null());
+    }
+
+    #[test]
+    fn dangerous_revocation_helpers_are_rejected_outside_revocation() {
+        for field in ["validate", "analyze"] {
+            let validation = if field == "analyze" { "validate='true'\n" } else { "" };
+            let source = format!(
+                "[[rules]]\nid='scope-test'\nregex='token'\n{validation}{field}='http.delete(\"https://example.invalid\")'"
+            );
+            assert!(import_custom_config(&source, "test").is_err());
+        }
+    }
+
+    #[test]
+    fn retains_v2_metadata_and_path_only_rules() {
+        let yaml = import_custom_config(
+            r#"
+minVersion = "v2.0.0-rc.1"
+[[rules]]
+id = "private-key-file"
+path = '\.key$'
+specificity = -17
+tags = ["private", "key"]
+"#,
+            "test",
+        )
+        .unwrap();
+        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let rule = &snapshot["rules"][0];
+        assert_eq!(rule["id"], "custom.private-key-file");
+        assert_eq!(rule["specificity"].as_i64(), Some(-17));
+        assert_eq!(rule["tags"][0], "private");
+        assert_eq!(rule["betterleaks_path_only"].as_bool(), Some(true));
+        assert_eq!(rule["pattern"], "(?:)");
+    }
+
+    #[test]
+    fn excludes_filename_only_rules_from_builtins_but_preserves_custom_rules() {
+        let source = r#"
+[[rules]]
+id = "filename-without-regex"
+path = '\.key$'
+
+[[rules]]
+id = "filename-with-empty-regex"
+regex = ''
+path = '\.p12$'
+
+[[rules]]
+id = "content-with-path"
+regex = '(specific_[a-z0-9]{16})'
+path = '\.env$'
+
+[[rules]]
+id = "content-only"
+regex = '(other_[a-z0-9]{16})'
+"#;
+        let builtins = import_config(source, "test", EMPTY_CAPABILITIES).unwrap();
+        let snapshot: serde_yaml::Value = serde_yaml::from_str(&builtins).unwrap();
+        let rules = snapshot["rules"].as_sequence().unwrap();
+        assert_eq!(rules.len(), 2);
+        assert_eq!(rules[0]["id"], "betterleaks.content-only");
+        assert_eq!(rules[1]["id"], "betterleaks.content-with-path");
+        assert_eq!(rules[1]["path"], r"\.env$");
+        assert!(rules.iter().all(|rule| rule["betterleaks_path_only"].as_bool() != Some(true)));
+        assert!(builtins.contains("Imported 2 of 4 Betterleaks rules"));
+
+        let custom = import_custom_config(source, "test").unwrap();
+        let snapshot: serde_yaml::Value = serde_yaml::from_str(&custom).unwrap();
+        let rules = snapshot["rules"].as_sequence().unwrap();
+        assert_eq!(rules.len(), 4);
+        assert_eq!(
+            rules
+                .iter()
+                .filter(|rule| rule["betterleaks_path_only"].as_bool() == Some(true))
+                .count(),
+            2
+        );
+        assert!(rules.iter().all(|rule| rule["id"].as_str().unwrap().starts_with("custom.")));
+    }
+
+    #[test]
+    fn rejects_invalid_v2_configuration_instead_of_dropping_fields() {
+        for source in [
+            "unknown = true\n[[rules]]\nid='x'\nregex='token'",
+            "[[rules]]\nid='x'\nregex='token'\nvalidte='true'",
+            "[[rules]]\nid='x'\nregex='token'\n[[rules]]\nid='x'\nregex='other'",
+            "[[rules]]\nid=''\nregex='token'",
+            "[[rules]]\nid='x'",
+            "[[rules]]\nid='x'\npath='secret'\nvalidate='true'",
+            "[[rules]]\nid='x'\nregex='token'\nanalyze='true'",
+            "[[rules]]\nid='x'\nregex='token'\ncomponents=[{id='missing'}]",
+            "[[rules]]\nid='x'\nregex='token'\ncomponents=[{id='x'}]",
+            "minVersion='broken'\n[[rules]]\nid='x'\nregex='token'",
+            "minVersion='v3.0.0'\n[[rules]]\nid='x'\nregex='token'",
+            "[extend]\nurl='https://example.invalid/config.toml'",
+            "[extend]\npath='base.toml'\nuseDefault=true",
+        ] {
+            assert!(import_custom_config(source, "invalid-test").is_err(), "{source}");
+        }
+    }
+
+    #[test]
+    fn extends_local_configs_with_complete_rule_replacement_and_additive_filters() {
+        let unique =
+            std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+        let directory = std::env::temp_dir()
+            .join(format!("kingfisher-betterleaks-extend-{}-{unique}", std::process::id()));
+        std::fs::create_dir(&directory).unwrap();
+        let base_path = directory.join("base.toml");
+        std::fs::write(
+            &base_path,
+            r#"
+prefilter = 'containsAny(attributes.path, ["base/"])'
+filter = 'finding.secret == "base-secret"'
+[[rules]]
+id = "keep"
+regex = 'base-token'
+[[rules]]
+id = "replace"
+regex = 'old-token'
+tags = ["old"]
+[[rules]]
+id = "disabled"
+regex = 'disabled-token'
+"#,
+        )
+        .unwrap();
+        let path_literal = serde_json::to_string(&base_path.to_string_lossy()).unwrap();
+        let child = format!(
+            r#"
+prefilter = 'containsAny(attributes.path, ["child/"])'
+filter = 'finding.secret == "child-secret"'
+[extend]
+path = {path_literal}
+disabledRules = ["disabled"]
+[[rules]]
+id = "replace"
+regex = 'new-token'
+"#
+        );
+        let yaml = import_custom_config(&child, "child").unwrap();
+        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let rules = snapshot["rules"].as_sequence().unwrap();
+        assert_eq!(rules.len(), 2);
+        let replacement = rules.iter().find(|rule| rule["id"] == "custom.replace").unwrap();
+        assert_eq!(replacement["pattern"], "new-token");
+        assert!(replacement["tags"].is_null());
+        assert!(yaml.contains("base-secret") && yaml.contains("child-secret"));
+        assert!(yaml.contains("base/") && yaml.contains("child/"));
+        // A cycle and an overdeep inheritance chain must both fail deterministically.
+        std::fs::write(&base_path, format!("[extend]\npath={path_literal}\n")).unwrap();
+        assert!(
+            format!("{:#}", import_custom_config(&child, "cycle").unwrap_err()).contains("cycle")
+        );
+        let middle_path = directory.join("middle.toml");
+        let last_path = directory.join("last.toml");
+        std::fs::write(&middle_path, "[[rules]]\nid='keep'\nregex='middle-token'\n").unwrap();
+        std::fs::write(
+            &base_path,
+            format!(
+                "[extend]\npath={}\n",
+                serde_json::to_string(&middle_path.to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+        assert!(import_custom_config(&child, "maximum-supported-depth").is_ok());
+        std::fs::write(&last_path, "[[rules]]\nid='last'\nregex='last-token'\n").unwrap();
+        std::fs::write(
+            &middle_path,
+            format!(
+                "[extend]\npath={}\n",
+                serde_json::to_string(&last_path.to_string_lossy()).unwrap()
+            ),
+        )
+        .unwrap();
+        assert!(
+            format!("{:#}", import_custom_config(&child, "overdeep").unwrap_err())
+                .contains("maximum depth of 2")
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn v2_schema_errors_identify_the_invalid_field_or_rule() {
+        for (source, expected) in [
+            ("minVersion='future'", "invalid Betterleaks minVersion"),
+            ("minVersion='v3.0.0'", "supported configuration major version is 2"),
+            ("[[rules]]\nid='x'\nregex='token'\nvalidte='true'", "validte"),
+            ("[[rules]]\nid='x'\nregex='token'\nrequired=[]", "required"),
+            ("[[rules]]\nid='x'\nregex='token'\ncomponents=[{id='x'}]", "cannot reference itself"),
+            (
+                "[[rules]]\nid='x'\nregex='token'\n[[rules]]\nid='x'\nregex='other'",
+                "duplicate Betterleaks rule ID",
+            ),
+            (
+                "[[rules]]\nid='x'\nregex='token'\ncomponents=[{id='helper',within='bad'}]\n[[rules]]\nid='helper'\nregex='secret'",
+                "invalid component within",
+            ),
+            ("[[rules]]\nid='x'\nregex='token'\nvalueGroup=-1", "valueGroup"),
+        ] {
+            let error = format!("{:#}", import_custom_config(source, "invalid").unwrap_err());
+            assert!(error.contains(expected), "expected {expected:?} in {error}");
+        }
+        let blank_programs = "minVersion=''\nprefilter=' '\nfilter=''\n[[rules]]\nid='x'\nregex='token'\nvalidate=' '\nanalyze=''\nrevoke=''\nfilter=' '\n";
+        assert!(import_custom_config(blank_programs, "blank-programs").is_ok());
+    }
+
+    #[test]
+    fn extends_archived_defaults_without_network_or_kingfisher_overlays() {
+        let yaml =
+            import_custom_config("[extend]\nuseDefault=true\ndisabledRules=['github-pat']", "test")
+                .unwrap();
+        assert!(yaml.contains("id: custom.generic-api-key"));
+        assert!(!yaml.contains("id: custom.github-pat\n"));
+    }
+
+    #[test]
+    fn parser_handles_sequences_optional_chains_ranges_and_native_helpers() {
+        for source in [
+            "let a = 1; a; let b = 2; a + b",
+            "components[\"id\"]?.captures[\"region\"] ?? \"default\"",
+            "all(1..3, {# <= 3}) && 2 ** 3 == 8",
+            "findLastIndex([1,2], {# == 2})",
+        ] {
+            let ast = parse_expression(source).unwrap();
+            validate_validation_expression(&ast).unwrap();
+        }
     }
 
     #[test]
@@ -1943,7 +2662,7 @@ rules:
     }
 
     #[test]
-    fn keeps_source_prefilter_separate_and_ignores_keywords() {
+    fn keeps_source_prefilter_separate_and_preserves_candidate_keywords() {
         let yaml = import_config(
             r#"
 prefilter = '''matchesAny(attributes["path"], ["vendor/"])'''
@@ -1970,7 +2689,7 @@ filter = '''containsAny(finding["secret"], ["rule-filter"])'''
         assert!(finding_filter.contains("global-filter"));
         assert!(finding_filter.contains("rule-filter"));
         assert!(!finding_filter.contains("vendor/"));
-        assert!(!yaml.contains("keywords"));
+        assert_eq!(snapshot["rules"][0]["keywords"][0], "token_");
     }
 
     #[test]
@@ -2090,6 +2809,35 @@ rules:
 
         assert!(filter.contains("sk_test_"));
         assert!(filter.contains("3.5"));
+    }
+
+    #[test]
+    fn private_key_structure_filter_is_explicit_and_preserves_legacy_rules() {
+        let source = r#"
+[[rules]]
+id = "private-key"
+description = "Private key"
+regex = '''-----BEGIN PRIVATE KEY-----[\s\S]+-----END PRIVATE KEY-----'''
+filter = '''finding.secret == "upstream placeholder"'''
+"#;
+        let yaml = import_config(
+            source,
+            "test",
+            r#"
+version: 1
+rules:
+  private-key:
+    filter_override: 'malformedPrivateKey(finding["secret"])'
+"#,
+        )
+        .unwrap();
+        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let filter = serde_yaml::to_string(&snapshot["rules"][0]["betterleaks_filter"]).unwrap();
+        assert!(filter.contains("malformedPrivateKey"));
+        assert!(filter.contains("upstream placeholder"));
+        let legacy = import_custom_config(source, "legacy.toml").unwrap();
+        assert!(!legacy.contains("malformedPrivateKey"));
+        assert!(legacy.contains("upstream placeholder"));
     }
 
     #[test]

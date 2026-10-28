@@ -310,15 +310,18 @@ impl RepositoryIndex {
                 let (mut clean_blobs, mut clean_bytes) = (0, 0);
                 for (i, oid) in ids.iter().enumerate() {
                     check_deadline(deadline, "Git content candidate prepass", repo_path)?;
-                    // Large blobs are few but expensive to inflate twice. Retain them
-                    // conservatively and let the normal pipeline read them just once.
-                    if repo
-                        .objects
-                        .header(oid)
-                        .is_ok_and(|header| header.size() > MAX_PREPASS_BLOB_BYTES)
-                    {
-                        selected.insert(i);
-                        continue;
+                    if let Ok(header) = repo.objects.header(oid) {
+                        // Enforce the scan limit before this prepass can inflate a blob.
+                        // Skipped objects are not scanned or counted as clean content.
+                        if filter.exceeds_max_blob_size(header.size()) {
+                            continue;
+                        }
+                        // Large blobs are expensive to inflate twice. Retain allowed
+                        // ones conservatively and let normal loading read them once.
+                        if header.size() > MAX_PREPASS_BLOB_BYTES {
+                            selected.insert(i);
+                            continue;
+                        }
                     }
                     let keep = match repo.objects.find_blob(oid, buffer) {
                         Ok(blob) => filter.may_match(blob.data)?,

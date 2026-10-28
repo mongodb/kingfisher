@@ -27,10 +27,30 @@ The viewer brings detection, validation and available blast-radius evidence from
 - **Cross-tool triage in one place** — import a Gitleaks scan, a TruffleHog scan, and a Kingfisher scan of the same codebase and look at them side-by-side with deduplication, rather than reconciling three different schemas by hand.
 - **Rotate real secrets first** — validated Kingfisher findings and TruffleHog-verified findings are surfaced as active credentials; unverified/static matches are marked as not attempted.
 - **Dedup automatically** — the same secret appearing across multiple reports, directories, or scan runs collapses to one entry by fingerprint / secret identity.
-- **See blast radius** — when a Kingfisher report was generated with `--blast-radius`, the viewer opens an interactive blast-radius graph with a side inspector and details view, so you can trace the identity, resources, and permissions without digging through nested JSON.
+- **See blast radius** — when a Kingfisher report was generated with `--blast-radius`, the viewer starts with investigation details for identities, policies, and role grants. Switch to the interactive map and side inspector to trace recorded resources and permissions without digging through nested JSON.
 - **Share and archive** — export filtered subsets for tickets, rotation runbooks, or audit reviewers.
 
 Kingfisher's viewer works with reports from all supported tools, preserving available validation evidence.
+
+## Synthetic investigation walkthrough
+
+Inspect permission evidence and trace an identity to recorded resources. These are actual viewer
+screens populated by the bundled synthetic report; the animation is a sequence of screens,
+not a live scan or proof of access to real accounts.
+
+![Kingfisher viewer walkthrough: inspect authorization evidence and trace identities to resources](../assets/screenshots/investigation-walkthrough.gif)
+
+Static alternatives: [policy investigation](../assets/screenshots/blast-radius-investigation.jpg) and
+[resource map](../assets/screenshots/blast-radius-map.jpg).
+
+Try the same data locally:
+
+```bash
+kingfisher view docs/viewer/investigation-demo.json
+```
+
+Or [open the hosted viewer](../viewer/index.html) and load the
+[synthetic report](../viewer/investigation-demo.json). It contains no usable credentials.
 
 ## Using the local viewer via the `kingfisher` CLI
 
@@ -106,6 +126,7 @@ Drag a Kingfisher, SARIF, Gitleaks, or TruffleHog report into the page (or use t
 You can test the hosted page with a bundled sample report:
 
 - [Open sample report JSON](../viewer/sample-report.json)
+- [Download the synthetic investigation report](../viewer/investigation-demo.json)
 
 ## Caveats for imported SARIF / Gitleaks / TruffleHog reports
 

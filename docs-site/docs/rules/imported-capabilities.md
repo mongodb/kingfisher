@@ -114,10 +114,37 @@ pattern. This is a source-controlled build overlay, not a runtime custom-rule op
 
 ## Placeholder exclusions
 
-The `private-key` filter discards PEM-shaped candidates with fewer than 64 characters
-between the BEGIN and END boundaries, including short concatenated source-code placeholders.
-This is a conservative size check, not cryptographic validation: retained candidates still use
-`Assumed`, and compact Ed25519 PKCS#8 keys remain detectable.
+The `private-key` overlay explicitly opts into Kingfisher's offline
+`malformedPrivateKey(secret)` finding-filter helper. It checks matching PEM labels, Base64,
+and decoded container structure rather than a minimum text length. Empty containers, explicit
+`PRIVATE_KEY` placeholders, and cleanly decoded malformed containers are rejected. Unrecognized
+source syntax or undecodable armor remains a finding rather than being assumed harmless. The helper is an
+additive Kingfisher extension, not an upstream Betterleaks function; existing custom YAML/TOML
+rules are unchanged unless they explicitly use it.
+
+- PKCS#1 RSA (including multi-prime), SEC1 EC (including explicit parameters), and traditional
+  DSA containers are checked for their required fields, tags, versions and complete DER consumption.
+- PKCS#8 checks the outer container and known inner encodings: RSA/RSA-PSS/RSA-OAEP, EC, DSA,
+  Ed25519/Ed448 and X25519/X448. RFC5958 public-key fields and attributes remain supported.
+- Encrypted PKCS#8 checks the algorithm identifier, PBES2/PBKDF2/scrypt parameter structure
+  when recognized, and nonempty ciphertext. Traditional PEM
+  checks `Proc-Type`/`DEK-Info` headers and encoding without trying to decrypt the payload.
+- OpenSSH checks magic, length-prefixed fields, key count and public records. Known unencrypted
+  records also check field sizes, checkints, comments and padding. Encrypted records remain
+  opaque; bcrypt options and AEAD tag framing are checked without running a KDF.
+- OpenPGP checks old/new/partial packet framing and requires a secret-key or secret-subkey packet;
+  known v2–v4 algorithms check public fields and unencrypted secret MPIs/checksum. Optional armor
+  CRC24 is checked. Newer versions, unknown algorithms, and encrypted secret fields stay opaque.
+
+CRLF, source-escaped newlines, adjacent/concatenated string literals, and shared per-line
+comment/diff/quote prefixes are supported without evaluating source or removing arbitrary
+punctuation. DER-family labels are hints: a valid key under another DER label is retained.
+Unknown formats/algorithms with valid
+armor, incomplete/nonstandard envelopes, candidates over 1 MiB, and DER nesting beyond 24 levels
+are retained conservatively. All checks run during detection, including `--no-validate` and
+Rust/Python SDK scans. No network, decryption, signing, key derivation or expensive mathematical
+key-consistency tests are performed. Retained candidates still use `Assumed`, not proof of active
+access; compact Ed25519 PKCS#8 keys remain detectable.
 
 The `mongodb-connection-string` filter excludes passwords consisting entirely of a variable
 reference: `$(NAME)`, `${NAME}`, `$NAME`, or `{{ NAME }}` (including dotted template names).

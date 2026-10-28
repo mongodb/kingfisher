@@ -9,10 +9,22 @@ use kingfisher_scanner::__cli_internals::candidate_verification::{self, Candidat
 
 use crate::{matcher::OwnedBlobMatch, validation_body};
 
+#[derive(serde::Deserialize)]
+struct BetterleaksComponentCandidate {
+    rule_id: String,
+    secret: String,
+    captures: std::collections::BTreeMap<String, String>,
+}
+
+#[cfg(test)]
 pub(crate) fn ready(m: &OwnedBlobMatch) -> bool {
+    ready_with_fallbacks(m, false)
+}
+
+pub(crate) fn ready_with_fallbacks(m: &OwnedBlobMatch, enabled: bool) -> bool {
     !m.dependency_candidates.is_empty()
         && m.dependency_candidates.len() == m.ambiguous_dependencies.len()
-        && supported(m.rule.syntax())
+        && candidate_verification::supported_with_fallbacks(m.rule.syntax(), enabled)
         && m.ambiguous_dependencies.keys().all(|variable| {
             m.dependency_candidates.get(variable).is_some_and(|v| !v.is_empty())
                 && m.rule.syntax().depends_on_rule.iter().flatten().any(|dep| {
@@ -46,6 +58,31 @@ where
 {
     let variables: Vec<_> = m.dependency_candidates.keys().cloned().collect();
     let values: Vec<_> = variables.iter().map(|key| m.dependency_candidates[key].clone()).collect();
+    let structured_candidates =
+        m.dependent_captures.get("__BETTERLEAKS_COMPONENT_CANDIDATES").map(|json| {
+            serde_json::from_str::<
+                std::collections::BTreeMap<
+                    String,
+                    std::collections::BTreeMap<String, BetterleaksComponentCandidate>,
+                >,
+            >(json)
+        });
+    let structured_candidates = match structured_candidates {
+        Some(Ok(candidates)) => candidates,
+        Some(Err(_)) => {
+            unresolved(m, 0, "invalid component candidate context", false);
+            return;
+        }
+        None => Default::default(),
+    };
+    if variables.iter().zip(&values).any(|(variable, values)| {
+        structured_candidates.get(variable).is_some_and(|candidates| {
+            values.iter().any(|identifier| !candidates.contains_key(identifier))
+        })
+    }) {
+        unresolved(m, 0, "missing component candidate context", false);
+        return;
+    }
     let lengths: Vec<_> = values.iter().map(Vec::len).collect();
     let truncated = variables.iter().zip(&lengths).any(|(variable, length)| {
         m.ambiguous_dependencies.get(variable).is_some_and(|count| count > length)
@@ -53,11 +90,39 @@ where
     let result = candidate_verification::search(&lengths, timeout, |indices, remaining| {
         let mut attempt = m.clone();
         attempt.dependency_candidates.clear();
+        attempt.dependent_captures.remove("__BETTERLEAKS_COMPONENT_CANDIDATES");
+        let mut components = attempt
+            .dependent_captures
+            .get("__BETTERLEAKS_COMPONENTS")
+            .and_then(|json| {
+                serde_json::from_str::<std::collections::BTreeMap<String, serde_json::Value>>(json)
+                    .ok()
+            })
+            .unwrap_or_default();
         for (dimension, variable) in variables.iter().enumerate() {
             attempt.ambiguous_dependencies.remove(variable);
-            attempt
-                .dependent_captures
-                .insert(variable.clone(), values[dimension][indices[dimension]].clone());
+            let identifier = &values[dimension][indices[dimension]];
+            let value = if let Some(candidate) = structured_candidates
+                .get(variable)
+                .and_then(|candidates| candidates.get(identifier))
+            {
+                components.insert(
+                    candidate.rule_id.clone(),
+                    serde_json::json!({
+                        "secret":candidate.secret,"captures":candidate.captures,
+                    }),
+                );
+                candidate.secret.clone()
+            } else {
+                identifier.clone()
+            };
+            attempt.dependent_captures.insert(variable.clone(), value);
+        }
+        if !components.is_empty() {
+            attempt.dependent_captures.insert(
+                "__BETTERLEAKS_COMPONENTS".into(),
+                serde_json::to_string(&components).expect("component strings serialize"),
+            );
         }
         let mut selected_captures = attempt.dependent_captures.clone();
         for (name, value, ..) in super::utils::process_captures(&attempt.captures) {
@@ -123,6 +188,61 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    #[tokio::test]
+    async fn structured_candidates_keep_equal_secrets_with_different_captures_separate() {
+        let mut finding = finding();
+        let mut syntax = finding.rule.syntax().clone();
+        syntax.validation = Some(
+            serde_json::from_value(serde_json::json!({
+                "type":"Betterleaks", "content":{
+                    "expression":"http.get(\"https://example.invalid/check\").status == 200",
+                    "components":{"helper":"SECRET"}
+                }
+            }))
+            .unwrap(),
+        );
+        finding.rule = Arc::new(crate::rules::Rule::new(syntax));
+        finding.ambiguous_dependencies.insert("SECRET".into(), 2);
+        finding.dependency_candidates.insert("SECRET".into(), vec!["0".into(), "1".into()]);
+        finding.dependent_captures.insert("__BETTERLEAKS_COMPONENT_CANDIDATES".into(),
+            serde_json::json!({"SECRET":{
+                "0":{"rule_id":"custom.helper", "secret":"same-secret", "captures":{"MixedCase":"wrong"}},
+                "1":{"rule_id":"custom.helper", "secret":"same-secret", "captures":{"MixedCase":"accepted"}}
+            }}).to_string());
+        let mut keys = Vec::new();
+        run(&mut finding, Duration::from_secs(2), |mut attempt, _| {
+            assert_eq!(attempt.dependent_captures["SECRET"], "same-secret");
+            assert!(!attempt.dependent_captures.contains_key("__BETTERLEAKS_COMPONENT_CANDIDATES"));
+            keys.push(super::super::validation_dedup_key(&attempt));
+            let components: serde_json::Value =
+                serde_json::from_str(&attempt.dependent_captures["__BETTERLEAKS_COMPONENTS"])
+                    .unwrap();
+            async move {
+                let accepted = components["custom.helper"]["captures"]["MixedCase"] == "accepted";
+                attempt.validation_outcome = if accepted {
+                    ValidationOutcome::VerifiedActive
+                } else {
+                    ValidationOutcome::VerifiedInactive
+                };
+                attempt.validation_response_status =
+                    if accepted { StatusCode::OK } else { StatusCode::UNAUTHORIZED };
+                attempt
+            }
+        })
+        .await;
+        assert_eq!(keys.len(), 2);
+        assert_ne!(keys[0], keys[1]);
+        assert_eq!(finding.validation_outcome, ValidationOutcome::VerifiedActive);
+        assert_eq!(finding.dependent_captures["SECRET"], "same-secret");
+        let components: serde_json::Value =
+            serde_json::from_str(&finding.dependent_captures["__BETTERLEAKS_COMPONENTS"]).unwrap();
+        assert_eq!(
+            components["custom.helper"]["captures"],
+            serde_json::json!({"MixedCase":"accepted"})
+        );
+        assert!(!finding.dependent_captures.contains_key("__BETTERLEAKS_COMPONENT_CANDIDATES"));
+    }
 
     fn finding() -> OwnedBlobMatch {
         let rule: RuleSyntax = serde_yaml::from_str(

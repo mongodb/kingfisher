@@ -7,6 +7,8 @@
 *.json
 !webserver/static/sample-report.json
 !docs/viewer/sample-report.json
+!docs/viewer/investigation-demo.json
+!docs/demos/investigation-demo.json
 !testdata/parsers/context_verifier_golden.json
 !testdata/parsers/scan_findings_baseline.json
 !testdata/parsers/tree_sitter_capture_baseline.json
@@ -247,8 +249,9 @@ docs-site/docs/viewer/
 
 !crates/kingfisher-rules/generated/provenance.json
 
-# Python release-helper test caches
+# Python helper-script caches
 scripts/**/__pycache__/
+docs-site/scripts/__pycache__/
 
 # Native Python SDK development artifacts
 python/**/__pycache__/

@@ -92,6 +92,20 @@ Kingfisher is a Rust secret scanner, live credential validator, revocation helpe
 
 ## Rule Authoring
 
+### Backward compatibility
+
+- Existing Kingfisher YAML and Betterleaks TOML rules must continue to load and work without edits.
+- New rule capabilities must be additive and opt-in; do not change legacy primary validation or
+  revocation behavior, require new fields, or silently widen credential destinations.
+- Fallback environments require `--fallbacks` on the CLI (or explicit SDK opt-in).
+  `reuse_primary_validation_logic` and `reuse_primary_revocation_logic` default to false. Each reuse mode replaces
+  only its own URL(s); validation reuse never implies revocation reuse. Revocation executes only
+  the selected environment's action, never mutation failover. Add legacy-rule regression tests.
+  Reuse means request/action logic only, not inheritance of the primary target URL(s).
+- CLI `revoke --fallbacks` must validate and retain selection internally before any mutation;
+  never trust caller-supplied `VALIDATION_*` endpoint state. Without the flag, preserve direct-primary
+  behavior without new validation requests. SDK result-based revocation reuses its original snapshot.
+
 New generally useful rules should be contributed to the Betterleaks repository first. Custom
 rules may use either the Kingfisher rule format (YAML) or Betterleaks TOML. Both are fully
 supported; choose the format that fits the required detection and validation capabilities.
@@ -113,6 +127,10 @@ supported; choose the format that fits the required detection and validation cap
   Exact upstream sources, provenance, and notices are archived under the rules crate's
   `generated/` directory. Run the tool without flags after importer or overlay changes, and
   use `--check` to verify reproducibility without network access.
+- Do not import filename-only/path-only detectors into the built-in catalog. Built-ins must
+  detect content, not merely a filename; omit metadata-only rules during import rather than
+  disabling them at runtime. Keep content detectors with path restrictions and explicit custom
+  YAML/TOML filename-only rules supported.
 - `--rules-path` accepts Betterleaks `.toml` and Kingfisher `.yml`/`.yaml` files. Betterleaks TOML is translated through the same importer used for built-ins, while custom TOML gets the `custom.` namespace.
 - A rule's regex produces candidate matches. The selected capture becomes the reported secret; entropy, pattern requirements, and filters remove candidates before reporting.
 - Components attach nearby supporting values to a primary rule. They can be required or optional and are made available to validation as named variables.

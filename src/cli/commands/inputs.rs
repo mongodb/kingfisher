@@ -754,7 +754,7 @@ fn warn_deprecated_provider(provider: &str, guidance: &str) {
 pub struct ContentFilteringArgs {
     #[command(flatten)]
     pub path_selection: crate::path_selection::PathSelection,
-    /// Ignore files larger than the given size in MB (0 = unlimited)
+    /// Ignore files and Git history blobs larger than the given size in MB (0 = unlimited)
     #[arg(
         global = true,
         long = "max-file-size",
@@ -776,7 +776,7 @@ pub struct ContentFilteringArgs {
     #[arg(global = true, long, value_name = "PATTERN")]
     pub exclude: Vec<String>,
 
-    /// If true, do NOT extract archive files
+    /// Disable archive and SQLite, Python bytecode, and PDF text extraction
     #[arg(global = true, long = "no-extract-archives", default_value_t = false)]
     pub no_extract_archives: bool,
 

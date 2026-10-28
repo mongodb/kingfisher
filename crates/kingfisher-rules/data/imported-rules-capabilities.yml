@@ -40,9 +40,9 @@ betterleaks:
   postman-api-token:
     filter_override: 'true'
   private-key:
-    # Even compact PKCS#8 Ed25519 keys have 64 base64 characters. Reject tiny
-    # PEM-shaped bodies (including short source-code placeholders), not key types.
-    filter_override: 'matchesAny(finding["secret"], [`(?s)^-----BEGIN [A-Z0-9 ]*PRIVATE KEY(?: BLOCK)?-----.{0,63}-----END `])'
+    # Offline structural filtering, including compact and encrypted key containers.
+    # Unknown algorithms remain candidates; this does not establish active access.
+    filter_override: 'malformedPrivateKey(finding["secret"])'
     validation: Assumed
   sendgrid-api-token:
     filter_override: 'matchesAny(finding["secret"], [`^SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$`])'

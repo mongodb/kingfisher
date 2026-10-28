@@ -2,7 +2,7 @@
 use crate::ValidationOutcome;
 use reqwest::StatusCode;
 use serde::Serialize;
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 /// Credential-free explanation for an inconclusive or skipped check.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize)]
@@ -34,6 +34,11 @@ pub struct ValidationResult {
     pub reason: Option<ValidationReason>,
     pub http_status: Option<u16>,
     pub response_body: String,
+    /// Structured Betterleaks analysis. May contain secrets; omitted from Debug and serialization.
+    pub analysis_data: Option<serde_json::Value>,
+    pub(crate) accepted_http_endpoint: Option<(usize, usize, reqwest::Url)>,
+    pub(crate) accepted_http_fallback: Option<String>,
+    pub(crate) input_diagnostics: Vec<super::preparation::CredentialInputDiagnostic>,
 }
 impl fmt::Debug for ValidationResult {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -46,7 +51,16 @@ impl fmt::Debug for ValidationResult {
 }
 impl ValidationResult {
     pub(crate) fn outcome(outcome: ValidationOutcome) -> Self {
-        Self { outcome, reason: None, http_status: None, response_body: String::new() }
+        Self {
+            outcome,
+            reason: None,
+            http_status: None,
+            response_body: String::new(),
+            analysis_data: None,
+            accepted_http_endpoint: None,
+            accepted_http_fallback: None,
+            input_diagnostics: Vec::new(),
+        }
     }
     pub(crate) fn skipped(reason: ValidationReason) -> Self {
         Self { reason: Some(reason), ..Self::outcome(ValidationOutcome::Skipped) }
@@ -65,5 +79,30 @@ impl ValidationResult {
     pub(crate) fn status(mut self, status: StatusCode) -> Self {
         self.http_status = Some(status.as_u16());
         self
+    }
+
+    /// Variables identifying the HTTP endpoint that verified the credential.
+    ///
+    /// These are empty unless validation succeeded. URLs may contain credentials;
+    /// retain them only in private credential snapshots, never ordinary reporting.
+    /// Revocation URL lists select `VALIDATION_ENDPOINT_INDEX`; a single revocation
+    /// URL can use `{{ VALIDATION_ORIGIN }}` or `{{ VALIDATION_URL }}`.
+    pub fn endpoint_variables(&self) -> BTreeMap<String, String> {
+        if !self.outcome.is_verified_active() {
+            return BTreeMap::new();
+        }
+        let Some((index, count, url)) = &self.accepted_http_endpoint else {
+            return BTreeMap::new();
+        };
+        let mut variables = BTreeMap::from([
+            ("VALIDATION_ENDPOINT_INDEX".into(), index.to_string()),
+            ("VALIDATION_ENDPOINT_COUNT".into(), count.to_string()),
+            ("VALIDATION_URL".into(), url.as_str().into()),
+            ("VALIDATION_ORIGIN".into(), url.origin().ascii_serialization()),
+        ]);
+        if let Some(id) = &self.accepted_http_fallback {
+            variables.insert("VALIDATION_FALLBACK_ID".into(), id.clone());
+        }
+        variables
     }
 }

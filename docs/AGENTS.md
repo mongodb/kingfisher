@@ -33,6 +33,13 @@ Guidance for editing documentation under `docs/`.
 
 ## Content Alignment
 
+- State backward compatibility explicitly when documenting rule/schema changes: existing
+  Kingfisher YAML and Betterleaks TOML rules must work without edits. New HTTP fallback
+  execution uses `--fallbacks`; both primary-reuse booleans default to false. Reusing validation
+  does not imply revocation reuse. Explain explicit revocation URL replacement and no mutation failover.
+- Document CLI `revoke --fallbacks` as validate-to-select followed by one action, without manual
+  `VALIDATION_*` variables. Distinguish SDK snapshot-based revocation and unchanged direct-primary defaults.
+
 - Installation flows belong in `INSTALLATION.md`.
 - Platform-specific usage belongs in `INTEGRATIONS.md`.
 - Advanced runtime flags and tuning belong in `ADVANCED.md`.

@@ -122,8 +122,14 @@ pub async fn map_access(args: &AccessMapArgs) -> Result<AccessMapResult> {
 }
 
 pub async fn map_access_from_token(token: &str) -> Result<AccessMapResult> {
-    let api_url = Url::parse(DEFAULT_GITHUB_API).expect("valid GitHub API URL");
+    map_access_from_token_at(token, DEFAULT_GITHUB_API).await
+}
+
+pub async fn map_access_from_token_at(token: &str, api_endpoint: &str) -> Result<AccessMapResult> {
+    let api_url = crate::provider_endpoints::access_map_api_url("github", api_endpoint)?;
     let client = Client::builder()
+        .redirect(reqwest::redirect::Policy::none())
+        .timeout(std::time::Duration::from_secs(20))
         .user_agent(GLOBAL_USER_AGENT.as_str())
         .build()
         .context("Failed to build GitHub HTTP client")?;
@@ -675,9 +681,64 @@ fn permission_to_label(level: &str) -> &str {
 
 fn severity_to_str(severity: Severity) -> &'static str {
     match severity {
+        Severity::Unknown => "unknown",
         Severity::Low => "low",
         Severity::Medium => "medium",
         Severity::High => "high",
         Severity::Critical => "critical",
+    }
+}
+
+#[cfg(test)]
+mod endpoint_tests {
+    use super::*;
+    use serde_json::json;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path},
+    };
+
+    #[tokio::test]
+    async fn enterprise_mapping_keeps_the_api_prefix() {
+        let server = MockServer::start().await;
+        for (resource, body) in [
+            ("user", json!({ "login": "enterprise-user", "id": 1, "type": "User" })),
+            ("user/repos", json!([])),
+            ("user/memberships/orgs", json!([])),
+        ] {
+            Mock::given(method("GET"))
+                .and(path(format!("/team/api/v3/{resource}")))
+                .and(header("authorization", "token test-token"))
+                .respond_with(ResponseTemplate::new(200).set_body_json(body))
+                .expect(1)
+                .mount(&server)
+                .await;
+        }
+        let result =
+            map_access_from_token_at("test-token", &format!("{}/team/api/v3", server.uri()))
+                .await
+                .unwrap();
+        assert_eq!(result.identity.id, "enterprise-user");
+        assert_eq!(server.received_requests().await.unwrap().len(), 3);
+    }
+
+    #[tokio::test]
+    async fn mapping_does_not_follow_credential_redirects() {
+        let server = MockServer::start().await;
+        let destination = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/api/v3/user"))
+            .respond_with(
+                ResponseTemplate::new(302)
+                    .insert_header("Location", format!("{}/user", destination.uri())),
+            )
+            .mount(&server)
+            .await;
+        assert!(
+            map_access_from_token_at("test-token", &format!("{}/api/v3", server.uri()))
+                .await
+                .is_err()
+        );
+        assert!(destination.received_requests().await.unwrap().is_empty());
     }
 }

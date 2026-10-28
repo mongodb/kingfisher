@@ -133,6 +133,7 @@ pub struct ValidationClients {
     pub global_mode: TlsMode,
     /// When true, skip SSRF IP validation and allow requests to internal/private addresses.
     pub allow_internal_ips: bool,
+    pub http_fallbacks: bool,
     pub unlimited_response: bool,
     /// Candidate budgets are independent of response body caps.
     pub unlimited_results: bool,
@@ -179,6 +180,7 @@ impl ValidationClients {
                     lax,
                     global_mode,
                     allow_internal_ips,
+                    http_fallbacks: false,
                     unlimited_response,
                     unlimited_results: false,
                 })
@@ -189,6 +191,11 @@ impl ValidationClients {
     /// Explicitly configure candidate budgets independently of HTTP response caps.
     pub fn with_unlimited_results(mut self, unlimited: bool) -> Self {
         self.unlimited_results = unlimited;
+        self
+    }
+
+    pub fn with_http_fallbacks(mut self, enabled: bool) -> Self {
+        self.http_fallbacks = enabled;
         self
     }
 
@@ -267,7 +274,81 @@ pub(crate) fn validation_context_values(m: &OwnedBlobMatch) -> Vec<(String, Opti
             values.entry(variable).or_insert(None);
         }
     }
+    if matches!(m.rule.syntax().validation, Some(Validation::Betterleaks(_)))
+        || matches!(m.rule.syntax().revocation, Some(crate::rules::Revocation::Betterleaks(_)))
+    {
+        if let Some(components) = m.dependent_captures.get("__BETTERLEAKS_COMPONENTS") {
+            values.insert("__BETTERLEAKS_COMPONENTS".into(), Some(components.clone()));
+        }
+        values.insert(
+            "__BETTERLEAKS_FINDING_CAPTURES".into(),
+            Some(
+                serde_json::to_string(&original_named_captures(m))
+                    .expect("capture strings serialize"),
+            ),
+        );
+    }
     values.into_iter().collect()
+}
+
+fn original_named_captures(m: &OwnedBlobMatch) -> std::collections::BTreeMap<String, String> {
+    let names = m
+        .rule
+        .syntax()
+        .as_anchored_regex()
+        .map(|regex| {
+            regex
+                .capture_names()
+                .flatten()
+                .map(str::to_owned)
+                .collect::<std::collections::BTreeSet<_>>()
+        })
+        .unwrap_or_default();
+    m.captures
+        .captures
+        .iter()
+        .filter_map(|capture| {
+            capture
+                .name
+                .filter(|name| names.contains(*name))
+                .map(|name| (name.to_owned(), capture.raw_value().to_owned()))
+        })
+        .collect()
+}
+
+/// Decode the private JSON contexts accepted by explicit validate/revoke commands.
+pub(crate) fn parse_betterleaks_context_globals(globals: &mut Object) -> Result<()> {
+    for name in ["__BETTERLEAKS_COMPONENTS", "__BETTERLEAKS_FINDING_CAPTURES"] {
+        if let Some(value) = globals.get(name) {
+            if value.as_object().is_some() {
+                continue;
+            }
+            let parsed = serde_json::from_str::<serde_json::Value>(&value.to_kstr())
+                .ok()
+                .filter(serde_json::Value::is_object)
+                .ok_or_else(|| {
+                    anyhow::anyhow!("Invalid Betterleaks capture context; expected a JSON object")
+                })?;
+            globals.insert(name.into(), liquid::model::to_value(&parsed)?);
+        }
+    }
+    Ok(())
+}
+
+/// Bind original case-sensitive Expr captures without exposing private context as scalar inputs.
+pub(crate) fn populate_betterleaks_globals(m: &OwnedBlobMatch, globals: &mut Object) {
+    globals.insert("__BETTERLEAKS_RULE_ID".into(), Value::scalar(m.rule.id().to_owned()));
+    if let Ok(captures) = liquid::model::to_value(&original_named_captures(m)) {
+        globals.insert("__BETTERLEAKS_FINDING_CAPTURES".into(), captures);
+    }
+    if let Some(components) = m
+        .dependent_captures
+        .get("__BETTERLEAKS_COMPONENTS")
+        .and_then(|json| serde_json::from_str::<serde_json::Value>(json).ok())
+        .and_then(|value| liquid::model::to_value(&value).ok())
+    {
+        globals.insert("__BETTERLEAKS_COMPONENTS".into(), components);
+    }
 }
 
 /// Refuse to guess which credential component or endpoint belongs to a secret.
@@ -297,9 +378,19 @@ pub(crate) fn skip_ambiguous_dependencies(m: &mut OwnedBlobMatch) -> bool {
 /// context. CredentialUri uses its full URI rather than the reported password.
 /// This scan-local key is independent of externally persisted finding fingerprints.
 fn validation_dedup_key(m: &OwnedBlobMatch) -> [u8; 32] {
+    validation_dedup_key_with_policy(m, false)
+}
+
+pub(crate) fn validation_dedup_key_with_policy(
+    m: &OwnedBlobMatch,
+    http_fallbacks: bool,
+) -> [u8; 32] {
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"kingfisher.validation-dedup.v1\0");
     hash_key_part(&mut hasher, m.rule.syntax().id.as_bytes());
+    if matches!(m.rule.syntax().validation, Some(Validation::Http(_))) {
+        hasher.update(&[u8::from(http_fallbacks)]);
+    }
 
     // CredentialUri reports the password as TOKEN but validates the complete URI. Use the actual
     // validator input so two endpoints that happen to share a password never share a result.
@@ -340,6 +431,44 @@ fn hash_key_part(hasher: &mut blake3::Hasher, part: &[u8]) {
 }
 
 static VALIDATION_CACHE: OnceLock<DashMap<[u8; 32], CachedResponse>> = OnceLock::new();
+// Private provider evidence for the opt-in Expr analysis stage. Never store it in a finding.
+static BETTERLEAKS_ANALYSIS_CACHE: OnceLock<DashMap<[u8; 32], serde_json::Value>> = OnceLock::new();
+
+pub(crate) fn cached_betterleaks_validation(m: &OwnedBlobMatch) -> Option<serde_json::Value> {
+    BETTERLEAKS_ANALYSIS_CACHE.get()?.get(&validation_dedup_key(m)).map(|value| value.clone())
+}
+
+pub(crate) fn endpoint_variables(
+    captures: &std::collections::BTreeMap<String, String>,
+) -> std::collections::BTreeMap<String, String> {
+    captures
+        .iter()
+        .filter(|(name, _)| {
+            endpoint_var_names().contains(&name.as_str())
+                || matches!(
+                    name.as_str(),
+                    "VALIDATION_URL"
+                        | "VALIDATION_FALLBACK_ID"
+                        | "VALIDATION_ORIGIN"
+                        | "VALIDATION_ENDPOINT_INDEX"
+                        | "VALIDATION_ENDPOINT_COUNT"
+                )
+        })
+        .map(|(name, value)| (name.clone(), value.clone()))
+        .collect()
+}
+
+/// Replay trusted execution state without retaining finding-controlled selections.
+pub(crate) fn apply_endpoint_variables(
+    rule: &crate::rules::rule::Rule,
+    captures: &mut std::collections::BTreeMap<String, String>,
+    variables: std::collections::BTreeMap<String, String>,
+) {
+    if matches!(rule.syntax().validation, Some(Validation::Http(_))) {
+        captures.retain(|name, _| !httpvalidation::is_validation_endpoint_var(name));
+    }
+    captures.extend(variables);
+}
 
 struct InFlightValidation {
     notify: Notify,
@@ -357,6 +486,7 @@ fn cache_validation_result(fp: [u8; 32], m: &OwnedBlobMatch) {
             is_valid: m.validation_success,
             outcome: m.validation_outcome,
             timestamp: Instant::now(),
+            endpoint_variables: endpoint_variables(&m.dependent_captures),
         },
     );
 }
@@ -378,6 +508,10 @@ pub fn init_validation_caches() {
 /// Clear the static validation caches at a scan boundary to reclaim memory and
 /// prevent validation results from leaking into a later scan.
 pub fn clear_validation_caches() {
+    if let Some(c) = BETTERLEAKS_ANALYSIS_CACHE.get() {
+        c.clear();
+        c.shrink_to_fit();
+    }
     if let Some(c) = VALIDATION_CACHE.get() {
         c.clear();
         c.shrink_to_fit();
@@ -491,7 +625,7 @@ pub async fn validate_single_match(
         unlimited_results: clients.unlimited_results,
     }
     .scope(async {
-        if candidates::ready(m) {
+        if candidates::ready_with_fallbacks(m, clients.http_fallbacks) {
             candidates::run(m, validation_timeout, |mut attempt, remaining| async move {
                 // Preserve endpoint inputs for generated commands on cache hits as well
                 // as misses. Fixed validation URLs may still use these in headers/body.
@@ -570,6 +704,15 @@ async fn validate_resolved_match(
     provider_endpoints: &ProviderEndpointOverrides,
     max_body_len: usize,
 ) {
+    if matches!(m.rule.syntax().validation, Some(Validation::Betterleaks(_)))
+        || matches!(m.rule.syntax().revocation, Some(crate::rules::Revocation::Betterleaks(_)))
+    {
+        m.dependent_captures.insert(
+            "__BETTERLEAKS_FINDING_CAPTURES".into(),
+            serde_json::to_string(&original_named_captures(m)).expect("capture strings serialize"),
+        );
+        m.dependent_captures.insert("__BETTERLEAKS_RULE_ID".into(), m.rule.id().to_owned());
+    }
     if !m.rule.syntax().is_authoritative() {
         m.validation_success = false;
         m.validation_response_status = StatusCode::CONTINUE;
@@ -581,7 +724,7 @@ async fn validate_resolved_match(
     if skip_ambiguous_dependencies(m) {
         return;
     }
-    let fp = validation_dedup_key(m);
+    let fp = validation_dedup_key_with_policy(m, clients.http_fallbacks);
     // Keep the unwind boundary inside this module so the process-wide
     // validation de-dupe state is cleared before the caller observes a panic.
     // The panic branch below overwrites the match with a deterministic failure.
@@ -676,7 +819,7 @@ async fn timed_validate_single_match(
     // ──────────────────────────────────────────────────────────
     // 1. process-wide fingerprint de-dup
     // ──────────────────────────────────────────────────────────
-    let fp = validation_dedup_key(m);
+    let fp = validation_dedup_key_with_policy(m, clients.http_fallbacks);
 
     // This cache is cleared at the start and end of every scan, so entries
     // remain valid for the full scan even when a large scan runs longer than
@@ -686,6 +829,11 @@ async fn timed_validate_single_match(
         m.validation_response_body = entry.body.clone();
         m.validation_response_status = entry.status;
         m.validation_outcome = entry.outcome;
+        apply_endpoint_variables(
+            &m.rule,
+            &mut m.dependent_captures,
+            entry.endpoint_variables.clone(),
+        );
         return;
     }
     // Claim the key atomically. A separate get followed by insert allows two
@@ -719,6 +867,11 @@ async fn timed_validate_single_match(
             m.validation_response_body = entry.body.clone();
             m.validation_response_status = entry.status;
             m.validation_outcome = entry.outcome;
+            apply_endpoint_variables(
+                &m.rule,
+                &mut m.dependent_captures,
+                entry.endpoint_variables.clone(),
+            );
         }
         return;
     }
@@ -784,6 +937,7 @@ async fn timed_validate_single_match(
 
     let mut globals = Object::new();
     populate_globals_from_captures(&mut globals, &captured_values);
+    populate_betterleaks_globals(m, &mut globals);
     hydrate_endpoint_globals_for_rule(m.rule.id(), &mut globals);
     provider_endpoints.apply_scan_overrides(&mut globals);
 
@@ -807,22 +961,34 @@ async fn timed_validate_single_match(
         let rule_syntax = m.rule.syntax();
         if let (Some(limiter), Some(validation)) = (rate_limiter, rule_syntax.validation.as_ref())
             && should_rate_limit_validation(validation)
+            && !matches!(validation, Validation::Http(_))
         {
             limiter.wait_for_rule(m.rule.id()).await;
         }
     }
 
+    let http_gate = rate_limiter.map(|limiter| limiter.http_gate(m.rule.id()));
     let result = kingfisher_scanner::validation::ValidationEngine::new(client, parser)
         .oauth2_token_cache(clients.oauth2_tokens.clone())
         .credential_uri_client(clients.credential_uri_client(rule_tls_mode))
         .timeout(validation_timeout)
         .retries(validation_retries)
+        .http_fallbacks(clients.http_fallbacks)
+        .http_request_gate(
+            http_gate
+                .as_ref()
+                .map(|gate| gate as &dyn kingfisher_scanner::validation::engine::HttpRequestGate),
+        )
         .max_response_bytes(if clients.unlimited_response { 0 } else { 1 << 20 })
         .allow_internal_ips(clients.allow_internal_ips)
         .use_lax_tls(use_lax_tls)
         .validate(&m.rule, &globals)
         .await;
     m.validation_outcome = result.outcome;
+    apply_endpoint_variables(&m.rule, &mut m.dependent_captures, result.endpoint_variables());
+    if let Some(evidence) = result.analysis_data {
+        BETTERLEAKS_ANALYSIS_CACHE.get_or_init(DashMap::new).insert(fp, evidence);
+    }
     m.validation_success = result.outcome.is_verified_active();
     m.validation_response_status = result
         .http_status
@@ -871,6 +1037,122 @@ fn populate_globals_from_captures(
 mod tests {
     use super::*;
     use crate::rules::rule::{Confidence, DependsOnRule, Rule, RuleSyntax};
+
+    #[test]
+    fn private_endpoint_cache_preserves_provider_context_without_secret_captures() {
+        let mut captures: std::collections::BTreeMap<String, String> = endpoint_var_names()
+            .iter()
+            .map(|name| ((*name).into(), format!("https://{}.example.test", name.to_lowercase())))
+            .collect();
+        for name in [
+            "VALIDATION_URL",
+            "VALIDATION_FALLBACK_ID",
+            "VALIDATION_ORIGIN",
+            "VALIDATION_ENDPOINT_INDEX",
+            "VALIDATION_ENDPOINT_COUNT",
+        ] {
+            captures.insert(name.into(), "private-endpoint-context".into());
+        }
+        captures.insert("TOKEN".into(), "credential-secret".into());
+        captures.insert("PASSWORD".into(), "dependent-secret".into());
+
+        let cached = endpoint_variables(&captures);
+        assert_eq!(cached.len(), endpoint_var_names().len() + 5);
+        for name in endpoint_var_names() {
+            assert_eq!(cached.get(*name), captures.get(*name));
+        }
+        assert!(!cached.contains_key("TOKEN"));
+        assert!(!cached.contains_key("PASSWORD"));
+        assert_eq!(
+            cached.get("VALIDATION_URL").map(String::as_str),
+            Some("private-endpoint-context")
+        );
+    }
+
+    #[test]
+    fn cached_provider_context_replay_does_not_add_public_access_map_requests() {
+        use crate::{access_map::AccessMapRequest, scanner::AccessMapCollector};
+
+        let original = std::collections::BTreeMap::from([
+            ("GITHUB_API_BASE_URL".into(), "https://github.example.test/api/v3".into()),
+            ("GITLAB_API_BASE_URL".into(), "https://gitlab.example.test/api/v4".into()),
+            ("GITEA_API_BASE_URL".into(), "https://gitea.example.test/api/v1".into()),
+            ("VALIDATION_ORIGIN".into(), "https://github.example.test".into()),
+        ]);
+        let cached_context = endpoint_variables(&original);
+        let mut stored_context = std::collections::BTreeMap::new();
+        stored_context.extend(cached_context.clone());
+        let collector = AccessMapCollector::default();
+
+        // These are the same private-map copies used by cache hits and the final store sweep.
+        for (index, context) in
+            [&original, &cached_context, &stored_context].into_iter().enumerate()
+        {
+            collector.record_github_at(
+                "enterprise-token",
+                context.get("GITHUB_API_BASE_URL").map(String::as_str),
+                format!("github-{index}"),
+            );
+            collector.record_gitlab_at(
+                "enterprise-token",
+                context.get("GITLAB_API_BASE_URL").map(String::as_str),
+                format!("gitlab-{index}"),
+            );
+            collector.record_gitea_at(
+                "enterprise-token",
+                context.get("GITEA_API_BASE_URL").map(String::as_str),
+                format!("gitea-{index}"),
+            );
+        }
+
+        let requests = collector.into_collected_requests();
+        assert_eq!(requests.len(), 3, "cache/store replay must not add public-provider requests");
+        for collected in requests {
+            assert_eq!(collected.finding_fingerprints.len(), 3);
+            match collected.request {
+                AccessMapRequest::GithubAt { api_endpoint, .. } => {
+                    assert_eq!(api_endpoint, original["GITHUB_API_BASE_URL"])
+                }
+                AccessMapRequest::GitlabAt { api_endpoint, .. } => {
+                    assert_eq!(api_endpoint, original["GITLAB_API_BASE_URL"])
+                }
+                AccessMapRequest::GiteaAt { api_endpoint, .. } => {
+                    assert_eq!(api_endpoint, original["GITEA_API_BASE_URL"])
+                }
+                _ => panic!("enterprise endpoint context must survive private cache/store replay"),
+            }
+        }
+        assert_eq!(stored_context.get("VALIDATION_ORIGIN"), original.get("VALIDATION_ORIGIN"));
+    }
+
+    #[test]
+    fn explicit_betterleaks_context_preserves_case_and_rejects_non_objects_without_values() {
+        let mut globals = Object::new();
+        globals.insert(
+            "__BETTERLEAKS_FINDING_CAPTURES".into(),
+            Value::scalar(r#"{"MixedCase":"capture-secret"}"#),
+        );
+        globals.insert(
+            "__BETTERLEAKS_COMPONENTS".into(),
+            Value::scalar(
+                r#"{"custom.helper":{"secret":"component-secret","captures":{"Realm":"east"}}}"#,
+            ),
+        );
+        parse_betterleaks_context_globals(&mut globals).unwrap();
+        assert_eq!(
+            serde_json::to_value(&globals["__BETTERLEAKS_FINDING_CAPTURES"]).unwrap(),
+            serde_json::json!({"MixedCase":"capture-secret"})
+        );
+        assert!(globals["__BETTERLEAKS_COMPONENTS"].as_object().is_some());
+        for value in ["not-json-secret", r#"["array-secret"]"#] {
+            globals.insert("__BETTERLEAKS_COMPONENTS".into(), Value::scalar(value));
+            let error = parse_betterleaks_context_globals(&mut globals).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Invalid Betterleaks capture context; expected a JSON object"
+            );
+        }
+    }
 
     #[test]
     fn credential_uri_classifier_normalizes_supported_database_schemes() {
@@ -1184,8 +1466,13 @@ mod tests {
             path: None,
             betterleaks_filter: None,
             betterleaks_secret_group: None,
+            specificity: 0,
+            tags: Vec::new(),
+            betterleaks_path_only: false,
+            keywords: Vec::new(),
             authoritative: true,
             vectorscan_compatible: true,
+            fallbacks: Vec::new(),
         })
     }
 
