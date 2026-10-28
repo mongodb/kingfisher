@@ -56,6 +56,28 @@ Kingfisher is a Rust secret scanner, live credential validator, revocation helpe
 - After markdown/doc changes, verify local documentation links when practical.
 - After `docs-site/` source changes, rebuild with `docs-site/.venv/bin/mkdocs build -f docs-site/mkdocs.yml` when practical so generated output stays in sync.
 
+## Crate Versions And Publication
+
+- Before finishing changes to a publishable crate, check whether its packaged contents
+  differ from the same version on crates.io. Packaged tests, examples, README files,
+  dependency requirements, licenses, and generated data count, even without runtime/API changes.
+- Crate versions are independent of the CLI tag and Python SDK version. Bump an
+  already-published crate when its package changes; do not bump every crate for a CLI
+  release or bump an unpublished prepared version unnecessarily. Choose patch/minor/major
+  versions according to the public API compatibility contract.
+- Update dependent minimum requirements and `Cargo.lock` with each internal crate bump.
+  Recheck dependent packages too: changing their published manifests can require their
+  own version bumps. Regenerate rule-bundle provenance after manifest/lockfile changes;
+  never hand-edit its hashes or bypass the immutable-package comparison.
+- Build fresh archives with `cargo package --locked` for `kingfisher-core`,
+  `kingfisher-rules`, `kingfisher-scanner`, and `kingfisher-bin`, then run the read-only
+  `python3 scripts/publish-crates.py --tag v<CLI-version>` plan before declaring a release
+  ready. Keep package verification enabled; `--allow-dirty` is only for local pre-commit checks.
+- For a metadata-only correction after a successful binary release, commit and merge
+  it into `main`, then run `make release crates` from a clean, current `main` checkout.
+  Preserve the existing public tag and artifacts. Runtime changes need a new binary
+  release, not a broader recovery exception. See [publishing guidance](docs/PUBLISHING.md).
+
 ## Cross-Platform Tests
 
 - New and modified tests must work on Windows (x64 and arm64), macOS, and Linux. Review fixture setup and subprocess calls for platform assumptions even when developing on Unix.

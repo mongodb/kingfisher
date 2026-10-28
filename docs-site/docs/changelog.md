@@ -7,9 +7,7 @@ description: "Kingfisher release history: new features, rules, bug fixes, and im
 
 All notable changes to this project will be documented in this file.
 
-## [v2.15.0] (Unreleased)
-
-Changes since the published v2.14.0 release.
+## [v2.15.0]
 
 ### Added
 
@@ -56,11 +54,14 @@ Changes since the published v2.14.0 release.
   requests also refuse redirects; configure final canonical URLs instead.
 - Prepare Python SDK **1.6.0** with explicit analysis and source-attribute scanning,
   and rules/scanner crates **3.0.0** for public Rust schema changes. Existing
-  YAML/TOML rule files and Python APIs remain compatible; core stays at **1.0.4**.
+  YAML/TOML rule files and Python APIs remain compatible; core uses the compatible **1.0.5** patch.
   Rust callers should follow the [3.0 migration guide](reference/library.md#migrating-to-rules-and-scanner-30).
 
 ### Improvements
 
+- Correct crates.io release metadata for the packaged core regression tests and
+  verify the regenerated rules-manifest hash during crates-only recovery. Verified
+  metadata-only recovery does not require another Python SDK release.
 - Reduce malformed-container and recognized-placeholder false positives with
   conservative, bounded offline private-key checks shared by the CLI and SDKs.
   These checks do not establish cryptographic or live validity. See the

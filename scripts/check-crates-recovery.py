@@ -22,18 +22,20 @@ SDK = "crates/kingfisher-python/Cargo.toml"
 DEPENDENTS = ("Cargo.toml", "crates/kingfisher-rules/Cargo.toml",
               "crates/kingfisher-scanner/Cargo.toml")
 PROVENANCE = "crates/kingfisher-rules/generated/provenance.json"
-PROVENANCE_INPUTS = ("Cargo.toml", "Cargo.lock")
+# The core requirement bump also changes the rules manifest's recorded input hash.
+# Manifest semantics are restricted above the provenance comparison in check_metadata.
+PROVENANCE_INPUTS = ("Cargo.toml", "Cargo.lock", "crates/kingfisher-rules/Cargo.toml")
 PLATFORMS = ("Linux x64", "Linux arm64", "macOS x64", "macOS arm64", "Windows x64", "Windows arm64")
 REQUIRED_JOBS = {"Verify release ref and version", "Public GitHub Release", *PLATFORMS} | {
     f"tests / {platform}" for platform in PLATFORMS
 }
 MAINTENANCE_FILES = {
-    "README.md", "CHANGELOG.md", "docs/LIBRARY.md", "docs/PUBLISHING.md",
+    "AGENTS.md", "README.md", "CHANGELOG.md", "docs/LIBRARY.md", "docs/PUBLISHING.md",
     "crates/kingfisher-core/README.md", "crates/kingfisher-rules/README.md",
     "crates/kingfisher-scanner/README.md", "docs-site/docs/changelog.md",
     "docs-site/docs/reference/library.md", ".github/RELEASING.md",
     ".github/workflows/release.yml", "scripts/check-crates-recovery.py",
-    "scripts/tests/test_crates_recovery.py", "Makefile",
+    "scripts/tests/test_crates_recovery.py", "scripts/tests/test_publish_crates.py", "Makefile",
     "scripts/release-packages.py", "scripts/tests/test_release_packages.py",
     "scripts/check-sdk-release.py", "scripts/tests/test_sdk_preflight.py",
     "scripts/tests/test_python_sdk_release.py", "scripts/tests/test_release_makefile.py",
@@ -120,7 +122,7 @@ def check_metadata(root, base, head="HEAD"):
                 raise ValueError(f"Recovery provenance does not match {path}; regenerate the bundle")
         after["generator_input_sha256"][path] = before["generator_input_sha256"][path]
     if before != after:
-        raise ValueError("Recovery changes rule-bundle provenance beyond workspace manifest/lock hashes")
+        raise ValueError("Recovery changes rule-bundle provenance beyond approved metadata input hashes")
 
 
 def github_json(path, token):

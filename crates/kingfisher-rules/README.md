@@ -101,7 +101,7 @@ These records document what was imported; they do not establish upstream authors
 Use rules/scanner `3.0.0` together. Existing YAML/TOML rule files remain compatible;
 public Rust schema fields and enum variants require source updates. See the
 [3.0 migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-scanner-30).
-Core stays at 1.0.4; Python SDK 1.6.0 preserves its existing Python API.
+Core uses the compatible 1.0.5 patch; Python SDK 1.6.0 preserves its existing Python API.
 
 ## Migrating to 2.0
 
