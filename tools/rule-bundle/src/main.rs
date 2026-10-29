@@ -20,17 +20,19 @@ use std::{
 use anyhow::{Context, Result, bail, ensure};
 use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
 use flate2::{Compression, read::GzDecoder, write::GzEncoder};
+use serde::Deserialize;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
-// Betterleaks v2.0.0-rc.1 includes Cloudflare cfut_/cfat_ formats absent from stable v1.9.0.
-const BETTERLEAKS_REVISION: &str = "b3b4cbb586c964701f78bbfb6bc2129ced99bed3";
-const BETTERLEAKS_SHA256: &str = "b8627cfd4b12beb833f0b7e1173157b1a2988ceb87cf3e2e2882182d7229adf7";
+// Betterleaks v2.0.0-rc.5 adds Labelbox, NuGet, and Tailscale content detectors.
+const BETTERLEAKS_REVISION: &str = "b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3";
+const BETTERLEAKS_SHA256: &str = "107da222fc897daa2647027248d86ece9dde29e993d5fc9e138826c71f951127";
 const BETTERLEAKS_WORDS_SHA256: &str =
     "d4dd5530d98f4ff343864ed71cfc0064abeae34e4f078edc0b46590c2da8fb47";
 const RULES: &str = "crates/kingfisher-rules";
 const GENERATED: &str = "crates/kingfisher-rules/generated";
 const DOCS: &str = "docs-site/docs/rules/builtin-rules.md";
+const FIRST_PARTY_RULES: &str = "crates/kingfisher-rules/data/kingfisher-rules.yml";
 // A null entry records an upstream NOTICE that was absent (HTTP 404) at the pinned revision.
 type Sources = BTreeMap<String, Option<String>>;
 
@@ -92,6 +94,9 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
     let veles_yaml = veles::import_config(&veles_config, &veles_capabilities, |url| {
         Ok(source(url, false)?.unwrap())
     })?;
+    let first_party_source = fs::read_to_string(root.join(FIRST_PARTY_RULES))?;
+    let (kingfisher_yaml, first_party_provenance) =
+        first_party_rules(&first_party_source, &[&yaml, &veles_yaml])?;
     let config: serde_yaml::Value = serde_yaml::from_str(&veles_config)?;
     let revision = config["revision"].as_str().context("missing Veles revision")?;
     let veles_base = format!("https://raw.githubusercontent.com/google/osv-scalibr/{revision}");
@@ -130,6 +135,13 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
         "wordfreq data license digest mismatch"
     );
     notices.push_str(&format!("\n===== Betterleaks wordfreq-derived wordlist data (CC-BY-SA-4.0) =====\n\n{wordfreq_notice_url}\n\n{wordfreq_notice}\n{wordfreq_license_url}\n\n{wordfreq_license}\n"));
+    let license = fs::read_to_string(root.join("LICENSE"))?;
+    notices.push_str(&format!(
+        "\n===== Kingfisher first-party detector exceptions (Apache-2.0) =====\n\n\
+         Source: {FIRST_PARTY_RULES}\n\
+         Per-rule exception reasons and upstream migration conditions are recorded in provenance.json.\n\n\
+         {license}\n"
+    ));
     // Preserve distinct Go copyright/license headers in readable binary notices as well.
     let headers: BTreeSet<_> = sources
         .iter()
@@ -148,8 +160,12 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
         "archive contains unused inputs; run --refresh"
     );
 
-    let bundle = rule_bundle(&[("betterleaks.yml", &yaml), ("veles.yml", &veles_yaml)])?;
-    let docs = builtin_docs::generate_builtin_rules_page(&[&yaml, &veles_yaml])?;
+    let bundle = rule_bundle(&[
+        ("betterleaks.yml", &yaml),
+        ("kingfisher.yml", &kingfisher_yaml),
+        ("veles.yml", &veles_yaml),
+    ])?;
+    let docs = builtin_docs::generate_builtin_rules_page(&[&yaml, &veles_yaml, &kingfisher_yaml])?;
     let mut artifacts = BTreeMap::from([
         (format!("{RULES}/data/betterleaks-words.txt.gz"), words),
         (format!("{RULES}/data/wordfreq-NOTICE.md"), wordfreq_notice.into_bytes()),
@@ -160,12 +176,24 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
         (DOCS.to_string(), docs.into_bytes()),
     ]);
     let mut provenance = rule_provenance(&yaml, &veles_yaml, &betterleaks_url, &contents, &config)?;
-    for (provider, contents) in [("betterleaks", &yaml), ("veles", &veles_yaml)] {
+    for (id, record) in first_party_provenance {
+        ensure!(provenance.insert(id.clone(), record).is_none(), "duplicate generated ID {id}");
+    }
+    for (provider, contents) in
+        [("betterleaks", &yaml), ("veles", &veles_yaml), ("kingfisher", &kingfisher_yaml)]
+    {
         let path = format!("rules/{provider}.yml");
-        let header = "# Converted and modified by Kingfisher importers and operational overlays.\n\
+        let header = if provider == "kingfisher" {
+            "# SPDX-License-Identifier: Apache-2.0\n\
+             # Generated from reviewed Kingfisher first-party detector exceptions.\n\
+             # See ../provenance.json for source hashes, exception reasons, and upstream migration\n\
+             # conditions, and ../NOTICES.txt for attribution and license terms.\n"
+        } else {
+            "# Converted and modified by Kingfisher importers and operational overlays.\n\
                       # See ../provenance.json for per-rule origins, pinned revisions, and hashes,\n\
                       # ../NOTICES.txt for attribution/licenses, and ../upstream-sources.json.gz\n\
-                      # for exact upstream sources. Kingfisher-authored helpers are identified in provenance.\n";
+                      # for exact upstream sources. Kingfisher-authored helpers are identified in provenance.\n"
+        };
         artifacts.insert(format!("{GENERATED}/{path}"), format!("{header}{contents}").into_bytes());
         for (id, record) in &mut provenance {
             if id.starts_with(&format!("{provider}.")) {
@@ -191,6 +219,8 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
         "crates/kingfisher-rules/build_support/veles.rs",
         "crates/kingfisher-rules/data/imported-rules-capabilities.yml",
         "crates/kingfisher-rules/data/veles-rules.yml",
+        FIRST_PARTY_RULES,
+        "crates/kingfisher-rules/data/kingfisher-rules.md",
         "crates/kingfisher-rules/data/betterleaks-words.md",
     ]
     .into_iter()
@@ -212,10 +242,11 @@ fn generate(root: &Path, mode: Option<&str>) -> Result<()> {
         artifacts.iter().map(|(path, bytes)| (path, digest(bytes))).collect();
     let mut manifest = json!({
         "schema_version": 1,
-        "bundle_format": "gzip / KFRULES v1 / converted YAML",
-        "transformation": "Kingfisher imports upstream rules and applies its operational overlays; generated rules are modified derivatives, not verbatim upstream files.",
+        "bundle_format": "gzip / KFRULES v1 / generated YAML",
+        "transformation": "Kingfisher imports upstream rules, applies operational overlays, and includes reviewed first-party exceptions; imported rules are modified derivatives, not verbatim upstream files.",
         "betterleaks": {"repository": "https://github.com/betterleaks/betterleaks", "revision": BETTERLEAKS_REVISION, "license": "MIT"},
         "veles": {"repository": "https://github.com/google/osv-scalibr", "revision": revision, "license": "Apache-2.0"},
+        "kingfisher": {"source": FIRST_PARTY_RULES, "license": "Apache-2.0", "policy": "Rare first-party exceptions require a specific reason and an upstream Betterleaks migration condition."},
         "source_sha256": source_hashes,
         "generator_input_sha256": inputs,
         "artifact_sha256": output_hashes,
@@ -290,6 +321,120 @@ fn find_obsolete_rule_files(
     }
     obsolete.sort();
     Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FirstPartySource {
+    rules: Vec<serde_yaml::Value>,
+    exceptions: Vec<FirstPartyException>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FirstPartyException {
+    rule_ids: Vec<String>,
+    reason: String,
+    upstream: String,
+    tracking: String,
+    removal_condition: String,
+}
+
+// This single reviewed source is part of the existing bundle, not a directory of extra catalogs.
+// New generally useful detectors belong upstream; retaining one here requires an explicit exception.
+fn first_party_rules(source: &str, imported: &[&str]) -> Result<(String, BTreeMap<String, Value>)> {
+    let source: FirstPartySource =
+        serde_yaml::from_str(source).context("invalid first-party detector source")?;
+    let mut imported_ids = BTreeSet::new();
+    for yaml in imported {
+        let parsed: serde_yaml::Value = serde_yaml::from_str(yaml)?;
+        for rule in parsed["rules"].as_sequence().context("missing imported rules")? {
+            let id = rule["id"].as_str().context("missing imported rule ID")?;
+            ensure!(imported_ids.insert(id.to_string()), "duplicate imported rule ID {id}");
+        }
+    }
+    let mut rules = BTreeMap::new();
+    for rule in source.rules {
+        let id = rule["id"].as_str().context("missing first-party rule ID")?;
+        ensure!(
+            id.starts_with("kingfisher.")
+                && id.split('.').all(|segment| {
+                    !segment.is_empty()
+                        && segment.bytes().all(|byte| {
+                            byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-'
+                        })
+                }),
+            "first-party rule ID must use the kingfisher namespace: {id}"
+        );
+        ensure!(!imported_ids.contains(id), "first-party rule overlaps imported rule {id}");
+        ensure!(
+            rule["pattern"].as_str().is_some_and(|pattern| !pattern.trim().is_empty()),
+            "first-party rule {id} must detect content"
+        );
+        ensure!(
+            rule["examples"].as_sequence().is_some_and(|examples| !examples.is_empty())
+                && rule["negative_examples"]
+                    .as_sequence()
+                    .is_some_and(|examples| !examples.is_empty()),
+            "first-party rule {id} requires positive and negative examples"
+        );
+        let id = id.to_string();
+        ensure!(rules.insert(id.clone(), rule).is_none(), "duplicate first-party rule ID {id}");
+    }
+    let mut provenance = BTreeMap::new();
+    for exception in source.exceptions {
+        ensure!(!exception.rule_ids.is_empty(), "first-party exception requires rule IDs");
+        for (name, value) in [
+            ("reason", &exception.reason),
+            ("tracking", &exception.tracking),
+            ("removal_condition", &exception.removal_condition),
+        ] {
+            ensure!(!value.trim().is_empty(), "first-party exception requires a nonempty {name}");
+        }
+        ensure!(
+            exception.upstream == "https://github.com/betterleaks/betterleaks",
+            "first-party exception upstream must be Betterleaks"
+        );
+        ensure!(
+            ["betterleaks/betterleaks", "mongodb/kingfisher"].iter().any(|repository| {
+                ["issues", "pull"].iter().any(|kind| {
+                    exception
+                        .tracking
+                        .strip_prefix(&format!("https://github.com/{repository}/{kind}/"))
+                        .is_some_and(|number| {
+                            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+                        })
+                })
+            }),
+            "first-party exception tracking must identify an upstream or Kingfisher issue or pull request"
+        );
+        for id in exception.rule_ids {
+            ensure!(rules.contains_key(&id), "exception references unknown first-party rule {id}");
+            let record = json!({
+                "provider": "kingfisher",
+                "role": "first-party-detector-exception",
+                "sources": [FIRST_PARTY_RULES],
+                "license": "Apache-2.0",
+                "reason": exception.reason,
+                "upstream": exception.upstream,
+                "tracking": exception.tracking,
+                "removal_condition": exception.removal_condition,
+            });
+            ensure!(
+                provenance.insert(id.clone(), record).is_none(),
+                "duplicate first-party exception for {id}"
+            );
+        }
+    }
+    for id in rules.keys() {
+        ensure!(provenance.contains_key(id), "first-party rule {id} requires a reviewed exception");
+    }
+    // Emit only runtime rule data; exception metadata stays in the per-rule provenance manifest.
+    let yaml = serde_yaml::to_string(&BTreeMap::from([(
+        "rules",
+        rules.into_values().collect::<Vec<_>>(),
+    )]))?;
+    Ok((yaml, provenance))
 }
 
 fn rule_provenance(
@@ -404,6 +549,108 @@ fn rule_bundle(files: &[(&str, &str)]) -> Result<Vec<u8>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const FIRST_PARTY_FIXTURE: &str = r#"
+rules:
+  - id: kingfisher.connection-string.password.test
+    name: Connection string password
+    pattern: 'Host=[^;]+;Password=([^;]+);'
+    examples: ['Host=db.example.com;Password=swordfish;']
+    negative_examples: ['Password=swordfish;']
+exceptions:
+  - rule_ids: [kingfisher.connection-string.password.test]
+    reason: Restore focused compatibility coverage unavailable in the pinned upstream.
+    upstream: https://github.com/betterleaks/betterleaks
+    tracking: https://github.com/mongodb/kingfisher/issues/558
+    removal_condition: Replace when a reviewed immutable Betterleaks pin includes the focused detector.
+"#;
+
+    #[test]
+    fn first_party_metadata_is_recorded_without_expanding_runtime_yaml() {
+        let (yaml, provenance) = first_party_rules(FIRST_PARTY_FIXTURE, &[]).unwrap();
+        let parsed: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        assert_eq!(parsed.as_mapping().unwrap().len(), 1);
+        assert_eq!(parsed["rules"].as_sequence().unwrap().len(), 1);
+        let record = &provenance["kingfisher.connection-string.password.test"];
+        assert_eq!(record["provider"], "kingfisher");
+        assert_eq!(record["role"], "first-party-detector-exception");
+        assert_eq!(record["sources"], json!([FIRST_PARTY_RULES]));
+        assert_eq!(record["license"], "Apache-2.0");
+        assert!(record["reason"].as_str().unwrap().contains("focused compatibility"));
+        assert!(record["removal_condition"].as_str().unwrap().contains("Betterleaks"));
+    }
+
+    #[test]
+    fn first_party_exceptions_fail_closed_on_incomplete_metadata() {
+        let baseline: serde_yaml::Value = serde_yaml::from_str(FIRST_PARTY_FIXTURE).unwrap();
+        for field in ["reason", "tracking", "removal_condition"] {
+            let mut source = baseline.clone();
+            source["exceptions"][0][field] = serde_yaml::Value::String("  ".into());
+            let error =
+                first_party_rules(&serde_yaml::to_string(&source).unwrap(), &[]).unwrap_err();
+            assert!(error.to_string().contains(field), "{field}: {error:#}");
+        }
+        for (field, value) in [
+            ("upstream", "https://example.com/catalog"),
+            ("tracking", "https://github.com/mongodb/kingfisher/issues/"),
+        ] {
+            let mut source = baseline.clone();
+            source["exceptions"][0][field] = serde_yaml::Value::String(value.into());
+            assert!(first_party_rules(&serde_yaml::to_string(&source).unwrap(), &[]).is_err());
+        }
+        let mut missing = baseline.clone();
+        missing["exceptions"][0].as_mapping_mut().unwrap().remove("reason");
+        assert!(first_party_rules(&serde_yaml::to_string(&missing).unwrap(), &[]).is_err());
+        let mut unreviewed = baseline;
+        unreviewed["exceptions"] = serde_yaml::Value::Sequence(Vec::new());
+        let error =
+            first_party_rules(&serde_yaml::to_string(&unreviewed).unwrap(), &[]).unwrap_err();
+        assert!(error.to_string().contains("requires a reviewed exception"));
+    }
+
+    #[test]
+    fn first_party_ids_and_exception_ownership_are_unique() {
+        let baseline: serde_yaml::Value = serde_yaml::from_str(FIRST_PARTY_FIXTURE).unwrap();
+        for (field, expected) in [
+            ("rules", "duplicate first-party rule ID"),
+            ("exceptions", "duplicate first-party exception"),
+        ] {
+            let mut source = baseline.clone();
+            let first = source[field][0].clone();
+            source[field].as_sequence_mut().unwrap().push(first);
+            let error =
+                first_party_rules(&serde_yaml::to_string(&source).unwrap(), &[]).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error:#}");
+        }
+        let mut unknown = baseline;
+        unknown["exceptions"][0]["rule_ids"][0] =
+            serde_yaml::Value::String("kingfisher.unknown".into());
+        let error = first_party_rules(&serde_yaml::to_string(&unknown).unwrap(), &[]).unwrap_err();
+        assert!(error.to_string().contains("unknown first-party rule"));
+        let error = first_party_rules(
+            FIRST_PARTY_FIXTURE,
+            &["rules: [{id: kingfisher.connection-string.password.test}]"],
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("overlaps imported rule"));
+    }
+
+    #[test]
+    fn first_party_rules_require_namespaced_content_detectors_and_examples() {
+        let baseline: serde_yaml::Value = serde_yaml::from_str(FIRST_PARTY_FIXTURE).unwrap();
+        for id in ["custom.password", "kingfisher.", "kingfisher..password", "kingfisher.Bad"] {
+            let mut source = baseline.clone();
+            source["rules"][0]["id"] = serde_yaml::Value::String(id.into());
+            let error =
+                first_party_rules(&serde_yaml::to_string(&source).unwrap(), &[]).unwrap_err();
+            assert!(error.to_string().contains("namespace"), "{error:#}");
+        }
+        for field in ["pattern", "examples", "negative_examples"] {
+            let mut source = baseline.clone();
+            source["rules"][0].as_mapping_mut().unwrap().remove(field);
+            assert!(first_party_rules(&serde_yaml::to_string(&source).unwrap(), &[]).is_err());
+        }
+    }
 
     fn fixture() -> tempfile::TempDir {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap().parent().unwrap();

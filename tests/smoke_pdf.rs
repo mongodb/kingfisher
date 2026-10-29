@@ -133,6 +133,69 @@ fn malformed_pdf_falls_back_to_raw_scanning() -> Result<()> {
 }
 
 #[test]
+fn pdf_fallback_diagnostic_requires_debug_logging() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let rules = rules(root.path())?;
+    let bytes = b"%PDF-1.4\ndemo_abcd1234efgh5678";
+    let file = root.path().join("broken.pdf");
+    fs::write(&file, bytes)?;
+    let archive = root.path().join("backup.zip");
+    let mut zip = zip::ZipWriter::new(fs::File::create(&archive)?);
+    zip.start_file("broken.pdf", zip::write::SimpleFileOptions::default())?;
+    zip.write_all(bytes)?;
+    drop(zip.finish()?);
+
+    for path in [&file, &archive] {
+        for verbose in [false, true] {
+            let mut command = scan(path, &rules);
+            if verbose {
+                command.arg("--debug");
+            }
+            let assertion = command.assert().code(200);
+            let stderr = String::from_utf8_lossy(&assertion.get_output().stderr);
+            assert_eq!(
+                stderr
+                    .contains("PDF text extraction failed or exceeded limits; scanning raw bytes"),
+                verbose,
+                "{}: {stderr}",
+                path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn lopdf_reader_errors_require_debug_logging() -> Result<()> {
+    let root = tempfile::tempdir()?;
+    let rules = rules(root.path())?;
+    // Break the catalog's object header without changing any xref offsets.
+    let mut bytes = pdf();
+    let header = bytes.windows(7).position(|word| word == b"1 0 obj").unwrap();
+    bytes[header] = b'x';
+    bytes.extend_from_slice(b"\n% demo_deadbeef12345678\n");
+    let file = root.path().join("broken-object.pdf");
+    fs::write(&file, bytes)?;
+
+    for (flags, debug) in [
+        (vec![], false),
+        (vec!["--quiet"], false),
+        (vec!["--debug"], true),
+        (vec!["--verbose"], true),
+        (vec!["-v"], true),
+        (vec!["-vv"], true),
+        (vec!["-vvv"], true),
+        (vec!["--quiet", "--debug"], false),
+    ] {
+        let assertion = scan(&file, &rules).args(&flags).assert().code(200);
+        let stderr = String::from_utf8_lossy(&assertion.get_output().stderr);
+        assert_eq!(stderr.contains("lopdf::reader"), debug, "{flags:?}: {stderr}");
+        assert_eq!(stderr.contains("Object load error"), debug, "{flags:?}: {stderr}");
+    }
+    Ok(())
+}
+
+#[test]
 fn pdf_raw_bytes_are_scanned_alongside_extracted_pages() -> Result<()> {
     let root = tempfile::tempdir()?;
     let rules = rules(root.path())?;

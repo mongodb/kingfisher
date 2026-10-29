@@ -33,7 +33,7 @@ pub struct RuleSpecifierArgs {
     #[arg(global = true, long = "exclude-rule", value_name = "RULE")]
     pub exclude_rule: Vec<String>,
 
-    /// Load the built-in Betterleaks and Veles rules
+    /// Load the built-in Betterleaks, Veles, and Kingfisher rules
     #[arg(global = true, long, default_value_t=true, action=ArgAction::Set)]
     pub load_builtins: bool,
 }

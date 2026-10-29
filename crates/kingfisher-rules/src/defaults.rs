@@ -1,4 +1,4 @@
-//! Betterleaks- and Veles-derived default rules embedded in the kingfisher-rules crate.
+//! Betterleaks, Veles, and rare first-party rules embedded in the kingfisher-rules crate.
 
 use std::{io::Read, path::PathBuf, sync::OnceLock};
 
@@ -67,8 +67,9 @@ fn load_rule_files(bundle: &[u8]) -> Result<BuiltinRuleFiles> {
     Ok(files)
 }
 
-/// Load Kingfisher's built-in Betterleaks and Veles rules.
+/// Load Kingfisher's built-in rule catalog.
 ///
+/// The catalog combines upstream Betterleaks and Veles detectors with rare first-party rules.
 /// This loads all rules that meet or exceed the given confidence level.
 /// If no confidence is specified, defaults to `Confidence::Medium`.
 pub fn get_builtin_rules(confidence: Option<Confidence>) -> Result<Rules> {
@@ -169,12 +170,21 @@ mod test {
               + "PRIVATE_KEY\n"
               + ""#,
             "\nYWJjZA==\n",
+            "\nfoo\nbar\nfoobar\nbarfoo\n",
             // A long, correctly encoded body is not necessarily a key.
             "\neHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4\n",
         ] {
             let pem = format!("-----BEGIN PRIVATE KEY-----{body}-----END PRIVATE KEY-----");
             assert!(filter_discards(key_rule, "fixture.java", &pem, &pem, &[]), "{pem}");
         }
+        let numbered = (1..=96)
+            .map(|index| {
+                format!("   {index}{}\n", ["foo", "bar", "foobar", "barfoo"][(index - 1) % 4])
+            })
+            .collect::<String>();
+        let pem =
+            format!("-----BEGIN RSA PRIVATE KEY-----\n{numbered}-----END RSA PRIVATE KEY-----");
+        assert!(filter_discards(key_rule, "ini_test.go", &pem, &pem, &[]));
         // A compact, synthetic Ed25519 PKCS#8 key must survive structural filtering.
         let body = "MC4CAQAwBQYDK2VwBCIEIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g";
         for body in [
@@ -195,12 +205,14 @@ mod test {
                 );
             }
         }
-        // Unknown source syntax is now deliberately conservative: the filter
-        // cannot prove that arbitrary punctuation is not a serialized key.
+        // Marker-only source wrappers have no plausible encoded key payload.
         let opaque = r#"-----BEGIN PRIVATE KEY-----", "begin key marker"),
             Pair.of(expectedKeyString, "private key pem"),
             Pair.of("-----END PRIVATE KEY-----"#;
-        assert!(!filter_discards(key_rule, "fixture.java", opaque, opaque, &[]));
+        assert!(filter_discards(key_rule, "fixture.java", opaque, opaque, &[]));
+        // The same source wrapper must retain actual serialized key material.
+        let with_material = opaque.replace("expectedKeyString", &format!("\"{body}\""));
+        assert!(!filter_discards(key_rule, "fixture.java", &with_material, &with_material, &[]));
         let mongo = &rules.rules["betterleaks.mongodb-connection-string"];
         for password in [
             "$(AWS_SECRET_ACCESS_KEY)",
@@ -367,8 +379,117 @@ mod test {
     }
 
     #[test]
+    fn betterleaks_rc5_detectors_detect_and_compile() {
+        let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
+        assert_eq!(rules.num_rules(), 501);
+        let provenance: serde_json::Value = serde_json::from_str(BUILTIN_RULE_PROVENANCE).unwrap();
+        assert_eq!(
+            provenance["betterleaks"]["revision"],
+            "b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3"
+        );
+
+        let base32 = "abcdefghijklmnopqrstuvwxyz234567";
+        let tailscale_secret = "Ab3DeF9gHk2mNp6Qr8St0Vw1Xy4Za7Bc";
+        let cases = [
+            (
+                "labelbox-api-key",
+                format!("lbx_{}A", "Ab3DeF9gHk2mNp".repeat(3)),
+                "lbx_Ab3DeF9gHk2mNp",
+            ),
+            (
+                "labelbox-recursion-api-key",
+                format!("rma_{}A", "Ab3DeF9gHk2mNp".repeat(3)),
+                "rma_Ab3DeF9gHk2mNp",
+            ),
+            (
+                "nuget-api-key",
+                format!("oy2a{}q{}e", &base32[..15], &base32[..25]),
+                "oy2qabcdefghijklmnopabcdefghijklmnopqrstuvwxye",
+            ),
+            (
+                "tailscale-auth-key",
+                format!("tskey-auth-kA1b2C3d4CNTRL-{tailscale_secret}"),
+                "tskey-auth-kA1b2C3d4CNTRL-short",
+            ),
+            (
+                "tailscale-key",
+                format!("tskey-kA1b2C3d4CNTRL-{tailscale_secret}"),
+                "tskey-kA1b2C3d4CNTRL-short",
+            ),
+            (
+                "tailscale-oauth-client-secret",
+                format!("tskey-client-kA1b2C3d4CNTRL-{tailscale_secret}"),
+                "tskey-client-kA1b2C3d4CNTRL-short",
+            ),
+            (
+                "tailscale-scim-key",
+                format!("tskey-scim-A1b2C3d4E5f6-{tailscale_secret}"),
+                "tskey-scim-A1b2C3d4E5f6-short",
+            ),
+            (
+                "tailscale-webhook-secret",
+                format!("tskey-webhook-kA1b2C3d4CNTRL-{tailscale_secret}"),
+                "tskey-webhook-kA1b2C3d4CNTRL-short",
+            ),
+        ];
+        let mut selected = Rules::new();
+        for (id, token, negative) in &cases {
+            let rule = &rules.rules[&format!("betterleaks.{id}")];
+            assert!(rule.visible, "{id}");
+            assert!(!rule.betterleaks_path_only, "{id}");
+            assert!(matches!(rule.validation, Some(Validation::Betterleaks(_))), "{id}");
+            // Upstream's omitted/zero valueGroup selects the first non-empty capture.
+            assert_eq!(rule.betterleaks_secret_group, Some(0), "{id}");
+            let regex = rule.as_regex().unwrap();
+            assert_eq!(regex.captures_len(), 2, "{id}: expected one secret capture");
+            for input in [token.clone(), format!("TOKEN=\"{token}\"")] {
+                let captures = regex.captures(input.as_bytes()).unwrap_or_else(|| panic!("{id}"));
+                assert_eq!(captures.get(1).unwrap().as_bytes(), token.as_bytes(), "{id}");
+                assert!(!filter_discards(rule, "fixture.txt", token, &input, &[]), "{id}");
+            }
+            assert!(!regex.is_match(negative.as_bytes()), "{id}");
+            selected.rules.insert(rule.id.clone(), rule.clone());
+        }
+
+        let db = crate::RulesDatabase::from_rule_collection(selected).unwrap();
+        let mut scanner = kingfisher_vectorscan::BlockScanner::new(db.vectorscan_db()).unwrap();
+        for (id, token, _) in cases {
+            let mut found = false;
+            scanner
+                .scan(token.as_bytes(), |index, from, to, _| {
+                    if db.get_rule(index as usize).unwrap().id() == format!("betterleaks.{id}") {
+                        let captures = db.anchored_regexes()[index as usize]
+                            .captures(&token.as_bytes()[from as usize..to as usize])
+                            .unwrap();
+                        assert_eq!(captures.get(1).unwrap().as_bytes(), token.as_bytes());
+                        found = true;
+                    }
+                    kingfisher_vectorscan::Scan::Continue
+                })
+                .unwrap();
+            assert!(found, "{id}: Vectorscan did not detect the token");
+        }
+    }
+
+    #[test]
     fn test_get_default_rules() {
         assert!(get_builtin_rules(None).unwrap().num_rules() >= 400);
+    }
+
+    #[test]
+    fn connection_string_rules_are_available_at_default_confidence() {
+        let rules = get_builtin_rules(None).unwrap();
+        let high_confidence = get_builtin_rules(Some(Confidence::High)).unwrap();
+        for suffix in ["unquoted", "double-quoted", "single-quoted", "odbc-braced"] {
+            let id = format!("kingfisher.connection-string.password.{suffix}");
+            let rule = &rules.rules[&id];
+            assert_eq!(rule.confidence, Confidence::Medium);
+            assert!(rule.visible);
+            assert_eq!(rule.as_anchored_regex().unwrap().captures_len(), 2);
+            assert!(rule.validation.is_none());
+            assert!(rule.revocation.is_none());
+            assert!(!high_confidence.rules.contains_key(&id));
+        }
     }
 
     #[test]
@@ -385,7 +506,7 @@ mod test {
     #[test]
     fn bundled_rule_files_are_sorted_and_complete() {
         let files = get_builtin_rule_files().unwrap();
-        assert_eq!(files.len(), 2);
+        assert_eq!(files.len(), 3);
         assert!(files.windows(2).all(|pair| pair[0].0 <= pair[1].0));
     }
 
@@ -401,9 +522,13 @@ mod test {
             .collect();
         assert_eq!(
             paths,
-            [root.join("rules/betterleaks.yml"), root.join("rules/veles.yml")]
-                .into_iter()
-                .collect()
+            [
+                root.join("rules/betterleaks.yml"),
+                root.join("rules/kingfisher.yml"),
+                root.join("rules/veles.yml"),
+            ]
+            .into_iter()
+            .collect()
         );
         let exported = Rules::from_yaml_files(paths, Confidence::Low).unwrap();
         let embedded = get_builtin_rules(Some(Confidence::Low)).unwrap();
@@ -423,13 +548,11 @@ mod test {
     }
 
     #[test]
-    fn default_rules_are_namespaced_upstream_rules() {
+    fn default_rules_are_namespaced_by_source() {
         let rules = get_builtin_rules(Some(Confidence::Low)).unwrap();
 
         assert!(rules.num_rules() >= 400);
-        // `kingfisher.` is permitted because the 1.x catalog is still loadable via
-        // `--rules-path`, and callers may merge it with the built-ins. The built-in
-        // bundle itself only ships `betterleaks.`/`veles.` rules today.
+        // Each source has its own namespace, including the rare first-party rules.
         assert!(rules.rules.keys().all(|id| {
             id.starts_with("betterleaks.")
                 || id.starts_with("veles.")
@@ -439,7 +562,7 @@ mod test {
             for dependency in rule.depends_on_rule.iter().flatten() {
                 assert!(
                     rules.rules.contains_key(&dependency.rule_id),
-                    "{} depends on missing Betterleaks rule {}",
+                    "{} depends on missing rule {}",
                     rule.id,
                     dependency.rule_id
                 );

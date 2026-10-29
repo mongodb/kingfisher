@@ -33,8 +33,7 @@ mod bson_format;
 mod commands;
 use commands::{
     BlastRadiusCommandContext, build_blast_radius_command, build_revoke_command_for_rule,
-    build_validate_command_for_rule, extract_akid_from_validation_body,
-    resolve_betterleaks_capability_source, with_rule_loading,
+    build_validate_command_for_rule, extract_akid_from_validation_body, with_rule_loading,
 };
 mod html_format;
 mod json_format;
@@ -902,47 +901,14 @@ impl DetailsReporter {
                             .entry(name.to_uppercase())
                             .or_insert_with(|| cap.raw_value().to_string());
                     }
-                    let mut revoke_secret = raw_snippet.clone();
-                    let mut bindings_complete = true;
-                    if let Some(crate::rules::Validation::Betterleaks(validation)) =
-                        &rm.m.rule.syntax().validation
-                        && let Some(bindings) = &validation.capabilities.revocation_bindings
-                    {
-                        if let Some(value) = resolve_betterleaks_capability_source(
-                            &bindings.secret,
-                            &raw_snippet,
-                            validation,
-                            &merged_vars,
-                        ) {
-                            revoke_secret = value.to_string();
-                        } else {
-                            bindings_complete = false;
-                        }
-                        for (name, source) in &bindings.variables {
-                            let Some(value) = resolve_betterleaks_capability_source(
-                                source,
-                                &raw_snippet,
-                                validation,
-                                &merged_vars,
-                            ) else {
-                                bindings_complete = false;
-                                break;
-                            };
-                            merged_vars.insert(name.to_ascii_uppercase(), value.to_string());
-                        }
-                    }
-                    bindings_complete
-                        .then(|| {
-                            build_revoke_command_for_rule(
-                                rm.m.rule.syntax(),
-                                &revocation,
-                                &revoke_secret,
-                                &merged_vars,
-                                akid_from_captures.as_deref(),
-                                akid_from_body.as_deref(),
-                            )
-                        })
-                        .flatten()
+                    build_revoke_command_for_rule(
+                        rm.m.rule.syntax(),
+                        &revocation,
+                        &raw_snippet,
+                        &merged_vars,
+                        akid_from_captures.as_deref(),
+                        akid_from_body.as_deref(),
+                    )
                 } else {
                     None
                 }
@@ -2053,6 +2019,129 @@ mod tests {
         assert_eq!(record.rule.name, "private.legacy-rule.1234");
         assert_eq!(record.rule.id, "private.legacy-rule.1234");
         assert_eq!(record.rule.description, "Legacy Custom YAML Rule Name");
+    }
+
+    fn sample_aws_report_match() -> ReportMatch {
+        let mut rules = crate::defaults::get_builtin_rules(Some(Confidence::Low)).unwrap();
+        let syntax = rules.rules.remove("betterleaks.aws-access-token").unwrap();
+        let (mut report_match, _) = sample_report_match("", StatusCode::OK.as_u16(), true);
+        report_match.m.rule = Arc::new(Rule::new(syntax));
+        report_match.m.groups.captures.push(SerializableCapture {
+            name: Some("TOKEN"),
+            match_number: 1,
+            start: 0,
+            end: 20,
+            value: "AKIAIOSFODNN7EXAMPLE".into(),
+        });
+        report_match.m.groups.captures.push(SerializableCapture {
+            name: Some("BODY"),
+            match_number: 2,
+            start: 0,
+            end: 20,
+            value: "unrelated-parser-capture".into(),
+        });
+        report_match.m.dependent_captures = BTreeMap::from([
+            ("AWS_SECRET_ACCESS_KEY".into(), "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".into()),
+            (
+                "__BETTERLEAKS_COMPONENTS".into(),
+                serde_json::json!({"betterleaks.aws-secret-access-key": {
+                    "secret": "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY",
+                    "captures": {}
+                }})
+                .to_string(),
+            ),
+            ("__BETTERLEAKS_FINDING_CAPTURES".into(), "{}".into()),
+            ("__BETTERLEAKS_RULE_ID".into(), "betterleaks.aws-access-token".into()),
+            ("UNRELATED".into(), "unrelated-component".into()),
+        ]);
+        report_match
+    }
+
+    #[test]
+    fn serialized_aws_commands_preserve_credential_roles_without_private_context() {
+        let temp = tempdir().unwrap();
+        let reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
+                temp.path().to_path_buf(),
+            ))),
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+        // Use the real AWS rule and reporter, with synthetic validation state only.
+        let report_match = sample_aws_report_match();
+        let mut args = sample_scan_args();
+        args.rules.load_builtins = true;
+        let record = reporter.build_finding_record(&report_match, &args);
+        let report = serde_json::to_value(record).unwrap();
+        assert_eq!(
+            report["finding"]["validate_command"],
+            "kingfisher validate --rule 'betterleaks.aws-access-token' --var AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' 'AKIAIOSFODNN7EXAMPLE'"
+        );
+        assert_eq!(
+            report["finding"]["revoke_command"],
+            "kingfisher revoke --rule 'betterleaks.aws-access-token' --var AKID='AKIAIOSFODNN7EXAMPLE' 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'"
+        );
+        let captures = report["finding"]["dependent_captures"].as_object().unwrap();
+        assert!(captures.keys().all(|name| !name.starts_with("__BETTERLEAKS_")));
+    }
+
+    #[test]
+    fn aws_report_commands_require_unredacted_unambiguous_inputs_and_active_revocation() {
+        use kingfisher_core::ValidationOutcome;
+
+        let temp = tempdir().unwrap();
+        let reporter = DetailsReporter {
+            datastore: Arc::new(Mutex::new(findings_store::FindingsStore::new(
+                temp.path().to_path_buf(),
+            ))),
+            styles: Styles::new(false),
+            validation_filter: cli::commands::scan::ValidationFilter::All,
+            audit_context: None,
+        };
+        let mut report_match = sample_aws_report_match();
+        let mut args = sample_scan_args();
+        args.rules.load_builtins = true;
+        for outcome in [
+            ValidationOutcome::VerifiedInactive,
+            ValidationOutcome::LocallyDerived,
+            ValidationOutcome::InvalidMaterial,
+            ValidationOutcome::Unavailable,
+            ValidationOutcome::Skipped,
+            ValidationOutcome::NotAttempted,
+            ValidationOutcome::Assumed,
+        ] {
+            report_match.validation_outcome = outcome;
+            report_match.m.validation_outcome = outcome;
+            let record = reporter.build_finding_record(&report_match, &args);
+            let report = serde_json::to_value(record).unwrap();
+            assert!(report["finding"].get("revoke_command").is_none(), "{outcome:?}");
+            assert!(report["finding"].get("validate_command").is_some(), "{outcome:?}");
+        }
+
+        report_match.validation_outcome = ValidationOutcome::VerifiedActive;
+        report_match.m.validation_outcome = ValidationOutcome::VerifiedActive;
+        args.redact = true;
+        let record = reporter.build_finding_record(&report_match, &args);
+        let report = serde_json::to_value(record).unwrap();
+        for name in
+            ["validate_command", "revoke_command", "blast_radius_command", "dependent_captures"]
+        {
+            assert!(report["finding"].get(name).is_none(), "{name}");
+        }
+
+        args.redact = false;
+        report_match.m.ambiguous_dependencies.insert("AWS_SECRET_ACCESS_KEY".into(), 2);
+        let record = reporter.build_finding_record(&report_match, &args);
+        assert!(record.finding.validate_command.is_none());
+        assert!(record.finding.revoke_command.is_none());
+        assert!(record.finding.blast_radius_command.is_none());
+
+        report_match.m.ambiguous_dependencies.clear();
+        report_match.m.dependent_captures.remove("AWS_SECRET_ACCESS_KEY");
+        let record = reporter.build_finding_record(&report_match, &args);
+        assert!(record.finding.validate_command.is_none());
+        assert!(record.finding.revoke_command.is_none());
     }
 
     #[test]

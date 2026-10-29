@@ -57,7 +57,7 @@ thread_local = "1.1.10"
 
 [package]
 name = "kingfisher-bin"
-version = "2.15.0"
+version = "2.16.0"
 description = "MongoDB's blazingly fast and accurate secret scanning, validation, blast radius mapping, and secret revocation tool"
 edition.workspace = true
 rust-version.workspace = true
@@ -118,8 +118,8 @@ command-group = { version = "5.0.1", optional = true }
 image = { version = "0.25", default-features = false, features = ["png"], optional = true }
 # Library crates
 kingfisher-core = { version = "1.0.5", path = "crates/kingfisher-core" }
-kingfisher-rules = { version = "3.0.0", path = "crates/kingfisher-rules" }
-kingfisher-scanner = { version = "3.0.0", path = "crates/kingfisher-scanner", features = ["validation", "archives", "context", "extraction", "git", "__cli-internals"] }
+kingfisher-rules = { version = "3.0.1", path = "crates/kingfisher-rules" }
+kingfisher-scanner = { version = "3.0.1", path = "crates/kingfisher-scanner", features = ["validation", "archives", "context", "extraction", "git", "__cli-internals"] }
 
 clap = { version = "4.6", default-features = false, features = [
     "derive",
@@ -321,6 +321,7 @@ system-alloc = [] # Darwin-only: force the system allocator
 
 [dev-dependencies]
 pretty_assertions = "1.4"
+shlex = "2.0"
 temp-env = { version = "0.3.6", features = ["async_closure"] }
 wiremock = "0.6.5"
 rcgen = "0.14.10"

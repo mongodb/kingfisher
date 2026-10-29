@@ -59,6 +59,93 @@ windows, and inline-ignore searches against their original behavior, checks cach
 reuse and bounded candidate work, and verifies the exact SDK issue fixture.
 Windows x64/arm64 was not verified in that benchmark run.
 
+## Embedded connection-string rule comparison (#558)
+
+`connection_string_password.py` compares a baseline CLI without the embedded
+`kingfisher.connection-string.password.*` family with the CLI containing it.
+Use unchanged local working trees, for example the public croc, Django, Rails,
+Ruby, and TypeScript repositories:
+
+```sh
+python scripts/benchmarks/connection_string_password.py \
+  --old /tmp/kingfisher-558-baseline --new target/debug/kingfisher \
+  --target /path/to/croc --target /path/to/django --target /path/to/rails \
+  --target /path/to/ruby --target /path/to/typescript \
+  --repeats 3 --results /tmp/kingfisher-558-comparison.json
+```
+
+Runs are sequential and alternate build order. Both binaries use all default
+rules at medium confidence, two jobs, and working trees only (`--git-history none`).
+They include every occurrence and hidden helper finding (`--no-dedup
+--include-hidden-findings`) so strict metadata comparisons do not depend on
+deduplication's choice of representative origin. Live validation, update checks, and the
+compiled-rule cache are disabled. Timings include startup, rule compilation,
+scanning, and redacted JSON reporting. Build both binaries with the same profile
+and toolchain when assessing the cost of the added rules.
+
+The results record distinct binary paths and version labels, each run's time
+and counts, median times, scanned blobs/bytes, repository completion and commit
+coverage, and audit findings before report filtering. Standard JSON reports do
+not expose pre-filter candidate counts. Redacted reports remain in a private
+temporary directory outside the scanned inputs; the results file records its
+location. Keep the results file outside all targets too.
+
+Existing-rule findings are compared as fingerprint and metadata multisets,
+excluding snippets and validation. Added findings are summarized by rule and
+path/line without credential content, and must remain stable across repeated
+new-build scans. The script exits unsuccessfully if existing findings or coverage
+identities change, a paired run or completed audit is missing, scanned counts are
+unstable within a build or decrease in the new build, the baseline reports an
+added-rule finding, or added-rule findings vary across repeats.
+
+Scanned blob and byte counts can increase: the first-party rules also examine
+paths excluded by the imported source catalog's prefilter. Without an eligible
+rule from another source, the baseline can skip those blobs before incrementing
+scan counters. Results record explicit per-repository and summary coverage deltas;
+repository identities, scope, commit tips, and completed status must still match.
+This is expanded detection scope, so report the extra scanned data when assessing
+timing changes. Review added finding locations to assess noise; stable counts
+alone do not establish accuracy.
+
+Recompute checks and median times from saved raw runs without rescanning:
+
+```sh
+python scripts/benchmarks/connection_string_password.py \
+  --recheck-results /tmp/kingfisher-558-comparison.json
+```
+
+This mode replaces the saved comparisons in place, retains every raw run, and
+cannot be combined with scan arguments. It checks for every requested paired
+repeat; older results without an explicit repeat count use the largest recorded
+repeat number across all targets.
+
+### Local corpus verification (October 29, 2026)
+
+The final 501-rule catalog, including five first-party connection-string rules, was
+checked against the 496-rule baseline using one paired scan per unchanged working
+tree (`--repeats 1`). Both Linux arm64 CLI builds reported 2.16.0 and used Rust
+1.99.0's unoptimized `dev` profile with debug information and the flags above.
+
+| Working tree | Existing findings | Added findings | Additional blobs | Additional bytes |
+| --- | ---: | ---: | ---: | ---: |
+| croc | 0 | 0 | 4 | 681,344 |
+| django | 0 | 0 | 92 | 2,123,160 |
+| rails | 0 | 0 | 88 | 12,850,667 |
+| ruby | 47 | 0 | 6 | 370,450 |
+| typescript | 0 | 0 | 32 | 372,295 |
+
+All ten scans completed. Existing fingerprint and finding-record multisets matched
+exactly, including the 47 findings in Ruby. The five first-party rules added no
+findings on these checkouts. Synthetic regressions separately verify positive
+detection, exact captures and offsets, JDBC query and SQL Server formats, quoting,
+placeholder exclusions and their override, percent encoding, and Base64 behavior.
+
+The final catalog scanned 222 additional blobs totaling 16,397,916 bytes because the
+first-party rules do not inherit Betterleaks-only source exclusions. No scan counts
+decreased. This single-pair run checks finding parity and coverage; use repeated
+runs with matching release builds to assess throughput. Windows x64/arm64
+verification remains pending.
+
 ## Additional dense-input variants
 
 `dense_findings.py` also covers `single-line-visible`, `single-line-filter`, and

@@ -19,6 +19,97 @@ fn escape_for_shell(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
 }
 
+/// Scalar secrets already travel as TOKEN and component variables. Preserve private
+/// scan context only when a program can inspect captures or the finding's rule ID.
+/// Unknown/dynamic accesses retain the complete relevant context conservatively.
+fn required_betterleaks_context_vars(
+    expression: &crate::rules::BetterleaksExpr,
+    vars: &mut BTreeSet<String>,
+) {
+    use crate::rules::BetterleaksExpr;
+
+    match expression {
+        BetterleaksExpr::Member { node, property, .. } => {
+            if matches!(node.as_ref(), BetterleaksExpr::Identifier { value } if value == "finding")
+            {
+                match property.as_ref() {
+                    BetterleaksExpr::String { value } if value == "secret" => return,
+                    BetterleaksExpr::String { value } if value == "captures" => {
+                        vars.insert("__BETTERLEAKS_FINDING_CAPTURES".into());
+                        return;
+                    }
+                    BetterleaksExpr::String { value } if value == "rule_id" => {
+                        vars.insert("__BETTERLEAKS_RULE_ID".into());
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+            if let BetterleaksExpr::Member { node, property: selector, .. } = node.as_ref()
+                && matches!(node.as_ref(), BetterleaksExpr::Identifier { value } if value == "components")
+                && matches!(property.as_ref(), BetterleaksExpr::String { value } if value == "secret")
+            {
+                // The component secret is provided by its ordinary --var. A dynamic
+                // selector can itself inspect other context, which still needs saving.
+                required_betterleaks_context_vars(selector, vars);
+                return;
+            }
+            required_betterleaks_context_vars(node, vars);
+            required_betterleaks_context_vars(property, vars);
+        }
+        BetterleaksExpr::Identifier { value } if value == "finding" => {
+            vars.extend(["__BETTERLEAKS_FINDING_CAPTURES".into(), "__BETTERLEAKS_RULE_ID".into()]);
+        }
+        BetterleaksExpr::Identifier { value } if value == "components" => {
+            vars.insert("__BETTERLEAKS_COMPONENTS".into());
+        }
+        BetterleaksExpr::Unary { node, .. }
+        | BetterleaksExpr::Chain { node }
+        | BetterleaksExpr::Predicate { node } => required_betterleaks_context_vars(node, vars),
+        BetterleaksExpr::Binary { left, right, .. } => {
+            required_betterleaks_context_vars(left, vars);
+            required_betterleaks_context_vars(right, vars);
+        }
+        BetterleaksExpr::Slice { node, from, to } => {
+            required_betterleaks_context_vars(node, vars);
+            required_betterleaks_context_vars(from, vars);
+            required_betterleaks_context_vars(to, vars);
+        }
+        BetterleaksExpr::Call { callee, arguments } => {
+            required_betterleaks_context_vars(callee, vars);
+            for argument in arguments {
+                required_betterleaks_context_vars(argument, vars);
+            }
+        }
+        BetterleaksExpr::Builtin { arguments, .. } => {
+            for argument in arguments {
+                required_betterleaks_context_vars(argument, vars);
+            }
+        }
+        BetterleaksExpr::Conditional { cond, exp1, exp2 } => {
+            required_betterleaks_context_vars(cond, vars);
+            required_betterleaks_context_vars(exp1, vars);
+            required_betterleaks_context_vars(exp2, vars);
+        }
+        BetterleaksExpr::VariableDeclarator { value, expr, .. } => {
+            required_betterleaks_context_vars(value, vars);
+            required_betterleaks_context_vars(expr, vars);
+        }
+        BetterleaksExpr::Sequence { nodes }
+        | BetterleaksExpr::Array { nodes }
+        | BetterleaksExpr::Map { pairs: nodes } => {
+            for node in nodes {
+                required_betterleaks_context_vars(node, vars);
+            }
+        }
+        BetterleaksExpr::Pair { key, value } => {
+            required_betterleaks_context_vars(key, vars);
+            required_betterleaks_context_vars(value, vars);
+        }
+        _ => {}
+    }
+}
+
 fn required_vars_for_validation(validation: &crate::rules::Validation) -> BTreeSet<String> {
     use crate::rules::Validation;
     let mut vars = BTreeSet::new();
@@ -53,11 +144,7 @@ fn required_vars_for_validation(validation: &crate::rules::Validation) -> BTreeS
         Validation::Betterleaks(validation) => {
             vars.insert("TOKEN".to_string());
             vars.extend(validation.components.values().cloned());
-            vars.extend([
-                "__BETTERLEAKS_COMPONENTS".into(),
-                "__BETTERLEAKS_FINDING_CAPTURES".into(),
-                "__BETTERLEAKS_RULE_ID".into(),
-            ]);
+            required_betterleaks_context_vars(&validation.expression, &mut vars);
         }
         Validation::AWS => {
             vars.insert("AKID".to_string());
@@ -103,11 +190,7 @@ fn required_vars_for_revocation(revocation: &Revocation) -> BTreeSet<String> {
         Revocation::Betterleaks(config) => {
             vars.insert("TOKEN".into());
             vars.extend(config.components.values().cloned());
-            vars.extend([
-                "__BETTERLEAKS_COMPONENTS".into(),
-                "__BETTERLEAKS_FINDING_CAPTURES".into(),
-                "__BETTERLEAKS_RULE_ID".into(),
-            ]);
+            required_betterleaks_context_vars(&config.expression, &mut vars);
         }
         Revocation::GCP => {
             vars.insert("TOKEN".to_string());
@@ -278,11 +361,31 @@ pub(super) fn build_revoke_command_for_rule(
             escape_for_shell(snippet)
         ));
     }
+
+    // Operational revokers can use different inputs from the detector (AWS
+    // reports the access key ID, while its typed revoker takes the secret key).
+    let mut bound_variables = variables.clone();
+    let mut secret = snippet;
+    if let Some(crate::rules::Validation::Betterleaks(validation)) = &rule.validation
+        && let Some(bindings) = &validation.capabilities.revocation_bindings
+    {
+        secret = resolve_betterleaks_capability_source(
+            &bindings.secret,
+            snippet,
+            validation,
+            variables,
+        )?;
+        for (name, source) in &bindings.variables {
+            let value =
+                resolve_betterleaks_capability_source(source, snippet, validation, variables)?;
+            bound_variables.insert(name.to_ascii_uppercase(), value.to_string());
+        }
+    }
     build_revoke_command(
         &rule.id,
         revocation,
-        snippet,
-        variables,
+        secret,
+        &bound_variables,
         akid_from_captures,
         akid_from_body,
     )
@@ -416,6 +519,14 @@ pub(super) fn build_validate_command(
 
     let command_secret = match validation {
         Validation::Assumed => return None,
+        Validation::Betterleaks(config) if rule_id == "betterleaks.aws-access-token" => {
+            // This built-in detects lone access IDs, but its aws.validate call
+            // always needs the secret component. Other programs may genuinely
+            // support absent optional components, so don't require all of them.
+            let variable = config.components.get("aws-secret-access-key")?;
+            dependent_captures.get(variable).filter(|secret| !secret.is_empty())?;
+            snippet
+        }
         Validation::AWS => {
             // AWS needs the access key ID (AKID) in addition to the secret.
             dependent_captures
@@ -677,11 +788,12 @@ mod tests {
 
     #[test]
     fn betterleaks_commands_preserve_exact_primary_and_component_capture_context() {
+        let expression = "finding.captures.OriginalName == 'primary-value' && components.helper.captures.MixedCase != '' && finding.rule_id == 'custom.primary'";
         let validation:crate::rules::Validation=serde_json::from_value(serde_json::json!({
-            "type":"Betterleaks", "content":{"expression":"true","components":{"helper":"COMPONENT"}}
+            "type":"Betterleaks", "content":{"expression":expression,"components":{"helper":"COMPONENT"}}
         })).unwrap();
         let revocation:Revocation=serde_json::from_value(serde_json::json!({
-            "type":"Betterleaks", "content":{"expression":"{\"result\":\"revoked\"}","components":{"helper":"COMPONENT"}}
+            "type":"Betterleaks", "content":{"expression":expression,"components":{"helper":"COMPONENT"}}
         })).unwrap();
         let component_context = serde_json::json!({"custom.helper":{
             "secret":"component-secret","captures":{"MixedCase":"O'Reilly"}
@@ -710,6 +822,102 @@ mod tests {
                 escape_for_shell(&primary_context)
             )));
             assert!(command.contains("--var __BETTERLEAKS_RULE_ID='custom.primary'"));
+        }
+    }
+
+    #[test]
+    fn betterleaks_secret_only_commands_omit_private_scan_context() {
+        let config = serde_json::json!({
+            "expression":"finding[ 'secret' ] != '' && components[ 'helper' ][ 'secret' ] != ''",
+            "components":{"helper":"COMPONENT"}
+        });
+        let validation = serde_json::from_value(serde_json::json!({
+            "type":"Betterleaks", "content":config
+        }))
+        .unwrap();
+        let revocation = serde_json::from_value(serde_json::json!({
+            "type":"Betterleaks", "content":config
+        }))
+        .unwrap();
+        let variables = BTreeMap::from([
+            ("COMPONENT".into(), "component-secret".into()),
+            ("__BETTERLEAKS_COMPONENTS".into(), "private component context".into()),
+            ("__BETTERLEAKS_FINDING_CAPTURES".into(), "private capture context".into()),
+            ("__BETTERLEAKS_RULE_ID".into(), "custom.primary".into()),
+        ]);
+        for (operation, command) in [
+            (
+                "validate",
+                build_validate_command(
+                    "custom.primary",
+                    &validation,
+                    "secret",
+                    &variables,
+                    None,
+                    None,
+                ),
+            ),
+            (
+                "revoke",
+                build_revoke_command(
+                    "custom.primary",
+                    &revocation,
+                    "secret",
+                    &variables,
+                    None,
+                    None,
+                ),
+            ),
+        ] {
+            assert_eq!(
+                command.unwrap(),
+                format!(
+                    "kingfisher {operation} --rule 'custom.primary' --var COMPONENT='component-secret' 'secret'"
+                )
+            );
+        }
+    }
+
+    #[test]
+    fn betterleaks_commands_do_not_require_genuinely_optional_components() {
+        let validation = serde_json::from_value(serde_json::json!({
+            "type":"Betterleaks", "content":{
+                "expression":"(components.helper?.secret ?? finding.secret) != ''",
+                "components":{"helper":"COMPONENT"}
+            }
+        }))
+        .unwrap();
+        assert_eq!(
+            build_validate_command(
+                "custom.optional",
+                &validation,
+                "secret",
+                &BTreeMap::new(),
+                None,
+                None,
+            )
+            .unwrap(),
+            "kingfisher validate --rule 'custom.optional' 'secret'"
+        );
+    }
+
+    #[test]
+    fn betterleaks_aliased_and_dynamic_context_access_remains_available() {
+        for expression in [
+            "let f = finding; let c = components; f.captures.id == c.helper.captures.id",
+            "let field = 'captures'; finding[field].id == components.helper[field].id",
+            "components[finding.captures.helper].secret != '' && finding.rule_id != ''",
+        ] {
+            let validation: crate::rules::Validation = serde_json::from_value(serde_json::json!({
+                "type":"Betterleaks", "content":{"expression":expression}
+            }))
+            .unwrap();
+            let required = required_vars_for_validation(&validation);
+            assert!(required.contains("__BETTERLEAKS_FINDING_CAPTURES"), "{expression}");
+            assert!(required.contains("__BETTERLEAKS_RULE_ID"), "{expression}");
+            if !expression.starts_with("components[") {
+                assert!(required.contains("__BETTERLEAKS_COMPONENTS"), "{expression}");
+            }
         }
     }
     use crate::rules::rule::Confidence;
@@ -1081,50 +1289,76 @@ mod tests {
     }
 
     #[test]
-    fn betterleaks_aws_revocation_binding_uses_component_as_secret() {
+    fn betterleaks_aws_commands_bind_credentials_without_private_scan_context() {
         let mut rules = crate::defaults::get_builtin_rules(Some(Confidence::Low)).unwrap();
         let syntax = rules.rules.remove("betterleaks.aws-access-token").unwrap();
         let Some(crate::rules::Validation::Betterleaks(validation)) = &syntax.validation else {
             panic!("AWS should use Betterleaks validation");
         };
-        let bindings = validation.capabilities.revocation_bindings.as_ref().unwrap();
         let component_variable = validation.components["aws-secret-access-key"].clone();
         let mut variables = BTreeMap::from([(
             component_variable,
             "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY".to_string(),
         )]);
         let finding_secret = "AKIAIOSFODNN7EXAMPLE";
-        let revocation_secret = resolve_betterleaks_capability_source(
-            &bindings.secret,
-            finding_secret,
-            validation,
-            &variables,
-        )
-        .unwrap()
-        .to_string();
-        for (name, source) in &bindings.variables {
-            let value = resolve_betterleaks_capability_source(
-                source,
-                finding_secret,
-                validation,
-                &variables,
-            )
-            .unwrap()
-            .to_string();
-            variables.insert(name.clone(), value);
-        }
+        variables.extend([
+            (
+                "__BETTERLEAKS_COMPONENTS".into(),
+                serde_json::json!({
+                    "betterleaks.aws-secret-access-key": {
+                        "secret":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY", "captures":{}
+                    }
+                })
+                .to_string(),
+            ),
+            ("__BETTERLEAKS_FINDING_CAPTURES".into(), "{}".into()),
+            ("__BETTERLEAKS_RULE_ID".into(), syntax.id.clone()),
+        ]);
 
-        let cmd = build_revoke_command(
-            &syntax.id,
+        let validate =
+            build_validate_command_for_rule(&syntax, finding_secret, &variables, None, None)
+                .unwrap();
+        assert_eq!(
+            validate,
+            "kingfisher validate --rule 'betterleaks.aws-access-token' --var AWS_SECRET_ACCESS_KEY='wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY' 'AKIAIOSFODNN7EXAMPLE'"
+        );
+
+        let revoke = build_revoke_command_for_rule(
+            &syntax,
             syntax.revocation.as_ref().unwrap(),
-            &revocation_secret,
+            finding_secret,
             &variables,
             None,
             None,
         )
         .unwrap();
 
-        assert!(cmd.contains("--var AKID='AKIAIOSFODNN7EXAMPLE'"), "{cmd}");
-        assert!(cmd.ends_with("'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'"), "{cmd}");
+        assert_eq!(
+            revoke,
+            "kingfisher revoke --rule 'betterleaks.aws-access-token' --var AKID='AKIAIOSFODNN7EXAMPLE' 'wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY'"
+        );
+
+        variables.remove("AWS_SECRET_ACCESS_KEY");
+        assert!(
+            build_validate_command_for_rule(&syntax, finding_secret, &variables, None, None)
+                .is_none()
+        );
+        variables.insert("AWS_SECRET_ACCESS_KEY".into(), String::new());
+        assert!(
+            build_validate_command_for_rule(&syntax, finding_secret, &variables, None, None)
+                .is_none()
+        );
+        variables.remove("AWS_SECRET_ACCESS_KEY");
+        assert!(
+            build_revoke_command_for_rule(
+                &syntax,
+                syntax.revocation.as_ref().unwrap(),
+                finding_secret,
+                &variables,
+                None,
+                None,
+            )
+            .is_none()
+        );
     }
 }

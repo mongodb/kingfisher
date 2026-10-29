@@ -13,6 +13,54 @@ fn from_toml(config: &str) -> Scanner {
 }
 
 #[test]
+fn builtin_private_keys_reject_ini_fixtures_without_consuming_the_next_key() {
+    let mut rules = kingfisher_rules::get_builtin_rules(Some(Confidence::Low)).unwrap();
+    rules.rules.retain(|id, _| id == "betterleaks.private-key");
+    let scanner = Scanner::new(Arc::new(RulesDatabase::from_rule_collection(rules).unwrap()));
+    // A synthetic compact PKCS#8 container exercises the structural checks.
+    let key = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g\n-----END PRIVATE KEY-----";
+    let fake = "-----BEGIN RSA PRIVATE KEY-----\n  foo\n  bar\n  foobar\n  barfoo\n  -----END RSA PRIVATE KEY-----";
+    let numbered = (1..=96)
+        .map(|index| format!("   {index}{}\n", ["foo", "bar", "foobar", "barfoo"][(index - 1) % 4]))
+        .collect::<String>();
+    let input = format!(
+        "{fake}\nmultiline_list =\n  first\n  second\n  third\n`))\nrequire.NoError(t, err)\nassert.Equal(t, \"{fake}\")\n-----BEGIN RSA PRIVATE KEY-----\n{numbered}-----END RSA PRIVATE KEY-----\n{key}\n"
+    );
+    for (input, key) in
+        [(input.clone(), key.to_string()), (input.replace('\n', "\r\n"), key.replace('\n', "\r\n"))]
+    {
+        let findings = scanner.scan_bytes(input.as_bytes()).unwrap();
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].secret, key);
+        let start = input.find(&key).unwrap();
+        assert_eq!(findings[0].location.start_offset, start);
+        assert_eq!(findings[0].location.end_offset, start + key.len());
+    }
+}
+
+#[test]
+fn builtin_private_keys_keep_numbered_source_lines() {
+    let mut rules = kingfisher_rules::get_builtin_rules(Some(Confidence::Low)).unwrap();
+    rules.rules.retain(|id, _| id == "betterleaks.private-key");
+    let scanner = Scanner::new(Arc::new(RulesDatabase::from_rule_collection(rules).unwrap()));
+    // Synthetic Ed25519 PKCS#8 material, pasted from cat -n or an editor gutter.
+    let encoded = "MC4CAQAwBQYDK2VwBCIEIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g";
+    for separator in [" ", "\t"] {
+        let input = format!(
+            "     1{separator}-----BEGIN PRIVATE KEY-----\n     2{separator}{encoded}\n     3{separator}-----END PRIVATE KEY-----"
+        );
+        for input in [input.clone(), input.replace('\n', "\r\n")] {
+            let findings = scanner.scan_bytes(input.as_bytes()).unwrap();
+            assert_eq!(findings.len(), 1);
+            let start = input.find("-----BEGIN").unwrap();
+            assert_eq!(findings[0].secret, input[start..]);
+            assert_eq!(findings[0].location.start_offset, start);
+            assert_eq!(findings[0].location.end_offset, input.len());
+        }
+    }
+}
+
+#[test]
 fn path_only_rules_detect_empty_files_and_obey_path_filters_and_visibility() {
     let scanner = from_toml(
         r#"

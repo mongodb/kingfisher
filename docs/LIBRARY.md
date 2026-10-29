@@ -5,9 +5,9 @@ For in-process Python detection, validation and revocation, see the [Python SDK]
 [← Back to README](../README.md)
 
 The prepared library releases are **kingfisher-core 1.0.5**,
-**kingfisher-rules 3.0.0**, and **kingfisher-scanner 3.0.0**.
+**kingfisher-rules 3.0.1**, and **kingfisher-scanner 3.0.1**.
 They require Rust **1.99** or newer and are versioned independently of the
-`kingfisher-bin` CLI, currently **2.15.0**. See [publishing](PUBLISHING.md).
+`kingfisher-bin` CLI, currently **2.16.0**. See [publishing](PUBLISHING.md).
 
 ## Crate Overview
 
@@ -48,7 +48,7 @@ Add the scanner crate to your application's `Cargo.toml`:
 
 ```toml
 [dependencies]
-kingfisher-scanner = "3.0.0"
+kingfisher-scanner = "3.0.1"
 anyhow = "1"
 ```
 
@@ -105,12 +105,12 @@ additional validator features your project needs.
 To install the CLI from crates.io:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.15.0
+cargo install --locked kingfisher-bin --version 2.16.0
 kingfisher scan path/to/project --no-validate --format json --no-update-check
 ```
 
 For the `kingfisher-bin` library example in your own application, use
-`kingfisher = { package = "kingfisher-bin", version = "2.15.0" }` and `anyhow = "1"`.
+`kingfisher = { package = "kingfisher-bin", version = "2.16.0" }` and `anyhow = "1"`.
 The focused library examples use the crate versions listed above;
 `kingfisher-rules` and `kingfisher-scanner` examples also use `anyhow = "1"`.
 
@@ -119,17 +119,17 @@ The focused library examples use the crate versions listed above;
 Start with a complete example above and copy it into `src/main.rs` in a small Rust
 application. These are public-API consumers; no CLI process or private Kingfisher
 module is required. Choose dependencies from this table in addition to
-`kingfisher-scanner = "3.0.0"` and `anyhow = "1"`:
+`kingfisher-scanner = "3.0.1"` and `anyhow = "1"`:
 
 | Recipe | Additional dependencies / features |
 | ------ | ---------------------------------- |
 | `scan_content` | None |
 | `detection_policy` | Scanner feature `context` |
-| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "3.0.0"` for loading custom YAML/TOML |
+| `inspect_rules` | `serde_json = "1"`; `kingfisher-rules = "3.0.1"` for loading custom YAML/TOML |
 | `scan_files` | `serde_json = "1"` |
-| `scan_custom_rules` | `kingfisher-rules = "3.0.0"` |
+| `scan_custom_rules` | `kingfisher-rules = "3.0.1"` |
 | `scan_async` | `tokio = { version = "1.53", features = ["macros", "rt", "sync"] }` |
-| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "3.0.0"` |
+| `local_validation` | Scanner feature `validation`; `kingfisher-rules = "3.0.1"` |
 | `http_validation` | Complete manifest below; also copy `fixtures/acme-http.yml` and `support/mod.rs` into `src/fixtures/` and `src/support/` |
 | `validate_file` | Scanner feature `validation`; `serde_json = "1"`; `tokio = { version = "1.53", features = ["macros", "rt"] }` |
 | `git_inputs` | Scanner feature `git` |
@@ -305,8 +305,8 @@ rust-version = "1.99"
 
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "3.0.0", features = ["validation"] }
-kingfisher-rules = "3.0.0"
+kingfisher-scanner = { version = "3.0.1", features = ["validation"] }
+kingfisher-rules = "3.0.1"
 serde_json = "1"
 tokio = { version = "1.53", features = ["macros", "rt", "net", "io-util", "time"] }
 ```
@@ -517,7 +517,7 @@ Compile once and share the database. Preserve catalog metadata with
 `RulesDatabase::from_rule_collection`; converting the loaded collection into a
 `Vec<Rule>` loses its database-level source prefilter.
 
-For custom files, add `kingfisher-rules = "3.0.0"` and use:
+For custom files, add `kingfisher-rules = "3.0.1"` and use:
 
 ```rust
 use kingfisher_rules::{Confidence, Rules, RulesDatabase};
@@ -578,7 +578,7 @@ services or when every file occurrence must be reported.
 
 ## Scanning Methods
 
-For reuse across processes, add `kingfisher-rules = "3.0.0"` to your dependencies and load the collection with
+For reuse across processes, add `kingfisher-rules = "3.0.1"` to your dependencies and load the collection with
 `kingfisher_rules::RulesDatabase::from_rule_collection_with_cache` and
 `kingfisher_rules::RuleCacheConfig::from_dir_or_env(None)` (or `RuleCacheConfig::new(path)`).
 This is the CLI/Python compiled content-database cache and honors `KF_RULE_CACHE_DIR`.
@@ -665,7 +665,7 @@ No validator features are enabled by default:
 
 ```toml
 [dependencies]
-kingfisher-scanner = { version = "3.0.0", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.1", features = ["validation"] }
 ```
 
 `validation` enables all supported validators and revocation: HTTP, gRPC,
@@ -682,7 +682,7 @@ logging or serializing it:
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "3.0.0", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.1", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -766,7 +766,7 @@ retained credential inputs. Validation never calls revocation automatically.
 ```toml
 [dependencies]
 anyhow = "1"
-kingfisher-scanner = { version = "3.0.0", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.1", features = ["validation"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -848,7 +848,7 @@ input limits and bound worker counts for untrusted or large workloads.
 The full application's library is available separately:
 
 ```toml
-kingfisher = { package = "kingfisher-bin", version = "2.15.0" }
+kingfisher = { package = "kingfisher-bin", version = "2.16.0" }
 ```
 
 It carries CLI dependencies and all validator features. The stable embedding

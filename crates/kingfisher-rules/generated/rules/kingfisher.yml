@@ -1,0 +1,332 @@
+# SPDX-License-Identifier: Apache-2.0
+# Generated from reviewed Kingfisher first-party detector exceptions.
+# See ../provenance.json for source hashes, exception reasons, and upstream migration
+# conditions, and ../NOTICES.txt for attribution and license terms.
+rules:
+- name: Database connection string password (double quoted)
+  id: kingfisher.connection-string.password.double-quoted
+  pattern: |
+    (?xi)
+    (?:^|[;\s'"=(])
+    (?:server|host|data[\t\x20]+source|dsn)[\t\x20]*=[\t\x20]*
+    [^\s;'"{}][^;'"{}\r\n]{0,127}[\t\x20]*;
+    (?:[^'"{}\r\n]{0,200};)?[\t\x20]*
+    (?:password|pwd)[\t\x20]*=[\t\x20]*
+    "([^"\r\n]{4,128})"[\t\x20]*(?:;|[\r\n']|$)
+  confidence: medium
+  min_entropy: 0
+  pattern_requirements:
+    ignore_if_contains:
+    - ${
+    - $(
+    - '#{'
+    - '{{'
+    - '$env:'
+    - redacted
+    - masked
+    - filtered
+    - '****'
+    - xxxx
+    - placeholder
+    - your_password
+    - yourpassword
+    - your-password
+    - your password
+    - insert_password
+    - replace_password
+    - changeme
+    - change_me
+    - change-me
+    - change.me
+    - change me
+    - replaceme
+    - replace_me
+    - replace-me
+    - replace.me
+    - replace me
+  examples:
+  - Server=db.example.com;User Id=app;Password="Xk9mQ2;vL7pR4wZ8q";
+  - Host=db.example.com;Password="weak";
+  - Host=db.example.com;Password="process.env.DB_PASSWORD";
+  negative_examples:
+  - Password="Xk9mQ2;vL7pR4wZ8q";
+  - Host=db.example.com;Password="${DB_PASSWORD}";
+  - Host=db.example.com;Password="[REDACTED]";
+  - Host=db.example.com;Password="YOUR_PASSWORD_HERE";
+  - Host=db.example.com;Password="Xk9mQ2vL7pR4wZ8q;
+  references:
+  - https://github.com/mongodb/kingfisher/issues/558
+  - https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/connection-strings
+  - https://learn.microsoft.com/en-us/sql/connect/odbc/dsn-connection-string-attribute
+  - https://www.npgsql.org/doc/connection-string-parameters.html
+  - https://learn.microsoft.com/en-us/sql/connect/jdbc/building-the-connection-url
+- name: Database JDBC query password
+  id: kingfisher.connection-string.password.jdbc-query
+  pattern: |
+    (?xi)
+    \bjdbc:(?:postgresql|mariadb|mysql(?::(?:loadbalance|replication))?)://
+    [a-z0-9\[][a-z0-9.:\[\]%,_-]{0,255}
+    (?:/[^?&\s;\#'"\x60{}<>]{0,200})?\?
+    (?:[a-z_][a-z0-9_.-]{0,63}(?:=[^&\s;\#'"\x60{}<>]{0,200})?&(?:amp;)?){0,16}
+    (?-i:password)=([^&\s;\#'"\x60{}<>]{4,128})
+    (?:[&\s;\#'"\x60<>]|$)
+  confidence: medium
+  min_entropy: 0
+  pattern_requirements:
+    ignore_if_contains:
+    - ${
+    - $(
+    - '#{'
+    - '{{'
+    - '$env:'
+    - redacted
+    - masked
+    - filtered
+    - '****'
+    - xxxx
+    - placeholder
+    - your_password
+    - yourpassword
+    - your-password
+    - your password
+    - insert_password
+    - replace_password
+    - changeme
+    - change_me
+    - change-me
+    - change.me
+    - change me
+    - replaceme
+    - replace_me
+    - replace-me
+    - replace.me
+    - replace me
+    - db_password
+    - database_password
+    - process.env
+    - os.environ
+    - config.
+    - config[
+    - settings.
+    - settings[
+    - secret.
+    - secrets.
+    - secrets[
+    - credential.
+    - credentials.
+    - credentials[
+    - getpassword(
+    - getenv(
+  examples:
+  - jdbc:postgresql://db.example.com:5432/app?user=app&password=Zq8vN3kL0pW2xR7t&ssl=true
+  - jdbc:mysql://db.example.com/app?password=Xk9%23mQ2%21vL7pR4wZ&user=app
+  - jdbc:mariadb://db.example.com/app?user=app&password=weak
+  negative_examples:
+  - jdbc:postgresql://db.example.com/app?user=app
+  - jdbc:postgresql://db.example.com/app?password=
+  - jdbc:mysql://db.example.com/app?PASSWORD=Zq8vN3kL0pW2xR7t
+  - jdbc:postgresql://db.example.com/app?notpassword=Zq8vN3kL0pW2xR7t
+  - jdbc:postgresql://db.example.com/app?password=${DB_PASSWORD}
+  - jdbc:sqlserver://db.example.com;integratedSecurity=true;
+  - jdbc:oracle:thin:@db.example.com:1521/APP
+  references:
+  - https://github.com/mongodb/kingfisher/issues/558
+  - https://jdbc.postgresql.org/documentation/use/
+  - https://dev.mysql.com/doc/connector-j/en/connector-j-reference-jdbc-url-format.html
+  - https://mariadb.com/docs/connectors/mariadb-connector-j/about-mariadb-connector-j
+- name: Database connection string password (ODBC braced)
+  id: kingfisher.connection-string.password.odbc-braced
+  pattern: |
+    (?xi)
+    (?:
+      (?:^|[;\s'"=(])
+      (?:server|host|data[\t\x20]+source|dsn)[\t\x20]*=[\t\x20]*
+      [^\s;'"{}][^;'"{}\r\n]{0,127}[\t\x20]*;
+      |
+      \bjdbc:sqlserver://[^\s;'"{}][^;'"{}\r\n]{0,127}[\t\x20]*;
+    )
+    (?:[^'"{}\r\n]{0,200};)?[\t\x20]*
+    (?:password|pwd)[\t\x20]*=[\t\x20]*
+    \{((?:[^}\r\n]|}}){4,128})\}[\t\x20]*(?:;|[\r\n'"]|$)
+  confidence: medium
+  min_entropy: 0
+  pattern_requirements:
+    ignore_if_contains:
+    - ${
+    - $(
+    - '#{'
+    - '{{'
+    - '$env:'
+    - redacted
+    - masked
+    - filtered
+    - '****'
+    - xxxx
+    - placeholder
+    - your_password
+    - yourpassword
+    - your-password
+    - your password
+    - insert_password
+    - replace_password
+    - changeme
+    - change_me
+    - change-me
+    - change.me
+    - change me
+    - replaceme
+    - replace_me
+    - replace-me
+    - replace.me
+    - replace me
+  examples:
+  - DSN=Production;Uid=app;Pwd={Xk9}}mQ2;vL7pR4wZ8q};
+  negative_examples:
+  - DSN=Production;Pwd={${DB_PASSWORD}};
+  - DSN=Production;Pwd={XXXX};
+  - DSN=Production;Pwd={Xk9mQ2vL7pR4wZ8q;
+  references:
+  - https://github.com/mongodb/kingfisher/issues/558
+  - https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/connection-strings
+  - https://learn.microsoft.com/en-us/sql/connect/odbc/dsn-connection-string-attribute
+  - https://www.npgsql.org/doc/connection-string-parameters.html
+  - https://learn.microsoft.com/en-us/sql/connect/jdbc/building-the-connection-url
+- name: Database connection string password (single quoted)
+  id: kingfisher.connection-string.password.single-quoted
+  pattern: |
+    (?xi)
+    (?:^|[;\s'"=(])
+    (?:server|host|data[\t\x20]+source|dsn)[\t\x20]*=[\t\x20]*
+    [^\s;'"{}][^;'"{}\r\n]{0,127}[\t\x20]*;
+    (?:[^'"{}\r\n]{0,200};)?[\t\x20]*
+    (?:password|pwd)[\t\x20]*=[\t\x20]*
+    '([^'\r\n]{4,128})'[\t\x20]*(?:;|[\r\n"]|$)
+  confidence: medium
+  min_entropy: 0
+  pattern_requirements:
+    ignore_if_contains:
+    - ${
+    - $(
+    - '#{'
+    - '{{'
+    - '$env:'
+    - redacted
+    - masked
+    - filtered
+    - '****'
+    - xxxx
+    - placeholder
+    - your_password
+    - yourpassword
+    - your-password
+    - your password
+    - insert_password
+    - replace_password
+    - changeme
+    - change_me
+    - change-me
+    - change.me
+    - change me
+    - replaceme
+    - replace_me
+    - replace-me
+    - replace.me
+    - replace me
+  examples:
+  - Host=pg.example.com;Username=app;Password='Zq8vN3;kL0pW2xR7t';
+  negative_examples:
+  - Host=pg.example.com;Password='${DB_PASSWORD}';
+  - Host=pg.example.com;Password='****';
+  - Host=pg.example.com;Password='Zq8vN3kL0pW2xR7t;
+  references:
+  - https://github.com/mongodb/kingfisher/issues/558
+  - https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/connection-strings
+  - https://learn.microsoft.com/en-us/sql/connect/odbc/dsn-connection-string-attribute
+  - https://www.npgsql.org/doc/connection-string-parameters.html
+  - https://learn.microsoft.com/en-us/sql/connect/jdbc/building-the-connection-url
+- name: Database connection string password (unquoted)
+  id: kingfisher.connection-string.password.unquoted
+  pattern: |
+    (?xi)
+    (?:
+      (?:^|[;\s'"=(])
+      (?:server|host|data[\t\x20]+source|dsn)[\t\x20]*=[\t\x20]*
+      [^\s;'"{}][^;'"{}\r\n]{0,127}[\t\x20]*;
+      |
+      \bjdbc:sqlserver://[^\s;'"{}][^;'"{}\r\n]{0,127}[\t\x20]*;
+    )
+    (?:[^'"{}\r\n]{0,200};)?[\t\x20]*
+    (?:password|pwd)[\t\x20]*=[\t\x20]*
+    ([^\s;'"{}]{4,128})[\t\x20]*(?:;|[\r\n'"]|$)
+  confidence: medium
+  min_entropy: 0
+  pattern_requirements:
+    ignore_if_contains:
+    - ${
+    - $(
+    - '#{'
+    - '{{'
+    - '$env:'
+    - redacted
+    - masked
+    - filtered
+    - '****'
+    - xxxx
+    - placeholder
+    - your_password
+    - yourpassword
+    - your-password
+    - your password
+    - insert_password
+    - replace_password
+    - changeme
+    - change_me
+    - change-me
+    - change.me
+    - change me
+    - replaceme
+    - replace_me
+    - replace-me
+    - replace.me
+    - replace me
+    - db_password
+    - database_password
+    - process.env
+    - os.environ
+    - config.
+    - config[
+    - settings.
+    - settings[
+    - secret.
+    - secrets.
+    - secrets[
+    - credential.
+    - credentials.
+    - credentials[
+    - getpassword(
+    - getenv(
+  examples:
+  - Server=tcp:acme.database.windows.net,1433;Initial Catalog=prod;User ID=sqladmin;Password=Xk9#mQ2!vL7pR4wZ;Encrypt=True;
+  - Driver={ODBC Driver 18 for SQL Server};Server=tcp:acme.database.windows.net,1433;Uid=sqladmin;Pwd=Xk9mQ2vL7pR4wZ8q;
+  - Host=pg.acme.io;Port=5432;Database=app;Username=app;Password=Zq8vN3kL0pW2xR7t
+  - Data Source=db.example.com;Password=weak;
+  negative_examples:
+  - Password=Xk9mQ2vL7pR4wZ8q;
+  - Host=;Password=Xk9mQ2vL7pR4wZ8q;
+  - ProxyServer=db.example.com;Password=Xk9mQ2vL7pR4wZ8q;
+  - HostName=db.example.com;Password=Xk9mQ2vL7pR4wZ8q;
+  - Host=db.example.com;Pwd=%DB_PASSWORD%;
+  - Host=db.example.com;Pwd=$env:DB_PASSWORD;
+  - Host=db.example.com;Pwd=process.env.DB_PASSWORD;
+  - Host=db.example.com;Pwd=getPassword();
+  - Host=db.example.com;Pwd=DB_PASSWORD;
+  - Host=db.example.com;Pwd=changeme;
+  - |-
+    Host=db.example.com;
+    Password=Xk9mQ2vL7pR4wZ8q;
+  references:
+  - https://github.com/mongodb/kingfisher/issues/558
+  - https://learn.microsoft.com/en-us/dotnet/framework/data/adonet/connection-strings
+  - https://learn.microsoft.com/en-us/sql/connect/odbc/dsn-connection-string-attribute
+  - https://www.npgsql.org/doc/connection-string-parameters.html
+  - https://learn.microsoft.com/en-us/sql/connect/jdbc/building-the-connection-url

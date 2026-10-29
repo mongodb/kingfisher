@@ -7848,7 +7848,7 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kingfisher-bin"
-version = "2.15.0"
+version = "2.16.0"
 dependencies = [
  "anyhow",
  "asar",
@@ -7961,6 +7961,7 @@ dependencies = [
  "serde_yaml",
  "sha1 0.11.0",
  "sha2 0.11.0",
+ "shlex 2.0.1",
  "smallvec",
  "strum 0.28.0",
  "sysinfo 0.39.6",
@@ -8021,7 +8022,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-python"
-version = "1.6.0"
+version = "1.6.1"
 dependencies = [
  "anyhow",
  "ignore",
@@ -8055,7 +8056,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-rules"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "anyhow",
  "aws-lc-rs",
@@ -8106,7 +8107,7 @@ dependencies = [
 
 [[package]]
 name = "kingfisher-scanner"
-version = "3.0.0"
+version = "3.0.1"
 dependencies = [
  "anyhow",
  "asar",

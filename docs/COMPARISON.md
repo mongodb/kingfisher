@@ -68,10 +68,10 @@ CPU Cores: 16
 RAM: 48.00 GB
 
 
-All four tools detect secrets. Kingfisher and Betterleaks 2.0 RC1 also include
+All four tools detect secrets. Kingfisher and Betterleaks 2.0 RC5 also include
 credential revocation for supported providers.
 
-| Built-in capability | Kingfisher | Betterleaks 2.0 RC1 | TruffleHog OSS | Gitleaks |
+| Built-in capability | Kingfisher | Betterleaks 2.0 RC5 | TruffleHog OSS | Gitleaks |
 |---|:---:|:---:|:---:|:---:|
 | Secret discovery | ✅ | ✅ | ✅ | ✅ |
 | Live credential verification | ✅ | ✅ | ✅ | ❌ |
@@ -80,7 +80,7 @@ credential revocation for supported providers.
 
 ✅ Built in · ❌ Not supported as a built-in capability.
 
-General capability references: [Betterleaks 2.0 RC1](https://github.com/betterleaks/betterleaks/blob/b3b4cbb586c964701f78bbfb6bc2129ced99bed3/README.md),
+General capability references: [Betterleaks 2.0 RC5](https://github.com/betterleaks/betterleaks/blob/b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3/README.md),
 [TruffleHog OSS](https://github.com/trufflesecurity/trufflehog/blob/662edea3ea7987aafe71580da817e2ee4e8a8783/README.md),
 and [Gitleaks](https://github.com/gitleaks/gitleaks/blob/v8.30.1/README.md).
 
@@ -88,35 +88,3 @@ Kingfisher also extracts PDF page text in CLI file, Git-history, and archive sca
 the SDK exposes it explicitly through `expand_content(..., pdf=True)`. This is
 bounded text extraction, not OCR or encrypted-PDF support. See
 [coverage and limits](ADVANCED.md#pdf-text-extraction).
-
-## Blast-radius mapping: Kingfisher vs. TruffleHog OSS
-
-| Mapping capability | Kingfisher | TruffleHog OSS |
-|---|:---:|:---:|
-| GitHub identity and repository access context | ✅ | ✅ |
-| GitLab identity and project access context | ✅ | ✅ |
-| Bitbucket identity, workspace, and repository access context | ✅ | ✅ |
-| Slack workspace identity and OAuth scope context | ✅ | ✅ |
-| Stripe account and API access context | ✅ | ✅ |
-| Shopify store and API access context | ✅ | ✅ |
-| Hugging Face key/resource access context | ✅ | ✅ |
-| OpenAI key/resource access context | ✅ | ✅ |
-| Anthropic key/resource access context | ✅ | ✅ |
-| AWS IAM policies and role-assumption paths | ✅ | — |
-| GCP IAM hierarchy and service-account impersonation | ✅ | — |
-| Azure Entra/Graph and ARM RBAC | ✅ | — |
-| Salesforce object capabilities, permission sets, and selected system permissions | ✅ | — |
-| Auth0 Management API scopes, applications, and APIs | ✅ | — |
-| Buildkite organization and pipeline inventory | ✅ | — |
-| Artifactory current user, groups, and repository inventory | ✅ | — |
-| Gitea organizations, repositories, and reported repository permissions | ✅ | — |
-| Harness organization and project inventory | ✅ | — |
-| MongoDB roles, databases, and collections | ✅ | — |
-| Terraform organizations and workspace capabilities | ✅ | — |
-| OpenAI admin project keys, service accounts, and users | ✅ | — |
-| IBM Cloud service-instance inventory | ✅ | — |
-| PayPal issued OAuth scopes and account environment | ✅ | — |
-
-✅ Built-in mapping for the listed scope · — No dedicated mapper in the reviewed OSS version.
-
-Reviewed **2026-10-22** against [TruffleHog OSS `662edea3`](https://github.com/trufflesecurity/trufflehog/tree/662edea3ea7987aafe71580da817e2ee4e8a8783).

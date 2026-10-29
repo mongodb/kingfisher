@@ -5,7 +5,7 @@ follows semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-scanner = "3.0.0"
+kingfisher-scanner = "3.0.1"
 anyhow = "1"
 ```
 
@@ -190,7 +190,7 @@ scratch allocation or reentrant borrowing errors; prefer `try_with`.
 Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "3.0.0", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.1", features = ["validation"] }
 ```
 
 `validation` enables every supported family and its dependencies. Legacy

@@ -21,6 +21,11 @@ catalog.
 Veles is Go source rather than a declarative catalog, so every selected ID must have an explicit,
 fail-closed adapter in `build_support/veles.rs`.
 
+`kingfisher-rules.yml` contains only rare first-party exceptions that have a specific reason
+requiring direct inclusion in Kingfisher. `kingfisher-rules.md` records each exception's reason,
+source/license provenance, test coverage, and retirement condition. These inputs feed the
+same generated bundle and readable catalogs as imported rules, without another runtime loader.
+
 ## Custom Rule Authoring
 
 - Read [Custom Rules for Kingfisher](../../../docs/RULES.md) before generating or editing custom
@@ -44,8 +49,11 @@ fail-closed adapter in `build_support/veles.rs`.
 
 ## Ownership Boundaries
 
-- Keep detection regexes, components, descriptions, and general validation expressions in
-  Betterleaks. Contribute generally useful detector changes upstream first.
+- Generally useful detection regexes, components, descriptions, and validation improvements
+  must go upstream to Betterleaks. Direct first-party inclusion must be rare and have a specific
+  documented reason requiring shipping in Kingfisher itself; convenience or an unsubmitted
+  upstream change is not sufficient. Replace temporary exceptions when compatible upstream
+  coverage becomes available. Keep the three broad Betterleaks generic-rule exclusions.
 - Do not copy or redefine Betterleaks detectors in the overlay.
 - Do not select or import filename-only/path-only detectors for the built-in catalog. A filename
   alone is not secret evidence; filter these rules during import rather than disabling them at
@@ -117,7 +125,8 @@ fail-closed adapter in `build_support/veles.rs`.
 
 - Run `cargo fmt --all` after Rust changes.
 - From the workspace root, run `python3 scripts/update-rule-bundle.py` after overlay/importer
-  changes. Use `--refresh` when pins, Veles selections, or required upstream files change.
+  or first-party source changes. Use `--refresh` when pins, Veles selections, or required upstream
+  files change.
   This regenerates and verifies the bundle, runs the rule/importer tests, and rebuilds docs
   when MkDocs is installed. Normal Cargo builds do not regenerate the prepared rules.
 - Commit the input changes and generated bundle, provenance, archived sources, notices, and

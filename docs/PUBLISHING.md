@@ -21,18 +21,19 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
 | `kingfisher-core` | `1.0.5` | `kingfisher_core` library |
-| `kingfisher-rules` | `3.0.0` | `kingfisher_rules` library |
-| `kingfisher-scanner` | `3.0.0` | `kingfisher_scanner` library |
-| `kingfisher-bin` | `2.15.0` | `kingfisher` executable and library |
+| `kingfisher-rules` | `3.0.1` | `kingfisher_rules` library |
+| `kingfisher-scanner` | `3.0.1` | `kingfisher_scanner` library |
+| `kingfisher-bin` | `2.16.0` | `kingfisher` executable and library |
 
 The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
-`1.6.0` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
+`1.6.1` in `crates/kingfisher-python/Cargo.toml`; Python modules share that version.
 
 The libraries follow semantic versioning and do not inherit the CLI version.
 Rules/scanner 3.0.0 add public Rust schema fields and Expr variants; upgrade both
 crates together. Existing YAML/TOML files remain compatible. Core 1.0.5 packages
 the added regression tests without changing its public API. Python SDK 1.6.0 adds
-compatible APIs for explicit analysis and source attributes.
+compatible APIs for explicit analysis and source attributes. Rules/scanner 3.0.1
+and Python SDK 1.6.1 include the private-key detection fixes.
 See the [3.0 migration guide](LIBRARY.md#migrating-to-rules-and-scanner-30).
 `kingfisher-rule-bundle` is `0.1.0` with `publish = false`. The external
 `kingfisher-vectorscan` dependency is versioned separately.
@@ -40,7 +41,7 @@ See the [3.0 migration guide](LIBRARY.md#migrating-to-rules-and-scanner-30).
 After publishing, consumers can install the CLI with:
 
 ```sh
-cargo install --locked kingfisher-bin --version 2.15.0
+cargo install --locked kingfisher-bin --version 2.16.0
 ```
 
 This installs the `kingfisher` command. See [library usage](LIBRARY.md#quick-start)
@@ -328,7 +329,7 @@ publishing, first create fresh archives:
 
 ```sh
 cargo package --locked -p kingfisher-core -p kingfisher-rules -p kingfisher-scanner -p kingfisher-bin
-python3 scripts/publish-crates.py --tag v2.15.0
+python3 scripts/publish-crates.py --tag v2.16.0
 python3 -m unittest discover -s scripts/tests -v
 ```
 
