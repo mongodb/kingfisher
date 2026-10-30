@@ -5,7 +5,7 @@ follows semantic versioning; breaking changes require a new major version.
 
 ```toml
 [dependencies]
-kingfisher-scanner = "3.0.0"
+kingfisher-scanner = "3.0.1"
 anyhow = "1"
 ```
 
@@ -61,7 +61,7 @@ and [rule format guide](../../docs/RULES.md).
 Use rules/scanner `3.0.0` together. Existing YAML/TOML rule files remain compatible;
 public Rust schema fields and enum variants require source updates. See the
 [3.0 migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-scanner-30).
-Core uses the compatible 1.0.5 patch; Python SDK 1.6.0 preserves its existing Python API.
+Core uses the compatible 1.0.6 patch; Python SDK 1.6.0 preserves its existing Python API.
 
 ## Migrating to 2.0
 
@@ -190,7 +190,7 @@ scratch allocation or reentrant borrowing errors; prefer `try_with`.
 Validation is disabled by default. Enable all supported validators and revocation:
 
 ```toml
-kingfisher-scanner = { version = "3.0.0", features = ["validation"] }
+kingfisher-scanner = { version = "3.0.1", features = ["validation"] }
 ```
 
 `validation` enables every supported family and its dependencies. Legacy

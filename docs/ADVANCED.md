@@ -499,7 +499,8 @@ The [Python SDK](PYPI.md#reuse-the-compiled-rule-cache) uses the same cache by d
 
 [Betterleaks](https://github.com/betterleaks/betterleaks) supplies Kingfisher's main candidate
 detector catalog, with selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles)
-detectors filling gaps. They load automatically and use the `betterleaks.` and `veles.` namespaces:
+detectors filling gaps and rare [first-party exceptions](../crates/kingfisher-rules/data/kingfisher-rules.md).
+They load automatically and use the `betterleaks.`, `veles.`, and `kingfisher.` namespaces:
 
 ```bash
 kingfisher scan --rule betterleaks.openai-api-key /path/to/repo
@@ -515,13 +516,24 @@ from the built-in catalog because their broad patterns provide low signal at dis
 cost. Use a targeted custom TOML or YAML rule when your organization needs generic credential
 detection for a known naming convention.
 
-Kingfisher embeds 488 built-in rules from a prepared compressed bundle. Normal compilation
-does not download rule sources. Exact upstream inputs, licenses, hashes, and source revisions
-are archived under `crates/kingfisher-rules/generated/`. Maintainers regenerate the bundle
-with `cargo run --locked -p kingfisher-rule-bundle`; `--refresh` fetches pinned upstream sources,
-and `--check` verifies the prepared artifacts offline. License text, source headers, and
-provenance are preserved under `crates/kingfisher-rules/generated/`. Veles import is not
-available through `--rules-path`.
+Five medium-confidence connection-string rules cover semicolon-delimited passwords and
+PostgreSQL, MySQL, MariaDB, and SQL Server JDBC formats. They load by default in the CLI,
+Rust's `get_builtin_rules(None)`, and Python's `Rules()`; validation and revocation are not
+attached. See [coverage and validation limits](RULES.md#connection-string-password-rules)
+and the [temporary upstream exception](../crates/kingfisher-rules/data/kingfisher-rules.md).
+Select this family with:
+
+```bash
+kingfisher scan ./src --rule kingfisher.connection-string.password \
+  --format toon --no-validate --no-update-check
+```
+
+Kingfisher embeds 501 built-in rules from one prepared compressed bundle. Normal compilation
+does not download rule sources. Exact upstream inputs, licenses, hashes, source revisions, and
+first-party rule provenance are recorded under `crates/kingfisher-rules/generated/`. Maintainers
+regenerate the bundle with `cargo run --locked -p kingfisher-rule-bundle`; `--refresh` fetches
+pinned upstream sources, and `--check` verifies the prepared artifacts offline. The same tool
+generates all three readable source catalogs. Veles import is not available through `--rules-path`.
 
 Detection regexes, path constraints, confidence changes, component dependencies, and Betterleaks
 validation expressions are translated into Kingfisher's runtime model. The top-level Betterleaks
@@ -529,19 +541,20 @@ validation expressions are translated into Kingfisher's runtime model. The top-l
 database, and evaluated once per source path before content matching. The top-level finding
 `filter` and each rule's `filter` are combined and evaluated only after a candidate match; their
 regex helpers are likewise compiled once into shared Vectorscan databases. Betterleaks `keywords`
-are intentionally ignored because Vectorscan already performs candidate selection. Production
+filter confirmed matches against their raw or decoded source fragment; they do not avoid native
+candidate matching work. Production
 validation runs in Rust; Go and Betterleaks itself are not runtime dependencies. Provider endpoint
 overrides are exposed to Betterleaks validation environment variables.
 
-The pinned Betterleaks v2.0.0-rc.1 catalog uses both older namespaced helpers and newer
+The pinned Betterleaks v2.0.0-rc.5 catalog uses both older namespaced helpers and newer
 expression helpers such as `type`, `string`, `int`, `toJSON`, `len`, `filter`, `all`, and
 `strings.splitTrim`. Kingfisher evaluates the imported validation expressions and preserves
 their provider-result checks. Upstream `analyze` expressions are not executed; blast-radius
 analysis continues to use Kingfisher's reviewed access-map handlers. Capture selection accepts
 both the v2 `valueGroup` field and the older `secretGroup` field in Betterleaks TOML.
 
-The source prefilter applies only to Betterleaks rules. Custom and Veles rules still run on paths
-that Betterleaks excludes.
+The source prefilter applies only to Betterleaks rules. Custom, Veles, and first-party rules
+still run on paths that Betterleaks excludes.
 
 `--blast-radius` (alias `--access-map`) works for validated Betterleaks findings when Kingfisher has
 an access-map handler for the credential shape. Kingfisher maintains a checked-in capability
@@ -559,9 +572,12 @@ mapper. It records exact accepted, restricted, invalid, and inconclusive probe o
 inferring access to untested methods; see [Blast Radius](BLAST_RADIUS.md#gcp-gcp) for its allowlist
 and safety boundaries.
 
-New generally useful rules and validation improvements must be contributed to the
-[Betterleaks repository](https://github.com/betterleaks/betterleaks) first. Do not add a new
-Kingfisher-owned built-in YAML catalog.
+Generally useful rules and validation improvements must go upstream to the
+[Betterleaks repository](https://github.com/betterleaks/betterleaks). Direct first-party inclusion
+is rare and requires a specific documented reason to ship in Kingfisher itself, provenance, tests,
+and a retirement condition. Convenience or an unsubmitted upstream change is not sufficient.
+Temporary regression exceptions are replaced when compatible upstream coverage is available.
+They feed the same generation and verification pipeline, without another catalog or runtime loader.
 
 ## Custom Rules
 

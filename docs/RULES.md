@@ -3,20 +3,26 @@
 [← Back to README](../README.md)
 
 Kingfisher's candidate detector catalog is sourced from the [Betterleaks catalog](https://github.com/betterleaks/betterleaks)
-and selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors. New generally
-useful detectors and validation improvements should still be contributed to Betterleaks first.
+and selected [Veles](https://github.com/google/osv-scalibr/tree/main/veles) detectors, with rare
+[first-party exceptions](../crates/kingfisher-rules/data/kingfisher-rules.md). Generally useful
+detectors and validation improvements must go upstream to Betterleaks. Direct inclusion requires
+a specific documented reason to ship in Kingfisher itself, source/license provenance, tests,
+and a retirement condition; it is not a shortcut around upstream contribution.
 When the Betterleaks catalog covers a Veles detector, the Betterleaks detector is preferred and
 the overlapping Veles detector is not bundled.
 
-The current built-in catalog contains **488 rules**, including selected Veles rules and hidden
-component/helper rules. See the [built-in rules listing](../docs-site/docs/rules/builtin-rules.md) for the per-rule catalog
-and capability counts.
+The current built-in catalog contains **501 rules**, including five first-party connection-string
+rules, selected Veles rules, and hidden component/helper rules. See the
+[built-in rules listing](../docs-site/docs/rules/builtin-rules.md) for the per-rule catalog and
+capability counts.
 
 Filename-only detectors are not imported into the built-in catalog: a filename alone is not
 evidence of an exposed secret. Content detectors may still restrict matching by path. Custom
 Kingfisher YAML and Betterleaks TOML rules continue to support explicit filename-only/path-only rules.
 
-The Betterleaks source is pinned to [v2.0.0-rc.1](https://github.com/betterleaks/betterleaks/tree/b3b4cbb586c964701f78bbfb6bc2129ced99bed3).
+The Betterleaks source is pinned to [v2.0.0-rc.5](https://github.com/betterleaks/betterleaks/tree/b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3).
+Eight new content detectors cover Labelbox and Recursion API keys, NuGet API keys,
+and Tailscale enrollment, legacy, OAuth client, SCIM, and webhook keys.
 It includes Bitbucket Data Center HTTP access tokens (`betterleaks.bitbucket-data-center-token`),
 Cloudflare `cfut_` user tokens and `cfat_` account tokens (`betterleaks.cloudflare-api-key.2`),
 and Tableau personal access tokens beginning with `+` or `/`. Cloudflare account-token
@@ -26,6 +32,9 @@ lines before or after). Without it, a `cfat_` token remains unvalidated.
 The former `betterleaks.cloudflare-api-key` rule is now `betterleaks.cloudflare-api-key.1`;
 `scan --rule cloudflare-api-key` continues to select both formats. Direct validation requires
 an unambiguous selector: use `validate --rule cloudflare-api-key.2` for the new token formats.
+
+AWS access IDs remain findings when no secret key falls within the component window.
+Validation and revocation still require a matching secret key.
 
 Kingfisher fully supports loading both the **Kingfisher rule format** (`.yml`/`.yaml`)
 and **Betterleaks TOML** (`.toml`) for custom rules. Either format can be used for
@@ -43,10 +52,12 @@ Betterleaks. Custom Betterleaks TOML rules are automatically placed in the `cust
 
 The YAML schema documented below is the **Kingfisher rule format**. It supports detection,
 validation, revocation, components, and checksum requirements for custom rules. The built-in
-catalog is maintained separately: the maintainer tool converts upstream rules to an internal
-YAML representation inside the compressed bundle and readable
-[betterleaks.yml](../crates/kingfisher-rules/generated/rules/betterleaks.yml) and
-[veles.yml](../crates/kingfisher-rules/generated/rules/veles.yml) files.
+catalog is maintained separately: the maintainer tool combines imported detectors and the
+small [first-party exception source](../crates/kingfisher-rules/data/kingfisher-rules.yml) in the
+same compressed bundle and readable
+[betterleaks.yml](../crates/kingfisher-rules/generated/rules/betterleaks.yml),
+[veles.yml](../crates/kingfisher-rules/generated/rules/veles.yml), and
+[kingfisher.yml](../crates/kingfisher-rules/generated/rules/kingfisher.yml) files.
 These generated files preserve the same rules and collection metadata; they are not maintained
 separately. Each file cites its sources, and the [provenance manifest](../crates/kingfisher-rules/generated/provenance.json)
 records its hash and per-rule origins, including Kingfisher-authored helpers. See the
@@ -60,9 +71,9 @@ or revoke secrets. With custom rules you can:
 - **Tune** sensitivity via entropy and confidence  
 - **Plug in** live checks against external services  
 
-Load `.toml`, `.yml`, or `.yaml` custom rules with `--rules-path`. They are additive to the Betterleaks
-and Veles built-ins; pass `--load-builtins=false` for a custom-only scan. A rules directory
-can contain both formats, or you can repeat `--rules-path` to load separate files:
+Load `.toml`, `.yml`, or `.yaml` custom rules with `--rules-path`. They are additive to built-ins;
+pass `--load-builtins=false` for a custom-only scan. A rules directory can contain both formats,
+or you can repeat `--rules-path` to load separate files:
 
 ```bash
 kingfisher scan --rules-path ./company.yml --rules-path ./team.toml ./src/
@@ -95,7 +106,49 @@ Veles support is built-in-only. `crates/kingfisher-rules/data/veles-rules.yml` p
 OSV-SCALIBR commit and selects upstream Veles plugin IDs that have explicit import adapters;
 `--rules-path` does not accept Veles source or configuration.
 
+## Connection-string password rules
+
+Five [embedded rules](../crates/kingfisher-rules/data/kingfisher-rules.yml) detect database
+passwords at medium confidence. They load by default in the CLI, Rust's
+`get_builtin_rules(None)`, and Python's `Rules()`. Broad Betterleaks `generic-api-key`,
+`generic-password`, and `generic-username` rules remain excluded.
+
+Their IDs use the `kingfisher.connection-string.password.` prefix with suffixes
+`unquoted`, `double-quoted`, `single-quoted`, `odbc-braced`, and `jdbc-query`:
+
+- Semicolon-delimited strings require same-line `Server`, `Host`, `Data Source`, or `DSN`
+  before `Password` or `Pwd`. SQL Server JDBC URLs support unquoted and braced passwords.
+- PostgreSQL, MySQL, and MariaDB JDBC URLs support the case-sensitive `password=` query
+  property, including MySQL `loadbalance`/`replication`, bare preceding flags, and `&amp;`
+  separators. Findings retain source percent encoding. JDBC userinfo URLs remain covered
+  by `betterleaks.generic-credential-uri`.
+
+Passwords contain 4–128 bytes; doubled ODBC closing braces count as one unit. Weak literals
+remain eligible (`min_entropy: 0`). Placeholder exclusions use documented
+[`pattern_requirements.ignore_if_contains`](#character-requirements): case-insensitive
+substrings can suppress real passwords containing a marker. Disable these exclusions with
+`--no-ignore-if-contains`.
+
+These rules report only passwords and perform no validation or revocation. The existing
+`Jdbc` validator supports PostgreSQL but needs the full connection URI. ODBC validation
+requires backend-specific parsing and clients; DSN-only strings also need local driver
+configuration. SQL Server validation would require TDS support.
+
+This is a temporary exception restoring coverage lost in the 2.x catalog migration
+([#558](https://github.com/mongodb/kingfisher/issues/558)); replace it when focused Betterleaks
+coverage becomes available. See [coverage limits, provenance, and the upstream exception](../crates/kingfisher-rules/data/kingfisher-rules.md).
+
+Select this family with:
+
+```bash
+kingfisher scan ./src --rule kingfisher.connection-string.password \
+  --format toon --no-validate --no-update-check
+```
+
 ## Betterleaks v2 programs
+
+Predicate bodies support local `let` declarations and expression sequences; the last
+expression supplies the result. Existing YAML/TOML rules need no edits.
 
 Custom TOML supports `validate`, `analyze`, and `revoke` Expr programs, named
 `finding.captures` and `components[id].captures`, optional components, `valueGroup`,
@@ -105,13 +158,19 @@ Unknown TOML keys, invalid component references, and malformed programs fail loa
 The optional `malformedPrivateKey` filter helper is a Kingfisher-only extension;
 custom TOML that uses it is not portable to upstream Betterleaks. Do not use it
 in upstream detector contributions.
-It rejects a narrow set of complete placeholder-only bodies (`PRIVATE_KEY`,
-`${PRIVATE_KEY}` / `${PRIVATE_KEY_NAME}` and `<YOUR_PRIVATE_KEY_HERE>`-style markers)
-and demonstrably malformed supported
-containers, not cryptographic weaknesses. Helm templates, `[REDACTED]`, ellipsis-only
-bodies and prose instructions are not generally filtered. Unknown source
-representations and recognized BER container/octet-string forms are retained
-conservatively; this is not a general BER or cryptographic validator.
+It decodes Base64 armor and checks supported private-key container structure offline.
+For known ASN.1 labels (PKCS#8, RSA, EC and DSA), source wrappers must contain
+Base64 bytes that can start an ASN.1 SEQUENCE. Placeholder text, runtime references,
+and marker-manipulation code without that payload are rejected regardless of their names.
+This check uses no minimum key-size cutoff and does not evaluate source code.
+Plausible partial payloads, unfamiliar encodings, encrypted material and recognized
+BER container/octet-string forms are retained conservatively. These bounded checks
+do not establish cryptographic or live validity; unrecognized OpenSSH, OpenPGP and
+future-format source wrappers remain conservative.
+Built-in private-key candidates stop at an explicit END marker, including short
+placeholder envelopes, so a malformed fixture cannot consume a following key.
+For supported unencrypted containers, an impossible decoded header is rejected
+even when the remaining Base64 has invalid length or padding.
 
 `[extend]` supports `path`, `useDefault`, and `disabledRules`, with at most two
 inheritance steps. As in Betterleaks, paths resolve from the working directory.

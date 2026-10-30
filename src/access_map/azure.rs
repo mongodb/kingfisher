@@ -1913,16 +1913,16 @@ async fn list_service_items(
         loop {
             match reader.read_event_into(&mut buf) {
                 Ok(Event::Eof) => break,
-                Ok(Event::Start(e)) if e.name().as_ref().eq_ignore_ascii_case(b"name") => {
+                Ok(Event::Start(e)) if e.name().as_ref().eq_ignore_ascii_case("name") => {
                     let text = reader.read_text(e.name())?;
-                    let name = text.decode()?.into_owned();
+                    let name = text.into_inner().into_owned();
                     if !name.is_empty() {
                         items.insert(name);
                     }
                 }
-                Ok(Event::Start(e)) if e.name().as_ref().eq_ignore_ascii_case(b"nextmarker") => {
+                Ok(Event::Start(e)) if e.name().as_ref().eq_ignore_ascii_case("nextmarker") => {
                     let text = reader.read_text(e.name())?;
-                    let value = text.decode()?.into_owned();
+                    let value = text.into_inner().into_owned();
                     if !value.trim().is_empty() {
                         next_marker = Some(value);
                     }

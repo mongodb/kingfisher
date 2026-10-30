@@ -348,7 +348,7 @@ fn reexec_with_new_binary() -> std::io::Result<()> {
     }
 }
 
-fn setup_logging(global_args: &GlobalArgs) {
+fn logging_filter(global_args: &GlobalArgs) -> tracing_subscriber::filter::Targets {
     // Determine log level based on global verbosity
     let (level, all_targets) = if global_args.quiet {
         (LevelFilter::ERROR, false)
@@ -371,12 +371,27 @@ fn setup_logging(global_args: &GlobalArgs) {
             .with_default(LevelFilter::ERROR) // Default for all modules
             .with_target("kingfisher", level)
     };
+    // Blast-radius mapping is best-effort; provider diagnostics should not flood
+    // normal scan or standalone output. Expose them only with --debug/--verbose/-v.
+    let filter = filter.with_target(
+        "kingfisher::access_map",
+        if global_args.verbose > 0 && !global_args.quiet { level } else { LevelFilter::OFF },
+    );
+    // PDF reader diagnostics are recoverable extraction details, even when
+    // lopdf logs them at ERROR. Expose them only with --debug/--verbose/-v.
+    filter.with_target(
+        "lopdf",
+        if global_args.verbose > 0 && !global_args.quiet { level } else { LevelFilter::OFF },
+    )
+}
+
+fn setup_logging(global_args: &GlobalArgs) {
     let fmt_layer = fmt::layer()
         .with_writer(std::io::stderr)
         .with_target(true) // Include the tracing target in each log line
         .with_ansi(std::io::stderr().is_terminal()) // Emit ANSI colours when stderr is a TTY
         .without_time();
-    registry().with(fmt_layer).with(filter).init();
+    registry().with(fmt_layer).with(logging_filter(global_args)).init();
 }
 
 /// Describe the first configured scan target, in priority order, for alert payloads.
@@ -1073,6 +1088,67 @@ async fn async_main(args: CommandLineArgs, matches: clap::ArgMatches) -> Result<
 #[cfg(test)]
 #[path = "app/config_tests.rs"]
 mod apply_config_tests;
+
+#[cfg(test)]
+mod logging_tests {
+    use super::*;
+
+    #[test]
+    fn access_map_diagnostics_require_debug_at_every_log_level() {
+        for verbose in 0..=4 {
+            for quiet in [false, true] {
+                let filter = logging_filter(&GlobalArgs { verbose, quiet, ..Default::default() });
+                for target in [
+                    "kingfisher::access_map",
+                    "kingfisher::access_map::aws",
+                    "kingfisher::access_map::azure",
+                    "kingfisher::access_map::gcp::api_key",
+                ] {
+                    for level in [
+                        tracing::Level::ERROR,
+                        tracing::Level::WARN,
+                        tracing::Level::INFO,
+                        tracing::Level::DEBUG,
+                        tracing::Level::TRACE,
+                    ] {
+                        assert_eq!(
+                            filter.would_enable(target, &level),
+                            verbose > 0 && !quiet && filter.would_enable("kingfisher", &level),
+                            "{target} {level}: verbose={verbose}, quiet={quiet}"
+                        );
+                    }
+                }
+                // Unrelated scan diagnostics must retain their existing visibility.
+                assert!(filter.would_enable("kingfisher::scanner", &tracing::Level::ERROR));
+                assert_eq!(
+                    filter.would_enable("kingfisher::scanner", &tracing::Level::WARN),
+                    !quiet
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn lopdf_diagnostics_require_debug_even_at_error_level() {
+        for verbose in 0..=4 {
+            for quiet in [false, true] {
+                let filter = logging_filter(&GlobalArgs { verbose, quiet, ..Default::default() });
+                for target in ["lopdf", "lopdf::reader", "lopdf::parser"] {
+                    for level in [tracing::Level::ERROR, tracing::Level::WARN] {
+                        assert_eq!(
+                            filter.would_enable(target, &level),
+                            verbose > 0 && !quiet,
+                            "{target} {level}: verbose={verbose}, quiet={quiet}"
+                        );
+                    }
+                }
+                // Other error diagnostics must retain their existing visibility.
+                assert!(filter.would_enable("kingfisher", &tracing::Level::ERROR));
+                assert!(filter.would_enable("other_dependency", &tracing::Level::ERROR));
+            }
+        }
+    }
+}
 
 #[cfg(all(test, unix))]
 mod staging_tests {

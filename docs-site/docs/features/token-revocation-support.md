@@ -16,7 +16,7 @@ Revocation is supported for mapped Betterleaks credentials and for Kingfisher cu
 [REVOCATION_PROVIDERS.md](../features/revocation.md) for the current support model and
 [RULES.md](../rules/overview.md) for Kingfisher custom-rule authoring details.
 
-Betterleaks 2.x defines [explicit `revoke` expressions](https://github.com/betterleaks/betterleaks/blob/v2.0.0-rc.1/docs/config.md#explicit-credential-revocation).
+Betterleaks 2.x defines [explicit `revoke` expressions](https://github.com/betterleaks/betterleaks/blob/v2.0.0-rc.5/docs/config.md#explicit-credential-revocation).
 Kingfisher's importer currently uses its reviewed overlay instead of executing those expressions.
 Contribute generally applicable detector and provider improvements upstream; translating new
 revocation expressions requires explicit importer support. Until that support exists, extend

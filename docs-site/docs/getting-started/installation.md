@@ -473,7 +473,7 @@ and platform prerequisites.
 
 ## Compile from Source
 
-Source builds embed the prepared catalog of 488 rules; they do not download Betterleaks or
+Source builds embed the prepared catalog of 501 rules; they do not download Betterleaks or
 Veles sources. Cargo dependencies and native build prerequisites must still be available.
 The repository preserves license texts, source headers, and provenance under
 `crates/kingfisher-rules/generated/`; the source archive includes those files.

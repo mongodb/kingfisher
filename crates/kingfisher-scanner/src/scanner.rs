@@ -2110,6 +2110,9 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
             + privateKeyEncoded
             + "\\n"
             + "-----END PRIVATE KEY-----"#;
+        let redacted = r"-----BEGIN PRIVATE KEY-----\n<redacted>\n-----END PRIVATE KEY-----";
+        let marker_removal = r#"-----BEGIN PRIVATE KEY-----", "")
+            .replace("-----END PRIVATE KEY-----"#;
         // Synthetic RFC8410 container, not a live key. No Validator is constructed.
         let key = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g\n-----END PRIVATE KEY-----";
         // DER outer container with a BER long-form length on the inner Ed25519
@@ -2150,11 +2153,17 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
             STANDARD.encode(&malformed),
             runtime_key.to_string(),
             STANDARD.encode(runtime_key),
+            redacted.to_string(),
+            STANDARD.encode(redacted),
+            marker_removal.to_string(),
+            STANDARD.encode(marker_removal),
+            java.to_string(),
+            STANDARD.encode(java),
         ] {
             assert!(scanner.scan_bytes(input.as_bytes()).unwrap().is_empty());
         }
-        // Opaque source syntax, including the Java fragment, cannot safely be
-        // classified as malformed just because it is not clean Base64 armor.
+        // Source wrappers containing encoded key bytes, including partial or
+        // unfamiliar representations, must retain the finding.
         for input in [
             key.to_string(),
             ber_key.clone(),
@@ -2172,8 +2181,6 @@ toml_AbCdEfGhIjKlMnOp\nyaml_AbCdEfGhIjKlMnOp\nveles_AbCdEfGhIjKlMnOp"
             key.replace('\n', "&#xA;"),
             key.replace('\n', "\\n\" + b\""),
             key.replace("PRIVATE KEY", "RSA PRIVATE KEY"),
-            java.to_string(),
-            STANDARD.encode(java),
         ] {
             let findings = scanner.scan_bytes(input.as_bytes()).unwrap();
             assert_eq!(findings.len(), 1);

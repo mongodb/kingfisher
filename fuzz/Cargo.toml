@@ -18,7 +18,7 @@ path = "../crates/kingfisher-scanner"
 
 # Expose base64 for the fuzz target that exercises get_base64_strings
 [dependencies.base64]
-version = "0.22"
+version = "0.23"
 
 [workspace]
 members = ["."]

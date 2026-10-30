@@ -631,16 +631,14 @@ mod tests {
     }
 
     #[test]
-    fn builtins_are_namespaced_imported_rules() {
+    fn builtins_are_namespaced_rules() {
         let loaded =
             RuleLoader::new().load_builtins(true).load_with_confidence(Confidence::Low).unwrap();
 
         assert!(loaded.num_rules() >= 400);
-        assert!(
-            loaded.iter_rules().all(
-                |rule| rule.id().starts_with("betterleaks.") || rule.id().starts_with("veles.")
-            )
-        );
+        assert!(loaded.iter_rules().all(|rule| rule.id().starts_with("betterleaks.")
+            || rule.id().starts_with("veles.")
+            || rule.id().starts_with("kingfisher.")));
     }
 
     #[test]
@@ -652,6 +650,22 @@ mod tests {
 
         let custom_rule = test_rule("custom.only");
         assert!(loaded.betterleaks_prefilter_for(&[&custom_rule]).is_none());
+    }
+
+    #[test]
+    fn first_party_family_selects_embedded_rules_without_upstream_source_prefilter() {
+        let loaded = RuleLoader::new()
+            .enable_rule_ids(["kingfisher.connection-string.password"])
+            .load_with_confidence(Confidence::Medium)
+            .unwrap();
+        let selected = loaded.resolve_enabled_rules().unwrap();
+        assert_eq!(selected.len(), 5);
+        assert!(
+            selected
+                .iter()
+                .all(|rule| { rule.id().starts_with("kingfisher.connection-string.password.") })
+        );
+        assert!(loaded.betterleaks_prefilter_for(&selected).is_none());
     }
 
     #[test]

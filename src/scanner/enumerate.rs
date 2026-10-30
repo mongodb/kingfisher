@@ -25,7 +25,7 @@ use rayon::{
     prelude::{ParallelIterator, *},
 };
 use serde::{Deserialize, Deserializer};
-use tracing::{debug, error, warn};
+use tracing::{debug, error};
 
 use smallvec::smallvec;
 
@@ -767,7 +767,7 @@ impl ParallelBlobIterator for FileResult {
                 }
                 Ok(_) => self.raw_blob_iter().map(Some),
                 Err(_) => {
-                    warn!(path = %self.path.display(), "PDF text extraction failed or exceeded limits; scanning raw bytes");
+                    debug!(path = %self.path.display(), "PDF text extraction failed or exceeded limits; scanning raw bytes");
                     self.raw_blob_iter().map(Some)
                 }
             }
@@ -1051,7 +1051,7 @@ fn expand_entries_with_pdf_budget(
                 // The Git iterator boundary propagates aborts; do not misreport
                 // an expired repository deadline as a malformed PDF.
                 Err(error) if error.is::<kingfisher_scanner::ScanAborted>() => {}
-                Err(_) => warn!(path = %logical, "PDF text extraction failed or exceeded limits; scanning raw bytes"),
+                Err(_) => debug!(path = %logical, "PDF text extraction failed or exceeded limits; scanning raw bytes"),
             }
         }
         total = total.saturating_add(data.len());

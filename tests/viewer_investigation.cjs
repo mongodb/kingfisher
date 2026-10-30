@@ -11,6 +11,16 @@ assert.ok(!/body:not\(\.workspace-empty\)\s+\.workspace-context\s*\{[^}]*display
 assert.ok(!html.includes('Open Details for the complete list.'));
 assert.ok(!html.includes('available in Details.</div>'));
 assert.ok(html.includes('Open Investigate for the complete list.'));
+// Details opened from the overview must not inherit a hidden tab panel.
+const sectionStack = [];
+let modalSections;
+for (const [tag] of html.matchAll(/<\/?section\b[^>]*>|<div\b[^>]*\bid="finding-detail"[^>]*>/g)) {
+  if (tag.startsWith('</')) sectionStack.pop();
+  else if (tag.startsWith('<section')) sectionStack.push(tag);
+  else { modalSections = [...sectionStack]; break; }
+}
+assert.ok(modalSections, 'Finding detail modal is present');
+assert.ok(!modalSections.some(tag => /\brole="tabpanel"/.test(tag)), 'Shared finding details must remain visible outside the Findings tab');
 const context = vm.createContext({ URL, URLSearchParams, Intl });
 vm.runInContext(scripts.join('\n').match(/^    (?:async )?function \w+\([^]*?^    }/gm).join('\n'), context);
 context.scanMetadata = {};
@@ -169,6 +179,7 @@ const element = tag => {
     appendChild(child) { this.children.push(child); return child; }, append(...children) { this.children.push(...children); },
     setAttribute(key, value) { this.attributes[key] = value; }, addEventListener(name, fn) { this.handlers.set(name, fn); },
     querySelector() { return null; }, click() { this.handlers.get('click')?.({}); },
+    focus() { context.document.activeElement = this; },
   };
   item.classList = { contains(name) { return (item.className || '').split(' ').includes(name); }, add(name) { item.className = (item.className || '') + ' ' + name; }, remove(name) { item.className = (item.className || '').split(' ').filter(value => value !== name).join(' '); }, toggle(name) { if (this.contains(name)) this.remove(name); else this.add(name); } };
   created.push(item); return item;
@@ -206,6 +217,7 @@ context.document.getElementById = id => id === 'investigation-queue' ? queue : n
 context.findings = [{ rule: { name: malicious }, finding: { path: malicious, validation: { status: malicious }, fingerprint: 'untrusted' } }];
 context.accessMap = [];
 let investigated;
+const showFindingDetail = context.showFindingDetail;
 context.showFindingDetail = record => { investigated = record; };
 context.renderInvestigationWorkspace();
 assert.equal(queue.children.length, 1);
@@ -213,6 +225,35 @@ assert.ok(queue.children[0].innerHTML.includes('&lt;img'));
 assert.ok(!queue.children[0].innerHTML.includes(malicious));
 queue.children[0].children[0].click();
 assert.equal(investigated, context.findings[0]);
+
+// Exercise the real queue action, including closing back to the overview action.
+context.showFindingDetail = showFindingDetail;
+const detailElements = new Map();
+context.document.getElementById = id => {
+  if (id === 'investigation-queue') return queue;
+  if (!detailElements.has(id)) detailElements.set(id, element('div'));
+  return detailElements.get(id);
+};
+context.fdPathInput = element('textarea');
+context.modalReturnFocus = null;
+context.findings = [{ rule: { id: 'example', name: 'Example credential' }, finding: { path: 'example.txt', snippet: 'example', fingerprint: 'example' } }];
+queue.children.length = 0;
+context.renderInvestigationWorkspace();
+const investigateButton = queue.children[0].children[0];
+const detailModal = context.document.getElementById('finding-detail');
+detailModal.classList.add('hidden');
+investigateButton.focus();
+investigateButton.click();
+assert.equal(detailModal.classList.contains('hidden'), false);
+assert.equal(detailModal.attributes['aria-hidden'], 'false');
+assert.equal(context.document.getElementById('finding-detail-title').textContent, 'Example credential');
+assert.equal(body.classList.contains('modal-open'), true);
+assert.equal(context.document.activeElement, context.document.getElementById('finding-detail-close'));
+context.closeFindingDetail();
+assert.equal(detailModal.classList.contains('hidden'), true);
+assert.equal(detailModal.attributes['aria-hidden'], 'true');
+assert.equal(body.classList.contains('modal-open'), false);
+assert.equal(context.document.activeElement, investigateButton);
 
 // Evidence details are the default; explicit map links and filter state remain accepted.
 context.viewRegistry = { 'view-dashboard': {} };

@@ -1,6 +1,6 @@
-mkdocs-material>=9.5
+mkdocs-material>=9.8
 mkdocs-minify-plugin>=0.8
-mkdocs-rss-plugin>=1.6
-pillow>=10.0
-cairosvg>=2.7
-pyyaml>=6.0
+mkdocs-rss-plugin>=1.19
+pillow>=13.0
+cairosvg>=2.9.1
+pyyaml>=6.0.3

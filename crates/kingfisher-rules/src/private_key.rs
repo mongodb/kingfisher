@@ -24,25 +24,16 @@ static ENVELOPE: LazyLock<Regex> = LazyLock::new(|| {
     .unwrap()
 });
 
-// Remove only adjacent/concatenated string-literal boundaries, never arbitrary
-// punctuation. Runtime references are checked separately, without evaluating them.
+// Remove adjacent, concatenated or array string-literal boundaries, never
+// arbitrary punctuation. No source code is evaluated.
 static STRING_JOIN: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r#""\s*(?:\+\s*)?"|'\s*(?:\+\s*)?'"#).unwrap());
-
-// Match the entire body, not a substring that could precede real key material
-// in an unfamiliar source representation. These delimiters cannot be PEM data.
-static PLACEHOLDER: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(
-        r"(?i)\A\s*(?:PRIVATE_KEY|\$\{PRIVATE_KEY(?:_[A-Z0-9_.\x{2026}]+)?\}|<YOUR_PRIVATE_KEY[A-Z0-9_.\x{2026}]*>)\s*\z",
-    )
-    .unwrap()
-});
+    LazyLock::new(|| Regex::new(r#""\s*(?:[+,]\s*)?"|'\s*(?:[+,]\s*)?'"#).unwrap());
 
 pub(crate) fn is_malformed(candidate: &str) -> bool {
     is_malformed_inner(candidate, true)
 }
 
-fn is_malformed_inner(candidate: &str, repair_partial_diff: bool) -> bool {
+fn is_malformed_inner(candidate: &str, repair_line_prefixes: bool) -> bool {
     if candidate.len() > MAX_CANDIDATE_BYTES {
         return false;
     }
@@ -56,7 +47,7 @@ fn is_malformed_inner(candidate: &str, repair_partial_diff: bool) -> bool {
         if !candidate[end..container.start()].trim().is_empty() || !malformed_container(&parts) {
             return false;
         }
-        if repair_partial_diff && partial_diff_keeps_material(&parts) {
+        if repair_line_prefixes && prefixed_lines_keep_material(&parts) {
             return false;
         }
         end = container.end();
@@ -65,28 +56,42 @@ fn is_malformed_inner(candidate: &str, repair_partial_diff: bool) -> bool {
     found && candidate[end..].trim().is_empty()
 }
 
-fn partial_diff_keeps_material(parts: &regex::Captures<'_>) -> bool {
+fn prefixed_lines_keep_material(parts: &regex::Captures<'_>) -> bool {
     let body = normalize(&parts["body"]);
-    // '+' is also a source-code concatenation operator. Only repair an armor
-    // payload; never reinterpret an already-recognized runtime-reference stub.
-    if armor_body(&body, &parts["label"].to_ascii_uppercase()).is_none() {
-        return false;
-    }
     let lines: Vec<_> = body.lines().map(str::trim).filter(|line| !line.is_empty()).collect();
-    if !lines.iter().any(|line| line.starts_with('+'))
-        || !lines.iter().any(|line| !line.starts_with('+'))
-    {
-        return false;
+    let numbered = !lines.is_empty() && lines.iter().all(|line| strip_line_number(line).is_some());
+    if !numbered {
+        // '+' is also a source-code concatenation operator. Only repair an armor
+        // payload; never reinterpret an already-recognized runtime-reference stub.
+        if armor_body(&body, &parts["label"].to_ascii_uppercase()).is_none()
+            || !lines.iter().any(|line| line.starts_with('+'))
+            || !lines.iter().any(|line| !line.starts_with('+'))
+        {
+            return false;
+        }
     }
     let mut repaired = Zeroizing::new(format!("-----BEGIN {}-----\n", &parts["label"]));
     for line in lines {
-        repaired.push_str(line.strip_prefix('+').unwrap_or(line));
+        let line = if numbered {
+            strip_line_number(line).expect("checked numbered line")
+        } else {
+            line.strip_prefix('+').unwrap_or(line)
+        };
+        repaired.push_str(line);
         repaired.push('\n');
     }
     repaired.push_str(&format!("-----END {}-----", &parts["end"]));
     // At most one repair attempt: a literal '+' can itself be Base64 material.
     // Never strip repeatedly or turn this source repair into unbounded recursion.
     !is_malformed_inner(&repaired, false)
+}
+
+fn strip_line_number(line: &str) -> Option<&str> {
+    // cat -n/editor gutters separate the number from the payload with whitespace.
+    // The final body line may contain only the number immediately before END.
+    let rest = line.trim_start_matches(|c: char| c.is_ascii_digit());
+    (rest.len() < line.len() && (rest.is_empty() || rest.starts_with(char::is_whitespace)))
+        .then(|| rest.trim_start())
 }
 
 fn malformed_container(parts: &regex::Captures<'_>) -> bool {
@@ -105,13 +110,32 @@ fn malformed_container(parts: &regex::Captures<'_>) -> bool {
     }
     let body = normalize(&parts["body"]);
     let Some((encoded, encrypted, checksum)) = armor_body(&body, &label) else {
-        // Unknown source representations may contain real serialized keys. Reject
-        // only a placeholder or literal PEM markers around runtime references with
-        // no literal key material, e.g. "BEGIN..." + privateKeyEncoded + "...END".
-        return PLACEHOLDER.is_match(&body) || concatenated_references_only(&body);
+        // Known ASN.1 wrappers need not be clean armor, but must contain a
+        // plausible encoded header. Do not identify placeholders or identifiers.
+        return !has_plausible_payload(&body, &label);
     };
     let Ok(decoded) = STANDARD.decode(encoded.as_bytes()).map(Zeroizing::new) else {
-        return false;
+        // Invalid padding alone can occur in a damaged real key. For known
+        // unencrypted ASN.1 containers, however, an intact first quartet that
+        // does not begin a SEQUENCE proves that this armor is not a key. This
+        // excludes repeated foo/bar fixtures even when their final quartet is
+        // incomplete, without rejecting a plausibly encoded partial container.
+        // Supported source-line prefixes are rechecked before discarding it.
+        return !encrypted
+            && matches!(
+                label.as_str(),
+                "PRIVATE KEY"
+                    | "ENCRYPTED PRIVATE KEY"
+                    | "RSA PRIVATE KEY"
+                    | "EC PRIVATE KEY"
+                    | "DSA PRIVATE KEY"
+            )
+            && encoded.as_bytes().get(..4).is_some_and(|prefix| {
+                STANDARD
+                    .decode(prefix)
+                    .map(Zeroizing::new)
+                    .is_ok_and(|prefix| prefix.first().is_some_and(|byte| *byte != 0x30))
+            });
     };
     if decoded.is_empty() || checksum.is_some_and(|checksum| crc24(&decoded) != checksum) {
         return true;
@@ -163,37 +187,44 @@ fn malformed_container(parts: &regex::Captures<'_>) -> bool {
     !valid
 }
 
-fn concatenated_references_only(body: &str) -> bool {
-    let body = body.trim();
-    let Some(quote @ ('"' | '\'')) = body.chars().next() else {
-        return false;
-    };
-    let Some(expression) = body.strip_prefix(quote).and_then(|body| body.strip_suffix(quote))
-    else {
-        return false;
-    };
-    let Some(references) = expression
-        .trim()
-        .strip_prefix('+')
-        .and_then(|expression| expression.trim().strip_suffix('+'))
-    else {
-        return false;
-    };
-    // Whitespace-only string literals can disappear during STRING_JOIN normalization,
-    // leaving adjacent `+` separators. Still require at least one runtime reference.
-    let mut references =
-        references.split('+').map(str::trim).filter(|part| !part.is_empty()).peekable();
-    // Quotes, calls, operators, comments, and any literal payload keep the finding.
-    references.peek().is_some()
-        && references.all(|reference| {
-            reference.split('.').all(|part| {
-                let mut bytes = part.trim().bytes();
-                bytes
-                    .next()
-                    .is_some_and(|byte| byte.is_ascii_alphabetic() || matches!(byte, b'_' | b'$'))
-                    && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'$'))
-            })
+fn has_plausible_payload(body: &str, label: &str) -> bool {
+    if !matches!(
+        label,
+        "PRIVATE KEY"
+            | "ENCRYPTED PRIVATE KEY"
+            | "RSA PRIVATE KEY"
+            | "EC PRIVATE KEY"
+            | "DSA PRIVATE KEY"
+    ) {
+        // Unknown encodings, OpenSSH and OpenPGP are not ASN.1 SEQUENCEs.
+        return true;
+    }
+    if matches!(label, "RSA PRIVATE KEY" | "EC PRIVATE KEY" | "DSA PRIVATE KEY")
+        && body.lines().any(|line| {
+            let line = line.trim_start();
+            line.starts_with("Proc-Type:") || line.starts_with("DEK-Info:")
         })
+    {
+        // Traditional encryption makes the key bytes opaque. Malformed or
+        // unfamiliar encryption metadata is not proof that no secret exists.
+        return true;
+    }
+    // All supported ASN.1 private-key containers start with SEQUENCE (0x30),
+    // encoded as M[A-P] followed by two Base64 characters. Look for that header
+    // inside source wrappers, including whitespace-wrapped/chunked material.
+    // This single byte pass allocates nothing and never parses source code.
+    // A plausible partial payload stays a finding; clean armor is fully parsed
+    // by the existing bounded container checks instead of a key-size heuristic.
+    body.match_indices('M').any(|(start, _)| {
+        let mut prefix =
+            body.as_bytes()[start + 1..].iter().copied().filter(|byte| !byte.is_ascii_whitespace());
+        matches!(prefix.next(), Some(b'A'..=b'P'))
+            && (0..2).all(|_| {
+                prefix
+                    .next()
+                    .is_some_and(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'+' | b'/'))
+            })
+    })
 }
 
 fn normalize(body: &str) -> Zeroizing<String> {
@@ -986,13 +1017,12 @@ mod tests {
     }
 
     #[test]
-    fn preserves_opaque_source_code_but_rejects_decoded_garbage_and_placeholders() {
+    fn rejects_source_without_encoded_material_and_decoded_garbage() {
         let java = r#"-----BEGIN PRIVATE KEY-----", "begin key marker"),
             Pair.of(expectedKeyString, "private key pem"),
             Pair.of("-----END PRIVATE KEY-----"#;
-        // Unrecognized source syntax may also contain a real serialized key.
-        // Failure to parse armor alone must not suppress a candidate.
-        assert!(!is_malformed(java));
+        // PEM markers around source code are not evidence of embedded key bytes.
+        assert!(is_malformed(java));
         for label in [
             "PRIVATE KEY",
             "ENCRYPTED PRIVATE KEY",
@@ -1008,10 +1038,107 @@ mod tests {
         assert!(is_malformed(
             "-----BEGIN PRIVATE KEY-----\nPRIVATE_KEY\n-----END PRIVATE KEY-----"
         ));
-        assert!(!is_malformed("-----BEGIN PRIVATE KEY-----\nYWJjZA=\n-----END PRIVATE KEY-----"));
+        assert!(is_malformed("-----BEGIN PRIVATE KEY-----\nYWJjZA=\n-----END PRIVATE KEY-----"));
+        assert!(!is_malformed("-----BEGIN PRIVATE KEY-----\nMAMCAQA\n-----END PRIVATE KEY-----"));
         assert!(is_malformed(
             "-----BEGIN RSA PRIVATE KEY-----\nYWJjZA==\n-----END EC PRIVATE KEY-----"
         ));
+    }
+
+    #[test]
+    fn rejects_redacted_keys_and_java_marker_removal_without_hiding_material() {
+        let encoded = STANDARD.encode(pkcs8("1.3.101.112", &tlv(4, &[0x35; 32])));
+        let key = pem("PRIVATE KEY", &pkcs8("1.3.101.112", &tlv(4, &[0x35; 32])));
+        for body in [
+            r"\n<redacted>\n",
+            r"\\n<REDACTED>\\n",
+            "\n  <redacted>\n",
+            r#"", "")
+                .replace(""#,
+            r#"", "" ) . replace ( ""#,
+            r#"", replacement).replace(""#,
+            r#"", "").unknown(""#,
+        ] {
+            let candidate = format!("-----BEGIN PRIVATE KEY-----{body}-----END PRIVATE KEY-----");
+            assert!(is_malformed(&candidate), "{candidate}");
+            assert!(is_malformed(&candidate.replace('\n', "\r\n")));
+            assert!(!is_malformed(&format!("{candidate}\n{key}")));
+        }
+
+        for body in [
+            format!("\n<redacted>\n{encoded}\n"),
+            format!(r#"", "{encoded}").replace(""#),
+            format!(r#"", "").replace("{encoded}").replace(""#),
+            format!(r#"\n" + "<redacted>" + "{encoded}\n"#),
+        ] {
+            let candidate = format!("-----BEGIN PRIVATE KEY-----{body}-----END PRIVATE KEY-----");
+            assert!(!is_malformed(&candidate), "{candidate}");
+        }
+    }
+
+    #[test]
+    fn rejects_ini_test_bodies_with_invalid_base64_and_impossible_der_prefixes() {
+        let short = "foo\nbar\nfoobar\nbarfoo";
+        let numbered = (1..=96)
+            .map(|index| {
+                let suffix = ["foo", "bar", "foobar", "barfoo"][(index - 1) % 4];
+                format!("   {index}{suffix}\n")
+            })
+            .collect::<String>();
+        for body in [short, numbered.as_str()] {
+            let candidate =
+                format!("-----BEGIN RSA PRIVATE KEY-----\n{body}\n-----END RSA PRIVATE KEY-----");
+            assert!(is_malformed(&candidate));
+            assert!(is_malformed(&candidate.replace('\n', "\r\n")));
+        }
+        // The same damaged representation can contain encrypted material or a
+        // future encoding, neither of which is ruled out by the DER prefix.
+        for label in ["FUTURE PRIVATE KEY", "OPENSSH PRIVATE KEY", "PGP PRIVATE KEY BLOCK"] {
+            assert!(!is_malformed(&format!(
+                "-----BEGIN {label}-----\n{short}\n-----END {label}-----"
+            )));
+        }
+        let encrypted = format!(
+            "-----BEGIN RSA PRIVATE KEY-----\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-256-CBC,0123456789ABCDEF\n\n{short}\n-----END RSA PRIVATE KEY-----"
+        );
+        assert!(!is_malformed(&encrypted));
+    }
+
+    #[test]
+    fn numbered_lines_do_not_hide_private_key_material() {
+        let encoded = STANDARD.encode(pkcs8("1.3.101.112", &tlv(4, &[0x35; 32])));
+        for width in [8, 64] {
+            let lines: Vec<_> = encoded
+                .as_bytes()
+                .chunks(width)
+                .map(|line| std::str::from_utf8(line).unwrap())
+                .collect();
+            for separator in [" ", "\t"] {
+                let body = lines
+                    .iter()
+                    .enumerate()
+                    .map(|(index, line)| format!("{:6}{separator}{line}\n", index + 2))
+                    .collect::<String>();
+                for end_prefix in [String::new(), format!("{:6}{separator}", lines.len() + 2)] {
+                    let candidate = format!(
+                        "-----BEGIN PRIVATE KEY-----\n{body}{end_prefix}-----END PRIVATE KEY-----"
+                    );
+                    assert!(!is_malformed(&candidate), "{candidate}");
+                    assert!(!is_malformed(&candidate.replace('\n', "\r\n")));
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn numbered_lines_still_reject_malformed_payloads() {
+        for separator in [" ", "\t"] {
+            let candidate = format!(
+                "-----BEGIN RSA PRIVATE KEY-----\n     2{separator}foo\n     3{separator}bar\n     4{separator}-----END RSA PRIVATE KEY-----"
+            );
+            assert!(is_malformed(&candidate));
+            assert!(is_malformed(&candidate.replace('\n', "\r\n")));
+        }
     }
 
     #[test]
@@ -1026,6 +1153,9 @@ mod tests {
             r#"\n" + firstPart + secondPart + "\n"#,
             r"\n' + private_key_encoded + '\n",
             r#"\n" + $privateKey + "\n"#,
+            r#"\n" + loadKey() + "\n"#,
+            r#"\n" + /* unknown source representation */ key + "\n"#,
+            r#"\n" + key + "\n'"#,
         ] {
             let candidate = format!("-----BEGIN PRIVATE KEY-----{body}-----END PRIVATE KEY-----");
             assert!(is_malformed(&candidate), "{candidate}");
@@ -1038,9 +1168,6 @@ mod tests {
             format!(r#"\n" + prefix + "{encoded}\n"#),
             format!(r#"\n" + prefix + "{encoded}" + suffix + "\n"#),
             format!(r#"\n" + "{encoded}" + "\n"#),
-            r#"\n" + loadKey() + "\n"#.to_owned(),
-            r#"\n" + /* unknown source representation */ key + "\n"#.to_owned(),
-            r#"\n" + key + "\n'"#.to_owned(),
         ] {
             let candidate = format!("-----BEGIN PRIVATE KEY-----{body}-----END PRIVATE KEY-----");
             assert!(!is_malformed(&candidate), "{candidate}");
@@ -1048,7 +1175,7 @@ mod tests {
     }
 
     #[test]
-    fn placeholder_filter_requires_a_complete_placeholder_only_body() {
+    fn source_without_a_payload_is_rejected_but_mixed_material_is_retained() {
         for body in [
             "${PRIVATE_KEY}",
             "${PRIVATE_KEY_CONTENTS}",
@@ -1072,6 +1199,57 @@ mod tests {
                 )));
             }
         }
+    }
+
+    #[test]
+    fn source_payload_check_uses_encoding_structure_without_a_minimum_key_size() {
+        for label in [
+            "PRIVATE KEY",
+            "ENCRYPTED PRIVATE KEY",
+            "RSA PRIVATE KEY",
+            "EC PRIVATE KEY",
+            "DSA PRIVATE KEY",
+        ] {
+            for body in [
+                "<<payload deliberately unavailable>>".to_string(),
+                "[CENSORED]".to_string(),
+                r#"" + fetch_key_at_runtime() + ""#.to_string(),
+                format!(r#"" + {} + ""#, "notEncodedKeyMaterial".repeat(64)),
+                format!(r#"" + "{}" + ""#, STANDARD.encode([b'x'; 200])),
+            ] {
+                assert!(
+                    is_malformed(&format!(
+                        "-----BEGIN {label}-----\n{body}\n-----END {label}-----"
+                    )),
+                    "{label}: {body}"
+                );
+            }
+        }
+
+        // Valid encodings can be shorter than Ed25519 PKCS#8's 64 Base64 bytes.
+        // Retain short SEC1, PKCS#1, DSA and future-algorithm PKCS#8 material.
+        for bytes in [
+            sequence(&[integer(1), tlv(4, &[1])]),
+            rsa(false),
+            sequence(&(0..=5).map(integer).collect::<Vec<_>>()),
+            pkcs8("1.3.6.1.4.1.55555.1", &[1]),
+        ] {
+            let encoded = STANDARD.encode(bytes);
+            assert!(encoded.len() < 64);
+            for split in 1..4 {
+                for join in ["\" + \"", "\", \""] {
+                    let body = format!("\"{}{}{}\"", &encoded[..split], join, &encoded[split..]);
+                    assert!(
+                        !is_malformed(&format!(
+                            "-----BEGIN PRIVATE KEY-----\n{body}\n-----END PRIVATE KEY-----"
+                        )),
+                        "{body}"
+                    );
+                }
+            }
+        }
+        assert!(has_plausible_payload("M \t\r\nC 4 C", "PRIVATE KEY"));
+        assert!(!has_plausible_payload("M?C4C", "PRIVATE KEY"));
     }
 
     #[test]

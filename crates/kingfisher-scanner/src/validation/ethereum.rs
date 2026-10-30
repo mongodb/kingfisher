@@ -171,7 +171,7 @@ fn strip_hex_prefix(value: &str) -> &str {
 }
 
 fn address_from_public_key(key: &VerifyingKey) -> String {
-    let encoded = key.to_encoded_point(false);
+    let encoded = key.to_sec1_point(false);
     let digest = Keccak256::digest(&encoded.as_bytes()[1..]);
     checksum_address(&digest[12..])
 }

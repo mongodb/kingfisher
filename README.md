@@ -74,10 +74,10 @@ For target-specific commands, authentication, scope, and pagination behavior, us
 
 ## Discover, validate, and revoke — open source options
 
-All four tools detect secrets. Kingfisher and Betterleaks 2.0 RC1 also include
+All four tools detect secrets. Kingfisher and Betterleaks 2.0 RC5 also include
 credential revocation for supported providers.
 
-| Built-in capability | Kingfisher | Betterleaks 2.0 RC1 | TruffleHog OSS | Gitleaks |
+| Built-in capability | Kingfisher | Betterleaks 2.0 RC5 | TruffleHog OSS | Gitleaks |
 |---|:---:|:---:|:---:|:---:|
 | (Find) Secret discovery | ✅ | ✅ | ✅ | ✅ |
 | (Validate) Live credential verification | ✅ | ✅ | ✅ | ❌ |
@@ -292,7 +292,7 @@ always confirm the target and operational impact before containment.
 
 ### Performance, Accuracy, and Extensible Rules
 - **Performance**: multithreaded, Hyperscan‑powered scanning built for huge codebases  
-- **Extensible rules**: [Betterleaks](https://github.com/betterleaks/betterleaks/blob/main/config/betterleaks.toml) is the main catalog, with selected [Veles detectors](https://github.com/google/osv-scalibr/tree/main/veles/secrets) filling gaps;
+- **Extensible rules**: [Betterleaks](https://github.com/betterleaks/betterleaks/blob/main/config/betterleaks.toml) is the main catalog, with selected [Veles detectors](https://github.com/google/osv-scalibr/tree/main/veles/secrets) and rare documented [first-party rules](crates/kingfisher-rules/data/kingfisher-rules.md) filling gaps;
   both Betterleaks TOML (`.toml`) and the Kingfisher rule format (`.yml`/`.yaml`) are fully supported via `--rules-path` ([built-in rules](https://mongodb.github.io/kingfisher/rules/builtin-rules/), [docs/RULES.md](docs/RULES.md))
 - **Validation and defender-led revocation**: validate discovered credentials live, then revoke supported credentials from the CLI. For supported provider flows, responders can contain a leaked token even when its owner is unknown or has left the company ([docs/USAGE.md](docs/USAGE.md), [docs/REVOCATION_PROVIDERS.md](docs/REVOCATION_PROVIDERS.md))
 - **Blast-radius mapping in the open-source release**: use `--blast-radius` (alias `--access-map`) to map supported credentials to identities, permissions, candidate role/service-account paths, and resource scopes. All 43 providers—including AWS IAM, GCP hierarchy/impersonation, and Azure Graph/ARM RBAC mapping—are included in the Apache-2.0 release ([blast-radius docs](https://mongodb.github.io/kingfisher/features/blast-radius/))

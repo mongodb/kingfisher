@@ -117,10 +117,17 @@ pattern. This is a source-controlled build overlay, not a runtime custom-rule op
 The `private-key` overlay explicitly opts into Kingfisher's offline
 `malformedPrivateKey(secret)` finding-filter helper. It checks matching PEM labels, Base64,
 and decoded container structure rather than a minimum text length. Empty containers, explicit
-`PRIVATE_KEY` placeholders, and cleanly decoded malformed containers are rejected. Unrecognized
-source syntax or undecodable armor remains a finding rather than being assumed harmless. The helper is an
+`PRIVATE_KEY` placeholders, and cleanly decoded malformed containers are rejected. Known ASN.1
+containers whose intact first Base64 quartet cannot begin a SEQUENCE are also rejected when
+the remaining encoding is malformed, excluding repeated `foo`/`bar` fixtures. Unrecognized
+source syntax and plausibly encoded undecodable armor remain findings. The helper is an
 additive Kingfisher extension, not an upstream Betterleaks function; existing custom YAML/TOML
 rules are unchanged unless they explicitly use it.
+
+For the built-in `private-key` rule with this filter, the importer derives an explicit END
+marker from the pinned upstream BEGIN pattern and removes its minimum body length. Short
+placeholder containers then end at their own footer, allowing a following real key to be
+scanned independently. Custom detector patterns and unknown upstream pattern forms are unchanged.
 
 - PKCS#1 RSA (including multi-prime), SEC1 EC (including explicit parameters), and traditional
   DSA containers are checked for their required fields, tags, versions and complete DER consumption.

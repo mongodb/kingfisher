@@ -148,8 +148,8 @@ DOC_MAP = {
     ),
     "COMPARISON.md": (
         "reference/comparison.md",
-        "Kingfisher vs. TruffleHog OSS: Capabilities & Benchmarks",
-        "Compare built-in mapping for AWS, GCP, Azure, developer, and AI services in Kingfisher and TruffleHog OSS, with dated sources and published benchmarks.",
+        "Kingfisher Capabilities & Open-Source Benchmarks",
+        "Compare published benchmarks, live verification, revocation, and licenses across Kingfisher, Betterleaks, TruffleHog OSS, and Gitleaks.",
     ),
     "PROJECT.md": (
         "reference/project.md",

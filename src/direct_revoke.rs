@@ -1038,6 +1038,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn reported_aws_command_uses_secret_key_as_positional_input() {
+        use clap::Parser;
+
+        #[derive(Parser)]
+        struct TestCli {
+            #[command(flatten)]
+            revoke: RevokeArgs,
+        }
+
+        let access_key_id = "AKIAIOSFODNN7EXAMPLE";
+        let secret_key = "wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY";
+        let parsed = TestCli::try_parse_from([
+            "kingfisher revoke",
+            "--rule",
+            "betterleaks.aws-access-token",
+            "--var",
+            &format!("AKID={access_key_id}"),
+            secret_key,
+        ])
+        .unwrap();
+        let mut rules =
+            crate::defaults::get_builtin_rules(Some(crate::rules::Confidence::Low)).unwrap();
+        let rule = rules.rules.remove(&parsed.revoke.rule).unwrap();
+        let revocation = rule.revocation.unwrap();
+        assert!(matches!(revocation, Revocation::AWS));
+        let secret = read_secret(parsed.revoke.secret.as_deref()).unwrap();
+        let globals = build_globals(
+            &parsed.revoke.rule,
+            &secret,
+            &parsed.revoke.args,
+            &parsed.revoke.variables,
+            &extract_revocation_vars(&revocation),
+            &ProviderEndpointOverrides::default(),
+        )
+        .unwrap();
+        let akid = get_global_var(&globals, "AKID").unwrap();
+        assert_eq!(akid, access_key_id);
+        assert_eq!(secret, secret_key);
+        assert!(validate_aws_credentials_input(&akid, &secret).is_ok());
+    }
+
+    #[test]
     fn explicit_commands_decode_original_betterleaks_named_capture_context() {
         let globals=build_globals("custom.primary","secret",&[],&[
             "__BETTERLEAKS_FINDING_CAPTURES={\"MixedCase\":\"original-value\"}".into(),

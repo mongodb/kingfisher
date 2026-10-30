@@ -8,7 +8,7 @@ secrets are detected without changing the Rust API.
 
 ```toml
 [dependencies]
-kingfisher-rules = "3.0.0"
+kingfisher-rules = "3.0.1"
 anyhow = "1"
 ```
 
@@ -81,7 +81,8 @@ This crate provides:
 
 - rule syntax and rule model types
 - Kingfisher YAML and Betterleaks TOML loading for custom rules
-- an embedded database generated from pinned Betterleaks and selected Veles detectors
+- one embedded database generated from pinned Betterleaks and selected Veles detectors,
+  plus rare documented first-party exceptions
 - `RulesDatabase` compilation for scanning engines
 
 Normal builds embed `generated/builtin-rules.gz` without fetching rule sources or
@@ -89,9 +90,15 @@ writing documentation. Betterleaks takes precedence when its catalog covers a Ve
 The existing importers apply Kingfisher matching, filtering, validation, access-map, and
 revocation behavior to the upstream candidates.
 
+The CLI, `get_builtin_rules(None)`, and Python SDK's `Rules()` load five medium-confidence,
+detection-only `kingfisher.connection-string.password.*` rules by default. They restore
+connection-string and JDBC password coverage lost in 2.x; broad Betterleaks `generic-api-key`,
+`generic-password`, and `generic-username` rules remain excluded. See the
+[exception rationale and coverage](data/kingfisher-rules.md).
+
 `generated/provenance.json` records upstream revisions, source hashes, generated rule IDs,
-generator input hashes, and artifact hashes. `generated/upstream-sources.json.gz` is a gzip
-compressed JSON map from immutable source URLs to exact UTF-8 file contents (including licenses
+generator input hashes, first-party rule origins, and artifact hashes.
+`generated/upstream-sources.json.gz` is a gzip-compressed JSON map from immutable source URLs to exact UTF-8 file contents (including licenses
 and source headers); null records an absent upstream NOTICE. `generated/NOTICES.txt` contains
 readable attribution and license text preserved in the repository.
 These records document what was imported; they do not establish upstream authorship.
@@ -101,7 +108,7 @@ These records document what was imported; they do not establish upstream authors
 Use rules/scanner `3.0.0` together. Existing YAML/TOML rule files remain compatible;
 public Rust schema fields and enum variants require source updates. See the
 [3.0 migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-scanner-30).
-Core uses the compatible 1.0.5 patch; Python SDK 1.6.0 preserves its existing Python API.
+Core uses the compatible 1.0.6 patch; Python SDK 1.6.0 preserves its existing Python API.
 
 ## Migrating to 2.0
 
@@ -124,22 +131,24 @@ See the [library migration guide](../../docs/LIBRARY.md#migrating-to-rules-and-s
 
 ## Readable rule catalogs
 
-The generated [rules directory](generated/rules/) contains two files in the Kingfisher rule
-format: [betterleaks.yml](generated/rules/betterleaks.yml) and
-[veles.yml](generated/rules/veles.yml). They preserve all imported rules, credential helpers,
+The generated [rules directory](generated/rules/) contains three files in the Kingfisher rule
+format: [betterleaks.yml](generated/rules/betterleaks.yml),
+[veles.yml](generated/rules/veles.yml), and [kingfisher.yml](generated/rules/kingfisher.yml).
+They preserve all imported and first-party rules, credential helpers,
 and collection-level metadata such as Betterleaks source filtering. These files ship in the
-crate and are generated from the same imported documents as the compressed bundle. The runtime
-bundle, its entry names, and public loading APIs remain unchanged.
+crate and are generated from the same source documents as the compressed bundle. The public
+loading APIs remain unchanged.
 
-Each file identifies its upstream sources and links to the provenance manifest and notices.
+Each file identifies its sources and links to the provenance manifest and notices.
 The manifest maps each rule ID to its `generated_file`, records immutable source revisions,
-and hashes both YAML files. Kingfisher-authored helpers are explicitly attributed to Kingfisher.
-These are modified derivatives, not verbatim upstream rules: Betterleaks sources carry MIT
-licensing and Veles / OSV-SCALIBR sources carry Apache-2.0 licensing; retain the
+and hashes all three YAML files. First-party rules and Kingfisher-authored helpers are explicitly
+attributed to Kingfisher. The imported files are modified derivatives: Betterleaks sources carry MIT
+licensing and Veles / OSV-SCALIBR sources carry Apache-2.0 licensing. First-party rules carry
+Kingfisher's Apache-2.0 license. Retain the
 [notices](generated/NOTICES.txt), [provenance](generated/provenance.json), and source archive
 when redistributing the catalog.
 
-To load both readable catalogs without also loading the embedded catalog:
+To load all three readable catalogs without also loading the embedded catalog:
 
 ```sh
 kingfisher rules check --rules-path crates/kingfisher-rules/generated/rules --load-builtins=false --no-update-check
@@ -151,7 +160,8 @@ and update dependency references consistently.
 Do not edit `generated/rules/`; regeneration replaces its contents and removes obsolete files.
 New imported rules automatically appear in the corresponding source's YAML file; no service
 assignment is required. Rule definitions come from pinned upstream inputs and Kingfisher
-importers and overlays. `--check` verifies both YAML files alongside the bundle and provenance.
+importers and overlays, plus the reviewed [first-party source](data/kingfisher-rules.yml).
+`--check` verifies all three YAML files alongside the bundle and provenance.
 
 From the repository workspace, maintainers run:
 
@@ -168,16 +178,16 @@ The lower-level commands remain available:
 ```sh
 # Fetch pinned upstream sources, archive evidence, and regenerate artifacts.
 cargo run --locked -p kingfisher-rule-bundle -- --refresh
-# Regenerate after importer/overlay changes using only archived sources.
+# Regenerate after importer/overlay/first-party changes using only archived sources.
 cargo run --locked -p kingfisher-rule-bundle
 # Verify all generated artifacts without changing files or fetching sources.
 cargo run --locked -p kingfisher-rule-bundle -- --check
 ```
 
-A Betterleaks release is preferred. The current bundle pins v2.0.0-rc.1 at
-`b3b4cbb586c964701f78bbfb6bc2129ced99bed3`, because stable v1.9.0 lacks the Cloudflare
-`cfut_`/`cfat_` detectors. The exact `config/betterleaks.toml` SHA-256 is
-`b8627cfd4b12beb833f0b7e1173157b1a2988ceb87cf3e2e2882182d7229adf7`.
+A Betterleaks release is preferred. The current bundle pins v2.0.0-rc.5 at
+`b1aa878bc41b06583f6ce83bf0ffcc5e6ed8f4f3`, including the Labelbox, NuGet, and Tailscale
+content detectors. The exact `config/betterleaks.toml` SHA-256 is
+`107da222fc897daa2647027248d86ece9dde29e993d5fc9e138826c71f951127`.
 Its revision and expected digest live in `tools/rule-bundle/src/main.rs`;
 Veles selections and revision live in `data/veles-rules.yml`. Update the pins, run `--refresh`,
 review the provenance and license changes, and commit the generated artifacts together.
@@ -185,7 +195,12 @@ The old `KINGFISHER_BETTERLEAKS_CONFIG` and `KINGFISHER_BETTERLEAKS_CONFIG_URL` 
 are no longer used. Custom rules remain supported through `--rules-path`.
 
 The tool also generates `docs-site/docs/rules/builtin-rules.md`. Kingfisher-only operational
-metadata lives in `data/imported-rules-capabilities.yml`.
+metadata lives in `data/imported-rules-capabilities.yml`. Generally useful detectors and
+validation improvements must go upstream to Betterleaks. First-party inclusion in
+`data/kingfisher-rules.yml` is rare and requires a specific reason for direct shipment,
+provenance, tests, and a retirement condition in [data/kingfisher-rules.md](data/kingfisher-rules.md).
+Convenience or an unsubmitted upstream change is not sufficient; replace temporary regression
+exceptions when compatible upstream coverage is available.
 
 Custom Betterleaks v2 TOML supports Expr validation, analysis and explicit
 revocation, inheritance, path-only rules, specificity and named component captures.

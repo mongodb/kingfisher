@@ -1754,12 +1754,16 @@ mod tests {
     }
 
     #[test]
-    fn aws_components_reject_missing_ambiguous_and_redacted_values() {
+    fn aws_components_require_complete_unambiguous_values_for_revocation() {
         let mut findings = aws_findings();
         let primary =
             findings.iter().find(|f| f.rule_id == "betterleaks.aws-access-token").unwrap().clone();
         let validator = Validator::builder().build().unwrap();
-        assert_eq!(validator.bind(&primary, &[]).unwrap_err(), ValidationReason::MissingDependency);
+        let incomplete = validator.bind(&primary, &[]).unwrap();
+        assert!(incomplete.components.is_empty());
+        assert!(!incomplete.variables.contains_key("AWS_SECRET_ACCESS_KEY"));
+        assert!(incomplete.revocation.is_none());
+        assert_eq!(incomplete.revocation_reason, Some(ValidationReason::MissingDependency));
         let helper = findings.iter_mut().find(|f| f.secret == "secret_abcd").unwrap();
         helper.secret = "different_secret".into();
         assert_eq!(

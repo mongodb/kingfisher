@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-rules"
-version = "3.0.0"
+version = "3.0.1"
 description = "Rule definitions and database for Kingfisher secret scanner"
 edition.workspace = true
 rust-version.workspace = true
@@ -22,7 +22,7 @@ __scanner-internals = []
 
 [dependencies]
 # Internal dependencies
-kingfisher-core = { version = "1.0.5", path = "../kingfisher-core" }
+kingfisher-core = { version = "1.0.6", path = "../kingfisher-core" }
 
 # Serialization
 serde.workspace = true
@@ -47,7 +47,7 @@ liquid = "0.26"
 liquid-core = "0.26"
 
 # Crypto for liquid filters
-aws-lc-rs = "1.18"
+aws-lc-rs = "1.19"
 base32.workspace = true
 base64.workspace = true
 bip39.workspace = true
@@ -70,7 +70,7 @@ zeroize.workspace = true
 kingfisher-vectorscan.workspace = true
 # Keep this exact pin in sync with cache_vectorscan_version(). Dependency feature
 # unification may alter the native build; the full runtime build version is also keyed.
-kingfisher-vectorscan-sys = "=0.1.1"
+kingfisher-vectorscan-sys = "=0.1.2"
 thread_local.workspace = true
 
 # Logging
@@ -97,5 +97,5 @@ windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Securit
 
 [dev-dependencies]
 pretty_assertions = "1.4"
-proptest = "1.11"
+proptest = "1.12"
 rsa = { version = "0.9.10", features = ["getrandom", "sha2"] }

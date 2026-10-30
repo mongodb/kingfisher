@@ -1,6 +1,6 @@
 [package]
 name = "kingfisher-python"
-version = "1.6.0"
+version = "1.6.1"
 description = "Native Python bindings for Kingfisher"
 repository.workspace = true
 edition.workspace = true
@@ -20,7 +20,7 @@ kingfisher-scanner = { path = "../kingfisher-scanner", features = ["validation",
 anyhow.workspace = true
 serde_json.workspace = true
 serde.workspace = true
-tokio = { version = "1.53", features = ["rt-multi-thread", "time", "net", "macros"] }
+tokio = { version = "1.54", features = ["rt-multi-thread", "time", "net", "macros"] }
 
 ignore.workspace = true
 tempfile = "3.27"

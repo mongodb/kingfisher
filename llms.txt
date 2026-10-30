@@ -24,15 +24,9 @@ workflows: `kingfisher scan <target> --format toon --no-update-check`.
 - [Repository scan audit log](https://mongodb.github.io/kingfisher/features/repository-audit/)
 - [Baselines](https://mongodb.github.io/kingfisher/usage/baseline/)
 
-## Provider Mapping and Comparisons
+## Comparisons and Examples
 
-Kingfisher includes AWS IAM policies and role paths, GCP IAM hierarchy and service-account paths,
-and Azure Graph/ARM RBAC mapping in its Apache-2.0 release. The source-based comparison distinguishes
-these dedicated cloud mappers from credential verification and metadata, and credits shared
-GitHub, GitLab, Slack, Hugging Face, OpenAI, and Anthropic analysis. Provider coverage is best effort
-and depends on the credential's access.
-
-- [Kingfisher vs. TruffleHog OSS: mapping scopes and dated source references](https://mongodb.github.io/kingfisher/reference/comparison/#blast-radius-mapping-kingfisher-vs-trufflehog-oss)
+- [Published benchmarks and capability comparisons](https://mongodb.github.io/kingfisher/reference/comparison/)
 - [Synthetic viewer walkthrough and sample report](https://mongodb.github.io/kingfisher/features/report-viewer/#synthetic-investigation-walkthrough)
 
 ## Configuration and Extension

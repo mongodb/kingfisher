@@ -2,6 +2,50 @@
 
 All notable changes to this project will be documented in this file.
 
+## [v2.16.0]
+
+### Added
+
+- Embed five detection-only [connection-string password rules](https://github.com/mongodb/kingfisher/blob/main/crates/kingfisher-rules/data/kingfisher-rules.yml)
+  by default in the CLI, `kingfisher-rules`, and Python SDK, including PostgreSQL/MySQL/MariaDB
+  JDBC query passwords and SQL Server JDBC properties. The catalog now has 501 rules;
+  broad generic Betterleaks rules remain excluded.
+  [#558](https://github.com/mongodb/kingfisher/issues/558)
+
+### Changed
+
+- Refresh Betterleaks to v2.0.0-rc.5 with eight new Labelbox, NuGet, and Tailscale
+  content detectors. Filename-only rules remain excluded;
+  selected Veles rules are unchanged.
+- Detect AWS access IDs without a nearby secret key; validation and revocation
+  still require a matching secret.
+- Refresh API-compatible Rust, Python, documentation, and CI dependencies, including
+  Vectorscan 0.1.2, Rustls 0.23.46 for the four open Rustls security advisories,
+  ZIP 9.1.3 for extraction security fixes, and BIP32 0.6.0 for updated key-derivation crypto.
+  Prepare core 1.0.6 for updated dependency minimums; public Rust APIs remain unchanged.
+
+### Fixed
+
+- Detect each connection-string password when multiple connections share a source line,
+  including Base64-encoded input, rather than skipping the first password.
+- Keep GCS authentication and JWT validation on the same crypto backend after dependency
+  updates, avoiding an uninitialized-provider panic while retaining legacy RSA verification.
+- Parse local `let` declarations and expression sequences inside Betterleaks
+  predicates, including rc.5's generic XML filters. Existing rules need no edits.
+- Keep generated validation and revocation commands concise while preserving required
+  component values and named captures, including AWS access-key revocation bindings.
+  Omit AWS validation commands when the matching secret component is absent.
+- Reject malformed private-key fixtures with short or numbered placeholder bodies, and
+  stop private-key findings at their END marker without consuming nearby source or keys.
+  Preserve real private keys pasted with `cat -n` or editor line-number prefixes.
+- Reject PEM source wrappers without a plausibly encoded key payload using bounded
+  structural checks shared by the CLI and SDKs, without matching placeholder or method names.
+- Prepare rules/scanner 3.0.1 and Python SDK 1.6.1 for the shared private-key detection fix.
+- Log PDF extraction failures and limits at DEBUG while continuing to scan raw bytes.
+  Hide `lopdf` reader warnings and errors unless `--debug`/`--verbose` is enabled.
+- Show finding details when clicking **Investigate** in the Overview's Investigation
+  Queue, and restore page scrolling and focus when closing the dialog.
+
 ## [v2.15.0]
 
 ### Added

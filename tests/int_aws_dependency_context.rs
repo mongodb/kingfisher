@@ -41,6 +41,9 @@ fn crowded_env_dump_keeps_ranked_contexts_unresolved_without_validation() {
         assert_eq!(finding["ambiguous_dependencies"]["AWS_SECRET_ACCESS_KEY"], 2, "{report}");
         assert!(finding.get("dependent_captures").is_none(), "{report}");
         assert!(finding.get("dependency_candidates").is_none(), "{report}");
+        assert!(finding.get("validate_command").is_none(), "{report}");
+        assert!(finding.get("revoke_command").is_none(), "{report}");
+        assert!(finding.get("blast_radius_command").is_none(), "{report}");
     }
 }
 
@@ -60,7 +63,22 @@ fn conflicting_names_and_unnamed_keys_remain_ambiguous() {
 }
 
 #[test]
-fn named_pair_must_still_be_inside_the_dependency_window() {
-    let report = scan(&format!("kms_aws_secret={SECRET}\n\n\n\n\n\n\nkms_aws_key={KEY}"));
-    assert!(report["findings"].as_array().unwrap().is_empty(), "{report}");
+fn access_ids_without_in_window_secrets_remain_detected() {
+    for input in [
+        format!("kms_aws_secret={SECRET}\n\n\n\n\n\n\nkms_aws_key={KEY}"),
+        format!("kms_aws_key={KEY}"),
+    ] {
+        let report = scan(&input);
+        let findings = report["findings"].as_array().unwrap();
+        assert_eq!(findings.len(), 1, "{report}");
+        assert_eq!(findings[0]["rule"]["id"], "betterleaks.aws-access-token", "{report}");
+        let finding = &findings[0]["finding"];
+        assert!(finding["snippet"].as_str().unwrap().contains(KEY), "{report}");
+        assert!(finding.get("dependent_captures").is_none(), "{report}");
+        assert!(finding.get("ambiguous_dependencies").is_none(), "{report}");
+        assert!(finding.get("dependency_candidates").is_none(), "{report}");
+        assert!(finding.get("validate_command").is_none(), "{report}");
+        assert!(finding.get("revoke_command").is_none(), "{report}");
+        assert!(finding.get("blast_radius_command").is_none(), "{report}");
+    }
 }

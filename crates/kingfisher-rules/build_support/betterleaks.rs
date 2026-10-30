@@ -4,6 +4,20 @@ use anyhow::{Context, Result, anyhow, bail};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 
+// The pinned detector's minimum body length can consume an END marker and the
+// next BEGIN marker when a short fixture appears before a real key. With the
+// explicit structural filter, complete short containers can safely be candidates.
+// Derive both labels from the source pattern; unknown upstream forms stay intact.
+fn bounded_private_key_pattern(pattern: &str) -> String {
+    const SOURCE: &str = r"(?i)-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----[\s\S-]{64,}?KEY(?: BLOCK)?-----";
+    if pattern != SOURCE {
+        return pattern.to_string();
+    }
+    let (begin, _) = pattern.split_once(r"[\s\S-]{64,}?").expect("known source pattern");
+    let end = begin.strip_prefix("(?i)").expect("known source flags").replace("BEGIN", "END");
+    format!(r"{begin}[\s\S-]*?{end}")
+}
+
 /// Relax assignment context without copying provider token formats into the overlay.
 /// Only a single mandatory, top-level capture is supported: retaining its index/name
 /// keeps the reported secret and capture-based expressions stable. Parsing the whole
@@ -673,6 +687,15 @@ fn import_config_with_namespace(
             "(?:)".to_string()
         } else {
             source_rule.regex.clone().expect("checked regex")
+        };
+        let source_pattern = if filter_builtins
+            && source_rule.id == "private-key"
+            && rule_capabilities.filter_override.as_deref()
+                == Some("malformedPrivateKey(finding[\"secret\"])")
+        {
+            bounded_private_key_pattern(&source_pattern)
+        } else {
+            source_pattern
         };
         let compiled_pattern = regex::bytes::RegexBuilder::new(&source_pattern)
             .unicode(false)
@@ -1764,8 +1787,7 @@ impl Parser {
         let is_map = matches!(self.peek(), Token::String(_) | Token::Identifier(_))
             && self.tokens.get(self.position + 1) == Some(&Token::Colon);
         if !is_map {
-            let node = self.parse_expr(0)?;
-            self.expect(Token::RBrace)?;
+            let node = self.parse_program(Token::RBrace)?;
             return Ok(BetterleaksExpr::Predicate { node: Box::new(node) });
         }
 
@@ -2314,6 +2336,40 @@ regex = 'new-token'
     }
 
     #[test]
+    fn parser_handles_local_programs_in_predicate_bodies() {
+        // The generic API-key filter normalizes XML tag attributes inside a map predicate.
+        let expression = parse_expression(
+            r#"
+let credentialMatch = finding["match"];
+let nameContext = containsAny(credentialMatch, ["<"])
+  ? join(map(split(credentialMatch, "<"), {
+      let tag = findMatch(#, `^[\w.:-]+(?:(?:[ \t]+|[ \t]*\r?\n[ \t]*)[\w.:-]{1,64}[ \t]*=[ \t]*(?:"[^"<\r\n]*"|'[^'<\r\n]*')){0,5}[ \t]*(?:\r?\n[ \t]*)?>`);
+      tag == "" ? # : replace(#, tag, findMatch(tag, `^[\w.:-]+`) + ">", 1)
+    }), "<")
+  : credentialMatch;
+matchesAny(nameContext, [`(?i)<publicKey>`])
+"#,
+        )
+        .unwrap();
+        validate_filter_expression(&expression).unwrap();
+
+        let expression =
+            parse_expression("map([1, 2], {let value = # + 1; value; value > 2})").unwrap();
+        let BetterleaksExpr::Builtin { arguments, .. } = expression else {
+            panic!("expected a map builtin");
+        };
+        let BetterleaksExpr::Predicate { node } = &arguments[1] else {
+            panic!("expected a predicate argument");
+        };
+        let BetterleaksExpr::VariableDeclarator { name, expr, .. } = node.as_ref() else {
+            panic!("expected a predicate-local variable");
+        };
+        assert_eq!(name, "value");
+        assert!(matches!(expr.as_ref(), BetterleaksExpr::Sequence { .. }));
+        validate_filter_expression(node).unwrap();
+    }
+
+    #[test]
     fn bare_preserves_flags_names_and_boundaries() {
         let generated =
             bare_pattern(r"(?i:provider)=(?P<secret>(?:pa|al)-[A-Z]{3})(?:[\s;]|$)", 1).unwrap();
@@ -2809,6 +2865,51 @@ rules:
 
         assert!(filter.contains("sk_test_"));
         assert!(filter.contains("3.5"));
+    }
+
+    #[test]
+    fn builtin_private_key_containers_end_before_source_or_the_next_key() {
+        let pattern = r"(?i)-----BEGIN[ A-Z0-9_-]{0,100}PRIVATE KEY(?: BLOCK)?-----[\s\S-]{64,}?KEY(?: BLOCK)?-----";
+        let source = format!(
+            "[[rules]]\nid = 'private-key'\ndescription = 'Private key'\nregex = '''{pattern}'''\n"
+        );
+        let yaml = import_config(
+            &source,
+            "test",
+            r#"
+version: 1
+rules:
+  private-key:
+    filter_override: 'malformedPrivateKey(finding["secret"])'
+"#,
+        )
+        .unwrap();
+        let snapshot: serde_yaml::Value = serde_yaml::from_str(&yaml).unwrap();
+        let imported = snapshot["rules"][0]["pattern"].as_str().unwrap();
+        let re = regex::bytes::Regex::new(imported).unwrap();
+        let fake = "-----BEGIN RSA PRIVATE KEY-----\nfoo\nbar\nfoobar\nbarfoo\n-----END RSA PRIVATE KEY-----";
+        let key = "-----BEGIN PRIVATE KEY-----\nMC4CAQAwBQYDK2VwBCIEIAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8g\n-----END PRIVATE KEY-----";
+        let input = format!(
+            "{fake}\nmultiline_list =\n  first\n  second\nassert.Equal(t, \"{fake}\")\n{key}"
+        );
+        let matched: Vec<_> = re.find_iter(input.as_bytes()).collect();
+        assert_eq!(matched.len(), 3);
+        assert_eq!(matched[0].as_bytes(), fake.as_bytes());
+        assert_eq!(matched[1].as_bytes(), fake.as_bytes());
+        assert_eq!(matched[2].as_bytes(), key.as_bytes());
+        assert_eq!(matched[2].start(), input.find(key).unwrap());
+        for body in ["", "foo"] {
+            let short = format!("-----BEGIN PRIVATE KEY-----{body}-----END PRIVATE KEY-----");
+            assert_eq!(re.find(short.as_bytes()).unwrap().as_bytes(), short.as_bytes());
+        }
+        let legacy = import_custom_config(&source, "legacy.toml").unwrap();
+        let legacy: serde_yaml::Value = serde_yaml::from_str(&legacy).unwrap();
+        assert_eq!(legacy["rules"][0]["pattern"].as_str().unwrap(), pattern);
+        let unfiltered = import_config(&source, "test", "version: 1\nrules: {}\n").unwrap();
+        let unfiltered: serde_yaml::Value = serde_yaml::from_str(&unfiltered).unwrap();
+        assert_eq!(unfiltered["rules"][0]["pattern"].as_str().unwrap(), pattern);
+        let unknown = pattern.replace("{64,}", "{65,}");
+        assert_eq!(bounded_private_key_pattern(&unknown), unknown);
     }
 
     #[test]

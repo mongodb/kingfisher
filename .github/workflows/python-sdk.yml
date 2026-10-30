@@ -50,7 +50,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           fetch-depth: 0
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.13'
       - name: Check source, SDK version, and PyPI before native builds
@@ -90,17 +90,17 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           targets: ${{ matrix.target }}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.13'
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
         with:
           enable-cache: true
-      - uses: swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
         with:
           key: python-${{ matrix.target }}
       - name: Verify SDK release tag
@@ -116,7 +116,7 @@ jobs:
         with:
           target: ${{ matrix.target }}
           manylinux: '2_28'
-          maturin-version: 'v1.15.0'
+          maturin-version: 'v1.16.0'
           rust-toolchain: ${{ env.RUST_TOOLCHAIN }}
           args: --profile python-release --locked --out dist-python --find-interpreter
           # Published Vectorscan archives require glibc 2.35. Build from the
@@ -125,14 +125,14 @@ jobs:
           docker-options: -e VECTORSCAN_BUILD_FROM_SOURCE=1 -e CARGO_PROFILE_RELEASE_PANIC=unwind -e CARGO_PROFILE_RELEASE_LTO=false
       - name: Build macOS wheel
         if: runner.os == 'macOS'
-        run: uv run --no-project --with maturin==1.15.0 maturin build --profile python-release --locked --target ${{ matrix.target }} --out dist-python
-      - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884
+        run: uv run --no-project --with maturin==1.16.0 maturin build --profile python-release --locked --target ${{ matrix.target }} --out dist-python
+      - uses: msys2/setup-msys2@ec48f7c5447b3140e2b088413ae3a55687bccb6e
         if: runner.os == 'Windows'
         with:
           msystem: ${{ matrix.msystem }}
           path-type: inherit
           update: true
-          install: ${{ matrix.packages }} make git
+          install: ${{ matrix.packages }} make git perl
       - name: Build Windows wheel
         if: runner.os == 'Windows'
         shell: msys2 {0}
@@ -153,7 +153,7 @@ jobs:
           # python3.dll import library and link the wheel to libpython3.dll.
           # These runners build for standard CPython, not MSYS2 Python.
           rm -f "$MINGW_PREFIX"/lib/libpython*.dll.a
-          uv run --no-project --with maturin==1.15.0 maturin build --profile python-release --locked --target "$SDK_TARGET" --out unrepaired
+          uv run --no-project --with maturin==1.16.0 maturin build --profile python-release --locked --target "$SDK_TARGET" --out unrepaired
           # Reject accidental MSYS2 Python linkage before DLL repair can bundle it.
           uv run --no-project --with pefile python - <<'PY'
           from pathlib import Path
@@ -189,12 +189,12 @@ jobs:
           echo "path=$SDK_CACHE_FIXTURES" >> "$GITHUB_OUTPUT"
           uv run --no-project --python .venv-wheel python python/tests/cache_portability.py seed "$SDK_CACHE_FIXTURES"
           uv run --no-project --python .venv-wheel python python/tests/cache_portability.py check "$SDK_CACHE_FIXTURES" --require-hit
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: rule-cache-${{ matrix.target }}
           path: ${{ steps.cache-fixtures.outputs.path }}
           if-no-files-found: error
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: python-${{ matrix.target }}
           path: dist-python/*.whl
@@ -224,11 +224,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.13'
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: python-${{ matrix.target }}
           path: dist-python
@@ -238,7 +238,7 @@ jobs:
         run: |
           SDK_CACHE_FIXTURES=$(uv run --no-project python -c 'import tempfile; from pathlib import Path; print(Path(tempfile.mkdtemp(prefix="kingfisher-foreign-cache-")).as_posix())')
           echo "path=$SDK_CACHE_FIXTURES" >> "$GITHUB_OUTPUT"
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: rule-cache-*
           path: ${{ steps.cache-fixtures.outputs.path }}
@@ -284,11 +284,11 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
-      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+      - uses: dtolnay/rust-toolchain@683b588c487a69d01f6c6ddf40f036ff682cc2c8
         with:
           toolchain: ${{ env.RUST_TOOLCHAIN }}
           components: rustfmt, clippy
-      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2
       - name: Format, lint, and shared scanner tests
         run: |
           cargo fmt --all --check
@@ -296,7 +296,7 @@ jobs:
           cargo test --locked -p kingfisher-scanner --features validation validation::revocation
           cargo test --locked -p kingfisher-scanner --features context --test context
       - name: Build source distribution
-        run: uv run --no-project --with maturin==1.15.0 maturin sdist --out dist-python
+        run: uv run --no-project --with maturin==1.16.0 maturin sdist --out dist-python
       - name: Build and test from sdist with oldest Python
         shell: bash
         run: |
@@ -305,7 +305,7 @@ jobs:
           mkdir sdist-check
           tar -xzf dist-python/*.tar.gz -C sdist-check --strip-components=1
           uv run --no-project --python .venv-sdist python -m pytest sdist-check/python/tests -q
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: python-sdist
           path: dist-python/*.tar.gz
@@ -321,10 +321,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           ref: ${{ github.sha }}
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0
         with:
           python-version: '3.13'
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           pattern: python-*
           path: dist
@@ -332,7 +332,7 @@ jobs:
       - name: Stage SDK distributions missing from PyPI
         id: plan
         run: python scripts/plan-python-sdk-publish.py --dist dist --pending-dir pending-sdk
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         if: steps.plan.outputs.pending == 'true'
         with:
           name: python-sdk-pending
@@ -352,11 +352,11 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333
         with:
           name: python-sdk-pending
           path: dist
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086
         with:
           # Handle a concurrent run publishing this version after the read-only plan.
           skip-existing: true

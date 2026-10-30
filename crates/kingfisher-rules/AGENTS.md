@@ -22,3 +22,12 @@ just to enable optional fallback behavior.
 - Preserve content detectors that also restrict matching by path. Keep filename-only support
   available for explicit custom Kingfisher YAML and Betterleaks TOML rules, including their
   native callback-budget safeguards.
+- Generally useful detectors and validation improvements must go upstream to Betterleaks.
+  Direct first-party rules in `data/kingfisher-rules.yml` are rare exceptions requiring a
+  specific reason that requires shipping in Kingfisher itself, source/license provenance,
+  tests, and a retirement condition in `data/kingfisher-rules.md`. Convenience or an
+  unsubmitted upstream change is not sufficient. Replace temporary exceptions when a
+  compatible upstream detector becomes available.
+- First-party exceptions feed the same maintainer-generated bundle, readable catalogs,
+  provenance, notices, and verification pipeline as imported detectors. Do not add another
+  catalog or runtime loader. Preserve the three broad Betterleaks generic-rule exclusions.
