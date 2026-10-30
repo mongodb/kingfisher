@@ -4,7 +4,7 @@ For in-process Python detection, validation and revocation, see the [Python SDK]
 
 [← Back to README](../README.md)
 
-The prepared library releases are **kingfisher-core 1.0.5**,
+The prepared library releases are **kingfisher-core 1.0.6**,
 **kingfisher-rules 3.0.1**, and **kingfisher-scanner 3.0.1**.
 They require Rust **1.99** or newer and are versioned independently of the
 `kingfisher-bin` CLI, currently **2.16.0**. See [publishing](PUBLISHING.md).
@@ -878,7 +878,7 @@ runner.
 
 
 The first published `1.0.0` established the stable contract. The rules and scanner
-3.0.0 releases start their next stable major; core stays on the compatible 1.x API at 1.0.5. Within each
+3.0.0 releases start their next stable major; core stays on the compatible 1.x API at 1.0.6. Within each
 stable major:
 
 - Existing reachable public Rust items, signatures, fields, trait implementations,
@@ -909,7 +909,7 @@ behavior; review and behavioral tests remain required.
 ### Migrating to rules and scanner 3.0
 
 Upgrade both crates to `"3.0.0"`; scanner 3.x exposes rules 3.x types.
-Existing YAML/TOML files and Python APIs remain compatible. Core uses the compatible 1.0.5 patch;
+Existing YAML/TOML files and Python APIs remain compatible. Core uses the compatible 1.0.6 patch;
 CLI 2.15.0 and Python SDK 1.6.0 are independently versioned.
 
 - `HttpRequest` literals need `fallback_urls: Vec::new()`; `url` remains a string.

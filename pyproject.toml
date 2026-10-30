@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin>=1.12,<2"]
+requires = ["maturin>=1.16,<2"]
 build-backend = "maturin"
 
 [project]
@@ -21,7 +21,7 @@ Examples = "https://github.com/mongodb/kingfisher/tree/main/python/examples"
 Issues = "https://github.com/mongodb/kingfisher/issues"
 
 [dependency-groups]
-dev = ["maturin>=1.12,<2", "pytest>=8,<10"]
+dev = ["maturin>=1.16,<2", "pytest>=9.2,<10"]
 
 [tool.maturin]
 manifest-path = "crates/kingfisher-python/Cargo.toml"

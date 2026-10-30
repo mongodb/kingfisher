@@ -20,7 +20,7 @@ The manifests currently prepare these releases; a Git tag does not override Carg
 
 | Package | Version | Published targets |
 | ------- | ------- | ----------------- |
-| `kingfisher-core` | `1.0.5` | `kingfisher_core` library |
+| `kingfisher-core` | `1.0.6` | `kingfisher_core` library |
 | `kingfisher-rules` | `3.0.1` | `kingfisher_rules` library |
 | `kingfisher-scanner` | `3.0.1` | `kingfisher_scanner` library |
 | `kingfisher-bin` | `2.16.0` | `kingfisher` executable and library |
@@ -30,8 +30,8 @@ The Python SDK (`kingfisher-secret-scanner`) is independently versioned at
 
 The libraries follow semantic versioning and do not inherit the CLI version.
 Rules/scanner 3.0.0 add public Rust schema fields and Expr variants; upgrade both
-crates together. Existing YAML/TOML files remain compatible. Core 1.0.5 packages
-the added regression tests without changing its public API. Python SDK 1.6.0 adds
+crates together. Existing YAML/TOML files remain compatible. Core 1.0.6 refreshes
+dependency minimums without changing its public API. Python SDK 1.6.0 adds
 compatible APIs for explicit analysis and source attributes. Rules/scanner 3.0.1
 and Python SDK 1.6.1 include the private-key detection fixes.
 See the [3.0 migration guide](LIBRARY.md#migrating-to-rules-and-scanner-30).

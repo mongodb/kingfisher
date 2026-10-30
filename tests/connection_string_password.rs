@@ -132,6 +132,38 @@ fn builtin_connection_strings_capture_issue_examples_quotes_and_weak_passwords()
 }
 
 #[test]
+fn builtin_connection_strings_capture_each_password_on_the_same_line() {
+    for (open, close, suffix) in [
+        ("", "", "unquoted"),
+        ("\"", "\"", "double-quoted"),
+        ("'", "'", "single-quoted"),
+        ("{", "}", "odbc-braced"),
+    ] {
+        for context in ["", "User Id=app;Database=prod;"] {
+            let raw = format!(
+                "FIRST=Host=db1;{context}Password={open}Abcd1234{close}; \
+                 SECOND=Host=db2;{context}Password={open}Efgh5678{close};"
+            );
+            for encoded in [false, true] {
+                let input = if encoded { STANDARD.encode(&raw) } else { raw.clone() };
+                let mut findings = connection_findings(&input);
+                findings.sort_unstable_by(|left, right| left.secret.cmp(&right.secret));
+                assert_eq!(findings.len(), 2, "input: {raw:?}; findings: {findings:?}");
+                for (finding, secret) in findings.iter().zip(["Abcd1234", "Efgh5678"]) {
+                    assert_eq!(finding.rule_id, format!("{RULE_PREFIX}{suffix}"));
+                    assert_eq!(finding.secret, secret);
+                    assert_eq!(finding.is_base64_encoded, encoded);
+                    let start = if encoded { 0 } else { input.find(secret).unwrap() };
+                    let end = if encoded { input.len() } else { start + secret.len() };
+                    assert_eq!(finding.location.start_offset, start);
+                    assert_eq!(finding.location.end_offset, end);
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn builtin_connection_strings_reject_unrelated_context_placeholders_and_malformed_values() {
     let cases = [
         "Password=Xk9mQ2vL7pR4wZ8q;",

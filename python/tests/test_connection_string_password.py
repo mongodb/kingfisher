@@ -106,6 +106,34 @@ def test_issue_passwords_and_quoting(connection_rules, scanner_type, encoded):
                     if finding.rule_id.startswith(RULE_PREFIX)]
 
 
+@pytest.mark.parametrize("scanner_type", [Scanner, DetectionScanner])
+@pytest.mark.parametrize("encoded", [False, True])
+@pytest.mark.parametrize("context", ["", "User Id=app;Database=prod;"])
+@pytest.mark.parametrize("opening,closing,suffix", [
+    ("", "", "unquoted"),
+    ('"', '"', "double-quoted"),
+    ("'", "'", "single-quoted"),
+    ("{", "}", "odbc-braced"),
+])
+def test_same_line_passwords(connection_rules, scanner_type, encoded, context,
+                            opening, closing, suffix):
+    source = (f"FIRST=Host=db1;{context}Password={opening}Abcd1234{closing}; "
+              f"SECOND=Host=db2;{context}Password={opening}Efgh5678{closing};")
+    content = source.encode()
+    if encoded:
+        content = base64.b64encode(content)
+    findings = sorted((finding for finding in scanner_type(connection_rules).scan(content)
+                       if finding.rule_id.startswith(RULE_PREFIX)), key=lambda finding: finding.secret)
+    assert [finding.secret for finding in findings] == ["Abcd1234", "Efgh5678"]
+    for finding in findings:
+        assert finding.rule_id == f"{RULE_PREFIX}{suffix}"
+        assert finding.is_base64_encoded == encoded
+        start = 0 if encoded else source.index(finding.secret)
+        end = len(content) if encoded else start + len(finding.secret)
+        assert finding.location["start_offset"] == start
+        assert finding.location["end_offset"] == end
+
+
 def test_example_preserves_default_exclusions_and_redacts():
     ids = {rule["id"] for rule in Rules(confidence="low", cache=False).metadata()}
     for name in ("generic-api-key", "generic-password", "generic-username"):

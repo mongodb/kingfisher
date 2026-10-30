@@ -1333,7 +1333,7 @@ fn cache_vectorscan_version() -> String {
     // from patched or differently configured native builds. Reuse within one deployed
     // build still avoids compilation across processes. CPU compatibility is checked by
     // Vectorscan itself when deserializing; OS labels alone do not establish compatibility.
-    format!("binding=0.1.1;sys=0.1.1;runtime={}", kingfisher_vectorscan::version())
+    format!("binding=0.1.2;sys=0.1.2;runtime={}", kingfisher_vectorscan::version())
 }
 
 fn load_cached_vectorscan_db(
@@ -1859,7 +1859,7 @@ rules:
         assert!(!target.contains(env::consts::OS));
         assert!(!target.contains(env::consts::FAMILY));
         let identity = cache_vectorscan_version();
-        assert!(identity.starts_with("binding=0.1.1;sys=0.1.1;runtime="));
+        assert!(identity.starts_with("binding=0.1.2;sys=0.1.2;runtime="));
         assert!(identity.ends_with(&kingfisher_vectorscan::version()));
     }
 

@@ -101,10 +101,14 @@ pub fn extract_zip_archive_in_memory_with_budget(
     for index in 0..zip.len() {
         budget.check_entry(index)?;
         let mut file = zip.by_index(index)?;
-        if !file.is_file() || !is_safe_extract_path(Path::new(file.name())) {
+        if !file.is_file() {
             continue;
         }
-        let name = format!("{archive_label}!{}", file.name());
+        let file_name = file.name()?;
+        if !is_safe_extract_path(Path::new(file_name.as_ref())) {
+            continue;
+        }
+        let name = format!("{archive_label}!{file_name}");
         let remaining = max_bytes.saturating_sub(total);
         if file.size() > remaining {
             anyhow::bail!("archive exceeds max_bytes budget");
@@ -459,10 +463,20 @@ fn zip_entries_with_budget<R: Read + std::io::Seek>(
                     continue;
                 }
             };
-            if !file.is_file() || !is_safe_extract_path(Path::new(file.name())) {
+            if !file.is_file() {
                 continue;
             }
-            let logical = format!("{archive_label}!{}", file.name());
+            let file_name = match file.name() {
+                Ok(name) => name,
+                Err(e) => {
+                    tracing::debug!("zip entry {i} name decoding failed: {e}");
+                    continue;
+                }
+            };
+            if !is_safe_extract_path(Path::new(file_name.as_ref())) {
+                continue;
+            }
+            let logical = format!("{archive_label}!{file_name}");
             let remaining = budget.saturating_sub(total);
             let mut bytes = Vec::new();
             if let Err(e) = resources.reader(&mut file, remaining).read_to_end(&mut bytes) {
@@ -541,7 +555,7 @@ fn handle_zip_archive_streaming(
 
         let mut zipped_file = zip.by_index(i)?;
         if zipped_file.is_file() {
-            let name_in_zip = zipped_file.name().to_string();
+            let name_in_zip = zipped_file.name()?.into_owned();
             if !is_safe_extract_path(Path::new(&name_in_zip)) {
                 tracing::debug!("unsafe zip path: {name_in_zip}");
                 continue;
@@ -1405,6 +1419,69 @@ mod tests {
             tar.append_data(&mut header, name, *contents)?;
         }
         tar.finish()?;
+        Ok(())
+    }
+
+    #[test]
+    fn zip_names_preserve_unicode_and_cp437_across_extraction_paths() -> anyhow::Result<()> {
+        for name in ["café.txt", "caf_.txt"] {
+            let mut zip = ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            for member in [name, "../escape.txt", "later.txt"] {
+                zip.start_file(member, SimpleFileOptions::default())?;
+                zip.write_all(b"synthetic secret")?;
+            }
+            let mut bytes = zip.finish()?.into_inner();
+            if name.is_ascii() {
+                // Use a CP437 é in both filename headers, without changing their length.
+                let positions: Vec<_> = bytes
+                    .windows(name.len())
+                    .enumerate()
+                    .filter_map(|(index, window)| (window == name.as_bytes()).then_some(index))
+                    .collect();
+                assert_eq!(positions.len(), 2);
+                for index in positions {
+                    bytes[index + 3] = 0x82;
+                }
+            }
+            let control = crate::ScanControl::default();
+            let (entries, inspected) = super::extract_zip_archive_in_memory_with_budget(
+                &bytes,
+                "archive.zip",
+                1024,
+                10,
+                &control,
+            )?;
+            assert_eq!(inspected, 3);
+            assert_eq!(entries.len(), 2);
+            assert_eq!(entries[0], ("archive.zip!café.txt".into(), b"synthetic secret".to_vec()));
+            assert_eq!(entries[1].0, "archive.zip!later.txt");
+            let streamed: Vec<_> = super::zip_entries(
+                std::io::Cursor::new(&bytes),
+                "archive.zip".into(),
+                Default::default(),
+            )?
+            .collect();
+            assert_eq!(streamed, entries);
+
+            let input = tempdir()?;
+            let path = input.path().join("archive.zip");
+            fs::write(&path, bytes)?;
+            let output = tempdir()?;
+            let CompressedContent::ArchiveFiles(files) = super::handle_zip_archive_streaming(
+                &mut File::open(&path)?,
+                &path,
+                output.path(),
+                Default::default(),
+                None,
+            )?
+            else {
+                panic!("expected disk-staged ZIP members");
+            };
+            assert_eq!(files.len(), 2);
+            assert!(files[0].0.ends_with("!café.txt"));
+            assert_eq!(fs::read(&files[0].1)?, b"synthetic secret");
+            assert!(!output.path().join("escape.txt").exists());
+        }
         Ok(())
     }
 

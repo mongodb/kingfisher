@@ -47,7 +47,7 @@ RUN --mount=type=cache,target=/usr/local/cargo/registry \
         cargo build --locked --release --bin kingfisher --target "$target"; \
     install -D -m 0755 "target/$target/release/kingfisher" /out/kingfisher
 
-FROM alpine:latest@sha256:25109184c71bdad752c8312a8623239686a9a2071e8825f20acb8f2198c3f659
+FROM alpine:latest@sha256:be2656061b536c1883c4034790e21d0a09c5aaaf51968b89368a3c0371ea2c9a
 
 RUN apk add --no-cache curl git tar \
     && addgroup -S -g 10001 app \

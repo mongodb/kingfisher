@@ -19,9 +19,17 @@ All notable changes to this project will be documented in this file.
   selected Veles rules are unchanged.
 - Detect AWS access IDs without a nearby secret key; validation and revocation
   still require a matching secret.
+- Refresh API-compatible Rust, Python, documentation, and CI dependencies, including
+  Vectorscan 0.1.2, Rustls 0.23.46 for the four open Rustls security advisories,
+  ZIP 9.1.3 for extraction security fixes, and BIP32 0.6.0 for updated key-derivation crypto.
+  Prepare core 1.0.6 for updated dependency minimums; public Rust APIs remain unchanged.
 
 ### Fixed
 
+- Detect each connection-string password when multiple connections share a source line,
+  including Base64-encoded input, rather than skipping the first password.
+- Keep GCS authentication and JWT validation on the same crypto backend after dependency
+  updates, avoiding an uninitialized-provider panic while retaining legacy RSA verification.
 - Parse local `let` declarations and expression sequences inside Betterleaks
   predicates, including rc.5's generic XML filters. Existing rules need no edits.
 - Keep generated validation and revocation commands concise while preserving required

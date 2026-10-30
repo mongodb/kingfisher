@@ -33,6 +33,10 @@ semicolon; horizontal whitespace around separators is permitted. Passwords conta
 and may be unquoted, single quoted, double quoted, or ODBC braced. A doubled ODBC closing brace
 (`}}`) counts as one unit for this bound; findings retain both source bytes. Each rule captures
 only the password, without its enclosing quotes or braces.
+The optional segment prefers the nearest password rather than consuming another connection
+string on the same line. [Rust](../../../tests/connection_string_password.rs) and
+[Python](../../../python/tests/test_connection_string_password.py) regressions cover multiple
+same-line passwords with and without intervening properties, both raw and Base64-encoded.
 
 The JDBC query rule detects a `password=` property in PostgreSQL, MySQL, and MariaDB JDBC
 URLs, including MySQL `loadbalance` and `replication` forms. The authority is bounded to 256
