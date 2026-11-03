@@ -11,6 +11,7 @@ use std::{
 
 use anyhow::{Context, Result, anyhow};
 use indicatif::{ProgressBar, ProgressStyle};
+use percent_encoding::percent_decode_str;
 use serde::Deserialize;
 use tracing::warn;
 use url::{Url, form_urlencoded};
@@ -125,8 +126,12 @@ fn parse_repo_identifier_from_path(path: &str) -> Option<String> {
 fn parse_repo_identifier_from_url(remote_url: &str) -> Option<String> {
     let url = Url::parse(remote_url).ok()?;
     if let Some(path) = url.path_segments() {
-        let segments: Vec<String> =
-            path.filter(|segment| !segment.is_empty()).map(|segment| segment.to_string()).collect();
+        // Azure returns percent-encoded remote URLs (`My%20Project`), while exclusions are
+        // usually written with the plain names, so compare decoded segments.
+        let segments: Vec<String> = path
+            .filter(|segment| !segment.is_empty())
+            .map(|segment| percent_decode_str(segment).decode_utf8_lossy().into_owned())
+            .collect();
         if segments.len() < 3 {
             return None;
         }
@@ -680,6 +685,17 @@ mod tests {
     fn exclude_matcher_is_case_insensitive_for_globs() {
         let matcher = build_exclude_matcher(&["ORG/*".to_string()]);
         assert!(should_exclude_repo("https://dev.azure.com/org/project/_git/repo", &matcher));
+    }
+
+    #[test]
+    fn exclude_matcher_matches_percent_encoded_remote_urls() {
+        let url = "https://dev.azure.com/org/My%20Project/_git/My%20Repo";
+        let matcher = build_exclude_matcher(&["org/My Project/My Repo".to_string()]);
+        assert!(should_exclude_repo(url, &matcher));
+        let matcher = build_exclude_matcher(&["org/My Project/*".to_string()]);
+        assert!(should_exclude_repo(url, &matcher));
+        let matcher = build_exclude_matcher(&[url.to_string()]);
+        assert!(should_exclude_repo(url, &matcher));
     }
 
     #[test]
