@@ -221,14 +221,14 @@ mod test {
             "$MONGODB_PASSWORD",
             "{{ MONGODB_PASSWORD }}",
         ] {
-            let uri = format!("mongodb+srv://$(MONGODB_USERNAME):{password}@cluster.invalid/db");
+            let uri = format!("mongodb+srv://$(MONGODB_USERNAME):{password}@cluster.invalid/db"); // kingfisher:ignore (synthetic MongoDB URI fixture)
             assert!(filter_discards(mongo, "fixture.yml", &uri, &uri, &[]), "{uri}");
         }
         for uri in [
-            "mongodb://$(MONGODB_USERNAME):r4nd0mLiteralSecret@cluster.invalid/db",
+            "mongodb://$(MONGODB_USERNAME):r4nd0mLiteralSecret@cluster.invalid/db", // kingfisher:ignore (synthetic MongoDB URI fixture)
             "mongodb://alice:r4nd0mLiteralSecret@$(MONGODB_HOST)/db",
-            "mongodb://alice:literal$(suffix)@cluster.invalid/db",
-            "mongodb://alice:dollar%24literal@cluster.invalid/db",
+            "mongodb://alice:literal$(suffix)@cluster.invalid/db", // kingfisher:ignore (synthetic MongoDB URI fixture)
+            "mongodb://alice:dollar%24literal@cluster.invalid/db", // kingfisher:ignore (synthetic MongoDB URI fixture)
         ] {
             assert!(!filter_discards(mongo, "fixture.yml", uri, uri, &[]), "{uri}");
         }
@@ -590,7 +590,7 @@ mod test {
                 "{veles_id}"
             );
         }
-        for (scheme, username, destination) in [
+        for (case, (scheme, username, destination)) in [
             ("http", "fixture", "bitbucket.org/team/repo.git"),
             ("HTTPS", "fixture", "bitbucket.org/team/repo.git"),
             ("https", "", "bitbucket.org/team/repo.git"),
@@ -603,15 +603,18 @@ mod test {
             ("https", "fixture", "git.codecatalyst.aws.evil.invalid/v1/repo"),
             ("https", "fixture", "git-codecommit.us_east_1.amazonaws.com/v1/repos/repo"),
             ("https", "fixture", "git-codecommit.us-east-1.amazonaws.com/"),
-        ] {
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let url = format!("{scheme}://{username}:{password}@{destination}");
             assert!(
                 uri.as_regex().unwrap().is_match(url.as_bytes()),
-                "expected URI candidate: {url}"
+                "expected URI candidate for negative fixture {case}"
             );
             assert!(
                 !filter_discards(uri, "project/.git/config", password, &url, &[("uri", &url)]),
-                "{url}"
+                "negative fixture {case} must not be suppressed"
             );
         }
 

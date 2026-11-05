@@ -144,16 +144,29 @@ class WindowsBuildDependenciesTests(unittest.TestCase):
         # --all-targets is necessary: the addon's test=false disables only
         # automatic selection, not its existing portable Rust unit tests.
         self.assertEqual(re.findall(r"(?m)^\s+run: (.+)$", native_tests), [
-            'cargo test --locked -p kingfisher-node --all-targets --target "$NATIVE_TARGET"',
+            'cargo test --locked -p kingfisher-node --all-targets --target "${{ matrix.target }}"',
         ])
-        self.assertIn("NATIVE_TARGET: ${{ matrix.target }}", native_tests)
-        self.assertIn("shell: bash", native_tests)
         self.assertNotIn("if:", native_tests)
         self.assertNotIn("continue-on-error:", build)
         self.assertLess(build.index("name: Rust native unit tests"),
                         build.index("name: Build production addon"))
-        self.assertIn('npm run build -- --target "$NATIVE_TARGET"', build)
+        self.assertIn('npm run build -- --target "${{ matrix.target }}"', build)
         self.assertRegex(build, r"(?m)^\s+npm test$")
+
+    def test_node_windows_compilation_keeps_the_native_shell_and_msvc_linker(self):
+        workflow = (ROOT / ".github/workflows/node-sdk.yml").read_text(encoding="utf-8")
+        build = workflow.split("  build:", 1)[1].split("  package:", 1)[0]
+        # In Git Bash, /usr/bin/link shadows MSVC even after VsDevCmd succeeds.
+        # Both Cargo tests and npm's Cargo build must inherit PowerShell on
+        # Windows (and Bash on Unix), without a Unix-only environment expansion.
+        self.assertNotIn("shell:", workflow.split("jobs:", 1)[0])
+        self.assertNotIn("shell:", build.split("    steps:", 1)[0])
+        for name in ("Rust native unit tests", "Build production addon"):
+            with self.subTest(step=name):
+                step = build.split(f"      - name: {name}", 1)[1].split("      - ", 1)[0]
+                self.assertNotIn("shell:", step)
+                self.assertIn('--target "${{ matrix.target }}"', step)
+                self.assertNotIn("$NATIVE_TARGET", step)
 
     def test_node_windows_abi_selects_an_installation_containing_the_pinned_toolset(self):
         workflow = (ROOT / ".github/workflows/node-sdk.yml").read_text(encoding="utf-8")

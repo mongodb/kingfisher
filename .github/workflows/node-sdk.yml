@@ -123,17 +123,14 @@ jobs:
         run: |
           cargo fmt --all --check
           cargo clippy --locked -p kingfisher-node -- -D warnings
+      # Keep the platform's native shell: Git Bash puts its GNU link utility
+      # ahead of the pinned MSVC linker on Windows.
       - name: Rust native unit tests
-        env:
-          NATIVE_TARGET: ${{ matrix.target }}
-        shell: bash
-        run: cargo test --locked -p kingfisher-node --all-targets --target "$NATIVE_TARGET"
+        run: cargo test --locked -p kingfisher-node --all-targets --target "${{ matrix.target }}"
       - name: Build production addon
         env:
-          NATIVE_TARGET: ${{ matrix.target }}
           MACOSX_DEPLOYMENT_TARGET: '11.0'
-        shell: bash
-        run: npm run build -- --target "$NATIVE_TARGET"
+        run: npm run build -- --target "${{ matrix.target }}"
       - name: Audit GNU/Linux imported runtime symbols
         if: runner.os == 'Linux'
         shell: bash

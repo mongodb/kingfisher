@@ -1851,7 +1851,7 @@ entropy(finding["secret"]) < 4 || len(payload) % 4 == 1 ||
                     )
                     .unwrap()
                     .discard,
-                    "{secret}"
+                    "unexpected normalization decision for synthetic {prefix} fixture"
                 );
             }
             for payload in [
@@ -1870,7 +1870,7 @@ entropy(finding["secret"]) < 4 || len(payload) % 4 == 1 ||
                     )
                     .unwrap()
                     .discard,
-                    "{secret}"
+                    "unexpected normalization decision for synthetic {prefix} fixture"
                 );
             }
         }
